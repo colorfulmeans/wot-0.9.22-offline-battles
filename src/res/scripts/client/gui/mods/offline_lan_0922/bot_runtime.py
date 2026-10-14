@@ -10335,19 +10335,19 @@ class BotRuntime(object):
                 result = physical_results[actor]
                 result['delta_velocity'] = tuple(result['delta_velocity'][i]+delta[i]
                                                   for i in range(2))
-            collision_bodies = {}
-            collision_radii = {}
-            maximum_radius = 4.0
-            for tank in tanks:
-                shape = tank_collision._tank_shape(tank)
-                radius = math.sqrt(
-                    shape[0] * shape[0] + shape[1] * shape[1])
-                maximum_radius = max(maximum_radius, radius)
-                collision_radii[tank['id']] = radius
-                collision_bodies[tank['id']] = {
-                    'position': (tank['x'], tank['y'], tank['z'])}
-            collision_index = tank_collision.build_spatial_index(
-                collision_bodies, maximum_radius * 2.0 + 4.0)
+        collision_bodies = {}
+        collision_radii = {}
+        maximum_radius = 4.0
+        for tank in tanks:
+            shape = tank_collision._tank_shape(tank)
+            radius = math.sqrt(
+                shape[0] * shape[0] + shape[1] * shape[1])
+            maximum_radius = max(maximum_radius, radius)
+            collision_radii[tank['id']] = radius
+            collision_bodies[tank['id']] = {
+                'position': (tank['x'], tank['y'], tank['z'])}
+        collision_index = tank_collision.build_spatial_index(
+            collision_bodies, maximum_radius * 2.0 + 4.0)
         contacted_bot_ids = set()
         reports = self._resolve_human_ram_receipts(players, now)
         previous_ram_contacts = self._ram_contacts

@@ -13,6 +13,20 @@ class EnvironmentAttributionTests(unittest.TestCase):
         self.assertIsNone(environment_push.initiator((2, 0), (-2, 0), (-1, 0)))
         self.assertIsNone(environment_push.initiator((0, 2), (0, 0), (-1, 0)))
 
+    def test_native_contact_rows_share_the_push_broadphase(self):
+        from gui.mods.offline_lan_0922 import bot_runtime, tank_collision
+        runtime = bot_runtime.BotRuntime(1)
+        first = dict(id=11, team=1, slot=0, alive=True, x=0., y=0., z=0.,
+            yaw=0., mass=25000., speed=1., collision_shape=tank_collision.DEFAULT_SHAPE)
+        second = dict(first, id=12, z=3., speed=0.)
+        runtime.states = {11:first, 12:second}
+        rows = [(actor,(0.,0.),(0.,0.),0.,True,True,(),()) for actor in (11,12)]
+        with mock.patch.object(tank_collision, 'contact_roster', return_value=rows), \
+                mock.patch.object(runtime, '_apply_tank_contact_response'), \
+                mock.patch.object(tank_collision, 'build_spatial_index', wraps=tank_collision.build_spatial_index) as index:
+            self.assertEqual([], runtime._resolve_tank_contacts([],1.,.04))
+        index.assert_called_once()
+
     def test_friendly_fall_counts_team_damage_and_blue_without_enemy_damage(self):
         state = _state()
         state.players[2].team = 1
