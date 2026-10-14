@@ -6669,7 +6669,12 @@ class BotRuntime(object):
         probe_started = self._probe_started()
         try:
             if maximum_y is not None and callable(self._physics_ground_limit_probe):
-                return self._physics_ground_limit_probe(x, z, hint, maximum_y)
+                result = self._physics_ground_limit_probe(x,z,hint,maximum_y)
+                if isinstance(result,dict):
+                    queries = getattr(self,'_basic_support_queries',None)
+                    if queries is not None and len(queries)<16:queries.append(result)
+                    return result['height']
+                return result
             value = self._physics_ground_probe(x, z, hint)
             # Narrow test/custom probes may not expose layered queries. They
             # cannot turn an overhead return into a physical landing either.
@@ -6703,7 +6708,7 @@ class BotRuntime(object):
         return tank_collision.straddled_support(
             position[1], follow_gap, axis_samples, interpolate=True)
 
-    def _terrain_support(self, state, follow_gap=None):
+    def _terrain_support(self, state, follow_gap=None, tick_pose=None):
         """Probe centre first, allowing only straddled support over a hole."""
         position = _position(state)
         # A falling body's centre cannot be supported by a deck above it.
@@ -6712,6 +6717,19 @@ class BotRuntime(object):
         maximum_y = (max(position[1], _number(state.get('_basic_fall_origin_y'), position[1])) + vehicle_physics.CONTACT_PENETRATION if state.get('airborne', False) else None)
         centre = self._ground_probe_at(
             position[0], position[2], maximum_y if maximum_y is not None else position[1], maximum_y)
+        if maximum_y is not None and (centre is None or position[1]-float(centre) > vehicle_physics.GROUND_FOLLOW_MAX):
+            travel = self._tick_horizontal_travel(state, tick_pose)
+            if tick_pose is not None and travel > 0.0001:
+                # A current-height ceiling excludes continuous rising terrain
+                # after a small airborne seam. Prove the realised path instead
+                # of treating every higher surface as an overhead bridge.
+                path_ceiling = float(tick_pose[1]) + travel * 0.55 + 0.02
+                candidate = self._ground_probe_at(position[0],position[2],
+                    max(position[1],float(tick_pose[1])),path_ceiling)
+                if (candidate is not None and float(candidate) > maximum_y and
+                        self._support_rise_follows_tick_path(state,float(candidate),tick_pose,travel)):
+                    centre = float(candidate)
+                    state['_basic_continuous_support'] = True
         if centre is not None:
             centre = float(centre)
             # Speed and a forward corridor grade can enlarge follow_gap
@@ -6733,6 +6751,12 @@ class BotRuntime(object):
                 state['_legacy_straddle_reference_y'] = position[1]
             # The vertical law below always selects centre while it exists;
             # front/back could not affect the realised pose on this branch.
+            if (tick_pose is not None and state.get('grounded_once', False) and
+                    (state.get('airborne', False) or
+                     centre < float(tick_pose[1]) - 1.0e-6)):
+                travel = self._tick_horizontal_travel(state,tick_pose)
+                if self._support_rise_follows_tick_path(state,centre,tick_pose,travel,allow_descending=True):
+                    state['_basic_continuous_support'] = True
             return centre, centre
         if not state.get('grounded_once', False):
             # Preserve one-time spawn placement while terrain streams. This
@@ -7006,8 +7030,8 @@ class BotRuntime(object):
             'contact_pairs': sorted(pair for pair in self._ram_contacts
                                     if int(state['id']) in pair),
         })
-        print('[BOT MOTION] %s' % json.dumps(
-            trace, separators=(',', ':')))
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT MOTION', trace)
 
     def _reset_planning_observers(self):
         # An invalidated observer must not leave a far command lease behind.
@@ -7457,7 +7481,7 @@ class BotRuntime(object):
         velocity = (math.sin(yaw) * speed,
                     state.get('vertical_speed', 0.0),
                     math.cos(yaw) * speed)
-        normal = vehicle_physics.horizontal_contact_normal(trace.get('normal'))
+        normal = trace.get('normal')
         impact = vehicle_physics.world_impact_speed(velocity, normal)
         if (impact <= vehicle_physics.FALL_SAFE_SPEED or
                 now - state.get('_last_world_impact_time', -1.0e30) < 0.25):
@@ -7480,11 +7504,11 @@ class BotRuntime(object):
         return math.sqrt(delta_x * delta_x + delta_z * delta_z)
 
     def _support_rise_follows_tick_path(self, state, centre, tick_pose,
-                                        horizontal_travel):
+                                        horizontal_travel, allow_descending=False):
         """Confirm a suspicious raised support through bounded interior rays.
 
-        Normal grounding still spends only its centre ray.  This helper is
-        called only after that endpoint rose beyond the hard step limit.  At
+        Flat grounding still spends only its centre ray. This helper also
+        distinguishes continuous downhill support from a real ledge drop.  At
         most four interior samples split a legal 0.2-second hull sweep into
         segments no longer than 1.5 metres; every segment must remain inside
         the same 0.55 grade accepted by the native direction probe.  A longer
@@ -7501,8 +7525,8 @@ class BotRuntime(object):
         delta_z = _number(state.get('z')) - start_z
         distance = max(0.0, _number(horizontal_travel))
         rise = float(centre) - start_y
-        if (distance <= 0.0001 or rise <= 0.0 or
-                rise > distance * 0.55 + 0.02):
+        if (distance <= 0.0001 or (rise <= 0.0 and not allow_descending) or
+                abs(rise) > distance * 0.55 + 0.02):
             return False
         segment_count = max(2, int(math.ceil(distance / 1.5)))
         if segment_count > 5:
@@ -7987,7 +8011,9 @@ class BotRuntime(object):
         fall_origin_y = state['y']
         was_basic_airborne = bool(state.get('airborne', False))
         previous_fall_origin = state.get('_basic_fall_origin_y')
-        highest, centre = self._terrain_support(state, snap_gap)
+        state['_basic_continuous_support'] = False
+        self._basic_support_queries = []
+        highest, centre = self._terrain_support(state, snap_gap, tick_pose)
         # Front/rear hits keep a bot supported across a narrow ditch, but use
         # their real CoM distance below so a remote valley floor cannot pull
         # the bot down in one tick.
@@ -7998,11 +8024,12 @@ class BotRuntime(object):
         if ground is not None:
             speed = abs(state['speed'])
             max_climb = max(0.6, speed * step * 2.5)
+            continuous_support = bool(state.get('_basic_continuous_support'))
             crossed_floor = bool(was_basic_airborne and previous_fall_origin is not None and
                 state.get('vertical_speed',0.) <= 0. and state['y'] <= ground <=
                 float(previous_fall_origin)+vehicle_physics.CONTACT_PENETRATION)
             support_rise_obstacle = bool(
-                state.get('grounded_once', False) and not crossed_floor and
+                state.get('grounded_once', False) and not crossed_floor and not continuous_support and
                 tank_collision.support_rise_is_obstacle(
                     state.get('y'), centre, max_climb))
             support_rise_continuous = False
@@ -8062,7 +8089,7 @@ class BotRuntime(object):
                     (state['yaw'] if attempted_yaw is None
                      else attempted_yaw))
                 return True
-            elif (state['y'] < ground - 0.002 or
+            elif (continuous_support or state['y'] < ground - 0.002 or
                   (state['y'] <= ground and
                    state.get('vertical_speed', 0.0) <= 0.0) or
                   (not state.get('airborne', False) and
@@ -8070,8 +8097,8 @@ class BotRuntime(object):
                        state['y'], ground,
                        state.get('vertical_speed', 0.0), step))):
                 impact_speed = (state.get('vertical_speed', 0.0)
-                                if state.get('airborne', False) else 0.0)
-                if crossed_floor:
+                                if state.get('airborne', False) and not continuous_support else 0.0)
+                if crossed_floor or continuous_support:
                     state['y'] = land_y
                 elif state['y'] < ground:
                     rise = ground - state['y']
@@ -8082,6 +8109,8 @@ class BotRuntime(object):
                     support_vertical_speed
                     if not state.get('airborne', False) else 0.0)
                 state['airborne'] = False
+                if was_basic_airborne and continuous_support:
+                    state.pop('pose_sample',None)
                 if impact_speed < 0.0:
                     state['_landing_ground_observed'] = True
                     self._apply_bot_landing_impact(state, impact_speed)
@@ -8127,10 +8156,12 @@ class BotRuntime(object):
         moment = getattr(self, '_contact_now', None)
         transition = was_basic_airborne != bool(state.get('airborne', False))
         if ((transition or ground is None or was_basic_airborne) and
-                int(state.get('_basic_vertical_reports', 0)) < 24 and
-                (transition or moment is not None and moment >= state.get('_basic_vertical_log_at', -1.e30))):
+                (moment is None and transition or moment is not None and
+                 moment >= state.get('_basic_vertical_log_at', -1.e30))):
             from .native_input_diagnostics import write_json_record
-            write_json_record('BOT VERTICAL SUPPORT', dict(actor=int(state['id']),
+            write_json_record('BOT VERTICAL SUPPORT', dict(actor=int(state['id']), round=self.round_id,
+                continuity_recovered=bool(state.get('_basic_continuous_support')),
+                queries=list(getattr(self,'_basic_support_queries',()) or ()),
                 x=state['x'], z=state['z'], y_before=fall_origin_y, y_after=state['y'],
                 previous_interval_y=previous_fall_origin, centre=centre, highest=highest,
                 was_airborne=was_basic_airborne, airborne=bool(state.get('airborne',False)),

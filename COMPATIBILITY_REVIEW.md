@@ -8353,3 +8353,51 @@ Existing extinguish/expiry fuel-regen handling owns destroyed-to-yellow recovery
 no additional time-repair rule or burn coefficient is invented. Regression covers
 recorded contact weights, player receipt replay, Bot landing, unowned fire damage,
 fuel restoration on fire-out and zero-body-HP impact publication.
+
+
+### Reports 203757 / 210308: support continuity, ram skin and fire publication
+
+Report 210308 proves the player 113 fuel destruction at 20:54:21 followed by
+`SERVER TICK failure ... combat source fire does not allow kind health` at
+20:54:22. The previous fire regression stopped before wire publication. Admit
+unowned `health` fire events with attack_reason 1 while requiring attributed
+hit kinds to retain their attacker. Reject attacker-bearing health fire events
+and wrong cause values. The regression now advances tick_once through reliable
+publication after environmental ignition, not only the private fire ledger.
+The visible/worker combat adapter admits the same unowned fire contract; local
+HP feedback keeps the FIRE cause without inventing an attacker or hit direction.
+This explains the recorded server failure; the archive has no native crash dump
+and does not establish a separate native crash cause.
+
+Report 203757 admits ram body contacts but the player first native track skin
+lies 0.294-0.711 m inside the shared proxy witness. Treating that witness as each
+vehicle's skin with a symmetric 0.15 m tolerance drops real first-surface track
+classifications. Classify the first native skin on the incoming half of each
+accepted ram ray, bounded by the witness's outward tolerance and the vehicle
+centre plane. Preserve this classification through the later shared-height
+structural armour search; nearer hull/gun hits and fallback corner rays cannot
+nominate a track. Record the native point and nomination basis separately from
+the proxy witness. This is native ray surface evidence, not a claim of exact
+mesh-to-mesh contact. Existing ram admission, armour and coefficient 30 remain.
+
+The same report shows authoritative and model Type59 Y falling below -960, and
+small support gaps repeatedly alternating grounded/airborne. Preserve bounded
+layered floors, previous-interval recovery and under-bridge falls. When realised
+travel crosses a continuous slope, validate bounded interior ground columns
+before following it; no guessed map height, cliff snap or overhead reattachment.
+Refresh slope pose after seam recovery. A flat unchanged floor spends no extra
+continuity columns. Retain the existing pose smoothing and 22.5/25 navigation
+policy. Continuity proofs cannot establish why the original native floor query
+first missed; raw layered hit/miss diagnostics are included for that boundary.
+
+A captured near-upward world normal was projected to X/Z before impact damage,
+turning ordinary floor contact into a wall hit. Both player and Bot damage now
+use the full observed normal; movement constraints retain their horizontal
+normal. Regressions cover the captured slope normal and real wall/roof impacts.
+Fall and ram module coefficients remain 30.
+
+Fragment BOT MOTION JSON instead of losing large records to engine line limits.
+The reader also flags legacy truncated motion rows. Replace the exhausted
+24-transition support log cap with a one-second per-Bot limit and include the
+raw bounded layered queries and round identity. Live Windows acceptance remains
+necessary for the original Type59 fall, player track contact and slope posture.

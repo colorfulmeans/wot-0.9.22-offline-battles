@@ -105,6 +105,35 @@ class BotSupportLayerTests(unittest.TestCase):
                 land.assert_called_once()
                 self.assertNotIn('_basic_fall_origin_y',state)
 
+    def test_airborne_seam_can_rejoin_proved_continuous_rising_ground(self):
+        self.collision_planes(lambda x,z:self.FLOOR+x*.25)
+        state=self.state(self.FLOOR+.05)
+        state.update(x=1.,z=0.,airborne=True,vertical_speed=-2.,speed=5.,
+            _basic_fall_origin_y=self.FLOOR+.05)
+        land=mock.Mock(return_value=0)
+        with mock.patch.object(self.bots,'_apply_bot_landing_impact',land):
+            self.assertFalse(self.bots._integrate_vertical_motion(state,.1,
+                tick_pose=(0.,self.FLOOR,0.)))
+        self.assertAlmostEqual(self.FLOOR+.25,state['y'])
+        self.assertFalse(state['airborne'])
+        self.assertTrue(state['_basic_continuous_support'])
+        land.assert_not_called()
+
+    def test_continuous_downhill_stays_supported_without_repeated_landings(self):
+        self.collision_planes(lambda x,z:self.FLOOR-x*.25)
+        state=self.state();state.update(x=0.,z=0.,speed=5.,yaw=math.pi*.5)
+        land=mock.Mock(return_value=0)
+        with mock.patch.object(self.bots,'_apply_bot_landing_impact',land):
+            for unused in range(30):
+                before=(state['x'],state['y'],state['z'])
+                state['x']+=.5
+                self.assertFalse(self.bots._integrate_vertical_motion(state,.1,tick_pose=before))
+                self.assertAlmostEqual(self.FLOOR-state['x']*.25,state['y'])
+                self.assertFalse(state['airborne'])
+                self.bots._update_slope_pose(state)
+        land.assert_not_called()
+        self.assertAlmostEqual(math.atan(.25)*.9,state['terrain_pitch'],places=2)
+
     def test_live_bot_support_ignores_bridge_above_its_drivable_road(self):
         self.collision_planes(lambda x, z: self.FLOOR, self.DECK)
         state = self.state()

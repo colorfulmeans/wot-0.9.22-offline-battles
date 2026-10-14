@@ -6,7 +6,7 @@ import zipfile
 
 LABELS = ('NATIVE INPUT FALLBACK', 'NATIVE INPUT SUMMARY',
           'RICOCHET SURFACE EVIDENCE', 'PROJECTILE INTERFACE', 'PROJECTILE SETTLEMENT',
-          'TREE DESCRIPTOR', 'ENV MODULE CONTACT', 'ENV MODULE DAMAGE', 'RAM TRACK CONTACT', 'RAM CONTACT GEOMETRY', 'BOT VERTICAL SUPPORT', 'BOT MOTION PRESENT')
+          'TREE DESCRIPTOR', 'ENV MODULE CONTACT', 'ENV MODULE DAMAGE', 'RAM TRACK CONTACT', 'RAM CONTACT GEOMETRY', 'BOT VERTICAL SUPPORT', 'BOT MOTION PRESENT', 'BOT MOTION')
 
 
 def parse_lines(lines, source='log'):
@@ -15,7 +15,10 @@ def parse_lines(lines, source='log'):
         for label in LABELS:
             marker = ('' if label == 'PROJECTILE SETTLEMENT' else '[Offline LAN 0.9.22] ') + label + ' '
             if marker not in line:
-                continue
+                if label == 'BOT MOTION' and '[BOT MOTION] ' in line:
+                    marker = '[BOT MOTION] '
+                else:
+                    continue
             text = line.split(marker, 1)[1]
             try:
                 if not text.startswith('PART '):

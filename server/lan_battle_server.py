@@ -424,7 +424,7 @@ COMBAT_SOURCE_KINDS = {
     "shot": frozenset((
         "hit", "bot_hit", "bot_human_hit", "bot_bot_hit")),
     "fire": frozenset((
-        "hit", "bot_hit", "bot_human_hit", "bot_bot_hit")),
+        "health", "hit", "bot_hit", "bot_human_hit", "bot_bot_hit")),
     "ram": frozenset((
         "hit", "bot_hit", "bot_human_hit", "bot_bot_hit")),
     "client_simulation": frozenset(("health",)),
@@ -2829,7 +2829,10 @@ class BattleState:
             raise RuntimeError("combat event has invalid attack_reason")
         if source in ("shot", "fire", "ram"):
             expected = {"shot": 0, "fire": 1, "ram": 2}[source]
-            if not has_attacker or attack_reason != expected:
+            unowned_fire = source == "fire" and kind == "health"
+            if ((unowned_fire and has_attacker) or
+                    (not unowned_fire and not has_attacker) or
+                    attack_reason != expected):
                 raise RuntimeError(
                     "combat event attacker/cause does not match source %s" %
                     source)

@@ -4085,7 +4085,7 @@ class BattleRuntime(object):
                 # and attitude. The wider placement query can acquire an
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
-                physics_ground_limit_probe=self._support_column,
+                physics_ground_limit_probe=self._bot_support_column,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -11764,7 +11764,7 @@ class BattleRuntime(object):
         kind = event.get('kind')
         valid_kinds = {
             'shot': ('hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit'),
-            'fire': ('hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit'),
+            'fire': ('health', 'hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit'),
             'ram': ('hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit'),
             'client_simulation': ('health',),
             'player_left': ('health',),
@@ -11795,7 +11795,10 @@ class BattleRuntime(object):
                 raise RuntimeError(
                     'ordered combat event has invalid damage_sticker')
         attacker_key = self._event_entity_key(event, 'attacker')
-        if source in ('shot', 'fire', 'ram') and attacker_key is None:
+        unowned_fire = source == 'fire' and kind == 'health'
+        if unowned_fire and ('attacker' in event or 'attacker_bot' in event):
+            raise RuntimeError('unowned fire event must not have an attacker')
+        if source in ('shot', 'fire', 'ram') and not unowned_fire and attacker_key is None:
             raise RuntimeError(
                 'ordered %s combat event has no attacker' % source)
         if source in ('client_simulation', 'player_left', 'environment') and \
@@ -12006,11 +12009,14 @@ class BattleRuntime(object):
         return bool(output)
 
     def _present_environment_feedback(self, event, target_record, reason_id):
-        """Feed attacker-free fall damage to the stock damage log."""
+        """Feed attacker-free fall or fire damage to the stock damage log."""
         world_collision = self._attack_reason('WORLD_COLLISION', 3)
+        source = self._combat_event_source(event)
+        unowned_fire = (source == 'fire' and event.get('kind') == 'health' and
+                        reason_id == self._attack_reason('FIRE', 1))
         if (self._worker_mode or not target_record.get('local') or
-                self._combat_event_source(event) != 'environment' or
-                reason_id != world_collision):
+                not (unowned_fire or
+                     (source == 'environment' and reason_id == world_collision))):
             return False
         damage = max(0, int(event.get('damage', 0) or 0))
         if damage <= 0:
@@ -12094,7 +12100,7 @@ class BattleRuntime(object):
                 event, record, attacker_record, attacker_id)
             self._present_combat_feedback(
                 event, record, attacker_record, attack_reason)
-        elif source == 'environment':
+        elif source in ('environment', 'fire'):
             self._present_environment_feedback(
                 event, record, attack_reason)
         if cosmetic:
@@ -21767,7 +21773,7 @@ class BattleRuntime(object):
                     damage_factor=float(getattr(getattr(c, 'matInfo', None), 'vehicleDamageFactor', 0.) or 0.))
                     for c in sorted(collisions or (), key=lambda c: float(c.dist))[:8]])
             row['first_surface_distance_to_witness'] = abs(row['surfaces'][0]['distance']-reach) if row['surfaces'] else None
-            row['track_contact_tolerance'] = 0.15
+            row['outward_witness_tolerance'] = 0.15
             if len(trace) < 48: trace.append(row)
         if not collisions:
             return None
@@ -21776,10 +21782,29 @@ class BattleRuntime(object):
         first_contact = ordered_contacts[0]
         material = getattr(first_contact, 'matInfo', None)
         name = getattr(getattr(material, 'extra', None), 'name', '')
-        # Only the first contacted skin, at the actual witness, can nominate a track.
-        # A chassis hit behind a nearer hull/gun is not a track contact.
-        if name in ('leftTrackHealth', 'rightTrackHealth') and abs(float(first_contact.dist)-reach) <= 0.15:
+        # The witness is the collision proxy's overlap centre, not this
+        # vehicle's skin. Classify the native first surface on the incoming
+        # half; a hull/gun before a track still prevents track nomination.
+        distance = float(first_contact.dist)
+        incoming_skin = reach-0.15 <= distance <= reach+center_depth+1.e-6
+        context = getattr(self,'_ram_surface_context',None)
+        if context is not None:
+            expected = context['normals'].get(id(vehicle))
+            incoming_skin = bool(incoming_skin and expected is not None and
+                sum(expected[i]*inward_normal[i] for i in (0,1)) > 1.-1.e-6)
+        if name in ('leftTrackHealth', 'rightTrackHealth') and incoming_skin:
             contact_tracks.add(name)
+            context = getattr(self,'_ram_surface_context',None)
+            if context is not None:
+                normal = context['normals'].get(id(vehicle))
+                if normal is not None and sum(normal[i]*inward_normal[i] for i in (0,1)) > 1.-1.e-6:
+                    context['tracks'].setdefault(id(vehicle),set()).add(name)
+        if trace is not None:
+            row['native_first_surface_point'] = [
+                float(start.x)+inward_normal[0]*distance, hit[1],
+                float(start.z)+inward_normal[1]*distance]
+            row['track_nomination_basis'] = 'first_native_skin_on_incoming_half'
+            row['nominated_tracks'] = sorted(contact_tracks)
         for collision in sorted(
                 collisions, key=lambda item: float(item.dist)):
             material = getattr(collision, 'matInfo', None)
@@ -21817,10 +21842,25 @@ class BattleRuntime(object):
         previous = getattr(self, '_ram_contact_ray_trace', None)
         trace = [] if count < 64 else None
         self._ram_contact_ray_trace = trace
+        previous_surface = getattr(self,'_ram_surface_context',None)
+        normal = self._validated_ram_contact_normal(proof.get('contact_normal'))
+        surface = dict(tracks={},normals={})
+        if normal is not None:
+            surface['normals'] = {id(proof['local_vehicle']):normal,
+                id(proof['bot_vehicle']):(-normal[0],-normal[1])}
+        self._ram_surface_context = surface
         try:
             result = self._ram_plate_pair_from_probe_impl(proof, armor_probe)
+            if result[0] is not None:
+                matched = list(result[0])
+                for index, key in enumerate(('local_vehicle','bot_vehicle')):
+                    matched[index] = dict(matched[index])
+                    tracks = surface['tracks'].get(id(proof[key]))
+                    if tracks: matched[index]['contact_tracks'] = sorted(tracks)
+                result = (tuple(matched),result[1],result[2])
         finally:
             self._ram_contact_ray_trace = previous
+            self._ram_surface_context = previous_surface
         if trace is not None:
             from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
             matched = result[0]
@@ -23355,7 +23395,12 @@ class BattleRuntime(object):
             return bool(clearer(token))
         return False
 
-    def _support_column(self, x, z, hint_y, maximum_y=None):
+    def _bot_support_column(self, x, z, hint_y, maximum_y):
+        trace = []
+        height = self._support_column(x,z,hint_y,maximum_y,trace)
+        return dict(height=height, x=x, z=z, hint_y=hint_y, maximum_y=maximum_y, layers=trace)
+
+    def _support_column(self, x, z, hint_y, maximum_y=None, trace=None):
         """Return one layered support column below rejected upper faces."""
         ray_end = self._vector((x, -1000.0, z))
         ray_start = self._vector((x, float(hint_y) + 2.0, z))
@@ -23367,6 +23412,7 @@ class BattleRuntime(object):
             except Exception:
                 hit = None
             if hit is None:
+                if trace is not None: trace.append(dict(miss=True,start=list(_xyz(ray_start)),end=list(_xyz(ray_end))))
                 return None
             candidate = float(hit[0].y)
             above_limit = (maximum_y is not None and
@@ -23380,6 +23426,9 @@ class BattleRuntime(object):
                 # normal, so this fallback cannot turn a live wall into
                 # support.
                 ground_facing = maximum_y is None
+            if trace is not None:
+                trace.append(dict(hit=list(_xyz(hit[0])), normal=list(_xyz(hit[1])) if len(hit)>1 else None,
+                    above_limit=above_limit, ground_facing=ground_facing))
             if not above_limit and ground_facing:
                 return candidate
             next_y = candidate - 0.05
@@ -23885,8 +23934,7 @@ class BattleRuntime(object):
         velocity = (math.sin(yaw) * speed, self._local_vertical_speed,
                     math.cos(yaw) * speed)
         impact = vehicle_physics.world_impact_speed(
-            velocity, vehicle_physics.horizontal_contact_normal(
-                trace.get('normal')))
+            velocity, trace.get('normal'))
         now = self._clock()
         if (impact > vehicle_physics.FALL_SAFE_SPEED and
                 now - getattr(self, '_last_world_impact_time', -1.0e30) >= 0.25):

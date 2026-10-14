@@ -87,7 +87,26 @@ class EnvironmentalModulesTests(unittest.TestCase):
         self.assertEqual('fire',event['source'])
         self.assertNotIn('attacker',event)
         self.assertNotIn('attacker_bot',event)
+        self.assertTrue(state._validate_combat_event_for_wire(event))
         self.assertTrue(any(e.get('critical',{}).get('fire') for e in state.pending_events))
+        player.offer_reliable=mock.Mock(return_value=True)
+        player.offer_snapshot=mock.Mock(return_value=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            state.tick_once(1. / 30.)
+        self.assertIsNone(state.battle_result)
+        self.assertTrue(player.offer_reliable.called)
+        self.assertEqual([],state.pending_events)
+
+    def test_unowned_fire_wire_contract_keeps_cause_and_attribution_strict(self):
+        state=server_fixture._state()
+        for dead in (False,True):
+            event=dict(kind='health',source='fire',attack_reason=1,
+                death_reason=1 if dead else 0,damage=50,health=0 if dead else 950,dead=dead)
+            self.assertTrue(state._validate_combat_event_for_wire(event))
+            for update in (dict(attacker=1),dict(attacker_bot=11),
+                           dict(attack_reason=3),dict(kind='hit')):
+                with self.assertRaises(RuntimeError):
+                    state._validate_combat_event_for_wire(dict(event,**update))
 
     def test_fire_reduces_only_internal_module_pools_and_never_crew(self):
         v=self.target()

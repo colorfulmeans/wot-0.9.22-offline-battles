@@ -18270,6 +18270,34 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertEqual([], battle._avatar.hit_directions)
         self.assertEqual([], battle._avatar.shot_results)
 
+    def test_unowned_fire_health_applies_with_fire_feedback_and_no_attacker(self):
+        for dead in (False, True):
+            runtime = _runtime()
+            battle = BattleRuntime(runtime)
+            battle._avatar = runtime.bigworld.avatar
+            battle._binding = mock.Mock()
+            battle._avatar.playerVehicleID = 10
+            entity = _Vehicle(10, _Descriptor(), _Vector(), (0, 0, 0),
+                              {'health': 500})
+            runtime.bigworld.entities[10] = entity
+            battle._records = {'player:1': {
+                'engine_id': 10, 'state': {'health': 500, 'team': 1, 'alive': True},
+                'kind': 'player', 'network_id': 1, 'local': True}}
+            event = dict(kind='health', target=1, damage=500 if dead else 50,
+                         health=0 if dead else 450, dead=dead, source='fire',
+                         attack_reason=1, death_reason=1 if dead else 0)
+            with mock.patch.object(critical_damage, 'apply_death', return_value=None):
+                self.assertTrue(battle._apply_combat_event(event))
+            self.assertEqual((event['health'], 0, 1), entity.health_change)
+            self.assertEqual([{'eventType': 10, 'targetID': 10, 'count': 1,
+                'details': _pack_damage(event['damage'], 1)}], battle._avatar.battle_events[0])
+            self.assertEqual([], battle._avatar.hit_directions)
+            self.assertEqual([], battle._avatar.shot_results)
+            for changes in (dict(attacker=1), dict(attacker_bot=11),
+                            dict(attack_reason=3), dict(kind='hit')):
+                with self.assertRaises(RuntimeError):
+                    battle._validate_combat_event_contract(dict(event, **changes))
+
     def test_nonfall_environment_death_has_no_received_damage_event(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)

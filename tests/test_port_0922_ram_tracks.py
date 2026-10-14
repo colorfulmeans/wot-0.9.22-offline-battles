@@ -41,7 +41,9 @@ class RamTrackTests(unittest.TestCase):
                 armor=30.,vehicleDamageFactor=df,extra=types.SimpleNamespace(name=name)))
         for contacts,expected in (([hit(reach,'leftTrackHealth',0.),hit(reach+.2,'hull',1.)],['leftTrackHealth']),
                                   ([hit(reach,'hull',1.),hit(reach+.1,'rightTrackHealth',0.)],[]),
-                                  ([hit(reach-1.,'rightTrackHealth',0.),hit(reach+.1,'hull',1.)],[])):
+                                  ([hit(reach-1.,'rightTrackHealth',0.),hit(reach+.1,'hull',1.)],[]),
+                                  ([hit(reach+.347,'rightTrackHealth',0.),hit(reach+.5,'hull',1.)],['rightTrackHealth']),
+                                  ([hit(reach+1.1,'rightTrackHealth',0.),hit(reach+1.2,'hull',1.)],[])):
             battle._ram_contact_ray_trace=[]
             with mock.patch.object(f.battle_runtime_module,'collide_vehicle_at_matrix',return_value=contacts):
                 result=battle._native_ram_vehicle_armor(vehicle,matrix,(1.,0.,0.),(-1.,0.))
@@ -50,6 +52,31 @@ class RamTrackTests(unittest.TestCase):
             self.assertEqual('sampled_contact_plane',ray['witness_source'])
             self.assertEqual(contacts[0].matInfo.extra.name,ray['surfaces'][0]['material'])
             self.assertAlmostEqual(abs(contacts[0].dist-reach),ray['first_surface_distance_to_witness'])
+
+    def test_structural_height_search_preserves_native_first_skin_tracks(self):
+        import math,types
+        from unittest import mock
+        import test_port_0922_battle_runtime as f
+        battle=f.BattleRuntime(f._runtime());battle._collision_shape=lambda td:(1.,1.,0.,1.)
+        first=types.SimpleNamespace(id=1,typeDescriptor=object(),position=(0.,0.,0.))
+        second=types.SimpleNamespace(id=2,typeDescriptor=object(),position=(2.,0.,0.))
+        a=types.SimpleNamespace(translation=f._Vector(0.,0.,0.))
+        b=types.SimpleNamespace(translation=f._Vector(2.,0.,0.))
+        reach=math.sqrt(2.)+1.
+        def collide(vehicle,matrix,start,end,*args,**kwargs):
+            low=start.y<.2
+            name=('leftTrackHealth' if vehicle is first else 'rightTrackHealth') if low else 'hull'
+            return [types.SimpleNamespace(dist=reach+.3,matInfo=types.SimpleNamespace(
+                armor=30.,vehicleDamageFactor=0. if low else 1.,extra=types.SimpleNamespace(name=name)))]
+        proof=dict(hit_point=(1.,.1,0.),contact_normal=(-1.,0.),contact_y_span=(0.,1.),
+            local_vehicle=first,bot_vehicle=second,local_matrix=a,bot_matrix=b)
+        with mock.patch.object(f.battle_runtime_module,'collide_vehicle_at_matrix',side_effect=collide):
+            matched,unused_a,unused_b=battle._native_ram_contact_plate_pair(proof)
+        self.assertIsNotNone(matched)
+        self.assertGreaterEqual(matched[2],.2)
+        self.assertEqual(['leftTrackHealth'],matched[0]['contact_tracks'])
+        self.assertEqual(['rightTrackHealth'],matched[1]['contact_tracks'])
+        self.assertEqual(30.,matched[0]['armor'])
 
     def test_server_ram_tracks_commit_once_and_reject_conflicting_contact_identity(self):
         import test_port_0922_server_projectiles as f

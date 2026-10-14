@@ -57,6 +57,16 @@ class EvidenceReaderTests(unittest.TestCase):
         self.assertEqual(payload,result['records'][0]['data'])
         self.assertTrue(all(len(line)<8192 for line in output.getvalue().splitlines()))
 
+    def test_motion_fragments_and_legacy_truncation_are_observable(self):
+        payload={'id':5,'planning_verdicts':['x'*4000]*48}
+        output=io.StringIO()
+        with mock.patch('sys.stdout',output):self.writer.write_json_record('BOT MOTION',payload)
+        result=self.reader.parse_lines(output.getvalue().splitlines())
+        self.assertEqual([],result['issues'])
+        self.assertEqual(payload,result['records'][0]['data'])
+        bad=self.reader.parse_lines(['[BOT MOTION] {"id":5,"text":"cut'])
+        self.assertEqual(1,len(bad['issues']))
+
     def test_missing_or_conflicting_parts_are_not_accepted(self):
         lines=self.lines()
         missing=self.reader.parse_lines(lines[1:])
