@@ -54,6 +54,17 @@ jobs:
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+      - name: Check bonds settlement and worker collision preparation
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern test_port_0922_ground_filter_batch.py
+          --pattern test_port_0922_destructibles.py
+          --pattern test_port_0922_world_collision.py
       - name: Compile all client code under Python 2.7
         if: ${{ !cancelled() }}
         run: |

@@ -11838,6 +11838,28 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             return_value=_ItemMatrix(_Vector(0., 0., 2.)))
         return manager, mapper, area, bigworld, math_module, descriptor
 
+    def test_below_speed_scan_keeps_registration_and_resumes_contact_on_acceleration(self):
+        (manager, unused_mapper, area, bigworld, math_module,
+         descriptor) = self._non_fellable_catalog_scan_fixture('fragile', 3)
+        with mock.patch.dict(sys.modules, {'AreaDestructibles': area,
+                'BigWorld': bigworld, 'Math': math_module}), \
+                mock.patch.object(destructibles_sensor._native_geometry, 'body',
+                    return_value=([], 0, False)) as body:
+            for speed in (0., .99, -.99):
+                destructibles_sensor._fell_trees_near(1, _Vector(), 0., speed, descriptor)
+            self.assertIn(22, destructibles_sensor.g_offh_tree_state['chunks'])
+            body.assert_not_called()
+            self.assertEqual(0, destructibles_sensor.registry_counts()['receipt_proximity_entries'])
+            for speed in (1., -1.):
+                destructibles_sensor._fell_trees_near(1, _Vector(), 0., speed, descriptor)
+                self.assertGreater(body.call_count, 0)
+                body.reset_mock()
+                destructibles_sensor.g_offh_destr_empty_proximity_receipts = {
+                    'entries': {}, 'order': []}
+            destructibles_sensor.g_offh_tree_state['publish_pending'][(22, 123)] = {}
+            destructibles_sensor._fell_trees_near(1, _Vector(), 0., 0., descriptor)
+            self.assertGreater(body.call_count, 0)
+
     def test_non_fellable_catalog_boxes_allow_empty_proximity_reuse(self):
         for kind, native_type in (('fragile', 3), ('structure', 4), ('falling', 2)):
             with self.subTest(kind=kind):

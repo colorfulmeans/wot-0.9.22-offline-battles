@@ -2165,8 +2165,25 @@ def _collision_region_revision_1513(lower, upper):
 	if globals().get('g_offh_destr_spatial_published_revision') != revision:
 		# A replaced writer with unknown locality retains global invalidation.
 		return ('global_revision', revision)
-	return _spatial_cell_signature_1513((
+	# A native world sweep asks for the same region for many ray lanes and
+	# ground columns. Rebuilding/sorting its Python cell set on every cache
+	# lookup costs work even when filter preparation itself is already shared.
+	# Reuse only inside the existing synchronous update, at an exact published
+	# revision. Dirty staged mutations are still rejected by the filter owners.
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = scope.setdefault('regions', {}) if isinstance(scope, dict) else None
+	key = (globals().get('g_offh_destr_runtime_space'), revision, lower, upper)
+	if cache is not None and key in cache:
+		combat_count('destructible_region_signature_hits')
+		return cache[key]
+	combat_count('destructible_region_signature_misses')
+	value = _spatial_cell_signature_1513((
 		(lower[0], upper[0], lower[1], upper[1]),))
+	if cache is not None:
+		if len(cache) >= 128:
+			cache.clear()
+		cache[key] = value
+	return value
 
 
 def _spatial_chunk_signature_1513(chunk_ids):
@@ -7647,6 +7664,15 @@ def _fell_trees_near(
 			if registration_only:
 				continue
 			if not registry['count']:
+				continue
+			if abs(vel) < 1.0 and not _st['publish_pending']:
+				# Both the reference law and Store::body require >= 1 m/s to
+				# fell a tree/pole. Keep streaming registration above, but avoid
+				# preparing/querying every ready chunk for an ineligible body.
+				# Do not mint an empty-space receipt: these items can become
+				# contacts immediately when the vehicle accelerates.
+				_found_nearby = True
+				combat_count('destructible_body_below_speed_skips')
 				continue
 			if _native_body_pose is None:
 				_native_body_pose = _native_geometry.pose(pos, yaw, bbox)

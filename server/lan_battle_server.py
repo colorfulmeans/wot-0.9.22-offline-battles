@@ -4980,6 +4980,12 @@ class BattleState:
                 # publication carries only the values that change, and
                 # ``_decode_bot_row`` rejoins these.
                 entry.update(round_constants)
+                previous = next((item for item in self.bot_manifest
+                    if item['id'] == bot_id and
+                    item['vehicle'] == entry['vehicle']), None)
+                entry['vehicle_tier'] = (previous['vehicle_tier']
+                    if previous is not None and 'vehicle_tier' in previous else
+                    self._result_vehicle_tier(entry['vehicle']))
                 if 'skill' in raw:
                     if raw['skill'] not in bot_gunnery.SKILL_TIERS:
                         return False
@@ -10870,6 +10876,17 @@ class BattleState:
             })
         return rows
 
+    def _battle_bond_eligible(self, participants):
+        """Use every frozen participant, including dead/disconnected actors."""
+        if self.battle_mode != 'regular':
+            return False
+        if set(row['id'] for row in self.bot_roster) != set(
+                row['id'] for row in self.bot_manifest):
+            return False
+        roster = list(participants) + list(self.bot_manifest)
+        return (set(row['team'] for row in roster) == set((1, 2)) and
+                all(row.get('vehicle_tier', 1) == 10 for row in roster))
+
     def _finish_battle(self, winner, reason, base_team=0,
                        record_receipts=True):
         """Durably store and announce a terminal result exactly once."""
@@ -10906,6 +10923,7 @@ class BattleState:
                     "team_killer": bool(player.team_killer),
                 } for player in self.players.values()]
             public_results = self._public_result_roster(winner, participants)
+            eligible_for_crystal = self._battle_bond_eligible(participants)
             awards = award_battle_achievements({
                 "actors": self._achievement_actor_rows(
                     winner, public_results),
@@ -10957,7 +10975,8 @@ class BattleState:
                         "player", player_id))
                 crystal_rewards = battle_bonds.medal_rewards(
                     public_row["achievements"], participant.get("vehicle_tier", 1))
-                rewards["crystal"] = sum(crystal_rewards.values())
+                rewards["crystal"] = (sum(crystal_rewards.values()) +
+                    battle_bonds.battle_reward(rewards['xp'], eligible_for_crystal))
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
                 if self.battle_mode == "training":
@@ -10992,6 +11011,7 @@ class BattleState:
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
                     "crystal_rewards": crystal_rewards,
+                    "eligible_for_crystal_rewards": eligible_for_crystal,
                     "friendly_fire": friendly,
                     "battle_booster": int(participant.get("battle_booster", 0)),
                     "public_results": public_results,
@@ -11034,6 +11054,17 @@ class BattleState:
                 _server_log("BATTLE RESULT persistence failed: %s" % error)
                 return False
             self.result_receipts = next_receipts
+            for participant in participants:
+                receipt = next_receipts['%s:%d:%d' % (
+                    self.receipt_namespace, self.round_id, participant['player_id'])]
+                medal_bonds = sum(receipt['crystal_rewards'].values())
+                _server_log('BOND REWARD round=%d player=%d eligible=%s '
+                    'base_xp=%d battle=%d medals=%d total=%d' % (
+                        self.round_id, participant['player_id'],
+                        receipt['eligible_for_crystal_rewards'],
+                        receipt['rewards']['xp'],
+                        receipt['rewards']['crystal'] - medal_bonds,
+                        medal_bonds, receipt['rewards']['crystal']))
         self.battle_result = result
         self.result_reset_tick = self.tick + max(
             1, int(round(RESULT_RESET_SECONDS * TICK_HZ)))
