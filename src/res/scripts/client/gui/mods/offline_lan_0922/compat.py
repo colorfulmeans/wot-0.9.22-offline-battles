@@ -416,6 +416,7 @@ def _load_runtime():
         AmmoController
     from gui.Scaleform.daapi.view.battle.shared.debug_panel import DebugPanel
     from gui.Scaleform.daapi.view.battle.shared.consumables_panel import ConsumablesPanel
+    from gui.shared.tooltips import shell as garage_shell_tooltip_module
     from gui.Scaleform.daapi.view.battle.shared.markers2d.plugins import \
         VehicleMarkerPlugin
     from gui.Scaleform.daapi.view.battle.shared.markers2d import settings as \
@@ -460,6 +461,7 @@ def _load_runtime():
     runtime.connection_manager = dependency.instance(IConnectionManager)
     runtime.debug_panel_type = DebugPanel
     runtime.consumables_panel_type = ConsumablesPanel
+    runtime.garage_shell_tooltip_module = garage_shell_tooltip_module
     runtime.login_status = LOGIN_STATUS
     runtime.math = Math
     runtime.custom_effect_manager_type = CustomEffectManager.CustomEffectManager
@@ -1283,6 +1285,12 @@ class OfflineCompatibility(object):
                 return original
 
         self._shell_tooltip_wrapper = shell_tooltip
+        self._garage_shell_tooltip_patch = None
+        garage_tooltip_module = getattr(runtime, 'garage_shell_tooltip_module', None)
+        if garage_tooltip_module is not None:
+            from gui.mods.offline_lan_0922.garage_shell_tooltip import GarageShellTooltipPatch
+            self._garage_shell_tooltip_patch = GarageShellTooltipPatch(
+                garage_tooltip_module, runtime.bigworld.wg_getNiceNumberFormat)
 
         def account_init(account):
             offline_initializing = compatibility._connecting
@@ -2906,6 +2914,8 @@ class OfflineCompatibility(object):
                 debug_panel_type.updateDebugInfo = debug_update
             if self._original_shell_tooltip is not None:
                 consumables_panel_type._ConsumablesPanel__makeShellTooltip = shell_tooltip
+            if self._garage_shell_tooltip_patch is not None:
+                self._garage_shell_tooltip_patch.install()
             self._installed = True
         except Exception:
             self._rollback_install()
@@ -3235,6 +3245,8 @@ class OfflineCompatibility(object):
                 debug_panel_type.__dict__.get('updateDebugInfo') is
                 self._debug_update_wrapper):
             debug_panel_type.updateDebugInfo = self._original_debug_update
+        if self._garage_shell_tooltip_patch is not None:
+            self._garage_shell_tooltip_patch.uninstall()
         consumables_panel_type = getattr(runtime, 'consumables_panel_type', None)
         if (consumables_panel_type is not None and
                 getattr(consumables_panel_type, '_ConsumablesPanel__makeShellTooltip', None)
