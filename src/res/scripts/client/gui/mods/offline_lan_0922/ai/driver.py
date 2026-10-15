@@ -994,7 +994,7 @@ class LocalDriver(object):
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
 			progress_target=None, turn_speed_limit=None, arrival_radius=None,
-			rotation_refused=False, recovery_goal=None):
+			rotation_refused=False, recovery_goal=None, retain_failed_legs=False):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1087,11 +1087,11 @@ class LocalDriver(object):
 			# mature driver behaviour. Reuse failed-leg memory only after two
 			# completed recovery attempts, like the existing recovery pocket.
 			history = None
-			if state['recovery_count'] >= 2 and target_distance > arrival:
+			if retain_failed_legs and state['recovery_count'] >= 2 and target_distance > arrival:
 				history = state.get('objective_progress_history')
-				if (history is None or _distance(position, history['origin']) >
-						2.0 * own_half_length + arrival):
-					history = dict(origin=tuple(position), entries=[])
+				if (history is None or _distance(history['goal'], pocket_goal) > 2.0 or
+						_distance(position, history['origin']) > 2.0 * own_half_length + arrival):
+					history = dict(origin=tuple(position), goal=tuple(pocket_goal), entries=[])
 					state['objective_progress_history'] = history
 				progress = next((entry for entry in history['entries']
 					if _distance(entry['goal'], progress_target) <= 2.0), None)
@@ -1110,7 +1110,7 @@ class LocalDriver(object):
 					del history['entries'][:-32]
 			elif distance <= arrival:
 				# A reached destination is a legitimate stop, not a timed stall.
-				progress.update(best=distance, at=state['clock'])
+				progress = dict(goal=tuple(progress_target), best=distance, at=state['clock'])
 			elif distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance

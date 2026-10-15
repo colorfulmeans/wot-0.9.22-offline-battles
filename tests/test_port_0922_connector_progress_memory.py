@@ -4,7 +4,8 @@ These are driver contract regressions, not native map/physics replays.
 """
 import math
 import unittest
-from test_port_0922_driver_arrival import LocalDriver
+from unittest import mock
+from test_port_0922_driver_arrival import BotAdapter, LocalDriver
 
 
 class ConnectorProgressMemoryTests(unittest.TestCase):
@@ -19,7 +20,8 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
         driver._state(11, 0, position)['recovery_count'] = 2
         return driver.drive(11, 0, position, 0., 0., dt, target, (),
                             lambda *unused: False, movement_intent=intent,
-                            progress_target=target, recovery_goal=(80., 0., 80.))
+                            progress_target=target, recovery_goal=(80., 0., 80.),
+                            retain_failed_legs=True)
 
     def test_recorded_local_global_local_handoff_keeps_previous_best_and_clock(self):
         for position, local, goal in self.cases:
@@ -72,6 +74,7 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
                         maximum_distance is not None and maximum_distance <= .5
                         and math.cos(yaw) < 0.,
                     progress_target=target, recovery_goal=goal,
+                    retain_failed_legs=True,
                     pose_clear=lambda yaw: False))
             self.assertTrue(any(c['recovery_mode'] == 'short_reverse_escape'
                                 for c in commands[85:]))
@@ -95,3 +98,22 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
         for index in range(100):
             self.drive(driver, (0., 0., 0.), (index * 3. + 10., 0., 20.))
         self.assertEqual(32, len(driver.states[11]['objective_progress_history']['entries']))
+
+    def test_adapter_admits_memory_for_withdrawal_or_local_spent_wreck_only(self):
+        for mode, wreck_distance, expected in (
+                ('route', None, False), ('withdraw', None, True),
+                ('route', 1., True), ('route', 100., False)):
+            adapter = BotAdapter('test', 1)
+            state = dict(id=11, slot=0, team=1, position=(0.,0.,0.),
+                         yaw=0., speed=0., dt=.1, neighbours=[])
+            if wreck_distance is not None:
+                adapter._wreck_history[11] = {29:dict(exhausted=True,
+                    origin=(wreck_distance,0.,0.))}
+            with mock.patch.object(adapter, '_wreck_push_plan', return_value=None), \
+                 mock.patch.object(adapter, '_reverse_withdrawal', return_value=None), \
+                 mock.patch.object(adapter.driver, 'drive', return_value=dict(
+                     throttle=1., turn=0., target_yaw=0., recovery_mode='drive')) as drive:
+                adapter._drive_order_controls(11, state, state['position'],
+                    dict(combat_mode=mode, move_position=(0.,0.,100.)),
+                    lambda *unused: True)
+            self.assertEqual(expected, drive.call_args.kwargs['retain_failed_legs'])

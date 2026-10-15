@@ -679,6 +679,15 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
+                    retain_failed_legs=(strategic.get('combat_mode') in (
+                        'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                        'crossfire_withdraw') or any(
+                            receipt.get('exhausted', False) and math.hypot(
+                                position[0] - receipt.get('exhausted_position', receipt['origin'])[0],
+                                position[2] - receipt.get('exhausted_position', receipt['origin'])[2]) <=
+                                2.0 * float(state.get('half_length', 3.5)) +
+                                2.0 * float(state.get('half_width', 1.7))
+                            for receipt in self._wreck_history.get(bot_id, {}).values())),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
