@@ -3622,7 +3622,10 @@ class TerrainNavigator(object):
 				('recovery', bot_id,
 				 int(state.get('replan_generation', 0))) +
 				tuple(path_key))
-			plan_start = tuple(state.get('recovery_start') or current)
+			# The request can precede a physics slice. Every new private search
+			# starts at the realised pose when it actually begins, not the earlier
+			# recovery anchor. Existing cached/in-flight jobs keep their identity.
+			plan_start = tuple(current)
 		previous_path = self.paths.get(state.get('path_key'))
 		key, path = self._path(effective_key, plan_start, goal, now,
 		                       None)
