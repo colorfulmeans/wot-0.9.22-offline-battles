@@ -20,10 +20,11 @@ def _fixture(damage='damage', speed=1415, kind='ARMOR_PIERCING_CR'):
                 compactDescr=42, kind=kind))
             # Different descriptor identity and a distractor shot ensure that
             # velocity comes from this gun's matching shell compact descriptor.
-            shots = [GunShot(7, 999), GunShot(42, speed)]
+            shots = [GunShot(7, speed), GunShot(42, speed), GunShot(8, 999)]
             self.configuration = types.SimpleNamespace(params=True,
                 vehicle=types.SimpleNamespace(descriptor=types.SimpleNamespace(
-                    gun=types.SimpleNamespace(shots=shots))))
+                    gun=types.SimpleNamespace(shots=shots),
+                    activeGunShotIndex=0)))
             self._valueWidth = 80
             self.rows = [self._packParameterBlock('口径', '105', ' (毫米)'),
                          self._packParameterBlock(labels[damage], '293–488', ' (HP)'),
@@ -56,11 +57,59 @@ def _fixture(damage='damage', speed=1415, kind='ARMOR_PIERCING_CR'):
     module = types.SimpleNamespace(CommonStatsBlockConstructor=Constructor,
         _AdvancedCommonStatsBlockConstructior=Advanced,
         text_styles=types.SimpleNamespace(main=main),
+        params_formatters=types.SimpleNamespace(BASE_SCHEME=(
+            lambda value: '<red>%s</red>' % value,
+            lambda value: '<stats>%s</stats>' % value,
+            lambda value: '<green>%s</green>' % value)),
         _ms=lambda key: labels[key.rsplit('/', 1)[-1]])
     return module, GarageShellTooltipPatch(module, lambda value: '{:,}'.format(value))
 
 
 class GarageShellTooltipTests(unittest.TestCase):
+    def test_speed_comparison_uses_native_scheme_and_each_views_baseline(self):
+        for kind in ('ARMOR_PIERCING', 'ARMOR_PIERCING_CR',
+                     'HOLLOW_CHARGE', 'HIGH_EXPLOSIVE'):
+            for speed, color in ((1400, 'green'), (800, 'red'), (1000, None)):
+                module, patch = _fixture(speed=speed, kind=kind)
+                patch.install()
+                for advanced, owner in ((False, module.CommonStatsBlockConstructor),
+                        (True, module._AdvancedCommonStatsBlockConstructior)):
+                    constructor = owner()
+                    descriptor = constructor.configuration.vehicle.descriptor
+                    descriptor.gun.shots[0].speed = 2000 if advanced else 1000
+                    descriptor.gun.shots[2].speed = 1000 if advanced else 2000
+                    descriptor.activeGunShotIndex = 2
+                    before = copy.deepcopy(constructor.rows)
+                    result = constructor.construct()
+                    number = '{:,}'.format(speed)
+                    if color:
+                        number = '<%s>%s</%s>' % (color, number, color)
+                    with self.subTest(kind=kind, speed=speed, advanced=advanced):
+                        self.assertEqual('<stats>%s</stats>' % number,
+                                         result[2]['data']['value'])
+                        self.assertEqual(2, descriptor.activeGunShotIndex)
+                        self.assertEqual(before, result[:2] + result[3:])
+                        self.assertEqual(before, constructor.rows)
+                patch.uninstall()
+
+    def test_unavailable_or_invalid_comparison_keeps_plain_velocity(self):
+        for baseline in (0, float('nan'), float('inf')):
+            module, patch = _fixture()
+            patch.install()
+            constructor = module.CommonStatsBlockConstructor()
+            constructor.configuration.vehicle.descriptor.gun.shots[0].speed = baseline
+            self.assertEqual('<stats>1,415</stats>',
+                             constructor.construct()[2]['data']['value'])
+            patch.uninstall()
+        for index in (None, -1, 10):
+            module, patch = _fixture()
+            patch.install()
+            constructor = module._AdvancedCommonStatsBlockConstructior()
+            constructor.configuration.vehicle.descriptor.activeGunShotIndex = index
+            self.assertEqual('<stats>1,415</stats>',
+                             constructor.construct()[2]['data']['value'])
+            patch.uninstall()
+
     def test_compatibility_lifecycle_installs_and_restores_native_garage_methods(self):
         from test_port_0922 import OfflineCompatibilityTests, _load_port_source
         runtime, unused_operations = OfflineCompatibilityTests()._runtime()

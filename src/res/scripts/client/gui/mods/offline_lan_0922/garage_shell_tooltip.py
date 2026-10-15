@@ -14,7 +14,7 @@ class GarageShellTooltipPatch(object):
         self._patches = []
         self._warned = False
 
-    def _insert(self, constructor, blocks):
+    def _insert(self, constructor, blocks, advanced=False):
         module = self._module
         damage_names = tuple(_text(module.text_styles.main(module._ms(
             '#menu:moduleInfo/params/' + name)))
@@ -47,6 +47,21 @@ class GarageShellTooltipPatch(object):
             if speed <= 0 or math.isnan(speed) or math.isinf(speed):
                 return blocks
             value = self._number_format(int(round(speed)))
+            # Match #1513 shellComparator (first/default shot) and
+            # shellOnVehicleComparator (the vehicle's active shot) without
+            # changing activeGunShotIndex or the native parameter registry.
+            shots = gun.shots
+            baseline_index = (getattr(descriptor, 'activeGunShotIndex', None)
+                              if advanced else 0)
+            if (isinstance(baseline_index, int) and
+                    0 <= baseline_index < len(shots)):
+                baseline = float(shots[baseline_index].speed)
+                if (baseline > 0 and not math.isnan(baseline) and
+                        not math.isinf(baseline) and speed != baseline):
+                    # Native BASE_SCHEME is worse/normal/better. Keep native
+                    # fonts, colors and any accessibility theme overrides.
+                    scheme = module.params_formatters.BASE_SCHEME
+                    value = scheme[2 if speed > baseline else 0](value)
             row = constructor._packParameterBlock(
                 speed_label, value,
                 u' (\u7c73/\u79d2)'.encode('utf-8'))
@@ -54,13 +69,13 @@ class GarageShellTooltipPatch(object):
             break
         return blocks
 
-    def _wrap(self, original):
+    def _wrap(self, original, advanced):
         patch = self
 
         def construct(constructor):
             blocks = original(constructor)
             try:
-                return patch._insert(constructor, blocks)
+                return patch._insert(constructor, blocks, advanced)
             except Exception as error:
                 # Optional tooltip enrichment must not break the native view.
                 if not patch._warned:
@@ -73,10 +88,11 @@ class GarageShellTooltipPatch(object):
     def install(self):
         if self._patches:
             return
-        for owner in (self._module.CommonStatsBlockConstructor,
-                      self._module._AdvancedCommonStatsBlockConstructior):
+        for owner, advanced in (
+                (self._module.CommonStatsBlockConstructor, False),
+                (self._module._AdvancedCommonStatsBlockConstructior, True)):
             original = owner.__dict__['construct']
-            wrapper = self._wrap(original)
+            wrapper = self._wrap(original, advanced)
             self._patches.append((owner, original, wrapper))
             owner.construct = wrapper
 
