@@ -30782,6 +30782,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._start_message = {'round_id': 2}
+        battle._battle_live = True
         position = types.SimpleNamespace(x=4., y=5., z=6.)
         matrix = types.SimpleNamespace(translation=position)
         runtime.math.Matrix = lambda value: value
@@ -30795,6 +30796,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertTrue(battle._log_bot_motion_probes(10.))
             payload = write.call_args[0][1]
             self.assertEqual(2, payload['round'])
+            self.assertEqual('live', payload['phase'])
             self.assertEqual([4.,5.,6.], payload['bots'][0]['model_position'])
             self.assertFalse(battle._log_bot_motion_probes(10.1))
             self.assertEqual(1, battle._sync.take_motion_probes.call_count)
@@ -30802,6 +30804,21 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertFalse(battle._log_bot_motion_probes(11.1))
             battle._generation += 1
             self.assertTrue(battle._log_bot_motion_probes(11.2))
+
+    def test_bot_motion_diagnostic_drains_without_reporting_after_result(self):
+        battle = BattleRuntime(_runtime())
+        battle._battle_live = True
+        battle._battle_result = {'winner': 1}
+        battle._sync = types.SimpleNamespace(take_motion_probes=mock.Mock())
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        with mock.patch.object(native_input_diagnostics, 'write_json_record') as write:
+            self.assertFalse(battle._log_bot_motion_probes(10.))
+            battle._battle_result = None
+            battle._battle_live = False
+            self.assertFalse(battle._log_bot_motion_probes(11.))
+        self.assertEqual([mock.call(10.), mock.call(11.)],
+                         battle._sync.take_motion_probes.call_args_list)
+        write.assert_not_called()
 
     def test_render_pose_fast_path_skips_materialization_and_bounds_tracks(self):
         runtime = _runtime()

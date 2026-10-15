@@ -27503,6 +27503,10 @@ class BattleRuntime(object):
             return False
         self._motion_probe_next = now + 1.0
         rows = self._sync.take_motion_probes(now)
+        if self._battle_result is not None or not self._battle_live:
+            # Drain at the existing diagnostic cadence, without touching pose
+            # playback. A stopped publisher has no live latency to report.
+            return False
         candidates = []
         origin = getattr(self._avatar, 'position', None)
         for key, row in rows.items():
@@ -27526,7 +27530,7 @@ class BattleRuntime(object):
             output.append(row)
         if output:
             from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
-            write_json_record('BOT MOTION PRESENT', dict(round=round_id,
+            write_json_record('BOT MOTION PRESENT', dict(round=round_id, phase='live',
                 time=now, bots=output))
             self._motion_probe_count += 1
         return bool(output)

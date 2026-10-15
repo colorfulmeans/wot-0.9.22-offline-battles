@@ -1098,7 +1098,11 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
                 mock.patch.object(
                     destructibles_sensor, '_get_destr_authority',
                     return_value=authority), \
-                mock.patch.object(sys, 'stdout', mock.Mock()):
+                mock.patch.object(sys, 'stdout', mock.Mock()), \
+                mock.patch.object(destructibles_sensor, '_vehicle_hull_bbox',
+                    side_effect=AssertionError('registration has no hull query')), \
+                mock.patch.object(destructibles_sensor, '_vehicle_swept_box',
+                    side_effect=AssertionError('registration has no contact sweep')):
             detail = destructibles_sensor.prewarm_tree_registry(
                 1, _Vector(), 0.0, descriptor, 1.0)
 

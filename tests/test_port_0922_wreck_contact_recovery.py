@@ -113,7 +113,8 @@ class WreckContactRecoveryTests(unittest.TestCase):
         before = dict(self.peer)
         command = self.decide()
         self.assertNotEqual('wreck_push', command['recovery_mode'])
-        self.assertEqual(14., self.adapter._wreck_attempts[1]['elapsed'])
+        self.assertTrue(self.adapter._wreck_attempts[1]['exhausted'])
+        self.assertLess(self.adapter._wreck_attempts[1]['elapsed'], 1.)
         self.assertEqual(before, self.peer)
         self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
 
@@ -128,7 +129,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
                          half_width=1.656103015,half_length=3.676434994)
         original_position=self.state['position']
         original_peer=dict(self.peer)
-        for frame in range(100):
+        for frame in range(50):
             # Reproduce the reported tiny longitudinal oscillation and tactical
             # engage/route changes without giving either body real progress.
             offset=.08 if frame%2 else -.08
@@ -142,7 +143,10 @@ class WreckContactRecoveryTests(unittest.TestCase):
             self.assertGreater(command['turn'],.1)
             self.assertGreater(command['recovery_probe_distance'],7.)
         self.assertEqual(original_peer,self.peer)
-        self.assertGreater(self.adapter._wreck_attempts[1]['elapsed'],9.)
+        self.assertGreater(self.adapter._wreck_attempts[1]['elapsed'],4.)
+        for unused in range(20):
+            command = self.decide()
+        self.assertNotEqual('wreck_push', command['recovery_mode'])
 
     def test_enemy_hull_ahead_does_not_replace_route_with_avoidance(self):
         self.route()
@@ -180,7 +184,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
             checked.append(yaw)
             return True
         self.state['push_pose_clear']=push_clear
-        commands=[self.decide() for unused in range(120)]
+        commands=[self.decide() for unused in range(55)]
         self.assertTrue(any(c['turn']>0. for c in commands))
         self.assertTrue(any(c['turn']<0. for c in commands))
         self.assertTrue(all(c['throttle']==1. for c in commands))
@@ -328,13 +332,13 @@ class WreckContactRecoveryTests(unittest.TestCase):
             command = self.decide()
         self.assertNotEqual('wreck_push', command['recovery_mode'])
 
-    def test_only_real_wreck_motion_restarts_failed_attempt(self):
+    def test_wreck_motion_does_not_restart_spent_attempt_in_same_jam(self):
         self.route()
         for unused in range(160): self.decide()
         self.order['route_id'] = 'medium'
         self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
         self.peer['position'] = (0., 0., 9.1)
-        self.assertEqual('wreck_push', self.decide()['recovery_mode'])
+        self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
 
     def test_push_never_ignores_live_hull_or_world_blocker(self):
         self.route()
@@ -352,9 +356,9 @@ class WreckContactRecoveryTests(unittest.TestCase):
             return position
         self.adapter.navigation_target=navigation
         self.assertEqual('wreck_push', self.decide()['recovery_mode'])
-        for unused in range(65): command=self.decide()
+        for unused in range(45): command=self.decide()
         self.assertEqual('wreck_push', command['recovery_mode'])
-        self.assertEqual([1]*66, calls)
+        self.assertEqual([1]*46, calls)
 
     def test_forget_removes_all_recovery_memory(self):
         self.decide()

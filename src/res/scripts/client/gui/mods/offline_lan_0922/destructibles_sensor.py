@@ -2148,15 +2148,20 @@ def _spatial_cell_signature_1513(rectangles):
 	"""Return local generations for the union of exact 8 m rectangles."""
 	cell_generations = globals().get(
 		'g_offh_destr_spatial_cell_generations', {})
-	keys = set()
-	for rectangle in rectangles:
-		for bin_x in xrange(int(rectangle[0]), int(rectangle[1]) + 1):
-			for bin_z in xrange(int(rectangle[2]), int(rectangle[3]) + 1):
-				keys.add((bin_x, bin_z))
+	keys = _native_geometry.spatial_cells(rectangles)
+	if keys is None:
+		keys = set()
+		for rectangle in rectangles:
+			for bin_x in xrange(int(rectangle[0]), int(rectangle[1]) + 1):
+				for bin_z in xrange(int(rectangle[2]), int(rectangle[3]) + 1):
+					keys.add((bin_x, bin_z))
+		keys = sorted(keys)
+	else:
+		combat_count('destructible_spatial_cells_native')
 	return (int(globals().get(
 		'g_offh_destr_spatial_global_generation', 0)), tuple(
 			(key, int(cell_generations.get(key, 0)))
-			for key in sorted(keys)))
+			for key in keys))
 
 
 def _collision_region_revision_1513(lower, upper):
@@ -7140,26 +7145,23 @@ def _fell_trees_near(
 			globals().setdefault('g_offh_destr_falling_active', {})
 		_st = _tree_runtime_state_1513(spaceID)
 		cos_y = math.cos(yaw); sin_y = math.sin(yaw)
-		bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
-		bbox = _vehicle_hull_bbox(td)
-		if bbox is None:
-			bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
-		try:
-			hw = max(abs(bbox[0][0]), abs(bbox[1][0]))
-			hl_b = abs(bbox[0][2])
-			hl_f = abs(bbox[1][2])
-		except (AttributeError, KeyError, TypeError, IndexError):
-			raise RuntimeError('#1513 hull hit tester bbox is invalid')
-		vehicle_box = _vehicle_swept_box(pos, yaw, vel, bbox)
+		# Registration consumes chunk identity, never hull contact geometry.
+		# Motion callers build their own current sweep after this prewarm pass.
+		bbox = vehicle_box = None
+		if not registration_only:
+			bbox = _vehicle_hull_bbox(td)
+			if bbox is None:
+				bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
+			vehicle_box = _vehicle_swept_box(pos, yaw, vel, bbox)
 		_current_cid = AreaDestructibles.chunkIDFromPosition(
 			Math.Vector3(pos.x, pos.y, pos.z))
 		_receipt_key = None
-		if _current_cid is not None and _destructible_catalog is not None:
+		if (not registration_only and _current_cid is not None and
+				_destructible_catalog is not None):
 			_receipt_key = _proximity_receipt_key_1513(
 				spaceID, _current_cid, pos, vehicle_box)
-			if (not registration_only and
-					_empty_proximity_receipt_valid_1513(
-					_receipt_key, mgr, _st['chunks'])):
+			if _empty_proximity_receipt_valid_1513(
+					_receipt_key, mgr, _st['chunks']):
 				return
 		_native_neighbourhood = _native_geometry.neighbourhood(
 			_native_sensor, AreaDestructibles, pos, sin_y, cos_y, vel,

@@ -149,6 +149,8 @@ jobs:
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \
               /tmp/offline_math_batch_native.so
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_box_geometry.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_visibility_frontier.py \
               /tmp/offline_math_batch_native.so
             g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \

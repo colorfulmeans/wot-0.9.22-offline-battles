@@ -21,6 +21,20 @@ class Vector:
 
 
 class NativeBoxAdapterTests(unittest.TestCase):
+    def test_spatial_signature_uses_native_cells_but_reads_current_generations(self):
+        generations = {(-1, 2): 7}
+        with mock.patch.dict(sensor.__dict__, {
+                'g_offh_destr_spatial_cell_generations': generations,
+                'g_offh_destr_spatial_global_generation': 3}), \
+                mock.patch.object(native_math, 'call', return_value=((-1, 2), (0, 2))) as call:
+            rectangles = ((-1, 0, 2, 2),)
+            self.assertEqual((3, (((-1, 2), 7), ((0, 2), 0))),
+                             sensor._spatial_cell_signature_1513(rectangles))
+            generations[(0, 2)] = 8
+            self.assertEqual((3, (((-1, 2), 7), ((0, 2), 8))),
+                             sensor._spatial_cell_signature_1513(rectangles))
+            call.assert_called_with('destr_box_geometry', 3, rectangles)
+
     def test_box_rejection_evidence_names_the_actual_native_opcode(self):
         with mock.patch.dict(diagnostics.__dict__, {'_counts': {}, '_reported': set(), '_reports_by_method': {}}), \
                 mock.patch.object(diagnostics, '_write_record') as write:

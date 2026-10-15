@@ -11,6 +11,8 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
+_WRECK_NO_PROGRESS_SECONDS = 6.0
+
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
 )
@@ -309,7 +311,7 @@ class BotAdapter(object):
         wreck_displacement = (0.0 if attempt is None else math.hypot(
             where[0]-attempt['position'][0], where[2]-attempt['position'][2]))
         if (attempt is None or
-                wreck_displacement >= 1.0):
+                (not attempt['exhausted'] and wreck_displacement >= 1.0)):
             previous = attempt
             heading = (math.atan2(where[0]-position[0], where[2]-position[2])
                        if side_wreck else desired)
@@ -328,6 +330,7 @@ class BotAdapter(object):
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
         evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
+                        no_progress_limit=_WRECK_NO_PROGRESS_SECONDS,
                         progress=progress, best_progress=attempt['best_progress'],
                         wreck_displacement=wreck_displacement,
                         own_elapsed=attempt['own_elapsed'],
@@ -352,11 +355,14 @@ class BotAdapter(object):
         attempt['own_elapsed'] += step
         evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'],
                         own_elapsed=attempt['own_elapsed'], own_best_progress=attempt['own_best_progress'])
-        if attempt['elapsed'] >= 14.0 or attempt['own_elapsed'] >= 14.0:
+        # Give a movable corpse real forward torque, then hand a motionless
+        # hull back to checked recovery. Historical progress (or a corpse
+        # sliding away) must not buy another fourteen seconds of oscillation.
+        if (attempt['elapsed'] >= _WRECK_NO_PROGRESS_SECONDS or
+                attempt['own_elapsed'] >= _WRECK_NO_PROGRESS_SECONDS):
             # Resume the ordinary driver and its progress/replanning clocks.
             # Never turn an exhausted motor attempt into a permanent hold.
             attempt.update(exhausted=True, exhausted_position=position)
-            attempt['elapsed'] = max(14.0, attempt['elapsed'])
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
@@ -379,12 +385,11 @@ class BotAdapter(object):
                 not pose_clear(yaw + math.copysign(min(0.45, abs(turn)), turn))):
             # A realised world turn refusal is not a movable-wreck contact.
             # Release this failed episode to normal checked recovery immediately.
-            attempt['elapsed'] = 14.0
             attempt.update(exhausted=True, exhausted_position=position)
-            evidence.update(phase='world_turn_refused', elapsed=14.0)
+            evidence.update(phase='world_turn_refused')
             return None
-        if not side_wreck and attempt['elapsed'] >= 8.0:
-            side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
+        if not side_wreck and attempt['elapsed'] >= 2.0:
+            side = 1.0 if int((attempt['elapsed']-2.0)/2.0) % 2 else -1.0
             sample_yaw = yaw + side*0.45
             pose_clear = state.get('push_pose_clear')
             own_shape = state.get('collision_shape') or (
