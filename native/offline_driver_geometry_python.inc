@@ -121,10 +121,10 @@ PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
             const double sx=v[0]+sign*std::sin(v[3])*v[6]*.5;
             const double sz=v[2]+sign*std::cos(v[3])*v[6]*.5;
             for(const auto &p:peers) {
-                if(op==0) {
+                if(op==0 || op==1) {
                     const auto hit=contact(v[0],v[2],v[3],v[4],v[5],p);
                     if(hit[2]>=-1.e-9) {
-                        const double bx=-std::sin(v[3]),bz=-std::cos(v[3]);
+                        const double bx=sign*std::sin(v[3]),bz=sign*std::cos(v[3]);
                         const double outward=bx*hit[0]+bz*hit[1];
                         const double away=bx*(v[0]-p.x)+bz*(v[2]-p.z);
                         if(outward>=-1.e-9 && away>=-1.e-9)continue;

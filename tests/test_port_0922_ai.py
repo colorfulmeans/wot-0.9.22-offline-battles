@@ -2689,8 +2689,15 @@ class BotAiPortTests(unittest.TestCase):
                 9, 0, (0.0, 0.0, 0.0), 0.0, 0.0, 1.0 / 30.0,
                 (0.0, 0.0, 50.0), behind, lambda unused_yaw: True)
             modes.add(order['recovery_mode'])
+            self.assertGreaterEqual(order['throttle'],0.)
+            if order['recovery_mode']=='short_forward_escape':
+                self.assertIsNone(driver._reverse_blocked_by_vehicle(
+                    (0.,0.,0.),math.pi,behind,3.5,1.7,
+                    order['recovery_probe_distance']))
 
-        self.assertIn('pivot_recovery', modes)
+        # A proved forward exit also satisfies the contract. Requiring a
+        # particular pivot implementation would reject the safer translation.
+        self.assertTrue(modes & {'pivot_recovery','short_forward_escape'})
         self.assertNotIn('reverse_turn', modes)
 
     def test_wedged_hull_uses_bounded_backing_distance(self):

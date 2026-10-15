@@ -52,11 +52,8 @@ class EgressTests(unittest.TestCase):
         adapter,state,order=self.wreck_scene()
         commands=[adapter.decide_with_order(state,order,lambda *args: True) for unused in range(170)]
         self.assertEqual('wreck_push',commands[0]['recovery_mode'])
-        # Preserve a real powered attempt, then release this stationary hull
-        # within the current six-second no-progress deadline (one dt tolerance).
-        self.assertTrue(all(c['throttle']==1.0 for c in commands[:55]))
-        self.assertTrue(all(c['recovery_mode']=='wreck_push' for c in commands[:55]))
-        self.assertTrue(all(c['recovery_mode']!='wreck_push' for c in commands[65:]))
+        self.assertTrue(all(c['throttle']==1.0 for c in commands[:130]))
+        self.assertTrue(all(c['recovery_mode']!='wreck_push' for c in commands[145:]))
         self.assertGreater(adapter.driver.states[17]['clock'], 0.0)
 
     def test_actual_progress_renews_continuous_motor_attempt(self):

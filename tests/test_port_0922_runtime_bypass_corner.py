@@ -15,6 +15,43 @@ class RuntimeBypassCornerTests(unittest.TestCase):
          (-167.33, .51, -80.20)),
     )
 
+    def test_rejected_cached_join_does_not_restart_its_consumed_entry(self):
+        fixture=corner_fixture.ReachedCornerTests()
+        corner=(-302.,0.,-194.)
+        current=(-302.129,0.,-191.851)
+        for deferred in (False,True):
+            nav,state,goal,path_key,key,path=fixture.scene(corner)
+            path[1]=(-306.,0.,-190.)
+            state.update(index=1,last_target=path[1])
+            def proof(*unused):
+                nav.grid._proof_deferred=deferred
+                return False
+            with self.subTest(deferred=deferred),fixture.seams(nav,key,path), \
+                 mock.patch.object(nav.grid,'segment_clear',side_effect=proof), \
+                 mock.patch.object(nav,'request_replan',wraps=nav.request_replan) as replan, \
+                 mock.patch.object(nav,'_fallback_target',return_value=current):
+                result=nav.next_target(3,current,goal,path_key,1.)
+                self.assertEqual(current,result)
+                self.assertNotEqual(corner,result)
+                replan.assert_not_called()
+                self.assertEqual(1,state['index'])
+
+    def test_clear_cached_setup_remains_available_for_a_real_turn(self):
+        fixture=corner_fixture.ReachedCornerTests()
+        corner=(-302.,0.,-194.)
+        current=(-302.129,0.,-191.851)
+        nav,state,goal,path_key,key,path=fixture.scene(corner)
+        path[1]=(-306.,0.,-190.)
+        state['last_target']=current
+        # Passing the setup's projection is a heuristic, not a collision.
+        # The outgoing edge is not proved; returning to the clear setup is
+        # still a legal way to make this actual bend.
+        with fixture.seams(nav,key,path), \
+             mock.patch.object(nav,'_fallback_target') as fallback:
+            self.assertEqual(corner,nav.next_target(3,current,goal,path_key,1.))
+        fallback.assert_not_called()
+        self.assertEqual(0,state['index'])
+
     def scene(self, corner, bypass):
         fixture = corner_fixture.ReachedCornerTests()
         nav, state, goal, path_key, key, path = fixture.scene(corner)

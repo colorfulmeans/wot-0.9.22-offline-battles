@@ -11,6 +11,15 @@ backend=imp.load_dynamic('offline_math_batch_native',sys.argv[1])
 rng=random.Random(134232);driver=LocalDriver();checks=0
 def reference():native_math._backend=None;native_math._attempted=True
 def native():native_math._backend=backend;native_math._attempted=True
+for x,z,blocked in ((3.,0.,False),(-3.,0.,False),(0.,7.,True),(0.,-7.,False)):
+ peer=dict(id=1,position=(x,0.,z),yaw=0.,half_width=1.5,half_length=3.5,
+           alive=True,velocity=(0.,0.,0.))
+ reference();assert driver._static_hull_ahead((0.,0.,0.),0.,[peer],3.5,1.5)==blocked
+ native();before=native_math.snapshot().get('driver_geometry',0)
+ assert driver._static_hull_ahead((0.,0.,0.),0.,[peer],3.5,1.5)==blocked
+ assert native_math.snapshot()['driver_geometry']==before+1
+ front=dict(peer,position=(0.,0.,7.))
+ assert driver._static_hull_ahead((0.,0.,0.),0.,[peer,front],3.5,1.5)
 for case in range(1500):
  position=(rng.uniform(-10.,10.),rng.uniform(-2.,2.),rng.uniform(-10.,10.))
  yaw=rng.uniform(-math.pi,math.pi);length=rng.uniform(2.,5.);width=rng.uniform(1.,2.5)

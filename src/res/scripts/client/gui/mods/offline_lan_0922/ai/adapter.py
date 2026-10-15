@@ -11,7 +11,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 
 import math
 
-_WRECK_NO_PROGRESS_SECONDS = 6.0
+_WRECK_NO_PROGRESS_SECONDS = 14.0
 
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
@@ -90,6 +90,7 @@ class BotAdapter(object):
                     'peer_team': peer.get('team'),
                     'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
+                    'depth': overlap[2],
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
@@ -251,6 +252,32 @@ class BotAdapter(object):
                 recovery_probe_distance=recovery_probe_distance(half_length))
         return None
 
+    def _retain_recovery_progress(self, bot_id, state, position, strategic):
+        """Admit persistent progress only for a real local recovery owner.
+
+        A history of two completed driver attempts is checked by the driver.
+        Mere travel through eroded cells or normal traffic alignment is not
+        a physical obstruction. Once admitted, tactical order changes do not
+        erase this owner's progress; arrival, hold and hull departure do.
+        """
+        episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode')
+        length = float(state.get('half_length', 3.5))
+        if (episode and math.hypot(position[0]-episode['origin'][0],
+                position[2]-episode['origin'][2]) <= 2.0*length + WAYPOINT_ARRIVAL_RADIUS):
+            return True
+        if state.get('native_rotation_refused'):
+            return True
+        if strategic.get('combat_mode') in (
+                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'crossfire_withdraw'):
+            return True
+        reach = (2.0 * float(state.get('half_length', 3.5)) +
+                 2.0 * float(state.get('half_width', 1.7)))
+        return any(receipt.get('exhausted', False) and math.hypot(
+            position[0] - receipt.get('exhausted_position', receipt['origin'])[0],
+            position[2] - receipt.get('exhausted_position', receipt['origin'])[2]) <= reach
+            for receipt in self._wreck_history.get(bot_id, {}).values())
+
     def _wreck_push_plan(self, bot_id, state, position, strategic,
                          direction_clear, contact=None):
         """Spend a continuous motor attempt before routing around a wreck.
@@ -310,8 +337,7 @@ class BotAdapter(object):
         phase = 'resumed'
         wreck_displacement = (0.0 if attempt is None else math.hypot(
             where[0]-attempt['position'][0], where[2]-attempt['position'][2]))
-        if (attempt is None or
-                (not attempt['exhausted'] and wreck_displacement >= 1.0)):
+        if attempt is None or wreck_displacement >= 1.0:
             previous = attempt
             heading = (math.atan2(where[0]-position[0], where[2]-position[2])
                        if side_wreck else desired)
@@ -355,9 +381,8 @@ class BotAdapter(object):
         attempt['own_elapsed'] += step
         evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'],
                         own_elapsed=attempt['own_elapsed'], own_best_progress=attempt['own_best_progress'])
-        # Give a movable corpse real forward torque, then hand a motionless
-        # hull back to checked recovery. Historical progress (or a corpse
-        # sliding away) must not buy another fourteen seconds of oscillation.
+        # Preserve the release motor budget. Only real hull progress renews
+        # it while the same encounter geometry remains in effect.
         if (attempt['elapsed'] >= _WRECK_NO_PROGRESS_SECONDS or
                 attempt['own_elapsed'] >= _WRECK_NO_PROGRESS_SECONDS):
             # Resume the ordinary driver and its progress/replanning clocks.
@@ -388,8 +413,8 @@ class BotAdapter(object):
             attempt.update(exhausted=True, exhausted_position=position)
             evidence.update(phase='world_turn_refused')
             return None
-        if not side_wreck and attempt['elapsed'] >= 2.0:
-            side = 1.0 if int((attempt['elapsed']-2.0)/2.0) % 2 else -1.0
+        if not side_wreck and attempt['elapsed'] >= 8.0:
+            side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
             sample_yaw = yaw + side*0.45
             pose_clear = state.get('push_pose_clear')
             own_shape = state.get('collision_shape') or (
@@ -602,6 +627,15 @@ class BotAdapter(object):
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
+        if side_contact and contact['peer_alive'] and contact['peer_team'] == state.get('team'):
+            # A tangential/outward route already leaves this contact. Do not
+            # replace it (or an explicit hold) with a new longitudinal trip.
+            # Ordinary checked steering still handles a blocked turn, and the
+            # runtime's friendly-reposition owner may issue an actual move.
+            approach = ((move_position[0]-position[0])*contact['normal'][0] +
+                        (move_position[2]-position[2])*contact['normal'][1])
+            side_contact = (contact['depth'] > 1.e-9 or
+                            approach < -1.e-9)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
@@ -679,15 +713,8 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
-                    retain_failed_legs=(strategic.get('combat_mode') in (
-                        'withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                        'crossfire_withdraw') or any(
-                            receipt.get('exhausted', False) and math.hypot(
-                                position[0] - receipt.get('exhausted_position', receipt['origin'])[0],
-                                position[2] - receipt.get('exhausted_position', receipt['origin'])[2]) <=
-                                2.0 * float(state.get('half_length', 3.5)) +
-                                2.0 * float(state.get('half_width', 1.7))
-                            for receipt in self._wreck_history.get(bot_id, {}).values())),
+                    retain_failed_legs=self._retain_recovery_progress(
+                        bot_id, state, position, strategic),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks

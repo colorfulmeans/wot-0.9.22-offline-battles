@@ -726,6 +726,17 @@ class LocalDriver(object):
 					neighbour.get('half_length', half_length) or half_length)
 				other_width = float(
 					neighbour.get('half_width', half_width) or half_width)
+				contact = tank_collision._obb_overlap(
+					position[0], position[2], candidate_yaw, (half_width, half_length),
+					other[0], other[2], other_yaw, (other_width, other_length))
+				if contact[2] >= -1.0e-9:
+					forward_x, forward_z = math.sin(candidate_yaw), math.cos(candidate_yaw)
+					outward = forward_x*contact[0] + forward_z*contact[1]
+					away = forward_x*(position[0]-other[0]) + forward_z*(position[2]-other[2])
+					if outward >= -1.0e-9 and away >= -1.0e-9:
+						# The same complete-sweep rule applies in both directions:
+						# separating or parallel contact is not an obstacle ahead.
+						continue
 				if self._obb_overlap(
 						sweep, float(candidate_yaw), sweep_length, half_width,
 						other, other_yaw, other_length, other_width):
@@ -1049,13 +1060,25 @@ class LocalDriver(object):
 			}
 		own_half_length = max(0.5, float(half_length))
 		own_half_width = max(0.3, float(half_width))
+		# Physical departure retires recovery even when the adapter has just
+		# returned to normal traffic. Do not leave inactive history that can
+		# resurrect on a later visit to the same coordinates.
+		history = state.get('objective_progress_history')
+		if (history is not None and
+				_distance(position, history['origin']) > 2.0 * own_half_length + arrival):
+			state.pop('objective_progress_history', None)
+			state.pop('objective_progress', None)
+		episode = state.get('recovery_replan_episode')
+		if (episode is not None and
+				_distance(position, episode['origin']) > 2.0 * own_half_length + arrival):
+			state.pop('recovery_replan_episode', None)
 		# A proved steering waypoint is not the recovery task's identity.
 		# Switching nearby bypass legs must not erase the native-refusal lease.
 		pocket_goal = recovery_goal if recovery_goal is not None else (progress_target or target)
 		pocket = state.get('recovery_pocket')
 		if pocket is not None and (
 				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
-				_distance(pocket['goal'], pocket_goal) > 2.0):
+				(not retain_failed_legs and _distance(pocket['goal'], pocket_goal) > 2.0)):
 			state.pop('recovery_pocket', None)
 			state.pop('short_escape_probes', None)
 			pocket = None
@@ -1089,10 +1112,15 @@ class LocalDriver(object):
 			history = None
 			if retain_failed_legs and state['recovery_count'] >= 2 and target_distance > arrival:
 				history = state.get('objective_progress_history')
-				if (history is None or _distance(history['goal'], pocket_goal) > 2.0 or
+				if (history is None or
 						_distance(position, history['origin']) > 2.0 * own_half_length + arrival):
+					previous = state.get('objective_progress') if history is None else None
 					history = dict(origin=tuple(position), goal=tuple(pocket_goal), entries=[])
 					state['objective_progress_history'] = history
+					# Entering repeated recovery must not give the active leg a
+					# fresh lease. Its physical progress predates this admission.
+					if previous is not None:
+						history['entries'].append(previous)
 				progress = next((entry for entry in history['entries']
 					if _distance(entry['goal'], progress_target) <= 2.0), None)
 			else:
@@ -1111,6 +1139,11 @@ class LocalDriver(object):
 			elif distance <= arrival:
 				# A reached destination is a legitimate stop, not a timed stall.
 				progress = dict(goal=tuple(progress_target), best=distance, at=state['clock'])
+				consumed = state.get('objective_progress_history')
+				if consumed is not None:
+					# A consumed leg cannot return later as an expired failure.
+					consumed['entries'][:] = [entry for entry in consumed['entries']
+						if _distance(entry['goal'], progress_target) > 2.0]
 			elif distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance
@@ -1140,6 +1173,12 @@ class LocalDriver(object):
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		if (target_distance <= arrival and not objective_stalled and
 				not native_translation_stalled):
+			if _distance(position, pocket_goal) <= arrival:
+				# Only arrival at the actual order completes the physical owner.
+				# Reaching an intermediate path corner does not clear a jam.
+				state.pop('objective_progress_history', None)
+				state.pop('recovery_pocket', None)
+				state.pop('recovery_replan_episode', None)
 			state.pop('short_translation_escape', None)
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
@@ -1153,6 +1192,7 @@ class LocalDriver(object):
 			state['braking_target'] = None
 			return {
 				'throttle': 0.0,
+				'brake': bool(stop_at_target),
 				'turn': 0.0,
 				'target_yaw': float(yaw),
 				'recovery_mode': 'arrived',
@@ -1452,7 +1492,7 @@ class LocalDriver(object):
 				# produced ``stopping_distance``. If tuning or a slope leaves the
 				# hull stopped short, release the latch and approach again.
 				if (abs(float(speed)) <= 0.35 and
-						target_distance > arrival + (0.5 if arrival_radius is None else 0.0)):
+						target_distance > arrival):
 					state['braking_target'] = None
 				else:
 					throttle = 0.0

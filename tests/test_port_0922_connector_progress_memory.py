@@ -99,7 +99,68 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
             self.drive(driver, (0., 0., 0.), (index * 3. + 10., 0., 20.))
         self.assertEqual(32, len(driver.states[11]['objective_progress_history']['entries']))
 
-    def test_adapter_admits_memory_for_withdrawal_or_local_spent_wreck_only(self):
+    def test_switching_remote_orders_cannot_renew_the_same_unmoved_leg(self):
+        driver = LocalDriver()
+        position, local = (0.,0.,0.), (0.,0.,100.)
+        driver._state(11,0,position)['recovery_count'] = 2
+        original = None
+        for remote in ((80.,0.,80.), (130.,0.,134.), (-110.,0.,27.), (80.,0.,80.)):
+            driver.drive(11,0,position,0.,0.,.1,local,(),lambda *unused:True,
+                         progress_target=local, recovery_goal=remote,
+                         retain_failed_legs=True)
+            if original is None:
+                original = driver.states[11]['objective_progress']
+            self.assertIs(original, driver.states[11]['objective_progress'])
+            self.assertEqual(.1, original['at'])
+
+    def test_admission_preserves_existing_progress_and_arrival_consumes_it(self):
+        driver = LocalDriver()
+        position, local, goal = self.cases[0]
+        driver.drive(11,0,position,0.,0.,.1,local,(),lambda *unused:False,
+                     progress_target=local)
+        original = driver.states[11]['objective_progress']
+        self.drive(driver, position, local)
+        self.assertIs(original, driver.states[11]['objective_progress'])
+        self.drive(driver, local, local)
+        self.drive(driver, local, goal)
+        self.drive(driver, position, local)
+        self.assertIsNot(original, driver.states[11]['objective_progress'])
+
+    def test_leaving_the_physical_pocket_retires_the_same_leg_history(self):
+        driver = LocalDriver()
+        for position in ((0.,0.,0.), (20.,0.,0.)):
+            driver._state(11,0,position)['recovery_count'] = 2
+            driver.drive(11,0,position,0.,0.,.1,(0.,0.,100.),(),lambda *a:True,
+                progress_target=(0.,0.,100.),retain_failed_legs=True)
+            self.assertEqual(driver.states[11]['clock'],
+                             driver.states[11]['objective_progress']['at'])
+
+    def test_actual_order_arrival_completes_the_recovery_owner(self):
+        driver = LocalDriver()
+        self.drive(driver,(0.,0.,0.),(80.,0.,80.))
+        driver.states[11]['recovery_replan_episode'] = dict(issued=True,origin=(0.,0.,0.))
+        self.drive(driver,(80.,0.,80.),(80.,0.,80.))
+        self.assertNotIn('objective_progress_history',driver.states[11])
+        self.assertNotIn('recovery_replan_episode',driver.states[11])
+
+    def test_stopping_short_of_arrival_releases_the_brake_latch(self):
+        driver = LocalDriver()
+        args = (11,0,(0.,0.,0.),0.)
+        goal = (0.,0.,1.8)
+        braking = driver.drive(*(args+(2.,.1,goal,(),lambda *a:True)),
+            stopping_distance=2.,stop_at_target=True)
+        self.assertTrue(braking['brake'])
+        approach = driver.drive(*(args+(0.,.1,goal,(),lambda *a:True)),
+            stopping_distance=0.,stop_at_target=True)
+        self.assertEqual(1.,approach['throttle'])
+        stopped = driver.drive(11,0,goal,0.,0.,.1,goal,(),lambda *a:True,
+                               stop_at_target=True)
+        self.assertTrue(stopped['brake'])
+        passing = driver.drive(11,0,goal,0.,0.,.1,goal,(),lambda *a:True,
+                               stop_at_target=False)
+        self.assertFalse(passing['brake'])
+
+    def test_unobstructed_travel_is_separate_from_admitted_recovery(self):
         for mode, wreck_distance, expected in (
                 ('route', None, False), ('withdraw', None, True),
                 ('route', 1., True), ('route', 100., False)):
@@ -117,3 +178,18 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
                     dict(combat_mode=mode, move_position=(0.,0.,100.)),
                     lambda *unused: True)
             self.assertEqual(expected, drive.call_args.kwargs['retain_failed_legs'])
+
+    def test_proved_route_blockage_keeps_progress_across_mode_handoffs(self):
+        adapter = BotAdapter('test', 1)
+        state = dict(id=11, half_length=3.5, half_width=1.7)
+        position = (0.,0.,0.)
+        adapter.driver._state(11,0,position)['recovery_replan_episode'] = dict(
+            origin=position, at=0., count=2, cause='local_blocked', issued=False)
+        for mode in ('route', 'advance', 'withdraw'):
+            self.assertTrue(adapter._retain_recovery_progress(
+                11,state,position,dict(combat_mode=mode)))
+        departed=(20.,0.,0.)
+        self.assertFalse(adapter._retain_recovery_progress(
+            11,state,departed,dict(combat_mode='route')))
+        adapter.driver.drive(11,0,departed,0.,0.,.1,(0.,0.,100.),(),lambda *a:True)
+        self.assertNotIn('recovery_replan_episode',adapter.driver.states[11])

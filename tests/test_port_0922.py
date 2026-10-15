@@ -7125,7 +7125,9 @@ class BootstrapContractTests(unittest.TestCase):
         package.PORT_VERSION = '0.6.1'
         package.TARGET_CLIENT_VERSION = '0.9.22.0.1'
         package.TARGET_CLIENT_BUILD = '1513'
-        package.__path__ = []
+        # Bootstrap imports the real customization rules. Keep the package
+        # searchable while substituting only the explicit engine owners below.
+        package.__path__ = [str(bootstrap_path.parent)]
         config = types.ModuleType('gui.mods.offline_lan_0922.config')
         config.PLAYER_MODE = 'player'
         config.SIMULATION_WORKER_MODE = 'simulation_worker'

@@ -28,7 +28,7 @@ def _write_record(payload):
 def write_json_record(label, payload):
     """Keep every engine stdout line below its 8 KiB truncation boundary."""
     global _record_sequence
-    encoded = json.dumps(payload, sort_keys=True)
+    encoded = json.dumps(payload)
     if len(encoded) <= 6000:
         sys.stdout.write('[Offline LAN 0.9.22] %s %s\n' % (label, encoded))
         return
@@ -37,7 +37,7 @@ def write_json_record(label, payload):
     for index, piece in enumerate(pieces):
         sys.stdout.write('[Offline LAN 0.9.22] %s PART %s\n' % (label,
             json.dumps({'schema': 1, 'pid': os.getpid(), 'record': _record_sequence,
-                'part': index + 1, 'parts': len(pieces), 'data': piece}, sort_keys=True)))
+                'part': index + 1, 'parts': len(pieces), 'data': piece})))
 
 
 def _type_name(value):
@@ -107,6 +107,21 @@ def _without_samples(value):
     return value
 
 
+def structural_signature(value):
+    """Canonicalize owned plain descriptions without the Python 2 encoder.
+
+    Callers supply sanitized descriptions, never arbitrary native inputs.
+    Ordering log keys is unnecessary and sort_keys forces CPython 2.7's
+    reference-cycle-producing Python encoder on every diagnostic record.
+    """
+    if type(value) is dict:
+        return tuple((key, structural_signature(item))
+                     for key, item in sorted(value.items()))
+    if type(value) in (list, tuple):
+        return tuple(structural_signature(item) for item in value)
+    return value
+
+
 def record(method, args, reason='unsupported_input', error=None):
     """Observe existing rejection; no retry, admission change or new callback."""
     if type(method) is not str or method not in _METHODS:
@@ -134,7 +149,7 @@ def record(method, args, reason='unsupported_input', error=None):
             [4096 if chunk_query else _MAX_NODES], 64 if chunk_query else _MAX_ITEMS)
         error_type = _type_name(error) if error is not None else None
         signature = (method, operation, reason, error_type,
-                     json.dumps(_without_samples(evidence), sort_keys=True))
+                     structural_signature(_without_samples(evidence)))
         if signature in _reported:
             return
         callers, frame = [], None

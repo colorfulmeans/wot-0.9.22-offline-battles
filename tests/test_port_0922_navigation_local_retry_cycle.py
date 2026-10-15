@@ -18,11 +18,7 @@ class LocalRetryCycleTests(unittest.TestCase):
         return nav, state, position, goal
 
     def refuse(self, nav, state, position, goal, now):
-        # Each verdict is a newly attempted connector. A retired exact point
-        # is now rejected before probing and cannot fabricate another verdict.
-        attempt = getattr(nav, '_fixture_refusal_attempt', 0)
-        nav._fixture_refusal_attempt = attempt + 1
-        target = (position[0]+(1.6 if attempt % 2 else -1.6), position[1], position[2]+2.65)
+        target = (position[0]-1.6, position[1], position[2]+2.65)
         nav._remember_local_fallback(target, goal, state, position, now)
         state['last_target'] = target
         with mock.patch.object(nav.grid, 'dry_segment_clear', return_value=False), \

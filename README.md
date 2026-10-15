@@ -570,6 +570,16 @@ python3 tools/run_test_suite.py --jobs 4 --logs build/client-test-results
 python3 tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
 ```
 
+The runner isolates module fakes by test file, fails empty discovery, and writes
+`summary.json` with failing assertion/subtest identities and skips alongside the
+complete logs. Compare the actual published release source with the candidate;
+equal failure counts between neighboring test builds are not regression proof.
+Recovery checks include continuous traffic departure, terminal arrival, real
+contact separation, returned connectors, deferred proofs, and physical departure
+from a recovery pocket. A control command alone does not demonstrate escape.
+Engine-free fixtures and CPython 2.7 native parity do not replace acceptance on
+the pinned Windows client.
+
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
 assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage
