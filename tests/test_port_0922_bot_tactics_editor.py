@@ -374,6 +374,20 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
 
 
 class PragueRouteResourceIdentityTests(unittest.TestCase):
+    def test_railway_navigation_refresh_preserves_saved_orders_on_all_affected_maps(self):
+        affected=[name for name,meta in cfg.MAPS.items()
+                  if meta.get('navigation_previous_sha256')]
+        self.assertEqual(11,len(affected))
+        for name in affected:
+            raw=cfg.empty('Existing railway map orders')
+            entry=copy.deepcopy(cfg.default_map(name))
+            entry['resource_sha256']=cfg.MAPS[name]['navigation_previous_sha256']
+            raw['maps'][name]=entry
+            expected=copy.deepcopy(entry)
+            expected['resource_sha256']=cfg.MAPS[name]['resource_sha256']
+            self.assertEqual(expected,cfg.canonical(raw)['maps'][name],name)
+            self.assertTrue(graph_data(name)['routes'])
+
     def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
         raw = cfg.empty('Existing Prague profile')
         raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))

@@ -81,7 +81,19 @@ def default_profile(name='Default'):
     from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
     document = json.loads(PROFILE_JSON)
     document['name'] = name
+    # The reviewed orders remain immutable. Refresh only a resource identity
+    # whose exact predecessor is recorded by the current map registry.
+    for map_name, settings in document['maps'].items():
+        meta = MAPS[map_name]
+        if settings.get('resource_sha256') in _resource_fingerprints(meta):
+            settings['resource_sha256'] = meta['resource_sha256']
     return document
+
+
+def _resource_fingerprints(meta):
+    return (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
+            meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'),
+            meta.get('navigation_previous_sha256'))
 
 
 def default_map(name):
@@ -196,8 +208,7 @@ def canonical(raw):
         meta = MAPS[name]
         _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes', 'deleted_positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
-        fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
-                        meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'))
+        fingerprints = _resource_fingerprints(meta)
         if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
