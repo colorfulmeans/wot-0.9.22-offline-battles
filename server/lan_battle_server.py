@@ -7700,6 +7700,7 @@ class BattleState:
         valid_bits = sum(1 << index for index in range(8)) | sum(
             1 << (12 + index) for index in range(8)) | sum(
             1 << (24 + index) for index in range(5))
+        feedback = {}
         for row in rows:
             try:
                 actor, cause, bit, total = row
@@ -7730,12 +7731,33 @@ class BattleState:
                 self._record_critical_damage(attacker, victim, None, None,
                     mask_override=bit, repetitions=total - previous)
                 if attacker is not None:
+                    receipt = feedback.setdefault((attacker, victim, cause), [0, 0])
+                    receipt[0] |= bit
+                    receipt[1] += total - previous
                     _server_log('ENV CRITICAL CREDIT ' + json.dumps(dict(
                         round=self.round_id, attacker=attacker, victim=victim,
                         cause=cause, mask=bit, count=total-previous), sort_keys=True))
             except (ValueError, TypeError, OverflowError):
                 continue
+        for (attacker, victim, cause), (mask, count) in sorted(feedback.items()):
+            self._queue_environment_critical_feedback(attacker, victim, cause, mask, count)
         return fires
+
+    def _queue_environment_critical_feedback(self, attacker, victim, cause, mask, count):
+        """Publish already credited transitions without replaying HP or death."""
+        if attacker is None or attacker == victim or count <= 0:
+            return
+        # #1513 packCrits has a 16-bit count. Preserve coalesced totals rather
+        # than silently wrapping them at the native presentation boundary.
+        while count > 0:
+            amount = min(count, 65535)
+            event = dict(kind='environment_critical', source='environment',
+                push_attributed=True, cause=cause, critical_mask=mask,
+                critical_count=amount)
+            event['attacker_bot' if attacker[0] == 'bot' else 'attacker'] = attacker[1]
+            event['target_bot' if victim[0] == 'bot' else 'target'] = victim[1]
+            self.pending_events.append(event)
+            count -= amount
 
     def _attribute_environment_event(self, event, victim, critical_before, attacker=None,
                                      record_criticals=True):
@@ -7762,6 +7784,11 @@ class BattleState:
             crew_only=event.get('attack_reason') == 5) if record_criticals else 0)
         self._record_critical_damage(attacker, victim, critical_before, current,
                                      mask_override=mask)
+        event['critical_feedback_separate'] = True
+        if mask:
+            cause = 'drowning' if event.get('attack_reason') == 5 else 'world_collision'
+            self._queue_environment_critical_feedback(
+                attacker, victim, cause, mask, _popcount(mask))
         if (attacker is not None and event['damage'] > 0 and
                 self._vehicle_team(*attacker) == self._vehicle_team(*victim)):
             actor = self.players.get(attacker[1]) if attacker[0] == 'player' else self.bot_states.get(attacker[1])

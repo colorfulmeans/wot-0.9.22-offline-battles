@@ -51,7 +51,8 @@ class EnvironmentAttributionTests(unittest.TestCase):
         state.players[2].team = 1
         state._remember_environment_push(('player', 1), ('player', 2))
         state._commit_player_environment_damage(state.players[2], 10, 3)
-        event = next(event for event in state.pending_events if event.get('push_attributed'))
+        event = next(event for event in state.pending_events
+                     if event.get('push_attributed') and 'death_reason' in event)
         self.assertEqual(1, event['attacker'])
         self.assertEqual(3, event['attack_reason'])
         self.assertEqual(10, state._statistics_row('player', 1)['team_damage'])
@@ -87,7 +88,8 @@ class EnvironmentAttributionTests(unittest.TestCase):
             observed_tick=state.tick, level=2, drowning_critical=_terminal_critical())
         state.player_drowning_seconds[2] = 10.0
         self.assertEqual(1, state._tick_player_drowning(1.0))
-        event = next(event for event in state.pending_events if event.get('push_attributed'))
+        event = next(event for event in state.pending_events
+                     if event.get('push_attributed') and 'death_reason' in event)
         self.assertEqual(5, event['death_reason'])
         self.assertEqual(1, event['attacker'])
         self.assertEqual(1, state.players[1].frags)

@@ -223,7 +223,7 @@ _PROJECTILE_POSE_CACHE_MISS = object()
 _SIMPLE_EVENT_KINDS = (
     'authority', 'bot_manifest', 'vehicle_statistics', 'destructible',
     'projectile_ricochet', 'projectile_impact', 'battle_result', 'assist',
-    'stun', 'detection')
+    'stun', 'detection', 'environment_critical')
 _COMBAT_EVENT_KINDS = (
     'health', 'hit', 'bot_hit', 'bot_human_hit', 'bot_bot_hit')
 _SHOT_OCCLUSION_EPSILON = 1.0e-3
@@ -10365,6 +10365,14 @@ class BattleRuntime(object):
 
     def _event_is_ready(self, event):
         kind = event.get('kind')
+        if kind == 'environment_critical' and not self._worker_mode:
+            for role in ('target', 'attacker'):
+                key = self._event_entity_key(event, role)
+                record = self._records.get(key)
+                if ((key in self._pending_bot_creates or record is not None) and
+                        not self._record_is_event_ready(record)):
+                    return False
+            return True
         if (not self._worker_mode and not self._replay_mode and
                 kind in ('projectile_impact', 'projectile_ricochet')):
             meta = self._projectile_meta.get(str(event.get('projectile_id'))) or {}
@@ -10539,6 +10547,8 @@ class BattleRuntime(object):
             self._apply_combat_event(event, update_state=False)
         elif kind == 'vehicle_statistics':
             self._apply_vehicle_statistics_event(event)
+        elif kind == 'environment_critical':
+            self._apply_environment_critical_feedback(event)
         elif kind == 'assist':
             self._apply_assist_event(event)
         elif kind == 'detection':
@@ -11810,6 +11820,29 @@ class BattleRuntime(object):
             raise RuntimeError('environment attacker has no push attribution')
         return source, attack_reason
 
+    def _apply_environment_critical_feedback(self, event):
+        """Present the server's deduplicated pre-cleanup critical checkpoint."""
+        if self._worker_mode:
+            return False
+        count = event.get('critical_count')
+        reasons = {'world_collision': 3, 'drowning': 5, 'fire': 1}
+        reason = reasons.get(event.get('cause'))
+        if (isinstance(count, bool) or not isinstance(count, _INTEGER_TYPES) or
+                not 1 <= count <= 65535 or reason is None):
+            return False
+        target = self._records.get(self._event_entity_key(event, 'target'))
+        attacker = self._records.get(self._event_entity_key(event, 'attacker'))
+        if target is None or attacker is None:
+            return False
+        result = self._present_combat_feedback(event, target, attacker, reason)
+        if attacker.get('local') or target.get('local'):
+            from .native_input_diagnostics import write_json_record
+            write_json_record('ENV CRITICAL FEEDBACK', dict(
+                event_id=event.get('event_id'), cause=event.get('cause'),
+                mask=event.get('critical_mask'), count=count, reason=reason,
+                target=self._event_entity_key(event, 'target'), presented=result))
+        return result
+
     def _present_combat_feedback(self, event, target_record,
                                  attacker_record, reason_id=None):
         """Feed accepted server combat through stock #1513 feedback RPCs."""
@@ -11847,6 +11880,10 @@ class BattleRuntime(object):
                 if (old_state != state and old_state != 'destroyed'):
                     critical_events.append(item)
         critical_count = len(critical_events)
+        if event.get('critical_feedback_separate') is True:
+            critical_count = 0
+        if event.get('kind') == 'environment_critical':
+            critical_count = int(event['critical_count'])
         if attacker_record.get('local'):
             self._assert_player_identity(attacker_record['engine_id'])
         target_team = self._combat_record_team(target_record)
