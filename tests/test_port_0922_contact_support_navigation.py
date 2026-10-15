@@ -50,6 +50,7 @@ class ContactSupportTests(unittest.TestCase):
             wreck_ground_probe=lambda *args,**kwargs: None)
         state = dict(id=11,x=0.,y=0.,z=0.,yaw=0.,pitch=0.,roll=0.,
             alive=True,grounded_once=True,_contact_dynamics=True,
+            _contact_edge_check=True,
             collision_shape=(1.5,3.5,-.5,2.))
         runtime.states={11:state}
         runtime._descriptors[11]=PhysicsFixture._descriptor()
@@ -64,6 +65,18 @@ class ContactSupportTests(unittest.TestCase):
         other,unused=self.scene(lambda x,z:0.)
         self.assertIsNone(other._suspension_params_for(11))
 
+    def test_old_flat_contact_does_not_repeat_edge_queries_without_a_new_shove(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        with mock.patch.object(runtime,'_ground_probe_at',return_value=0.) as probe:
+            self.assertIsNone(runtime._suspension_params_for(11))
+            self.assertEqual(4,probe.call_count)
+            for unused in range(20):
+                self.assertIsNone(runtime._suspension_params_for(11))
+            self.assertEqual(4,probe.call_count)
+            state['_contact_edge_check']=True
+            self.assertIsNone(runtime._suspension_params_for(11))
+            self.assertEqual(8,probe.call_count)
+
     def test_navigation_alone_does_not_enable_edge_dynamics(self):
         runtime,state=self.scene(lambda x,z:None)
         state.pop('_contact_dynamics')
@@ -75,7 +88,7 @@ class ContactSupportTests(unittest.TestCase):
         runtime,state,unused=bots.BotRuntimeTests._suspension_case(
             self,lambda x,z: 0.0 if x <= -.3 else -20.0)
         state.update(alive=True,collision_shape=(1.5,3.5,-.5,2.),
-            _contact_dynamics=True,speed=0.,movement_dir=0)
+            _contact_dynamics=True,_contact_edge_check=True,speed=0.,movement_dir=0)
         runtime.states={11:state}
         runtime._contact_motion_bodies=lambda unused:[]
         runtime.motion_resolver=mock.Mock(return_value='clear')

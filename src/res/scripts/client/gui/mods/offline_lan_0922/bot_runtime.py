@@ -2928,6 +2928,13 @@ class BotRuntime(object):
             return True
         if not state.get('_contact_dynamics') or not state.get('grounded_once'):
             return False
+        fresh_contact = state.pop('_contact_edge_check', False)
+        if not (fresh_contact or state.get('push_x') or state.get('push_z') or
+                state.get('_contact_forward_speed')):
+            # Historical contact alone is not an active external shove.
+            # Do not add four edge rays to every previously touched Bot for
+            # the rest of the battle. Fresh displacement/momentum rechecks it.
+            return False
         if self._suspension_ground_probe is None and self._wreck_ground_probe is None:
             return False
         x, y, z = _position(state)
@@ -9700,6 +9707,9 @@ class BotRuntime(object):
             push_x, push_z = self._bleed_contact_push(state, push_x, push_z, step)
         correction_x, correction_z = (result['correction'] if
                                       apply_correction else (0.0, 0.0))
+        if delta_x or delta_z or correction_x or correction_z:
+            state['_contact_dynamics'] = True
+            state['_contact_edge_check'] = True
         move_x = correction_x + (push_x * step if advance_push else 0.0)
         move_z = correction_z + (push_z * step if advance_push else 0.0)
         if advance_forward:
