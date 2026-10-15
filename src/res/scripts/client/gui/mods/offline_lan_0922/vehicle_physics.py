@@ -2009,7 +2009,8 @@ def suspension_impact_velocity(before_airborne, before_velocity, solved):
 	the damaging impulse before another point establishes sustained support.
 	"""
 	impact = solved.get('impact_speed')
-	if impact is not None and float(impact) < -FALL_SAFE_SPEED:
+	if (impact is not None and float(impact) < -FALL_SAFE_SPEED and
+			(before_airborne or solved.get('airborne'))):
 		return float(impact)
 	if before_airborne and not solved.get('airborne') and before_velocity < 0.:
 		return float(impact) if impact is not None else float(before_velocity)

@@ -47,7 +47,8 @@ class SupportLifecycleTests(unittest.TestCase):
         for final_airborne in (False,True):
             for before_airborne in (False,True):
                 solved=dict(airborne=final_airborne,impact_speed=-19.5)
-                self.assertEqual(-19.5,vp.suspension_impact_velocity(before_airborne,-19.,solved))
+                expected=-19.5 if (before_airborne or final_airborne) else None
+                self.assertEqual(expected,vp.suspension_impact_velocity(before_airborne,-19.,solved))
         self.assertIsNone(vp.suspension_impact_velocity(False,0.,dict(airborne=False,impact_speed=None)))
         self.assertEqual(-19.,vp.suspension_impact_velocity(True,-19.,dict(airborne=False,impact_speed=None)))
 
