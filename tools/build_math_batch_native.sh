@@ -6,7 +6,7 @@ OUTPUT="$PORT_ROOT/native/offline_math_batch_native.pyd"
 
 build_bridge() {
     python3 "$PORT_ROOT/tools/verify_native_payload.py" --header "$PORT_ROOT/build/native_build_identity.h"
-    i686-w64-mingw32-g++ -m32 -std=c++17 -O3 -msse2 -mfpmath=sse \
+    i686-w64-mingw32-g++-posix -m32 -std=c++17 -O3 -msse2 -mfpmath=sse \
         -include "$PORT_ROOT/build/native_build_identity.h" \
         -fno-fast-math -ffp-contract=off \
         -fno-builtin-sin -fno-builtin-cos -fno-builtin-pow \
@@ -46,7 +46,7 @@ build_bridge() {
     python3 "$PORT_ROOT/tools/verify_native_payload.py" --verify "$OUTPUT"
 }
 
-if command -v i686-w64-mingw32-g++ >/dev/null 2>&1 &&
+if command -v i686-w64-mingw32-g++-posix >/dev/null 2>&1 &&
         command -v i686-w64-mingw32-objdump >/dev/null 2>&1; then
     build_bridge
 else
