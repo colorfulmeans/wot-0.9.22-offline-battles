@@ -5041,8 +5041,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(10.0, state['y'], places=6)
         self.assertFalse(state['airborne'])
         self.assertAlmostEqual(0.0, state['vertical_speed'], places=6)
-        # One centre column on flat ground, five only at the fall transition.
-        self.assertEqual(5, len(calls))
+        # Five mode-admission points, five basic support queries, and five
+        # handback points: no detailed descriptor exists in this fixture.
+        self.assertEqual(15, len(calls))
 
     def test_fast_bot_checks_track_support_before_following_a_trench_floor(self):
         self.runtime.battle_start(self.start)
@@ -5062,7 +5063,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertAlmostEqual(10.0, state['y'])
         self.assertFalse(state['airborne'])
-        self.assertEqual(5, len(calls))
+        self.assertEqual(15, len(calls))
 
     def test_fast_bot_follow_gap_cannot_pull_down_an_unbridged_drop(self):
         for single_rim in (False, True):
@@ -5080,13 +5081,14 @@ class BotRuntimeTests(unittest.TestCase):
                     return 8.46 - z * 0.2
                 self.runtime._physics_ground_probe = probe
 
+                already_detailed = bool(state.get("_edge_support_active"))
                 self.assertFalse(self.runtime._update_vertical_motion(state, 0.15))
 
                 self.assertAlmostEqual(
                     10.0 - self.module.vehicle_physics.GRAVITY * 0.15 ** 2,
                     state['y'])
                 self.assertTrue(state['airborne'])
-                self.assertEqual(5, len(calls))
+                self.assertEqual(10 if already_detailed else 15, len(calls))
 
     def test_bot_bridges_a_slot_running_along_its_hull(self):
         self.runtime.battle_start(self.start)
@@ -5141,7 +5143,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(state['airborne'])
         self.assertLess(state['y'], 10.0)
 
-    def test_bot_keeps_the_single_column_fast_path_on_flat_ground(self):
+    def test_bot_keeps_basic_support_with_five_point_mode_check_on_flat_ground(self):
         self.runtime.battle_start(self.start)
         state = self.runtime.states[11]
         state.update(x=0.0, y=10.0, z=0.0, yaw=0.0, speed=4.0,
@@ -5152,7 +5154,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
 
-        self.assertEqual(1, len(calls))
+        self.assertEqual(6, len(calls))
         self.assertAlmostEqual(10.0, state['y'], places=6)
 
     def test_bot_steep_hull_keeps_falling_without_support(self):
@@ -6439,14 +6441,15 @@ class BotRuntimeTests(unittest.TestCase):
                 0, 29 - frame * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
             sampled = min(
                 self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, remaining)
-            self.assertEqual(29 + 4 * sampled, len(calls) - before)
+            self.assertEqual(6 * 29 + 4 * sampled, len(calls) - before)
         self.assertTrue(all(
             'pose_sample' in state for state in runtime.states.values()))
 
-        # Stationary bots keep the sampled pose; only support remains.
+        # Stationary bots keep the sampled pose; five mode probes plus
+        # the existing centre support query remain per Bot.
         before = len(calls)
         runtime.update(0.04, 2.0)
-        self.assertEqual(29, len(calls) - before)
+        self.assertEqual(6 * 29, len(calls) - before)
 
 
     def test_traffic_stopping_cache_reuses_only_identical_inputs(self):
@@ -9503,7 +9506,7 @@ class BotRuntimeTests(unittest.TestCase):
                 0, 29 - frame * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
             sampled = min(
                 self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, remaining)
-            self.assertEqual(29 + 4 * sampled,
+            self.assertEqual(6 * 29 + 4 * sampled,
                              len(ground_calls) - before)
         self.assertTrue(all(
             'pose_sample' in state for state in runtime.states.values()))
