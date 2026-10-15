@@ -16752,6 +16752,20 @@ class BattleRuntime(object):
             }
             if segment:
                 payload['bounce'] = meta.get('ricochet_first_contact_evidence')
+                # Millisecond event times round a real millimetre-scale flight
+                # to zero. Keep the solver interval and first-plane departure
+                # separately; neither observation changes the damage verdict.
+                payload['segment_elapsed_us'] = float(state.get('elapsed', 0.0)) * 1.e6
+                first = payload['bounce'] or {}
+                first_point = first.get('selected_contact_impact') or first.get('impact')
+                first_normal = first.get('normal')
+                if first_point is not None and first_normal is not None:
+                    normal_length = math.sqrt(sum(float(v) ** 2 for v in first_normal))
+                    if normal_length > 1.e-6 and selected_impact is not None:
+                        offset = tuple(selected_impact[i] - first_point[i] for i in range(3))
+                        payload['contact_from_bounce_mm'] = 1000. * math.sqrt(sum(v*v for v in offset))
+                        payload['contact_first_plane_mm'] = 1000. * sum(
+                            offset[i] * first_normal[i] for i in range(3)) / normal_length
             else:
                 meta['ricochet_first_contact_evidence'] = dict(
                     (key, payload[key]) for key in ('target', 'component', 'material_kind',
