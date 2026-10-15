@@ -1278,14 +1278,6 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							_ray_end, _ray_hit))
 				_upper_hits.sort(key=lambda value: value[0])
 				for _unused_distance, _ray_start, _ray_end, _ray_hit in _upper_hits:
-					# A lower-lane miss does not turn an outward terrain top into
-					# an upper wall. Apply the same exact-top and remainder proof
-					# used by the lower lane; a beam, wall, unknown top or later
-					# obstruction still fails this proof and remains solid.
-					if _ground_exit_is_clear(
-							spaceID, Math, profile_pos, _ray_start, _ray_end,
-							_ray_hit, profile_look, lane_ground_plane, _sweep_filter):
-						continue
 					_resolve_args = (
 						spaceID, _ray_start, _ray_end, _ray_hit,
 						yaw, vel, td, _crush_state, allow_kinetic,

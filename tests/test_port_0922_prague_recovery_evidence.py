@@ -77,7 +77,7 @@ class RecoveryEvidenceTests(unittest.TestCase):
         state = dict(id=17, slot=0, team=1, position=(0., 0., 0.),
                      yaw=0., speed=0., dt=.1, neighbours=[])
         driver_state = adapter.driver._state(17, 0, state['position'])
-        driver_state['recovery_replan_episode'] = {'issued': True, 'origin': state['position']}
+        driver_state['recovery_replan_episode'] = {'issued': True}
         order = dict(throttle=0., turn=1., target_yaw=.85, recovery_mode='pivot_recovery')
         with mock.patch.object(adapter, '_hull_contact', return_value=None), \
              mock.patch.object(adapter, '_wreck_push_plan', return_value=None), \

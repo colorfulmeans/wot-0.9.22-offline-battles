@@ -65,25 +65,6 @@ class NavigationReplanTests(unittest.TestCase):
         self.assertFalse(nav.request_replan(99, (0.0, 0.0, 0.0), 1.0))
         self.assertFalse(nav.bot_states)
 
-    def test_replan_requested_before_physics_uses_pose_at_search_start(self):
-        nav = TerrainNavigator(lambda *unused: 0.0,
-                               lambda *unused: True, cell_size=4.0)
-        request = ('route_join', 7, 'private')
-        goal = (0.0, 0.0, 40.0)
-        nav.begin_frame(0.0)
-        nav.next_target(7, (0.0, 0.0, 0.0), goal, request, 0.0)
-        nav.request_replan(7, (0.0, 0.0, -8.0), 2.0)
-        # A checked physics slice can move a fraction of a metre between
-        # issuing a request and beginning its actual private search.
-        live = (0.25, 0.0, -8.2)
-        nav.next_target(7, live, goal, request, 2.1)
-        replacements = [job for key, job in nav.searches.items()
-                        if key[0][:2] == ('recovery', 7)]
-        self.assertEqual(1, len(replacements))
-        replacements[0].step(1)
-        self.assertEqual(live, replacements[0].progress['start'])
-        nav.end_frame()
-
 
 if __name__ == '__main__':
     unittest.main()

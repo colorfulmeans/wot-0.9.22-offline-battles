@@ -958,7 +958,7 @@ def _bsp_triangle_record(section, offset):
     return (values[0:3], values[3:6], values[6:9]), material_id
 
 
-NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-retain-railway-vehicles-v2'
+NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-no-original-destructibles-v1'
 NAVIGATION_VEHICLE_SKIP_FLAGS = 0x10 | 0x40
 NAVIGATION_ORIGINAL_MATERIAL_MIN = 71
 NAVIGATION_ORIGINAL_MATERIAL_END = 86
@@ -994,7 +994,7 @@ def _compiled_collision_materials(bsmo, collider, model_id):
 def compiled_navigation_obstacles(compiled, vfs, legacy):
     """Build the static route raster directly from placed compiled colliders.
 
-    Crush-through original destructible surfaces (71..85) are removed BEFORE node,
+    All original destructible surfaces (71..85) are removed BEFORE node,
     clearance, link, component and route construction. Hard surfaces in mixed
     structures, replacement materials and vehicle-only bridge decks remain.
     Render sets, shaders and a model-wide structure label are not collision
@@ -1026,7 +1026,6 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
                 hard_surfaces_retained=0, mixed_instances=0,
                 unselected_component_surfaces=0, empty_collision_resources=0)
     obstacles = CompiledObstacles()
-    obstacles.railway_obstacles = CompiledObstacles()
     mesh_cache = {}
     material_cache = {}
     for instance_id, (model_id, transform, mask) in enumerate(zip(model_ids, transforms, masks)):
@@ -1050,8 +1049,6 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
         if not isinstance(name, str) or not name.lower().endswith('.primitives'):
             raise UnsafeBakeInputError('BSMO model %d has an invalid BSP resource: %r' % (model_id, name))
         name = name[:-len('.primitives')] + '.primitives_processed'
-        railway_vehicle = any('/' + family + '/' in name.lower()
-            for family in ('rw004_carriage', 'rw005_locomotive'))
         if model_id not in material_cache:
             material_cache[model_id] = _compiled_collision_materials(bsmo, collider, model_id)
         materials = material_cache[model_id]
@@ -1102,12 +1099,8 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
                 obstacles.collision_stats['nonvehicle_surfaces_excluded'] += 1
                 continue
-            # These #1513 rolling-stock families retain solid collision after
-            # destruction. Their original faces must participate in every
-            # graph stage too; treating them as crush-through props creates
-            # paths into a consist which the motion owner correctly rejects.
             if (NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
-                    NAVIGATION_ORIGINAL_MATERIAL_END and not railway_vehicle):
+                    NAVIGATION_ORIGINAL_MATERIAL_END):
                 soft_count += 1
                 obstacles.collision_stats['original_surfaces_excluded'] += 1
                 continue
@@ -1132,9 +1125,6 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             # Do not skip a whole short model: an elevated/rotated short shape
             # can still be a hard obstacle, and mixed models need face granularity.
             _raster_compiled_collision_instance(obstacles, name, hard, legacy)
-            if railway_vehicle:
-                _raster_compiled_collision_instance(
-                    obstacles.railway_obstacles, name, hard, legacy)
     obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
     return obstacles
 
@@ -1647,15 +1637,9 @@ def install_munchen_underpass(graph, terrain, obstacles, legacy):
     for point in deck_points + side_decks:
         unused_cell, index = _graph_state(graph, point)
         surface = obstacles.surface_height(point[0], point[1])
-        railway = getattr(obstacles, 'railway_obstacles', None)
-        rail_blocked_deck = (surface is not None and
-            graph['heights_mm'][index] is None and railway is not None and
-            railway.blocked(point[0], point[1], surface,
-                margin=legacy.VEHICLE_HALF_WIDTH))
-        if (surface is None or
-                (not rail_blocked_deck and (graph['heights_mm'][index] is None or
-                 abs(int(graph['heights_mm'][index]) -
-                     int(round(float(surface) * 1000.0))) > 1)) or
+        if (surface is None or graph['heights_mm'][index] is None or
+                abs(int(graph['heights_mm'][index]) -
+                    int(round(float(surface) * 1000.0))) > 1 or
                 float(surface) - float(terrain.height(*point)) < 8.0):
             raise UnsafeBakeInputError(
                 '%s bridge-layer contract changed at %r' % (label, point))
@@ -1680,15 +1664,9 @@ def install_munchen_underpass(graph, terrain, obstacles, legacy):
     for point in side_decks:
         unused_cell, index = _graph_state(graph, point)
         surface = obstacles.surface_height(point[0], point[1])
-        railway = getattr(obstacles, 'railway_obstacles', None)
-        rail_blocked_deck = (surface is not None and
-            graph['heights_mm'][index] is None and railway is not None and
-            railway.blocked(point[0], point[1], surface,
-                margin=legacy.VEHICLE_HALF_WIDTH))
-        if (surface is None or (not rail_blocked_deck and (
-                graph['heights_mm'][index] is None or
+        if (graph['heights_mm'][index] is None or surface is None or
                 abs(int(graph['heights_mm'][index]) -
-                    int(round(float(surface) * 1000.0))) > 1))):
+                    int(round(float(surface) * 1000.0))) > 1):
             raise UnsafeBakeInputError('%s opened a side/deck layer' % label)
     return {
         'id': label,
@@ -2023,34 +2001,6 @@ def canonicalize_reversible_routes(graph, routes):
     if not isinstance(bake, dict):
         raise UnsafeBakeInputError('navigation graph has no bake metadata')
     bake['canonical_reversible_routes'] = sorted(canonical)
-    return routes
-
-
-def refine_prague_railway_corners(graph, routes, legacy):
-    """Retain the reviewed valley gate without a hook beside solid carriages.
-
-    These #1513 points are graph centres, not new movement permissions. The
-    train-aware raster must admit them and every replacement chord must still
-    have a bounded path over the validated links. Keep the north hold within
-    ten metres of the original reviewed gate and mirror both teams exactly.
-    """
-    first = next(route for route in routes['1'] if route['id'] == 'valley')
-    points = [list(point) for point in first['waypoints']]
-    expected = ((62.,162.),(62.,158.),(110.,166.),(154.,126.),(126.,90.))
-    if tuple(tuple(point[:2]) for point in points[3:8]) != expected:
-        raise UnsafeBakeInputError('Prague railway corner contract changed')
-    points[3:5] = [[62.,170.,bool(points[3][2] or points[4][2])]]
-    points.insert(6, [154.,110.,False])
-    for point in points:
-        unused_cell,index = _graph_state(graph,point[:2])
-        if graph['heights_mm'][index] is None:
-            raise UnsafeBakeInputError('Prague railway corner is blocked')
-    if legacy._route_maximum_detour(graph,points) > legacy.MAX_ROUTE_DETOUR:
-        raise UnsafeBakeInputError('Prague railway corner loses path continuity')
-    first['waypoints'] = points
-    second = next(route for route in routes['2'] if route['id'] == 'valley')
-    second['waypoints'] = [list(point) for point in reversed(points)]
-    graph['bake']['railway_corner_refinement'] = 'prague-valley-north-and-exit-v1'
     return routes
 
 
@@ -2800,10 +2750,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 routes = original_bake_routes(graph, adjusted)
                 routes = expand_stationary_routes(
                     graph, routes, adjusted['bases'], legacy)
-                routes = canonicalize_reversible_routes(graph, routes)
-                if map_name == '114_czech':
-                    routes = refine_prague_railway_corners(graph,routes,legacy)
-                return routes
+                return canonicalize_reversible_routes(graph, routes)
             legacy.bake_tactical_routes = bake_routes
             legacy.validate_graph = lambda graph, unused_config: original_validate(graph, safe_config(graph))
             # Lakeville's decoded water volumes intentionally split off the
@@ -2888,8 +2835,6 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
         graph['bake']['original_destructible_surfaces_excluded'] = True
-        graph['bake']['original_destructible_surface_exceptions'] = [
-            'rw004_Carriage', 'rw005_locomotive']
         graph['bake']['compiled_collision_filter'] = obstacles.collision_stats
         graph['bake']['water_mode'] = ('BWWa-cell-surface-depth' if water_cells else
                                        'verified-empty-BWWa')

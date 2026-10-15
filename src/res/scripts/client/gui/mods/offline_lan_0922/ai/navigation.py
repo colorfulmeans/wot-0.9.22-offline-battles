@@ -1851,7 +1851,7 @@ class TerrainNavigator(object):
 	@staticmethod
 	def _clear_temporary_progress(state):
 		for name in ('local_fallback_episode', 'temporary_visited_cells',
-		             'temporary_visited_order', 'temporary_stalled', 'runtime_path_corner'):
+		             'temporary_visited_order', 'temporary_stalled'):
 			state.pop(name, None)
 
 	def _temporary_path_repeats(self, state, path, start=0):
@@ -1900,22 +1900,11 @@ class TerrainNavigator(object):
 				(_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
 				 self._local_fallback_passed(current, target, state))):
 			state['local_completed_target'] = (tuple(target), self._local_fallback_intent(goal, state))
-			corner = state.pop('runtime_path_corner', None)
-			if (corner is not None and corner['target'] == tuple(target) and
-					corner['key'] == state.get('path_key') and
-					corner['request'] == state.get('request_key') and
-					corner['index'] == state.get('index')):
-				# Arrival at a proved runtime bypass consumes its source vertex,
-				# not just the temporary point. Otherwise the next cached-path
-				# handoff offsets that same vertex again, often to the other side
-				# of a wreck (FV4005 / ST-I report 020500).
-				state['reached_path_corner'] = corner
-				combat_count('nav_runtime_corner_consumed')
 		if (target is not None and state.get('last_target', target) == target and
 				intent_matches and
 				_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
 				not self._local_fallback_passed(current, target, state) and
-				not self._bot_edges_penalized(bot_id, current, target, now, False)):
+				not self._bot_edges_penalized(bot_id, current, target, now)):
 			revision = self.grid._native_proof_revision
 			clear = self.grid.dry_segment_clear(current, target, now)
 			deferred = (revision != self.grid._native_proof_revision or
@@ -1923,13 +1912,6 @@ class TerrainNavigator(object):
 			if not clear and not deferred:
 				state['local_target_end_reason'] = 'unsafe'
 				self._record_local_retry_refusal(state, current, goal, now)
-				# A whole-ray refusal does not locate a blocked grid edge. Retire
-				# this approach only; a clear prefix or another approach to the
-				# endpoint remains admissible. The retry owner requests a replan
-				# after actual repeated refusals, not on every rejected ray.
-				state['local_target_retired'] = (
-					tuple(target), float(now) + MACRO_STALL_SECONDS, tuple(current))
-				combat_count('nav_local_refusal_retired')
 			else:
 				remaining = _distance_2d(current, target)
 				best = state.get('local_target_best_distance', remaining)
@@ -1951,7 +1933,6 @@ class TerrainNavigator(object):
 		if target is not None and state.get('last_target') == target:
 			# Pending-path bridging must not resurrect a consumed local point.
 			state.pop('last_target', None)
-		state.pop('runtime_path_corner', None)
 		state.pop('local_fallback_target', None)
 		state.pop('local_fallback_intent', None)
 		state.pop('local_fallback_start', None)
@@ -2030,17 +2011,10 @@ class TerrainNavigator(object):
 					state['local_target_progress_at'] = float(now)
 		return self._retained_local_fallback(bot_id, current, planned, now, state)
 
-	def remember_runtime_target(self, bot_id, current, goal, target, now, selected=None):
+	def remember_runtime_target(self, bot_id, current, goal, target, now):
 		"""Publish the final proved bypass, rather than its pre-offset A* vertex."""
 		state = self.bot_states.get(int(bot_id))
 		if state is not None:
-			state.pop('runtime_path_corner', None)
-			path = self.paths.get(state.get('path_key')) or ()
-			index = int(state.get('index', 0))
-			if (selected is not None and index + 1 < len(path) and
-					tuple(path[index]) == tuple(selected)):
-				state['runtime_path_corner'] = dict(key=state['path_key'], index=index,
-					point=tuple(selected), target=tuple(target), request=state.get('request_key'))
 			self._remember_local_fallback(target, state.get('planned_goal') or goal, state, current, now)
 			state['last_target'] = tuple(target)
 
@@ -2105,7 +2079,8 @@ class TerrainNavigator(object):
 			# for this decision, then retry from the hull on the next one.
 			return tuple(current)
 		if fallback is not None:
-			if self._retired_approach(state, current, fallback, now):
+			retired = state.get('local_target_retired')
+			if retired is not None and float(now) < retired[1] and _distance_2d(fallback, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS:
 				return None
 			self._remember_local_fallback(fallback, goal, state, current, now)
 		return fallback
@@ -2699,7 +2674,6 @@ class TerrainNavigator(object):
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
 			'local_retry_replans': state.get('local_retry_progress', {}).get('replans', 0),
 			'reached_path_corner': state.get('reached_path_corner'),
-			'runtime_path_corner': state.get('runtime_path_corner'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
@@ -2822,18 +2796,11 @@ class TerrainNavigator(object):
 		result.update(self._active_macro_edge_penalties(bot_id, now) or {})
 		return result or None
 
-	@staticmethod
-	def _retired_approach(state, start, end, now):
-		retired = state.get('local_target_retired')
-		return bool(retired is not None and float(now) < retired[1] and
-				_distance_2d(end, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS and
-				(len(retired) < 3 or
-				 _distance_2d(start, retired[2]) <= WAYPOINT_ARRIVAL_RADIUS))
-
-	def _bot_edges_penalized(self, bot_id, start, end, now, include_retired=True):
-		"""Keep an unlocated chord refusal separate from located grid failures."""
-		if include_retired and self._retired_approach(
-				self.bot_states.get(int(bot_id), {}), start, end, now):
+	def _bot_edges_penalized(self, bot_id, start, end, now):
+		"""True when this bot's own escalation covers any edge of the segment."""
+		retired = self.bot_states.get(int(bot_id), {}).get('local_target_retired')
+		if (retired is not None and float(now) < retired[1] and
+				_distance_2d(end, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS):
 			return True
 		penalties = self._active_planning_edge_penalties(bot_id, now)
 		return bool(penalties and any(
@@ -3090,8 +3057,7 @@ class TerrainNavigator(object):
 		self._clear_temporary_progress(state)
 		state.pop('local_completed_target', None)
 		state.pop('reached_path_corner', None)
-		# A new private job is not evidence that its rejected local leg cleared.
-		# Keep the finite retirement until expiry or a genuine request change.
+		state.pop('local_target_retired', None)
 		for name in ('last_target', 'local_fallback_target', 'controlled_shallow_target',
 				'macro_escape_target', 'macro_escape_until', 'pending_since'):
 			state.pop(name, None)
@@ -3545,7 +3511,6 @@ class TerrainNavigator(object):
 		allow_pending_last_target = True
 		if request_changed:
 			state.pop('local_fallback_target', None)
-			state.pop('runtime_path_corner', None)
 			state.pop('local_target_retired', None)
 			state.pop('local_completed_target', None)
 			state.pop('reached_path_corner', None)
@@ -3657,10 +3622,7 @@ class TerrainNavigator(object):
 				('recovery', bot_id,
 				 int(state.get('replan_generation', 0))) +
 				tuple(path_key))
-			# The request can precede a physics slice. Every new private search
-			# starts at the realised pose when it actually begins, not the earlier
-			# recovery anchor. Existing cached/in-flight jobs keep their identity.
-			plan_start = tuple(current)
+			plan_start = tuple(state.get('recovery_start') or current)
 		previous_path = self.paths.get(state.get('path_key'))
 		key, path = self._path(effective_key, plan_start, goal, now,
 		                       None)
@@ -3745,7 +3707,6 @@ class TerrainNavigator(object):
 			selected_target = state.get('controlled_shallow_target')
 		current_segment_shallow = self.grid.segment_has_baked_hazard(
 			current, path[index], BAKED_SHALLOW_WATER)
-		join_proof_revision = self.grid._native_proof_revision
 		if (passed_vertex or
 				self.grid.segment_penalty(current, path[index], now) > 0.0 or
 				self._bot_edges_penalized(
@@ -3769,28 +3730,10 @@ class TerrainNavigator(object):
 				state['path_key'] = key
 				return self._fallback_target(
 					bot_id, current, goal, now, avoid_points, state, True)
-			if (key == active_key and joined_path is previous_path and (
-					self._bot_edges_penalized(bot_id, current, path[index], now) or
-					self.grid.segment_penalty(current, path[index], now) > 0.0 or
-					not self.grid.segment_clear(current, path[index]))):
-				# This cached join is the very path whose current connector just
-				# failed. Resetting its index to zero reissues its old entry behind
-				# the hull (Airfield 18/27), alternating two corners indefinitely.
-				# Unknown proof holds; a real refusal hands off from the live pose
-				# to the existing checked local exit without resetting path progress
-				# or cancelling a healthy suffix/search on every decision.
-				if (join_proof_revision != self.grid._native_proof_revision or
-						self.grid._proof_deferred):
-					state['navigation_status'] = 'pending'
-					state['target_is_terminal'] = False
-					return tuple(current)
-				combat_count('nav_cached_join_fallbacks')
-				return self._fallback_target(
-					bot_id, current, goal, now, avoid_points, state, True)
-			index = 0
 			path = joined_path
 			state['path_key'] = key
-			state['index'] = index
+			state['index'] = 0
+			index = 0
 		reach_radius = min(10.0, max(1.5, self.grid.cell_size * 0.55))
 		while (index + 1 < len(path) and
 		       _distance_2d(current, path[index]) < reach_radius and

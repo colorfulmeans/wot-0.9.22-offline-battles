@@ -1,4 +1,4 @@
-"""Report 165013: real patch levers, shoved Bot edges and rolling stock."""
+"""Retained physical-support corrections and independent crush receipts."""
 import io
 import sys
 import types
@@ -106,27 +106,8 @@ class ContactSupportTests(unittest.TestCase):
         self.assertFalse(runtime._suspension_param_failures)
 
 
-class RailwayNavigationTests(unittest.TestCase):
-    def test_rolling_stock_original_faces_block_and_sleepers_stay_soft(self):
-        legacy=baker._legacy_baker()
-        for family,blocked in (('rw004_Carriage',True),
-                               ('rw005_locomotive',True),('rw002_Sleepers',False)):
-            path='content/Railway/%s/normal/lod0/item.primitives'%family
-            data=compiled([[(7,73<<8)]])
-            data.sections['BWST'][1]=path
-            vfs=VFS([(t,7) for t in WALL])
-            vfs.files[path+'_processed']=next(iter(vfs.files.values()))
-            field=baker.compiled_navigation_obstacles(data,vfs,legacy)
-            self.assertEqual(blocked,bool(field.cells),family)
 
-    def test_vehicle_skip_surfaces_of_carriage_remain_noncolliding(self):
-        path='content/Railway/rw004_Carriage/normal/lod0/item.primitives'
-        data=compiled([[(7,(73<<8)|0x10)]])
-        data.sections['BWST'][1]=path
-        vfs=VFS([(t,7) for t in WALL])
-        vfs.files[path+'_processed']=next(iter(vfs.files.values()))
-        self.assertFalse(baker.compiled_navigation_obstacles(
-            data,vfs,baker._legacy_baker()).cells)
+
 
 
 class MultiModuleCrushTests(unittest.TestCase):

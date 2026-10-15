@@ -6,12 +6,10 @@ movement command, and optional fire intent.  The caller remains responsible
 for visibility, collision probes, and applying commands to any client entity.
 """
 
-from gui.mods.offline_lan_0922.worker_diagnostics import observed, count as combat_count
+from gui.mods.offline_lan_0922.worker_diagnostics import observed
 from gui.mods.offline_lan_0922 import tank_collision
 
 import math
-
-_WRECK_NO_PROGRESS_SECONDS = 14.0
 
 from gui.mods.offline_lan_0922.ai.driver import (
     LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
@@ -90,7 +88,6 @@ class BotAdapter(object):
                     'peer_team': peer.get('team'),
                     'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
-                    'depth': overlap[2],
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
@@ -252,32 +249,6 @@ class BotAdapter(object):
                 recovery_probe_distance=recovery_probe_distance(half_length))
         return None
 
-    def _retain_recovery_progress(self, bot_id, state, position, strategic):
-        """Admit persistent progress only for a real local recovery owner.
-
-        A history of two completed driver attempts is checked by the driver.
-        Mere travel through eroded cells or normal traffic alignment is not
-        a physical obstruction. Once admitted, tactical order changes do not
-        erase this owner's progress; arrival, hold and hull departure do.
-        """
-        episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode')
-        length = float(state.get('half_length', 3.5))
-        if (episode and math.hypot(position[0]-episode['origin'][0],
-                position[2]-episode['origin'][2]) <= 2.0*length + WAYPOINT_ARRIVAL_RADIUS):
-            return True
-        if state.get('native_rotation_refused'):
-            return True
-        if strategic.get('combat_mode') in (
-                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
-                'crossfire_withdraw'):
-            return True
-        reach = (2.0 * float(state.get('half_length', 3.5)) +
-                 2.0 * float(state.get('half_width', 1.7)))
-        return any(receipt.get('exhausted', False) and math.hypot(
-            position[0] - receipt.get('exhausted_position', receipt['origin'])[0],
-            position[2] - receipt.get('exhausted_position', receipt['origin'])[2]) <= reach
-            for receipt in self._wreck_history.get(bot_id, {}).values())
-
     def _wreck_push_plan(self, bot_id, state, position, strategic,
                          direction_clear, contact=None):
         """Spend a continuous motor attempt before routing around a wreck.
@@ -337,7 +308,8 @@ class BotAdapter(object):
         phase = 'resumed'
         wreck_displacement = (0.0 if attempt is None else math.hypot(
             where[0]-attempt['position'][0], where[2]-attempt['position'][2]))
-        if attempt is None or wreck_displacement >= 1.0:
+        if (attempt is None or
+                wreck_displacement >= 1.0):
             previous = attempt
             heading = (math.atan2(where[0]-position[0], where[2]-position[2])
                        if side_wreck else desired)
@@ -356,7 +328,6 @@ class BotAdapter(object):
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
         evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
-                        no_progress_limit=_WRECK_NO_PROGRESS_SECONDS,
                         progress=progress, best_progress=attempt['best_progress'],
                         wreck_displacement=wreck_displacement,
                         own_elapsed=attempt['own_elapsed'],
@@ -381,13 +352,11 @@ class BotAdapter(object):
         attempt['own_elapsed'] += step
         evidence.update(elapsed=attempt['elapsed'], best_progress=attempt['best_progress'],
                         own_elapsed=attempt['own_elapsed'], own_best_progress=attempt['own_best_progress'])
-        # Preserve the release motor budget. Only real hull progress renews
-        # it while the same encounter geometry remains in effect.
-        if (attempt['elapsed'] >= _WRECK_NO_PROGRESS_SECONDS or
-                attempt['own_elapsed'] >= _WRECK_NO_PROGRESS_SECONDS):
+        if attempt['elapsed'] >= 14.0 or attempt['own_elapsed'] >= 14.0:
             # Resume the ordinary driver and its progress/replanning clocks.
             # Never turn an exhausted motor attempt into a permanent hold.
             attempt.update(exhausted=True, exhausted_position=position)
+            attempt['elapsed'] = max(14.0, attempt['elapsed'])
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
@@ -410,8 +379,9 @@ class BotAdapter(object):
                 not pose_clear(yaw + math.copysign(min(0.45, abs(turn)), turn))):
             # A realised world turn refusal is not a movable-wreck contact.
             # Release this failed episode to normal checked recovery immediately.
+            attempt['elapsed'] = 14.0
             attempt.update(exhausted=True, exhausted_position=position)
-            evidence.update(phase='world_turn_refused')
+            evidence.update(phase='world_turn_refused', elapsed=14.0)
             return None
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
@@ -627,15 +597,6 @@ class BotAdapter(object):
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
-        if side_contact and contact['peer_alive'] and contact['peer_team'] == state.get('team'):
-            # A tangential/outward route already leaves this contact. Do not
-            # replace it (or an explicit hold) with a new longitudinal trip.
-            # Ordinary checked steering still handles a blocked turn, and the
-            # runtime's friendly-reposition owner may issue an actual move.
-            approach = ((move_position[0]-position[0])*contact['normal'][0] +
-                        (move_position[2]-position[2])*contact['normal'][1])
-            side_contact = (contact['depth'] > 1.e-9 or
-                            approach < -1.e-9)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
@@ -713,8 +674,6 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
-                    retain_failed_legs=self._retain_recovery_progress(
-                        bot_id, state, position, strategic),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
@@ -723,33 +682,18 @@ class BotAdapter(object):
         recovery_mode = local.get('recovery_mode', 'drive')
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))
-        # A realised native-world rotation refusal is also physical blockage,
-        # even without a neighbouring vehicle. Reuse the same distance/time
-        # and completed-recovery gate; this requests a path, never a bypass
-        # of ground, collision or friendly-vehicle admission.
-        native_blockage = bool(state.get('native_rotation_refused'))
-        # A checked local planner can reject every exit before native motion
-        # is attempted. EMIL II repeatedly backed into the same pocket without
-        # either a current vehicle contact or a realised rotation veto. Keep
-        # crowded traffic under its established contact/traffic admission.
-        planning_blockage = recovery_mode == 'blocked' and not state.get('neighbours')
-        # Only the isolated-planner admission persists before its first request.
-        # Preserve the existing contact episode's issued-request requirement.
-        replan_episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode', {})
-        active_replan = bool(replan_episode.get('issued') or
-                             replan_episode.get('cause') == 'local_blocked')
-        if ((vehicle_blockage or native_blockage or planning_blockage or active_replan) and movement_intent and not navigation_wait and
+        # Once a proved vehicle blockage admitted this recovery episode, a
+        # failed follower may retry after another completed recovery. Losing
+        # instantaneous contact does not prove that the hull escaped the pocket.
+        active_replan = bool(self.driver.states.get(bot_id, {}).get(
+            'recovery_replan_episode', {}).get('issued'))
+        if ((vehicle_blockage or active_replan) and movement_intent and not navigation_wait and
                 not local.get('navigation_recovery') and recovery_mode in (
                 'blocked', 'pivot_recovery', 'reverse_turn', 'short_forward_escape',
-                'short_reverse_escape', 'forward_escape', 'avoid')):
-            requested = self.driver.recovery_replan(bot_id, position,
-                float(state.get('half_length', 3.5)))
-            episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode')
-            if planning_blockage and episode is not None:
-                episode['cause'] = 'local_blocked'
-            if requested:
-                local['navigation_replan'] = True
-                combat_count('driver_blockage_replan_requests')
+                'short_reverse_escape', 'forward_escape', 'avoid') and
+                self.driver.recovery_replan(bot_id, position,
+                    float(state.get('half_length', 3.5)))):
+            local['navigation_replan'] = True
         target_yaw = float(local['target_yaw'])
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])

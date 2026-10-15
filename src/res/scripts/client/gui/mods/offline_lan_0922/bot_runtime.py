@@ -6980,8 +6980,7 @@ class BotRuntime(object):
         driver_state = getattr(getattr(getattr(self, 'adapter', None), 'driver', None), 'states', {}).get(int(state['id']), {})
         driver_trace = {key: driver_state.get(key) for key in (
             'clock', 'stuck_time', 'recovery_time', 'recovery_count',
-            'alignment_target', 'heading_progress_yaw', 'best_heading_error',
-            'translation_progress_at', 'native_translation_stalled')}
+            'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
@@ -7013,7 +7012,6 @@ class BotRuntime(object):
             # These distinguish strategic range/readiness denial from a
             # rendered gun-elevation or physical alignment problem.
             'firing': dict(
-                stage='before_motion', sample_time_us=self._sample_time_us,
                 order_fire=bool(strategic.get('fire_allowed')),
                 command_fire=bool(command.get('fire_allowed')),
                 fire_range=command.get('fire_range'),
@@ -7110,20 +7108,6 @@ class BotRuntime(object):
                 'shape': other.get('collision_shape'),
             })
         trace.update({
-            # The original firing fields precede this slice's gun update.
-            # Keep a stamped final view so a target change is not mistaken
-            # for hull and turret aiming at different enemies concurrently.
-            'firing_final': dict(
-                stage='after_contacts', sample_time_us=self._sample_time_us,
-                target_kind=state.get('target_kind'),
-                target_id=state.get('target_id'),
-                aim_intent=state.get('_diagnostic_aim_intent'),
-                gun_aligned=state.get('gun_aligned'),
-                turret_yaw=state.get('turret_yaw'),
-                rear_aim_episode=dict(state.get('_rear_aim_episode') or {}),
-                rear_motion_lease=dict(state.get('_rear_motion_lease') or {}),
-                rear_aim_retry=state.get('_rear_aim_retry'),
-                laying_progress=state.get('_rear_laying_progress')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
@@ -9134,7 +9118,7 @@ class BotRuntime(object):
         pair = getattr(self, '_navigation_crush_profiles', {}).get(int(bot_id))
         return pair[1 if direction < 0 else 0] if pair is not None else None
 
-    def _navigation_recovery_allowed(self, bot_id, position, neighbours=()):
+    def _navigation_recovery_allowed(self, bot_id, position):
         """Allow a pending-path backout only with local obstruction evidence."""
         navigator = self.navigator
         grid = getattr(navigator, 'grid', None)
@@ -9146,29 +9130,6 @@ class BotRuntime(object):
             except (AttributeError, TypeError, ValueError):
                 pass
         nav_state = getattr(navigator, 'bot_states', {}).get(int(bot_id), {})
-        fallback = nav_state.get('local_fallback') or {}
-        if (nav_state.get('navigation_status') == 'blocked' and
-                fallback.get('attempted', 0) > 0 and fallback.get('accepted') == 0 and
-                any(fallback.get(name, 0) > 0 for name in
-                    ('failed_edge', 'private_edge', 'corridor_rejected'))):
-            # A conclusively exhausted local fan beside a wreck is different
-            # from an ordinary pending search or live-vehicle queue. Admit the
-            # existing once-only backout; its full world/vehicle sweep still
-            # decides whether ANY movement is possible (Char 25 t, 020500).
-            own = self.states.get(int(bot_id), {})
-            length, width = own.get('half_length', 3.5), own.get('half_width', 1.7)
-            for peer in neighbours:
-                if peer.get('alive', True):
-                    continue
-                point = peer['position']
-                shape = peer.get('shape') or tank_collision.DEFAULT_SHAPE
-                reach = (math.hypot(length, width) + math.hypot(shape[0], shape[1]) +
-                         ai_driver.recovery_probe_distance(length))
-                if (_distance(position, point) <= reach and
-                        abs(position[1] - point[1]) <= max(
-                            (own.get('collision_shape') or tank_collision.DEFAULT_SHAPE)[3], shape[3])):
-                    combat_count('nav_wait_wreck_admitted')
-                    return True
         return bool(nav_state.get('hard_contact_episode') or
                     nav_state.get('blocked_step_tracker') or
                     self._hard_contact_grinds.get(int(bot_id), 0) > 0)
@@ -9341,7 +9302,7 @@ class BotRuntime(object):
                 state['navigation_stop_at_target'] = False
         remember = getattr(self.navigator, 'remember_runtime_target', None)
         if movement_intent and tuple(target) != selected_target and callable(remember):
-            remember(bot_id, position, goal, target, now, selected_target)
+            remember(bot_id, position, goal, target, now)
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         progress_receipt = getattr(self.navigator, 'driver_progress_target', None)
@@ -11508,7 +11469,6 @@ class BotRuntime(object):
     @timed('bot.gun_aim')
     def _update_gun_aim(self, state, command, target, step, weapon_tick=None):
         """Slew the rendered turret and barrel through the 0.8.2 limits."""
-        state.pop('_rear_laying_progress', None)
         descriptor = self._descriptors.get(state['id'], {})
         ballistic_solution = command.get('_ballistic_solution')
         planning_pending = False
@@ -11646,10 +11606,6 @@ class BotRuntime(object):
             state['aim_yaw'] = (
                 world_angles[0] if world_angles is not None else
                 _wrapped(state['yaw'] + state['turret_yaw']))
-            self._record_rear_laying_progress(
-                state, aim_key, raw_relative, raw_pitch,
-                max(minimum_yaw, min(maximum_yaw, slew_relative)),
-                limited, planning_pending)
             return desired_yaw, horizontal
         desired_relative = raw_relative
         if limited:
@@ -11712,28 +11668,8 @@ class BotRuntime(object):
             # policy admits a snapshot. Limits remain compared to RAW intent.
             abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 1.0e-6 and
             abs(raw_pitch - state['gun_pitch']) <= 1.0e-6)
-        self._record_rear_laying_progress(
-            state, aim_key, raw_relative, raw_pitch,
-            desired_relative, limited, planning_pending)
         return desired_yaw, horizontal
 
-    def _record_rear_laying_progress(self, state, identity, yaw, pitch,
-                                     endpoint, limited, planning_pending):
-        """Record actual remaining mechanical work after either gun owner slews.
-
-        A limited turret traverses its legal interval, not the wrapped rear
-        gap. Include the hull's unreachable angle as well as the turret and
-        barrel work, so reaching a clamped stop alone is not aim completion.
-        This receipt performs no new world query and never grants fire.
-        """
-        if (identity is None or not limited or planning_pending or
-                state.get('_rear_aim_episode') is None):
-            return
-        error = (abs(_angle_delta(yaw, endpoint)) +
-                 abs(endpoint - state.get('turret_yaw', 0.0)) +
-                 abs(pitch - state.get('gun_pitch', 0.0)))
-        state['_rear_laying_progress'] = dict(
-            identity=identity, time_us=self._sample_time_us, error=error)
 
     @staticmethod
     def _shot_los_key(source, target):
@@ -13175,24 +13111,7 @@ class BotRuntime(object):
         return result
 
     def _rear_laying_order(self, state, order, targets, now):
-        """Allow healthy mechanical laying; bound attempts with no progress."""
-        progress = state.pop('_rear_laying_progress', None)
-        if progress is not None:
-            for attempt in (state.get('_rear_aim_episode'),
-                            state.get('_rear_motion_lease')):
-                if (attempt is None or
-                        attempt.get('identity') != progress['identity'] or
-                        attempt.get('retry_until') is not None):
-                    continue
-                attempt['sample_us'] = progress['time_us']
-                best = attempt.get('best_error')
-                if best is None:
-                    attempt['best_error'] = progress['error']
-                elif progress['error'] < best - 0.02:
-                    # Only a new best by more than the angular hysteresis
-                    # renews time; oscillation and replay cannot do so.
-                    attempt['best_error'] = progress['error']
-                    attempt['progress_at'] = now
+        """Finish one bounded mechanical laying attempt before route handoff."""
         # A new enemy cannot renew the same stationary movement attempt.
         lease = state.get('_rear_motion_lease')
         motion_blocked = False
@@ -13208,8 +13127,7 @@ class BotRuntime(object):
             retry_until = lease.get('retry_until')
             if completed or (retry_until is not None and now >= retry_until):
                 state.pop('_rear_motion_lease', None)
-            elif (retry_until is not None or
-                  now - lease.get('progress_at', lease['start']) >= 8.0):
+            elif retry_until is not None or now - lease['start'] >= 8.0:
                 if retry_until is None:
                     lease['retry_until'] = now + max(8.0, _number(state.get('reload_time')))
                 motion_blocked = True
@@ -13224,8 +13142,7 @@ class BotRuntime(object):
                    order.get('combat_mode') in
                    ('base_defense', 'artillery_deploy', 'artillery_relocate'))
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
-        expired = (motion_blocked or
-                   now - episode.get('progress_at', episode['start']) >= 8.0)
+        expired = motion_blocked or now - episode['start'] >= 8.0
         blocked = any(now < failed[3] and
                       _distance(_position(state), failed[0]) <= 0.08 and
                       abs(_angle_delta(state.get('yaw', 0.0), failed[1])) <= 0.02
@@ -14444,12 +14361,12 @@ class BotRuntime(object):
                     'half_length': state.get('half_length', 3.5),
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
+                    'navigation_recovery_allowed': self._navigation_recovery_allowed(
+                        state['id'], position),
                     'decision_horizon': decision_horizon,
                     'turn_speed_limit': (physics_params.get('rotSpd')
                                          if physics_params is not None else None),
                 }
-                decision_state['navigation_recovery_allowed'] = self._navigation_recovery_allowed(
-                    state['id'], position, decision_state['neighbours'])
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
                 if (reposition_order is not None and
@@ -14748,8 +14665,7 @@ class BotRuntime(object):
                 if (state.get('_rear_motion_lease') is None and
                         command.get('movement_intent', True) and
                         command.get('combat_mode') != 'engage'):
-                    state['_rear_motion_lease'] = dict(
-                        start=now, origin=tuple(position), identity=aim_target_key)
+                    state['_rear_motion_lease'] = dict(start=now, origin=tuple(position))
                 if state.get('_rear_aim_episode') is None:
                     state['_rear_aim_episode'] = dict(
                         identity=aim_target_key, target_id=command.get('target_id'),

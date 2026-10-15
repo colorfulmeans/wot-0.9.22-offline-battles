@@ -118,8 +118,6 @@ class SpawnDepartureTests(unittest.TestCase):
 
     def test_flat_spawn_traffic_departs_at_15_and_24_fps(self):
         module = runtime_fixtures._load()
-        from gui.mods.offline_lan_0922.ai.navigation import MACRO_STALL_SECONDS
-        from gui.mods.offline_lan_0922.ai.driver import WAYPOINT_ARRIVAL_RADIUS
         original_factors = module.loadout.attribute_factors
         module.loadout.attribute_factors = bot_default_crew_factors
         self.addCleanup(
@@ -207,8 +205,6 @@ class SpawnDepartureTests(unittest.TestCase):
                     (bot_id, (state['x'], state['z']))
                     for bot_id, state in runtime.states.items())
                 monitor = _EpisodeMonitor()
-                departure_distances = dict((bot_id,0.0) for bot_id in starts)
-                tail_origins, tail_departures = {}, {}
                 now = [0.0]
                 macro_goals = {}
 
@@ -259,15 +255,6 @@ class SpawnDepartureTests(unittest.TestCase):
                 for frame in range(1, fps * 60 + 1):
                     now[0] = frame / float(fps)
                     runtime.update(1.0 / float(fps), now[0])
-                    for bot_id,state in runtime.states.items():
-                        departure_distances[bot_id] = max(
-                            departure_distances[bot_id], math.hypot(
-                                state['x']-starts[bot_id][0],
-                                state['z']-starts[bot_id][1]))
-                        if now[0] >= 60.0-MACRO_STALL_SECONDS:
-                            origin=tail_origins.setdefault(bot_id,(state['x'],state['z']))
-                            tail_departures[bot_id]=max(tail_departures.get(bot_id,0.0),
-                                math.hypot(state['x']-origin[0],state['z']-origin[1]))
 
                 non_spg_ids = [
                     bot_id for bot_id, state in runtime.states.items()
@@ -283,25 +270,10 @@ class SpawnDepartureTests(unittest.TestCase):
 
                 self.assertEqual(29, len(runtime.states))
                 self.assertEqual(25, len(non_spg_ids))
-                # Departure is an event within the same 60s/20m bounds.
-                # A legal obstacle detour can return nearer the spawn later:
-                # Airfield BOT24 exits at 16s, travels 83m, then is 18.4m
-                # from spawn at 60s. Final radius alone mislabels that as a
-                # stationary queue. Continuous wait/arrival bounds below and
-                # the recovery lifecycle/corner tests still reject loops.
                 self.assertEqual([], sorted(
                     (bot_id, round(distance, 3))
-                    for bot_id, distance in departure_distances.items()
-                    if bot_id in non_spg_ids and distance <= 20.0),
-                    'peak departure failed; final distances: %r' % distances)
-                # An out-and-back orbit must not pass just because it once
-                # left spawn. A hull returning inside 20m must still exit its
-                # physical recovery pocket during the existing stall lease.
-                self.assertEqual([],sorted(bot_id for bot_id in non_spg_ids
-                    if distances[bot_id] <= 20.0 and tail_departures[bot_id] <=
-                       2.0*runtime.states[bot_id].get('half_length',3.5)+
-                       WAYPOINT_ARRIVAL_RADIUS),
-                    'returned to spawn and remained in the same recovery pocket')
+                    for bot_id, distance in distances.items()
+                    if distance <= 20.0))
                 self.assertLessEqual(
                     max(monitor.maximum['traffic'].values() or [0.0]),
                     5.0)

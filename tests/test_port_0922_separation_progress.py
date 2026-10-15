@@ -137,12 +137,8 @@ class SeparationProgressTests(unittest.TestCase):
                         },
                     } for slot in range(2)],
                 })
-                def terminal_target(bot_id, position, target, strategic, state):
-                    # This fixture replaces A*. Preserve its terminal receipt:
-                    # an intermediate route corner is deliberately pass-through.
-                    state['navigation_stop_at_target'] = True
-                    return target
-                runtime.adapter.navigation_target = terminal_target
+                runtime.adapter.navigation_target = (
+                    lambda bot_id, position, target, strategic, state: target)
                 runtime._apply_orders({
                     'bot_order_revision': 1, 'bot_orders': [
                         {'id': 1, 'move_position': goal, 'face_position': goal,

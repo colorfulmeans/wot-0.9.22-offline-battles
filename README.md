@@ -580,6 +580,15 @@ from a recovery pocket. A control command alone does not demonstrate escape.
 Engine-free fixtures and CPython 2.7 native parity do not replace acceptance on
 the pinned Windows client.
 
+Bot navigation, driving and recovery have been restored to the **initial**
+`v0.10.1` tag (`e7d95d56`), not the subsequently replaced release assets.
+Retain only the separate support/contact-point corrections in the Bot runtime.
+Do not restore cross-order recovery memory, first-refusal route retirement,
+new local bypass ownership or arrival handbraking as incidental fixes.
+Audit the original failure and its existing retry/route progression first.
+Known test-build map identities remain readable so saved user route points
+are preserved when returning to the original navigation resources.
+
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
 assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage

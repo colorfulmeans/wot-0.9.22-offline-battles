@@ -81,19 +81,7 @@ def default_profile(name='Default'):
     from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
     document = json.loads(PROFILE_JSON)
     document['name'] = name
-    # The reviewed orders remain immutable. Refresh only a resource identity
-    # whose exact predecessor is recorded by the current map registry.
-    for map_name, settings in document['maps'].items():
-        meta = MAPS[map_name]
-        if settings.get('resource_sha256') in _resource_fingerprints(meta):
-            settings['resource_sha256'] = meta['resource_sha256']
     return document
-
-
-def _resource_fingerprints(meta):
-    return (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
-            meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'),
-            meta.get('navigation_previous_sha256'))
 
 
 def default_map(name):
@@ -173,6 +161,20 @@ def waypoint(raw, bounds):
     return value
 
 
+# Known test-build resource identities accepted during navigation rollback.
+NAVIGATION_ROLLBACK_IDENTITIES = {'04_himmelsdorf': 'f03b9a8a6f706e055198185b393afe19cc91bb4e1034e09eb4979b50a0bf543c',
+ '05_prohorovka': '648694cb5cacae9c039833659579b2f95a1a4a5908ea9efc796c34c57e023ed7',
+ '06_ensk': 'c37fbee5d445a6b3456dab9a21511f096b38f0e96f2267a8e160d1bbc13265ca',
+ '114_czech': '20edc5c59bfb2008931a67e6451484a215e7fecbf1e5d824e12f5163afe81b40',
+ '17_munchen': 'cca0e9e9e5b47a46ec682413907b6b7954a0fb83ff4f13f010f4d901caa663ef',
+ '35_steppes': '12898d9b0487eacfdcbde51dc1711e2223d7ec0113e7d75f95e948d2c029eb9b',
+ '44_north_america': '9209714bbde0dd3bbb2e9d8f26f32065d7505519946a97edc6e7a69d20184384',
+ '45_north_america': '2194e14f3592fcbbede09c8fe3064b2a0fc96596f5a7f1fcdab00d87b102f8b4',
+ '47_canada_a': 'cacfe6cfe6f44eda588037b97b1725acaca8346db695071dcdce3d231cc5187c',
+ '86_himmelsdorf_winter': '141bfa6e0011557242941c2f71dfcb507fadf33f7fc34945c33e5d4a0b873809',
+ '92_stalingrad': 'a91c83e470a7cb790b85014ba0f99f815e56dcb3e3cbfcb7b165042fbb604a76'}
+
+
 def canonical(raw):
     _keys(raw, ('schema', 'client', 'name', 'behavior', 'maps'),
           ('schema', 'client', 'name', 'behavior', 'maps'))
@@ -208,7 +210,9 @@ def canonical(raw):
         meta = MAPS[name]
         _keys(settings, ('mode', 'resource_sha256', 'routes', 'positions', 'default_routes', 'deleted_positions'),
               ('mode', 'resource_sha256', 'routes', 'positions'))
-        fingerprints = _resource_fingerprints(meta)
+        fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
+                        meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'),
+                        NAVIGATION_ROLLBACK_IDENTITIES.get(name))
         if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])

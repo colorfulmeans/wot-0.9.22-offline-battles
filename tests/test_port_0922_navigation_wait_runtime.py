@@ -102,40 +102,6 @@ class NavigationWaitRuntimeTests(unittest.TestCase):
         self.assertTrue(first_state['navigation_recovery_allowed'])
         self.assertEqual(1, runtime.navigator.request_replan.call_count)
 
-    def test_recorded_char_wait_near_wreck_admits_only_a_checked_backout(self):
-        runtime = self.runtime(evidence=dict(navigation_status='blocked',
-            local_fallback=dict(attempted=18,accepted=0,failed_edge=6)))
-        own=runtime.states[11]
-        own.update(half_length=2.6292960644,half_width=1.4991409779,
-                   collision_shape=(1.4991409779,2.6292960644,.000913,1.508467))
-        position=(-177.7243656,.2700003,15.3431525)
-        peer=dict(id=17,alive=False,position=(-178.3564155,.2649999,6.2036730),
-                  shape=(1.706792,3.626273,-.000234,1.890968))
-        self.assertTrue(runtime._navigation_recovery_allowed(11,position,[peer]))
-        for change in ('alive','far','other_layer','pending','unproved','accepted','unknown'):
-            p=dict(peer)
-            ns=runtime.navigator.bot_states[11]
-            ns.update(navigation_status='blocked',local_fallback=dict(attempted=18,accepted=0,failed_edge=6))
-            if change=='alive':p['alive']=True
-            elif change=='far':p['position']=(100.,.27,100.)
-            elif change=='other_layer':p['position']=(position[0],10.,position[2])
-            elif change=='pending':ns['navigation_status']='pending'
-            elif change=='unproved':ns['local_fallback']={}
-            elif change=='unknown':ns['local_fallback']=dict(attempted=18,accepted=0,missing_ground=18)
-            else:ns['local_fallback']['accepted']=1
-            self.assertFalse(runtime._navigation_recovery_allowed(11,position,[p]),change)
-
-    def test_exhausted_wreck_wait_reaches_existing_once_only_driver_recovery(self):
-        runtime=self.runtime(evidence=dict(navigation_status='blocked',
-            local_fallback=dict(attempted=18,accepted=0,failed_edge=6)))
-        peer=dict(id=17,alive=False,team=1,position=(6.,0.,0.),yaw=0.,
-                  shape=(1.,2.,0.,1.),half_length=2.,half_width=1.)
-        with mock.patch.object(runtime,'_neighbours_for',return_value=[peer]), \
-             mock.patch.object(runtime.adapter,'_wreck_push_plan',return_value=None):
-            commands=[self.tick(runtime,frame)[1] for frame in range(175)]
-        self.assertTrue(any(c.get('navigation_recovery') for c in commands))
-        self.assertEqual(1,runtime.navigator.request_replan.call_count)
-
     def test_physical_contact_evidence_enables_recovery_on_supported_ground(self):
         for evidence in ({'hard_contact_episode': {'position': (0.0, 0.0, 0.0)}},
                          {'blocked_step_tracker': {'position': (0.0, 0.0, 0.0)}}):

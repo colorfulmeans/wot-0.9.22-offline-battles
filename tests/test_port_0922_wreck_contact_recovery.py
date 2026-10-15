@@ -113,10 +113,7 @@ class WreckContactRecoveryTests(unittest.TestCase):
         before = dict(self.peer)
         command = self.decide()
         self.assertNotEqual('wreck_push', command['recovery_mode'])
-        # A geometric refusal spends the attempt, not fourteen seconds of time.
-        self.assertTrue(self.adapter._wreck_attempts[1]['exhausted'])
-        self.assertLess(self.adapter._wreck_attempts[1]['elapsed'], 1.)
-        self.assertEqual('world_turn_refused', self.state['_wreck_push_evidence']['phase'])
+        self.assertEqual(14., self.adapter._wreck_attempts[1]['elapsed'])
         self.assertEqual(before, self.peer)
         self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
 
