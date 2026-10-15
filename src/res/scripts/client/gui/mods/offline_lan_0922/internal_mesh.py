@@ -12,6 +12,15 @@ import math
 import struct
 import zlib
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    _native_math = None
+try:
+    _NATIVE_COUNT_TYPES = (int, long, bool)
+except NameError:
+    _NATIVE_COUNT_TYPES = (int, bool)
+
 
 _EPS = 1.0e-8
 _LEAF_SIZE = 8
@@ -206,7 +215,7 @@ def _triangle_line(start, delta, a, b, c):
     return _dot(e2, q) / det, (1 if det > 0.0 else -1)
 
 
-def _line_hits(mesh, start, delta, first, last, stats=None):
+def _reference_line_hits(mesh, start, delta, first, last, stats=None):
     vertices, faces = mesh['vertices'], mesh['triangles']
     stack, hits = [mesh['bvh']], []
     while stack:
@@ -232,6 +241,26 @@ def _line_hits(mesh, start, delta, first, last, stats=None):
         else:
             groups.append([t, set((sign,))])
     return groups
+
+
+def _line_hits(mesh, start, delta, first, last, stats=None):
+    """Return original grouped hits after a single native BVH/triangle walk."""
+    if (_query_input(mesh, stats, orientations=True) and
+            _ray_laws() == _PINNED_RAY_LAWS):
+        result = _native_math.call(
+            'projectile_math', 3,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh'], mesh['orientations']),
+            (start, delta, first, last, _EPS))
+        if result is not None:
+            groups, tested = result
+            # Sets/lists are the original consumer contract, not mesh copies.
+            result = [[t, set((-1,) if mask == 1 else
+                              (1,) if mask == 2 else (-1, 1))]
+                      for t, mask in groups]
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return result
+    return _reference_line_hits(mesh, start, delta, first, last, stats)
 
 
 def intervals(start, end, mesh, stats=None):
@@ -315,6 +344,22 @@ def triangle_closest(point, a, b, c):
 def distance(point, mesh, stats=None):
     if contains(point, mesh):
         return 0.0, tuple(point)
+    if (_query_input(mesh, stats) and
+            _distance_laws() == _PINNED_DISTANCE_LAWS):
+        result = _native_math.call(
+            'projectile_math', 4,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']), (point,))
+        if result is not None:
+            value, closest, vertex, tested = result
+            # The reference returns the original vertex object in a vertex
+            # region, including its tuple/list type and signed coordinates.
+            if vertex >= 0:
+                closest = mesh['vertices'][vertex]
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return value, closest
+    # Read-only native rejection leaves original counter/error ordering intact.
+    # Containment has already run exactly once above.
     vertices, faces = mesh['vertices'], mesh['triangles']
     best, closest, serial = float('inf'), None, 0
     queue = [(0.0, serial, mesh['bvh'])]
@@ -401,8 +446,11 @@ def triangle_intersects_cone(a, b, c, apex, axis, depth, tangent):
     return False
 
 
-def intersects_cone(mesh, apex, axis, depth, tangent, stats=None):
-    if contains(apex, mesh):
+def _reference_intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
+                    apex_inside=None):
+    if apex_inside is None:
+        apex_inside = contains(apex, mesh)
+    if apex_inside:
         return True
     base = _add_scaled(apex, axis, depth)
     radii = tuple(depth * tangent * math.sqrt(max(0.0, 1.0 - axis[a] ** 2))
@@ -428,6 +476,147 @@ def intersects_cone(mesh, apex, axis, depth, tangent, stats=None):
     return False
 
 
+def _cone_laws():
+    return (_sub, _dot, _add_scaled, _clip_axial, triangle_intersects_cone)
+
+
+_PINNED_CONE_LAWS = _cone_laws()
+
+
+def intersects_cone(mesh, apex, axis, depth, tangent, stats=None,
+                    apex_inside=None):
+    """Run the complete current surface query without per-triangle callbacks."""
+    if apex_inside is None:
+        apex_inside = contains(apex, mesh)
+    if apex_inside:
+        return True
+    # Custom mappings/counters retain their exact reference side effects.
+    plain_stats = (stats is None or (type(stats) is dict and
+                   all(type(key) is str for key in stats) and
+                   type(stats.get('triangles', 0)) in _NATIVE_COUNT_TYPES))
+    if (_native_math is not None and type(mesh) is dict and plain_stats and
+            _cone_laws() == _PINNED_CONE_LAWS and
+            all(key in mesh for key in ('vertices', 'triangles', 'bvh'))):
+        result = _native_math.call(
+            'projectile_math', 2,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']),
+            (apex, axis, depth, tangent, _EPS))
+        if result is not None:
+            hit, tested = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return bool(hit)
+    # Native rejection is read-only, so the reference owns every observable
+    # error/counter write. Do not redo the apex containment query on fallback.
+    return _reference_intersects_cone(
+        mesh, apex, axis, depth, tangent, stats, apex_inside=False)
+
+
 def export_primitive(mesh):
     """Public diagnostic geometry; acceleration nodes are an implementation detail."""
     return dict((key, value) for key, value in mesh.items() if key != 'bvh')
+
+
+# Current laws are checked before a native walk; custom geometry functions,
+# mappings and observable counter objects keep their Python behavior.
+def _ray_laws():
+    return (_sub, _dot, _cross, _line_box, _triangle_line)
+
+
+def _distance_laws():
+    return (_sub, _dot, _add_scaled, _box_distance_sq, triangle_closest,
+            heapq.heappop, heapq.heappush)
+
+
+_PINNED_RAY_LAWS = _ray_laws()
+_PINNED_DISTANCE_LAWS = _distance_laws()
+
+
+def _query_input(mesh, stats, orientations=False):
+    if (_native_math is None or type(mesh) is not dict or
+            not all(type(key) is str for key in mesh)):
+        return False
+    keys = ('vertices', 'triangles', 'bvh')
+    if orientations:
+        keys += ('orientations',)
+    if not all(key in mesh for key in keys):
+        return False
+    return (stats is None or (type(stats) is dict and
+            all(type(key) is str for key in stats) and
+            type(stats.get('triangles', 0)) in _NATIVE_COUNT_TYPES))
+
+
+# Complete consumer frontiers preserve the old functions as error/override
+# oracles. No query rebuilds or retains the mesh between calls.
+_reference_volume_contains = contains
+_reference_volume_intervals = intervals
+_reference_volume_distance = distance
+
+
+def _volume_laws():
+    return _ray_laws() + _distance_laws() + (_line_hits, math.sqrt)
+
+
+_PINNED_VOLUME_LAWS = _volume_laws()
+_PINNED_VOLUME_CONE = intersects_cone
+
+
+def _volume_input(mesh, stats=None):
+    return (_query_input(mesh, stats, orientations=True) and
+            all(key in mesh for key in ('closed', 'minimum', 'maximum')) and
+            all(current is pinned for current, pinned in
+                zip(_volume_laws(), _PINNED_VOLUME_LAWS)))
+
+
+def _volume_geometry(mesh):
+    return (mesh['vertices'], mesh['triangles'], mesh['bvh'],
+            mesh['orientations'], mesh['closed'], mesh['minimum'], mesh['maximum'])
+
+
+def contains(point, mesh):
+    if _volume_input(mesh):
+        result = _native_math.call('projectile_math', 5,
+                                  _volume_geometry(mesh), (point, _EPS))
+        if result is not None:
+            return bool(result)
+    return _reference_volume_contains(point, mesh)
+
+
+_PINNED_VOLUME_CONTAINS = contains
+
+
+def intervals(start, end, mesh, stats=None):
+    if contains is _PINNED_VOLUME_CONTAINS and _volume_input(mesh, stats):
+        result = _native_math.call('projectile_math', 6,
+                                  _volume_geometry(mesh), (start, end, _EPS))
+        if result is not None:
+            values, tested = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            return values
+    return _reference_volume_intervals(start, end, mesh, stats)
+
+
+def distance(point, mesh, stats=None):
+    if contains is _PINNED_VOLUME_CONTAINS and _volume_input(mesh, stats):
+        result = _native_math.call('projectile_math', 7,
+                                  _volume_geometry(mesh), (point, _EPS))
+        if result is not None:
+            value, closest, vertex, tested, inside = result
+            if stats is not None and tested:
+                stats['triangles'] = stats.get('triangles', 0) + tested
+            if inside:
+                return 0.0, tuple(point)
+            return value, mesh['vertices'][vertex] if vertex >= 0 else closest
+    return _reference_volume_distance(point, mesh, stats)
+
+
+def cone_entry_depth(mesh, apex, axis, depth, tangent):
+    """Optional complete 14-step depth search; caller proved apex is outside."""
+    if (intersects_cone is _PINNED_VOLUME_CONE and
+            all(current is pinned for current, pinned in
+                zip(_cone_laws(), _PINNED_CONE_LAWS)) and _query_input(mesh, None)):
+        return _native_math.call('projectile_math', 8,
+            (mesh['vertices'], mesh['triangles'], mesh['bvh']),
+            (apex, axis, depth, tangent, _EPS))
+    return None

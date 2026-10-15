@@ -2,6 +2,7 @@ name: Build Windows launcher
 
 on:
   workflow_dispatch:
+  workflow_call:
   push:
     branches:
       - fix/0922-cliff-gravity-hull-damage
@@ -11,6 +12,7 @@ on:
       - fix/094-pr40-gameplay-20260925
       - release/v0.9.5
       - fix/097-bot-withdrawal-and-slope-aim
+      - integrate/0100-native-worker
 
 permissions:
   contents: read
@@ -18,6 +20,7 @@ permissions:
 
 jobs:
   windows-server:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[native-only]')
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -72,6 +75,8 @@ jobs:
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
       - name: Stage verified style UI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python tools/stage_release_style_ui.py
       - name: Build Python 2.7 0.9.22 client package
         run: >-
@@ -81,7 +86,7 @@ jobs:
           -w /work python:2.7.18
           python build_wotmod.py
       - name: Verify all current client bytecode
-        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.0.wotmod
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.1.wotmod
       - name: Validate 0.9.22 client package
         run: >-
           python tools/validate_wotmod.py
@@ -119,6 +124,9 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - name: Include opt-in worker spike timing entry point
+        shell: pwsh
+        run: Copy-Item -LiteralPath tools/START_SPIKE_PROFILE.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_SPIKE_PROFILE.bat
       - name: Verify v0.9.5 launcher and client versions
         if: github.ref == 'refs/heads/release/v0.9.5'
         shell: pwsh
@@ -146,6 +154,20 @@ jobs:
           print('Verified v0.9.5 client build identity and mod.')
           '@ | python - $archive
           if ($LASTEXITCODE -ne 0) { throw "Client release version check failed" }
+      - name: Verify release versions, native payload, and frozen sources
+        shell: pwsh
+        env:
+          LOCALAPPDATA: ${{ runner.temp }}/release0101-runtime-cache
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($exe in @('launcher/dist/wot-0.9.22-offline-battles/wot-0.9.22-offline-battles.exe', 'dist/server/WoT-0.9.22-LAN-Server.exe')) {
+            $version = (Get-Item -LiteralPath $exe).VersionInfo
+            if ($version.FileVersion -ne '0.10.1' -or $version.ProductVersion -ne '0.10.1') {
+              throw "Incorrect executable version: $exe"
+            }
+          }
+          python tools/verify_release0100_package.py launcher/dist/wot-0.9.22-offline-battles
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen release source verification failed' }
       - uses: actions/upload-artifact@v4
         id: launcher_download
         with:

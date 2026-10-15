@@ -45,6 +45,20 @@ def _load_runtime():
     runtime.player_events = g_playerEvents
     runtime.prb_loader = g_prbLoader
     runtime.prb_action_type = PrbAction
+    from gui.app_loader import g_appLoader
+    from gui.Scaleform.framework import ViewTypes
+    from gui.Scaleform.daapi.settings.views import VIEW_ALIAS
+    from gui.Scaleform.framework.managers.containers import VIEW_SEARCH_CRITERIA
+
+    def queue_view_ready():
+        app = g_appLoader.getDefLobbyApp()
+        if app is None:
+            return False
+        view = app.containerManager.getView(ViewTypes.LOBBY_SUB,
+            {VIEW_SEARCH_CRITERIA.VIEW_ALIAS: VIEW_ALIAS.BATTLE_QUEUE})
+        return view is not None and view._isDAAPIInited()
+
+    runtime.queue_view_ready = queue_view_ready
     return runtime
 
 
@@ -56,6 +70,7 @@ class QueueScreenUI(object):
         self._runtime = runtime
         self._installed = False
         self._engaged = False
+        self._pending_account = None
 
     def install(self):
         if self._installed:
@@ -79,9 +94,14 @@ class QueueScreenUI(object):
         if not self._installed:
             return False
         try:
+            account = self._runtime.bigworld.player()
             if self._in_queue():
                 self._engaged = True
+                self._pending_account = None
                 return True
+            if self._pending_account is account:
+                return True
+            self._pending_account = None
             dispatcher = self._dispatcher()
             if dispatcher is None:
                 _log('LAN queue screen unavailable: no prebattle dispatcher')
@@ -91,16 +111,33 @@ class QueueScreenUI(object):
                 _log('LAN queue screen unavailable: the lobby is not in the '
                      'random pre-queue')
                 return False
+            # Install the pending owner before a possibly synchronous callback.
+            self._pending_account = account
             accepted = dispatcher.doAction(
                 self._runtime.prb_action_type('', mapID=0))
             if not accepted:
+                self._pending_account = None
                 _log('LAN queue screen unavailable: the queue action was '
                      'refused')
                 return False
             self._engaged = True
             return True
         except Exception as error:
+            self._pending_account = None
             _log('LAN queue screen could not open: %s' % error)
+            return False
+
+    def is_ready(self):
+        """Require the current Account's populated stock BattleQueue view."""
+        try:
+            ready = self._in_queue() and self._runtime.queue_view_ready()
+            state = (id(self._runtime.bigworld.player()), bool(ready))
+            if state != getattr(self, '_last_ready_state', None):
+                _log('LAN queue view ready=%s account=%s' % (int(bool(ready)), state[0]))
+                self._last_ready_state = state
+            return bool(ready)
+        except Exception as error:
+            _log('LAN queue view readiness failed: %s' % error)
             return False
 
     def leave(self):
@@ -108,6 +145,7 @@ class QueueScreenUI(object):
         if not self._installed:
             return False
         self._engaged = False
+        self._pending_account = None
         try:
             # exitFromQueue toggles by queue state, so it must never run
             # while the player is not queued.
@@ -130,6 +168,7 @@ class QueueScreenUI(object):
         if not self._engaged:
             return
         self._engaged = False
+        self._pending_account = None
         if callable(self._on_exit):
             self._on_exit()
 
@@ -141,4 +180,5 @@ class QueueScreenUI(object):
             self._on_dequeued_random
         self._installed = False
         self._engaged = False
+        self._pending_account = None
         return True

@@ -28,6 +28,8 @@ customization writers share one live record: two independent writers would each
 rebuild the descriptor from a stale copy and silently drop the other's change.
 """
 
+from gui.mods.offline_lan_0922.customization_rules import is_rental, rental_battles
+
 import contextlib
 import copy
 import math
@@ -1300,6 +1302,7 @@ class GarageState(object):
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
         self.revision += 1
+        self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
         return record
 
     def apply_style(self, vehicle_inventory_id, style_id):
@@ -1318,6 +1321,7 @@ class GarageState(object):
             record.setdefault('outfits', {}).pop(CUSTOMIZATION_ALL_SEASONS, None)
             self._touched.add(_int(vehicle_inventory_id))
             self.revision += 1
+            self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
             return record
         try:
             styles = self._vehicles_module().g_cache.customization20().styles
@@ -1348,6 +1352,7 @@ class GarageState(object):
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
         self.revision += 1
+        self.report_customization(record.get('vehicleTypeCompactDescr'), 'equip_staged')
         return record
 
     def buy_customizations(self, vehicle_inventory_id, purchases):
@@ -1370,8 +1375,8 @@ class GarageState(object):
             for currency, amount in price.items():
                 total[currency] = total.get(currency, 0) + amount
             style = self._customization_style(compact_descr)
-            units = max(1, _int(getattr(style, 'rentCount', 0)))
-            if units > 1 and vehicle_type == 0:
+            units = max(1, rental_battles(style))
+            if is_rental(style) and vehicle_type == 0:
                 raise GarageError('a rental style needs a vehicle')
             parsed.append((custom_type, item_id, count * units))
 
@@ -1397,7 +1402,7 @@ class GarageState(object):
         vehicle_type = _int(record.get('vehicleTypeCompactDescr', 0)) if record else 0
         self._customization_cost(compact_descr)
         style = self._customization_style(compact_descr)
-        if _int(getattr(style, 'rentCount', 0)) > 0:
+        if is_rental(style):
             raise GarageError('remaining rental battles cannot be sold')
         # Match the stock dialog's existing sell modifiers and conversion.
         refund = self._item_refund(compact_descr, count)
@@ -1432,6 +1437,20 @@ class GarageState(object):
                 return style
         return None
 
+    def report_customization(self, vehicle_type, stage, receipt=None):
+        """Diagnose equipped style/stock without altering the live snapshot."""
+        try:
+            from gui.mods.offline_lan_0922.customization_rules import report_style
+            record = next((row for row in self._records()
+                           if _int(row.get('vehicleTypeCompactDescr')) == _int(vehicle_type)), None)
+            if record is not None:
+                report_style(stage, record, self._snapshot,
+                             self._vehicles_module().g_cache.customization20().styles,
+                             self._customizations_module().parseOutfitDescr,
+                             self._customization_identity, receipt)
+        except Exception:
+            pass
+
     def consume_customization_rental(self, vehicle_type):
         """Consume one played battle, inside the durable battle settlement."""
         record = next((row for row in self._records()
@@ -1449,7 +1468,7 @@ class GarageState(object):
         if not style_id:
             return False
         style = self._vehicles_module().g_cache.customization20().styles.get(style_id)
-        if _int(getattr(style, 'rentCount', 0)) <= 0:
+        if not is_rental(style):
             return False
         kind, item_id = self._customization_identity(style.compactDescr)
         bindings = self._snapshot.get('customizationItems', {}).get(kind, {}).get(item_id, {})

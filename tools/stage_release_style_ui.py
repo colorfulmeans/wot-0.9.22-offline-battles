@@ -7,6 +7,7 @@ docs/depot-styles-build.md. Both transformer and generated asset are gated.
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -14,7 +15,11 @@ root = Path(__file__).resolve().parents[1]
 proof = json.loads((root/'tools/release0100-style-input.json').read_text())
 assert hashlib.sha256((root/'tools/build_depot_style_swf.py').read_bytes().replace(b'\r\n', b'\n')).hexdigest() == proof['transformer_sha256']
 url = 'https://api.github.com/repos/colorfulmeans/wot-0.9.22-offline-battles/git/blobs/' + proof['blob_sha']
-with urlopen(Request(url, headers={'User-Agent': 'WoT-release-builder'}), timeout=60) as response:
+headers = {'User-Agent': 'WoT-release-builder'}
+token = os.environ.get('GITHUB_TOKEN')
+if token:
+    headers['Authorization'] = 'Bearer ' + token
+with urlopen(Request(url, headers=headers), timeout=60) as response:
     record = json.load(response)
 assert record['sha'] == proof['blob_sha'] and record['encoding'] == 'base64'
 raw = base64.b64decode(record['content'])

@@ -1,0 +1,139 @@
+name: Validate native destructible preparation migration
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [integrate/0100-native-worker]
+    paths:
+      - .github/workflows/native-driver-mesh-migration.yml
+      - tools/prepare_native_validation_host.sh
+      - tools/build_verify_native_migration.py
+      - tools/build_verify_native_destructible_prepare.py
+      - tools/apply_native_destructible_prepare_migration.py
+      - tools/check_native_destructible_prepare.py
+      - tools/benchmark_native_destructible_prepare.py
+      - native/offline_destructible_prepare_python.inc
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: native-driver-mesh-migration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-publish:
+    # This recipe applies an unintegrated staged batch. Ordinary fixes to the
+    # integrated runtime use tests.yml and must not apply/publish it again.
+    if: >-
+      github.repository == 'colorfulmeans/wot-0.9.22-offline-battles' &&
+      github.ref == 'refs/heads/integrate/0100-native-worker' &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[native-only]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+      - name: Check staged validation source syntax before native builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B - <<'PY'
+          import ast, pathlib
+          for name in ('apply_native_destructible_prepare_migration.py',
+                       'build_verify_native_destructible_prepare.py',
+                       'check_native_destructible_prepare.py',
+                       'benchmark_native_destructible_prepare.py'):
+              p = pathlib.Path('tools') / name
+              ast.parse(p.read_text(), filename=str(p))
+          PY
+      - name: Download independently built 32-bit Python and MinGW environment
+        uses: actions/download-artifact@v4
+        with:
+          name: wot-native-environment-38142371281
+          run-id: 38142371281
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/wot-native-environment
+      - name: Create a credential-free disposable validation checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wot-native-validation/repo" "$RUNNER_TEMP/wot-native-validation/out"
+          git archive HEAD | tar -x -C "$RUNNER_TEMP/wot-native-validation/repo"
+          curl --fail --location --retry 3 \
+            https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz \
+            -o "$RUNNER_TEMP/wot-native-validation/Python-2.7.18.tar.xz"
+          docker import "$RUNNER_TEMP/wot-native-environment/toolchain-rootfs.tar.gz" wot-native-validate
+      - name: Validate complete baseline and migrated CPython 2.7 x86 extensions
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=$(git rev-parse HEAD^)
+          docker run --rm --network none \
+            -v "$RUNNER_TEMP/wot-native-validation:/work" \
+            -e VALIDATION_SOURCE_SHA="${{ github.sha }}" \
+            -e VALIDATION_BASELINE_SHA="$baseline" \
+            -e WOT_NATIVE_VALIDATION_BATCH=destructible-preparation \
+            -w /work/repo wot-native-validate \
+            sh tools/prepare_native_validation_host.sh
+      - name: Commit validated runtime and matching Win32 binary together
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin integrate/0100-native-worker
+          actual=$(git rev-parse FETCH_HEAD)
+          if [ "$actual" != "$EXPECTED_SHA" ]; then
+            echo "Branch advanced; refusing to overwrite: $actual" >&2
+            exit 1
+          fi
+          export VALIDATED_WORK="$RUNNER_TEMP/wot-native-validation"
+          python3 - <<'PY'
+          import json, os, pathlib, shutil, subprocess
+          work = pathlib.Path(os.environ['VALIDATED_WORK'])
+          report = json.loads((work/'out/report.json').read_text())
+          assert report['passed'] is True, report.get('error')
+          assert report['validation_source'] == os.environ['EXPECTED_SHA']
+          assert report['shipping']['machine'] == '0x014c'
+          assert report['new_reference_failures'] == []
+          prefix = 'src/res/scripts/client/gui/mods/offline_lan_0922/'
+          allowed = {prefix+'native_destructibles.py', prefix+'destructibles_sensor.py',
+                     'native/offline_destructible_python.inc',
+                     'native/offline_math_batch_native.pyd', 'tools/check_native_destructibles.py'}
+          manifest = json.loads((work/'out/changed-paths.json').read_text())
+          assert set(manifest) == allowed and len(manifest) == len(allowed), manifest
+          for name in manifest:
+              source, destination = work/'repo'/name, pathlib.Path(name)
+              assert source.is_file() and not source.is_symlink(), name
+              shutil.copy2(source, destination)
+          pathlib.Path('native/offline_math_batch_native.pyd').chmod(0o755)
+          subprocess.check_call(['git','diff','--check'])
+          subprocess.check_call(['git','add','--'] + manifest)
+          subprocess.check_call(['git','update-index','--chmod=+x','native/offline_math_batch_native.pyd'])
+          staged = subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert set(staged) == allowed, staged
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Integrate validated destructible chunk preparation with rebuilt x86 module [skip ci]' \
+            -m "Full 32-bit CPython 2.7.18 native gates and strict Win32 build passed for source $EXPECTED_SHA. Preserve current registration, cache, identity and geometry rules. No new reference failures. Validation run: ${{ github.run_id }}. Host validation is not #1513 Windows gameplay acceptance."
+          git push origin HEAD:refs/heads/integrate/0100-native-worker
+          git rev-parse HEAD | tee "$RUNNER_TEMP/wot-native-validation/out/published-commit.txt"
+          git status --short
+      - name: Upload exact build and comparison evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-destructible-prepare-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/wot-native-validation/out/
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 14

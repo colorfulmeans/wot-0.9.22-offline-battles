@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +126,8 @@ class _Runtime(object):
         self.prb_action_type = _PrbAction
         self._dispatcher = dispatcher
         self._account = account
+        self.view_ready = False
+        self.queue_view_ready = lambda: self.view_ready
 
         class _Loader(object):
             @staticmethod
@@ -158,6 +161,44 @@ class QueueScreenTests(unittest.TestCase):
         while self.pending:
             self.pending.pop(0)()
 
+    def test_real_runtime_loader_uses_1513_alias_and_populated_queue_view(self):
+        modules = {}
+        def module(name, **attrs):
+            value = types.ModuleType(name)
+            value.__path__ = []
+            value.__dict__.update(attrs)
+            modules[name] = value
+            return value
+        module('BigWorld', player=lambda: self.account)
+        module('PlayerEvents', g_playerEvents=self.events)
+        for name in ('gui.prb_control','gui.prb_control.entities',
+                'gui.prb_control.entities.base', 'gui.Scaleform',
+                'gui.Scaleform.daapi','gui.Scaleform.daapi.settings',
+                'gui.Scaleform.framework.managers'):
+            module(name)
+        module('gui.prb_control.dispatcher', g_prbLoader=self.runtime.prb_loader)
+        module('gui.prb_control.entities.base.ctx', PrbAction=_PrbAction)
+        alias = types.SimpleNamespace(BATTLE_QUEUE='battleQueue')
+        module('gui.Scaleform.daapi.settings.views', VIEW_ALIAS=alias)
+        module('gui.Scaleform.framework', ViewTypes=types.SimpleNamespace(LOBBY_SUB=7))
+        module('gui.Scaleform.framework.managers.containers',
+            VIEW_SEARCH_CRITERIA=types.SimpleNamespace(VIEW_ALIAS=1))
+        view = types.SimpleNamespace(_isDAAPIInited=lambda: self.runtime.view_ready)
+        manager = types.SimpleNamespace(getView=mock.Mock(return_value=view))
+        app = types.SimpleNamespace(containerManager=manager)
+        module('gui.app_loader', g_appLoader=types.SimpleNamespace(getDefLobbyApp=lambda: app))
+        # The exact scripts.pkg provides settings/views.pyc, not genConsts/VIEW_ALIAS.pyc.
+        with mock.patch.dict(sys.modules, modules):
+            runtime = self.module._load_runtime()
+            self.assertFalse(runtime.queue_view_ready())
+            self.runtime.view_ready = True
+            self.assertTrue(runtime.queue_view_ready())
+            manager.getView.assert_called_with(7, {1:'battleQueue'})
+            manager.getView.return_value = None
+            self.assertFalse(runtime.queue_view_ready())
+            app = None
+            self.assertFalse(runtime.queue_view_ready())
+
     def test_open_enqueues_once_and_is_idempotent_while_queued(self):
         self.assertTrue(self.screen.open())
         self.assertEqual(1, self.entity.queue_calls)
@@ -166,6 +207,32 @@ class QueueScreenTests(unittest.TestCase):
         self.assertTrue(self.account.isInRandomQueue)
         self.assertTrue(self.screen.open())
         self.assertEqual(1, self.entity.queue_calls)
+
+    def test_pending_open_is_idempotent_and_requires_populated_view(self):
+        self.assertTrue(self.screen.open())
+        self.assertTrue(self.screen.open())
+        self.assertEqual(1, self.entity.queue_calls)
+        self.assertFalse(self.screen.is_ready())
+        self.pump()
+        self.assertFalse(self.screen.is_ready())
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
+
+    def test_replaced_account_reenters_queue_instead_of_using_old_engagement(self):
+        self.screen.open()
+        self.pump()
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
+        replacement = _Account()
+        self.runtime._account = replacement
+        self.entity._account = replacement
+        self.runtime.view_ready = False
+        self.assertTrue(self.screen.open())
+        self.assertEqual(2, self.entity.queue_calls)
+        self.assertFalse(self.screen.is_ready())
+        self.pump()
+        self.runtime.view_ready = True
+        self.assertTrue(self.screen.is_ready())
 
     def test_open_fails_closed_without_a_dispatcher(self):
         self.runtime._dispatcher = None

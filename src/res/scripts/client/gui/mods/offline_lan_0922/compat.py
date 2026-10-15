@@ -25,6 +25,33 @@ _dossier_cache_pinned = False
 _SETTINGS_KEYS = ('settings', 'filters', 'counters', 'notifications')
 
 
+def _track_effect_update_with_receipt(original, clock):
+    """Observe one completed stock update without changing its effect inputs."""
+    def update(manager, *args, **kwargs):
+        vehicle = getattr(manager, '_CustomEffectManager__vehicle', None)
+        enabled = bool(vehicle is not None and vehicle.__dict__.get(
+            '_offlineTrackEffectDiagnostic', False))
+        receipt = None
+        if enabled:
+            try:
+                receipt = {'at': clock(),
+                           'speed_info': list(vehicle.speedInfo.value)[:4]}
+            except Exception:
+                receipt = None
+        result = original(manager, *args, **kwargs)
+        if receipt is not None:
+            try:
+                args = manager._CustomEffectManager__variableArgs
+                receipt['effect_inputs'] = dict((key, args.get(key)) for key in (
+                    'speed', 'rotSpeed', 'direction', 'matkindL', 'matkindR',
+                    'deltaL', 'deltaR', 'directionL', 'directionR', 'hullAngle'))
+                vehicle.__dict__['_offlineTrackEffectReceipt'] = receipt
+            except Exception:
+                pass  # Diagnostics must never retire stock presentation.
+        return result
+    return update
+
+
 def _show_lan_death_message(panel, original, own_id, color_format,
                             key, args=None, extra=None, postfix=None):
     """Preserve personal messages and color only LAN squad name fields."""
@@ -358,10 +385,14 @@ def _load_runtime():
     import Avatar
     import AvatarInputHandler
     import AvatarInputHandler.control_modes as ControlModes
+    from AvatarInputHandler import gun_marker_ctrl
     import AvatarPositionControl
     import BigWorld
     import ChatManager
+    from gui.battle_control.controllers.chat_cmd_ctrl import ChatCommandsController
+    from gui.Scaleform.daapi.view.battle.shared.radial_menu import RadialMenu
     import Math
+    import CustomEffectManager
     import ProjectileMover
     import SoundGroups
     import Vehicle
@@ -385,6 +416,7 @@ def _load_runtime():
         AmmoController
     from gui.Scaleform.daapi.view.battle.shared.debug_panel import DebugPanel
     from gui.Scaleform.daapi.view.battle.shared.consumables_panel import ConsumablesPanel
+    from gui.shared.tooltips import shell as garage_shell_tooltip_module
     from gui.Scaleform.daapi.view.battle.shared.markers2d.plugins import \
         VehicleMarkerPlugin
     from gui.Scaleform.daapi.view.battle.shared.markers2d import settings as \
@@ -394,6 +426,7 @@ def _load_runtime():
     from gui.Scaleform.daapi.view.battle.shared.messages.player_messages import \
         PlayerMessages
     from gui.Scaleform.daapi.view.battle.shared.messages import fading_messages
+    from gui.Scaleform.daapi.view.battle.shared.postmortem_panel import _BasePostmortemPanel
     from helpers import dependency
     from predefined_hosts import g_preDefinedHosts
     from skeletons.connection_mgr import IConnectionManager
@@ -407,10 +440,12 @@ def _load_runtime():
     runtime.account_module = Account
     runtime.avatar_module = Avatar
     runtime.avatar_input_handler = AvatarInputHandler
+    runtime.gun_marker_ctrl = gun_marker_ctrl
     runtime.avatar_getter = avatar_getter
     runtime.ammo_controller_type = AmmoController
     runtime.arena_info_settings = ArenaInfoSettings
     runtime.player_messages_type = PlayerMessages
+    runtime.postmortem_panel_type = _BasePostmortemPanel
     runtime.battle_message_color_format = fading_messages._EXTRA_COLOR_FORMAT
     runtime.control_modes = ControlModes
     runtime.avatar_position_control = AvatarPositionControl
@@ -418,14 +453,18 @@ def _load_runtime():
     runtime.arcade_camera_type = ArcadeCamera
     runtime.bigworld = BigWorld
     runtime.chat_manager = ChatManager.chatManager
+    runtime.chat_commands_type = ChatCommandsController
+    runtime.radial_menu_type = RadialMenu
     runtime.compound_appearance_module = CompoundAppearanceModule
     runtime.crashed_tracks_controller_type = CrashedTrackController
     runtime.constants = constants
     runtime.connection_manager = dependency.instance(IConnectionManager)
     runtime.debug_panel_type = DebugPanel
     runtime.consumables_panel_type = ConsumablesPanel
+    runtime.garage_shell_tooltip_module = garage_shell_tooltip_module
     runtime.login_status = LOGIN_STATUS
     runtime.math = Math
+    runtime.custom_effect_manager_type = CustomEffectManager.CustomEffectManager
     runtime.offline_map_creator = g_offlineMapCreator
     runtime.player_events = g_playerEvents
     runtime.projectile_mover_module = ProjectileMover
@@ -551,6 +590,23 @@ class _OfflineEventSink(object):
 
     def __isub__(self, callback):
         return self
+
+
+class _CopiedVehicleSpeedInfo(object):
+    """Read-only #1513 speed columns owned by the copied pose publisher."""
+
+    def __init__(self, source, overlay):
+        self._source = source
+        self._overlay = overlay
+
+    @property
+    def value(self):
+        # Vehicle.getSpeed reads column 0; CustomEffectManager reads signed
+        # movement in column 2 and rotation in column 1. Keep the unrelated
+        # native fourth column live, including stock provider resets.
+        original = self._source.value
+        speed = self._overlay['speed']
+        return (speed, self._overlay['turn_speed'], speed, original[3])
 
 
 class _OfflineVehicleFilterSyncProxy(object):
@@ -691,6 +747,12 @@ class OfflineCompatibility(object):
         self._original_vehicle_collide_segment = None
         self._original_vehicle_collide_segment_ext = None
         self._vehicle_set_gun_angles_code = None
+        self._original_gun_server_marker = None
+        self._gun_server_marker_property = None
+        self._original_use_client_gun_marker = None
+        self._original_use_server_gun_marker = None
+        self._use_client_gun_marker_wrapper = None
+        self._use_server_gun_marker_wrapper = None
         self._gun_rotator_stabilised_code = None
         self._gun_rotator_predict_locked_target_code = None
         self._original_projectile_segment_may_hit = None
@@ -699,6 +761,7 @@ class OfflineCompatibility(object):
         self._original_projectile_collidable_entities = None
         self._projectile_collidable_entities_wrapper = None
         self._camera_acceleration_update_code = None
+        self._custom_effect_update_code = None
         self._arcade_oscillator_acceleration_code = None
         self._sniper_oscillator_acceleration_code = None
         self._crashed_track_setup_assembler_code = None
@@ -712,6 +775,7 @@ class OfflineCompatibility(object):
         self._original_disconnect = None
         self._original_server_time = None
         self._original_target = None
+        self._team_command_readers = []
         self._original_debug_update = None
         self._account_init_wrapper = None
         self._account_getattribute_wrapper = None
@@ -776,6 +840,8 @@ class OfflineCompatibility(object):
         self._original_player_message_show = None
         self._player_message_show = None
         self._player_message_show_owned = False
+        self._postmortem_populate = None
+        self._original_postmortem_populate = None
 
     def install(self):
         if self._installed:
@@ -948,6 +1014,43 @@ class OfflineCompatibility(object):
                 '#1513 steady matrix relink boundary is unavailable')
         if gun_rotator_type is None:
             raise RuntimeError('#1513 VehicleGunRotator is unavailable')
+        server_marker_property = gun_rotator_type.__dict__.get(
+            'showServerMarker')
+        if (not isinstance(server_marker_property, property) or
+                server_marker_property.fget is None or
+                server_marker_property.fset is None):
+            raise RuntimeError(
+                '#1513 server gun-marker property is unavailable')
+        self._original_gun_server_marker = server_marker_property
+
+        def set_server_marker(rotator, enabled):
+            # Both stock start() and applySettings() use this setter. Keep the
+            # persisted preference untouched while the offline owner is live.
+            if compatibility._battle_active:
+                enabled = False
+            return server_marker_property.fset(rotator, enabled)
+
+        self._gun_server_marker_property = property(
+            server_marker_property.fget, set_server_marker,
+            server_marker_property.fdel, server_marker_property.__doc__)
+        gun_marker_module = getattr(runtime, 'gun_marker_ctrl', None)
+        use_client_marker = getattr(
+            gun_marker_module, 'useClientGunMarker', None)
+        use_server_marker = getattr(
+            gun_marker_module, 'useServerGunMarker', None)
+        if not callable(use_client_marker) or not callable(use_server_marker):
+            raise RuntimeError('#1513 gun-marker selection is unavailable')
+        self._original_use_client_gun_marker = use_client_marker
+        self._original_use_server_gun_marker = use_server_marker
+
+        def use_client_gun_marker():
+            return True if compatibility._battle_active else use_client_marker()
+
+        def use_server_gun_marker():
+            return False if compatibility._battle_active else use_server_marker()
+
+        self._use_client_gun_marker_wrapper = use_client_gun_marker
+        self._use_server_gun_marker_wrapper = use_server_gun_marker
         gun_rotator_stabilised = getattr(
             gun_rotator_type, 'getAvatarOwnVehicleStabilisedMatrix', None)
         if gun_rotator_stabilised is None:
@@ -1018,6 +1121,16 @@ class OfflineCompatibility(object):
         (self._camera_acceleration_update_code,
          self._arcade_oscillator_acceleration_code,
          self._sniper_oscillator_acceleration_code) = camera_motion_codes
+        effect_type = getattr(runtime, 'custom_effect_manager_type', None)
+        effect_update = getattr(effect_type, 'update', None)
+        self._custom_effect_update_code = getattr(
+            effect_update, 'func_code', getattr(effect_update, '__code__', None))
+        self._original_effect_update = effect_update
+        self._effect_update_wrapper = None
+        if callable(effect_update):
+            self._effect_update_wrapper = _track_effect_update_with_receipt(
+                effect_update, runtime.bigworld.time)
+            effect_type.update = self._effect_update_wrapper
         if crashed_tracks_controller_type is None:
             raise RuntimeError('#1513 crashed-track controller is unavailable')
         crashed_track_setup_assembler = getattr(
@@ -1172,6 +1285,12 @@ class OfflineCompatibility(object):
                 return original
 
         self._shell_tooltip_wrapper = shell_tooltip
+        self._garage_shell_tooltip_patch = None
+        garage_tooltip_module = getattr(runtime, 'garage_shell_tooltip_module', None)
+        if garage_tooltip_module is not None:
+            from gui.mods.offline_lan_0922.garage_shell_tooltip import GarageShellTooltipPatch
+            self._garage_shell_tooltip_patch = GarageShellTooltipPatch(
+                garage_tooltip_module, runtime.bigworld.wg_getNiceNumberFormat)
 
         def account_init(account):
             offline_initializing = compatibility._connecting
@@ -1859,7 +1978,7 @@ class OfflineCompatibility(object):
                 entity, startPoint, endPoint)
 
         vehicle_overlay_names = frozenset((
-            'health', 'isCrewActive', 'position', 'yaw', 'matrix'))
+            'health', 'isCrewActive', 'position', 'yaw', 'matrix', 'speedInfo'))
         vehicle_special_names = vehicle_overlay_names.union((
             'filter', 'cell', 'show', 'guiSessionProvider'))
 
@@ -1975,6 +2094,10 @@ class OfflineCompatibility(object):
                     compatibility._arcade_oscillator_acceleration_code,
                     compatibility._sniper_oscillator_acceleration_code) and
                 overlay is not None and overlay.get('_pose_active'))
+            direct_effect_motion = (
+                caller_code is compatibility._custom_effect_update_code and
+                caller_code is not None and overlay is not None and
+                overlay.get('_pose_active'))
             direct_crashed_track_pose = (
                 caller_code in (
                     compatibility._crashed_track_setup_assembler_code,
@@ -2007,7 +2130,7 @@ class OfflineCompatibility(object):
                     return collision_filter
             if (direct_start_filter or direct_gun_sync or
                     direct_avatar_aux_sync or direct_avatar_pose_init or
-                    direct_fixed_turret_pose or direct_camera_motion or
+                    direct_fixed_turret_pose or direct_camera_motion or direct_effect_motion or
                     direct_crashed_track_pose):
                 vehicle_filter = (
                     compatibility._original_vehicle_getattribute(
@@ -2017,9 +2140,9 @@ class OfflineCompatibility(object):
                     if direct_fixed_turret_pose else
                     (overlay['matrix'] if direct_crashed_track_pose else None))
                 velocity = (overlay.get('velocity')
-                            if direct_camera_motion else None)
+                            if direct_camera_motion or direct_effect_motion else None)
                 acceleration = (overlay.get('acceleration')
-                                if direct_camera_motion else None)
+                                if direct_camera_motion or direct_effect_motion else None)
                 return _OfflineVehicleFilterSyncProxy(
                     vehicle_filter, pose_matrix, velocity, acceleration)
             return compatibility._original_vehicle_getattribute(vehicle, name)
@@ -2686,6 +2809,13 @@ class OfflineCompatibility(object):
 
                 self._player_message_show = show_player_message
                 player_messages.showMessage = show_player_message
+            postmortem = getattr(runtime, 'postmortem_panel_type', None)
+            if postmortem is not None:
+                from gui.mods.offline_lan_0922 import postmortem_causes
+                self._original_postmortem_populate = postmortem._populate
+                self._postmortem_populate = postmortem_causes.wrap_populate(
+                    postmortem._populate)
+                postmortem._populate = self._postmortem_populate
             squad_settings = getattr(runtime, 'arena_info_settings', None)
             if squad_settings is not None:
                 self._original_squad_range = squad_settings.SQUAD_RANGE_TO_SHOW
@@ -2724,6 +2854,12 @@ class OfflineCompatibility(object):
             strategic_camera_type._StrategicCamera__cameraUpdate = (
                 strategic_camera_update)
             input_handler_type.onControlModeChanged = control_mode_changed
+            gun_rotator_type.showServerMarker = (
+                self._gun_server_marker_property)
+            # __onArenaStarted reads these module attributes on every arena
+            # period edge, independently of VehicleGunRotator.start/settings.
+            gun_marker_module.useClientGunMarker = use_client_gun_marker
+            gun_marker_module.useServerGunMarker = use_server_gun_marker
             vehicle_marker_type.start = vehicle_marker_start
             vehicle_marker_type.stop = vehicle_marker_stop
             consistent_matrices_type._ConsistentMatrices__linkOwnVehicle = \
@@ -2763,11 +2899,23 @@ class OfflineCompatibility(object):
                         compound_effects_lod)
             runtime.bigworld.connect = connect
             runtime.bigworld.disconnect = disconnect
+            for owner, name in ((getattr(runtime, 'chat_commands_type', None),
+                                 'handleShortcutChatCommand'),
+                                (getattr(runtime, 'radial_menu_type', None), 'show')):
+                if owner is None:
+                    continue
+                from gui.mods.offline_lan_0922.tactical_radio import team_command_reader
+                original = owner.__dict__[name]
+                patched = team_command_reader(original, self._team_command_target)
+                self._team_command_readers.append((owner, name, original, patched))
+                setattr(owner, name, patched)
             runtime.bigworld.serverTime = server_time
             if self._original_debug_update is not None:
                 debug_panel_type.updateDebugInfo = debug_update
             if self._original_shell_tooltip is not None:
                 consumables_panel_type._ConsumablesPanel__makeShellTooltip = shell_tooltip
+            if self._garage_shell_tooltip_patch is not None:
+                self._garage_shell_tooltip_patch.install()
             self._installed = True
         except Exception:
             self._rollback_install()
@@ -2789,6 +2937,12 @@ class OfflineCompatibility(object):
 
     def _rollback_install(self):
         runtime = self._runtime
+        postmortem = getattr(runtime, 'postmortem_panel_type', None)
+        if (postmortem is not None and self._postmortem_populate is not None
+                and postmortem._populate is self._postmortem_populate):
+            postmortem._populate = self._original_postmortem_populate
+        self._postmortem_populate = None
+        self._original_postmortem_populate = None
         player_messages = getattr(runtime, 'player_messages_type', None)
         if (player_messages is not None and self._player_message_show is not None
                 and player_messages.__dict__.get('showMessage') is
@@ -2804,6 +2958,34 @@ class OfflineCompatibility(object):
                 squad_settings.SQUAD_RANGE_TO_SHOW is self._lan_squad_range):
             squad_settings.SQUAD_RANGE_TO_SHOW = self._original_squad_range
         self._original_squad_range = None
+        gun_rotator_type = getattr(
+            getattr(runtime, 'vehicle_gun_rotator', None),
+            'VehicleGunRotator', None)
+        if (gun_rotator_type is not None and
+                self._gun_server_marker_property is not None and
+                gun_rotator_type.__dict__.get('showServerMarker') is
+                self._gun_server_marker_property):
+            gun_rotator_type.showServerMarker = (
+                self._original_gun_server_marker)
+        self._original_gun_server_marker = None
+        self._gun_server_marker_property = None
+        gun_marker_module = getattr(runtime, 'gun_marker_ctrl', None)
+        if (gun_marker_module is not None and
+                self._use_client_gun_marker_wrapper is not None and
+                getattr(gun_marker_module, 'useClientGunMarker', None) is
+                self._use_client_gun_marker_wrapper):
+            gun_marker_module.useClientGunMarker = (
+                self._original_use_client_gun_marker)
+        if (gun_marker_module is not None and
+                self._use_server_gun_marker_wrapper is not None and
+                getattr(gun_marker_module, 'useServerGunMarker', None) is
+                self._use_server_gun_marker_wrapper):
+            gun_marker_module.useServerGunMarker = (
+                self._original_use_server_gun_marker)
+        self._original_use_client_gun_marker = None
+        self._original_use_server_gun_marker = None
+        self._use_client_gun_marker_wrapper = None
+        self._use_server_gun_marker_wrapper = None
         account_type = runtime.account_module.PlayerAccount
         avatar_type = runtime.avatar_module.PlayerAvatar
         ammo_controller_type = getattr(
@@ -3046,6 +3228,16 @@ class OfflineCompatibility(object):
             runtime.bigworld.connect = self._original_connect
         if runtime.bigworld.disconnect is self._disconnect_wrapper:
             runtime.bigworld.disconnect = self._original_disconnect
+        for owner, name, original, patched in self._team_command_readers:
+            if owner.__dict__.get(name) is patched:
+                setattr(owner, name, original)
+        self._team_command_readers = []
+        effect_type = getattr(runtime, 'custom_effect_manager_type', None)
+        effect_wrapper = getattr(self, '_effect_update_wrapper', None)
+        if (effect_type is not None and effect_wrapper is not None and
+                effect_type.__dict__.get('update') is effect_wrapper):
+            effect_type.update = self._original_effect_update
+        self._effect_update_wrapper = None
         if runtime.bigworld.serverTime is self._server_time_wrapper:
             runtime.bigworld.serverTime = self._original_server_time
         if (debug_panel_type is not None and
@@ -3053,6 +3245,8 @@ class OfflineCompatibility(object):
                 debug_panel_type.__dict__.get('updateDebugInfo') is
                 self._debug_update_wrapper):
             debug_panel_type.updateDebugInfo = self._original_debug_update
+        if self._garage_shell_tooltip_patch is not None:
+            self._garage_shell_tooltip_patch.uninstall()
         consumables_panel_type = getattr(runtime, 'consumables_panel_type', None)
         if (consumables_panel_type is not None and
                 getattr(consumables_panel_type, '_ConsumablesPanel__makeShellTooltip', None)
@@ -3069,6 +3263,8 @@ class OfflineCompatibility(object):
         self._vehicle_start_wg_physics_code = None
         self._vehicle_syncing_gun_angles = None
         self._vehicle_set_gun_angles_code = None
+        self._original_gun_server_marker = None
+        self._gun_server_marker_property = None
         self._gun_rotator_stabilised_code = None
         self._gun_rotator_predict_locked_target_code = None
         self._original_projectile_segment_may_hit = None
@@ -3081,6 +3277,7 @@ class OfflineCompatibility(object):
         self._original_projectile_collidable_entities = None
         self._projectile_collidable_entities_wrapper = None
         self._camera_acceleration_update_code = None
+        self._custom_effect_update_code = None
         self._arcade_oscillator_acceleration_code = None
         self._sniper_oscillator_acceleration_code = None
         self._avatar_syncing_aux_physics = None
@@ -3485,6 +3682,22 @@ class OfflineCompatibility(object):
         self.install()
         self._control_mode_listener = listener
 
+    def _team_command_target(self):
+        """Reuse the current occlusion-checked cursor owner, never a lock target."""
+        vehicle = self._target_lock_candidate
+        if not self._battle_active or vehicle is None:
+            return None
+        alive = getattr(vehicle, 'isAlive', False)
+        if not bool(alive() if callable(alive) else alive):
+            return None
+        if not bool(getattr(vehicle, '_spot_visible', True)):
+            return None
+        entity = getattr(vehicle, 'bw_entity', None) or vehicle
+        if (getattr(entity, 'model', None) is None or
+                not bool(getattr(entity, 'inWorld', False))):
+            return None
+        return entity
+
     def set_target_lock_candidate(self, vehicle):
         """Publish the exact synthetic Vehicle under the native crosshair."""
         if vehicle is not None:
@@ -3611,6 +3824,15 @@ class OfflineCompatibility(object):
             matrix if stabilised_matrix is None else stabilised_matrix)
         overlay['speed'] = float(speed)
         overlay['turn_speed'] = float(turn_speed)
+        if 'speedInfo' not in overlay:
+            try:
+                stock_speed = self._original_vehicle_getattribute(
+                    vehicle, 'speedInfo')
+            except AttributeError:
+                # A partially constructed Vehicle has no stock provider yet.
+                stock_speed = None
+            if stock_speed is not None:
+                overlay['speedInfo'] = _CopiedVehicleSpeedInfo(stock_speed, overlay)
         if velocity is not None:
             overlay['velocity'] = velocity
         if acceleration is not None:
@@ -3746,7 +3968,7 @@ class OfflineCompatibility(object):
             return False
         for name in ('_pose_active', 'position', 'yaw', 'matrix',
                      'steady_rotation_matrix', 'stabilised_matrix',
-                     'speed', 'turn_speed', 'velocity', 'acceleration',
+                     'speed', 'turn_speed', 'speedInfo', 'velocity', 'acceleration',
                      '_collision_filter'):
             overlay.pop(name, None)
         if not overlay:

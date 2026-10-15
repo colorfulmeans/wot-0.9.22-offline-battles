@@ -181,11 +181,13 @@ temporary output and diff it before replacing tracked catalogs.
 
 ## Current operating model
 
-- Every room has one mandatory hidden native worker. The only simulation path
-  is `visible client -> LAN server -> hidden worker -> LAN server -> replicas`.
-  Visible clients submit player input and fire intent; they never become Bot or
-  projectile authority. Do not restore visible-client authority or the removed
-  pure-Python simulation fallback.
+- Every room has one mandatory hidden native worker. Each visible player owns
+  the flight, collision, damage and destructible proposals of its own shots;
+  the worker owns Bot motion and Bot shots. The LAN server validates owners and
+  frozen launches, deduplicates results, and commits shared health, critical
+  state and destruction. A player never simulates another player's or a Bot's
+  shots. Disconnect cancels that player's remaining ledger entries; do not add
+  projectile takeover or restore the removed pure-Python simulation fallback.
 - The launcher installs and starts the matching server and worker together.
   Do not build speculative compatibility machinery for combinations it never
   creates. This is a trusted-LAN product, not an anti-cheat boundary.
@@ -196,10 +198,10 @@ temporary output and diff it before replacing tracked catalogs.
   must not freeze every Bot, end the round as a system-error draw, disconnect
   all clients, or return everyone to the garage.
 - Coalesce only state that is genuinely superseded. Preserve barriers,
-  accepted fire intents, projectile terminal events, destruction events, and
+  accepted launches, projectile terminal events, destruction events, and
   other one-shot transitions. Never silently discard an admitted shot or a
   frame merely because the next update arrived late.
-- An accepted operation needs an observable terminal outcome. A fire intent,
+- An accepted operation needs an observable terminal outcome. A trigger,
   for example, must become a launched/terminal projectile or an explicit local
   failure with correct ammunition and reload state. A sound-only no-op that
   permits immediate refiring is a bug.
@@ -350,3 +352,15 @@ the stated acceptance requires native Windows evidence.
   Automated packaging proves the artifact contract, not untested gameplay.
 - Do not calculate or report checksums unless explicitly requested or required
   by an integrity gate.
+
+
+### Native integration behavior ownership
+
+For the 0.10.0 native architecture integration, preserve the release's driver,
+traffic, navigation orchestration and vertical/support motion owners. Native
+perception and weapons are installed; geometry, contact rosters and background
+searches use native primitive frontiers. Do not install the older persistent
+native control/motion/navigation laws merely because their APIs are present.
+New rule migrations require parity with the current release before replacing
+those owners. Preserve camera-based decision cadence; nearest-human throttling
+is a separate product behavior change and is not enabled in this integration.

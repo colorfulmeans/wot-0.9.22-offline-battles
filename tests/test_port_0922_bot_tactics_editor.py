@@ -370,4 +370,26 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
         for i in (11,12):self.assertEqual('user_west',planner._route_assignments[i]['route']['id'])
 
 
+
+
+
+class PragueRouteResourceIdentityTests(unittest.TestCase):
+    def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
+        raw = cfg.empty('Existing Prague profile')
+        raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))
+        raw['maps']['114_czech']['resource_sha256'] = cfg.MAPS['114_czech']['route_previous_sha256']
+        normalized = cfg.canonical(raw)
+        self.assertEqual(cfg.MAPS['114_czech']['resource_sha256'],
+                         normalized['maps']['114_czech']['resource_sha256'])
+        self.assertEqual(raw['maps']['114_czech'].get('default_routes', []),
+                         normalized['maps']['114_czech'].get('default_routes', []))
+        self.assertTrue(graph_data('114_czech')['routes'])
+
+    def test_unrelated_resource_fingerprint_is_still_rejected(self):
+        raw = cfg.empty('Invalid Prague profile')
+        raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))
+        raw['maps']['114_czech']['resource_sha256'] = '0'*64
+        with self.assertRaises(cfg.TacticsError):
+            cfg.canonical(raw)
+
 if __name__=='__main__':unittest.main()

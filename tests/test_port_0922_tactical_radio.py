@@ -84,6 +84,67 @@ class _Sender(object):
         return self.next_chat_sequence
 
 
+class TeamCommandTargetTests(unittest.TestCase):
+    def test_stock_reader_bytecode_keeps_native_picker_and_other_imports_unchanged(self):
+        import types
+        from unittest import mock
+        world = types.ModuleType('BigWorld')
+        original_target = lambda: None
+        world.target = original_target
+        world.screenWidth = lambda: 800
+        namespace = {'BigWorld': world}
+        exec('def shortcut():\n import BigWorld\n import math\n return BigWorld.target(), math.sqrt(4)\n'
+             'def radial():\n return BigWorld.target(), BigWorld.screenWidth()\n', namespace)
+        candidate = types.SimpleNamespace(id=2130706451)
+        with mock.patch.dict(sys.modules, {'BigWorld': world}):
+            shortcut = tactical_radio.team_command_reader(namespace['shortcut'], lambda: candidate)
+            radial = tactical_radio.team_command_reader(namespace['radial'], lambda: candidate)
+            self.assertIs(namespace['shortcut'].__code__, shortcut.__code__)
+            self.assertEqual((candidate, 2.), shortcut())
+            self.assertEqual((candidate, 800), radial())
+            self.assertEqual((None, 2.), namespace['shortcut']())
+        self.assertIs(original_target, world.target)
+        self.assertIs(world, namespace['BigWorld'])
+
+    def test_only_reviewed_readers_receive_the_cursor_target_and_clear_delegates(self):
+        from types import SimpleNamespace
+        native_calls = []
+        def native(*args, **kwargs):
+            native_calls.append((args, kwargs))
+            return 'original'
+        native.clear = lambda: native_calls.append('clear')
+        current = [SimpleNamespace(id=2130706451)]
+        def shortcut(): return proxy()
+        def radial(): return proxy()
+        proxy = tactical_radio.TeamCommandTargetProxy(
+            native, (shortcut.__code__, radial.__code__), lambda: current[0])
+        self.assertIs(current[0], shortcut())
+        self.assertIs(current[0], radial())
+        self.assertEqual('original', proxy())
+        proxy.clear()
+        self.assertEqual('clear', native_calls[-1])
+        current[0] = None
+        self.assertEqual('original', shortcut())
+
+    def test_dead_hidden_retired_and_missing_model_cursor_owners_are_not_admitted(self):
+        from types import SimpleNamespace
+        from gui.mods.offline_lan_0922.compat import OfflineCompatibility
+        # This is the real shared admission method, independent of C++ picking.
+        owner = SimpleNamespace(_battle_active=True, _target_lock_candidate=None)
+        vehicle = SimpleNamespace(isAlive=lambda: True, _spot_visible=True,
+                                  model=object(), inWorld=True)
+        owner._target_lock_candidate = vehicle
+        self.assertIs(vehicle, OfflineCompatibility._team_command_target(owner))
+        for name, value in (('_spot_visible', False), ('inWorld', False),
+                            ('model', None), ('isAlive', lambda: False)):
+            original = getattr(vehicle, name)
+            setattr(vehicle, name, value)
+            self.assertIsNone(OfflineCompatibility._team_command_target(owner))
+            setattr(vehicle, name, original)
+        owner._battle_active = False
+        self.assertIsNone(OfflineCompatibility._team_command_target(owner))
+
+
 class BattleRadioAdapterTests(unittest.TestCase):
     def setUp(self):
         self.avatar = _Avatar()

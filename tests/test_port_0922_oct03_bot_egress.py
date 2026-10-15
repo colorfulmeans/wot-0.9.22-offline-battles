@@ -48,24 +48,20 @@ class EgressTests(unittest.TestCase):
                    route_index=2,throttle_override=None)
         return adapter,state,order
 
-    def test_right_hand_exit_is_tried_before_push_and_failed_push_never_returns_to_left(self):
+    def test_push_precedes_detour_and_exhaustion_returns_to_driver(self):
         adapter,state,order=self.wreck_scene()
-        def terrain(yaw, distance=None):
-            return -.05<=yaw<=1.4
-        commands=[adapter.decide_with_order(state,order,terrain) for unused in range(170)]
-        self.assertEqual('avoid',commands[0]['recovery_mode'])
-        self.assertGreater(commands[0]['turn'],0.)
-        self.assertTrue(all(c['recovery_mode']!='wreck_push' for c in commands[:59]))
-        self.assertIn('wreck_push',[c['recovery_mode'] for c in commands[60:130]])
-        self.assertTrue(all(c['recovery_mode']=='blocked' and c['throttle']==c['turn']==0.
-                            for c in commands[145:]))
+        commands=[adapter.decide_with_order(state,order,lambda *args: True) for unused in range(170)]
+        self.assertEqual('wreck_push',commands[0]['recovery_mode'])
+        self.assertTrue(all(c['throttle']==1.0 for c in commands[:130]))
+        self.assertTrue(all(c['recovery_mode']!='wreck_push' for c in commands[145:]))
+        self.assertGreater(adapter.driver.states[17]['clock'], 0.0)
 
-    def test_successful_wreck_detour_never_switches_to_pushing(self):
+    def test_actual_progress_renews_continuous_motor_attempt(self):
         adapter,state,order=self.wreck_scene()
         for frame in range(100):
-            state['position']=(frame*.03,0.,frame*.1)
+            state['position']=(0.,0.,frame*.03)
             command=adapter.decide_with_order(state,order,lambda *unused: True)
-            self.assertNotEqual('wreck_push',command['recovery_mode'])
+            self.assertEqual('wreck_push',command['recovery_mode'])
 
     def test_failed_withdrawal_releases_parking_after_threat_disappears(self):
         planner=BotPlanner()

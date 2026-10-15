@@ -12,12 +12,14 @@ import math
 from collections import deque
 
 try:
+    from .projectile_runtime import prepare_chord
     from .projectile_runtime import curvature_limited_substep
     from .projectile_runtime import lerp3
     from .projectile_runtime import substep_boundaries
     from .projectile_runtime import trajectory_position
     from .projectile_runtime import PROJECTILE_MAX_SUBSTEP_SECONDS
 except (ImportError, ValueError):
+    from projectile_runtime import prepare_chord
     from projectile_runtime import curvature_limited_substep
     from projectile_runtime import lerp3
     from projectile_runtime import substep_boundaries
@@ -632,28 +634,14 @@ class InFlightProjectiles(object):
                 state.cursor_time, end_time, state.maximum_step):
             if maximum_chords is not None and used >= maximum_chords:
                 break
-            start = trajectory_position(
-                state.start, state.velocity, state.gravity,
-                absolute_start - state.launch_time)
-            unconstrained_end = trajectory_position(
-                state.start, state.velocity, state.gravity,
-                absolute_end - state.launch_time)
-            chord_distance = _distance(start, unconstrained_end)
-            remaining_distance = max(
-                0.0, state.max_distance - state.distance)
-            distance_fraction = 1.0
-            distance_terminal = False
-            if chord_distance > remaining_distance:
-                distance_fraction = remaining_distance / chord_distance
-                distance_terminal = True
-            elif remaining_distance <= 0.0:
-                distance_fraction = 0.0
-                distance_terminal = True
-
-            end = lerp3(start, unconstrained_end, distance_fraction)
-            constrained_absolute_end = (
-                absolute_start +
-                (absolute_end - absolute_start) * distance_fraction)
+            # One native numeric step replaces two trajectories, range
+            # integration, distance clipping and the final interpolation.
+            # Keep collision callbacks, event order and cursor commits here.
+            start, end, constrained_absolute_end, distance_terminal = (
+                prepare_chord(
+                    state.start, state.velocity, state.gravity,
+                    state.launch_time, absolute_start, absolute_end,
+                    state.max_distance, state.distance))
             result = self._call_chord(
                 chord_callback, state, start, end, absolute_start,
                 constrained_absolute_end)

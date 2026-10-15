@@ -516,6 +516,9 @@ class LANSession(object):
             self._effective_params_provider = \
                 _selected_vehicle_effective_params
         self._postbattle_store = postbattle_store
+        self._pending_battle_receipts = []
+        self._receipt_callback_id = None
+        self._receipt_callback_token = 0
         self._training_mode = False
         self._training_bots = False
         self._room_preferences = port_config.load_waiting_room_state()
@@ -1756,12 +1759,20 @@ class LANSession(object):
             except Exception as error:
                 sys.stdout.write(
                     '[Offline LAN 0.9.22] the stock queue screen is '
-                    'unavailable, keeping the room over the hangar: %s\n' %
+                    'unavailable; room opening deferred: %s\n' %
                     error)
                 self._queue_screen_factory = None
                 return None
             self._queue_screen = screen
         return self._queue_screen
+
+    def _ensure_queue_background(self):
+        # Account and Scaleform views are recreated across every battle.
+        # An earlier successful action is not proof of the current room.
+        screen = self._ensure_queue_screen()
+        if screen is None or not screen.open():
+            return False
+        return bool(screen.is_ready())
 
     def _leave_queue_screen(self):
         if self._queue_screen is None:
@@ -1955,6 +1966,17 @@ class LANSession(object):
         Every other caller reached this while the player was in the garage,
         which is how the room kept appearing over an open maintenance dialog.
         """
+        if (not self._stopped and not self._picker_cleanup_pending and not self._picker_dismissed and
+                self._picker_open and self.state == 'waiting' and self._picker_requested):
+            # A connection form can already be open when welcome arrives.
+            opened = self._ensure_queue_background()
+            if not opened:
+                self._close_picker()
+                # A programmatic promotion is not the player's Leave action.
+                self._picker_requested = True
+                self._picker_dismissed = False
+                self._schedule_picker_when_lobby_ready()
+            return opened
         if (self._stopped or self._picker_open or
                 self._picker_cleanup_pending or self._picker_dismissed):
             return False
@@ -1969,11 +1991,10 @@ class LANSession(object):
             # The stock map window can only present the elected room host.
             return False
         # As in 0.8.2, the stock queue screen loads under the room.
-        screen = None if self._training_mode else self._ensure_queue_screen()
-        if screen is not None:
-            screen.open()
-        elif self._training_mode and self._queue_screen is not None:
-            self._leave_queue_screen()
+        # Training changes LAN rules, not the visible pre-queue background.
+        if not self._ensure_queue_background():
+            self._schedule_picker_when_lobby_ready()
+            return False
         self._picker_open = bool(self._open_surface(surface))
         if self._picker_open:
             sys.stdout.write(
@@ -2616,6 +2637,110 @@ class LANSession(object):
             print('[Offline LAN 0.9.22] vehicle catalog donation was not '
                   'accepted by the transport (%d rows)' % len(rows))
 
+    def _accept_battle_receipt(self, message, client, generation):
+        store = self._postbattle_store
+        if store is None:
+            return
+        started = time.time()
+        try:
+            accepted = store.accept(message)
+        except Exception as error:
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] battle receipt was rejected: %s '
+                'receipt_id=%s elapsed_ms=%.3f\n' % (
+                    error, _message_value(message, 'receipt_id'),
+                    max(0.0, time.time() - started) * 1000.0))
+            traceback.print_exc(file=sys.stdout)
+            return
+        if accepted:
+            sys.stdout.write(
+                '[Offline LAN 0.9.22] battle receipt accepted '
+                'receipt_id=%s elapsed_ms=%.3f\n' % (
+                    _message_value(message, 'receipt_id'),
+                    max(0.0, time.time() - started) * 1000.0))
+        # Store.accept() returns only after its atomic JSON replacement.
+        # Ack duplicates too: they already exist in durable local state,
+        # and the server may be retrying because an earlier ACK was lost.
+        acknowledge = getattr(
+            client, 'acknowledge_battle_receipt', None)
+        if callable(acknowledge):
+            acknowledge(_message_value(message, 'receipt_id'))
+        if (self._stopped or client is not self.client or
+                generation != self._client_generation):
+            return
+        if accepted:
+            returning = self._postbattle_return
+            if (returning is not None and
+                    returning['generation'] == self._client_generation and
+                    _message_value(message, 'round_id') ==
+                    returning['round_id'] and
+                    _message_value(
+                        message, 'watched_battle_to_end',
+                        not _message_value(
+                            message, 'premature_leave', False))):
+                returning['arena_unique_id'] = _message_value(
+                    message, 'arena_unique_id')
+            self._publish_postbattle_progress()
+        self._publish_postbattle_results()
+
+    def _schedule_receipt_drain(self):
+        if self._receipt_callback_id is not None or self._stopped:
+            return
+        token = self._receipt_callback_token
+        def drain():
+            if token != self._receipt_callback_token or self._stopped:
+                return
+            self._receipt_callback_id = None
+            self._drain_battle_receipts()
+        self._receipt_callback_id = self._callback(0.01, drain)
+
+    def _drain_battle_receipts(self, force=False):
+        if not self._pending_battle_receipts:
+            return
+        entry = self._pending_battle_receipts[0]
+        runtime = self._battle_runtime
+        pending = getattr(runtime, 'has_pending_presentation', None)
+        if not force and self._battle_started and callable(pending):
+            if pending():
+                entry['ready_runtime'] = None
+                self._schedule_receipt_drain()
+                return
+            if entry['ready_runtime'] is not runtime:
+                # Yield a callback after combat was submitted. Persistence
+                # must not occupy the same callback that showed the last hit.
+                entry['ready_runtime'] = runtime
+                self._schedule_receipt_drain()
+                return
+        self._pending_battle_receipts.pop(0)
+        self._accept_battle_receipt(
+            entry['message'], entry['client'], entry['generation'])
+        if self._pending_battle_receipts and not force:
+            self._schedule_receipt_drain()
+
+    def _defer_battle_receipt(self, message):
+        runtime = self._battle_runtime
+        if (self._postbattle_store is None or not self._battle_started or
+                not callable(self._callback) or
+                not callable(getattr(runtime, 'has_pending_presentation', None))):
+            return False
+        receipt_id = _message_value(message, 'receipt_id')
+        for entry in self._pending_battle_receipts:
+            if _message_value(entry['message'], 'receipt_id') == receipt_id:
+                # Keep the original complete receipt, but ACK a retry through
+                # the transport that delivered it once persistence succeeds.
+                entry['client'] = self.client
+                entry['generation'] = self._client_generation
+                self._schedule_receipt_drain()
+                return True
+        self._pending_battle_receipts.append({
+            'message': message, 'client': self.client,
+            'generation': self._client_generation, 'ready_runtime': None})
+        sys.stdout.write('[Offline LAN 0.9.22] battle receipt deferred '
+                         'receipt_id=%s pending_combat=%s\n' % (
+                             receipt_id, runtime.has_pending_presentation()))
+        self._schedule_receipt_drain()
+        return True
+
     def _on_event(self, kind, message):
         if self._stopped or getattr(self, '_replay_exit_requested', False):
             return
@@ -2783,47 +2908,9 @@ class LANSession(object):
         elif kind == 'battle_failed':
             self._on_battle_failed(message)
         elif kind == 'battle_receipt':
-            store = self._postbattle_store
-            if store is None:
-                return
-            started = time.time()
-            try:
-                accepted = store.accept(message)
-            except Exception as error:
-                sys.stdout.write(
-                    '[Offline LAN 0.9.22] battle receipt was rejected: %s '
-                    'receipt_id=%s elapsed_ms=%.3f\n' % (
-                        error, _message_value(message, 'receipt_id'),
-                        max(0.0, time.time() - started) * 1000.0))
-                traceback.print_exc(file=sys.stdout)
-                return
-            if accepted:
-                sys.stdout.write(
-                    '[Offline LAN 0.9.22] battle receipt accepted '
-                    'receipt_id=%s elapsed_ms=%.3f\n' % (
-                        _message_value(message, 'receipt_id'),
-                        max(0.0, time.time() - started) * 1000.0))
-            # Store.accept() returns only after its atomic JSON replacement.
-            # Ack duplicates too: they already exist in durable local state,
-            # and the server may be retrying because an earlier ACK was lost.
-            acknowledge = getattr(
-                self.client, 'acknowledge_battle_receipt', None)
-            if callable(acknowledge):
-                acknowledge(_message_value(message, 'receipt_id'))
-            if accepted:
-                returning = self._postbattle_return
-                if (returning is not None and
-                        returning['generation'] == self._client_generation and
-                        _message_value(message, 'round_id') ==
-                        returning['round_id'] and
-                        _message_value(
-                            message, 'watched_battle_to_end',
-                            not _message_value(
-                                message, 'premature_leave', False))):
-                    returning['arena_unique_id'] = _message_value(
-                        message, 'arena_unique_id')
-                self._publish_postbattle_progress()
-            self._publish_postbattle_results()
+            if not self._defer_battle_receipt(message):
+                self._accept_battle_receipt(
+                    message, self.client, self._client_generation)
         elif kind == 'snapshot':
             round_id = _message_value(message, 'round_id')
             if (not self._battle_started or
@@ -2914,6 +3001,20 @@ class LANSession(object):
         self._stopped = True
         self._postbattle_return = None
         errors = []
+        self._receipt_callback_token += 1
+        callback_id, self._receipt_callback_id = self._receipt_callback_id, None
+        if callback_id is not None and callable(self._cancel_callback):
+            try:
+                self._cancel_callback(callback_id)
+            except Exception as error:
+                errors.append(error)
+        # A deliberate exit must persist already received receipts before the
+        # transport closes, even when their visual barrier was still pending.
+        while self._pending_battle_receipts:
+            try:
+                self._drain_battle_receipts(force=True)
+            except Exception as error:
+                errors.append(error)
         try:
             self._cancel_retry_callback()
         except Exception as error:
@@ -2964,6 +3065,8 @@ class LANSession(object):
                         'queue-screen uninstall remains pending')
             except Exception as error:
                 errors.append(error)
+            else:
+                self._queue_screen = None
         if self._join_ui is not None and release_join:
             try:
                 self._join_ui.uninstall()

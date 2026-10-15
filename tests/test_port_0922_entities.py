@@ -310,11 +310,15 @@ class BigWorldBindingTests(unittest.TestCase):
                 (1, 0, 23, 'DEATH_FROM_FIRE'),
                 (0, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_SHOT'),
                 (1, -1, 23, 'DEATH_FROM_DEVICE_EXPLOSION_AT_FIRE'),
+                (3, -1, 0, 'DEATH_FROM_DEVICE_EXPLOSION_AT_WORLD_COLLISION'),
                 (0, 0, 0, 'DEATH_UNKNOWN')):
             with self.subTest(reason=reason, health=health, attacker=attacker):
                 avatar, bigworld = _Avatar(), _BigWorld()
                 avatar.playerVehicleID = 91
                 bigworld.entity_value.health = health
+                ammo_extra = types.SimpleNamespace(deviceUserString="native ammo name")
+                bigworld.entity_value.typeDescriptor = types.SimpleNamespace(
+                    extrasDict={"ammoBayHealth": ammo_extra})
                 messages = avatar.guiSessionProvider.shared.messages
                 messages._BattleMessagesController__getKillInfo = mock.Mock(
                     return_value=('DEATH_FROM_SHOT', 'ENEMY_SELF', None, None))
@@ -324,7 +328,8 @@ class BigWorldBindingTests(unittest.TestCase):
                     outfit_provider=lambda descriptor: '')
                 binding.arena_vehicle_killed(91, attacker, reason)
                 messages.onShowVehicleMessageByCode.assert_called_once_with(
-                    expected, 'ENEMY_SELF', attacker, None, 0)
+                    expected, 'ENEMY_SELF', attacker,
+                    ammo_extra if health < 0 else None, 0)
 
     def test_unassisted_environment_death_selects_native_central_template(self):
         module = _binding_module()

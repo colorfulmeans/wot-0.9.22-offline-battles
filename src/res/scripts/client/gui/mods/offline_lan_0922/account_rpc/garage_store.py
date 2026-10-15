@@ -839,6 +839,8 @@ class GarageStore(object):
         if self._path is not None and not self._write_state(self._payload(snapshot), snapshot):
             self._crew_service_rosters = previous
             raise IOError('could not save participating crew; battle not started')
+        from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+        GarageState(snapshot).report_customization(vehicle_type_cd, 'battle_start', key)
         return True
 
     def apply_battle_crew_xp(self, snapshot, receipt_id,
@@ -884,6 +886,7 @@ class GarageStore(object):
         staged = copy.deepcopy(snapshot)
         state = GarageState(staged, tankmen_module=tankmen_module,
                             vehicles_module=vehicles_module)
+        state.report_customization(vehicle_type_compact_descr, 'settlement_before', receipt_id)
         # Resolve every victim's own native hull repair price before changing
         # the staged wallet. A missing descriptor leaves the receipt pending.
         friendly_prices = friendly_fire.price(
@@ -1103,6 +1106,7 @@ class GarageStore(object):
         self._dirty = False
         result['receipt_id'] = receipt_id
         result['applied'] = True
+        state.report_customization(vehicle_type_compact_descr, 'settlement_committed', receipt_id)
         return result
 
     # ---- reading --------------------------------------------------------

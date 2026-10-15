@@ -165,6 +165,42 @@ class DriverArrivalTests(unittest.TestCase):
                 modes.append(command['recovery_mode'])
             self.assertTrue(any(mode != 'drive' for mode in modes))
 
+    def test_repeated_recovery_cannot_renew_objective_progress_lease(self):
+        driver = LocalDriver()
+        modes = []
+        for frame in range(180):
+            # Fixed target, stationary hull, alternating local steering. A
+            # completed recovery cannot count as having left this pocket.
+            command = self._orbit_command(driver, speed=0.0,
+                yaw=(-.15 if frame % 2 else 0.0),
+                progress_target=(0.0, 0.0, 200.0), rotation_refused=True)
+            modes.append(command['recovery_mode'])
+        state = next(iter(driver.states.values()))
+        self.assertGreater(state['recovery_count'], 1)
+        self.assertGreaterEqual(state['clock'] -
+                                state['recovery_pocket']['at'], 8.0)
+
+    def test_native_recovery_pocket_retires_after_real_travel_or_hold(self):
+        for hold in (False, True):
+            driver = LocalDriver()
+            for frame in range(180):
+                self._orbit_command(driver, speed=0.0,
+                    yaw=(-.15 if frame % 2 else 0.0),
+                    progress_target=(0.0, 0.0, 200.0), rotation_refused=True)
+            state = next(iter(driver.states.values()))
+            self.assertIsNotNone(state.get('recovery_pocket'))
+            self._orbit_command(driver, speed=4.0, position=(0.0, 0.0, 20.0),
+                movement_intent=not hold, progress_target=(0.0, 0.0, 200.0))
+            self.assertIsNone(state.get('recovery_pocket'))
+
+    def test_ordinary_recovery_cannot_admit_native_rotation_pocket(self):
+        driver = LocalDriver()
+        for frame in range(180):
+            self._orbit_command(driver, speed=0.0,
+                yaw=(-.15 if frame % 2 else 0.0),
+                progress_target=(0.0, 0.0, 200.0))
+        self.assertIsNone(next(iter(driver.states.values())).get('recovery_pocket'))
+
     def test_changing_local_targets_cannot_reset_alignment_credit(self):
         driver = LocalDriver(stuck_seconds=100.0)
         modes = []

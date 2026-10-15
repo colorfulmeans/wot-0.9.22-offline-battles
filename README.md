@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.0** — [Release notes](docs/releases/v0.10.0.md).
+Current release: **v0.10.1** — [Release notes](docs/releases/v0.10.1.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.1-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -466,9 +466,10 @@ whose profile changed after it started must be restarted first.
 - Live combat statistics, a damage log with assists, hit and critical-damage
   messages, target outlines, vehicle fires, wrecks, and a consumables panel
   that counts down each cooldown.
-- A LAN match is one shared battle: lineups, countdown, orders, projectiles,
-  health, critical damage, destructibles, capture and results stay
-  synchronized through the room's mandatory hidden simulation worker.
+- A LAN match is one shared battle. Each player simulates their own shells;
+  the mandatory hidden worker simulates Bots and their shells. The server
+  commits shared health, critical damage and destruction once, and keeps the
+  lineups, countdown, orders, capture and results synchronized.
 - The results screen awards battle heroes, historical, special and
   commemorative medals from the client's own achievement thresholds, and both
   the vehicle and the account dossier keep counting them. Medals the client
@@ -587,3 +588,44 @@ Default SPG parking is deletable from the total, shared and SPG editor views. A 
 Deleting the last small waiting place restores a three-field ordinary parent gate, with no hold flag or clock. Contract loading/saving discards retired parent-only durations and empty waiting-place collections. Reselecting or double-clicking that parent only focuses its waiting editor; it cannot recreate a sixty-second small place. The explicit Add wait point action still permits intentional placement at the parent's coordinates. Existing nonempty places retain their individual times and geometry.
 
 Bot tactics editor: [English user guide](docs/bot-editor-guide-en.md).
+
+
+### 0.10.1 native performance integration
+
+The integration keeps the 0.10.0 launcher operations, route editor, tactics,
+parking, recovery, artillery, customization and server route-progress rules.
+The hidden worker uses native computation for expensive geometry, background
+path searches, sight/foliage and weapon work. The release's higher-level Bot
+behavior owners remain in place; older native state machines do not replace
+them. Decision cadence is unchanged.
+
+Each visible player advances their own frozen shells; the server validates
+ownership and commits shared damage and destruction once. Bot movement and
+Bot shells remain with the hidden worker. State synchronization sends deltas
+with full initialization/recovery checkpoints and ordered event delivery.
+Current turn-sweep envelopes and occupied-wall departure proofs now use native
+numeric laws. Rotation and local movement also use the ordered world-query
+frontier, including supplied departure callbacks and lazy exact-footprint
+witnesses. External contact pushes and the iterative passive wreck track solver
+use current-release C++ laws with live tuning. Collision query order, main-thread
+ownership, native effects and shared damage remain on their existing owners.
+Host numerical comparisons and complete physical-stage fixtures cover these
+boundaries; their component timings do not establish a Windows frame-time gain.
+
+Countdown spawn cleanup retains frozen destruction publications until the
+worker's live gate, so transport admission cannot retire an event the server
+still refuses. Completed player-contact verdicts retry from a round- and
+sweep-fenced cache without rerunning native commits. Server rejection logs now
+name missing publications, token mismatches and stale envelopes. Selected
+firing-lane jobs rotate within their existing priority classes and keep the
+existing query limits and independent final-fire gate. Ray endpoint Vector3
+construction/coordinate reads share one capability crossing instead of four,
+with exact float32 query order retained. Frame diagnostics report end-to-entry
+main-thread CPU alongside wall time (including other callbacks and LAN poll),
+and Bot publication/echo timings distinguish real launch waiting from the
+supplemental lane queue. These measurements do not directly measure GPU time.
+
+Use a launcher built from the integration commit so its native module, client
+and server match. Version 0.10.1 ships this integration. Performance depends on the map, vehicle
+count and hardware; component benchmarks do not establish a universal
+frame-time improvement.

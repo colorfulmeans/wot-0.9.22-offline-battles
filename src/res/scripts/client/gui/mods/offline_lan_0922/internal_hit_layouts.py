@@ -2304,10 +2304,11 @@ def _gjk_intersects(support, initial_direction):
 
 
 def _primitive_intersects_cone(target, primitive, apex, axis, depth,
-		tangent):
+		tangent, apex_outside=False):
 	if primitive.get('shape') == 'mesh':
 		return _internal_geometry.internal_mesh.intersects_cone(
-			primitive, apex, axis, depth, tangent)
+			primitive, apex, axis, depth, tangent,
+			apex_inside=False if apex_outside else None)
 	center = _primitive_center(target, primitive)
 	cone_center = _vector_add(apex, _vector_scale(axis, depth * 0.5))
 	initial = _vector_subtract(center, cone_center)
@@ -2319,13 +2320,36 @@ def _primitive_intersects_cone(target, primitive, apex, axis, depth,
 	return _gjk_intersects(support, initial)
 
 
-def _primitive_cone_entry(target, primitive, apex, axis, depth, tangent):
+_PINNED_PRIMITIVE_CONE_LAW = _primitive_intersects_cone
+_PINNED_PRIMITIVE_CONE_NUMERICS = (_vector_subtract, _vector_dot, _vector_length, _vector_scale)
+
+
+def _primitive_cone_entry(target, primitive, apex, axis, depth, tangent,
+		distance_record=None):
 	'''First axial depth at which the growing finite cone touches a primitive.'''
+	distance, closest = (distance_record if distance_record is not None else
+		_primitive_distance_record(apex, target, primitive))
+	# A positive exact mesh distance proves the apex is outside this same
+	# immutable primitive. The nested depth search need not repeat its full
+	# containment ray cast on all fifteen cone queries.
+	apex_outside = distance > 0.0000001
+	if (apex_outside and type(primitive) is dict and
+			all(type(key) is str for key in primitive) and
+			type(primitive.get('shape')) is str and primitive['shape'] == 'mesh' and
+			_primitive_intersects_cone is _PINNED_PRIMITIVE_CONE_LAW and
+			all(current is pinned for current, pinned in zip(
+				(_vector_subtract, _vector_dot, _vector_length, _vector_scale),
+				_PINNED_PRIMITIVE_CONE_NUMERICS)) and
+			(type(closest) is tuple or type(closest) is list) and len(closest) == 3 and
+			all(type(value) is float and -1.e6 <= value <= 1.e6 for value in closest)):
+		result = _internal_geometry.internal_mesh.cone_entry_depth(
+			primitive, apex, axis, depth, tangent)
+		if result is not None:
+			return result[1] if result[0] else None
 	if not _primitive_intersects_cone(
-			target, primitive, apex, axis, depth, tangent):
+			target, primitive, apex, axis, depth, tangent,
+			apex_outside=apex_outside):
 		return None
-	distance, closest = _primitive_distance_record(
-		apex, target, primitive)
 	if distance <= 0.0000001:
 		return 0.0
 	# Preserve an exact entry for points/volumes whose apex-nearest point is
@@ -2345,7 +2369,8 @@ def _primitive_cone_entry(target, primitive, apex, axis, depth, tangent):
 	for unused_index in range(14):
 		middle = (low + high) * 0.5
 		if _primitive_intersects_cone(
-				target, primitive, apex, axis, middle, tangent):
+				target, primitive, apex, axis, middle, tangent,
+				apex_outside=apex_outside):
 			high = middle
 		else:
 			low = middle
@@ -2396,7 +2421,7 @@ def resolve_explosion(layout, parent_contexts, radius_m, mode='sphere',
 			if mode == 'cone':
 				cone_entry = _primitive_cone_entry(
 					target, primitive, point, direction, cone_depth,
-					cone_tangent)
+					cone_tangent, distance_record=(distance, closest))
 				if cone_entry is None:
 					continue
 			record = dict(target)

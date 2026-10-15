@@ -5,6 +5,12 @@ from __future__ import print_function
 import math
 import struct
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    # The pure oracle is also imported directly by tools outside the client.
+    _native_math = None
+
 
 def _float32(value):
     """Round one finite Python number exactly as an x86 ``float``."""
@@ -17,23 +23,25 @@ def _float32(value):
     return result
 
 
+# Every caller supplies float32 operands: yaw, curve nodes, a previous rounded
+# result, or the exactly representable 1.0. Round each arithmetic result once;
+# re-rounding the operands would be idempotent and repeat Python struct work.
 def _add(left, right):
-    return _float32(_float32(left) + _float32(right))
+    return _float32(left + right)
 
 
 def _subtract(left, right):
-    return _float32(_float32(left) - _float32(right))
+    return _float32(left - right)
 
 
 def _multiply(left, right):
-    return _float32(_float32(left) * _float32(right))
+    return _float32(left * right)
 
 
 def _divide(left, right):
-    denominator = _float32(right)
-    if denominator == 0.0:
+    if right == 0.0:
         raise ValueError('gun pitch limit curve has duplicate yaw nodes')
-    return _float32(_float32(left) / denominator)
+    return _float32(left / right)
 
 
 _TWO_PI = _float32(2.0 * math.pi)
@@ -91,6 +99,11 @@ def calc_pitch_limits(turret_yaw, pitch_limits):
         maximum_curve = pitch_limits['maxPitch']
     except (KeyError, TypeError):
         raise ValueError('gun pitch limits have no yaw curves')
+    if _native_math is not None:
+        result = _native_math.call(
+            'driver_aim', 4, (yaw, minimum_curve, maximum_curve), ())
+        if result is not None:
+            return result
     return (
         _sample_curve(yaw, minimum_curve),
         _sample_curve(yaw, maximum_curve),

@@ -3,6 +3,7 @@ import contextlib
 import copy
 import importlib.util
 import io
+import json
 import math
 import types
 from pathlib import Path
@@ -116,7 +117,15 @@ class TransportTests(unittest.TestCase):
                 sample[1][30]['ram_motion'] = [motion(vz=-8.)]
             receipt = chain.receipt(vz=0., bot_vz=-8., bot_ram_motion_seq=7)
             receipt.update(change)
-            value, reason = s._validate_ram_contact(s.players[1], receipt)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                value, reason = s._validate_ram_contact(s.players[1], receipt)
+            if 'x' in change:
+                row = json.loads(output.getvalue().split('RAM POSE MISMATCH ', 1)[1])
+                self.assertEqual('x', row['field'])
+                self.assertAlmostEqual(0.01, row['delta'])
+                self.assertEqual(0.0002, row['tolerance'])
+                self.assertEqual(6, len(row['expected_pose']))
             self.assertEqual(not change, value is not None)
             if change:
                 self.assertEqual(('canonical_ram_motion_pose_mismatch' if 'x' in change

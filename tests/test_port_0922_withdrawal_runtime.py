@@ -91,7 +91,7 @@ class RuntimeWithdrawalTests(unittest.TestCase):
             for frame in range(1, 81):
                 runtime.update(.05, frame*.05)
                 modes.add(runtime._decision_cache[11][3]['recovery_mode'])
-        self.assertIn('contact_escape', modes)
+        self.assertIn('wreck_push', modes)
         self.assertGreater(abs(runtime.states[11]['z']), 1.)
 
     def test_front_wreck_push_spends_motor_force_in_contact_solver(self):

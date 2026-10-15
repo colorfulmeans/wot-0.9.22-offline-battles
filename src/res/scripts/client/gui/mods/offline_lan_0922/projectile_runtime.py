@@ -7,13 +7,19 @@ responsible for clocks, BigWorld collision queries, and vehicle matrices.
 
 import math
 
+try:
+    from gui.mods.offline_lan_0922 import native_math as _native_math
+except ImportError:
+    # Standalone engine-free fixtures also import this file without gui.
+    _native_math = None
+
 PROJECTILE_CALLBACK_SECONDS = 0.01
 PROJECTILE_MAX_SUBSTEP_SECONDS = 0.05
 PROJECTILE_MAX_CHORD_ERROR_METERS = 0.05
 PROJECTILE_BROADPHASE_RADIUS = 15.0
 
 
-def projectile_range_distance(state, point):
+def _reference_projectile_range_distance(state, point):
     """Return straight 3-D range from one frozen range origin.
 
     The pinned #1513 client marker evaluates penetration falloff with a
@@ -65,7 +71,24 @@ def ideal_reflection_velocity(incoming_velocity, surface_normal):
     return reflected
 
 
-def trajectory_position(start, velocity, gravity, elapsed):
+def ricochet_departure_origin(impact, reflected_velocity, surface_normal):
+    """Keep the existing 2 mm clearance perpendicular to the struck plate.
+
+    A flight-direction offset loses its normal clearance at grazing angles.
+    Orient the normal onto the reflected side; its stored winding may be either
+    sign. This does not skip a vehicle or any of its other collision surfaces.
+    """
+    normal_length = math.sqrt(sum(float(v) ** 2 for v in surface_normal))
+    if normal_length <= 1.0e-12:
+        raise ValueError('ricochet departure normal is degenerate')
+    normal = tuple(float(v) / normal_length for v in surface_normal)
+    side = sum(float(reflected_velocity[i]) * normal[i] for i in range(3))
+    sign = 1.0 if side >= 0.0 else -1.0
+    return tuple(float(impact[i]) + sign * normal[i] * 0.002
+                 for i in range(3))
+
+
+def _reference_trajectory_position(start, velocity, gravity, elapsed):
     """Return ``r0 + v0*t + 1/2*g*t^2`` as a plain three-tuple."""
     time = max(0.0, float(elapsed or 0.0))
     half_time_sq = 0.5 * time * time
@@ -79,7 +102,7 @@ def trajectory_position(start, velocity, gravity, elapsed):
     )
 
 
-def lerp3(first, second, fraction):
+def _reference_lerp3(first, second, fraction):
     """Linearly interpolate two plain three-component positions."""
     value = max(0.0, min(1.0, float(fraction or 0.0)))
     return (
@@ -87,6 +110,59 @@ def lerp3(first, second, fraction):
         float(first[1]) + (float(second[1]) - float(first[1])) * value,
         float(first[2]) + (float(second[2]) - float(first[2])) * value,
     )
+
+
+def _reference_prepare_chord(origin, velocity, gravity, launch_time,
+                             absolute_start, absolute_end, max_distance, distance):
+    """Original complete one-chord mathematics without callback or state writes."""
+    trajectory = (_reference_trajectory_position
+                  if trajectory_position is _NATIVE_TRAJECTORY else trajectory_position)
+    interpolate = _reference_lerp3 if lerp3 is _NATIVE_LERP else lerp3
+    start = trajectory(origin, velocity, gravity, absolute_start - launch_time)
+    unconstrained_end = trajectory(origin, velocity, gravity, absolute_end - launch_time)
+    delta_x = float(unconstrained_end[0]) - float(start[0])
+    delta_y = float(unconstrained_end[1]) - float(start[1])
+    delta_z = float(unconstrained_end[2]) - float(start[2])
+    chord_distance = math.sqrt(delta_x * delta_x + delta_y * delta_y +
+                               delta_z * delta_z)
+    remaining_distance = max(0.0, max_distance - distance)
+    distance_fraction = 1.0
+    distance_terminal = False
+    if chord_distance > remaining_distance:
+        distance_fraction = remaining_distance / chord_distance
+        distance_terminal = True
+    elif remaining_distance <= 0.0:
+        distance_fraction = 0.0
+        distance_terminal = True
+    end = interpolate(start, unconstrained_end, distance_fraction)
+    constrained_absolute_end = (
+        absolute_start + (absolute_end - absolute_start) * distance_fraction)
+    return start, end, constrained_absolute_end, distance_terminal
+
+
+# Do not override a custom/patchable reference trajectory law.
+_NATIVE_TRAJECTORY = _reference_trajectory_position
+_NATIVE_LERP = _reference_lerp3
+
+
+def prepare_chord(origin, velocity, gravity, launch_time, absolute_start,
+                  absolute_end, max_distance, distance):
+    """Return the entire numeric chord with one synchronous native operation.
+
+    The manager still owns the real collision callback, immutable launch,
+    projectile/round ledger, clock and terminal settlement.
+    """
+    if (_native_math is not None and
+            trajectory_position is _NATIVE_TRAJECTORY and
+            lerp3 is _NATIVE_LERP):
+        result = _native_math.call(
+            'projectile_math', 0, (origin, velocity, gravity),
+            (launch_time, absolute_start, absolute_end, max_distance, distance))
+        if result is not None:
+            return result[0], result[1], result[2], bool(result[3])
+    return _reference_prepare_chord(
+        origin, velocity, gravity, launch_time, absolute_start,
+        absolute_end, max_distance, distance)
 
 
 def compensate_segment_for_moving_target(projectile_start, projectile_end,
@@ -99,10 +175,24 @@ def compensate_segment_for_moving_target(projectile_start, projectile_end,
     the target displacement remaining at that endpoint converts the query into
     a relative-motion sweep without requiring an engine-owned historic matrix.
     """
-    previous_at_start = lerp3(
-        target_previous, target_current, interval_start)
-    previous_at_end = lerp3(
-        target_previous, target_current, interval_end)
+    if _native_math is not None and lerp3 is _NATIVE_LERP:
+        result = _native_math.call(
+            'projectile_math', 1,
+            (projectile_start, projectile_end, target_previous, target_current),
+            (interval_start, interval_end))
+        if result is not None:
+            return result
+    return _reference_compensate_segment_for_moving_target(
+        projectile_start, projectile_end, target_previous, target_current,
+        interval_start, interval_end)
+
+
+def _reference_compensate_segment_for_moving_target(
+        projectile_start, projectile_end, target_previous, target_current,
+        interval_start=0.0, interval_end=1.0):
+    interpolate = _reference_lerp3 if lerp3 is _NATIVE_LERP else lerp3
+    previous_at_start = interpolate(target_previous, target_current, interval_start)
+    previous_at_end = interpolate(target_previous, target_current, interval_end)
     return (
         (
             float(projectile_start[0]) + float(target_current[0]) -
@@ -191,7 +281,7 @@ def curvature_limited_substep(
     return max(0.001, min(maximum_step, error_limited))
 
 
-def substep_boundaries(start_time, end_time,
+def _reference_substep_boundaries(start_time, end_time,
                        maximum_step=PROJECTILE_MAX_SUBSTEP_SECONDS):
     """Yield bounded absolute-time chords without dropping a slow frame."""
     start_time = max(0.0, float(start_time or 0.0))
@@ -203,3 +293,122 @@ def substep_boundaries(start_time, end_time,
         next_time = min(end_time, cursor + maximum_step)
         yield cursor, next_time
         cursor = next_time
+
+# Current #1513 spatial computation frontier. The original laws remain the
+# reference path for unsupported numeric objects and older shipping binaries.
+_reference_point_segment_distance_sq = point_segment_distance_sq
+_reference_point_in_expanded_segment_bounds = point_in_expanded_segment_bounds
+_reference_ideal_reflection_velocity = ideal_reflection_velocity
+_reference_ricochet_departure_origin = ricochet_departure_origin
+_reference_parabolic_chord_error = parabolic_chord_error
+_reference_curvature_limited_substep = curvature_limited_substep
+
+
+def _spatial_native(op, vectors, scalars=()):
+    if _native_math is None:
+        return None
+    return _native_math.call('projectile_spatial', op, vectors, scalars)
+
+
+def point_segment_distance_sq(point, start, end):
+    result = _spatial_native(0, (point, start, end))
+    if result is not None:
+        return result
+    return _reference_point_segment_distance_sq(point, start, end)
+
+
+def point_in_expanded_segment_bounds(point, start, end, radius):
+    result = _spatial_native(1, (point, start, end), (radius,))
+    if result is not None:
+        return bool(result)
+    return _reference_point_in_expanded_segment_bounds(
+        point, start, end, radius)
+
+
+def ideal_reflection_velocity(incoming_velocity, surface_normal):
+    result = _spatial_native(2, (incoming_velocity, surface_normal))
+    if result is not None:
+        return None if result == 0 else result
+    return _reference_ideal_reflection_velocity(incoming_velocity, surface_normal)
+
+
+def ricochet_departure_origin(impact, reflected_velocity, surface_normal):
+    result = _spatial_native(3, (impact, reflected_velocity, surface_normal))
+    if result is not None:
+        return result
+    return _reference_ricochet_departure_origin(
+        impact, reflected_velocity, surface_normal)
+
+
+def parabolic_chord_error(gravity, duration):
+    result = _spatial_native(4, (gravity,), (duration,))
+    if result is not None:
+        return result
+    return _reference_parabolic_chord_error(gravity, duration)
+
+
+def curvature_limited_substep(
+        gravity, maximum_step=PROJECTILE_MAX_SUBSTEP_SECONDS,
+        maximum_error=PROJECTILE_MAX_CHORD_ERROR_METERS):
+    result = _spatial_native(
+        5, (gravity,), (maximum_step, maximum_error,
+                       PROJECTILE_MAX_SUBSTEP_SECONDS,
+                       PROJECTILE_MAX_CHORD_ERROR_METERS))
+    if result is not None:
+        return result
+    return _reference_curvature_limited_substep(
+        gravity, maximum_step, maximum_error)
+
+
+def projectile_range_distance(state, point):
+    """Preserve the frozen range-origin owner; migrate only numeric distance."""
+    payload = state.get('payload') or {}
+    origin = (payload['range_origin']
+              if 'range_origin' in payload else state['start'])
+    result = None if _native_math is None else _native_math.projectile_math(32, (origin, point), ())
+    if result is not None:
+        return result
+    # Do not repeat state/payload lookup after an unsupported numeric input.
+    delta_x = float(point[0]) - float(origin[0])
+    delta_y = float(point[1]) - float(origin[1])
+    delta_z = float(point[2]) - float(origin[2])
+    return math.sqrt(
+        delta_x * delta_x + delta_y * delta_y + delta_z * delta_z)
+
+
+def trajectory_position(start, velocity, gravity, elapsed):
+    result = None if _native_math is None else _native_math.projectile_math(33, (start, velocity, gravity), (elapsed,))
+    if result is not None:
+        return result
+    return _reference_trajectory_position(start, velocity, gravity, elapsed)
+
+
+def lerp3(first, second, fraction):
+    result = None if _native_math is None else _native_math.projectile_math(34, (first, second), (fraction,))
+    if result is not None:
+        return result
+    return _reference_lerp3(first, second, fraction)
+
+
+def substep_boundaries(start_time, end_time,
+                       maximum_step=PROJECTILE_MAX_SUBSTEP_SECONDS):
+    """Retain generator semantics while native batches all boundary arithmetic."""
+    start_time = max(0.0, float(start_time or 0.0))
+    end_time = max(start_time, float(end_time or 0.0))
+    maximum_step = max(
+        0.001, float(maximum_step or PROJECTILE_MAX_SUBSTEP_SECONDS))
+    cursor = start_time
+    while cursor + 1e-9 < end_time:
+        result = None if _native_math is None else _native_math.projectile_math(35, (), (cursor, end_time, maximum_step))
+        if result is None:
+            for boundary in _reference_substep_boundaries(cursor, end_time, maximum_step):
+                yield boundary
+            return
+        for boundary in result:
+            yield boundary
+        cursor = result[-1][1]
+
+
+# Pin public adapters after their definitions; replaced laws remain authoritative.
+_NATIVE_TRAJECTORY = trajectory_position
+_NATIVE_LERP = lerp3

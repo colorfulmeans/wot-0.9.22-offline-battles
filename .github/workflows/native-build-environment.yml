@@ -1,0 +1,61 @@
+name: Native build environment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [integrate/0100-native-worker]
+    paths: [.github/workflows/native-build-environment.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build isolated CPython 2.7.18 x86 and MinGW toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/native-environment
+          cat > "$RUNNER_TEMP/Dockerfile.wot-native" <<'DOCKER'
+          FROM debian:trixie-slim
+          ENV DEBIAN_FRONTEND=noninteractive
+          RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+              build-essential gcc-multilib g++-multilib g++-mingw-w64-i686 binutils-mingw-w64-i686 \
+              ca-certificates curl xz-utils git file python3 python3-pil \
+              zlib1g-dev:i386 libbz2-dev:i386 libffi-dev:i386 libsqlite3-dev:i386 \
+              && rm -rf /var/lib/apt/lists/*
+          RUN mkdir /build && cd /build && \
+              curl --fail --location --retry 3 -o python.tar.xz https://www.python.org/ftp/python/2.7.18/Python-2.7.18.tar.xz && \
+              tar -xf python.tar.xz && cd Python-2.7.18 && \
+              CC='gcc -m32' CXX='g++ -m32' \
+              CFLAGS='-O2 -fno-strict-aliasing -fwrapv -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types' \
+              LDFLAGS='-m32' ./configure --prefix=/opt/python27 --disable-shared --with-ensurepip=no && \
+              make -j2 && make install && cd / && rm -rf /build
+          RUN /opt/python27/bin/python2.7 -B -c "import sys,struct,math,zlib,bz2,ctypes,unittest; assert sys.version_info[:3] == (2,7,18); assert struct.calcsize('P') == 4; print(sys.version)"
+          DOCKER
+          docker build -t wot-native-environment -f "$RUNNER_TEMP/Dockerfile.wot-native" "$RUNNER_TEMP"
+          docker run --rm wot-native-environment sh -c 'dpkg-query -W; /opt/python27/bin/python2.7 -V; g++ --version; i686-w64-mingw32-g++ --version' > build/native-environment/toolchain-versions.txt 2>&1
+          cp "$RUNNER_TEMP/Dockerfile.wot-native" build/native-environment/Dockerfile
+      - name: Export toolchain and exact repository source without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > build/native-environment/source-commit.txt
+          git archive --format=tar.gz -o build/native-environment/repository.tar.gz HEAD
+          instance=$(docker create wot-native-environment /bin/true)
+          trap 'docker rm "$instance" >/dev/null' EXIT
+          docker export "$instance" | gzip -1 > build/native-environment/toolchain-rootfs.tar.gz
+          ls -lh build/native-environment/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-native-environment-${{ github.run_id }}
+          path: build/native-environment/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

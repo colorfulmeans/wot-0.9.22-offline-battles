@@ -2734,6 +2734,24 @@ class BotAiPortTests(unittest.TestCase):
                             order['throttle'] == 0.0 and order['turn'] == 0.0
                             for order in blocked))
 
+    def test_recovery_can_use_proven_short_arc_when_full_turn_and_translation_fail(self):
+        driver = LocalDriver()
+        orders = []
+        for unused in range(150):
+            orders.append(driver.drive(9, 0, (0.,0.,0.), 0., 0., 1./30.,
+                (0.,4.,50.), (), lambda *unused: False,
+                pose_clear=lambda yaw: 0. <= yaw <= 0.12,
+                turn_speed_limit=2., decision_horizon=0.15))
+        partial = [o for o in orders if o['recovery_mode']=='partial_pivot_recovery']
+        self.assertTrue(partial)
+        for order in partial:
+            self.assertEqual(0., order['throttle'])
+            self.assertGreater(order['turn'], 0.)
+            self.assertLessEqual(order['turn']*2.*0.15, 0.12)
+            self.assertLessEqual(order['target_yaw'], 0.12)
+        self.assertIsNone(driver._partial_pivot(lambda yaw: False, 0., 1., 2., .15))
+        self.assertIsNone(driver._partial_pivot(lambda yaw: True, 0., 1., None, .15))
+
     def test_wedged_hull_tries_the_pivot_side_that_fits(self):
         driver = LocalDriver()
         pivots = []
@@ -2913,9 +2931,10 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(0.0,order['throttle'])
         self.assertTrue(order['brake'])
 
-    def test_dynamic_grid_admits_both_directions_up_to_27_point_5_degrees(self):
+    def test_dynamic_grid_admits_both_directions_up_to_25_degrees(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
-        for grade,allowed in ((.51,True),(-.51,True),(.53,False),(-.53,False)):
+        for grade,allowed in ((.46,True),(-.46,True),(.48,False),(-.48,False),
+                              (.51,False),(-.51,False)):
             grid=TerrainGrid(lambda x,z,hint:grade*z,obstacle_probe=lambda *args:False,cell_size=4)
             self.assertEqual(allowed,grid._native_segment_clear((0,0,0),(0,grade*20,20)))
         for sign in (-1,1):

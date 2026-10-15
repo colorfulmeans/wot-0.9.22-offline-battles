@@ -12,6 +12,11 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
     current as current_combat, count as combat_count)
 
+import sys as _sys
+from contextlib import contextmanager
+from gui.mods.offline_lan_0922 import native_destructibles as _native_geometry
+_native_sensor = _sys.modules[__name__]
+
 _event_sink = None
 
 _DESTRUCTIBLE_BIN_METRES = 8.0
@@ -96,6 +101,10 @@ def _normalized_filename(filename):
 	if not isinstance(filename, _STRING_TYPES):
 		return None
 	return filename.replace('\\', '/').strip().lower()
+
+
+# Pinned only for native chunk-preparation truth-value projection.
+_NATIVE_FILENAME_LAW = (_normalized_filename, _STRING_TYPES)
 
 
 def is_excluded_1513(chunk_id, item_index):
@@ -208,6 +217,7 @@ def trusted_tree_identity_status_1513(space_id, chunk_id, item_index):
 def _drop_isolated_destructible_1513(chunk_id, item_index=None):
 	"""Remove synthetic collision state without touching native authority."""
 	chunk_id = int(chunk_id)
+	_native_geometry.drop(chunk_id, item_index)
 	identity = (chunk_id, int(item_index)) if item_index is not None else None
 	instances = globals().get('g_offh_destr_instances', {})
 	identities = [key for key in list(instances)
@@ -624,6 +634,7 @@ def _commit_proved_chunk_layout_1513(entry, chunk_id):
 			sum(wire != (chunk_id, item) for item, (wire, record) in matches.items())))
 	except Exception:
 		pass
+	_native_geometry.refresh_baked(_native_sensor)
 	return mapping
 
 
@@ -797,7 +808,7 @@ def _invalidate_chunk_native_names_1513(chunk_id):
 		if key[1] == chunk_id:
 			cache.pop(key, None)
 	from gui.mods.offline_lan_0922 import destructibles_compat
-	destructibles_compat.invalidate_safe_descriptor_chunk(chunk_id)
+	destructibles_compat.invalidate_safe_descriptor_chunk(chunk_id, retire_calls=True)
 	# Placement proof belongs to this streaming lifetime too: a reload can
 	# reuse the same native slot count with a different item matrix.
 	unresolved = globals().get('g_offh_destr_unresolved_obstacles', {})
@@ -816,6 +827,7 @@ def _invalidate_chunk_layout_1513(chunk_id):
 	identity and spatial entry for this exact chunk.
 	"""
 	chunk_id = int(chunk_id)
+	_native_geometry.drop(chunk_id)
 	for cache_name in ('g_offh_destr_item_names',
 			'g_offh_destr_proved_layouts', 'g_offh_destr_catalog_model_names'):
 		cache = globals().get(cache_name, {})
@@ -1353,9 +1365,15 @@ def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
 		import Math
 		chunk = observed_call('native.destructible.chunk_matrix',
 			bigworld.wg_getChunkMatrix, space_id, chunk_id)
-		matrix = Math.Matrix(observed_call(
-			'native.destructible.item_matrix',
-			bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
+		# Stock __dropDestructible retains the initial matrix before the tree
+		# animator changes its live transform. Resolve effects from that exact
+		# retained native matrix after cache invalidation, not the fallen pose.
+		manager = getattr(area, 'g_destructiblesManager', None)
+		initial = getattr(manager, '_DestructiblesManager__destrInitialMatrices', {})
+		original_matrix = initial.get(wire) if isinstance(initial, dict) else None
+		matrix = Math.Matrix(original_matrix if original_matrix is not None else
+			observed_call('native.destructible.item_matrix',
+				bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
 		signature, unused_located = _catalog_instance_for_matrix_1513(
 			matrix, chunk.translation, Math, (chunk_id, item_index))
 		if _layout_repair_pending_1513(chunk_id):
@@ -1585,6 +1603,7 @@ def _diagnostic_static_recast_1513(cleared, now=None):
 
 
 def _clear_runtime_registry(preserve_spatial_batch=False):
+	_native_geometry.reset()
 	names = ('g_offh_destr_seen', 'g_offh_destr_nodesc',
 			'g_offh_tree_state', 'g_offh_destr_ordered',
 			'g_offh_destr_chunks', 'g_offh_destr_instances',
@@ -1615,6 +1634,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
 			'g_offh_destr_contact_diagnostic_times',
 			'g_offh_destr_spatial_revision',
+			'g_offh_destr_spatial_published_revision',
 			'g_offh_destr_spatial_global_generation',
 			'g_offh_destr_spatial_cell_generations',
 			'g_offh_destr_spatial_chunk_generations',
@@ -2033,7 +2053,8 @@ def _publish_spatial_mutation_1513(bin_keys=(), chunk_ids=(),
 	chunk_ids = set(int(chunk_id) for chunk_id in chunk_ids)
 	if not bin_keys and not chunk_ids and not global_invalidation:
 		return _spatial_revision_1513()
-	if global_invalidation:
+	if (global_invalidation or globals().get(
+			'g_offh_destr_spatial_published_revision', 0) != _spatial_revision_1513()):
 		name = 'g_offh_destr_spatial_global_generation'
 		globals()[name] = int(globals().get(name, 0)) + 1
 	cell_generations = globals().setdefault(
@@ -2048,6 +2069,7 @@ def _publish_spatial_mutation_1513(bin_keys=(), chunk_ids=(),
 			chunk_generations.get(chunk_id, 0)) + 1
 	revision = _spatial_revision_1513() + 1
 	globals()['g_offh_destr_spatial_revision'] = revision
+	globals()['g_offh_destr_spatial_published_revision'] = revision
 	_receipt_stat_1513('spatial_invalidations')
 	return revision
 
@@ -2134,6 +2156,16 @@ def _spatial_cell_signature_1513(rectangles):
 		'g_offh_destr_spatial_global_generation', 0)), tuple(
 			(key, int(cell_generations.get(key, 0)))
 			for key in sorted(keys)))
+
+
+def _collision_region_revision_1513(lower, upper):
+	"""Keep unrelated index mutations out of a scoped filter cache key."""
+	revision = _spatial_revision_1513()
+	if globals().get('g_offh_destr_spatial_published_revision') != revision:
+		# A replaced writer with unknown locality retains global invalidation.
+		return ('global_revision', revision)
+	return _spatial_cell_signature_1513((
+		(lower[0], upper[0], lower[1], upper[1]),))
 
 
 def _spatial_chunk_signature_1513(chunk_ids):
@@ -2512,6 +2544,10 @@ def _boxes_intersect(left, right):
 
 
 def _point_in_world_box(point, world_box):
+	rows = _native_geometry.box_probe(_native_sensor, (world_box,), point,
+		padding=_CATALOG_POINT_EPSILON, flags=1)
+	if rows is not None:
+		return bool(rows[0][0])
 	center, half_axes = world_box[:2]
 	delta = (point.x - center[0], point.y - center[1],
 		point.z - center[2])
@@ -2531,6 +2567,10 @@ def _segment_world_box_interval(start, end, world_box, padding=None):
 	"""Return the exact normalized ray interval inside one transformed OBB."""
 	if padding is None:
 		padding = _CATALOG_POINT_EPSILON
+	rows = _native_geometry.box_probe(_native_sensor, (world_box,),
+		start=start, end=end, padding=padding, flags=2)
+	if rows is not None:
+		return rows[0][1]
 	center, half_axes = world_box[:2]
 	start_delta = (start.x - center[0], start.y - center[1],
 		start.z - center[2])
@@ -2560,6 +2600,11 @@ def _segment_world_box_interval(start, end, world_box, padding=None):
 		if entry > exit:
 			return None
 	return entry, exit
+
+
+_BOX_LAWS_1513 = (_box_face_axes, _vector_dot, _vector_cross)
+_DEFAULT_POINT_BOX_PROBE_1513 = _point_in_world_box
+_DEFAULT_SEGMENT_BOX_PROBE_1513 = _segment_world_box_interval
 
 
 def _instance_descriptor_filename_1513(instance):
@@ -2860,8 +2905,80 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 	return instance
 
 
+def _catalog_precise_shot_distance_1513(spaceID, identity, instance, world_box,
+		start, end, evidence=None, scene_cache=None):
+	"""Ask the current scene for contact, never reload an intact prop model.
+
+	The catalog descriptor names an authored original model, not the live
+	geometry after destruction or mode-specific scene assembly. The stock
+	material query also sees dynamic-only skins excluded by mask 128. Using
+	the ray start as its reference selects the nearest scene contact; the
+	exact returned wire and material must still match this candidate.
+	"""
+	import BigWorld
+	if scene_cache is None or 'payload' not in scene_cache:
+		skipped = set()
+		# Exact EffectMaterialCalculation.pyc isDestructibleBroken ABI:
+		# (chunkID, itemIndex, matKind, itemFilename), True excludes the skin.
+		# This is NOT wg_collideSegment's material/flags/item/chunk callback.
+		def skip_surface(chunk, item, material, filename):
+			if 87 <= material <= 100:
+				return False  # The replacement is new physical geometry.
+			return (chunk, item, None) in skipped or (chunk, item, material) in skipped
+		for unused in range(65):
+			payload = BigWorld.wg_getMatInfoNearPoint(
+				spaceID, start, end, start, skip_surface)
+			decoded = _decode_mat_info_1513(payload)
+			tree = _validated_tree_shot_identity_1513(spaceID, decoded)
+			broken = (_already_broken_shot_surface_1513(decoded)
+				if tree is None else tree + (None,))
+			if broken is None:
+				break
+			if broken in skipped or len(skipped) >= 64:
+				raise RuntimeError('#1513 material shot filter did not advance')
+			skipped.add(broken)
+		if scene_cache is not None:
+			scene_cache['payload'] = payload
+			scene_cache['skipped_surfaces'] = sorted(skipped)
+	else:
+		payload = scene_cache['payload']
+	decoded = _decode_mat_info_1513(payload)
+	if evidence is not None:
+		evidence.update(interface='BigWorld.wg_getMatInfoNearPoint',
+			reference=[float(start[i]) for i in (0, 1, 2)])
+		evidence['skipped_surfaces'] = (scene_cache.get('skipped_surfaces', ())
+			if scene_cache is not None else list(skipped))
+		if decoded is not None:
+			evidence.update(native_identity=list(decoded[2:4]),
+				native_material=decoded[4], native_filename=decoded[5],
+				native_point=[float(decoded[0][i]) for i in (0, 1, 2)])
+	if decoded is None or tuple(decoded[2:4]) != tuple(identity):
+		return None
+	point, unused_normal, unused_chunk, unused_item, material, filename = decoded
+	if (instance['kind'] == 'structure' and world_box[2] != material):
+		return None
+	# A neighbouring skin may be returned by a point/material probe. Neither
+	# proximity to an envelope nor an authored filename proves ray contact.
+	segment = end - start
+	length = segment.length
+	if length <= 1.0e-9:
+		return None
+	distance = sum((float(point[i]) - float(start[i])) * float(segment[i])
+		for i in (0, 1, 2)) / length
+	if not (0.0 <= distance <= length + 1.0e-6):
+		return None
+	projected = start + segment.scale(distance / length)
+	if (point - projected).length > 1.0e-4:
+		return None
+	if not _point_in_world_box(point, world_box):
+		return None
+	if evidence is not None:
+		evidence['contact_proved'] = True
+	return distance
+
+
 @observed('destructible.shot_catalog')
-def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None):
+def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None, diagnostic=None):
 	"""Resolve the nearest live-validated catalog OBB along a shell ray."""
 	segment = end - start
 	segment_length = segment.length
@@ -2894,6 +3011,9 @@ def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None):
 		identities.update(baked_bins.get(bin_key, ()))
 	combat_count('destructible_shot_candidates', len(identities))
 	hits = {}
+	# All candidates belong to this exact ray; the current-scene probe is
+	# performed once, including a miss, instead of once per model/module box.
+	scene_cache = {}
 	for identity in sorted(identities):
 		if _destructible_isolated_1513(identity[0], identity[1]):
 			continue
@@ -2934,13 +3054,22 @@ def _catalog_shot_intersection(spaceID, start, end, maximum_distance=None):
 			if interval is None:
 				continue
 			entry, exit = interval
-			distance = entry * segment_length
-			if (maximum_distance is not None and
-					distance > float(maximum_distance) + 1.0e-6):
-				continue
 			mat_kind = (world_box[2]
 				if instance['kind'] == 'structure' else None)
 			if authority.is_destroyed(identity[0], identity[1], mat_kind):
+				continue
+			contact_evidence = {'pending_identity': pending, 'registered': not pending}
+			precise_args = (spaceID, identity, instance, world_box, start, end,
+				contact_evidence, scene_cache)
+			distance = (_catalog_precise_shot_distance_1513(*precise_args)
+				if diagnostic is None else diagnostic.call(
+					'native.projectile.prop_material', _catalog_precise_shot_distance_1513,
+					*precise_args))
+			if distance is None:
+				continue
+			entry = distance / segment_length
+			if (maximum_distance is not None and
+					distance > float(maximum_distance) + 1.0e-6):
 				continue
 			key = (identity[0], identity[1], mat_kind)
 			previous = hits.get(key)
@@ -3126,11 +3255,13 @@ def _stream_baked_motion_instances_1513(spaceID, vehicle_box):
 	catalog = _destructible_catalog or {}
 	if not catalog.get('has_instance_index'):
 		return ()
-	identities = set()
-	for bin_key in _baked_bin_keys_for_bounds_1513(
-			*_box_xz_bounds(vehicle_box)):
-		identities.update(
-			catalog.get('baked_shot_bins', {}).get(bin_key, ()))
+	identities = _native_geometry.baked_candidates(_native_sensor, vehicle_box)
+	if identities is None:
+		identities = set()
+		for bin_key in _baked_bin_keys_for_bounds_1513(
+				*_box_xz_bounds(vehicle_box)):
+			identities.update(
+				catalog.get('baked_shot_bins', {}).get(bin_key, ()))
 	instances = globals().get('g_offh_destr_instances', {})
 	unresolved = []
 	cache = globals().get('g_offh_destr_unresolved_obstacles')
@@ -3278,6 +3409,11 @@ def _tree_pose_sweep_boxes_1513(
 	if (any(value is None for value in minimum + maximum) or
 			any(minimum[index] > maximum[index] for index in range(3))):
 		return None
+	_native = _native_geometry.tree_sweep(
+		_native_sensor, (sx, sy, sz), start_yaw, (ex, ey, ez), end_yaw,
+		minimum, maximum, float(pivot_offset))
+	if _native is not None:
+		return _native
 	dx = ex - sx
 	dy = ey - sy
 	dz = ez - sz
@@ -3413,6 +3549,10 @@ def _tree_candidates_for_sweeps_1513(
 		chunk_id, registry, sweep_boxes, tree_type, sweep_hulls,
 		contact_radius=_SOLID_CONTACT_RADIUS_1513):
 	"""Find exact tree contacts, sharing polygons within this motion query."""
+	_native = _native_geometry.trees(_native_sensor, chunk_id, registry,
+		sweep_boxes, tree_type, contact_radius)
+	if _native is not None:
+		return _native
 	candidates = {}
 	isolated_hits = set()
 	seen = set()
@@ -3454,6 +3594,10 @@ def _tree_candidates_for_sweeps_1513(
 def _vehicle_contact_box(pos, yaw, bbox, travel=0.0,
 		motion_yaw=None, pitch=0.0, roll=0.0):
 	"""Return the complete current hull plus only this frame's real travel."""
+	_native = _native_geometry.vehicle_box(_native_sensor, pos, yaw, bbox,
+		travel, motion_yaw, pitch, roll)
+	if _native is not None:
+		return _native
 	import math
 	minimum, maximum = bbox[:2]
 	travel = float(travel)
@@ -3496,6 +3640,10 @@ def _vehicle_contact_box(pos, yaw, bbox, travel=0.0,
 
 @observed('destructible.intersections')
 def _catalog_intersections(world_boxes, vehicle_box):
+	_native = _native_geometry.intersections(
+		_native_sensor, world_boxes, vehicle_box)
+	if _native is not None:
+		return _native
 	result = []
 	for world_box in world_boxes:
 		if not _boxes_intersect(vehicle_box, world_box):
@@ -3748,7 +3896,7 @@ def clear_local_prediction(token):
 
 
 @observed('destructible.contact_candidates')
-def _catalog_contact_candidates(vehicle_box):
+def _catalog_contact_candidates(vehicle_box, contact_box=None, grouped=False):
 	diagnostic = current_combat()
 	if diagnostic is not None:
 		diagnostic.geometry('destructible_contact_box', vehicle_box)
@@ -3757,7 +3905,19 @@ def _catalog_contact_candidates(vehicle_box):
 	bounds = _box_xz_bounds(vehicle_box)
 	receipt_key = _bin_rectangle_signature_1513(bounds)
 	if _empty_contact_receipt_valid_1513(receipt_key):
-		return []
+		return ([], {}) if grouped else []
+	_native = _native_geometry.catalog(_native_sensor, vehicle_box, contact_box)
+	if _native is not None:
+		candidates, groups, members, duplicates, had_members = _native
+		combat_count('destructible_contact_bin_items', members)
+		combat_count('destructible_contact_duplicate_bin_item', duplicates)
+		if not had_members:
+			_receipt_cache_put_1513(
+				'g_offh_destr_empty_contact_receipts', receipt_key,
+				{'cell_signature': _spatial_cell_signature_1513((receipt_key,))},
+				_EMPTY_CONTACT_RECEIPT_LIMIT)
+		combat_count('destructible_contact_candidates', len(candidates))
+		return (candidates, groups) if grouped else candidates
 	candidates = []
 	seen = set()
 	had_members = False
@@ -3792,7 +3952,7 @@ def _catalog_contact_candidates(vehicle_box):
 			{'cell_signature': _spatial_cell_signature_1513((receipt_key,))},
 			_EMPTY_CONTACT_RECEIPT_LIMIT)
 	combat_count('destructible_contact_candidates', len(candidates))
-	return candidates
+	return (candidates, None) if grouped else candidates
 
 
 def _synthetic_mat_info(candidate, math_module):
@@ -4313,9 +4473,75 @@ def ground_collision_filter(x, z):
 	return _broken_collision_filter(members, accepted_trees)
 
 
+_DEFAULT_GROUND_FILTER = ground_collision_filter
+_DEFAULT_CONTACT_BOUNDS = _bin_keys_for_bounds
+_DEFAULT_CONTACT_CELL = _destructible_bin_key
+
+
+@contextmanager
+def collision_preparation_scope_1513():
+	"""Bound filter preparation to one synchronous Bot update, including retries."""
+	previous = globals().get('g_offh_destr_collision_preparation_scope')
+	globals()['g_offh_destr_collision_preparation_scope'] = {}
+	try:
+		yield
+	finally:
+		globals()['g_offh_destr_collision_preparation_scope'] = previous
+
+
+def _contact_members_for_bounds_1513(bounds):
+	batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+	if (not batch.get('global') and not batch.get('bin_keys') and
+			_bin_keys_for_bounds is _DEFAULT_CONTACT_BOUNDS and
+			_DESTRUCTIBLE_BIN_METRES == 8.0):
+		members = _native_geometry.contact_members(_native_sensor, bounds)
+		if members is not None:
+			combat_count('destructible_contact_members_native')
+			return members
+	members = set()
+	contact_bins = globals().get('g_offh_destr_contact_bins', {})
+	for key in _bin_keys_for_bounds(*bounds):
+		members.update(contact_bins.get(key, ()))
+	return members
+
+
+def ground_filter_batch_1513(provider):
+	"""Share live column filters within one synchronous collision operation."""
+	if (provider is not _DEFAULT_GROUND_FILTER or
+			_destructible_bin_key is not _DEFAULT_CONTACT_CELL or
+			_get_destr_authority is not _DEFAULT_DESTR_AUTHORITY):
+		combat_count('destructible_ground_filter_batch_disabled')
+		return None
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = scope.setdefault('ground', {}) if isinstance(scope, dict) else {}
+	def query(x, z):
+		combat_count('destructible_ground_filter_queries')
+		cell = _destructible_bin_key(x, z)
+		trees = _accepted_tree_collision_keys_1513()
+		key = (globals().get('g_offh_destr_runtime_space'),
+			_collision_region_revision_1513(cell, cell), cell, id(trees), len(trees))
+		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+		dirty = batch.get('global') or cell in batch.get('bin_keys', ())
+		if dirty:
+			combat_count('destructible_ground_filter_batch_dirty')
+		if not dirty and key in cache:
+			combat_count('destructible_ground_filter_batch_hits')
+			return cache[key]
+		combat_count('destructible_ground_filter_batch_misses')
+		members = globals().get('g_offh_destr_contact_bins', {}).get(cell, ())
+		value = _live_broken_collision_filter_1513(members, trees)
+		if not dirty:
+			if len(cache) >= 64:
+				cache.clear()
+			cache[key] = value
+		return value
+	return query
+
+
 def _live_broken_collision_filter_1513(members, accepted_trees=()):
 	"""Return one sweep-local callback backed by the live accepted ledger."""
-	accepted_trees = accepted_trees or ()
+	if accepted_trees is None:
+		accepted_trees = ()
 	if not members and not accepted_trees:
 		return None
 	authority = _get_destr_authority() if members else None
@@ -4326,7 +4552,16 @@ def _live_broken_collision_filter_1513(members, accepted_trees=()):
 		for chunk_id, item_index in members)
 
 	def keep_native_surface(hit, identity):
-		if _DIAGNOSTICS_ENABLED:
+		if _DIAGNOSTICS_ENABLED and globals().get('g_offh_destr_pending'):
+			# This diagnostic is once per identity. Do not rescan the pending
+			# ledger for every native candidate after its line was admitted.
+			diagnostics = globals().get('g_offh_destr_diagnostics', {})
+			if (diagnostics.get('disabled') or
+					('native_motion_keep', identity[0], identity[1]) in
+					diagnostics.get('seen_contacts', ()) or
+					len(diagnostics.get('seen_contacts', ())) >=
+					_DIAGNOSTIC_CONTACT_LIMIT):
+				return True
 			now = _diagnostic_time_1513()
 			pending = tuple(sorted(key for key, deadline in
 				globals().get('g_offh_destr_pending', {}).items()
@@ -4381,22 +4616,50 @@ def prepare_horizontal_collision_filter(start, end):
 	later lane without rebuilding the spatial candidate set.
 	"""
 	accepted_trees = _accepted_tree_collision_keys_1513()
+	combat_count('destructible_horizontal_filter_queries')
 	if _destructible_catalog is None and not accepted_trees:
 		return None
-	contact_bins = globals().get('g_offh_destr_contact_bins')
 	try:
-		keys = _bin_keys_for_bounds(
+		bounds = (
 			min(float(start.x), float(end.x)),
 			max(float(start.x), float(end.x)),
 			min(float(start.z), float(end.z)),
 			max(float(start.z), float(end.z)))
 	except (AttributeError, TypeError, ValueError):
 		return None
-	members = set()
-	if contact_bins:
-		for key in keys:
-			members.update(contact_bins.get(key, ()))
-	return _live_broken_collision_filter_1513(members, accepted_trees)
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = None
+	if (isinstance(scope, dict) and
+			_bin_keys_for_bounds is _DEFAULT_CONTACT_BOUNDS and
+			_destructible_bin_key is _DEFAULT_CONTACT_CELL and
+			_get_destr_authority is _DEFAULT_DESTR_AUTHORITY):
+		lower = _destructible_bin_key(bounds[0], bounds[2])
+		upper = _destructible_bin_key(bounds[1], bounds[3])
+		key = (globals().get('g_offh_destr_runtime_space'),
+			_collision_region_revision_1513(lower, upper), lower, upper,
+			id(accepted_trees), len(accepted_trees))
+		batch = globals().get('g_offh_destr_spatial_mutation_batch', {})
+		dirty = batch.get('global') or any(
+			lower[0] <= cell[0] <= upper[0] and
+			lower[1] <= cell[1] <= upper[1]
+			for cell in batch.get('bin_keys', ()))
+		if dirty:
+			combat_count('destructible_horizontal_filter_batch_dirty')
+		else:
+			cache = scope.setdefault('horizontal', {})
+			if key in cache:
+				combat_count('destructible_horizontal_filter_batch_hits')
+				return cache[key]
+	else:
+		combat_count('destructible_horizontal_filter_scope_unavailable')
+	combat_count('destructible_horizontal_filter_batch_misses')
+	members = _contact_members_for_bounds_1513(bounds)
+	value = _live_broken_collision_filter_1513(members, accepted_trees)
+	if cache is not None:
+		if len(cache) >= 128:
+			cache.clear()
+		cache[key] = value
+	return value
 
 
 def horizontal_collision_filter(start, end):
@@ -4417,6 +4680,13 @@ def _instance_motion_envelope_1513(instance):
 	cached = instance.get('_motion_envelope')
 	if cached is not None and cached[0] is boxes:
 		return cached[1]
+	native = _native_geometry.box_envelope(_native_sensor, boxes)
+	if native is not None:
+		if native[0] is None:
+			return None
+		envelope = tuple(native[0]) + (None,)
+		instance['_motion_envelope'] = (boxes, envelope)
+		return envelope
 	center, axes = boxes[0][:2]
 	normals = _box_face_axes(axes)
 	limits = []
@@ -4460,6 +4730,10 @@ def _anonymous_original_surface_1513(surface):
 
 def _projected_box_interval_1513(start, end, box):
 	"""Clip to the authored footprint, extruded along the model's own up axis."""
+	rows = _native_geometry.box_probe(_native_sensor, (box,),
+		start=start, end=end, flags=4)
+	if rows is not None:
+		return rows[0][2]
 	center, axes = box[:2]
 	entry, leave = 0.0, 1.0
 	normals = _box_face_axes(axes)
@@ -4497,6 +4771,65 @@ def _original_side_face_1513(normal, box):
 		_vector_dot(up, face) ** 2 <= 1.0e-10 * length_squared)
 
 
+_MOTION_SKIN_LAWS_1513 = (_point_in_world_box, _segment_world_box_interval,
+    _projected_box_interval_1513, _original_side_face_1513)
+
+
+class _MotionSkinWitnesses1513(object):
+    """Numeric witnesses owned by exactly one synchronous contact query."""
+    def __init__(self, point, start, end, normal):
+        self.point, self.start, self.end, self.normal = point, start, end, normal
+        self.rows = {}
+        self.enabled = all(left is right for left, right in zip(
+            (_point_in_world_box, _segment_world_box_interval,
+             _projected_box_interval_1513, _original_side_face_1513),
+            _MOTION_SKIN_LAWS_1513))
+
+    def prime(self, boxes):
+        if not self.enabled or type(boxes) not in (tuple, list):
+            return
+        missing = []
+        for box in boxes:
+            if id(box) in self.rows:
+                continue
+            # Cache only immutable numeric geometry. Mutable/custom protocols
+            # retain their evaluation order on the reference path.
+            if (type(box) is not tuple or len(box) < 2 or
+                    type(box[0]) is not tuple or type(box[1]) is not tuple or
+                    any(type(axis) is not tuple for axis in box[1]) or
+                    any(type(value) not in _INTEGER_TYPES + (float,)
+                        for vector in (box[0],) + box[1] for value in vector)):
+                return
+            missing.append(box)
+        if not missing:
+            return
+        rows = _native_geometry.motion_witnesses(_native_sensor,
+            tuple(missing), self.point, self.start, self.end, self.normal)
+        if rows is not None:
+            for box, row in zip(missing, rows):
+                self.rows[id(box)] = (box, row)
+
+    def inside(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][0]) if row is not None else _point_in_world_box(self.point, box)
+
+    def interval(self, box):
+        row = self.rows.get(id(box))
+        return row[1][1] if row is not None else _segment_world_box_interval(self.start, self.end, box)
+
+    def footprint(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][3]) if row is not None else _projected_box_interval_1513(self.point, self.point, box) is not None
+
+    def projected(self, box):
+        row = self.rows.get(id(box))
+        return row[1][2] if row is not None else _projected_box_interval_1513(self.start, self.end, box)
+
+    def side(self, box):
+        row = self.rows.get(id(box))
+        return bool(row[1][4]) if row is not None else _original_side_face_1513(self.normal, box)
+
+
 def _owned_component_skin_1513(point, start, end, surfaces):
 	"""Bound a stale original material to its proved, broken live component.
 
@@ -4527,7 +4860,14 @@ def _owned_component_skin_1513(point, start, end, surfaces):
 		boxes = instance['boxes']
 		if surface[0] not in set(box[2] for box in boxes):
 			continue
-		containing = [box for box in boxes if _point_in_world_box(point, box)]
+		probes = None
+		if (_point_in_world_box is _DEFAULT_POINT_BOX_PROBE_1513 and
+				_segment_world_box_interval is _DEFAULT_SEGMENT_BOX_PROBE_1513):
+			probes = _native_geometry.box_probe(_native_sensor, boxes,
+				point, start, end, _CATALOG_POINT_EPSILON, 3)
+		containing = ([box for index, box in enumerate(boxes) if probes[index][0]]
+			if probes is not None else
+			[box for box in boxes if _point_in_world_box(point, box)])
 		if not containing:
 			continue
 		if authority is None:
@@ -4538,15 +4878,17 @@ def _owned_component_skin_1513(point, start, end, surfaces):
 		if (not containing or any(not broken(box) for box in containing) or
 				any(box[2] == surface[0] for box in containing)):
 			continue
-		intervals = [_segment_world_box_interval(start, end, box)
-			for box in containing]
+		intervals = ([probes[index][1] for index, box in enumerate(boxes)
+			if probes[index][0]] if probes is not None else
+			[_segment_world_box_interval(start, end, box) for box in containing])
 		if any(interval is None for interval in intervals):
 			continue
 		local_limit = min(interval[1] for interval in intervals)
-		for box in boxes:
+		for index, box in enumerate(boxes):
 			if broken(box):
 				continue
-			interval = _segment_world_box_interval(start, end, box)
+			interval = (probes[index][1] if probes is not None else
+				_segment_world_box_interval(start, end, box))
 			if interval is not None and interval[1] * length >= (point - start).length:
 				local_limit = min(local_limit,
 					max(0.0, interval[0] - 2.0 * _SHOT_RAY_EPSILON / length))
@@ -4579,6 +4921,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
 		_destructible_bin_key(point.x, point.z), ())
+	witness = _MotionSkinWitnesses1513(point, start, end, normal)
 	owners = []
 	for identity in members:
 		instance = instances.get(identity)
@@ -4587,10 +4930,13 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 				_destructible_isolated_1513(*identity)):
 			continue
 		envelope = _instance_motion_envelope_1513(instance)
-		if envelope is None or not _point_in_world_box(point, envelope):
+		if envelope is not None:
+			witness.prime((envelope,))
+		if envelope is None or not witness.inside(envelope):
 			continue
-		interval = _segment_world_box_interval(start, end, envelope)
+		interval = witness.interval(envelope)
 		if interval is not None:
+			witness.prime(instance['boxes'])
 			owners.append((identity, instance, interval))
 	for surface in remapped:
 		wire = (surface[3], surface[2])
@@ -4605,10 +4951,12 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		registered = instances.get(wire) or catalog.get('baked_instances', {}).get(wire)
 		if registered is not None:
 			envelope = _instance_motion_envelope_1513(registered)
-			if envelope is not None and _point_in_world_box(point, envelope):
+			if envelope is not None:
+				witness.prime((envelope,))
+			if envelope is not None and witness.inside(envelope):
 				continue
 		if any(identity[0] == wire[0] and
-				_point_in_world_box(point, box)
+				witness.inside(box)
 				for identity, instance, unused_interval in owners
 				for box in instance['boxes']):
 			# The exact 3-D box already bounds this original face. Westfield's
@@ -4624,9 +4972,9 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	# actual material belongs to a tilted component just outside its Y bounds.
 	needs_projection = not all(any(
 		(instance['kind'] != 'structure' or box[2] == surface[0]) and
-		(_point_in_world_box(point, box) or
-		 (_original_side_face_1513(normal, box) and
-		  _projected_box_interval_1513(point, point, box) is not None))
+		(witness.inside(box) or
+		 (witness.side(box) and
+		  witness.footprint(box)))
 		for unused_identity, instance, unused_interval in owners
 		for box in instance['boxes']) for surface in aliases)
 	if (needs_projection and normal is not None and
@@ -4650,14 +4998,16 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			if instance is None:
 				continue
 			envelope = _instance_motion_envelope_1513(instance)
+			if envelope is not None:
+				witness.prime((envelope,))
 			if (envelope is None or
-					_projected_box_interval_1513(point, point, envelope) is None):
+					not witness.footprint(envelope)):
 				continue
 			if identity not in instances or _destructible_isolated_1513(*identity):
 				return None
-			has_side_face = has_side_face or _original_side_face_1513(
-				normal, envelope)
-			interval = _projected_box_interval_1513(start, end, envelope)
+			witness.prime(instance['boxes'])
+			has_side_face = has_side_face or witness.side(envelope)
+			interval = witness.projected(envelope)
 			if interval is not None:
 				projected_owners.append((identity, instance, interval))
 		if has_side_face:
@@ -4676,9 +5026,9 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		for identity, instance, interval in owners:
 			material = surface[0] if instance['kind'] == 'structure' else None
 			if any((material is None or box[2] == material) and
-					(_point_in_world_box(point, box) or
-					 ((projected or _original_side_face_1513(normal, box)) and
-					  _projected_box_interval_1513(point, point, box) is not None))
+					(witness.inside(box) or
+					 ((projected or witness.side(box)) and
+					  witness.footprint(box)))
 					for box in instance['boxes']):
 				component_owners.append((identity, instance, interval))
 		# Original BSP faces can extend beyond damage-module bounds. In that
@@ -4719,8 +5069,8 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			other = baked.get(other_identity)
 		if other is None:
 			continue
-		clip = (_projected_box_interval_1513 if projected else
-			_segment_world_box_interval)
+		witness.prime(other['boxes'])
+		clip = witness.projected if projected else witness.interval
 		for material in (set(surface[0] for surface in excluded)
 				if other['kind'] == 'structure' else (None,)):
 			key = other_identity + (material,)
@@ -4731,7 +5081,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 			for other_box in other['boxes']:
 				if material is not None and other_box[2] != material:
 					continue
-				other_interval = clip(start, end, other_box)
+				other_interval = clip(other_box)
 				if (other_interval is not None and
 						other_interval[1] * (end - start).length >=
 						(point - start).length):
@@ -5002,7 +5352,12 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	# populates the live item registry.  Admit only checksum-pinned wires in the
 	# current hull bins through the same read-only native validation as shells.
 	unresolved = _stream_baked_motion_instances_1513(spaceID, vehicle_box)
-	candidates = _catalog_contact_candidates(vehicle_box)
+	contact_box = (_vehicle_contact_box(
+		pos, yaw, bbox, travel=float(vel) * max(0.0, float(dt)),
+		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
+		if kinetic_speed is not None else None)
+	candidates, native_groups = _catalog_contact_candidates(
+		vehicle_box, contact_box, grouped=True)
 	# An unidentified model is real geometry this sweep cannot name, destroy or
 	# publish.  #1513 keeps it solid, so the hull stops on it until a later tick
 	# resolves its identity and the ordinary crush law can decide.
@@ -5020,10 +5375,6 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			continue
 		grouped.setdefault((candidate[0], candidate[1]), []).append(candidate)
 	instances = globals().get('g_offh_destr_instances', {})
-	contact_box = (_vehicle_contact_box(
-		pos, yaw, bbox, travel=float(vel) * max(0.0, float(dt)),
-		motion_yaw=motion_yaw, pitch=pitch, roll=roll)
-		if kinetic_speed is not None else None)
 	blocked = bool(unidentified)
 	crushed = False
 	kinetic = False
@@ -5035,22 +5386,33 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 	commit_candidates = []
 
 	for identity in sorted(grouped):
-		by_material = {}
-		for candidate in grouped[identity]:
-			by_material.setdefault(candidate[2], candidate)
+		prepared = None
+		if native_groups is not None:
+			native_group = native_groups.get(identity)
+			if (native_group is not None and
+					instances.get(identity, {}).get('boxes') is native_group[1]):
+				prepared = native_group[0]
+		if prepared is None:
+			# A preceding descriptor/effect callback may invalidate a streamed
+			# instance. Re-read exactly that current geometry before admission.
+			by_material = {}
+			for candidate in grouped[identity]:
+				by_material.setdefault(candidate[2], candidate)
+			prepared = []
+			for mat_kind in sorted(
+					by_material, key=lambda value: -1 if value is None else value):
+				candidate = by_material[mat_kind]
+				kind = candidate[4]
+				contact_candidate = (contact_box is not None and
+					kind in ('fragile', 'structure', 'falling') and
+					any(_boxes_intersect(contact_box, world_box)
+						for world_box in instances.get(identity, {}).get('boxes', ())
+						if (kind != 'structure' or world_box[2] == mat_kind)))
+				prepared.append((candidate, contact_candidate))
 		active = []
-		for mat_kind in sorted(
-				by_material, key=lambda value: -1 if value is None else value):
-			candidate = by_material[mat_kind]
-			chunk_id, item_index, unused_mat, unused_filename, kind = (
-				candidate[:5])
+		for candidate, contact_candidate in prepared:
+			chunk_id, item_index, mat_kind, unused_filename, kind = candidate[:5]
 			key = (chunk_id, item_index, mat_kind)
-			contact_candidate = (contact_box is not None and
-				kind in ('fragile', 'structure', 'falling') and
-				any(_boxes_intersect(contact_box, world_box)
-					for world_box in instances.get(
-						(chunk_id, item_index), {}).get('boxes', ())
-					if (kind != 'structure' or world_box[2] == mat_kind)))
 			contact_kinds.add(kind)
 			# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True for any
 			# item the chunk controller already reports broken, so a hiding skin
@@ -5340,6 +5702,7 @@ def _index_catalog_instance_1513(contact_bins, key, instance,
 		members.add(key)
 		changed = changed or len(members) != before
 	instance['bin_keys'] = tuple(sorted(bin_keys))
+	_native_geometry.put_instance(_native_sensor, key, instance)
 	if changed:
 		_bump_spatial_revision_1513(
 			set(bin_keys).union(invalidated_bin_keys))
@@ -5777,6 +6140,9 @@ def _get_destr_authority():
 	return destructibles_authority
 
 
+_DEFAULT_DESTR_AUTHORITY = _get_destr_authority
+
+
 def set_event_sink(callback):
 	global _event_sink
 	if callback is not None and not callable(callback):
@@ -5983,6 +6349,8 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 			record = _destructible_catalog['resources'].get(normalized_fname)
 			if record is None or record['kind'] != expected_kind:
 				return False
+	if typ == AreaDestructibles.DESTR_TYPE_TREE and isShotDamage:
+		return False
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
 		_hp_gate = desc.get('health', 0)
 		try:
@@ -6091,6 +6459,7 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 def _drop_streamed_chunk_registry_1513(state, chunk_id):
 	"""Drop stale streamed geometry while preserving canonical destroy state."""
 	chunk_id = int(chunk_id)
+	_native_geometry.drop(chunk_id)
 	_invalidate_chunk_native_names_1513(chunk_id)
 	changed = state.get('chunks', {}).pop(chunk_id, None) is not None
 	instances = globals().get('g_offh_destr_instances', {})
@@ -6154,7 +6523,7 @@ def _tree_motion_axis_samples_1513(minimum, maximum):
 		for index in range(segments + 1))
 
 
-def _tree_motion_required_chunks_1513(sweep_boxes):
+def _reference_tree_motion_required_chunks_1513(sweep_boxes):
 	"""Map only chunk cells intersected by the segmented sweep broadphase."""
 	import AreaDestructibles
 	import Math
@@ -6190,6 +6559,30 @@ def _tree_motion_required_chunks_1513(sweep_boxes):
 	if not chunk_ids:
 		return 'pending', ()
 	return 'ready', tuple(sorted(chunk_ids))
+
+
+
+_PINNED_TREE_CHUNK_LAWS_1513 = (_box_xz_bounds, _tree_motion_axis_samples_1513)
+
+
+def _tree_motion_required_chunks_1513(sweep_boxes):
+	"""Plan the same chunk set before the unchanged registry/effect owners."""
+	import AreaDestructibles
+	import Math
+	# There is no geometric computation for an empty builtin sweep. Avoid
+	# admission/FFI work while keeping the original mapper availability rule.
+	if type(sweep_boxes) in (tuple, list) and not sweep_boxes:
+		return ('pending' if callable(getattr(
+			AreaDestructibles, 'chunkIDFromPosition', None)) else 'hard'), ()
+	if ((_box_xz_bounds, _tree_motion_axis_samples_1513) ==
+			_PINNED_TREE_CHUNK_LAWS_1513):
+		result = _native_geometry.required_chunks(
+			_native_sensor, AreaDestructibles, Math, sweep_boxes)
+		if result is not None:
+			combat_count('destructible_required_chunks_native')
+			return result
+	combat_count('destructible_required_chunks_reference')
+	return _reference_tree_motion_required_chunks_1513(sweep_boxes)
 
 
 def prewarm_tree_registry(spaceID, pos, yaw, td=None, now=None,
@@ -6748,37 +7141,51 @@ def _fell_trees_near(
 					_empty_proximity_receipt_valid_1513(
 					_receipt_key, mgr, _st['chunks'])):
 				return
-		cids = set((_current_cid,))
-		_mapped_cid = AreaDestructibles.chunkIDFromPosition(
-			Math.Vector3(pos.x + sin_y * (6.0 if vel >= 0 else -6.0),
-				pos.y, pos.z + cos_y * (6.0 if vel >= 0 else -6.0)))
-		cids.add(_mapped_cid)
-		_prewarm_priority = {}
-		# #1513 chunks are 100 m squares.  Catalog instances can be non-uniformly
-		# scaled, so raw resource bounds cannot determine the origin reach.  Sample
-		# the current chunk plus all eight neighbours through the native mapper.
-		# Registration-only tree prewarm deliberately uses the same neighbourhood:
-		# at 16 name probes per frame it starts the next chunk before contact rather
-		# than waiting 0.5-1 seconds after the vehicle crosses the boundary.
-		if _destructible_catalog is not None or registration_only:
-			for _offset_x in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
-					_DESTRUCTIBLE_CHUNK_METRES_1513):
-				for _offset_z in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
+		_native_neighbourhood = _native_geometry.neighbourhood(
+			_native_sensor, AreaDestructibles, pos, sin_y, cos_y, vel,
+			_destructible_catalog is not None or registration_only)
+		if _native_neighbourhood is not None:
+			_current_cid, _mapped_cid, _offset_rows = _native_neighbourhood
+			cids = set((_current_cid, _mapped_cid))
+			_prewarm_priority = {}
+			for _neighbour_cid, _forward, _lateral in _offset_rows:
+				cids.add(_neighbour_cid)
+				_prewarm_priority[_neighbour_cid] = max(
+					_prewarm_priority.get(_neighbour_cid,
+						(-float('inf'), -float('inf'))), (_forward, _lateral))
+			combat_count('destructible_neighbourhood_native')
+		else:
+			cids = set((_current_cid,))
+			_mapped_cid = AreaDestructibles.chunkIDFromPosition(
+				Math.Vector3(pos.x + sin_y * (6.0 if vel >= 0 else -6.0),
+					pos.y, pos.z + cos_y * (6.0 if vel >= 0 else -6.0)))
+			cids.add(_mapped_cid)
+			_prewarm_priority = {}
+			# #1513 chunks are 100 m squares.  Catalog instances can be non-uniformly
+			# scaled, so raw resource bounds cannot determine the origin reach.  Sample
+			# the current chunk plus all eight neighbours through the native mapper.
+			# Registration-only tree prewarm deliberately uses the same neighbourhood:
+			# at 16 name probes per frame it starts the next chunk before contact rather
+			# than waiting 0.5-1 seconds after the vehicle crosses the boundary.
+			if _destructible_catalog is not None or registration_only:
+				for _offset_x in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
 						_DESTRUCTIBLE_CHUNK_METRES_1513):
-					_neighbour_cid = AreaDestructibles.chunkIDFromPosition(
-						Math.Vector3(pos.x + _offset_x, pos.y,
-							pos.z + _offset_z))
-					cids.add(_neighbour_cid)
-					if _neighbour_cid is not None:
-						_forward_offset = (
-							_offset_x * sin_y + _offset_z * cos_y)
-						_lateral_offset = abs(
-							_offset_x * cos_y - _offset_z * sin_y)
-						_prewarm_priority[_neighbour_cid] = max(
-							_prewarm_priority.get(
-								_neighbour_cid,
-								(-float('inf'), -float('inf'))),
-							(_forward_offset, -_lateral_offset))
+					for _offset_z in (-_DESTRUCTIBLE_CHUNK_METRES_1513, 0.0,
+							_DESTRUCTIBLE_CHUNK_METRES_1513):
+						_neighbour_cid = AreaDestructibles.chunkIDFromPosition(
+							Math.Vector3(pos.x + _offset_x, pos.y,
+								pos.z + _offset_z))
+						cids.add(_neighbour_cid)
+						if _neighbour_cid is not None:
+							_forward_offset = (
+								_offset_x * sin_y + _offset_z * cos_y)
+							_lateral_offset = abs(
+								_offset_x * cos_y - _offset_z * sin_y)
+							_prewarm_priority[_neighbour_cid] = max(
+								_prewarm_priority.get(
+									_neighbour_cid,
+									(-float('inf'), -float('inf'))),
+								(_forward_offset, -_lateral_offset))
 		cids.discard(None)
 		instances = globals().setdefault('g_offh_destr_instances', {})
 		contact_bins = globals().setdefault(
@@ -6804,6 +7211,7 @@ def _fell_trees_near(
 				-_prewarm_priority.get(cid, (0.0, 0.0))[0],
 				-_prewarm_priority.get(cid, (0.0, 0.0))[1], cid))
 		_tree_vehicle_box = None
+		_native_body_pose = None
 		_tree_sweep_hulls = {}
 		for cid in _cid_order:
 			combat_count('destructible_body_chunks')
@@ -7237,50 +7645,86 @@ def _fell_trees_near(
 				continue
 			if not registry['count']:
 				continue
-			if _tree_vehicle_box is None:
-				_tree_vehicle_box = vehicle_box
-			_tree_candidates, unused_tree_isolated_hits = (
-				_tree_candidates_for_sweeps_1513(
-					cid, registry, (_tree_vehicle_box,),
-					AreaDestructibles.DESTR_TYPE_TREE, _tree_sweep_hulls, 0.0))
-			_tree_candidate_keys = set(_tree_candidates)
+			if _native_body_pose is None:
+				_native_body_pose = _native_geometry.pose(pos, yaw, bbox)
+			# Accepted whole-item destruction is monotonic in this chunk
+			# lifetime. Retire it before native proximity accounting, not after
+			# it repeatedly defeats empty-cell receipts for every nearby Bot.
+			_authority = (_get_destr_authority()
+				if _get_destr_authority is _DEFAULT_DESTR_AUTHORITY else None)
+			_reader = getattr(_authority, 'destroyed_keys', None)
+			_retired = tuple(sorted(int(item) for item, material in
+				(_reader(cid) if callable(_reader) else ()) if material is None and
+				(cid, item) not in _st['publish_pending']))
+			_body_options = {'prepared_pose': _native_body_pose}
+			if _retired:
+				_body_options['retired'] = _retired
+			_native_body = _native_geometry.body(_native_sensor, cid, registry,
+				pos, yaw, vel, bbox, vehicle_box, **_body_options)
+			if _native_body is not None:
+				_nearby, _nearby_count, _has_nearby = _native_body
+				combat_count('destructible_nearby_items', _nearby_count)
+				_found_nearby = _found_nearby or _has_nearby
+			else:
+				if _tree_vehicle_box is None:
+					_tree_vehicle_box = vehicle_box
+				_tree_candidates, unused_tree_isolated_hits = (
+					_tree_candidates_for_sweeps_1513(
+						cid, registry, (_tree_vehicle_box,),
+						AreaDestructibles.DESTR_TYPE_TREE, _tree_sweep_hulls, 0.0))
+				_tree_candidate_keys = set(_tree_candidates)
+				_nearby = _nearby_destructibles(registry, pos, vehicle_box)
 			for (_ti, _tx, _ty, _tz, _ttyp, _tfn, _thp, _tmass,
-					_world_boxes, _contact_radius) in _nearby_destructibles(
-						registry, pos, vehicle_box):
-				_found_nearby = True
-				if _destructible_isolated_1513(cid, _ti):
-					continue
-				dx = _tx - pos.x; dz = _tz - pos.z
-				_origin_radius = (
-					_DESTRUCTIBLE_ORIGIN_RADIUS + _contact_radius)
-				if dx * dx + dz * dz > _origin_radius * _origin_radius:
+					_world_boxes, _contact_radius) in _nearby:
+				if _ti in _retired:
 					continue
 				_mat_kind = None
-				if (_world_boxes and _ttyp in (
-						AreaDestructibles.DESTR_TYPE_FRAGILE,
-						structure_type,
-						AreaDestructibles.DESTR_TYPE_FALLING_ATOM)):
-					# Fragile/structure catalog boxes register exact native
-					# identities for the anchored material probe.  They are not a
-					# collision event and must never destroy or permit movement on
-					# proximity alone.  Stock WGVehiclePhysics (when available) or
-					# the native solid ray below remains the contact authority.
-					continue
-				elif _ttyp == AreaDestructibles.DESTR_TYPE_TREE:
-					if abs(vel) < 1.0:
-						continue
-					if (cid, _ti, None) not in _tree_candidate_keys:
+				if _native_body is not None:
+					if _destructible_isolated_1513(cid, _ti):
 						continue
 				else:
-					if abs(vel) < 1.0:
+					# Catalog boxes below never fell by proximity. They remain solid
+					# in the motion/contact seam, but cannot invalidate this scan's
+					# empty tree/pole receipt. Keep all potentially fallable items,
+					# including ones outside this pose or below the speed threshold.
+					if not (_world_boxes and _ttyp in (
+							AreaDestructibles.DESTR_TYPE_FRAGILE,
+							structure_type,
+							AreaDestructibles.DESTR_TYPE_FALLING_ATOM)):
+						_found_nearby = True
+					if _destructible_isolated_1513(cid, _ti):
 						continue
-					fwd = dx * sin_y + dz * cos_y
-					lat = dx * cos_y - dz * sin_y
-					# This scan has no integration interval; only the occupied
-					# body can prove contact, in either travel direction.
-					if not (bbox[0][0] <= lat <= bbox[1][0] and
-							bbox[0][2] <= fwd <= bbox[1][2]):
+					dx = _tx - pos.x; dz = _tz - pos.z
+					_origin_radius = (
+						_DESTRUCTIBLE_ORIGIN_RADIUS + _contact_radius)
+					if dx * dx + dz * dz > _origin_radius * _origin_radius:
 						continue
+					_mat_kind = None
+					if (_world_boxes and _ttyp in (
+							AreaDestructibles.DESTR_TYPE_FRAGILE,
+							structure_type,
+							AreaDestructibles.DESTR_TYPE_FALLING_ATOM)):
+						# Fragile/structure catalog boxes register exact native
+						# identities for the anchored material probe.  They are not a
+						# collision event and must never destroy or permit movement on
+						# proximity alone.  Stock WGVehiclePhysics (when available) or
+						# the native solid ray below remains the contact authority.
+						continue
+					elif _ttyp == AreaDestructibles.DESTR_TYPE_TREE:
+						if abs(vel) < 1.0:
+							continue
+						if (cid, _ti, None) not in _tree_candidate_keys:
+							continue
+					else:
+						if abs(vel) < 1.0:
+							continue
+						fwd = dx * sin_y + dz * cos_y
+						lat = dx * cos_y - dz * sin_y
+						# This scan has no integration interval; only the occupied
+						# body can prove contact, in either travel direction.
+						if not (bbox[0][0] <= lat <= bbox[1][0] and
+								bbox[0][2] <= fwd <= bbox[1][2]):
+							continue
 				_key = ((cid, _ti, _mat_kind) if _mat_kind is not None
 					else (cid, _ti))
 				if _key in _st['felled']:
@@ -7713,7 +8157,7 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	"""Inspect a diagnostic key without registering, isolating or destroying it."""
 	if (len(surface) != 4 or
 			not all(type(value) in _INTEGER_TYPES for value in surface) or
-			not 71 <= surface[0] <= 86 or surface[1] != 0):
+			(surface[0] < 71 or 87 <= surface[0] <= 100) or surface[1] != 0):
 		return None
 	identity = (surface[3], surface[2])
 	catalog = _destructible_catalog or {}
@@ -7736,6 +8180,9 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 	proved = globals().get('g_offh_destr_proved_layouts', {}).get(
 		(int(space_id), identity[0]))
 	result['proved_filename'] = None if proved is None else proved[1].get(identity[1])
+	result['cached_native_category'] = globals().get(
+		'g_offh_destr_native_slot_types', {}).get(
+		(int(space_id), identity[0]), {}).get(identity[1])
 	if result['quarantined']:
 		return result
 	try:
@@ -8262,7 +8709,125 @@ def _shot_broken_surface_advance_1513(measured, bigworld, spaceID,
 	return max(floor, maximum - _SHOT_RAY_EPSILON)
 
 
+def _recover_shot_material_1513(measured, bigworld, spaceID, start, end,
+        world_collision, mat_info, surface_filter, diagnostic=None):
+	decoded = _decode_mat_info_1513(mat_info)
+	if decoded is not None and _normalized_filename(decoded[5]):
+		return mat_info
+	keys = []
+	def collect(*key):
+		if surface_filter(*key) and len(key) == 4:
+			if (isinstance(key[0], _INTEGER_TYPES) and
+					key[0] >= _DESTRUCTIBLE_MAT_KIND_MIN_1513 and
+					not 87 <= key[0] <= 100 and
+					key not in keys and len(keys) < 17):
+				keys.append(key)
+			return True
+		return False
+	replay = measured('native.projectile.identity', bigworld.wg_collideSegment,
+		spaceID, start, end, 128, collect)
+	if len(keys) > 16 or replay is None or (replay[0] - world_collision[0]).length > 1.0e-4:
+		return mat_info
+	matches = []
+	for key in keys:
+		hit = measured('native.projectile.identity', bigworld.wg_collideSegment,
+			spaceID, start, end, 128, lambda *surface: surface == key)
+		if hit is None or (hit[0] - world_collision[0]).length > 1.0e-4:
+			continue
+		chunk_id, item_index = key[3], key[2]
+		if _destructible_isolated_1513(chunk_id, item_index):
+			if diagnostic is not None:
+				diagnostic.append({'stage': 'native.projectile.identity_resource',
+					'chunk': chunk_id, 'item': item_index, 'material': key[0],
+					'status': 'isolated', 'filename': '',
+					'slot': _native_contact_slot_evidence_1513(spaceID, key),
+					'hit': (hit[0].x, hit[0].y, hit[0].z)})
+			continue
+		instance = globals().get('g_offh_destr_instances', {}).get((chunk_id, item_index))
+		if instance is None and _destructible_catalog is not None:
+			instance = _stream_baked_shot_instance_1513(spaceID, (chunk_id, item_index))
+		filename = _instance_descriptor_filename_1513(instance) if instance is not None else None
+		status = 'catalog_exact' if filename else None
+		if not filename:
+			status, filename = resolve_native_item_name_1513(spaceID, chunk_id, item_index)
+		if diagnostic is not None:
+			diagnostic.append({'stage': 'native.projectile.identity_resource',
+				'chunk': chunk_id, 'item': item_index, 'material': key[0],
+				'status': status, 'filename': filename or '',
+				'slot': (_native_contact_slot_evidence_1513(spaceID, key)
+					if not filename else None),
+				'hit': (hit[0].x, hit[0].y, hit[0].z)})
+		if status != 'catalog_exact':
+			if status != 'exact' or not _normalized_filename(filename):
+				continue
+		matches.append((True, hit[0], hit[1], key[0], filename, item_index, chunk_id))
+	# Coincident different identities remain unresolved; never destroy a prop
+	# behind a wall or infer identity merely from callback visitation order.
+	return matches[0] if len(matches) == 1 else mat_info
+
+
 def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
+		shot=None, diagnostic=None):
+	"""Keep bounded actual ray/material/destruction evidence on typed results."""
+	if shot is None:
+		return _shot_world_distance_impl_1513(bigworld, spaceID, start_pos,
+			end_pos, dir_vec, shot, diagnostic)
+	evidence = []
+	def point(value):
+		return [float(value[index]) for index in (0, 1, 2)]
+	class Observer(object):
+		def append(self, row):
+			# Resource evidence uses the same bounded sink as measured calls.
+			# The optional outer profiler only supplies call(), not a list API.
+			if len(evidence) < 24:
+				evidence.append(row)
+
+		def call(self, stage, function, *args):
+			surfaces = []
+			if stage in ('native.projectile.world', 'native.projectile.identity') and len(args) > 4:
+				original_filter = args[4]
+				def observed_filter(*surface):
+					kept = original_filter(*surface)
+					if len(surfaces) < 64:
+						surfaces.append({'key': list(surface), 'kept': bool(kept)})
+					return kept
+				args = args[:4] + (observed_filter,) + args[5:]
+			value = function(*args) if diagnostic is None else diagnostic.call(stage, function, *args)
+			try:
+				if len(evidence) < 24:
+					row = {'stage': stage}
+					if stage in ('native.projectile.world', 'native.projectile.identity'):
+						row.update(start=point(args[1]), end=point(args[2]),
+							filtered=len(args) > 4, surfaces=surfaces,
+							hit=None if value is None else point(value[0]),
+							normal=None if value is None else point(value[1]))
+					elif stage == 'native.projectile.material':
+						row.update(identity_status=('identified' if value[4] else
+							'missing_resource' if value[0] else 'no_hit'))
+						row.update(collided=value[0], material=value[3],
+							filename=value[4], item=value[5], chunk=value[6])
+					elif stage == 'native.projectile.prop_material':
+						row.update(args[6])
+						row.update(
+							identity=list(args[1]),
+							filename=_instance_descriptor_filename_1513(args[2]),
+							start=point(args[4]), end=point(args[5]),
+							distance=value, gap=value is None)
+					elif stage == 'native.projectile.destroy':
+						row.update(accepted=bool(value), material=args[1][3],
+							filename=args[1][4], item=args[1][5], chunk=args[1][6])
+					evidence.append(row)
+			except Exception:
+				pass
+			return value
+	result = _shot_world_distance_impl_1513(bigworld, spaceID, start_pos,
+		end_pos, dir_vec, shot, Observer())
+	if isinstance(result, dict):
+		result['collision_evidence'] = evidence
+	return result
+
+
+def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_vec,
 		shot=None, diagnostic=None):
 	"""Resolve the first native or exact-catalog destructible on a shell ray.
 
@@ -8292,17 +8857,22 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 			spaceID, start_pos,
 			world_collision[0] + dir_vec.scale(0.3),
 			world_collision[0], lambda *unused: False)
+		if (_destructible_catalog is not None and shot is not None and
+				_shot_kind_1513(shot) in ('HIGH_EXPLOSIVE', 'ARMOR_PIERCING_HE')):
+			mat_info = _recover_shot_material_1513(measured, bigworld, spaceID,
+				start_pos, end_pos, world_collision, mat_info, surface_filter, diagnostic)
 		decoded = _decode_mat_info_1513(mat_info)
 		tree_identity = _validated_tree_shot_identity_1513(spaceID, decoded)
 		if tree_identity is not None:
 			# A catalog-only prop may be closer than this native tree.  Resolve
 			# it before publishing tree destruction so unreachable trees stay put.
 			catalog_hit = _catalog_shot_intersection(
-				spaceID, start_pos, end_pos, world_dist)
+				spaceID, start_pos, end_pos, world_dist, diagnostic=diagnostic)
 			if catalog_hit is not None:
 				break
-		destruction_accepted = _try_destroy_destructible(
-			spaceID, mat_info, shot_yaw, 12.0, True)
+		destruction_accepted = (False if tree_identity is not None else
+			measured('native.projectile.destroy', _try_destroy_destructible,
+				spaceID, mat_info, shot_yaw, 12.0, True))
 		if destruction_accepted:
 			if decoded is not None:
 				_diagnostic_contact_1513(
@@ -8400,11 +8970,9 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 	# destroyed by this fallback.
 	if catalog_hit is None and world_collision is not None:
 		point_candidate = None
-		if decoded is not None:
+		if decoded is not None and (decoded[0] - world_collision[0]).length <= 1.0e-4:
 			point_candidate = _catalog_candidate_for_native_identity_1513(
 				decoded[2], decoded[3], decoded[4], decoded[0])
-		if point_candidate is None:
-			point_candidate = _catalog_candidate_at_contact(world_collision[0])
 		if (point_candidate is not None and
 				_get_destr_authority().is_destroyed(
 					point_candidate[0], point_candidate[1],
@@ -8430,7 +8998,7 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 	if catalog_hit is None:
 		catalog_hit = _catalog_shot_intersection(
 			spaceID, start_pos, end_pos,
-			world_dist if world_collision is not None else None)
+			world_dist if world_collision is not None else None, diagnostic=diagnostic)
 	if catalog_hit is None:
 		if world_collision is not None:
 			_diagnostic_contact_1513(
@@ -8460,7 +9028,7 @@ def shot_world_distance(bigworld, spaceID, start_pos, end_pos, dir_vec,
 	mat_info = (True, point, normal,
 		mat_kind if mat_kind is not None else 73,
 		candidate[3], item_index, chunk_id)
-	if not _try_destroy_destructible(
+	if not measured('native.projectile.destroy', _try_destroy_destructible,
 			spaceID, mat_info, shot_yaw, 12.0, True):
 		_diagnostic_contact_1513(
 			'shot_native_reject', chunk_id, item_index,
