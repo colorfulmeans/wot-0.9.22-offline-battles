@@ -9134,7 +9134,7 @@ class BotRuntime(object):
         pair = getattr(self, '_navigation_crush_profiles', {}).get(int(bot_id))
         return pair[1 if direction < 0 else 0] if pair is not None else None
 
-    def _navigation_recovery_allowed(self, bot_id, position):
+    def _navigation_recovery_allowed(self, bot_id, position, neighbours=()):
         """Allow a pending-path backout only with local obstruction evidence."""
         navigator = self.navigator
         grid = getattr(navigator, 'grid', None)
@@ -9146,6 +9146,29 @@ class BotRuntime(object):
             except (AttributeError, TypeError, ValueError):
                 pass
         nav_state = getattr(navigator, 'bot_states', {}).get(int(bot_id), {})
+        fallback = nav_state.get('local_fallback') or {}
+        if (nav_state.get('navigation_status') == 'blocked' and
+                fallback.get('attempted', 0) > 0 and fallback.get('accepted') == 0 and
+                any(fallback.get(name, 0) > 0 for name in
+                    ('failed_edge', 'private_edge', 'corridor_rejected'))):
+            # A conclusively exhausted local fan beside a wreck is different
+            # from an ordinary pending search or live-vehicle queue. Admit the
+            # existing once-only backout; its full world/vehicle sweep still
+            # decides whether ANY movement is possible (Char 25 t, 020500).
+            own = self.states.get(int(bot_id), {})
+            length, width = own.get('half_length', 3.5), own.get('half_width', 1.7)
+            for peer in neighbours:
+                if peer.get('alive', True):
+                    continue
+                point = peer['position']
+                shape = peer.get('shape') or tank_collision.DEFAULT_SHAPE
+                reach = (math.hypot(length, width) + math.hypot(shape[0], shape[1]) +
+                         ai_driver.recovery_probe_distance(length))
+                if (_distance(position, point) <= reach and
+                        abs(position[1] - point[1]) <= max(
+                            (own.get('collision_shape') or tank_collision.DEFAULT_SHAPE)[3], shape[3])):
+                    combat_count('nav_wait_wreck_admitted')
+                    return True
         return bool(nav_state.get('hard_contact_episode') or
                     nav_state.get('blocked_step_tracker') or
                     self._hard_contact_grinds.get(int(bot_id), 0) > 0)
@@ -9318,7 +9341,7 @@ class BotRuntime(object):
                 state['navigation_stop_at_target'] = False
         remember = getattr(self.navigator, 'remember_runtime_target', None)
         if movement_intent and tuple(target) != selected_target and callable(remember):
-            remember(bot_id, position, goal, target, now)
+            remember(bot_id, position, goal, target, now, selected_target)
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         progress_receipt = getattr(self.navigator, 'driver_progress_target', None)
@@ -14421,12 +14444,12 @@ class BotRuntime(object):
                     'half_length': state.get('half_length', 3.5),
                     'half_width': state.get('half_width', 1.7),
                     'stopping_distance': stopping_distance,
-                    'navigation_recovery_allowed': self._navigation_recovery_allowed(
-                        state['id'], position),
                     'decision_horizon': decision_horizon,
                     'turn_speed_limit': (physics_params.get('rotSpd')
                                          if physics_params is not None else None),
                 }
+                decision_state['navigation_recovery_allowed'] = self._navigation_recovery_allowed(
+                    state['id'], position, decision_state['neighbours'])
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
                 if (reposition_order is not None and

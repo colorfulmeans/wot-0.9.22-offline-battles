@@ -1851,7 +1851,7 @@ class TerrainNavigator(object):
 	@staticmethod
 	def _clear_temporary_progress(state):
 		for name in ('local_fallback_episode', 'temporary_visited_cells',
-		             'temporary_visited_order', 'temporary_stalled'):
+		             'temporary_visited_order', 'temporary_stalled', 'runtime_path_corner'):
 			state.pop(name, None)
 
 	def _temporary_path_repeats(self, state, path, start=0):
@@ -1900,6 +1900,17 @@ class TerrainNavigator(object):
 				(_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
 				 self._local_fallback_passed(current, target, state))):
 			state['local_completed_target'] = (tuple(target), self._local_fallback_intent(goal, state))
+			corner = state.pop('runtime_path_corner', None)
+			if (corner is not None and corner['target'] == tuple(target) and
+					corner['key'] == state.get('path_key') and
+					corner['request'] == state.get('request_key') and
+					corner['index'] == state.get('index')):
+				# Arrival at a proved runtime bypass consumes its source vertex,
+				# not just the temporary point. Otherwise the next cached-path
+				# handoff offsets that same vertex again, often to the other side
+				# of a wreck (FV4005 / ST-I report 020500).
+				state['reached_path_corner'] = corner
+				combat_count('nav_runtime_corner_consumed')
 		if (target is not None and state.get('last_target', target) == target and
 				intent_matches and
 				_distance_2d(current, target) > WAYPOINT_ARRIVAL_RADIUS and
@@ -1945,6 +1956,7 @@ class TerrainNavigator(object):
 		if target is not None and state.get('last_target') == target:
 			# Pending-path bridging must not resurrect a consumed local point.
 			state.pop('last_target', None)
+		state.pop('runtime_path_corner', None)
 		state.pop('local_fallback_target', None)
 		state.pop('local_fallback_intent', None)
 		state.pop('local_fallback_start', None)
@@ -2023,10 +2035,17 @@ class TerrainNavigator(object):
 					state['local_target_progress_at'] = float(now)
 		return self._retained_local_fallback(bot_id, current, planned, now, state)
 
-	def remember_runtime_target(self, bot_id, current, goal, target, now):
+	def remember_runtime_target(self, bot_id, current, goal, target, now, selected=None):
 		"""Publish the final proved bypass, rather than its pre-offset A* vertex."""
 		state = self.bot_states.get(int(bot_id))
 		if state is not None:
+			state.pop('runtime_path_corner', None)
+			path = self.paths.get(state.get('path_key')) or ()
+			index = int(state.get('index', 0))
+			if (selected is not None and index + 1 < len(path) and
+					tuple(path[index]) == tuple(selected)):
+				state['runtime_path_corner'] = dict(key=state['path_key'], index=index,
+					point=tuple(selected), target=tuple(target), request=state.get('request_key'))
 			self._remember_local_fallback(target, state.get('planned_goal') or goal, state, current, now)
 			state['last_target'] = tuple(target)
 
@@ -2686,6 +2705,7 @@ class TerrainNavigator(object):
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
 			'local_retry_replans': state.get('local_retry_progress', {}).get('replans', 0),
 			'reached_path_corner': state.get('reached_path_corner'),
+			'runtime_path_corner': state.get('runtime_path_corner'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
@@ -3524,6 +3544,7 @@ class TerrainNavigator(object):
 		allow_pending_last_target = True
 		if request_changed:
 			state.pop('local_fallback_target', None)
+			state.pop('runtime_path_corner', None)
 			state.pop('local_target_retired', None)
 			state.pop('local_completed_target', None)
 			state.pop('reached_path_corner', None)
