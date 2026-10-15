@@ -217,6 +217,8 @@ class VisibleAdmissionTests(unittest.TestCase):
         # The renderer has moved; the incoming witness still owns the first
         # contact and native plate proof must use its matrices.
         own['z'] = -1.
+        b._local_pitch,b._local_roll=.3,-.2
+        own.update(pitch=.3,roll=-.2)
         b._records['bot:22']['presented_pose'] = dict(
             b._records['bot:22']['presented_pose'], z=8.)
         others = b._contact_tanks((0.,0.,-1.), PLAYER_SHAPE)
@@ -224,6 +226,7 @@ class VisibleAdmissionTests(unittest.TestCase):
             self.assertTrue(b._poll_local_ram_contact_episodes(object(),own,others))
         kwargs = b._queue_ram_contact_proof.call_args.kwargs
         self.assertEqual((0.,0.,0.), kwargs['own_pose'][:3])
+        self.assertEqual((0.,0.),kwargs['own_pose'][4:])
         self.assertEqual((0.,0.,6.8), kwargs['bot_pose'][:3])
 
     def test_neutral_stationary_pair_does_not_borrow_predicted_motor_speed(self):
