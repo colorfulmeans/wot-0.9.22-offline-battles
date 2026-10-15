@@ -1,0 +1,158 @@
+name: Recorder process Windows contracts
+on:
+  push:
+    branches: [test/096-recorder-process-20261001]
+    paths: [.github/workflows/recorder-process-windows-20261001.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  recorder:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: recorder-python3119-verified
+          run-id: 36818904303
+          github-token: ${{ github.token }}
+          path: runtime
+      - name: Restore exact reviewed source blobs
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive runtime/python-3.11.9-embed-amd64.zip -DestinationPath py311
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          $headers = @{Authorization="Bearer $env:GH_TOKEN"; Accept='application/vnd.github+json'}
+          $files = @{'bridge.py.gz'='40e422531851bcd6d85b580fe1cd169bd9430b2b';'replay_writer_process.py.gz'='0a2df96643a77c46acdccf56ca5b4cd5166b7498'}
+          foreach ($name in $files.Keys) {
+            $row = Invoke-RestMethod -Headers $headers -Uri ('https://api.github.com/repos/colorfulmeans/wot-0.9.22-offline-battles/git/blobs/' + $files[$name])
+            [IO.File]::WriteAllBytes((Join-Path $PWD $name), [Convert]::FromBase64String($row.content))
+          }
+          @'
+          import gzip,hashlib
+          from pathlib import Path
+          expected={'bridge.py':'7432d20be003a4686a1853d81c908b5e8cd498e916a5507a384d8847a9690158','replay_writer_process.py':'2aa2439d927671144a7a275f1054495cfc2e62eef9daca6d816087feb10e956d'}
+          for name,digest in expected.items():
+              data=gzip.decompress(Path(name+'.gz').read_bytes())
+              assert hashlib.sha256(data).hexdigest()==digest,name
+              Path(name).write_bytes(data)
+          print('Reviewed source digests match')
+          '@ | Set-Content -Encoding utf8 restore.py
+          & ./py311/python.exe -I restore.py
+          if ($LASTEXITCODE -ne 0) { throw 'Source mismatch' }
+      - name: Execute real Windows process and pipe contracts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          @'
+          import gzip,hashlib,importlib.util,json,os,struct,sys,tempfile,threading,time,unittest,zipfile
+          from pathlib import Path
+          spec=importlib.util.spec_from_file_location('rp',str(Path('bridge.py').resolve()))
+          rp=importlib.util.module_from_spec(spec);spec.loader.exec_module(rp)
+          helper=Path('replay_writer_process.py').resolve()
+          resource=Path('recorder-runtime.zip')
+          with zipfile.ZipFile('runtime/python-3.11.9-embed-amd64.zip') as src,zipfile.ZipFile(resource,'w',compression=zipfile.ZIP_DEFLATED) as out:
+              for info in src.infolist():out.writestr(info,src.read(info.filename))
+              out.write(helper,'replay_writer_process.py')
+          resource_bytes=resource.read_bytes()
+          rp.RUNTIME_DIGEST=hashlib.sha256(resource_bytes).hexdigest()
+          evidence=[]
+          def wait(predicate,timeout=15):
+              deadline=time.monotonic()+timeout
+              while not predicate():
+                  if time.monotonic()>deadline:raise AssertionError('wait timed out')
+                  time.sleep(.01)
+          def header():return dict(welcome={'type':'welcome'},start={'type':'battle_start'},snapshot={'type':'snapshot'},config={'map':'37_caucasus'})
+          def read(path):
+              with gzip.open(path,'rt',encoding='utf8') as f:return [json.loads(line) for line in f]
+          class Tests(unittest.TestCase):
+              def setUp(self):
+                  self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)/'测试 游戏'
+                  self.mod=self.root/'mods/0.9.22.0.1'/rp.PACKAGE_NAME;self.mod.parent.mkdir(parents=True)
+                  with zipfile.ZipFile(self.mod,'w') as z:z.writestr(rp.RUNTIME_RESOURCE,resource_bytes)
+                  self.env=os.environ.get('LOCALAPPDATA');os.environ['LOCALAPPDATA']=str(Path(self.tmp.name)/'缓存')
+                  self.recorders=[]
+              def tearDown(self):
+                  for r in self.recorders:
+                      if not r.done:r.abort();wait(lambda:r.done)
+                  if self.env is None:os.environ.pop('LOCALAPPDATA',None)
+                  else:os.environ['LOCALAPPDATA']=self.env
+                  self.tmp.cleanup()
+              def rec(self,mode=2,**kw):
+                  kw.setdefault('command_factory',lambda:rp.prepare_runtime(str(self.root)))
+                  r=rp.ProcessRecorder(str(self.root/'replays/offline'),mode,header(),**kw);self.recorders.append(r);return r
+              def finish(self,r):
+                  r.close();wait(lambda:r.done);self.assertFalse(r.failed,r.failure)
+                  evidence.append(dict(parent=os.getpid(),writer=r.pid,records=r.count,ack=r._ack,result=r.result,stats=r.stats()))
+                  self.assertNotEqual(os.getpid(),r.pid);self.assertEqual(r.count+1,r._ack)
+                  return read(r.result['path'])
+              def test_real_signed_runtime_chinese_path_sequence_and_mutation(self):
+                  r=self.rec();wait(lambda:r._ready)
+                  for i in range(120):
+                      x={'type':'snapshot','x':i,'label':'中文录像','items':[1,2]}
+                      r.append('wire',x,i/30);x['x']=-999;x['items'].append(9)
+                  rows=self.finish(r)
+                  self.assertEqual(list(range(120)),[x['data']['x'] for x in rows[1:-1]])
+                  self.assertEqual([1,2],rows[1]['data']['items'])
+                  self.assertEqual('中文录像',rows[1]['data']['label'])
+              def test_normal_startup_no_main_thread_wait(self):
+                  gate=threading.Event()
+                  def delayed():gate.wait(3);return rp.prepare_runtime(str(self.root))
+                  r=self.rec(command_factory=delayed);r.append('local',{'position':[1,2,3]},.1)
+                  before=time.monotonic();r.close();self.assertLess(time.monotonic()-before,.1)
+                  self.assertFalse(r.done);gate.set();wait(lambda:r.done);self.assertFalse(r.failed,r.failure)
+              def test_last_file_preserved_on_abort_and_replaced_on_complete(self):
+                  a=self.rec(1);a.append('local',{'position':[1,0,0]},0);self.finish(a);old=Path(a.path).read_bytes()
+                  b=self.rec(1);wait(lambda:b._ready);b.abort();wait(lambda:b.done)
+                  self.assertEqual(old,Path(a.path).read_bytes())
+                  c=self.rec(1);c.append('local',{'position':[3,0,0]},0)
+                  self.assertEqual([3,0,0],self.finish(c)[1]['data']['position'])
+              def test_older_finalizer_does_not_replace_new_last(self):
+                  a=self.rec(1);a.append('local',{'position':[1,0,0]},0);wait(lambda:a._ready)
+                  b=self.rec(1);b.append('local',{'position':[2,0,0]},0);self.finish(b);self.finish(a)
+                  self.assertNotEqual(a.result['path'],b.path)
+                  self.assertEqual([2,0,0],read(b.path)[1]['data']['position'])
+              def test_queue_full_is_nonblocking_failure(self):
+                  gate=threading.Event()
+                  def delay():gate.wait(3);return rp.prepare_runtime(str(self.root))
+                  r=self.rec(command_factory=delay,queue_packets=2);r.append('local',{},0)
+                  now=time.monotonic()
+                  with self.assertRaises(RuntimeError):r.append('local',{},0)
+                  self.assertLess(time.monotonic()-now,.1);gate.set();wait(lambda:r.done)
+                  self.assertTrue(r.failed);self.assertFalse(Path(r.path).exists())
+              def test_stalled_child_is_terminated(self):
+                  r=self.rec(command_factory=lambda:[sys.executable,'-I','-u','-c','import time;time.sleep(60)'],startup_timeout=.3)
+                  wait(lambda:r.done);self.assertTrue(r.failed);self.assertIn('timeout',r.failure)
+                  self.assertIsNotNone(r._process.poll())
+              def test_child_killed_does_not_publish(self):
+                  r=self.rec();wait(lambda:r._ready);r._process.kill();wait(lambda:r.done)
+                  self.assertTrue(r.failed);self.assertFalse(Path(r.path).exists())
+              def test_changed_runtime_resource_is_rejected(self):
+                  with zipfile.ZipFile(self.mod,'w') as z:z.writestr(rp.RUNTIME_RESOURCE,resource_bytes+b'bad')
+                  r=self.rec();wait(lambda:r.done);self.assertTrue(r.failed);self.assertIn('checksum',r.failure)
+              def test_changed_extracted_runtime_is_not_silently_replaced(self):
+                  cmd=rp.prepare_runtime(str(self.root));Path(cmd[-1]).write_bytes(b'changed')
+                  r=self.rec();wait(lambda:r.done);self.assertTrue(r.failed);self.assertIn('changed',r.failure)
+              def test_invalid_record_does_not_damage_old_last(self):
+                  a=self.rec(1);self.finish(a);old=Path(a.path).read_bytes()
+                  b=self.rec(1);b.append('wire',{'type':'battle_receipt','rewards':999},0)
+                  wait(lambda:b.done);self.assertTrue(b.failed);self.assertEqual(old,Path(a.path).read_bytes())
+          result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(Tests))
+          Path('artifact/windows-results.json').write_text(json.dumps(dict(python=sys.version,platform=sys.platform,ran=result.testsRun,errors=[str(t) for t,e in result.errors],failures=[str(t) for t,e in result.failures],evidence=evidence),indent=2),encoding='utf8')
+          raise SystemExit(not result.wasSuccessful())
+          '@ | Set-Content -Encoding utf8 windows_contracts.py
+          & ./py311/python.exe -I -u windows_contracts.py 2>&1 | Tee-Object artifact/windows-contracts.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Recorder process contract failure' }
+          Copy-Item bridge.py,replay_writer_process.py,windows_contracts.py artifact/
+          Copy-Item runtime/provenance.json artifact/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: recorder-process-windows-contracts
+          path: artifact/
+          retention-days: 30
+          if-no-files-found: error

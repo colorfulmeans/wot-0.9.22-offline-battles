@@ -1,0 +1,35 @@
+name: Recorder process runtime verification
+on:
+  push:
+    branches: [test/096-recorder-process-20261001]
+    paths: [.github/workflows/recorder-process-runtime-20261001.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Retrieve and inspect the unmodified official runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force artifact | Out-Null
+          $url = 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip'
+          $path = 'artifact/python-3.11.9-embed-amd64.zip'
+          Invoke-WebRequest -Uri $url -OutFile $path
+          $md5 = (Get-FileHash $path -Algorithm MD5).Hash.ToLower()
+          if ($md5 -ne '6d9aa08531d48fcc261ba667e2df17c4') { throw 'Official release digest mismatch' }
+          Expand-Archive -LiteralPath $path -DestinationPath embedded
+          $sig = Get-AuthenticodeSignature embedded/python.exe
+          if ($sig.Status -ne 'Valid') { throw ('Python executable signature: ' + $sig.Status) }
+          & ./embedded/python.exe -I -c "import sys,gzip,pickle,json,subprocess,msvcrt,hashlib; print(sys.version); print('required recorder stdlib imports OK')" | Tee-Object artifact/runtime-smoke.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime import check failed' }
+          @{source=$url; md5=$md5; sha256=(Get-FileHash $path -Algorithm SHA256).Hash.ToLower(); bytes=(Get-Item $path).Length; executable_signature=$sig.Status.ToString(); signer=$sig.SignerCertificate.Subject} | ConvertTo-Json | Set-Content -Encoding utf8 artifact/provenance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recorder-python3119-verified
+          path: artifact/
+          retention-days: 30
+          if-no-files-found: error
