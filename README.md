@@ -599,6 +599,19 @@ walls and beams still require a clear remainder and continue to block.
 Known test-build map identities remain readable so saved user route points
 are preserved when returning to the original navigation resources.
 
+Temporary Bot suspension uses the basic centre/front/rear/right/left footprint:
+any missing valid support point enables the detailed solver without a vehicle
+contact prerequisite. After accepted landing effects, all five restored points
+and a grounded pose return ownership to basic support without moving the hull
+or zeroing its velocities. Support samples are reused at an identical pose in
+the same tick. BOT SUPPORT MODE logs transitions and bounded per-point evidence.
+Player and Bot landing admission retains a damaging solver contact even if the
+final pose rebounds airborne; observed ground with no selected witness still
+reaches the existing Bot module-contact resolver. Landing and module-query logs
+distinguish physical admission, empty geometry results and actual HP changes.
+The impact module coefficient remains 25. Native-client gameplay and query cost
+still require a matching launcher playtest.
+
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
 assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage

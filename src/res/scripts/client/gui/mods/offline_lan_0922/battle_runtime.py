@@ -24023,6 +24023,10 @@ class BattleRuntime(object):
                 target.position = self._vector(landing_pose)
             contacts = environment_modules.collect_contacts(target, witnesses, normal, impact_speed, self._runtime.math)
         self._pending_landing_impacts.append(dict(impact_speed=impact_speed, module_contacts=contacts) if contacts else impact_speed)
+        from .native_input_diagnostics import write_json_record
+        write_json_record('PLAYER LANDING IMPACT', dict(speed=impact_speed, damage=damage,
+            witnesses=list(witnesses), normal=normal, landing_pose=landing_pose,
+            contacts=contacts, queued=len(self._pending_landing_impacts)))
         return damage
 
     def _apply_world_contact_impact(self, entity, trace, speed, yaw):
@@ -24470,11 +24474,9 @@ class BattleRuntime(object):
         self._local_right_flying = bool(solved['right_flying'])
         if solved['contact_count']:
             self._local_fall_armed = True
-        if (before_airborne and not self._local_airborne and
-                before_vertical_speed < 0.0):
-            impact_vertical = solved.get('impact_speed')
-            if impact_vertical is None:
-                impact_vertical = before_vertical_speed
+        impact_vertical = vehicle_physics.suspension_impact_velocity(
+            before_airborne, before_vertical_speed, solved)
+        if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
             if motion_pose is not None and float(dt) > 0.0:
                 velocity = (

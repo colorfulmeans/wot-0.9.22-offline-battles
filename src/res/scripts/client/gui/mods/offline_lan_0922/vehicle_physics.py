@@ -2001,6 +2001,21 @@ def _native_suspension_step(params, state, ground, dt, pseudo, support):
 	return result
 
 
+def suspension_impact_velocity(before_airborne, before_velocity, solved):
+	"""Do not lose a real contact impulse when the final pose rebounds airborne.
+
+	The solver records first-contact pre-impulse velocity. Final airborne state
+	alone cannot own landing admission: a side contact may already have absorbed
+	the damaging impulse before another point establishes sustained support.
+	"""
+	impact = solved.get('impact_speed')
+	if impact is not None and float(impact) < -FALL_SAFE_SPEED:
+		return float(impact)
+	if before_airborne and not solved.get('airborne') and before_velocity < 0.:
+		return float(impact) if impact is not None else float(before_velocity)
+	return None
+
+
 def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
 	'''Use the current numeric law; adapters retain every engine/effect owner.'''

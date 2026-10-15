@@ -65,23 +65,23 @@ class ContactSupportTests(unittest.TestCase):
         other,unused=self.scene(lambda x,z:0.)
         self.assertIsNone(other._suspension_params_for(11))
 
-    def test_old_flat_contact_does_not_repeat_edge_queries_without_a_new_shove(self):
+    def test_same_pose_in_one_tick_reuses_five_point_status(self):
         runtime,state=self.scene(lambda x,z:0.)
+        runtime._contact_now=1.
         with mock.patch.object(runtime,'_ground_probe_at',return_value=0.) as probe:
-            self.assertIsNone(runtime._suspension_params_for(11))
-            self.assertEqual(4,probe.call_count)
             for unused in range(20):
                 self.assertIsNone(runtime._suspension_params_for(11))
-            self.assertEqual(4,probe.call_count)
-            state['_contact_edge_check']=True
+            self.assertEqual(5,probe.call_count)
+            runtime._contact_now=2.
             self.assertIsNone(runtime._suspension_params_for(11))
-            self.assertEqual(8,probe.call_count)
+            self.assertEqual(10,probe.call_count)
 
-    def test_navigation_alone_does_not_enable_edge_dynamics(self):
+    def test_natural_support_loss_enables_without_contact(self):
         runtime,state=self.scene(lambda x,z:None)
         state.pop('_contact_dynamics')
-        self.assertIsNone(runtime._suspension_params_for(11))
-        self.assertNotIn('_edge_support_active',state)
+        with mock.patch('sys.stdout',new=io.StringIO()):
+            self.assertIsNotNone(runtime._suspension_params_for(11))
+        self.assertTrue(state['_edge_support_active'])
 
     def test_shoved_hull_tips_off_remaining_track_and_lands_below_deck(self):
         self.module = bots._load()
@@ -100,6 +100,7 @@ class ContactSupportTests(unittest.TestCase):
                 runtime._update_vertical_motion(state,.05,
                     (state['x'],state['y'],state['z']),state['yaw'])
                 tilted=tilted or abs(state.get('roll',0.))>.2
+        # One footprint point still lies over the original upper deck.
         self.assertTrue(state['_edge_support_active'])
         self.assertTrue(tilted)
         self.assertLess(state['y'],-15.)

@@ -2887,7 +2887,7 @@ class BotRuntime(object):
         if (self._suspension_ground_probe is None and
                 (self._wreck_ground_probe is None or
                  (self.states.get(bot_id, {}).get('alive', True) and
-                  not self.states.get(bot_id, {}).get('_contact_dynamics')))):
+                  not self.states.get(bot_id, {}).get('_edge_support_active')))):
             return None
         if bot_id in self._suspension_params:
             return self._suspension_params[bot_id]
@@ -2917,52 +2917,80 @@ class BotRuntime(object):
         self._suspension_params[bot_id] = params
         return params
 
-    def _contact_edge_support_needed(self, state):
-        """Escalate a shoved hull only when its real footprint loses support.
-
-        Keep the cheap owner on continuous terrain. Once an edge is proved,
-        retain angular dynamics through the fall, landing and wreck lifecycle.
-        A centre column alone is never proof of balance after an external push.
-        """
-        if state.get('_edge_support_active'):
-            return True
-        if not state.get('_contact_dynamics') or not state.get('grounded_once'):
-            return False
-        fresh_contact = state.pop('_contact_edge_check', False)
-        if not (fresh_contact or state.get('push_x') or state.get('push_z') or
-                state.get('_contact_forward_speed')):
-            # Historical contact alone is not an active external shove.
-            # Do not add four edge rays to every previously touched Bot for
-            # the rest of the battle. Fresh displacement/momentum rechecks it.
-            return False
-        if self._suspension_ground_probe is None and self._wreck_ground_probe is None:
-            return False
+    def _basic_support_status(self, state):
+        """Sample the same centre/front/rear/right/left footprint in its pose."""
         x, y, z = _position(state)
         yaw = _number(state.get('yaw'))
+        pitch = _number(state.get('terrain_pitch', state.get('pitch')))
+        roll = _number(state.get('roll'))
+        key = (getattr(self, '_contact_now', None), x, y, z, yaw, pitch, roll)
+        cached = state.get('_support_mode_sample')
+        if key[0] is not None and cached and cached[0] == key:
+            return cached[1]
+        length = max(1.5, _number(state.get('half_length'), 3.5))
+        width = max(1.0, _number(state.get('half_width'), 1.7))
         sine, cosine = math.sin(yaw), math.cos(yaw)
-        shape = state.get('collision_shape')
-        if not shape:
+        rows = []
+        for name, side, forward in (('centre',0.,0.), ('front',0.,length),
+                ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
+            ox, oy, oz = vehicle_physics.suspension_point_offset(
+                dict(x=side, y=0., z=forward), pitch, roll)
+            px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, y+oy
+            ground = self._ground_probe_at(px, pz, expected, expected+0.6)
+            gap = None if ground is None else expected-float(ground)
+            valid = gap is not None and -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN
+            rows.append(dict(name=name, x=px, z=pz, expected=expected,
+                             ground=ground, gap=gap, valid=valid))
+        state['_support_mode_sample'] = (key, rows)
+        return rows
+
+    def _contact_edge_support_needed(self, state):
+        """Any missing basic footprint point admits temporary detailed support."""
+        if state.get('_edge_support_active'):
+            return True
+        if not state.get('grounded_once') or self._physics_ground_probe is None:
             return False
-        probes = []
-        for side in (-float(shape[0]), float(shape[0])):
-            for forward in (-float(shape[1]), float(shape[1])):
-                ox, oy, oz = vehicle_physics.suspension_point_offset(
-                    dict(x=side, y=0.0, z=forward),
-                    _number(state.get('terrain_pitch', state.get('pitch'))),
-                    _number(state.get('roll')))
-                px, pz = x + cosine*ox + sine*oz, z - sine*ox + cosine*oz
-                ground = self._ground_probe_at(px, pz, y + oy)
-                probes.append((px, pz, y + oy, ground))
-        missing = any(value is None or expected - value >
-                      vehicle_physics.GROUND_FOLLOW_MIN
-                      for unused_x, unused_z, expected, value in probes)
+        rows = self._basic_support_status(state)
+        missing = any(not row['valid'] for row in rows)
         if missing:
             state['_edge_support_active'] = True
-            sys.stdout.write('[Offline LAN 0.9.22] BOT EDGE SUPPORT %s\n' %
-                json.dumps(dict(bot=state['id'], position=(x,y,z),
-                    probes=probes, columns='x,z,expected,ground',
-                    reason='external_contact_footprint_loss')))
+        self._report_support_mode(state, rows, 'enable' if missing else 'sample')
         return missing
+
+    def _report_support_mode(self, state, rows, phase):
+        now = _number(getattr(self, '_contact_now', None))
+        if phase == 'sample' and now < state.get('_support_mode_log_at', -1.e30):
+            return
+        state['_support_mode_log_at'] = now+2.
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT SUPPORT MODE', dict(round=self.round_id,
+            bot=state['id'], phase=phase, detailed=bool(state.get('_edge_support_active')),
+            position=_position(state), valid_count=sum(bool(r['valid']) for r in rows),
+            total=5, points=rows, airborne=bool(state.get('airborne')),
+            vertical_speed=state.get('vertical_speed'),
+            reason=('point_support_lost' if phase == 'enable' else
+                    'all_points_restored' if phase == 'disable' else 'support_observation')))
+
+    def _release_detailed_support(self, state):
+        """Hand back only after admitted landing effects, without moving the hull."""
+        if BOT_FULL_SUPPORT_ENABLED or not state.get('_edge_support_active'):
+            return False
+        rows = self._basic_support_status(state)
+        if state.get('airborne') or not all(row['valid'] for row in rows):
+            self._report_support_mode(state, rows, 'sample')
+            return False
+        state.pop('_edge_support_active', None)
+        self._suspension_params.pop(int(state['id']), None)
+        # Solver memory must not suppress the basic four-point pose owner.
+        # Keep the accepted pose and all velocities at the ownership boundary.
+        for name in ('_spring_ground_memory', '_pseudo_ground_memory',
+                     '_suspension_ground_plane', '_suspension_support_gradient'):
+            state.pop(name, None)
+        state['pose_sample'] = None
+        state['_basic_slope_basis_yaw'] = state.get('yaw', 0.)
+        state.pop('_legacy_straddle_reference_y', None)
+        self._report_support_mode(state, rows, 'disable')
+        return True
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -7581,6 +7609,12 @@ class BotRuntime(object):
                 if payload.get('fire') and not (state.get('critical') or {}).get('fire'):
                     state['_environment_fire'] = True
                 state['critical'] = _canonical_critical(payload)
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT LANDING IMPACT', dict(round=self.round_id, bot=state['id'],
+            speed=impact_speed, damage=damage, witnesses=list(witnesses), normal=normal,
+            ground_observed=ground_observed, module_resolver=callable(self.impact_contacts_resolver),
+            contacts=contacts if (witnesses or ground_observed) and callable(self.impact_contacts_resolver) else [],
+            critical=state.get('critical'), position=_position(state)))
         before_health = int(state.get('health', maximum))
         health = max(0, before_health - damage)
         totals = getattr(self, '_environment_fall_totals', {})
@@ -7990,11 +8024,9 @@ class BotRuntime(object):
             state['_suspension_ground_plane'] = current_plane
         else:
             state.pop('_suspension_ground_plane', None)
-        if (before_airborne and not state['airborne'] and
-                before_vertical_speed < 0.0):
-            impact_vertical = solved.get('impact_speed')
-            if impact_vertical is None:
-                impact_vertical = before_vertical_speed
+        impact_vertical = vehicle_physics.suspension_impact_velocity(
+            before_airborne, before_vertical_speed, solved)
+        if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
             if motion_pose is not None and float(step) > 0.0:
                 velocity = (
@@ -8013,6 +8045,8 @@ class BotRuntime(object):
                 params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
                 _number(state.get('yaw')), _number(state.get('pitch')), _number(state.get('roll')))
             state['_landing_contact_normal'] = (current_plane or {}).get('normal', (0., 1., 0.))
+            state['_landing_ground_observed'] = bool(
+                solved.get('contact_count') or solved.get('touched_contact_count'))
             self._apply_bot_landing_impact(
                 state, impact_speed, normal_impact=True)
         elif not before_airborne and state['airborne']:
@@ -8048,9 +8082,11 @@ class BotRuntime(object):
                                 suspension_motion_pose=None):
         """Commit suspension and landing only after the full turret sweep."""
         if self._turret_motion_probe is None:
-            return self._integrate_vertical_motion(
-                state, step, tick_pose, attempted_yaw,
-                suspension_motion_pose)
+            blocked = self._integrate_vertical_motion(
+                state, step, tick_pose, attempted_yaw, suspension_motion_pose)
+            if not blocked:
+                self._release_detailed_support(state)
+            return blocked
         before = self._turret_state_pose(state)
         snapshot = self._snapshot_bot_suspension_state(state)
         pending = []
@@ -8094,6 +8130,8 @@ class BotRuntime(object):
             state['_landing_contact_normal'] = normal
             state['_landing_ground_observed'] = ground_observed
             self._apply_bot_landing_impact(state, impact_speed, normal_impact)
+        if not blocked:
+            self._release_detailed_support(state)
         return blocked
 
     def _apply_suspension_slope_slide(self, state, step):
