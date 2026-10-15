@@ -183,11 +183,14 @@ PyObject *WOT_CDECL destr_box_geometry(PyObject *,PyObject *args) {
                 if(visits>131072)throw Unsupported();
                 rectangles.push_back(bounds);
             }
-            const auto cells=profile.run([&rectangles](){
-                std::set<d::Cell> result;
+            const auto cells=profile.run([&rectangles,visits](){
+                std::vector<d::Cell> result;result.reserve(visits);
                 for(const auto &bounds:rectangles)
                     for(int x=bounds[0];x<=bounds[1];++x)
-                        for(int z=bounds[2];z<=bounds[3];++z)result.emplace(x,z);
+                        for(int z=bounds[2];z<=bounds[3];++z)result.emplace_back(x,z);
+                // One rectangle already has the required lexicographic order.
+                if(rectangles.size()>1){std::sort(result.begin(),result.end());
+                    result.erase(std::unique(result.begin(),result.end()),result.end());}
                 return result;
             });
             OwnedTuple result(cells.size());Py_ssize_t i=0;

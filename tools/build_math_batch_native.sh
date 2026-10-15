@@ -5,7 +5,9 @@ PORT_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUTPUT="$PORT_ROOT/native/offline_math_batch_native.pyd"
 
 build_bridge() {
+    python3 "$PORT_ROOT/tools/verify_native_payload.py" --header "$PORT_ROOT/build/native_build_identity.h"
     i686-w64-mingw32-g++ -m32 -std=c++17 -O3 -msse2 -mfpmath=sse \
+        -include "$PORT_ROOT/build/native_build_identity.h" \
         -fno-fast-math -ffp-contract=off \
         -fno-builtin-sin -fno-builtin-cos -fno-builtin-pow \
         -fno-builtin-hypot -fno-builtin-fmod \
@@ -41,6 +43,7 @@ build_bridge() {
                     ;;
             esac
         done
+    python3 "$PORT_ROOT/tools/verify_native_payload.py" --verify "$OUTPUT"
 }
 
 if command -v i686-w64-mingw32-g++ >/dev/null 2>&1 &&
@@ -52,7 +55,7 @@ else
             set -eu
             apt-get update >/dev/null
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-                g++-mingw-w64-i686 binutils-mingw-w64-i686 >/dev/null
+                python3 g++-mingw-w64-i686 binutils-mingw-w64-i686 >/dev/null
             /bin/sh /src/tools/build_math_batch_native.sh
         '
 fi

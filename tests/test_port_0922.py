@@ -512,6 +512,15 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual(b'native geometry', (
                 Path(overlay) / 'mods' / '0.9.22.0.1' /
                 packager.NATIVE_MATH_FILENAME).read_bytes())
+            # A native-only update must get a new install identity even when
+            # Python bytecode, server and all other binaries are unchanged.
+            native_math.write_bytes(b'updated native geometry')
+            next_overlay, unused_archive = packager._write_client_overlay(
+                str(root), str(package), str(checksum), 'a' * 64,
+                str(graphs), str(PORT_ROOT / 'foliage'), str(PORT_ROOT / 'destructibles'),
+                native_bridge_source=str(native_bridge), native_math_source=str(native_math),
+                worker_starter_source=str(worker_starter), server_executable_source=str(server_executable))
+            self.assertNotEqual(Path(overlay).name, Path(next_overlay).name)
             packed_xml = _load_tool('packed_xml')
             for filename, preferences_leaf in packager.PREFERENCES_CONFIGS:
                 packaged_config = (

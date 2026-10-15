@@ -217,6 +217,7 @@ def _write_client_overlay(dist_root, package_path, checksum_path, digest,
         os.path.dirname(__file__), 'dist', 'server', SERVER_FILENAME)
     native_payloads = (
         ('native instance guard bridge', native_bridge_source),
+        ('native geometry module', native_math_source),
         ('simulation worker starter', worker_starter_source),
         ('Windows LAN server', server_executable_source),
     )
@@ -723,6 +724,9 @@ def _stage_depot_style_ui(staging_root):
 def build():
     _validate_python()
     repo_root = os.path.abspath(os.path.dirname(__file__))
+    sys.path.insert(0, os.path.join(repo_root, 'tools'))
+    from verify_native_payload import verify_file
+    verify_file(repo_root, os.path.join(repo_root, 'native', NATIVE_MATH_FILENAME))
     source_root = os.path.join(repo_root, 'src')
     dist_root = os.path.join(repo_root, 'dist')
     if not os.path.isdir(dist_root):

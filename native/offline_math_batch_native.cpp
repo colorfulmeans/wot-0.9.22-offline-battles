@@ -37,6 +37,14 @@ struct PyMethodDef {
 #include "navigation_query_stage.h"
 #include "offline_simulation.h"
 #include "offline_simulation_diagnostics.h"
+#ifndef WOT_HOST_PYTHON
+#ifndef WOT_NATIVE_SOURCE_STAMP
+#error Build the shipping module through tools/build_math_batch_native.sh
+#endif
+// Retained in the shipping PE even after symbols are stripped. Packaging
+// verifies this against the current source tree, including every .inc file.
+static const char native_source_stamp[] __attribute__((used)) = WOT_NATIVE_SOURCE_STAMP;
+#endif
 #ifdef WOT_HOST_PYTHON
 #include <time.h>
 #endif

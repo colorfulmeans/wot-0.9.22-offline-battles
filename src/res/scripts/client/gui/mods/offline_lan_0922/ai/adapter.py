@@ -6,7 +6,7 @@ movement command, and optional fire intent.  The caller remains responsible
 for visibility, collision probes, and applying commands to any client entity.
 """
 
-from gui.mods.offline_lan_0922.worker_diagnostics import observed
+from gui.mods.offline_lan_0922.worker_diagnostics import observed, count as combat_count
 from gui.mods.offline_lan_0922 import tank_collision
 
 import math
@@ -692,18 +692,26 @@ class BotAdapter(object):
         # and completed-recovery gate; this requests a path, never a bypass
         # of ground, collision or friendly-vehicle admission.
         native_blockage = bool(state.get('native_rotation_refused'))
-        # Once a proved physical blockage admitted this recovery episode, a
-        # failed follower may retry after another completed recovery. Losing
-        # instantaneous contact does not prove that the hull escaped the pocket.
+        # A checked local planner can reject every exit before native motion
+        # is attempted. EMIL II repeatedly backed into the same pocket without
+        # either a current vehicle contact or a realised rotation veto.
+        planning_blockage = recovery_mode == 'blocked'
+        # Retain an admitted blockage through checked reverse/pivot legs even
+        # before its first request. Brief lost contact is not a cleared pocket.
         active_replan = bool(self.driver.states.get(bot_id, {}).get(
-            'recovery_replan_episode', {}).get('issued'))
-        if ((vehicle_blockage or native_blockage or active_replan) and movement_intent and not navigation_wait and
+            'recovery_replan_episode'))
+        if ((vehicle_blockage or native_blockage or planning_blockage or active_replan) and movement_intent and not navigation_wait and
                 not local.get('navigation_recovery') and recovery_mode in (
                 'blocked', 'pivot_recovery', 'reverse_turn', 'short_forward_escape',
-                'short_reverse_escape', 'forward_escape', 'avoid') and
-                self.driver.recovery_replan(bot_id, position,
-                    float(state.get('half_length', 3.5)))):
-            local['navigation_replan'] = True
+                'short_reverse_escape', 'forward_escape', 'avoid')):
+            requested = self.driver.recovery_replan(bot_id, position,
+                float(state.get('half_length', 3.5)))
+            episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode')
+            if planning_blockage and episode is not None:
+                episode['cause'] = 'local_blocked'
+            if requested:
+                local['navigation_replan'] = True
+                combat_count('driver_blockage_replan_requests')
         target_yaw = float(local['target_yaw'])
         turn = float(local['turn'])
         dx = float(face_position[0]) - float(position[0])

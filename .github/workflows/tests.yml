@@ -172,6 +172,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p test_port_0922_worker_diagnostics.py
           python3 -m unittest discover -s tests -p test_port_0922_battle_visibility.py
+          python3 -m unittest discover -s tests -p test_native_payload_identity.py
   test:
     needs: windows-server
     runs-on: ubuntu-latest

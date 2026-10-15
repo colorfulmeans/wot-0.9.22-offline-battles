@@ -157,7 +157,7 @@ def record(method, args, reason='unsupported_input', error=None):
         if method == 'driver_geometry':
             profile = (method, operation if operation in (0, 1, 9, 10) else -1)
         elif method == 'destr_box_geometry':
-            profile = (method, operation if operation in (0, 1, 2) else -1)
+            profile = (method, operation if operation in (0, 1, 2, 3) else -1)
         _write_record({'method': method, 'operation': operation, 'reason': reason,
                         'native_profile': {'family': profile[0], 'opcode': profile[1]},
                         'inputs': evidence, 'callers': callers, 'exception_type': error_type,

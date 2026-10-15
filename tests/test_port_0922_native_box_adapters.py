@@ -44,6 +44,9 @@ class NativeBoxAdapterTests(unittest.TestCase):
             diagnostics.record('destr_box_geometry', (1, ()))
             self.assertEqual({'family': 'destr_box_geometry', 'opcode': 1},
                              write.call_args.args[0]['native_profile'])
+            diagnostics.record('destr_box_geometry', (3, ((-9, -9, 14, 15),)))
+            self.assertEqual({'family': 'destr_box_geometry', 'opcode': 3},
+                             write.call_args.args[0]['native_profile'])
 
     def test_custom_vector_and_helper_protocols_do_not_enter_native(self):
         box = ((0., 0., 0.), ((1., 0., 0.), (0., 1., 0.), (0., 0., 1.)), None)
