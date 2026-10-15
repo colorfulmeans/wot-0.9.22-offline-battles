@@ -217,7 +217,7 @@ jobs:
           -w /work python:2.7.18
           sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
-        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.0.wotmod
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.1.wotmod
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py

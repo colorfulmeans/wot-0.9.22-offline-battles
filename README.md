@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.0** — [Release notes](docs/releases/v0.10.0.md).
+Current release: **v0.10.1** — [Release notes](docs/releases/v0.10.1.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.10.0-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.1-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -590,7 +590,7 @@ Deleting the last small waiting place restores a three-field ordinary parent gat
 Bot tactics editor: [English user guide](docs/bot-editor-guide-en.md).
 
 
-### 0.10.0 native performance integration
+### 0.10.1 native performance integration
 
 The integration keeps the 0.10.0 launcher operations, route editor, tactics,
 parking, recovery, artillery, customization and server route-progress rules.
@@ -626,5 +626,6 @@ and Bot publication/echo timings distinguish real launch waiting from the
 supplemental lane queue. These measurements do not directly measure GPU time.
 
 Use a launcher built from the integration commit so its native module, client
-and server match. This branch is a test candidate; it does not replace the
-published 0.10.0 release or establish a measured frame-time improvement.
+and server match. Version 0.10.1 ships this integration. Performance depends on the map, vehicle
+count and hardware; component benchmarks do not establish a universal
+frame-time improvement.
