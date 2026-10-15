@@ -1633,6 +1633,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_isolation_log_capped',
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
 			'g_offh_destr_contact_diagnostic_times',
+			'g_offh_destr_crush_gate_times',
 			'g_offh_destr_spatial_revision',
 			'g_offh_destr_spatial_published_revision',
 			'g_offh_destr_spatial_global_generation',
@@ -5449,6 +5450,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				kind in ('fragile', 'structure', 'falling') and
 				_stock_crushable_1513(
 					mat_info, kinetic_speed, td, candidate[5]))
+			_crush_gate_diagnostic_1513(candidate, vel, kinetic_speed, td,
+				physical_crushable, cap_crushable, contact_candidate, now)
 			if (kinetic_speed is not None and not contact_candidate and
 					not physical_crushable):
 				# A real frame sweep at sufficient physical speed keeps the old
@@ -8041,6 +8044,40 @@ def _registered_shot_exit_1513(chunkID, itemIndex, matKind, filename,
 	# More than one matching interval is not an exact module/instance answer;
 	# do not jump over unknown static geometry between disjoint boxes.
 	return exits[0] if len(exits) == 1 else None
+
+
+def _crush_gate_diagnostic_1513(candidate, speed, cap, td,
+		physical, kinetic, contact, now):
+	'''Bounded per-module evidence; diagnostics never choose a collision result.'''
+	if candidate[4] != 'structure':
+		return
+	key = tuple(candidate[:3])
+	times = globals().setdefault('g_offh_destr_crush_gate_times', {})
+	if now < times.get(key, -1.0e30) + 2.0:
+		return
+	if len(times) >= 4096:
+		times.clear()
+	times[key] = now
+	try:
+		import AreaDestructibles
+		import DestructiblesCache
+		import json
+		# Read the already-proved resource directly. A diagnostic lookup must
+		# never quarantine an item or alter collision admission on failure.
+		desc = AreaDestructibles.g_cache.getDescByFilename(candidate[3]) or {}
+		health = (desc.get('modules') or {}).get(candidate[2], {}).get('health')
+		mass = float(_descriptor_value(_descriptor_value(td, 'physics'), 'weight'))
+		scaled = (None if health is None else
+			DestructiblesCache.scaledDestructibleHealth(candidate[5], health))
+		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE %s\n' %
+			json.dumps(dict(identity=key, resource=candidate[3],
+				health=health, scaled_health=scaled, scale=candidate[5], mass=mass,
+				speed=speed, cap=cap, physical=bool(physical),
+				kinetic=bool(kinetic), hull_contact=bool(contact),
+				energy=0.5*mass*speed*speed*0.00015,
+				cap_energy=None if cap is None else 0.5*mass*cap*cap*0.00015)))
+	except Exception as error:
+		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE unavailable %s\n' % error)
 
 
 def _stock_crushable_1513(mat_info, vel, td, item_scale=None):

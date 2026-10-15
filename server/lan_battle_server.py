@@ -10132,6 +10132,8 @@ class BattleState:
             if previous_fingerprint is not None:
                 # Exact retransmission is an idempotent success. Reusing one
                 # operation identity for different damage is a conflict.
+                _server_log('RAM AUDIT duplicate round=%s key=%s identical=%s hp_applied=False' % (
+                    self.round_id, key, previous_fingerprint == fingerprint))
                 return previous_fingerprint == fingerprint
             bot = self.bot_states.get(bot_id)
             target = (self.bot_states.get(target_id) if target_kind == "bot"
@@ -10251,6 +10253,12 @@ class BattleState:
                     damage_to_target, contact_seq, bot.get('health'),
                     (target.get('health') if target_kind == 'bot' else
                      target.health)))
+            _server_log('RAM AUDIT commit round=%s key=%s motion_seq=%s '
+                'bot=%s target=%s:%s damage_bot=%s damage_target=%s '
+                'track_contacts_bot=%s track_contacts_target=%s track_speed=%s' % (
+                    self.round_id, key, (ram_contact or {}).get('bot_ram_motion_seq'),
+                    bot_id, target_kind, target_id, damage_to_bot, damage_to_target,
+                    track_bot, track_target, impact_speed))
             reason = 2
 
             bot_combat_before = self._bot_combat_signature(bot)

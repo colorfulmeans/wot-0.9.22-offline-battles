@@ -1014,6 +1014,41 @@ def suspension_pose_params(params, pitch, roll, pitch_velocity=0.0,
 	return result
 
 
+class FootprintSupport(float):
+	'''A fresh patch hit, retaining its actual local force application point.'''
+	def __new__(cls, height, side, forward, world_point=None):
+		value = float.__new__(cls, height)
+		value.offset = (float(side), float(forward))
+		value.world_point = world_point
+		return value
+	def __reduce__(self):
+		return (FootprintSupport,
+			(float(self), self.offset[0], self.offset[1], self.world_point))
+
+
+def suspension_contact_params(params, ground):
+	'''Move patch-supported constraints to the proven hit, never its carrier.'''
+	if (params.get('_patch_contacts_applied') or
+			len(ground) != len(params['springs'])):
+		return params
+	changed = False
+	springs = []
+	for spring, height in zip(params['springs'], ground):
+		offset = getattr(height, 'offset', None)
+		if offset is not None and offset != (0.0, 0.0):
+			spring = dict(spring)
+			spring['x'] += offset[0]
+			spring['z'] += offset[1]
+			changed = True
+		springs.append(spring)
+	if not changed:
+		return params
+	result = dict(params)
+	result['springs'] = tuple(springs)
+	result['_patch_contacts_applied'] = True
+	return result
+
+
 def suspension_footprint_support(params, point, ground, memory, yaw, query,
 		support_gradient=None, point_height=None, spring=None, reference_height=None,
 		pitch=0.0, roll=0.0):
@@ -1077,7 +1112,9 @@ def suspension_footprint_support(params, point, ground, memory, yaw, query,
 				continue
 			value = query(px, pz, low, high)
 			if value is not None and low - 0.01 <= float(value) <= high + 0.01:
-				return float(value) - delta
+				# Returning only a height at the nominal carrier invents an
+				# outboard lever arm on ledges. Preserve the real patch point.
+				return FootprintSupport(value, side, forward, (px, pz))
 	return ground
 
 
@@ -1596,13 +1633,16 @@ def retained_ground_contact(point, ground, memory, maximum_distance,
 			for value in (x, z, distance)):
 		return None, None
 	if ground is not None:
+		contact = ground
 		try:
 			ground = float(ground)
 		except (TypeError, ValueError, OverflowError):
 			return None, None
 		if math.isnan(ground) or math.isinf(ground):
 			return None, None
-		return ground, (x, z, ground, x, z, 0.0, False)
+		if isinstance(contact, FootprintSupport) and contact.world_point is not None:
+			x, z = contact.world_point
+		return (contact if isinstance(contact, FootprintSupport) else ground), (x, z, ground, x, z, 0.0, False)
 	# A remembered column cannot supply support after the surrounding
 	# contacts no longer establish a terrain plane. This is especially
 	# important at ledges: rotation can otherwise repeatedly recover the
@@ -1945,7 +1985,8 @@ def _native_suspension_step(params, state, ground, dt, pseudo, support):
 			 params['fixed_step'], params['constraint_iterations']),
 			springs, contacts,
 			tuple(state.get(key, 0.0) for key in _SUSPENSION_RESULT_KEYS[:6]),
-			(tuple(ground), pseudo), (dt, support),
+			(tuple(float(value) if isinstance(value, FootprintSupport) else value
+				for value in ground), pseudo), (dt, support),
 			(GRAVITY, CONTACT_PENETRATION, AIRBORNE_ANGULAR_DAMPING,
 			 AIRBORNE_ANGULAR_SPEED_LIMIT, FREEZE_ACCEL_EPSILON,
 			 FREEZE_VEL_EPSILON, FREEZE_ANG_ACCEL_EPSILON,
@@ -1963,6 +2004,7 @@ def _native_suspension_step(params, state, ground, dt, pseudo, support):
 def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
 	'''Use the current numeric law; adapters retain every engine/effect owner.'''
+	params = suspension_contact_params(params, ground_heights)
 	result = _native_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights, support_vertical_velocity)
 	if result is not None:

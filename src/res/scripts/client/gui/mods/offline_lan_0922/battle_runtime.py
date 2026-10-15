@@ -19463,7 +19463,7 @@ class BattleRuntime(object):
                 'pitch': self._local_pitch, 'roll': self._local_roll,
                 'motion_skip_flags': VEHICLE_SKIP_FLAGS,
                 'spring_columns':
-                    'x,z,minimum,maximum,direct,support,flat_maximum,layers',
+                    'x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset',
                 'spring_layer_columns': 'height,normal_y,verdict',
                 'spring_probes': self._local_suspension_probe_trace,
             }))
@@ -19513,7 +19513,7 @@ class BattleRuntime(object):
                     'roll_velocity': self._local_suspension_roll_velocity,
                     'plane': self._local_ground_plane,
                     'spring_columns':
-                        'x,z,minimum,maximum,direct,support,flat_maximum,layers',
+                        'x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset',
                     'spring_layer_columns': 'height,normal_y,verdict',
                     'spring_probes': self._local_suspension_probe_trace,
                 }))
@@ -19574,7 +19574,7 @@ class BattleRuntime(object):
                     trace['native_contact_evidence_error'] = str(error)
             trace['motion_skip_flags'] = VEHICLE_SKIP_FLAGS
             trace['spring_columns'] = (
-                'x,z,minimum,maximum,direct,support,flat_maximum,layers')
+                'x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset')
             trace['spring_layer_columns'] = 'height,normal_y,verdict'
             trace['spring_probes'] = getattr(
                 self, '_local_suspension_probe_trace', ())
@@ -22572,6 +22572,7 @@ class BattleRuntime(object):
         overlapping = set()
         closing_gaps = set()
         newly_armed = set()
+        release_evidence = {}
         live_own = own
         for other in others:
             own = live_own
@@ -22645,6 +22646,16 @@ class BattleRuntime(object):
                 # released after the clear hulls are no longer approaching.
                 if bot_id in previous and relative_normal < 0.0:
                     closing_gaps.add(bot_id)
+                elif bot_id in previous:
+                    release_evidence[bot_id] = dict(
+                        reason='clear_nonapproaching', vertical_overlap=vertical,
+                        relative_normal=relative_normal,
+                        player_pose=tuple(own[k] for k in ('x','y','z','yaw')),
+                        bot_pose=tuple(other[k] for k in ('x','y','z','yaw')),
+                        player_shape=own['shape'], bot_shape=other['shape'],
+                        player_velocity=(own['vx'],own.get('vy',0.),own['vz']),
+                        bot_velocity=(other['vx'],other.get('vy',0.),other['vz']),
+                        motion_seq=other.get('bot_ram_motion_seq'))
                 continue
             overlapping.add(bot_id)
             impact_contact = tank_collision.obb_impact_contact(
@@ -22724,6 +22735,11 @@ class BattleRuntime(object):
                 newly_armed.add(bot_id)
         self._local_ram_episode_contacts = frozenset(
             (previous & (overlapping | closing_gaps)) | newly_armed)
+        for bot_id in sorted(previous - set(self._local_ram_episode_contacts)):
+            from .native_input_diagnostics import write_json_record
+            evidence = release_evidence.get(bot_id, dict(reason='peer_not_in_contact_roster'))
+            evidence.update(bot=bot_id, last_receipt_seq=self._local_ram_seq)
+            write_json_record('RAM EPISODE RELEASE', evidence)
         return bool(newly_armed)
 
     def _predict_bot_contact_velocity(self, bot_id, state, shape, params):
@@ -23759,7 +23775,8 @@ class BattleRuntime(object):
                 point, value, memory[index],
                 params['contact_memory_distance'], support_gradient)
             probe_trace.append((x, z, minimum_y, maximum_y, direct, value,
-                                flat_maximum_y, layers))
+                                flat_maximum_y, layers,
+                                getattr(value, 'offset', None)))
             result.append(value)
         self._local_spring_ground_memory = memory
         self._local_suspension_probe_trace = tuple(probe_trace)
@@ -24288,6 +24305,7 @@ class BattleRuntime(object):
         ground = self._local_suspension_ground_samples(
             position, yaw, probe_height=probe_height,
             support_gradient=support_gradient, sweep_drop=sweep_drop)
+        params = vehicle_physics.suspension_contact_params(params, ground)
         pseudo_ground = self._local_suspension_pseudo_ground_samples(
             position, yaw, probe_height=probe_height,
             support_gradient=support_gradient, sweep_drop=sweep_drop,
@@ -24365,6 +24383,17 @@ class BattleRuntime(object):
         if timings is not None:
             timings['local_solver'] = timings.get('local_solver', 0.0) + max(
                 0.0, _PROFILE_CLOCK() - solver_started)
+        now = self._clock()
+        if (any(value is None or getattr(value, 'offset', None) is not None
+                for value in ground) and
+                now >= getattr(self, '_next_local_edge_support_log', 0.0)):
+            self._next_local_edge_support_log = now + 2.0
+            from .native_input_diagnostics import write_json_record
+            write_json_record('LOCAL EDGE SUPPORT', dict(position=position,
+                before=physics_state, solved=solved,
+                spring_columns='x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset',
+                spring_probes=self._local_suspension_probe_trace,
+                applied_springs=[(p['x'],p.get('y',0.),p['z']) for p in params['springs']]))
         values = (
             solved['height'], solved['vertical_velocity'],
             solved['pitch'], solved['pitch_velocity'],

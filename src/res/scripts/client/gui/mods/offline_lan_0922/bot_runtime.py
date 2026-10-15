@@ -2873,10 +2873,13 @@ class BotRuntime(object):
         return True
 
     def _suspension_params_for(self, bot_id):
-        """Select detailed support, or the explicit Test8L basic-ground path."""
-        if not BOT_FULL_SUPPORT_ENABLED:
-            # Keep this before both activation and the cache. Neither contact,
-            # motion, nor death may re-enable expensive spring integration.
+        """Keep basic driving; a shoved ledge hull uses detailed contacts."""
+        state = self.states.get(int(bot_id), {})
+        edge_support = (not BOT_FULL_SUPPORT_ENABLED and
+                        self._contact_edge_support_needed(state))
+        if not BOT_FULL_SUPPORT_ENABLED and not edge_support:
+            # Keep this before activation/cache: contact on continuous ground
+            # alone does not enable the more expensive spring integration.
             self._report_suspension_trial(
                 'disabled: Test8L basic ground for live Bots and wrecks')
             return None
@@ -2913,6 +2916,46 @@ class BotRuntime(object):
             self._report_suspension_trial('active')
         self._suspension_params[bot_id] = params
         return params
+
+    def _contact_edge_support_needed(self, state):
+        """Escalate a shoved hull only when its real footprint loses support.
+
+        Keep the cheap owner on continuous terrain. Once an edge is proved,
+        retain angular dynamics through the fall, landing and wreck lifecycle.
+        A centre column alone is never proof of balance after an external push.
+        """
+        if state.get('_edge_support_active'):
+            return True
+        if not state.get('_contact_dynamics') or not state.get('grounded_once'):
+            return False
+        if self._suspension_ground_probe is None and self._wreck_ground_probe is None:
+            return False
+        x, y, z = _position(state)
+        yaw = _number(state.get('yaw'))
+        sine, cosine = math.sin(yaw), math.cos(yaw)
+        shape = state.get('collision_shape')
+        if not shape:
+            return False
+        probes = []
+        for side in (-float(shape[0]), float(shape[0])):
+            for forward in (-float(shape[1]), float(shape[1])):
+                ox, oy, oz = vehicle_physics.suspension_point_offset(
+                    dict(x=side, y=0.0, z=forward),
+                    _number(state.get('terrain_pitch', state.get('pitch'))),
+                    _number(state.get('roll')))
+                px, pz = x + cosine*ox + sine*oz, z - sine*ox + cosine*oz
+                ground = self._ground_probe_at(px, pz, y + oy)
+                probes.append((px, pz, y + oy, ground))
+        missing = any(value is None or expected - value >
+                      vehicle_physics.GROUND_FOLLOW_MIN
+                      for unused_x, unused_z, expected, value in probes)
+        if missing:
+            state['_edge_support_active'] = True
+            sys.stdout.write('[Offline LAN 0.9.22] BOT EDGE SUPPORT %s\n' %
+                json.dumps(dict(bot=state['id'], position=(x,y,z),
+                    probes=probes, columns='x,z,expected,ground',
+                    reason='external_contact_footprint_loss')))
+        return missing
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -7779,6 +7822,7 @@ class BotRuntime(object):
             params['contact_reference_plane'] = previous_plane
         ground = self._suspension_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
+        params = vehicle_physics.suspension_contact_params(params, ground)
         pseudo_ground = self._suspension_pseudo_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
         current_plane = self._suspension_world_ground_plane(
@@ -7849,6 +7893,17 @@ class BotRuntime(object):
         solved = vehicle_physics.damper_suspension_step(
             params, physics_state, ground, step, pseudo_ground,
             support_vertical_speed)
+        moment = float(getattr(self, '_contact_now', None) or 0.0)
+        if (state.get('_edge_support_active') and
+                moment >= state.get('_next_edge_support_log', -1.e30)):
+            state['_next_edge_support_log'] = moment + 2.0
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT EDGE DYNAMICS', dict(round=self.round_id,
+                bot=state['id'], position=position, before=physics_state, solved=solved,
+                spring_columns='local_x,local_y,local_z,height,patch_offset',
+                springs=[(p['x'],p.get('y',0.),p['z'],height,getattr(height,'offset',None))
+                    for p,height in zip(params['springs'],ground)],
+                pseudo_ground=pseudo_ground))
         values = (
             solved['height'], solved['vertical_velocity'],
             solved['pitch'], solved['pitch_velocity'],

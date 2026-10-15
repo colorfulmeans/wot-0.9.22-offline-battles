@@ -695,9 +695,14 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		# second destroy attempt, while every unrelated solid still fails closed.
 		cleared = _catalog_soft_static_path(
 			spaceID, segment_start, segment_end, collision, vel, td,
-			[_WORLD_SOFT_RECAST_BUDGET])
+			[_WORLD_SOFT_RECAST_BUDGET],
+			allow_kinetic_first=allow_kinetic, kinetic_speed=kinetic_speed)
 		_diagnostic_static_recast_1513(cleared)
-		return cleared is True
+		# Another lane may meet a different live house module. Keep that
+		# exact kinetic candidate for the hull/catalog commit seam instead of
+		# turning it into a hard wall after the first lane succeeded. Unknown
+		# solids still fail closed; this read-only branch never destroys them.
+		return 'kinetic' if cleared == 'kinetic' else cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
 	# keeps the 0.2 s native callback window out of the hot path and still
 	# requires the exact accepted identity and a filtered query of the whole ray.
