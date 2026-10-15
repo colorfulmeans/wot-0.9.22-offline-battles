@@ -31,6 +31,7 @@ jobs:
           --pattern 'test_port_0922_ai.py'
           --pattern 'test_port_0922_eroded_fallback_cycle.py'
           --pattern 'test_port_0922_initial_allocation.py'
+          --pattern 'test_port_0922_initial_navigation_handoffs.py'
           --pattern 'test_port_0922_navigation*.py'
           --pattern 'test_port_0922_driver*.py'
           --pattern 'test_port_0922_traffic*.py'

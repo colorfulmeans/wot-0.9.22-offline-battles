@@ -586,6 +586,13 @@ Retain only the separate support/contact-point corrections in the Bot runtime.
 Do not restore cross-order recovery memory, first-refusal route retirement,
 new local bypass ownership or arrival handbraking as incidental fixes.
 Audit the original failure and its existing retry/route progression first.
+Focused corrections on that baseline preserve local alignment/safety braking
+when strategy requests forward travel, avoid contact escape for a merely
+tangent parallel hull, and include ordinary forward `advance` in the existing
+20-second authored-gate retry budget. Actual overlap and movement into a peer
+retain the original checked escape; holds and explicit team commands remain
+outside the route-stall timer. No global recovery state or replacement route
+law is introduced.
 Known test-build map identities remain readable so saved user route points
 are preserved when returning to the original navigation resources.
 

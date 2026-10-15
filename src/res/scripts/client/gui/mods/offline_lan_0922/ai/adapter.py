@@ -88,6 +88,7 @@ class BotAdapter(object):
                     'peer_team': peer.get('team'),
                     'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
+                    'depth': overlap[2],
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
@@ -597,6 +598,15 @@ class BotAdapter(object):
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
+        if side_contact:
+            # Touching a parallel hull does not obstruct travel along its side.
+            # Keep the original escape for penetration or a goal into the peer;
+            # do not turn a clear route (or a deliberate hold) into a reversal.
+            into_contact = (
+                (target[0]-position[0])*contact['normal'][0] +
+                (target[2]-position[2])*contact['normal'][1])
+            side_contact = (contact['depth'] > 1.e-9 or
+                            into_contact < -tank_collision.POSITION_SLOP)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
@@ -748,8 +758,11 @@ class BotAdapter(object):
         while difference < -math.pi:
             difference += 2.0 * math.pi
         if (throttle_override is not None and
+                not result['brake'] and
                 recovery_mode in ('drive', 'arrived') and
                 abs(difference) < 0.65):
+            # Strategic travel requests cannot override local turn alignment,
+            # arrival or safety braking. The driver owns pedal arbitration.
             result['throttle'] = max(
                 -1.0, min(1.0, float(throttle_override)))
         if throttle_override is not None and float(throttle_override) == 0.0:

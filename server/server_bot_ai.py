@@ -2504,10 +2504,13 @@ class BotPlanner(object):
         route_id = str(order.get('route_id') or '')
         if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture') or
                 order.get('team_command') or
-                order.get('throttle_override') is not None or
+                (order.get('throttle_override') is not None and
+                 _number(order.get('throttle_override')) <= 0.0) or
                 not self._route_donor_eligible(bot)):
             self._wreck_route_progress.pop(bot_id, None)
             return
+        # Normal advance carries a positive travel override. It is still the
+        # same authored gate attempt, with the original retry/skip budget.
         point = _point(state)
         goal = _point(order.get('move_position') or {})
         physical_block = bool(state.get('route_wreck_blocked'))
