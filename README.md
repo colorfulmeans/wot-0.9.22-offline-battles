@@ -593,6 +593,9 @@ tangent parallel hull, and include ordinary forward `advance` in the existing
 retain the original checked escape; holds and explicit team commands remain
 outside the route-stall timer. No global recovery state or replacement route
 law is introduced.
+The retained physical boundary also applies the existing ground-exit proof to
+upper hull rays, so leaving a slope is not rejected as an upper wall; real
+walls and beams still require a clear remainder and continue to block.
 Known test-build map identities remain readable so saved user route points
 are preserved when returning to the original navigation resources.
 
