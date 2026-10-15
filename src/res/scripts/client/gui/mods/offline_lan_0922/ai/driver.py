@@ -1024,6 +1024,7 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			state['native_translation_stalled'] = False
 			state.pop('short_translation_escape', None)
 			state.pop('translation_escape', None)
 			state['translation_progress_at'] = state['clock']
@@ -1065,6 +1066,13 @@ class LocalDriver(object):
 		if displacement >= 0.08 or 'translation_progress_at' not in state:
 			state['translation_progress_at'] = state['clock']
 		translation_stalled = state['clock'] - state['translation_progress_at'] >= 8.0
+		# A nearby path connector is not arrival at the tactical destination.
+		# Keep physical no-progress evidence across route/withdraw goal changes
+		# after a realised native refusal. Neither an elapsed timer alone nor
+		# reaching the actual destination may manufacture a recovery command.
+		native_translation_stalled = bool(rotation_refused and translation_stalled and
+			_distance(position, pocket_goal) > arrival)
+		state['native_translation_stalled'] = native_translation_stalled
 		# Local targets may alternate around a prop while the tank makes no
 		# progress toward its actual order. Do not credit that orbit as travel.
 		objective_stalled = False
@@ -1103,7 +1111,8 @@ class LocalDriver(object):
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
-		if target_distance <= arrival and not objective_stalled:
+		if (target_distance <= arrival and not objective_stalled and
+				not native_translation_stalled):
 			state.pop('short_translation_escape', None)
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
@@ -1160,7 +1169,7 @@ class LocalDriver(object):
 
 		timing_phase = state['recovery_timing_phase']
 		threshold = self.stuck_seconds + timing_phase * 0.42
-		if objective_stalled:
+		if objective_stalled or native_translation_stalled:
 			state['stuck_time'] = max(state['stuck_time'], threshold)
 		if state['recovery_time'] > 0.0:
 			state['recovery_time'] = max(0.0, state['recovery_time'] - step)

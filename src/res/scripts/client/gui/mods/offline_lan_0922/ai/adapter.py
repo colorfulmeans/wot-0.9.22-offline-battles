@@ -692,12 +692,17 @@ class BotAdapter(object):
         recovery_mode = local.get('recovery_mode', 'drive')
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))
-        # Once a proved vehicle blockage admitted this recovery episode, a
+        # A realised native-world rotation refusal is also physical blockage,
+        # even without a neighbouring vehicle. Reuse the same distance/time
+        # and completed-recovery gate; this requests a path, never a bypass
+        # of ground, collision or friendly-vehicle admission.
+        native_blockage = bool(state.get('native_rotation_refused'))
+        # Once a proved physical blockage admitted this recovery episode, a
         # failed follower may retry after another completed recovery. Losing
         # instantaneous contact does not prove that the hull escaped the pocket.
         active_replan = bool(self.driver.states.get(bot_id, {}).get(
             'recovery_replan_episode', {}).get('issued'))
-        if ((vehicle_blockage or active_replan) and movement_intent and not navigation_wait and
+        if ((vehicle_blockage or native_blockage or active_replan) and movement_intent and not navigation_wait and
                 not local.get('navigation_recovery') and recovery_mode in (
                 'blocked', 'pivot_recovery', 'reverse_turn', 'short_forward_escape',
                 'short_reverse_escape', 'forward_escape', 'avoid') and

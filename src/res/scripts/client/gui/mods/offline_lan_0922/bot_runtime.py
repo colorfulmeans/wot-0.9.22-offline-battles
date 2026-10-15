@@ -6980,7 +6980,8 @@ class BotRuntime(object):
         driver_state = getattr(getattr(getattr(self, 'adapter', None), 'driver', None), 'states', {}).get(int(state['id']), {})
         driver_trace = {key: driver_state.get(key) for key in (
             'clock', 'stuck_time', 'recovery_time', 'recovery_count',
-            'alignment_target', 'heading_progress_yaw', 'best_heading_error')}
+            'alignment_target', 'heading_progress_yaw', 'best_heading_error',
+            'translation_progress_at', 'native_translation_stalled')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
