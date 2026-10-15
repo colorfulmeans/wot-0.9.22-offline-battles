@@ -16,6 +16,7 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
     )
 
     def drive(self, driver, position, target, dt=.1, intent=True):
+        driver._state(11, 0, position)['recovery_count'] = 2
         return driver.drive(11, 0, position, 0., 0., dt, target, (),
                             lambda *unused: False, movement_intent=intent,
                             progress_target=target, recovery_goal=(80., 0., 80.))
@@ -59,6 +60,7 @@ class ConnectorProgressMemoryTests(unittest.TestCase):
     def test_alternating_failed_legs_eventually_take_proved_short_exit(self):
         for position, local, goal in self.cases:
             driver = LocalDriver()
+            driver._state(11, 0, position)['recovery_count'] = 2
             commands = []
             for tick in range(150):
                 # Net-zero shuffling renews translation samples but makes no

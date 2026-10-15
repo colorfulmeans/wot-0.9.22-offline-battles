@@ -1083,21 +1083,31 @@ class LocalDriver(object):
 			# destination was selected. Remember its best distance/alignment in
 			# this physical pocket instead of giving the same failed leg a new
 			# lease on every handoff (Jagdpanther II / FV4005 report 011855).
-			history = state.get('objective_progress_history')
-			if (history is None or _distance(position, history['origin']) >
-					2.0 * own_half_length + arrival):
-				history = dict(origin=tuple(position), entries=[])
-				state['objective_progress_history'] = history
-			progress = next((entry for entry in history['entries']
-				if _distance(entry['goal'], progress_target) <= 2.0), None)
+			# Ordinary traffic alignment and a reached path connector retain the
+			# mature driver behaviour. Reuse failed-leg memory only after two
+			# completed recovery attempts, like the existing recovery pocket.
+			history = None
+			if state['recovery_count'] >= 2 and target_distance > arrival:
+				history = state.get('objective_progress_history')
+				if (history is None or _distance(position, history['origin']) >
+						2.0 * own_half_length + arrival):
+					history = dict(origin=tuple(position), entries=[])
+					state['objective_progress_history'] = history
+				progress = next((entry for entry in history['entries']
+					if _distance(entry['goal'], progress_target) <= 2.0), None)
+			else:
+				progress = state.get('objective_progress')
+				if progress is not None and _distance(progress['goal'], progress_target) > 2.0:
+					progress = None
 			distance = _distance(position, progress_target)
 			if progress is None:
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'at': state['clock']}
-				history['entries'].append(progress)
-				# Bound per-actor bookkeeping even when a producer keeps issuing
-				# distinct goals without moving the hull out of this pocket.
-				del history['entries'][:-32]
+				if history is not None:
+					history['entries'].append(progress)
+					# Bound per-actor bookkeeping even when a producer keeps issuing
+					# distinct goals without moving the hull out of this pocket.
+					del history['entries'][:-32]
 			elif distance <= arrival:
 				# A reached destination is a legitimate stop, not a timed stall.
 				progress.update(best=distance, at=state['clock'])
@@ -1127,8 +1137,7 @@ class LocalDriver(object):
 					if error + 0.002 < progress['alignment_best']:
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
-			objective_stalled = (target_distance > arrival and
-				state['clock'] - progress['at'] >= 8.0)
+			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		if (target_distance <= arrival and not objective_stalled and
 				not native_translation_stalled):
 			state.pop('short_translation_escape', None)
