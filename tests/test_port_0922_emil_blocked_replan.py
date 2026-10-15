@@ -45,3 +45,13 @@ class EmilBlockedReplanTests(unittest.TestCase):
                                                      lambda *args: True)
             self.assertFalse(command.get('navigation_replan', False))
         self.assertNotIn('recovery_replan_episode', adapter.driver.states[2])
+
+    def test_neighbour_scene_does_not_gain_isolated_planner_admission(self):
+        adapter, state, order = self.scene()
+        state['neighbours'] = [dict(id=3, team=1, position=(6., .26, 15.117),
+                                    yaw=0., half_length=3.6, half_width=1.7)]
+        for tick in range(300):
+            command = adapter._drive_order_controls(2, state, state['position'], order,
+                                                     lambda *args: False)
+            self.assertFalse(command.get('navigation_replan', False))
+        self.assertNotIn('recovery_replan_episode', adapter.driver.states[2])

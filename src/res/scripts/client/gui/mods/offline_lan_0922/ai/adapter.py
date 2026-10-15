@@ -694,12 +694,14 @@ class BotAdapter(object):
         native_blockage = bool(state.get('native_rotation_refused'))
         # A checked local planner can reject every exit before native motion
         # is attempted. EMIL II repeatedly backed into the same pocket without
-        # either a current vehicle contact or a realised rotation veto.
-        planning_blockage = recovery_mode == 'blocked'
-        # Retain an admitted blockage through checked reverse/pivot legs even
-        # before its first request. Brief lost contact is not a cleared pocket.
-        active_replan = bool(self.driver.states.get(bot_id, {}).get(
-            'recovery_replan_episode'))
+        # either a current vehicle contact or a realised rotation veto. Keep
+        # crowded traffic under its established contact/traffic admission.
+        planning_blockage = recovery_mode == 'blocked' and not state.get('neighbours')
+        # Only the isolated-planner admission persists before its first request.
+        # Preserve the existing contact episode's issued-request requirement.
+        replan_episode = self.driver.states.get(bot_id, {}).get('recovery_replan_episode', {})
+        active_replan = bool(replan_episode.get('issued') or
+                             replan_episode.get('cause') == 'local_blocked')
         if ((vehicle_blockage or native_blockage or planning_blockage or active_replan) and movement_intent and not navigation_wait and
                 not local.get('navigation_recovery') and recovery_mode in (
                 'blocked', 'pivot_recovery', 'reverse_turn', 'short_forward_escape',
