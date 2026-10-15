@@ -2026,6 +2026,34 @@ def canonicalize_reversible_routes(graph, routes):
     return routes
 
 
+def refine_prague_railway_corners(graph, routes, legacy):
+    """Retain the reviewed valley gate without a hook beside solid carriages.
+
+    These #1513 points are graph centres, not new movement permissions. The
+    train-aware raster must admit them and every replacement chord must still
+    have a bounded path over the validated links. Keep the north hold within
+    ten metres of the original reviewed gate and mirror both teams exactly.
+    """
+    first = next(route for route in routes['1'] if route['id'] == 'valley')
+    points = [list(point) for point in first['waypoints']]
+    expected = ((62.,162.),(62.,158.),(110.,166.),(154.,126.),(126.,90.))
+    if tuple(tuple(point[:2]) for point in points[3:8]) != expected:
+        raise UnsafeBakeInputError('Prague railway corner contract changed')
+    points[3:5] = [[62.,170.,bool(points[3][2] or points[4][2])]]
+    points.insert(6, [154.,110.,False])
+    for point in points:
+        unused_cell,index = _graph_state(graph,point[:2])
+        if graph['heights_mm'][index] is None:
+            raise UnsafeBakeInputError('Prague railway corner is blocked')
+    if legacy._route_maximum_detour(graph,points) > legacy.MAX_ROUTE_DETOUR:
+        raise UnsafeBakeInputError('Prague railway corner loses path continuity')
+    first['waypoints'] = points
+    second = next(route for route in routes['2'] if route['id'] == 'valley')
+    second['waypoints'] = [list(point) for point in reversed(points)]
+    graph['bake']['railway_corner_refinement'] = 'prague-valley-north-and-exit-v1'
+    return routes
+
+
 SPAWN_SLOTS_PER_TEAM = 15
 # This is the pinned retail-like formation law: a wide, shallow line
 # deployed toward the map interior.  The former five-column, three-row block
@@ -2772,7 +2800,10 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
                 routes = original_bake_routes(graph, adjusted)
                 routes = expand_stationary_routes(
                     graph, routes, adjusted['bases'], legacy)
-                return canonicalize_reversible_routes(graph, routes)
+                routes = canonicalize_reversible_routes(graph, routes)
+                if map_name == '114_czech':
+                    routes = refine_prague_railway_corners(graph,routes,legacy)
+                return routes
             legacy.bake_tactical_routes = bake_routes
             legacy.validate_graph = lambda graph, unused_config: original_validate(graph, safe_config(graph))
             # Lakeville's decoded water volumes intentionally split off the
