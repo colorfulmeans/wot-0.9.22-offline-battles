@@ -119,6 +119,159 @@ class RearLimitedAimTests(unittest.TestCase):
 
 
 class RearTraverseRuntimeTests(unittest.TestCase):
+    def progress_attempt(self, identity=('human', 2)):
+        state = self.state
+        state['_rear_aim_episode'] = dict(
+            identity=identity, target_id=2, start=0., fire_seq=0)
+        state['_rear_motion_lease'] = dict(
+            identity=identity, start=0., origin=(0., 0., 0.))
+        order = dict(target_id=2, combat_mode='advance', move_position=(0., 0., 100.))
+        return state, order, {2: dict(alive=True, position=(0., 0., -100.))}
+
+    def record_progress(self, state, identity, error):
+        state['_rear_laying_progress'] = dict(
+            identity=identity, time_us=0, error=error)
+
+    def test_healthy_slew_extends_both_attempts_but_not_original_start(self):
+        state, order, targets = self.progress_attempt()
+        for now, error in ((1., 3.), (5., 2.), (9., 1.)):
+            self.record_progress(state, ('human', 2), error)
+            self.assertEqual('engage', self.runtime._rear_laying_order(
+                state, order, targets, now)['combat_mode'])
+        for key in ('_rear_aim_episode', '_rear_motion_lease'):
+            self.assertEqual(0., state[key]['start'])
+            self.assertEqual(9., state[key]['progress_at'])
+        self.assertFalse(state['_rear_motion_blocked'])
+        self.assertNotIn('_rear_laying_progress', state)
+
+    def test_stalled_slew_still_releases_after_eight_seconds_without_progress(self):
+        state, order, targets = self.progress_attempt()
+        for now, error in ((1., 3.), (5., 2.), (9., 1.), (13., 1.), (17., 1.)):
+            self.record_progress(state, ('human', 2), error)
+            result = self.runtime._rear_laying_order(state, order, targets, now)
+        self.assertIs(order, result)
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertTrue(state['_rear_motion_blocked'])
+        self.assertGreater(state['_rear_aim_retry'][1], 17.)
+
+    def test_small_oscillations_and_stale_receipts_cannot_keep_laying_alive(self):
+        for replay in (False, True):
+            with self.subTest(replay=replay):
+                state, order, targets = self.progress_attempt()
+                self.record_progress(state, ('human', 2), 2.)
+                self.runtime._rear_laying_order(state, order, targets, 1.)
+                for now in (3., 5., 7.):
+                    if replay:
+                        self.record_progress(state, ('human', 2), 1.99)
+                    self.runtime._rear_laying_order(state, order, targets, now)
+                self.assertIs(order, self.runtime._rear_laying_order(
+                    state, order, targets, 8.))
+                self.assertTrue(state['_rear_motion_blocked'])
+
+    def test_switched_target_progress_cannot_renew_original_motion_attempt(self):
+        state, order, targets = self.progress_attempt()
+        self.record_progress(state, ('human', 2), 3.)
+        self.runtime._rear_laying_order(state, order, targets, 1.)
+        state['_rear_aim_episode'] = dict(
+            identity=('bot', 3), target_id=3, start=2., fire_seq=0)
+        order['target_id'] = 3
+        targets[3] = dict(alive=True, position=(0., 0., -100.))
+        for now, error in ((3., 2.), (5., 1.), (7., .5), (9., .1)):
+            self.record_progress(state, ('bot', 3), error)
+            result = self.runtime._rear_laying_order(state, order, targets, now)
+        self.assertIs(order, result)
+        self.assertTrue(state['_rear_motion_blocked'])
+        self.assertNotIn('progress_at', state['_rear_motion_lease'])
+
+    def test_python_and_native_clamped_stops_do_not_report_completed_laying(self):
+        for native in (False, True):
+            with self.subTest(native=native):
+                state, order, targets = self.progress_attempt()
+                self.aim(native=native)
+                progress = state['_rear_laying_progress']
+                self.assertEqual(('human', 2), progress['identity'])
+                self.assertGreater(progress['error'], 1.5)
+                self.assertFalse(state['gun_aligned'])
+
+    def test_dead_target_releases_even_a_progressing_attempt(self):
+        state, order, targets = self.progress_attempt()
+        self.record_progress(state, ('human', 2), 3.)
+        self.runtime._rear_laying_order(state, order, targets, 1.)
+        targets[2]['alive'] = False
+        self.record_progress(state, ('human', 2), 2.)
+        self.assertIs(order, self.runtime._rear_laying_order(state, order, targets, 5.))
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertNotIn('_rear_hull_aim', state)
+
+    def test_final_diagnostics_stamp_the_current_target_separately(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        state, unused_order, unused_targets = self.progress_attempt()
+        state.update(target_kind='bot', target_id=3,
+                     _motion_stall_pending=dict(firing=dict(
+                         aim_intent=dict(target_kind='human', target_id=2))))
+        self.runtime._sample_time_us = 123456
+        with mock.patch.object(native_input_diagnostics, 'write_json_record') as write:
+            self.runtime._finish_motion_stall(state, False, False, (0., 0., 0.), 1.)
+        trace = write.call_args[0][1]
+        self.assertEqual(2, trace['firing']['aim_intent']['target_id'])
+        self.assertEqual(3, trace['firing_final']['target_id'])
+        self.assertEqual('after_contacts', trace['firing_final']['stage'])
+        self.assertEqual(123456, trace['firing_final']['sample_time_us'])
+
+    def test_slow_t110e4_turret_finishes_rear_aim_before_route_resumes(self):
+        for kind in ('human', 'bot'):
+            for side in (-1., 1.):
+                with self.subTest(kind=kind, side=side):
+                    self.slow_rear_aim(kind, side)
+
+    def slow_rear_aim(self, kind, side):
+        descriptor = harness._combat_descriptor(
+            turret_yaw_limits=(-math.pi / 2, math.pi / 2),
+            turret_speed=math.radians(18.), reload_time=.5, clip=(1, 0.))
+        runtime = self.fixture.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), 0.),
+            visibility_probe=lambda *unused: True, firing_lane_probe=lambda *unused: True,
+            baked_graph=harness._flat_open_graph())
+        start = dict(self.fixture.start)
+        if kind == 'bot':
+            start['bots'] = list(start['bots']) + [dict(id=12, team=1, slot=0, name='Target')]
+        runtime.battle_start(start)
+        state = runtime.states[11]
+        # The installed arc forces a real 180-degree slew through the front;
+        # neither wrapping through the rear gap nor speeding it up is legal.
+        state.update(turret_yaw=-side * math.pi / 2, aim_yaw=-side * math.pi / 2)
+        point = (side, 0., -100.)
+        target_id = 2 if kind == 'human' else 12
+        orders = [dict(
+            id=11, team=2, combat_mode='advance', target_kind=kind, target_id=target_id,
+            move_position=(0., 0., 100.), aim_position=point, face_position=point,
+            fire_range=500., fire_allowed=True, throttle_override=None)]
+        if kind == 'bot':
+            runtime.states[12].update(x=point[0], y=point[1], z=point[2])
+            orders.append(dict(id=12, team=1, combat_mode='hold',
+                target_id=None, move_position=point, fire_allowed=False,
+                throttle_override=0.))
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=orders))
+        player = harness._admit_player(dict(
+            id=2, team=1, alive=True, x=point[0], y=point[1], z=point[2]))
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 321):
+                runtime.update(.05, frame * .05,
+                               players=[player] if kind == 'human' else [])
+                self.assertLessEqual(abs(state['turret_yaw']), math.pi / 2)
+                if state['fire_seq']:
+                    self.assertTrue(state['gun_aligned'])
+                    break
+        self.assertGreater(state['fire_seq'], 0,
+                           'healthy turret slew was cancelled by the eight-second route budget')
+        self.assertGreater(frame * .05, 8.)
+        self.assertLess(abs(state['z']), .1)
+
     def test_switching_rear_enemies_cannot_renew_stationary_movement_budget(self):
         state=self.state
         state['_rear_motion_lease']=dict(start=0.,origin=(0.,0.,0.))
@@ -296,7 +449,7 @@ class RearTraverseRuntimeTests(unittest.TestCase):
                     0., 2.9, -.1, .1, -.2, 1., 'drive', True,
                     combat_mode=mode, movement_intent=True))
 
-    def test_rear_episode_holds_route_until_shot_or_absolute_deadline(self):
+    def test_rear_episode_holds_route_until_shot_or_no_progress_deadline(self):
         state = self.state
         target = dict(id=2, kind='human', position=(0., 0., -100.), alive=True)
         order = dict(target_id=2, combat_mode='advance', move_position=(100., 0., 0.),

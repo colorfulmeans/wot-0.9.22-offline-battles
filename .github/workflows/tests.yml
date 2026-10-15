@@ -43,6 +43,7 @@ jobs:
           --pattern 'test_port_0922_parking*.py'
           --pattern 'test_port_0922_withdrawal*.py'
           --pattern 'test_port_0922_gun_angle*.py'
+          --pattern 'test_port_0922_rear_limited_aim.py'
           --pattern 'test_port_0922_wait_parking.py'
           --pattern 'test_port_0922_server_bot_ai.py'
 
