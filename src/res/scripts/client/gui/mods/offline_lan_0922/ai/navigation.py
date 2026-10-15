@@ -1912,6 +1912,18 @@ class TerrainNavigator(object):
 			if not clear and not deferred:
 				state['local_target_end_reason'] = 'unsafe'
 				self._record_local_retry_refusal(state, current, goal, now)
+				# A conclusive local veto must reach both target admission and
+				# this Bot's path search. Otherwise a cached/replanned route can
+				# immediately return the same rejected connector (Windows292
+				# IS-7 wreck orbit and Tortoise backtracking). Never publish a
+				# shared terrain failure, or treat deferred proof as an obstacle.
+				state['local_target_retired'] = (tuple(target), float(now) + MACRO_STALL_SECONDS)
+				edge = self.grid._edge_cells_for_segment(current, target)
+				if edge is not None:
+					self.bot_failed_edges.setdefault(int(bot_id), {})[edge] = (
+						float(now) + BLOCKED_STEP_EDGE_TTL, BLOCKED_STEP_EDGE_PENALTY)
+					self._cancel_bot_searches(bot_id)
+				combat_count('nav_local_refusal_retired')
 			else:
 				remaining = _distance_2d(current, target)
 				best = state.get('local_target_best_distance', remaining)
@@ -3057,7 +3069,8 @@ class TerrainNavigator(object):
 		self._clear_temporary_progress(state)
 		state.pop('local_completed_target', None)
 		state.pop('reached_path_corner', None)
-		state.pop('local_target_retired', None)
+		# A new private job is not evidence that its rejected local leg cleared.
+		# Keep the finite retirement until expiry or a genuine request change.
 		for name in ('last_target', 'local_fallback_target', 'controlled_shallow_target',
 				'macro_escape_target', 'macro_escape_until', 'pending_since'):
 			state.pop(name, None)
