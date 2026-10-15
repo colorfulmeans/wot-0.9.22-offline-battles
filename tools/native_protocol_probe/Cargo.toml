@@ -1,0 +1,13 @@
+[package]
+name = "wot-native-protocol-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wg-toolkit = { path = ".deps/wg-toolkit/wg-toolkit" }
+blowfish = "0.9"
+crypto-common = "0.1"
+rsa = "0.8"
+serde_json = "1"
+sha1 = "0.10"
