@@ -2029,6 +2029,38 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights, support_vertical_velocity)
 
 
+def suspension_contact_recovery(params, before, after, ground, pseudo_ground,
+		previous_plane, position, motion_pose):
+	"""Admit depenetration at a stationary, previously accepted support layer.
+
+	A tipped body can already intersect its remaining ledge contacts. Rejecting
+	their projection as a new climb restores the same penetration forever.
+	A translated step or an unproved upper layer still belongs to the guard.
+	"""
+	if previous_plane is None or motion_pose is None:
+		return False
+	if math.hypot(position[0]-motion_pose[0], position[2]-motion_pose[2]) > .02:
+		return False
+	lift = float(after['height']) - float(before['height'])
+	if lift <= 0.0:
+		return False
+	rotation = _suspension_rotation(before['pitch'], before['roll'])
+	allowance = 0.0
+	for points, heights in ((params['springs'], ground),
+			(params.get('pseudo_contacts', ()), pseudo_ground)):
+		for point, height in zip(points, heights):
+			if height is None:
+				continue
+			# Use the accepted layer at the body origin. This is deliberately
+			# bounded to a local ledge, not extrapolated into an upper storey.
+			expected = suspension_plane_height(previous_plane, position[0], position[2])
+			if expected is None or abs(float(height)-expected) > .2:
+				continue
+			penetration = float(height) - _rigid_point_height(before, point, rotation)
+			allowance = max(allowance, penetration)
+	return allowance > .62 and lift <= allowance + .02
+
+
 def _reference_damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights=None, support_vertical_velocity=0.0):
 	'''Advance the model-origin ten-spring heave/pitch/roll trial.

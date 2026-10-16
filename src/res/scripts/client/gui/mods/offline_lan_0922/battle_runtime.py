@@ -28,7 +28,7 @@ from gui.mods.offline_lan_0922.battle_feedback import (
 from gui.mods.offline_lan_0922 import battle_missions
 from gui.mods.offline_lan_0922.bot_runtime import (
     BOT_WATER_AVOID_DEPTH, BotRuntime, PROBE_KINDS,
-    WORKER_CONTROL_SECONDS)
+    WORKER_CONTROL_SECONDS, ground_pose_for_yaw)
 from gui.mods.offline_lan_0922.entities.avatar_server import AvatarServerBridge
 from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
@@ -21404,7 +21404,8 @@ class BattleRuntime(object):
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, pivot_offset=0.0,
-            contact_trace=None, include_static=False, translation=(0.0, 0.0)):
+            contact_trace=None, include_static=False, translation=(0.0, 0.0),
+            follow_ground=False):
         """Recast every rotating body slice against the live native BSP.
 
         The catalog owns each destructible's original shape.  Once a structure
@@ -21486,6 +21487,9 @@ class BattleRuntime(object):
             upper = float(index + 1) / float(steps)
             middle = (lower + upper) * 0.5
             slice_yaw = float(start_yaw) + yaw_delta * middle
+            if follow_ground:
+                sweep_pitch, sweep_roll = ground_pose_for_yaw(
+                    pitch, roll, start_yaw, slice_yaw)
             interval_bbox = _destructible_rotation_interval_bbox(
                 sweep_bbox, abs(yaw_delta) * 0.5 / float(steps), pivot_offset)
             slice_position = vehicle_physics.track_pivot_position(
@@ -21866,7 +21870,9 @@ class BattleRuntime(object):
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
             pivot_offset=pivot_offset, contact_trace=contact_trace,
-            include_static=True, translation=translation)
+            include_static=True, translation=translation,
+            follow_ground=bool(bot_state.get('grounded_once') and not bot_state.get('airborne')
+                and not bot_state.get('_edge_support_active')))
         if not clear:
             self._bot_motion_kinds[int(bot_id)] = 'world'
             bot_state['_rotation_contact_trace'] = contact_trace
@@ -23299,6 +23305,48 @@ class BattleRuntime(object):
             stack_carrier=getattr(self,'_local_stack_carrier',None))
         return [body for body in result if vehicle_stack.planar_pair(own,body)]
 
+    def _falling_roof_approaches(self, entity, position, yaw, peers):
+        """Keep a descending roof approach out of conservative planar OBBs.
+
+        A fresh upward native BSP hit must lie below a posed underside point.
+        This is not a settled carrier and never publishes pressure or damage.
+        """
+        if (not getattr(self, '_local_airborne', False) or
+                getattr(self, '_local_vertical_speed', 0.0) >= 0.0):
+            return set()
+        shape = self._collision_shape(entity.typeDescriptor)
+        actor = dict(id=int(getattr(self.client, 'player_id', 0) or 0),
+            kind='player', x=position[0], y=position[1], z=position[2],
+            yaw=yaw, pitch=self._local_pitch, roll=self._local_roll,
+            collision_shape=shape)
+        previous = self._stack_support_context(actor)
+        admitted = set()
+        try:
+            context = self._stack_context
+            candidates = list(context['candidates'])
+            for key, state, target in candidates:
+                if not any((p['kind'], p['network_id']) == key for p in peers):
+                    continue
+                context['candidates'] = [(key, state, target)]
+                for side, forward in ((0.,0.), (-1.,0.), (1.,0.),
+                        (0.,-1.), (0.,1.), (-1.,-1.), (-1.,1.),
+                        (1.,-1.), (1.,1.)):
+                    ox, oy, oz = vehicle_physics.suspension_point_offset(
+                        dict(x=side*shape[0], y=shape[2], z=forward*shape[1]),
+                        self._local_pitch, self._local_roll)
+                    x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
+                    z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
+                    foot_y = position[1]+oy
+                    context['hits'] = []
+                    self._stack_ground_hit(self._vector((x,foot_y+.15,z)),
+                        self._vector((x,float(state['y'])-.5,z)),None)
+                    if any(point[2][1] <= foot_y+.02 for point in context['hits']):
+                        admitted.add(key)
+                        break
+            return admitted
+        finally:
+            self._stack_context = previous
+
     @timed('local.contact_resolve')
     def _resolve_local_tank_contacts(self, entity, position, yaw, dt,
                                      start_position=None):
@@ -23339,6 +23387,17 @@ class BattleRuntime(object):
                   if start_position is not None else (0.0, 0.0))
         others = self._contact_tanks(
             position, own['shape'], dt, extra_reach=math.hypot(*travel))
+        roof_approaches = self._falling_roof_approaches(entity, position, yaw, others)
+        if roof_approaches:
+            others = [body for body in others
+                      if (body['kind'], body['network_id']) not in roof_approaches]
+            moment = self._clock()
+            if moment >= getattr(self, '_roof_approach_log_at', -1.e30):
+                native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
+                    phase='descending_roof_approach', local_pose=position,
+                    upper=['player', own['network_id']],
+                    lower=[list(k) for k in sorted(roof_approaches)]))
+                self._roof_approach_log_at = moment + 1.
         drive_fraction = 1.0
         if start_position is not None:
             start_body = dict(own, x=start_position[0], z=start_position[2])
@@ -24769,11 +24828,21 @@ class BattleRuntime(object):
             not solved.get('rigid_contact_count') and
             tank_collision.support_rise_is_obstacle(
                 position[1], solved['height'], 0.6))
+        contact_recovery = bool(extra_rise and vehicle_physics.suspension_contact_recovery(
+            params, physics_state, solved, ground, pseudo_ground,
+            previous_plane, position, motion_pose))
         raised_support = bool(
-            extra_rise and
+            extra_rise and not contact_recovery and
             not self._local_suspension_rise_is_continuous(
                 position, solved['height'], motion_pose,
                 previous_plane, current_plane))
+        if invalid_pose or raised_support or contact_recovery:
+            if now >= getattr(self, '_local_support_decision_log_at', -1.e30):
+                native_input_diagnostics.write_json_record('LOCAL SUPPORT DECISION', dict(
+                    position=position, before=physics_state, solved=solved,
+                    invalid_pose=invalid_pose, raised_support=raised_support,
+                    contact_recovery=contact_recovery, previous_plane=previous_plane))
+                self._local_support_decision_log_at = now + 1.
         if invalid_pose or raised_support:
             if tick_pose is not None:
                 position = tuple(tick_pose)

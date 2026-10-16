@@ -765,9 +765,9 @@ def slope_pose(probe, position, yaw, half_length, half_width,
         # over-tilt a diagonal grade; fit one plane normal in that order.
         pitch = -math.atan(forward_grade)
         roll = math.atan2(lateral_grade, math.sqrt(1.0 + forward_grade**2))
-        tilt = math.hypot(pitch, roll)
-        if tilt > 0.61:
-            pitch, roll = pitch * 0.61/tilt, roll * 0.61/tilt
+        # Physical attitude follows measured terrain. Driving grade limits
+        # belong to navigation; clamping this pose after detailed handback
+        # repeatedly makes the same five grounded points appear unsupported.
         return pitch, roll
     pitch = -math.atan2(float(front) - float(rear), length) * 0.9
     roll = math.atan2(float(right) - float(left), width) * 0.9
@@ -2925,7 +2925,8 @@ class BotRuntime(object):
         yaw = _number(state.get('yaw'))
         pitch = _number(state.get('terrain_pitch', state.get('pitch')))
         roll = _number(state.get('roll'))
-        key = (getattr(self, '_contact_now', None), x, y, z, yaw, pitch, roll)
+        key = (getattr(self, '_contact_now', None), x, y, z, yaw, pitch, roll,
+               bool(state.get('_edge_support_active')))
         cached = state.get('_support_mode_sample')
         if key[0] is not None and cached and cached[0] == key:
             return cached[1]
@@ -8046,6 +8047,19 @@ class BotRuntime(object):
             not solved.get('rigid_contact_count') and
             self._suspension_rise_exceeds_base(
                 state.get('y'), solved['height']))
+        contact_recovery = bool(raised_support and vehicle_physics.suspension_contact_recovery(
+            params, physics_state, solved, ground, pseudo_ground,
+            previous_plane, position, motion_pose))
+        if raised_support and contact_recovery:
+            raised_support = False
+            moment = float(getattr(self, '_contact_now', None) or 0.)
+            if moment >= state.get('_support_recovery_log_at', -1.e30):
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT SUPPORT RECOVERY', dict(
+                    round=self.round_id, bot=bot_id, before=physics_state,
+                    solved=solved, previous_plane=previous_plane,
+                    position=position, motion_pose=motion_pose))
+                state['_support_recovery_log_at'] = moment + 1.
         if raised_support:
             raised_support = not self._suspension_rise_has_continuous_support(
                 previous_plane, current_plane, motion_pose,
@@ -8055,6 +8069,14 @@ class BotRuntime(object):
         # centre when all of them miss repeatedly cancels gravity beneath
         # the deck, even without horizontal movement (report 004720).
         if invalid_pose or raised_support:
+            moment = float(getattr(self, '_contact_now', None) or 0.)
+            if moment >= state.get('_support_rejection_log_at', -1.e30):
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT SUPPORT REJECTION', dict(
+                    round=self.round_id, bot=bot_id, before=physics_state, solved=solved,
+                    invalid_pose=invalid_pose, raised_support=raised_support,
+                    contact_recovery=contact_recovery, position=position))
+                state['_support_rejection_log_at'] = moment + 1.
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)
             if tick_pose is not None:

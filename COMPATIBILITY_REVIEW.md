@@ -8559,3 +8559,33 @@ distance and grade limit to the existing bounded refusal receipt, without
 extra probes or changed acceptance. Bot10/25's remaining route stagnation is
 not assigned a speculative behavioral fix. Exact native colors, physical
 handoff stability and gameplay acceptance require the new Windows package.
+
+
+## Report 175138: bridge projection and slope ownership
+
+- A stationary tipped hull can already penetrate its last accepted ledge contacts.
+  The former raised-support guard restored the same penetrated pose and zeroed
+  gravity on every retry (Bot 9). Permit only bounded depenetration on a previously
+  accepted support layer, with no appreciable horizontal displacement. Keep the
+  new-layer, translated-step, finite-pose and detached-turret guards. Player and
+  Bot adapters use the same numeric decision. Log accepted recovery and refusals.
+- Keep one invalid five-point witness to enable detailed support and all five
+  restored to release it. Separate basic/detailed point-cache ownership. Remove
+  the basic physical pose's 0.61-radian tilt clamp: it flattened a fully supported
+  steep pose immediately after detailed handback and manufactured new point loss.
+  Navigation's drive-grade limits and suspension availability remain unchanged.
+  Genuine repeated edge crossings may still switch; no holding timer is added.
+- Rebase basic grounded Bot slope attitude for each native rotation-sweep slice.
+  The old query rotated yaw with fixed local pitch/roll, sweeping corners into a
+  different world plane. Do not apply ground following to airborne or detailed
+  tumbling bodies. Existing hard surface queries still veto walls.
+- While falling, fresh upward native component hits below posed underside points
+  defer conservative horizontal separation for that specific lower vehicle.
+  Missing native hits and side contacts keep planar collision. Approach evidence
+  is distinct from settled carrier admission and cannot award crushing damage.
+  Existing impact, pressure, corpse attribution and module coefficients are kept.
+- Regression inputs include the recorded Bot 9 projection, a physical tip-and-fall
+  sequence, steep-plane handback, mode-cache ownership, rotation slice coordinates,
+  roof misses and side contacts. Engine-free checks establish adapter/numeric
+  behavior only. Actual bridge release, stacking feel, terrain contacts and the
+  remaining hillside cases require the next exact-client session.
