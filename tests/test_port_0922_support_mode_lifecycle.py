@@ -9,6 +9,25 @@ from gui.mods.offline_lan_0922 import environment_modules as em
 
 class SupportLifecycleTests(unittest.TestCase):
     scene = fixtures.ContactSupportTests.scene
+    def test_continuous_descent_does_not_accumulate_stale_basis_height(self):
+        import math
+        for grade in (.2,.4,.6):
+            for travel in (.5,1.5,2.3):
+                with self.subTest(grade=grade,travel=travel):
+                    runtime,state=self.scene(lambda x,z:-grade*z)
+                    state.update(speed=travel/.15,vertical_speed=0.,pitch=math.atan(grade),
+                                 terrain_pitch=math.atan(grade))
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        runtime._contact_now=-1.
+                        self.assertFalse(runtime._contact_edge_support_needed(state))
+                        for tick in range(40):
+                            state['z']+=travel
+                            runtime._contact_now=tick*.15
+                            self.assertFalse(runtime._contact_edge_support_needed(state), tick)
+                            runtime._integrate_vertical_motion(state,.15)
+                            self.assertFalse(state.get('_edge_support_active',False), tick)
+                            self.assertAlmostEqual(-grade*state['z'],state['y'])
+
     def test_each_of_five_points_can_enable_without_a_vehicle_contact(self):
         for missing in range(5):
             with self.subTest(missing=missing):

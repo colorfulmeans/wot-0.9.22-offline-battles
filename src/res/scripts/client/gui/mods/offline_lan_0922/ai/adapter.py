@@ -751,6 +751,7 @@ class BotAdapter(object):
             throttle_override=throttle_override, stop_at_target=stop_at_target,
             navigation_wait=navigation_wait,
             navigation_status=state.get('navigation_status'),
+            arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
             hull_angle_degrees=strategic.get('hull_angle_degrees'))
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']

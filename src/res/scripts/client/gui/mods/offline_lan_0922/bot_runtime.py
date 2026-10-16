@@ -2981,7 +2981,10 @@ class BotRuntime(object):
             residual=max(abs((rows[1]['ground']+rows[2]['ground'])*.5-rows[0]['ground']),
                          abs((rows[3]['ground']+rows[4]['ground'])*.5-rows[0]['ground']))
             if abs(determinant)>1.e-8 and residual<=0.35:
-                state['_support_mode_basis']=(x,z,y,
+                # These five witnesses were validated against support_y.
+                # Storing the old pre-settle root here reintroduces one tick
+                # of descent at every sample and falsely loses all contacts.
+                state['_support_mode_basis']=(x,z,support_y,
                     (forward*bz-az*side)/determinant,
                     (ax*side-forward*bx)/determinant)
             else:
@@ -3008,6 +3011,9 @@ class BotRuntime(object):
         if phase == 'sample' and now < state.get('_support_mode_log_at', -1.e30):
             return
         state['_support_mode_log_at'] = now+2.
+        previous = state.get('_support_mode_transition')
+        if phase in ('enable', 'disable'):
+            state['_support_mode_transition'] = (phase, now, _position(state))
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT SUPPORT MODE', dict(round=self.round_id,
             bot=state['id'], phase=phase, detailed=bool(state.get('_edge_support_active')),
@@ -3015,6 +3021,9 @@ class BotRuntime(object):
             total=5, points=rows, airborne=bool(state.get('airborne')),
             vertical_speed=state.get('vertical_speed'),
             basic_support_datum=state.get('_basic_support_datum'),
+            support_basis=state.get('_support_mode_basis'),
+            previous_transition=previous,
+            transition_age_ms=(max(0.,now-previous[1])*1000. if previous else None),
             reason=('point_support_lost' if phase == 'enable' else
                     'all_points_restored' if phase == 'disable' else 'support_observation')))
 

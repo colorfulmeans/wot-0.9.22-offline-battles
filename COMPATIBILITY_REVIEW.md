@@ -8495,3 +8495,32 @@ A separate stack contract bug is fixed: when a human snapshot omits chassis
 shape, the worker resolves it but previously left the roof-admission context
 without that geometry, giving tilted contact a zero-size height cap. Pass the
 resolved descriptor shape into that same context; no contact is fabricated.
+
+### Windows309 recovery cancellation and support basis reproduction
+
+Report 101752 records Bot10 at a nearby single-point connector with a remote
+objective, mostly returning arrived for about 63 seconds. A driver replay using
+its captured position starts reverse_turn, renews the objective retry clock,
+then cancels recovery on the next decision because the connector is close.
+Retain an already admitted recovery while its actual recovery goal remains
+outside arrival radius. Explicit movement holds and arrival at that actual
+goal still stop it. Do not change navigator endpoint selection, recovery
+budgets, path policy, terrain vetoes or the withdrawn short-distance grade law.
+The new replay fails on Windows309 and passes with this correction, including
+completion of the recovery attempt rather than only its first command.
+
+A second multi-frame reproduction descends a continuous plane with five real
+ground witnesses. The support test predicts the next basic ground-follow root
+but stores the old pre-settle root in its new plane basis. On the following
+tick that stale height falsely exceeds contact reach and enables detailed
+support. Store the same validated support_y used by those witnesses. Nine
+grade/travel combinations cover 360 descent ticks, alongside existing turning,
+ledge, airborne, landing and handback tests. The one-missing/five-restored rule
+and all reach thresholds remain unchanged; no mode hold timer is added.
+
+These reproductions establish local defects, not every native blockage or
+every fast transition in the report. Existing bounded BOT MOTION receipts now
+include arrival distances, progress ages and pre-decision recovery time. Support
+receipts include the evaluated plane basis, previous transition pose and age.
+The next exact-client session must establish bridge traversal, remaining point
+losses, and native support stability; no additional routing change is inferred.

@@ -219,9 +219,14 @@ class DriverRecoveryFeedbackTests(unittest.TestCase):
             # A stationary commanded hold advances the same driver clock;
             # no new motion renews the old five-second collision receipt.
             runtime.adapter.navigation_target = lambda *unused: (0.0, 0.0, 0.0)
+            # A close connector with a remote route order is not a hold.
+            # Exercise the explicit production hold input instead.
+            runtime._server_orders[11]['throttle_override'] = 0.0
+            runtime._decision_cache.clear()
             for frame in range(1, 62):
                 runtime.update(0.1, 1.0+frame*0.1)
             runtime.adapter.navigation_target = lambda *unused: target
+            runtime._server_orders[11].pop('throttle_override')
             runtime.adapter.driver.states[11]['recovery_time'] = 0.85
             runtime._decision_cache.clear()
             runtime.update(0.1, 7.2)
