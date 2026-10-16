@@ -724,6 +724,9 @@ def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
         # The budget limits force; the target speed separately limits travel.
         axes = _axes(a['yaw'])
         for b in bodies:
+            from .vehicle_stack import planar_pair
+            if not planar_pair(a,b):
+                continue
             if (a['id'] == b['id'] or not a.get('impulse', True) or
                     not b.get('impulse', True) or budget <= 0.0 or
                     (anchor is not None and anchor not in (a['id'], b['id']))):
@@ -968,6 +971,8 @@ def translation_fraction(body, movement, others, contacts=None, contact_ids=None
     SAT time intervals instead. Existing overlap may escape or slide, but
     cannot deepen or pass through the neighbour's centre plane.
     """
+    from .vehicle_stack import planar_pair
+    others = [other for other in others if planar_pair(body,other)]
     mx, mz = movement
     if abs(mx) + abs(mz) <= 1.0e-12:
         return 1.0
@@ -1040,6 +1045,8 @@ def translation_fraction(body, movement, others, contacts=None, contact_ids=None
 
 def _slide_peers(body, others):
     """Freeze vertical/shape data only for this synchronous translation."""
+    from .vehicle_stack import planar_pair
+    others = [other for other in others if planar_pair(body,other)]
     shape = _tank_shape(body)
     radius = math.hypot(*shape[:2])
     peers = []
@@ -1120,6 +1127,8 @@ def slide_translation(body, movement, others, first_fraction=None):
     roster. Geometry prepared after a blocked segment belongs only to this
     call; each segment still tests its current position in roster order.
     """
+    from .vehicle_stack import planar_pair
+    others = [other for other in others if planar_pair(body,other)]
     current = dict(body)
     remaining = tuple(movement)
     total = [0.0, 0.0]
@@ -1313,9 +1322,12 @@ def resolve_pairs(tanks, dt, anchor=None):
     pairs = []
     for index, a in enumerate(bodies):
         for b in bodies[index+1:]:
+            from .vehicle_stack import planar_pair
+            if not planar_pair(a,b):
+                continue
             if anchor is not None and anchor not in (a['id'], b['id']):
                 continue
-            if a.get('kind') == b.get('kind') == 'player':
+            if anchor is None and a.get('kind') == b.get('kind') == 'player':
                 continue
             if not (a.get('alive', True) or b.get('alive', True) or
                     a['vx'] or a['vz'] or b['vx'] or b['vz'] or
@@ -1557,6 +1569,9 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
         other_id = _tank_value(other, 'id', -1)
         if other is None or other_id == self_id:
             continue
+        from .vehicle_stack import planar_pair
+        if not planar_pair(tank,other):
+            continue
         other_is_wreck = not _tank_value(other, 'alive', True)
         # A wreck has no engine, but it is still a hull resting on tracks and
         # a heavy enough neighbour shoves it.  ``immovable`` is for a body no
@@ -1751,6 +1766,8 @@ _tank_resolve = resolve_tank
 
 
 def contact_roster(tanks, owner_ids, dt, previous_ram_contacts):
+    if any(body.get('stack_carrier') for body in tanks):
+        return None
     """Return native contact rows or None for the existing Python chain."""
     return native_math.contact_roster(tanks, owner_ids, dt, previous_ram_contacts)
 

@@ -1882,7 +1882,8 @@ def _collision_interface_evidence(tester, component, component_index,
 
 def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
                                end_point, math_module, include_world_normal,
-                               chassis_matrix=None, diagnostic=None):
+                               chassis_matrix=None, diagnostic=None,
+                               capture_query=True):
     """Run precise descriptor collision at supplied body/chassis matrices.
 
     #1513's native ``Vehicle.collideSegmentExt`` first rejects rays through
@@ -1942,7 +1943,7 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
             component_to_vehicle = math_module.Matrix(component_matrix)
             component_to_vehicle.invert()
         native_query = None
-        if include_world_normal and type(collisions) in (tuple, list) and collisions:
+        if include_world_normal and capture_query and type(collisions) in (tuple, list) and collisions:
             native_query = _collision_interface_evidence(tester, component, component_index,
                 component_start, component_end, start_point, end_point,
                 chassis_to_world if component_index == 0 else vehicle_to_world,
@@ -2016,11 +2017,13 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
 
 def _collide_vehicle_evidence_at_matrix(vehicle, vehicle_matrix, start_point,
                                         end_point, math_module,
-                                        chassis_matrix=None, diagnostic=None):
+                                        chassis_matrix=None, diagnostic=None,
+                                        capture_query=True):
     """Return world-normal evidence for the authoritative shot resolver."""
     return _collide_vehicle_at_matrix(
         vehicle, vehicle_matrix, start_point, end_point, math_module, True,
-        chassis_matrix=chassis_matrix, diagnostic=diagnostic)
+        chassis_matrix=chassis_matrix, diagnostic=diagnostic,
+        capture_query=capture_query)
 
 
 def collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,

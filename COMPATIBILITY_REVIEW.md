@@ -8404,3 +8404,46 @@ The reader also flags legacy truncated motion rows. Replace the exhausted
 24-transition support log cap with a one-second per-Bot limit and include the
 raw bounded layered queries and round identity. Live Windows acceptance remains
 necessary for the original Type59 fall, player track contact and slope posture.
+
+
+### Vertical vehicle contacts and support handoff (October 16)
+
+The user-supplied historical clip BV1m4411Y7c8 shows perched vehicles and an
+upper wreck remaining over a lower vehicle. Mixed shell hits and montage cuts
+do not establish an exact retail HP-per-second coefficient. This trial uses the
+explicitly authorized offline approximation: equal masses lose 5 HP/second;
+pressure on either live vehicle scales by the opposing/own descriptor mass
+ratio. An upper wreck keeps damaging a live lower vehicle; a lower wreck ends
+sustained damage to both. Landing damage to the lower vehicle uses the existing
+fall curve scaled by the striking/struck mass ratio. Ordinary horizontal ram
+and the fall/ram module coefficient of 25 are unchanged.
+
+Only an upward non-gun native component hit admits a vehicle roof as support.
+OBB overlap is broad phase only. The existing component collider is reused at
+current body, turret and gun poses without mutating the live target. Proved
+carrier pairs bypass planar separation/ram only for that pair, so the planar
+solver does not immediately eject a tank from its actual roof contact.
+Cumulative worker pair totals survive coalescing and exact replay; player
+landing contact identity travels through the existing sequenced landing path.
+Server HP, attribution, friendly damage, blue status, kills and stock combat
+feedback retain their existing owners. No additional damage panel is created.
+VEHICLE STACK records expose pair identity, phase, contact point, elapsed
+contact and cumulative totals; PLAYER LANDING IMPACT includes the carrier.
+
+Support checks retain one-invalid enables / five-valid disables. On a proved
+continuous supported plane, evaluate the next basic ground-follow height at
+the new X/Z instead of mixing new X/Z with the previous frame's Y. Fresh native
+columns must still validate all five samples, and discontinuous planes discard
+the basis. No new fixed hold timer or contact prerequisite is introduced.
+Short recovery probes remove measured body-ground clearance from their grade;
+terminal graph connectors hand back to the existing checked local retry when
+the actual objective remains outside arrival range. Retry budgets, normal
+route advancement, yielding and initial v0.10.1 command ownership are retained.
+
+Focused regressions cover update-rate-independent totals, repeated/reordered
+receipts, human/Bot landing publication, corpse lifecycle, friendly/native
+feedback, real native roof admission, continuous slope translation, five-point
+mode transitions and nonterminal connector arrival. The 19-file subsystem gate
+passes, and all 187 client sources compile under CPython 2.7.18. This does not
+prove native roof stability, bridge-edge feel, Flash visibility, all Bot escape
+outcomes or net worker cost; those require the matching Windows test package.

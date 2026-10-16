@@ -70,7 +70,7 @@ from gui.mods.offline_lan_0922 import (
     world_census, prebaked_destructibles,
     prebaked_foliage,
     prebaked_navigation, native_mapping_mask, native_math, shot_geometry, spotting,
-    tank_collision, track_damage,
+    tank_collision, track_damage, vehicle_stack,
     vehicle_blacklist, vehicle_configuration, vehicle_physics,
     water_geometry, world_collision)
 
@@ -4125,6 +4125,10 @@ class BattleRuntime(object):
                 control_seconds=(
                     WORKER_CONTROL_SECONDS if self._worker_mode else None),
                 combat_diagnostics=self._combat_diagnostics)
+            self._bots.support_context = self._stack_support_context
+            self._bots.stack_impact = self._bot_stack_impact
+            self._bots.stack_update = self._advance_stack_contacts
+            self._bots.stack_publication = self._stack_publication
             if self._worker_mode:
                 from .native_navigation_query import Oracle
                 self._bots.navigator.grid.native_query_oracle = Oracle.create(self)
@@ -5792,7 +5796,213 @@ class BattleRuntime(object):
             return (_xyz(hit[0]), _xyz(hit[1])) if hit is not None else None
         return collide
 
+    def _stack_ledger_for_round(self):
+        round_id = (getattr(self.client, 'round_id', None),
+                    getattr(self.client, 'authority_epoch', None))
+        if getattr(self, '_stack_round', object()) != round_id:
+            self._stack_round = round_id
+            self._stack_ledger = vehicle_stack.Ledger()
+        return self._stack_ledger
+
+    def _stack_candidates(self, actor):
+        own = (actor.get('kind', 'bot'), int(actor['id']))
+        for record in self._records.values():
+            key = (record.get('kind'), record.get('network_id'))
+            if key == own or key[0] not in ('bot', 'player') or not record.get('ready'):
+                continue
+            state = record.get('state') or {}
+            if key[0] == 'bot' and self._bots is not None:
+                state = self._bots.states.get(key[1], state)
+            if not self._worker_mode and isinstance(record.get('presented_pose'), dict):
+                state = dict(state, **record['presented_pose'])
+            if not all(name in state for name in ('x', 'y', 'z')):
+                continue
+            # Horizontal neighbours are not supporting roofs. Broad phase
+            # never supplies contact; the component hit tester below must hit.
+            if (float(actor['y']) < float(state['y']) + 0.5 or
+                    math.hypot(float(actor['x'])-state['x'],
+                               float(actor['z'])-state['z']) > 12.0):
+                continue
+            entity = self._server_entity(record.get('engine_id'))
+            if entity is not None:
+                yield key, state, entity
+
+    def _stack_support_context(self, actor):
+        previous = getattr(self, '_stack_context', None)
+        if actor is None:
+            self._stack_context = None
+            return previous
+        self._stack_context = dict(actor=actor, hits=[],
+            candidates=list(self._stack_candidates(actor)))
+        actor.pop('_stack_carrier', None)
+        return previous
+
+    def _stack_ground_hit(self, start, end, ground):
+        context = getattr(self, '_stack_context', None)
+        if not context:
+            return ground
+        x, top, z = _xyz(start)
+        bottom = float(end.y)
+        best = ground
+        best_y = float(ground[0].y) if ground is not None else bottom
+        for key, state, entity in context['candidates']:
+            shape = state.get('collision_shape')
+            if shape is None:
+                shape = self._collision_shape(entity.typeDescriptor)
+            dx, dz = x-state['x'], z-state['z']
+            yaw = float(state.get('yaw', 0.0))
+            if (abs(math.cos(yaw)*dx-math.sin(yaw)*dz) > shape[0]+0.5 or
+                    abs(math.sin(yaw)*dx+math.cos(yaw)*dz) > shape[1]+0.5):
+                continue
+            try:
+                matrix = self._ram_pose_matrix(_xyz(state), yaw,
+                    state.get('pitch', 0.0), state.get('roll', 0.0))
+                turret = self._runtime.math.Matrix()
+                turret.setRotateY(float(state.get('turret_yaw',
+                    state.get('aim_yaw', yaw)-yaw)))
+                gun = self._runtime.math.Matrix()
+                gun.setRotateX(float(state.get('gun_pitch', 0.0)))
+                appearance = type('StackAim', (object,), {})()
+                appearance.turretMatrix, appearance.gunMatrix = turret, gun
+                target = vehicle_stack.CollisionPose(entity, appearance)
+                hits = _collide_vehicle_evidence_at_matrix(target, matrix,
+                    start, end, self._runtime.math,
+                    chassis_matrix=self._ram_pose_matrix(_xyz(state),yaw,
+                        state.get('terrain_pitch',state.get('pitch',0.0)),state.get('roll',0.0)),
+                    capture_query=False)
+                for hit in hits:
+                    collision, normal = hit.collision, hit.worldNormal
+                    if (collision.compName in ('gun','vehicleGun') or normal is None or
+                            float(normal.y) <= 0.5):
+                        continue
+                    height = top-float(collision.dist)
+                    actor = context['actor']
+                    actor_shape = actor.get('collision_shape') or (0.0,0.0)
+                    reach = (abs(math.sin(actor.get('pitch',0.0)))*actor_shape[1] +
+                             abs(math.sin(actor.get('roll',0.0)))*actor_shape[0])
+                    if height > actor['y']+reach+0.15:
+                        continue
+                    if not bottom <= height <= top or height <= best_y:
+                        continue
+                    best_y = height
+                    best = (self._vector((x,height,z)), normal)
+                    context['hits'].append((key, state, (x,height,z)))
+                    # Keep the contact identity with the exact height query.
+                    context['actor']['_stack_carrier'] = list(key)
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError,
+                    RuntimeError) as error:
+                now = self._clock()
+                if now >= getattr(self, '_stack_probe_log_at', -1.e30):
+                    self._stack_probe_log_at = now+2.0
+                    self._warn_optional_failure('vertical vehicle contact', error)
+        return best
+
+    def _bot_stack_impact(self, actor, speed):
+        context = getattr(self, '_stack_context', None)
+        if not context or not context['hits']:
+            return False
+        key, lower, point = context['hits'][-1]
+        if abs(float(actor['y'])-point[1]) > 1.0:
+            return False
+        lower_entity = next((entity for identity, state, entity in
+            context['candidates'] if identity == key), None)
+        if lower_entity is None or not lower.get('alive', True):
+            return False
+        try:
+            upper_mass = actor.get('mass')
+            lower_mass = vehicle_physics.descriptor_mass(lower_entity.typeDescriptor)
+            maximum = int(lower.get('max_health',
+                lower_entity.typeDescriptor.maxHealth))
+            damage = vehicle_stack.impact_damage(maximum, abs(speed),
+                upper_mass, lower_mass)
+            self._stack_ledger_for_round().strike(('bot',int(actor['id'])), key, damage)
+            native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
+                phase='impact', upper=['bot',actor['id']], lower=list(key),
+                speed=abs(speed), damage_lower=damage, point=point, trial_rates=True))
+            return True
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError,
+                RuntimeError, OverflowError) as error:
+            self._warn_optional_failure('vertical impact observation', error)
+            return False
+
+    def _advance_stack_contacts(self, players, dt):
+        ledger = self._stack_ledger_for_round()
+        actors = list(self._bots.states.values()) if self._bots is not None else []
+        actors += [dict(row,kind='player') for row in players or ()]
+        carriers = {}
+        if self._bots is not None:
+            self._bots._stack_current_carriers = carriers
+        for actor in actors:
+            if not all(name in actor for name in ('id','x','y','z')):
+                continue
+            previous = self._stack_support_context(actor)
+            context = self._stack_context
+            try:
+                if not context['candidates']:
+                    continue
+                shape = actor.get('collision_shape')
+                if shape is None:
+                    record = self._records.get('%s:%s' % (actor.get('kind','bot'),actor['id']))
+                    entity = self._server_entity(record['engine_id']) if record else None
+                    if entity is None:
+                        continue
+                    shape = self._collision_shape(entity.typeDescriptor)
+                    upper_mass = vehicle_physics.descriptor_mass(entity.typeDescriptor)
+                else:
+                    upper_mass = actor.get('mass')
+                    if upper_mass is None:
+                        record=self._records.get('%s:%s' % (actor.get('kind','bot'),actor['id']))
+                        entity=self._server_entity(record['engine_id']) if record else None
+                        if entity is None:
+                            continue
+                        upper_mass=vehicle_physics.descriptor_mass(entity.typeDescriptor)
+                yaw = float(actor.get('yaw',0.0))
+                for side, forward in ((0.,0.),(-shape[0],0.),(shape[0],0.),
+                                      (0.,-shape[1]),(0.,shape[1])):
+                    ox, oy, oz = vehicle_physics.suspension_point_offset(
+                        dict(x=side,y=0.,z=forward), actor.get('pitch',0.), actor.get('roll',0.))
+                    x = actor['x']+math.cos(yaw)*ox+math.sin(yaw)*oz
+                    z = actor['z']-math.sin(yaw)*ox+math.cos(yaw)*oz
+                    y = actor['y']+oy
+                    hit = self._stack_ground_hit(self._vector((x,y+0.15,z)),
+                        self._vector((x,y-0.15,z)), None)
+                    if hit is not None:
+                        break
+                if not context['hits']:
+                    continue
+                key, lower, point = context['hits'][-1]
+                carriers[(actor.get('kind','bot'),int(actor['id']))] = list(key)
+                entity = next(e for k,s,e in context['candidates'] if k==key)
+                lower_mass = vehicle_physics.descriptor_mass(entity.typeDescriptor)
+                row = ledger.advance((actor.get('kind','bot'),int(actor['id'])),key,
+                    dt,bool(actor.get('alive',True)),bool(lower.get('alive',True)),
+                    upper_mass,lower_mass)
+                now = self._clock()
+                log_key = (actor.get('kind','bot'), int(actor['id']))
+                log_times = getattr(self, '_stack_log_times', None)
+                if log_times is None:
+                    log_times = self._stack_log_times = {}
+                if now >= log_times.get(log_key,-1.e30):
+                    log_times[log_key]=now+1.0
+                    native_input_diagnostics.write_json_record('VEHICLE STACK',
+                        dict(row,phase='pressure',point=point,trial_rates=True))
+            except (AttributeError, IndexError, KeyError, TypeError, ValueError,
+                    RuntimeError, OverflowError) as error:
+                now = self._clock()
+                if now >= getattr(self, '_stack_scan_log_at', -1.e30):
+                    self._stack_scan_log_at = now+2.0
+                    self._warn_optional_failure('vertical contact observation',error)
+            finally:
+                self._stack_context = previous
+
+    def _stack_publication(self):
+        return self._stack_ledger_for_round().publication()
+
     def _collide_down(self, start, end, ground_filter):
+        ground = self._collide_static_down(start, end, ground_filter)
+        return self._stack_ground_hit(start, end, ground)
+
+    def _collide_static_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
         collide = getattr(self._destructibles, 'collide_motion_segment', None)
         if callable(collide):
@@ -6105,6 +6315,10 @@ class BattleRuntime(object):
                 far_distance, max(0.5, requested_distance))
         near_distance = min(8.0, far_distance)
         previous_y = y
+        if descriptor is not None and maximum_distance is not None and far_distance <= 2.0:
+            origin = self._support_column(x,z,y,maximum_y=y+0.6)
+            if origin is not None and abs(float(origin)-y) <= 0.8:
+                previous_y = float(origin)
         previous_distance = 0.0
         sine = math.sin(float(yaw))
         cosine = math.cos(float(yaw))
@@ -23052,7 +23266,9 @@ class BattleRuntime(object):
                 'pitch': _number(state.get('pitch')),
                 'roll': _number(state.get('roll')),
             })
-        return result
+        own=dict(id=-1,kind='player',network_id=int(getattr(self.client,'player_id',0) or 0),
+            stack_carrier=getattr(self,'_local_stack_carrier',None))
+        return [body for body in result if vehicle_stack.planar_pair(own,body)]
 
     @timed('local.contact_resolve')
     def _resolve_local_tank_contacts(self, entity, position, yaw, dt,
@@ -23072,7 +23288,8 @@ class BattleRuntime(object):
         own_mass = _number(
             (self._local_physics or {}).get('mass'), 25000.0)
         own = {
-            'id': -1,
+            'id': -1, 'kind': 'player', 'network_id': int(getattr(self.client,'player_id',0) or 0),
+            'stack_carrier': getattr(self,'_local_stack_carrier',None),
             'alive': True,
             'team': int(_number(getattr(self.client, 'team', 0))),
             'x': position[0], 'y': position[1], 'z': position[2],
@@ -24069,11 +24286,17 @@ class BattleRuntime(object):
                     target._chassis_matrix.translation = target._chassis_matrix.translation + delta
                 target.position = self._vector(landing_pose)
             contacts = environment_modules.collect_contacts(target, witnesses, normal, impact_speed, self._runtime.math)
-        self._pending_landing_impacts.append(dict(impact_speed=impact_speed, module_contacts=contacts) if contacts else impact_speed)
+        context = getattr(self,'_stack_context',None)
+        carrier = context['actor'].get('_stack_carrier') if context else None
+        observation = dict(impact_speed=impact_speed,module_contacts=contacts)
+        if carrier:
+            observation['vehicle_contact'] = list(carrier)
+        self._pending_landing_impacts.append(observation if contacts or carrier else impact_speed)
         from .native_input_diagnostics import write_json_record
         write_json_record('PLAYER LANDING IMPACT', dict(speed=impact_speed, damage=damage,
             witnesses=list(witnesses), normal=normal, landing_pose=landing_pose,
-            contacts=contacts, queued=len(self._pending_landing_impacts)))
+            contacts=contacts, vehicle_contact=carrier,
+            queued=len(self._pending_landing_impacts)))
         return damage
 
     def _apply_world_contact_impact(self, entity, trace, speed, yaw):
@@ -24116,8 +24339,10 @@ class BattleRuntime(object):
         contacts = observation.get('module_contacts', []) if isinstance(observation, dict) else []
         sender = getattr(self._sender, 'send_current', None)
         publish = getattr(self.client, 'send_landing_observation', None)
-        if (not callable(sender) or not callable(publish) or
-                not sender() or not (publish(impact_speed, contacts) if contacts else publish(impact_speed))):
+        carrier = observation.get('vehicle_contact') if isinstance(observation,dict) else None
+        sent = (publish(impact_speed,contacts,vehicle_contact=carrier) if carrier else
+                publish(impact_speed,contacts) if contacts else publish(impact_speed)) if callable(publish) and callable(sender) and sender() else False
+        if not sent:
             return False
         del self._pending_landing_impacts[0]
         return True
@@ -24274,6 +24499,22 @@ class BattleRuntime(object):
         return position
 
     def _update_vertical_motion(
+            self, entity, position, yaw, dt,
+            support_height_delta=0.0, support_speed_delta=0.0):
+        actor = dict(id=int(getattr(self.client,'player_id',0) or 0),kind='player',
+            x=position[0],y=position[1],z=position[2],yaw=yaw,
+            pitch=self._local_pitch,roll=self._local_roll,
+            collision_shape=self._collision_shape(entity.typeDescriptor))
+        previous = self._stack_support_context(actor)
+        try:
+            result = self._update_vertical_motion_impl(entity,position,yaw,dt,
+                support_height_delta,support_speed_delta)
+            self._local_stack_carrier = actor.get('_stack_carrier')
+            return result
+        finally:
+            self._stack_context = previous
+
+    def _update_vertical_motion_impl(
             self, entity, position, yaw, dt,
             support_height_delta=0.0, support_speed_delta=0.0):
         """Contain the optional suspension trial to this local vehicle."""

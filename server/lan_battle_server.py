@@ -2474,6 +2474,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self._stack_totals = {}
         self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
@@ -2860,6 +2861,7 @@ class BattleState:
             self.environment_pushes = {}
             self.environment_push_sequences = {}
             self.environment_fall_totals = {}
+            self._stack_totals = {}
             self.environment_critical_totals = {}
             self.player_mission_view_ranges = {}
             self.player_mission_view_ranges_tick = -1
@@ -3685,6 +3687,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self._stack_totals = {}
         self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
@@ -4980,6 +4983,11 @@ class BattleState:
                 # publication carries only the values that change, and
                 # ``_decode_bot_row`` rejoins these.
                 entry.update(round_constants)
+                if 'stack_mass' in raw:
+                    try:
+                        entry['stack_mass'] = _bounded_float(raw['stack_mass'],1.0,1000000.0)
+                    except (TypeError,ValueError,OverflowError):
+                        return False
                 previous = next((item for item in self.bot_manifest
                     if item['id'] == bot_id and
                     item['vehicle'] == entry['vehicle']), None)
@@ -7444,6 +7452,7 @@ class BattleState:
                     if owner is not None:
                         fire_owners[victim[1]] = owner
             self.bot_states = next_states
+            self._consume_stack_contacts(progress)
             environment_fires = self._consume_environment_criticals(progress, fire_owners)
             for victim, previous, current, lost, reason in environment_records:
                 event = dict(kind='bot_health', target_bot=victim[1], damage=lost,
@@ -7905,6 +7914,95 @@ class BattleState:
                 break
         return deaths
 
+    def _stack_actor(self, identity):
+        return (self.bot_states.get(identity[1]) if identity[0] == 'bot'
+                else self.players.get(identity[1]))
+
+    def _stack_actor_mass(self, identity):
+        if identity[0] == 'bot':
+            return next((float(row['stack_mass']) for row in self.bot_manifest
+                         if row['id']==identity[1] and 'stack_mass' in row),0.0)
+        return float(self.human_collision_profiles.get(identity[1], {}).get('mass', 0.0))
+
+    def _commit_stack_damage(self, attacker, victim, damage, phase):
+        target = self._stack_actor(victim)
+        if target is None:
+            return 0
+        alive = target.get('alive') if victim[0] == 'bot' else target.alive
+        health = int(target.get('health',0) if victim[0] == 'bot' else target.health)
+        damage = min(health,max(0,int(damage)))
+        if not alive or damage <= 0:
+            return 0
+        health -= damage
+        if victim[0] == 'bot':
+            before = self._bot_combat_signature(target)
+            critical_before = before[2]
+            target.update(health=health,display_health=health,alive=health>0,
+                          death_reason=2 if health<=0 else 0)
+            critical = self._apply_bot_terminal_critical(target) if health<=0 else None
+            self._commit_external_bot_combat(target,before)
+        else:
+            critical_before = target.critical
+            target.health = target.display_health = health
+            target.alive = health > 0
+            target.death_reason = 2 if health<=0 else 0
+            if health<=0:
+                target.forward=target.turn=target.speed=0.0
+            critical = None
+        event = dict(kind='bot_health' if victim[0]=='bot' else 'health',
+            damage=damage,health=health,display_health=health,dead=health<=0,
+            attack_reason=2,death_reason=2 if health<=0 else 0,
+            source='ram',stack_phase=phase)
+        event['target_bot' if victim[0]=='bot' else 'target'] = victim[1]
+        if critical is not None:
+            event.update(critical=critical,combat_revision=target['combat_revision'],
+                combat_base_revision=target['combat_base_revision'],
+                combat_ack_seq=target['combat_ack_seq'])
+        self._drop_capture_for_vehicle(*victim,attacker=attacker)
+        self._attribute_environment_event(event,victim,critical_before,
+            attacker=attacker,record_criticals=False)
+        self.pending_events.append(event)
+        if health<=0:
+            self._record_vehicle_end(*victim)
+        _server_log('VEHICLE STACK ' + json.dumps(dict(phase=phase,
+            upper_or_attacker=attacker,victim=victim,damage=damage,health=health,
+            round=self.round_id,trial_rates=True),sort_keys=True))
+        return damage
+
+    def _consume_stack_contacts(self, progress):
+        from gui.mods.offline_lan_0922 import vehicle_stack
+        rows = progress.get('stacks',())
+        if not isinstance(rows,(list,tuple)) or len(rows)>1024:
+            return
+        totals = getattr(self,'_stack_totals',None)
+        if totals is None:
+            totals=self._stack_totals={}
+        for row in rows:
+            try:
+                upper=vehicle_stack.carrier(row['upper'])
+                lower=vehicle_stack.carrier(row['lower'])
+                up=_exact_int(row['upper_total'],0,2147483647)
+                low=_exact_int(row['lower_total'],0,2147483647)
+            except (KeyError,ValueError,TypeError,OverflowError):
+                continue
+            if upper==lower or self._stack_actor(upper) is None or self._stack_actor(lower) is None:
+                continue
+            key=upper+lower
+            previous=totals.get(key,(0,0))
+            if up<previous[0] or low<previous[1]:
+                continue
+            # The authority's cumulative native-contact receipt is consumed
+            # once. An unchanged/replayed publication cannot spend HP again.
+            totals[key]=(up,low)
+            lower_actor=self._stack_actor(lower)
+            lower_alive=(lower_actor.get('alive') if lower[0]=='bot' else lower_actor.alive)
+            if not lower_alive:
+                continue
+            # Freeze both sides' eligibility before either can die in this
+            # tick. A top wreck keeps its load; a bottom wreck stops pressure.
+            self._commit_stack_damage(upper,lower,low-previous[1],'pressure_or_impact')
+            self._commit_stack_damage(lower,upper,up-previous[0],'pressure')
+
     def _commit_player_environment_damage(
             self, player, damage, reason, display_health=None, critical=None):
         """Apply one server-decided fall or overturn HP delta atomically."""
@@ -8038,7 +8136,7 @@ class BattleState:
                     PLAYER_ENVIRONMENT_CAPABILITY not in
                     player.capabilities or
                     not isinstance(message, dict) or
-                    set(message) - {'module_contacts'} != {
+                    set(message) - {'module_contacts', 'vehicle_contact'} != {
                         "type", "round_id", "authority_epoch",
                         "observation_seq", "input_seq", "impact_speed"} or
                     message.get("type") != "landing_observation" or
@@ -8073,6 +8171,16 @@ class BattleState:
                 "impact_speed": impact_speed,
                 "module_contacts": module_contacts,
             }
+            from gui.mods.offline_lan_0922 import vehicle_stack
+            carrier = None
+            if message.get('vehicle_contact') is not None:
+                try:
+                    carrier = vehicle_stack.carrier(message['vehicle_contact'])
+                    if carrier == ('player',player_id) or self._stack_actor(carrier) is None:
+                        return False
+                except (TypeError,ValueError,OverflowError):
+                    return False
+                normalized['vehicle_contact']=list(carrier)
             fingerprint = _message_fingerprint(normalized)
             previous = player.landing_observation_fingerprints.get(
                 observation_seq)
@@ -8133,6 +8241,15 @@ class BattleState:
             self._commit_player_environment_damage(
                 player, max(damage, terminal), 3, display_health=0,
                 critical=_critical_payload(module_payload) if module_payload else None)
+            if carrier is not None:
+                upper_mass=self._stack_actor_mass(('player',player_id))
+                lower_mass=self._stack_actor_mass(carrier)
+                target=self._stack_actor(carrier)
+                maximum=int(target.get('max_health',target.get('health',0))
+                    if carrier[0]=='bot' else target.max_health)
+                if upper_mass>0.0 and lower_mass>0.0:
+                    crush=vehicle_stack.impact_damage(maximum,impact_speed,upper_mass,lower_mass)
+                    self._commit_stack_damage(('player',player_id),carrier,crush,'fall_impact')
             player.landing_observation_seq = observation_seq
             player.landing_observation_input_seq = input_seq
             player.landing_observation_fingerprints[

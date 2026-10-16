@@ -241,7 +241,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
     '_basic_fall_origin_y', '_basic_continuous_support',
-    '_legacy_straddle_reference_y',
+    '_legacy_straddle_reference_y', '_support_mode_basis',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -2930,12 +2930,21 @@ class BotRuntime(object):
         length = max(1.5, _number(state.get('half_length'), 3.5))
         width = max(1.0, _number(state.get('half_width'), 1.7))
         sine, cosine = math.sin(yaw), math.cos(yaw)
+        basis = state.get('_support_mode_basis')
+        support_y = y
+        if (basis and not state.get('_edge_support_active') and
+                not state.get('airborne') and state.get('grounded_once')):
+            dx,dz=x-basis[0],z-basis[1]
+            # This is the existing basic ground-follow candidate, not a
+            # replacement physical pose or a remembered ground contact.
+            if 1.e-8 < math.hypot(dx,dz) <= max(length,width) and abs(y-basis[2]) <= 0.8:
+                support_y = basis[2]+basis[3]*dx+basis[4]*dz
         rows = []
         for name, side, forward in (('centre',0.,0.), ('front',0.,length),
                 ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
             ox, oy, oz = vehicle_physics.suspension_point_offset(
                 dict(x=side, y=0., z=forward), pitch, roll)
-            px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, y+oy
+            px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, support_y+oy
             ground = self._ground_probe_at(px, pz, expected, expected+0.6)
             continuous_rise = False
             upper_candidate = None
@@ -2956,10 +2965,25 @@ class BotRuntime(object):
             valid = gap is not None and (continuous_rise or
                 -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN)
             rows.append(dict(name=name, x=px, z=pz, expected=expected,
+                raw_expected=y+oy, basic_follow_y=support_y,
                 ground=ground, gap=gap, valid=valid, continuous_rise=continuous_rise,
                 upper_candidate=upper_candidate,
                 verdict=('continuous_rise' if continuous_rise else 'supported' if valid
                          else 'missing_ground' if ground is None else 'outside_reach')))
+        if all(row['valid'] for row in rows) and not state.get('airborne'):
+            ax,az=(rows[1]['x']-rows[2]['x'],rows[1]['z']-rows[2]['z'])
+            bx,bz=(rows[3]['x']-rows[4]['x'],rows[3]['z']-rows[4]['z'])
+            forward= float(rows[1]['ground'])-float(rows[2]['ground'])
+            side= float(rows[3]['ground'])-float(rows[4]['ground'])
+            determinant=ax*bz-az*bx
+            residual=max(abs((rows[1]['ground']+rows[2]['ground'])*.5-rows[0]['ground']),
+                         abs((rows[3]['ground']+rows[4]['ground'])*.5-rows[0]['ground']))
+            if abs(determinant)>1.e-8 and residual<=0.35:
+                state['_support_mode_basis']=(x,z,float(rows[0]['ground']),
+                    (forward*bz-az*side)/determinant,
+                    (ax*side-forward*bx)/determinant)
+            else:
+                state.pop('_support_mode_basis',None)
         state['_support_mode_sample'] = (key, rows)
         return rows
 
@@ -4859,6 +4883,8 @@ class BotRuntime(object):
                 'siege_time_left_ms', 'siege_transition_total_ms',
                 'equipment_states', 'stun_end_server_time_ms')
         result = dict((key, state[key]) for key in keys)
+        if state.get('mass') is not None:
+            result['stack_mass'] = float(state['mass'])
         result['profile'] = dict(result['profile'], parking_radius=math.hypot(
             float(state.get('half_length', 3.5)), float(state.get('half_width', 1.7))))
         # The rating rides the manifest so a takeover installs the same
@@ -7638,6 +7664,9 @@ class BotRuntime(object):
             ground_observed=ground_observed, module_resolver=callable(self.impact_contacts_resolver),
             contacts=contacts if (witnesses or ground_observed) and callable(self.impact_contacts_resolver) else [],
             critical=state.get('critical'), position=_position(state)))
+        stack_impact = getattr(self,'stack_impact',None)
+        if callable(stack_impact):
+            stack_impact(state,impact_speed)
         before_health = int(state.get('health', maximum))
         health = max(0, before_health - damage)
         totals = getattr(self, '_environment_fall_totals', {})
@@ -8101,6 +8130,21 @@ class BotRuntime(object):
 
     @timed('bot.vertical')
     def _update_vertical_motion(self, state, step, tick_pose=None,
+                                attempted_yaw=None, suspension_motion_pose=None):
+        callback = getattr(self,'support_context',None)
+        previous = callback(state) if callable(callback) else None
+        try:
+            return self._update_vertical_motion_impl(state,step,tick_pose,
+                attempted_yaw,suspension_motion_pose)
+        finally:
+            if callable(callback):
+                callback(None)
+                # The BattleRuntime context may nest a zero-time settle.
+                owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
+                if owner is not None:
+                    owner._stack_context = previous
+
+    def _update_vertical_motion_impl(self, state, step, tick_pose=None,
                                 attempted_yaw=None,
                                 suspension_motion_pose=None):
         """Commit suspension and landing only after the full turret sweep."""
@@ -9634,6 +9678,9 @@ class BotRuntime(object):
         if body_id is not None:
             body['id'] = body_id
         body['shape'] = shape or state.get('collision_shape')
+        body['kind'] = 'player' if body_id is not None else 'bot'
+        body['network_id'] = state['id']
+        body['stack_carrier'] = state.get('_stack_carrier')
         return body
 
     def _contact_motion_bodies(self, players=()):
@@ -10391,6 +10438,9 @@ class BotRuntime(object):
         self._contact_players = players or ()
         self._contact_now = now
         self._consume_human_contact_pushes(players, now)
+        stack_update = getattr(self,'stack_update',None)
+        if callable(stack_update):
+            stack_update(players,step)
         tanks = []
         for state in self._ordered_states():
             alive = bool(state.get('alive', True))
@@ -10412,6 +10462,7 @@ class BotRuntime(object):
                 'contact_decel': grip,
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
+                'stack_carrier': state.get('_stack_carrier'),
                 'team': int(state.get('team', 0)),
                 'vehicle': str(state.get('vehicle') or ''),
                 'x': state['x'], 'y': state['y'],
@@ -10443,6 +10494,7 @@ class BotRuntime(object):
             tanks.append({
                 'id': player_id, 'kind': 'player',
                 'network_id': int(raw['id']), 'alive': alive,
+                'stack_carrier': getattr(self,'_stack_current_carriers',{}).get(('player',int(raw['id']))),
                 'team': int(raw.get('team', 0)),
                 'vehicle': str(raw.get('vehicle') or ''),
                 # Current senders report the human's contact momentum above.
@@ -15954,6 +16006,9 @@ class BotRuntime(object):
                              sorted(self._environment_critical_totals.items())],
             environment_fires=[int(state['id']) for state in ordered_states
                                if state.get('_environment_fire')])
+        stack_publication = getattr(self,'stack_publication',None)
+        if callable(stack_publication):
+            publication['push_contacts']['stacks'] = stack_publication()
         if launches:
             # Never put these local-only SPG proof receipts on the LAN wire.
             # BattleRuntime retries an unaccepted launch from this compact list.
