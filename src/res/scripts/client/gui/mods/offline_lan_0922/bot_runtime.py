@@ -9682,6 +9682,21 @@ class BotRuntime(object):
             progress_target = progress_receipt(bot_id, position, target, now)
             if progress_target is not None:
                 state['navigation_progress_target'] = progress_target
+        local_state = getattr(self.navigator, 'bot_states', {}).get(int(bot_id), {})
+        direct_state = getattr(self.navigator, 'bot_direct_progress', {}).get(int(bot_id), {})
+        choices = []
+        for owner, local in (('path', local_state), ('direct', direct_state)):
+            fallback = local.get('local_fallback') or {}
+            rows = [row for row in fallback.get('candidates', ())
+                    if row.get('rejected') is None]
+            if rows:
+                ranked = sorted(rows, key=lambda row:(row['score'], abs(row['theta'])))[:3]
+                shortest = min(rows, key=lambda row:row['D'])
+                choices.append(dict(owner=owner, at=fallback.get('at'),
+                    current=fallback.get('current'), goal=fallback.get('goal'),
+                    selected=fallback.get('selected'), ranked=ranked,
+                    shortest_distance=shortest))
+        target_receipt['local_choices'] = choices
         target_receipt.update(final_target=tuple(target),
             progress_target=state.get('navigation_progress_target'),
             stop_at_target=state.get('navigation_stop_at_target'))
