@@ -170,6 +170,24 @@ class NativeRoofAdmissionTests(unittest.TestCase):
                 self.assertEqual(expected,hit is not None)
                 self.assertEqual(expected,bool(actor.get('_stack_carrier')))
 
+    def test_rejected_or_distant_roof_does_not_disable_planar_contact(self):
+        for blocked,settled,expected in ((True,2.,None),(False,5.,None),
+                                          (False,2.,['bot',12])):
+            with self.subTest(blocked=blocked,settled=settled):
+                battle,actor=self.scene()
+                battle._local_pitch=battle._local_roll=0.
+                battle.client=types.SimpleNamespace(player_id=1)
+                battle._collision_shape=lambda unused:(1.5,3.,0.,2.)
+                def solve(*args):
+                    battle._stack_context['hits'].append((('bot',12),{},(0.,2.,0.)))
+                    battle._stack_context['actor']['_stack_carrier']=['bot',12]
+                    battle._local_support_rise_blocked=blocked
+                    return (0.,settled,0.)
+                battle._update_vertical_motion_impl=solve
+                entity=types.SimpleNamespace(typeDescriptor=object())
+                battle._update_vertical_motion(entity,(0.,2.,0.),0.,.1)
+                self.assertEqual(expected,battle._local_stack_carrier)
+
     def test_no_native_hit_cannot_invent_roof_from_obb_overlap(self):
         battle,actor=self.scene()
         with mock.patch.object(battle_fixture.battle_runtime_module,'_collide_vehicle_evidence_at_matrix',return_value=[]):

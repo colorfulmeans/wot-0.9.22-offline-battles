@@ -24509,7 +24509,16 @@ class BattleRuntime(object):
         try:
             result = self._update_vertical_motion_impl(entity,position,yaw,dt,
                 support_height_delta,support_speed_delta)
-            self._local_stack_carrier = actor.get('_stack_carrier')
+            # A long support query can see a roof which the pose guard
+            # subsequently rejects. Only the admitted settled height may
+            # exempt this pair from the horizontal contact solver.
+            hits = self._stack_context['hits']
+            shape = actor['collision_shape']
+            reach = (abs(math.sin(self._local_pitch))*shape[1] +
+                     abs(math.sin(self._local_roll))*shape[0])
+            accepted = (hits and not getattr(self,'_local_support_rise_blocked',False)
+                        and abs(result[1]-hits[-1][2][1]) <= reach+0.15)
+            self._local_stack_carrier = actor.get('_stack_carrier') if accepted else None
             return result
         finally:
             self._stack_context = previous
