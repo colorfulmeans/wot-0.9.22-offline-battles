@@ -1,4 +1,4 @@
-"""A native Lakeville van hit must not inherit an authored absent-slot gate."""
+"""Fixed raw WGDE slots enter ordinary native registration without reindexing."""
 import json
 from pathlib import Path
 import sys
@@ -18,15 +18,16 @@ class ContactedLayoutTests(unittest.TestCase):
         d.set_catalog(json.loads((Path(__file__).resolve().parents[1] /
                                  'destructibles/07_lakeville.json').read_text()))
         self.catalog=d._destructible_catalog
-        self.record=self.catalog['baked_instances'][(33149,188)]
-        self.catalog['excluded_instances'].add((33149,189))
-        self.catalog['baked_instances'].pop((33149,189),None)
+        self.record=self.catalog['baked_instances'][(33149,189)]
         self.manager=fixture._Manager()
         self.manager.space_id=1
         self.manager.set_chunk_count(33149,222)
         self.area=types.ModuleType('AreaDestructibles')
         self.area.g_destructiblesManager=self.manager
         self.area.DESTR_TYPE_FRAGILE=2
+        self.area.DESTR_TYPE_TREE=0
+        self.area.DESTR_TYPE_FALLING_ATOM=1
+        self.area.DESTR_TYPE_STRUCTURE=3
         self.area.g_cache=types.SimpleNamespace(getDescByFilename=lambda name:dict(type=2,health=20))
         self.bigworld=types.ModuleType('BigWorld')
         self.bigworld.wg_getChunkMatrix=lambda *args:types.SimpleNamespace(translation=fixture._Vector())
@@ -48,7 +49,7 @@ class ContactedLayoutTests(unittest.TestCase):
         self.saved={name:d.__dict__.get(name) for name in
                     ('g_offh_destr_isolated_slots','g_offh_destr_isolated_chunks',
                      'g_offh_destr_isolation_reasons')}
-        d.g_offh_destr_isolated_slots={(33149,188)}
+        d.g_offh_destr_isolated_slots=set()
         d.g_offh_destr_isolated_chunks=set()
         d.g_offh_destr_isolation_reasons={}
         self.addCleanup(self.restore)
@@ -59,83 +60,59 @@ class ContactedLayoutTests(unittest.TestCase):
             if value is None:d.__dict__.pop(name,None)
             else:setattr(d,name,value)
 
-    def test_exact_contact_rehomes_omitted_van_and_preserves_quarantine(self):
-        self.assertTrue(d._recover_contacted_model_slot_1513(1,(33149,189)))
+    def test_van_is_in_the_native_slot_before_any_contact(self):
+        self.assertTrue(d.is_excluded_1513(33149,188))
         self.assertFalse(d.is_excluded_1513(33149,189))
-        self.assertEqual(self.record,self.catalog['baked_instances'][(33149,189)])
-        self.assertTrue(d.is_isolated_1513(33149,188))
-        self.assertEqual((33149,189),self.catalog['instances'][self.record['signature']]['wire'])
-        self.assertEqual(self.record['descriptor_filename'],
-            d.g_offh_destr_proved_layouts[(1,33149)][1][189])
+        self.assertIn('van',self.record['filename'].lower())
+        name=d._resolve_catalog_model_name_1513(self.bigworld,self.area,1,33149,189,222,('',)*222)
+        self.assertEqual(self.record['descriptor_filename'],name)
+        self.bigworld.wg_getDestructibleMatrix.assert_called_once_with(1,33149,189)
+        # The normal shot instance path consumes exactly that baked slot.
         instance=d._stream_baked_shot_instance_1513(1,(33149,189))
         self.assertIsNotNone(instance)
-        point=fixture._Vector(209.28936767578125,-3.620638847351074,-151.54971313476562)
-        payload=(True,point,fixture._Vector(0,1,0),73,'',189,33149)
-        named=d._recover_contact_material_1513(1,payload,point)
-        self.assertEqual(self.record['descriptor_filename'],named[4])
-        self.assertEqual((189,33149),named[5:7])
+        self.assertEqual(self.record,self.catalog['baked_instances'][(33149,189)])
 
-    def test_active_duplicate_owner_is_not_guessed_away(self):
-        d.g_offh_destr_isolated_slots=set()
-        self.assertFalse(d._recover_contacted_model_slot_1513(1,(33149,189)))
-        self.assertTrue(d.is_excluded_1513(33149,189))
-
-    def test_quarantined_live_slot_is_never_queried(self):
-        d.g_offh_destr_isolated_slots.add((33149,189))
-        self.assertFalse(d._recover_contacted_model_slot_1513(1,(33149,189)))
+    def test_quarantined_slot_cannot_be_reproved_or_remapped(self):
+        d._isolate_destructible_1513('native_failure',33149,189)
+        self.assertIsNone(d._resolve_catalog_model_name_1513(self.bigworld,self.area,1,33149,189,222,()))
         self.bigworld.wg_getDestructibleMatrix.assert_not_called()
+        self.assertFalse(hasattr(d,'_recover_contact_material_1513'))
+        self.assertFalse(hasattr(d,'_commit_proved_chunk_layout_1513'))
 
-    def test_actual_quarantined_contact_can_reprove_logical_identity_only(self):
-        for reason in ('layout_placement_conflict','catalog_signature_miss'):
-            d._isolate_destructible_1513(reason,33149,189,detail='captured identity failure')
-            self.assertTrue(d.is_isolated_1513(33149,189))
-            self.assertTrue(d._recover_contacted_model_slot_1513(1,(33149,189)))
-            self.assertFalse(d.is_isolated_1513(33149,189))
-            self.assertEqual(self.record,self.catalog['baked_instances'][(33149,189)])
-            self.assertTrue(d.g_offh_destr_isolation_reasons[(33149,189)]['recovered'])
-            # The captured AP hit must recover the descriptor and register
-            # this exact live wire after logical quarantine, not just remap it.
-            point=fixture._Vector(208.3767547607,-3.4958736897,-150.6924896240)
-            payload=(True,point,fixture._Vector(0,1,0),73,'',189,33149)
-            named=d._recover_contact_material_1513(1,payload,point)
-            self.assertEqual(self.record['descriptor_filename'],named[4])
-            self.assertEqual((189,33149),named[5:7])
+    def test_fixed_van_slot_enters_normal_crush_commit(self):
+        self.area.g_cache.unitVehicleMass=10000.
+        self.area.g_cache.getDescByFilename=lambda name:dict(type=2,health=20,kineticDamageCorrection=0.)
+        cache=types.ModuleType('DestructiblesCache')
+        cache.scaledDestructibleHealth=lambda scale,health:scale*health
+        hull=fixture._Strict1513Component(hitTester=types.SimpleNamespace(
+            bbox=((-1.7,-1.,-3.7),(1.7,1.5,3.7),None)))
+        descriptor=fixture._Strict1513Component(physics={'weight':57000.},hull=hull)
+        authority=types.SimpleNamespace(is_destroyed=lambda *args:False,
+            destroy_fragile=mock.Mock(return_value=True))
+        d.set_event_sink(lambda event:True)
+        self.addCleanup(d.set_event_sink,None)
+        centre=fixture._Vector(*(x/1000. for x in self.record['signature'][:3]))
+        with mock.patch.dict(sys.modules,{'DestructiblesCache':cache}),mock.patch.object(d,'_get_destr_authority',return_value=authority):
+            detail=d._catalog_motion_blocked(1,centre,0.,3.3,descriptor,10.,dt=.05,
+                return_detail=True,commit_enabled=True)
+        self.assertEqual('crushed',detail['status'])
+        self.assertEqual(((33149,189,None),),detail['token'])
+        authority.destroy_fragile.assert_called_once()
+        self.assertTrue(d.is_excluded_1513(33149,188))
 
-    def test_native_query_failure_cannot_be_downgraded_to_identity_conflict(self):
-        d._isolate_destructible_1513('name_item_unresolved',33149,189,detail='native exception')
-        d._isolate_destructible_1513('layout_placement_conflict',33149,189,detail='later conflict')
-        self.assertFalse(d._recover_contacted_model_slot_1513(1,(33149,189)))
-        self.bigworld.wg_getDestructibleMatrix.assert_not_called()
-        self.assertEqual('name_item_unresolved',d.g_offh_destr_isolation_reasons[(33149,189)]['reason'])
-
-    def test_quarantined_wrong_transform_remains_solid_with_contact_evidence(self):
-        d._isolate_destructible_1513('layout_placement_conflict',33149,189)
-        signature=list(self.record['signature']);signature[3]+=20
+    def test_wrong_transform_is_not_reassigned_to_a_nearby_slot(self):
+        signature=list(self.record['signature']);signature[0]+=20000
         self.bigworld.wg_getDestructibleMatrix.return_value=fixture._CatalogSignatureMatrix(signature)
-        self.assertFalse(d._recover_contacted_model_slot_1513(1,(33149,189)))
-        self.assertTrue(d.is_isolated_1513(33149,189))
-        self.assertIn('contact_proof',d.g_offh_destr_isolation_reasons[(33149,189)])
+        self.assertIsNone(d._resolve_catalog_model_name_1513(self.bigworld,self.area,1,33149,189,222,()))
+        self.assertEqual(self.record,self.catalog['baked_instances'][(33149,189)])
+        self.assertNotIn((33149,188),self.catalog['baked_instances'])
 
     def test_chunk_lifetime_retires_isolation_provenance(self):
-        d._isolate_destructible_1513('layout_placement_conflict',33149,189)
+        d._isolate_destructible_1513('native_failure',33149,189)
         d._isolate_destructible_1513('native_count_abi',123)
         d.retire_chunk_identity_1513(33149)
         self.assertNotIn((33149,189),d.g_offh_destr_isolation_reasons)
         self.assertIn((123,None),d.g_offh_destr_isolation_reasons)
-
-    def test_wrong_full_transform_does_not_register_or_destroy(self):
-        signature=list(self.record['signature']);signature[3]+=20
-        self.bigworld.wg_getDestructibleMatrix.return_value=fixture._CatalogSignatureMatrix(signature)
-        self.assertFalse(d._recover_contacted_model_slot_1513(1,(33149,189)))
-        self.assertTrue(d.is_excluded_1513(33149,189))
-
-    def test_named_or_off_contact_material_needs_no_layout_probe(self):
-        point=fixture._Vector(209.,-3.6,-151.5)
-        for payload,contact in (( (True,point,fixture._Vector(0,1,0),73,'van.model',189,33149),point),
-                ((True,point,fixture._Vector(0,1,0),73,'',189,33149),fixture._Vector(210,-3.6,-151.5))):
-            with mock.patch.object(d,'_recover_contacted_model_slot_1513') as recover:
-                self.assertEqual(payload,d._recover_contact_material_1513(1,payload,contact))
-                recover.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

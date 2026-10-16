@@ -147,6 +147,29 @@ def navigation_checks():
         assert backend.nav_close(context) and backend.nav_close(context)
         assert backend.nav_poll(context)[0:2] == ((), ())
 
+    # Exercise actual shipping C++ grading against Python on nonuniform
+    # slopes, including a shorter sloping corridor and equal-length forks.
+    # A secondary slope score must never become an additive distance cost.
+    for pattern in range(4):
+        blocked = [(9,z) for z in range(13) if z not in (3,9)] if pattern<3 else []
+        graph=graph_for(blocked=blocked)
+        graph['heights_mm']=[None if (x,z) in blocked else
+            (int(180*abs(z-9)) if pattern==0 else
+             int(180*abs(z-3)) if pattern==1 else
+             int(150*x+70*z) if pattern==2 else int(220*x))
+            for z in range(13) for x in range(19)]
+        grid=grid_for(graph)
+        start=grid.point_for((1,6),grid._baked_cell_height((1,6)))
+        goal=grid.point_for((17,6),grid._baked_cell_height((17,6)))
+        expected=grid.plan(start,goal,max_expansions=4096,prefer_clearance=False)
+        assert expected, 'Legal sloped route was discarded'
+        context=backend.nav_open(graph_values(graph,grid))
+        try:
+            assert backend.nav_submit(context,*search_values(grid,700+pattern,start,goal,clearance=False))
+            equal(nav_wait(context,[700+pattern],grid)[700+pattern][2],expected)
+        finally:
+            backend.nav_close(context)
+
     graph = graph_for()
     grid = grid_for(graph)
     grid._native_review_cells = set((x, z) for x in range(19) for z in range(13))

@@ -2216,7 +2216,7 @@ class LANClient(object):
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
-                   gun_checkpoint=None, up_cosine=None):
+                   gun_checkpoint=None, up_cosine=None, wreck_pose=False):
         if not self.ready or self.phase != 'battle':
             return False
         if self._input_seq_round != self.round_id:
@@ -2276,6 +2276,8 @@ class LANClient(object):
                 message['pitch'] = _canonical_angle(pitch)
             if roll is not None:
                 message['roll'] = _canonical_angle(roll)
+            if wreck_pose:
+                message['wreck_pose'] = True
             if up_cosine is not None:
                 if (isinstance(up_cosine, bool) or
                         not isinstance(up_cosine, integer_types + (float,))):

@@ -8944,3 +8944,49 @@ quarantine from native-query quarantine, check full-transform disagreement,
 and exercise exact registration plus material recovery. These are engine-free
 contract checks; the exact van's live identity and native roof stability still
 require the next #1513 gameplay replay.
+
+## Windows322: fixed scene identities, nested terrain preference, passive player wreck
+
+This supersedes Windows320/321's runtime layout-repair interpretation. An
+independent read of the exact #1513 Lakeville WGDE tables finds 222 raw rows
+in chunk 33149: row 188 is empty and row 189 references the env420 van. The
+baker incorrectly skipped empty rows when assigning native item numbers.
+Rebuild all 41 destructible and foliage catalogs together, preserving empty
+slots and excluding them from native model queries (formats 10 and 5).
+Resource descriptions, collision boxes and authored transforms are unchanged.
+Remove live placement reindexing, contacted-material recovery, logical
+unquarantine/reproof and the unused placement matcher. Normal native name,
+category and transform validation remains slot-local and never changes wires.
+
+Navigation now compares distance/progress first and slope second, rather
+than adding a slope surcharge to distance. Local candidate ordering uses
+distance to the real goal, then local/longitudinal grade, then the existing
+steering/avoidance tie break. Python and native C++ A* retain existing route,
+obstacle, corridor and failure costs as the primary key and accumulate grade
+as a separate secondary key. Legal slopes remain usable. No retry budget,
+route-switch rule, path-end strategy, or height-layer exclusion is added.
+
+The fatal-contact player 113 case exposed two lifecycle stops: the local
+driver stopped physics on death, and the server ignored dead-owner poses.
+Continue passive gravity, suspension and existing wreck contact laws after
+death; publish only the dead body's validated pose during the active round.
+Controls, weapons and damage inputs remain inactive and ordered retries stay
+idempotent. A round result, leave or new round still terminates this path.
+
+Withdraw the later falling-roof approach and near-roof pair exemptions.
+Retain the original native support sampling, suspension solver, proved carrier,
+first-impact and pressure laws. Add bounded carrier receipts containing full
+solver input/output, patch offsets and actual carrier witnesses, so a replay
+can distinguish support-query, solver and planar-separation failures. No new
+roof fallback is added; stable roof support still requires native acceptance.
+The support-mode transition rule is unchanged: one of five invalid enables
+detailed support, all five valid disables it. Fall/ram module coefficients,
+native module presentation and unrelated damage/economy rules are unchanged.
+
+Regression coverage replaces tests requiring compacted WGDE indices and the
+withdrawn remapping/roof exemptions. It includes raw empty-slot classes, all
+map identity disjointness, Lakeville's ordinary crush and shot-registration
+paths, immutable identity under quarantine, real passive vertical integration,
+dead-pose admission/rejection and nested slope preferences. Native worker
+conformance additionally compares nonuniform-slope C++ paths with Python.
+These checks establish source/data contracts, not BigWorld gameplay acceptance.

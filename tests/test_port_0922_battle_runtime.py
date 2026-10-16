@@ -29188,13 +29188,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
             send_current=lambda: client.send_input('current'))
         battle._local_speed = 5.0
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
 
-        self.assertEqual(0.0, battle._local_speed)
+        battle._advance_local_wreck.assert_called_once_with(entity, 0.1)
         self.assertEqual(0.0, battle._sender.forward)
         self.assertEqual(0.0, battle._sender.turn)
         self.assertFalse(battle.shoot(0.0, 0.0))
-        self.assertFalse(any(kind == 'fire' for kind, unused in client.sent))
+        self.assertFalse(any(row[0] == 'fire' for row in client.sent))
 
     def test_presentation_ledger_names_only_verifiable_displayed_bots(self):
         runtime = _runtime()
@@ -34043,6 +34044,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             forward=1.0, turn=0.0,
             send_current=lambda: client.send_input('current'))
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
         self.assertEqual([], entity.teleports)
 

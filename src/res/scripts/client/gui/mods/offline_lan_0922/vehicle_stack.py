@@ -55,9 +55,7 @@ def planar_pair(first, second):
     first_key = (first.get('kind', 'bot'), first.get('network_id', first['id']))
     second_key = (second.get('kind', 'bot'), second.get('network_id', second['id']))
     return not (tuple(first.get('stack_carrier') or ()) == second_key or
-                tuple(second.get('stack_carrier') or ()) == first_key or
-                second_key in first.get('roof_contact_pairs', ()) or
-                first_key in second.get('roof_contact_pairs', ()))
+                tuple(second.get('stack_carrier') or ()) == first_key)
 
 
 def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
@@ -123,36 +121,6 @@ def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
     return result
 
 
-def roof_contact_pairs(params, ground, pseudo_ground, solved, position, yaw,
-                       sample_pitch, sample_roll, hits):
-    """Classify every fresh near-roof pair, without granting pressure damage.
-
-    The suspension integrator can leave a small separating gap on a rebound.
-    A fresh native upward face at that same underside sample still proves a
-    vertical pair; selecting just one carrier lets the planar OBB resolver
-    eject a tank straddling two roofs. No previous-frame witnesses are used.
-    """
-    from . import vehicle_physics as vp
-    rotation = vp._suspension_rotation(solved.get('pitch', 0.), solved.get('roll', 0.))
-    pairs = set()
-    for kind, points, heights in (('spring', params['springs'], ground),
-                                  ('pseudo', params.get('pseudo_contacts', ()), pseudo_ground)):
-        for index, point in enumerate(points):
-            height = heights[index]
-            if height is None:
-                continue
-            compression = float(height) - vp._rigid_point_height(solved, point, rotation)
-            if kind == 'spring':
-                compression += point['static_compression']
-            if compression < -.03:
-                continue
-            ox, unused, oz = vp.suspension_point_offset(point, sample_pitch, sample_roll)
-            x = position[0] + math.cos(yaw)*ox + math.sin(yaw)*oz
-            z = position[2] - math.sin(yaw)*ox + math.cos(yaw)*oz
-            for key, unused_state, witness in hits:
-                if abs(witness[1]-float(height)) <= .03 and math.hypot(witness[0]-x, witness[2]-z) <= .05:
-                    pairs.add(tuple(key))
-    return sorted(pairs)
 
 
 class Ledger(object):

@@ -2019,6 +2019,8 @@ class _LANInputSender(object):
                 self.owner, '_local_turret_pushes', {}).values()),
             'destructible_contacts': destructible_contacts,
         }
+        if getattr(self.owner, '_local_wreck_active', False):
+            keyword_args['wreck_pose'] = True
         up_cosine = getattr(self.owner, '_local_surface_up_cosine', None)
         if up_cosine is None:
             up_cosine = math.cos(keyword_args['pitch']) * math.cos(
@@ -5954,12 +5956,9 @@ class BattleRuntime(object):
         actors = list(self._bots.states.values()) if self._bots is not None else []
         actors += [dict(row,kind='player') for row in players or ()]
         carriers = {}
-        roof_pairs = {}
         if self._bots is not None:
             self._bots._stack_current_carriers = carriers
-            self._bots._stack_current_roof_pairs = roof_pairs
         for actor in actors:
-            actor['_stack_roof_pairs'] = ()
             if not all(name in actor for name in ('id','x','y','z')):
                 continue
             previous = self._stack_support_context(actor)
@@ -6003,8 +6002,6 @@ class BattleRuntime(object):
                 if not context['hits']:
                     continue
                 pairs = sorted(set(key for key,unused_lower,unused_point in context['hits']))
-                actor['_stack_roof_pairs'] = pairs
-                roof_pairs[(actor.get('kind','bot'),int(actor['id']))] = pairs
                 key, lower, point = primary
                 carriers[(actor.get('kind','bot'),int(actor['id']))] = list(key)
                 entity = next(e for k,s,e in context['candidates'] if k==key)
@@ -23348,69 +23345,6 @@ class BattleRuntime(object):
             stack_carrier=getattr(self,'_local_stack_carrier',None))
         return [body for body in result if vehicle_stack.planar_pair(own,body)]
 
-    def _falling_roof_approaches(self, entity, position, yaw, peers):
-        """Keep a descending roof approach out of conservative planar OBBs.
-
-        A fresh upward native BSP hit must lie below a posed underside point.
-        This is not a settled carrier and never publishes pressure or damage.
-        """
-        descending = getattr(self, '_local_vertical_speed', 0.0) < 0.0
-        if (not descending and not getattr(self, '_local_stack_carrier', None) and
-                not getattr(self, '_local_roof_contact_pairs', ())):
-            return set()
-        shape = self._collision_shape(entity.typeDescriptor)
-        actor = dict(id=int(getattr(self.client, 'player_id', 0) or 0),
-            kind='player', x=position[0], y=position[1], z=position[2],
-            yaw=yaw, pitch=self._local_pitch, roll=self._local_roll,
-            collision_shape=shape)
-        previous = self._stack_support_context(actor)
-        try:
-            admitted = set()
-            sample_points = [(dict(x=side*shape[0],y=shape[2],z=forward*shape[1]), 0.)
-                for side,forward in ((0.,0.),(-1.,0.),(1.,0.),(0.,-1.),(0.,1.),
-                                     (-1.,-1.),(-1.,1.),(1.,-1.),(1.,1.))]
-            params = getattr(self, '_local_suspension_params', None)
-            if not descending and params:
-                # Real spring records have optional local Y. Compression is
-                # world-vertical, just as in the suspension solver; rotating
-                # a pre-compressed local point changes its XZ on a slope.
-                sample_points = [(point, point['static_compression'])
-                                 for point in params['springs']]
-                sample_points.extend((point, 0.) for point in params.get('pseudo_contacts', ()))
-            context = self._stack_context
-            candidates = list(context['candidates'])
-            for key, state, target in candidates:
-                if not any((p['kind'], p['network_id']) == key for p in peers):
-                    continue
-                context['candidates'] = [(key, state, target)]
-                for point, compression in sample_points:
-                    ox, oy, oz = vehicle_physics.suspension_point_offset(
-                        point,
-                        self._local_pitch, self._local_roll)
-                    x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
-                    z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
-                    foot_y = position[1]+oy-compression
-                    context['hits'] = []
-                    bottom = (float(state['y'])-.5 if descending else
-                              max(float(state['y'])-.5, foot_y-.03))
-                    self._stack_ground_hit(self._vector((x,foot_y+.02,z)),
-                        self._vector((x,bottom,z)),None)
-                    if any(point[2][1] <= foot_y+.02 for point in context['hits']):
-                        admitted.add(key)
-                        break
-            return admitted
-        except Exception as error:
-            # This optional planar exemption cannot terminate the battle.
-            # Without fresh roof proof, keep ordinary solid-body contact.
-            moment = self._clock()
-            if moment >= getattr(self, '_roof_approach_error_at', -1.e30):
-                self._roof_approach_error_at = moment + 2.0
-                native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
-                    phase='roof_approach_query_failed', upper=['player', actor['id']],
-                    local_pose=position, descending=descending, error=str(error)[:240]))
-            return set()
-        finally:
-            self._stack_context = previous
 
     @timed('local.contact_resolve')
     def _resolve_local_tank_contacts(self, entity, position, yaw, dt,
@@ -23432,7 +23366,7 @@ class BattleRuntime(object):
         own = {
             'id': -1, 'kind': 'player', 'network_id': int(getattr(self.client,'player_id',0) or 0),
             'stack_carrier': getattr(self,'_local_stack_carrier',None),
-            'alive': True,
+            'alive': not getattr(self, '_local_wreck_active', False),
             'team': int(_number(getattr(self.client, 'team', 0))),
             'x': position[0], 'y': position[1], 'z': position[2],
             'yaw': yaw, 'pitch': self._local_pitch,
@@ -23452,17 +23386,6 @@ class BattleRuntime(object):
                   if start_position is not None else (0.0, 0.0))
         others = self._contact_tanks(
             position, own['shape'], dt, extra_reach=math.hypot(*travel))
-        roof_approaches = self._falling_roof_approaches(entity, position, yaw, others)
-        if roof_approaches:
-            others = [body for body in others
-                      if (body['kind'], body['network_id']) not in roof_approaches]
-            moment = self._clock()
-            if moment >= getattr(self, '_roof_approach_log_at', -1.e30):
-                native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
-                    phase='descending_roof_approach', local_pose=position,
-                    upper=['player', own['network_id']],
-                    lower=[list(k) for k in sorted(roof_approaches)]))
-                self._roof_approach_log_at = moment + 1.
         drive_fraction = 1.0
         if start_position is not None:
             start_body = dict(own, x=start_position[0], z=start_position[2])
@@ -23479,7 +23402,8 @@ class BattleRuntime(object):
                 contact_drive_intent, self._local_pitch)
             if reaction_paid:
                 own['traverse_torque'] = 0.0
-        self._poll_local_ram_contact_episodes(entity, own, others)
+        if own['alive']:
+            self._poll_local_ram_contact_episodes(entity, own, others)
         now = self._clock()
         physical_others = []
         for other in others:
@@ -23570,7 +23494,7 @@ class BattleRuntime(object):
                   applied_forward * math.sin(yaw))
         push_z = (self._local_push_z + delta_z -
                   applied_forward * math.cos(yaw))
-        if self._local_physics is not None:
+        if self._local_physics is not None and not getattr(self, '_local_wreck_active', False):
             push_x, push_z = vehicle_physics.contact_push_step(
                 self._local_physics, push_x, push_z, yaw, dt,
                 rolling=bool(self._local_speed or getattr(self._sender, 'forward', 0)),
@@ -24416,6 +24340,8 @@ class BattleRuntime(object):
 
     def _apply_fall_damage(self, entity, impact_speed):
         """Queue a physical impact observation without mutating canonical HP."""
+        if getattr(self, '_local_wreck_active', False):
+            return False
         witnesses = getattr(self, '_landing_contact_witnesses', ())
         normal = getattr(self, '_landing_contact_normal', (0., 1., 0.))
         self._landing_contact_witnesses = ()
@@ -24687,9 +24613,6 @@ class BattleRuntime(object):
                 accepted_carrier = (actor.get('_stack_carrier') if hits and
                     abs(result[1]-hits[-1][2][1]) <= reach+0.15 else None)
             previous_carrier=getattr(self,'_local_stack_carrier',None)
-            self._local_roof_contact_pairs = (
-                self._stack_context.get('roof_contact_pairs', ()) if not
-                getattr(self,'_local_support_rise_blocked',False) else ())
             self._local_stack_carrier = (accepted_carrier if not
                 getattr(self,'_local_support_rise_blocked',False) else None)
             if previous_carrier is not None and previous_carrier != self._local_stack_carrier:
@@ -24965,9 +24888,6 @@ class BattleRuntime(object):
             self._local_fall_armed = True
         context = getattr(self,'_stack_context',None)
         if context is not None:
-            context['roof_contact_pairs'] = vehicle_stack.roof_contact_pairs(
-                params,ground,pseudo_ground,solved,position,yaw,
-                previous_pitch,previous_roll,context['hits'])
             context['contact_carrier'] = vehicle_stack.settled_carrier(
                 params,ground,pseudo_ground,solved,position,yaw,
                 previous_pitch,previous_roll,context['hits'])
@@ -24985,8 +24905,14 @@ class BattleRuntime(object):
             if context['hits'] and (carrier_due or carrier_changed):
                 native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
                     phase='carrier_commit',position=position,
+                    solver_input=dict(params=params,ground=list(ground),
+                        pseudo_ground=list(pseudo_ground),state=physics_state,dt=dt,
+                        patches=[dict(index=i,offset=h.offset,
+                            world_point=getattr(h,'world_point',None))
+                            for i,h in enumerate(ground) if getattr(h,'offset',None) is not None],
+                        support_vertical_speed=support_vertical_speed),
+                    solver_output=solved,
                     carrier=context['contact_carrier'],contacts=solved['contact_count'],
-                    roof_contact_pairs=context['roof_contact_pairs'],
                     touched_contacts=solved.get('touched_contact_count'),airborne=solved.get('airborne'),
                     vertical_speed=solved.get('vertical_velocity'),dt=dt,
                     matching=carrier_receipt,
@@ -25410,6 +25336,41 @@ class BattleRuntime(object):
             self._local_smooth_drive_pitch = 0.0
         return yaw
 
+    def _advance_local_wreck(self, entity, dt):
+        """Advance the dead owner's existing passive contact and gravity laws."""
+        position, yaw = self._local_position, self._local_yaw
+        shape = self._collision_shape(entity.typeDescriptor)
+        vx = math.sin(yaw)*self._local_speed + self._local_push_x
+        vz = math.cos(yaw)*self._local_speed + self._local_push_z
+        vx, vz, omega = vehicle_physics.wreck_contact_step(
+            self._local_physics, vx, vz, self._local_turn_speed, yaw, shape, dt,
+            normal_y=math.cos(self._local_pitch)*math.cos(self._local_roll),
+            airborne=self._local_airborne)
+        self._local_speed = 0.0
+        self._local_push_x, self._local_push_z = vx, vz
+        self._local_turn_speed = omega
+        candidate_yaw = yaw + omega*dt
+        if self._native_world_rotation_is_clear(position,yaw,candidate_yaw,
+                entity.typeDescriptor,pitch=self._local_pitch,roll=self._local_roll):
+            yaw = candidate_yaw
+        self._local_support_tick_pose = position
+        self._local_support_motion_pose = position
+        try:
+            settled = self._update_vertical_motion(entity,position,yaw,dt)
+        finally:
+            self._local_support_tick_pose = self._local_support_motion_pose = None
+        self._local_contact_start_position = position
+        settled = self._resolve_local_tank_contacts(entity,settled,yaw,dt)
+        self._local_position, self._local_yaw = settled,yaw
+        self._update_local_presentation(entity,dt)
+        now = self._clock()
+        if now >= getattr(self,'_local_wreck_log_at',-1.e30):
+            self._local_wreck_log_at = now+1.0
+            native_input_diagnostics.write_json_record('WRECK POSE',dict(
+                phase='local_passive_step',player=getattr(self.client,'player_id',None),
+                before=position,after=settled,vertical_speed=self._local_vertical_speed,
+                airborne=self._local_airborne,carrier=getattr(self,'_local_stack_carrier',None)))
+
     def _drive_local_step(self, dt):
         if self._sender is None or self._server is None:
             return
@@ -25422,6 +25383,17 @@ class BattleRuntime(object):
                    (not callable(is_alive) and
                     (_number(getattr(entity, 'health', 0.0)) <= 0.0 or
                      not bool(getattr(entity, 'isCrewActive', True)))))
+        dead = bool(stopped and self._battle_result is None and
+                    _number(getattr(entity, 'health', 0.0)) <= 0.0)
+        if dead:
+            self._local_wreck_active = True
+            self._sender.forward = self._sender.turn = 0.0
+            self._local_drive_turn = self._local_drive_throttle = 0.0
+            self._local_direction_command = 0.0
+            self._local_service_brake = False
+            self._advance_local_wreck(entity, max(0.0, min(float(dt), .1)))
+            return False
+        self._local_wreck_active = False
         if stopped:
             dt = max(0.0, min(float(dt), 0.1))
             self._local_speed = 0.0
@@ -31145,6 +31117,7 @@ class BattleRuntime(object):
         self._local_speed = 0.0
         self._local_turn_speed = 0.0
         self._local_reaction_rate = 0.0
+        self._local_wreck_active = False
         self._local_drive_turn = 0.0
         self._local_drive_throttle = 0.0
         self._local_direction_command = 0.0

@@ -336,7 +336,7 @@ MODERN_INPUT_FIELDS = frozenset((
     "fire_seq", "shell_index", "next_shell_index",
     "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes", "turret_pushes",
     "ram_contact", "destructible_contacts", "siege_enabled",
-    "up_cosine",
+    "up_cosine", "wreck_pose",
 ))
 MODERN_INPUT_REQUIRED_FIELDS = frozenset(("round_id",))
 HUMAN_RAM_CONTACT_FIELDS = frozenset((
@@ -11844,6 +11844,8 @@ class BattleState:
         extra = fields - MODERN_INPUT_FIELDS
         if extra:
             return ("field_whitelist", sorted(extra)[0]), parsed
+        if 'wreck_pose' in message and not isinstance(message['wreck_pose'], bool):
+            return ('wreck_pose_shape', 'wreck_pose'), parsed
         has_next_shell = "next_shell_index" in message
         has_shell_pending = "shell_change_pending" in message
         if has_next_shell != has_shell_pending:
@@ -12037,10 +12039,21 @@ class BattleState:
             gun_checkpoint = parsed["gun_checkpoint"]
             reported_up_cosine = parsed["up_cosine"]
             if inactive_modern:
+                if (message.get('wreck_pose') is True and not player.alive and
+                        self.phase == 'battle' and self.battle_result is None and
+                        player.participating):
+                    # A dead owner publishes passive position only. Driver,
+                    # weapons and damage inputs remain terminal no-ops.
+                    for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'):
+                        if name in message:
+                            setattr(player, name, _finite_float(message[name]))
+                    player.forward = player.turn = player.speed = 0.0
+                    player.client_position = True
+                    self._record_player_pose_sample(player, message)
                 # A complete input frame may already be queued when death,
                 # leave, or the round result overtakes it. Its whole
-                # non-mutating envelope is validated above; fold it as a
-                # terminal no-op that advances only the processed frontier so
+                # envelope is validated above. Apart from an explicit passive
+                # wreck pose, fold it as a no-op advancing the processed frontier so
                 # the frames queued behind it never wait on a sequence gap.
                 if ledger:
                     self._record_player_input_decision(
