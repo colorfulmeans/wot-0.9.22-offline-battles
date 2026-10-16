@@ -67,25 +67,35 @@ class Ledger(object):
                 upper_mass, lower_mass):
         key = tuple(upper) + tuple(lower)
         row = self.rows.setdefault(key, dict(upper=list(upper), lower=list(lower),
-            upper_total=0.0, lower_total=0.0, contact_seconds=0.0))
+            upper_total=0.0, lower_total=0.0, lower_environment_total=0.0,
+            upper_impact_total=0, contact_seconds=0.0))
         seconds = max(0.0, float(dt))
         if math.isnan(seconds) or math.isinf(seconds):
             raise ValueError('stack elapsed time is not finite')
         if lower_alive:
             up_rate, low_rate = pressure_rates(upper_mass, lower_mass)
             row['contact_seconds'] += seconds
-            row['lower_total'] += low_rate * seconds
+            if upper_alive:
+                row['lower_total'] += low_rate * seconds
+            else:
+                row['lower_environment_total'] += low_rate * seconds
             if upper_alive:
                 row['upper_total'] += up_rate * seconds
         return row
 
-    def strike(self, upper, lower, damage):
+    def strike(self, upper, lower, damage, upper_damage=0):
         row = self.advance(upper, lower, 0.0, False, False, 1.0, 1.0)
         row['lower_total'] += max(0, int(damage))
+        # Bot HP is already committed by its landing owner. This cumulative
+        # witness changes its cause/credit, never spends that HP a second time.
+        row['upper_impact_total'] += max(0, int(upper_damage))
 
     def publication(self):
         return [dict(upper=list(row['upper']), lower=list(row['lower']),
                      upper_total=int(row['upper_total']+1.e-8),
-                     lower_total=int(row['lower_total']+1.e-8),
+                     lower_total=(int(row['lower_total']+1.e-8)+
+                                  int(row['lower_environment_total']+1.e-8)),
+                     lower_environment_total=int(row['lower_environment_total']+1.e-8),
+                     upper_impact_total=row['upper_impact_total'],
                      contact_seconds=round(row['contact_seconds'], 6))
                 for unused, row in sorted(self.rows.items())]

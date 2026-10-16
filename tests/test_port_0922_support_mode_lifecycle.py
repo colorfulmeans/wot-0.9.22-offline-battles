@@ -9,6 +9,19 @@ from gui.mods.offline_lan_0922 import environment_modules as em
 
 class SupportLifecycleTests(unittest.TestCase):
     scene = fixtures.ContactSupportTests.scene
+    def test_turn_rebases_slope_before_deciding_detailed_support(self):
+        import math
+        runtime,state=self.scene(lambda x,z:.4*x+.2*z)
+        state.update(speed=0.,vertical_speed=0.,pitch=-math.atan(.2),
+            terrain_pitch=-math.atan(.2),roll=math.atan(.4),_basic_slope_basis_yaw=0.)
+        with contextlib.redirect_stdout(io.StringIO()):
+            runtime._contact_now=0.
+            self.assertFalse(runtime._contact_edge_support_needed(state))
+            state['yaw']=math.pi/2
+            runtime._contact_now=.15
+            self.assertFalse(runtime._contact_edge_support_needed(state))
+            self.assertEqual(5,sum(p['valid'] for p in runtime._basic_support_status(state)))
+
     def test_continuous_descent_does_not_accumulate_stale_basis_height(self):
         import math
         for grade in (.2,.4,.6):

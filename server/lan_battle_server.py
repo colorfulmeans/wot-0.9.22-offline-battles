@@ -7452,18 +7452,37 @@ class BattleState:
                     if owner is not None:
                         fire_owners[victim[1]] = owner
             self.bot_states = next_states
-            self._consume_stack_contacts(progress)
+            stack_impacts = self._consume_stack_contacts(progress)
             environment_fires = self._consume_environment_criticals(progress, fire_owners)
             for victim, previous, current, lost, reason in environment_records:
-                event = dict(kind='bot_health', target_bot=victim[1], damage=lost,
-                    health=current['health'], dead=not current['alive'],
-                    display_health=current.get('display_health', current['health']),
-                    attack_reason=reason, death_reason=reason if not current['alive'] else 0,
-                    source='environment', critical=current.get('critical'))
-                self._attribute_environment_event(event, victim, previous.get('critical'),
-                    record_criticals='critical_totals' not in progress)
-                if event.get('push_attributed'):
-                    self.pending_events.append(event)
+                # Bot landing HP is already in current. Classify that loss
+                # once, using frozen impact witnesses even if this impact
+                # destroyed either participant before publication arrived.
+                remaining = lost
+                parts = []
+                for attacker, amount in stack_impacts.get(victim, ()):
+                    amount = min(remaining, amount)
+                    if amount>0:
+                        parts.append((attacker,amount,2))
+                        remaining -= amount
+                if remaining:
+                    parts.append((None,remaining,reason))
+                cursor = int(current['health'])+lost
+                for attacker, amount, part_reason in parts:
+                    cursor -= amount
+                    dead = cursor<=0 and not current['alive']
+                    if dead:
+                        current['death_reason'] = part_reason
+                    event = dict(kind='bot_health', target_bot=victim[1], damage=amount,
+                        health=cursor, dead=dead, display_health=cursor,
+                        attack_reason=part_reason, death_reason=part_reason if dead else 0,
+                        source='ram' if attacker is not None else 'environment',
+                        critical=current.get('critical'))
+                    self._attribute_environment_event(event,victim,previous.get('critical'),
+                        attacker=attacker,resolve_push=attacker is None,
+                        record_criticals='critical_totals' not in progress)
+                    if event.get('push_attributed'):
+                        self.pending_events.append(event)
                 if victim[1] not in hazards and reason == 3:
                     self.environment_pushes.pop(victim, None)
             for attacker, victim, damage, before, after in fire_damage_records:
@@ -7775,8 +7794,8 @@ class BattleState:
             count -= amount
 
     def _attribute_environment_event(self, event, victim, critical_before, attacker=None,
-                                     record_criticals=True):
-        if attacker is None:
+                                     record_criticals=True, resolve_push=True):
+        if attacker is None and resolve_push:
             attacker = self._environment_pusher(victim)
         if attacker is not None:
             event['attacker_bot' if attacker[0] == 'bot' else 'attacker'] = attacker[1]
@@ -7925,6 +7944,7 @@ class BattleState:
         return float(self.human_collision_profiles.get(identity[1], {}).get('mass', 0.0))
 
     def _commit_stack_damage(self, attacker, victim, damage, phase):
+        reason = 2 if attacker is not None else 3
         target = self._stack_actor(victim)
         if target is None:
             return 0
@@ -7938,21 +7958,21 @@ class BattleState:
             before = self._bot_combat_signature(target)
             critical_before = before[2]
             target.update(health=health,display_health=health,alive=health>0,
-                          death_reason=2 if health<=0 else 0)
+                          death_reason=reason if health<=0 else 0)
             critical = self._apply_bot_terminal_critical(target) if health<=0 else None
             self._commit_external_bot_combat(target,before)
         else:
             critical_before = target.critical
             target.health = target.display_health = health
             target.alive = health > 0
-            target.death_reason = 2 if health<=0 else 0
+            target.death_reason = reason if health<=0 else 0
             if health<=0:
                 target.forward=target.turn=target.speed=0.0
             critical = None
-        event = dict(kind='bot_health' if victim[0]=='bot' else 'health',
+        event = dict(kind='health',
             damage=damage,health=health,display_health=health,dead=health<=0,
-            attack_reason=2,death_reason=2 if health<=0 else 0,
-            source='ram',stack_phase=phase)
+            attack_reason=reason,death_reason=reason if health<=0 else 0,
+            source='ram' if attacker is not None else 'environment',stack_phase=phase)
         event['target_bot' if victim[0]=='bot' else 'target'] = victim[1]
         if critical is not None:
             event.update(critical=critical,combat_revision=target['combat_revision'],
@@ -7960,12 +7980,13 @@ class BattleState:
                 combat_ack_seq=target['combat_ack_seq'])
         self._drop_capture_for_vehicle(*victim,attacker=attacker)
         self._attribute_environment_event(event,victim,critical_before,
-            attacker=attacker,record_criticals=False)
+            attacker=attacker,record_criticals=False,resolve_push=False)
         self.pending_events.append(event)
         if health<=0:
             self._record_vehicle_end(*victim)
         _server_log('VEHICLE STACK ' + json.dumps(dict(phase=phase,
             upper_or_attacker=attacker,victim=victim,damage=damage,health=health,
+            source=event['source'],attack_reason=reason,
             round=self.round_id,trial_rates=True),sort_keys=True))
         return damage
 
@@ -7973,7 +7994,8 @@ class BattleState:
         from gui.mods.offline_lan_0922 import vehicle_stack
         rows = progress.get('stacks',())
         if not isinstance(rows,(list,tuple)) or len(rows)>1024:
-            return
+            return {}
+        impact_credits = {}
         totals = getattr(self,'_stack_totals',None)
         if totals is None:
             totals=self._stack_totals={}
@@ -7983,28 +8005,36 @@ class BattleState:
                 lower=vehicle_stack.carrier(row['lower'])
                 up=_exact_int(row['upper_total'],0,2147483647)
                 low=_exact_int(row['lower_total'],0,2147483647)
+                environment=_exact_int(row.get('lower_environment_total',0),0,low)
+                impact=_exact_int(row.get('upper_impact_total',0),0,2147483647)
             except (KeyError,ValueError,TypeError,OverflowError):
                 continue
             if upper==lower or self._stack_actor(upper) is None or self._stack_actor(lower) is None:
                 continue
             key=upper+lower
-            previous=totals.get(key,(0,0))
-            if up<previous[0] or low<previous[1]:
+            previous=totals.get(key,(0,0,0,0))
+            if (up<previous[0] or low<previous[1] or environment<previous[2] or
+                    impact<previous[3] or low-environment<previous[1]-previous[2]):
                 continue
             # The authority's cumulative native-contact receipt is consumed
             # once. An unchanged/replayed publication cannot spend HP again.
-            totals[key]=(up,low)
+            totals[key]=(up,low,environment,impact)
+            if impact>previous[3] and upper[0]=='bot':
+                impact_credits.setdefault(upper,[]).append((lower,impact-previous[3]))
             lower_actor=self._stack_actor(lower)
             lower_alive=(lower_actor.get('alive') if lower[0]=='bot' else lower_actor.alive)
             if not lower_alive:
                 continue
             # Freeze both sides' eligibility before either can die in this
             # tick. A top wreck keeps its load; a bottom wreck stops pressure.
-            self._commit_stack_damage(upper,lower,low-previous[1],'pressure_or_impact')
+            self._commit_stack_damage(upper,lower,
+                (low-environment)-(previous[1]-previous[2]),'pressure_or_impact')
+            self._commit_stack_damage(None,lower,environment-previous[2],'wreck_pressure')
             self._commit_stack_damage(lower,upper,up-previous[0],'pressure')
+        return impact_credits
 
     def _commit_player_environment_damage(
-            self, player, damage, reason, display_health=None, critical=None):
+            self, player, damage, reason, display_health=None, critical=None, attacker=None):
         """Apply one server-decided fall or overturn HP delta atomically."""
         if player is None or not player.alive or player.health <= 0:
             return False
@@ -8040,12 +8070,16 @@ class BattleState:
                 int(player.display_health) if dead else int(player.health)),
             "attack_reason": reason,
             "death_reason": reason if dead else 0,
-            "source": "environment",
+            "source": "ram" if attacker is not None else "environment",
         })
         if critical is not None:
             self.pending_events[-1]['critical'] = critical
             self.pending_events[-1].update(critical_commit or {})
-        if reason == 3:
+        if attacker is not None:
+            self._attribute_environment_event(self.pending_events[-1],
+                ('player',player.player_id),critical_before,attacker=attacker,
+                resolve_push=False)
+        elif reason == 3:
             self._attribute_environment_event(self.pending_events[-1], ('player', player.player_id), critical_before)
             observation = self.player_environment.get(player.player_id) or {}
             if observation.get('level') == 2:
@@ -8236,10 +8270,17 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
+            # Freeze the contact's identities before either side can die in
+            # the same impact. Later wreck pressure has a separate counter.
+            upper_alive = bool(player.alive)
+            lower = self._stack_actor(carrier) if carrier is not None else None
+            lower_alive = bool(lower.get('alive') if carrier and carrier[0]=='bot'
+                               else lower.alive if lower is not None else False)
             terminal, module_payload = player_critical_mechanics.advance_impact(
                 player, impact_speed, module_contacts, float(self.tick)/TICK_HZ)
             self._commit_player_environment_damage(
-                player, max(damage, terminal), 3, display_health=0,
+                player, max(damage, terminal), 2 if lower_alive else 3, display_health=0,
+                attacker=carrier if lower_alive else None,
                 critical=_critical_payload(module_payload) if module_payload else None)
             if carrier is not None:
                 upper_mass=self._stack_actor_mass(('player',player_id))
@@ -8249,7 +8290,8 @@ class BattleState:
                     if carrier[0]=='bot' else target.max_health)
                 if upper_mass>0.0 and lower_mass>0.0:
                     crush=vehicle_stack.impact_damage(maximum,impact_speed,upper_mass,lower_mass)
-                    self._commit_stack_damage(('player',player_id),carrier,crush,'fall_impact')
+                    self._commit_stack_damage(('player',player_id) if upper_alive else None,
+                        carrier,crush,'fall_impact')
             player.landing_observation_seq = observation_seq
             player.landing_observation_input_seq = input_seq
             player.landing_observation_fingerprints[

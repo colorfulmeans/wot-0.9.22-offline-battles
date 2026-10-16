@@ -8524,3 +8524,38 @@ include arrival distances, progress ages and pre-decision recovery time. Support
 receipts include the evaluated plane basis, previous transition pose and age.
 The next exact-client session must establish bridge traversal, remaining point
 losses, and native support stability; no additional routing change is inferred.
+
+### Windows310 vertical contact credit and yaw-frame audit
+
+Report 170052 uses colorfulmeans-38841483064-1. Player1 struck Bot12 for
+387 HP and died from an ammo-rack failure in that same landing. The wreck then
+dealt 59 HP over roughly nine seconds; all 59 points incorrectly retained the
+player as attacker. The local before/after progress save increased damage by
+837 (84 horizontal ram, 307 pushed fall, 387 strike, 59 wreck pressure).
+
+Freeze first-impact participants before either can die. A live upper landing
+on a live lower vehicle now reports both HP losses as ram, including the upper
+vehicle's existing fall/module HP loss. Bot HP is still spent by its existing
+landing owner; a cumulative upper-impact witness classifies that already spent
+loss rather than applying it twice. Live/live pressure remains mutual ram.
+The worker separately accumulates lower-vehicle pressure from an upper wreck,
+so coalescing a pre-death and post-death interval cannot reassign the entire
+receipt to the last observed life state. Wreck pressure is unowned environment
+damage (reason 3), bypasses remembered push attribution, and earns no damage,
+friendly-fire penalty, frag or blue status. A lower wreck stops pressure.
+Rates, masses, fall/module coefficients and planar ram formulas are unchanged.
+
+The support reproduction rotates a hull on one continuous plane. Previously
+the five-point mode selector ran before the existing yaw-frame slope rebase,
+so old pitch/roll offsets were evaluated at new world positions. Run that
+existing guarded rebase before mode selection; retain native pose vetoes and
+the one-invalid/five-valid rule. Log yaw, pitch/roll and their basis yaw.
+
+Clear the previous arrival receipt before each adapter decision: navigation
+wait, contact and reverse-withdrawal branches do not execute driver.drive.
+No navigation or recovery law is changed in this revision. Existing native
+egress probes now attach their actual longitudinal and shoulder heights,
+distance and grade limit to the existing bounded refusal receipt, without
+extra probes or changed acceptance. Bot10/25's remaining route stagnation is
+not assigned a speculative behavioral fix. Exact native colors, physical
+handoff stability and gameplay acceptance require the new Windows package.

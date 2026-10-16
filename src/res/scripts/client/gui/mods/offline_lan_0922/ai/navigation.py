@@ -976,6 +976,10 @@ class TerrainGrid(object):
 					return False
 				y = float(y)
 				run = math.hypot(x - previous[0], z - previous[2])
+				if evidence is not None:
+					evidence.setdefault('ground_samples', []).append(dict(
+						start=previous, end=(x,y,z), run=run,
+						rise=y-previous[1], grade_limit=grade))
 				if abs(y - previous[1]) > run * grade:
 					if evidence is not None:
 						evidence['egress_reason'] = 'grade'
@@ -984,6 +988,11 @@ class TerrainGrid(object):
 				for side in (-2.15, 2.15):
 					shoulder = self.ground_probe(
 						x + lateral_x * side, z + lateral_z * side, y)
+					if evidence is not None:
+						evidence.setdefault('shoulder_samples', []).append(dict(
+							position=(x+lateral_x*side,z+lateral_z*side),
+							centre_y=y, shoulder_y=shoulder, grade_limit=grade,
+							width=abs(side)))
 					if (shoulder is None or math.isnan(float(shoulder)) or
 							math.isinf(float(shoulder)) or
 							abs(float(shoulder) - y) > abs(side) * grade):

@@ -2998,6 +2998,9 @@ class BotRuntime(object):
             return True
         if not state.get('grounded_once') or self._physics_ground_probe is None:
             return False
+        # Five-point offsets must use the current yaw's slope frame before
+        # deciding whether that frame needs the detailed contact owner.
+        self._reorient_basic_ground_pose(state)
         rows = self._basic_support_status(state)
         missing = any(not row['valid'] for row in rows)
         if missing:
@@ -3021,6 +3024,8 @@ class BotRuntime(object):
             total=5, points=rows, airborne=bool(state.get('airborne')),
             vertical_speed=state.get('vertical_speed'),
             basic_support_datum=state.get('_basic_support_datum'),
+            yaw=state.get('yaw'), terrain_pitch=self._terrain_pitch(state),
+            roll=state.get('roll'), basic_basis_yaw=state.get('_basic_slope_basis_yaw'),
             support_basis=state.get('_support_mode_basis'),
             previous_transition=previous,
             transition_age_ms=(max(0.,now-previous[1])*1000. if previous else None),
@@ -7689,10 +7694,11 @@ class BotRuntime(object):
             ground_observed=ground_observed, module_resolver=callable(self.impact_contacts_resolver),
             contacts=contacts if (witnesses or ground_observed) and callable(self.impact_contacts_resolver) else [],
             critical=state.get('critical'), position=_position(state)))
-        stack_impact = getattr(self,'stack_impact',None)
-        if callable(stack_impact):
-            stack_impact(state,impact_speed)
         before_health = int(state.get('health', maximum))
+        stack_impact = getattr(self,'stack_impact',None)
+        struck_vehicle = False
+        if callable(stack_impact):
+            struck_vehicle = stack_impact(state,impact_speed,min(before_health,damage))
         health = max(0, before_health - damage)
         totals = getattr(self, '_environment_fall_totals', {})
         self._environment_fall_totals = totals
@@ -7709,7 +7715,7 @@ class BotRuntime(object):
         state['combat_fire_elapsed'] = 0.0
         state['combat_fire_timer'] = 0.0
         self._friendly_repositions.pop(state['id'], None)
-        state['death_reason'] = 3
+        state['death_reason'] = 2 if struck_vehicle else 3
         state['speed'] = 0.0
         state['movement_dir'] = 0
         state['rotation_dir'] = 0

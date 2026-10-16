@@ -13,6 +13,16 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver, WAYPOINT_ARRIVAL_RA
 
 
 class DriverArrivalTests(unittest.TestCase):
+    def test_navigation_wait_does_not_publish_old_drive_arrival(self):
+        adapter=BotAdapter('airfield',11,
+            navigation_target=lambda bot,position,*args:position)
+        adapter.driver._state(17,1,(0.,0.,0.))['arrival_trace']={'local_distance':123.}
+        command=adapter.decide_with_order(dict(id=17,team=2,slot=1,
+            position=(0.,0.,0.),yaw=0.,speed=0.,dt=.15,navigation_status='pending'),
+            dict(combat_mode='route',move_position=(0.,0.,200.)),lambda *args:True)
+        self.assertEqual('nav_wait',command['recovery_mode'])
+        self.assertEqual({},command['control_trace']['arrival'])
+
     def test_near_connector_does_not_cancel_started_recovery(self):
         position = (-9.335251321555758, -14.392024747126916, 17.37296667813116)
         connector = (-10., -14.681, 18.)

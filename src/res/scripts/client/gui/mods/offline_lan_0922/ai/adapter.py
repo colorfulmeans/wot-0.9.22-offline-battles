@@ -555,6 +555,9 @@ class BotAdapter(object):
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                               direction_clear):
+        # Navigation waits, withdrawal and contact plans do not execute drive.
+        # Their receipts must not reuse the previous drive call's distances.
+        self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
         state.pop('_withdrawal_evidence', None)

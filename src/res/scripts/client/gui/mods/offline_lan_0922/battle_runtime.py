@@ -5919,7 +5919,7 @@ class BattleRuntime(object):
                     self._warn_optional_failure('vertical vehicle contact', error)
         return best
 
-    def _bot_stack_impact(self, actor, speed):
+    def _bot_stack_impact(self, actor, speed, upper_damage=0):
         context = getattr(self, '_stack_context', None)
         if not context or not context['hits']:
             return False
@@ -5937,10 +5937,12 @@ class BattleRuntime(object):
                 lower_entity.typeDescriptor.maxHealth))
             damage = vehicle_stack.impact_damage(maximum, abs(speed),
                 upper_mass, lower_mass)
-            self._stack_ledger_for_round().strike(('bot',int(actor['id'])), key, damage)
+            self._stack_ledger_for_round().strike(('bot',int(actor['id'])), key, damage,
+                                                upper_damage=upper_damage)
             native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
                 phase='impact', upper=['bot',actor['id']], lower=list(key),
-                speed=abs(speed), damage_lower=damage, point=point, trial_rates=True))
+                speed=abs(speed), damage_lower=damage, damage_upper=upper_damage,
+                point=point, trial_rates=True))
             return True
         except (AttributeError, IndexError, KeyError, TypeError, ValueError,
                 RuntimeError, OverflowError) as error:
