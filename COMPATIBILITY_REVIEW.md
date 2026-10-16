@@ -8630,3 +8630,49 @@ agreement before treating a segment origin as a different physical storey.
 Static route-anchor and lateral-lane checks keep their baked height ownership.
 The original Malinovka navigable-water/fatal-hazard lane regression and a new
 nonzero-terrain authored-anchor case both pass with this correction.
+
+
+## 2026-10-16: remove navigation storey gates and restore bounded route retries
+
+Supersedes the navigation-height claims in the Windows314 section above.
+The 19:18, 19:24 and 19:38 reports all identify build 38891646252-1. The
+19:24 session proves Bots 12/15 can enter the bridge; this does not validate
+unrelated slopes or the new shared navigation predicates. The user requests
+removal of these predicates, rather than another height-dependent strategy.
+
+- Restore exactly the Windows312 implementations of TerrainGrid._ground,
+  segment_clear, _live_baked_egress_clear and safe_local_target. No added
+  storey test, live-start redirection or endpoint-height rejection remains.
+  Keep the physical suspension and native roof-carrier changes. The 1/5
+  support contract and module damage coefficients are unchanged in this patch.
+- The first 0.10.1 reference is e7d95d56. Its server failed-route algorithm
+  differs from Windows314 only in allowing positive advance overrides to
+  participate. Its 120-second avoided-route preference and 13-metre arrival
+  gate already existed; they were not subsequently deleted retry code.
+- Report 19:38 Bot 24 really switches east -> west -> east, but remains at
+  approximately (336.868,-9.485,-141.528) while both routes are cooling down.
+  After each normal gate/route attempt, prefer untried eligible routes, then
+  permit the oldest failed eligible alternative if all are cooling down.
+  Keep the original 20-second attempt and one-gate skip, class eligibility,
+  explicit commands, mobility checks and real-progress renewal.
+- The same report's Bot 13 repeatedly stops at a local connector about eleven
+  metres from its single automatic objective. Such objectives have no next
+  macro gate: use the driver's 1.5-metre arrival for their failed-route entry.
+  Multi-point macro routes retain their original 13-metre arrival. No vertical
+  criterion is introduced. Travelling withdraw modes join the existing failed
+  attempt budget; intentional combat holds and explicit stops remain excluded.
+- Add current route-attempt evidence to existing Bot motion receipts and log
+  server skip/switch/no-alternative events with round, Bot, failed route/index,
+  elapsed attempt, distance, arrival, physical blocker and next route/index.
+- Eight focused logic tests include repeated return-to-old-route cycles,
+  preference for untried routes, actual arrival, holds, commands, damaged tracks
+  and the preserved macro arrival. Three captured scenarios fail before this
+  patch. These tests prove algorithm boundaries, not native drivability.
+- A pre-existing queue test demanded pivot_recovery even though both the first
+  0.10.1 and Windows314 drivers choose a proved short forward escape. Preserve
+  production driving; correct the assertion to allow valid escapes and assert
+  nonnegative throttle on every step, retaining the no-reverse requirement.
+
+Native acceptance must still establish that the tank physically traverses the
+chosen route after a bridge fall or a hillside refusal. No claim is made that
+all terrain traps or the outstanding fast support switches are fixed here.

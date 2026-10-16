@@ -7129,7 +7129,9 @@ class BotRuntime(object):
             'strategic': {key: strategic.get(key) for key in (
                 'combat_mode', 'move_position', 'route_id', 'route_index',
                 'route_anchor', 'route_join', 'target_id', 'parking_phase',
-                'parking_slot', 'arrival_radius')},
+                'parking_slot', 'arrival_radius', 'route_attempt',
+                'route_switch_reason', 'previous_route_id',
+                'route_point_skip_reason', 'previous_route_index')},
             # Reuse current state at the existing bounded stall cadence.
             # These distinguish strategic range/readiness denial from a
             # rendered gun-elevation or physical alignment problem.

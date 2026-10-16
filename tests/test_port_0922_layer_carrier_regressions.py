@@ -11,51 +11,28 @@ from test_port_0922_navigation import StaticHullNavigationTests, TerrainGrid
 from gui.mods.offline_lan_0922 import vehicle_stack, vehicle_physics as vp
 
 
-class LayerTests(unittest.TestCase):
+class BakedNavigationRollbackTests(unittest.TestCase):
     def scene(self):
         graph=StaticHullNavigationTests._flat_graph()
         return TerrainGrid(lambda x,z,hint:-15.,obstacle_probe=lambda *args:False,
                            baked_graph=graph,cell_size=4.)
 
-    def test_under_bridge_cannot_acquire_the_deck_cell_as_a_local_target(self):
+    def test_baked_corridor_does_not_add_a_current_height_gate(self):
         grid=self.scene()
-        self.assertFalse(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
-        evidence={}
-        self.assertFalse(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.),evidence=evidence))
-        self.assertEqual('endpoint_support_layer',evidence['egress_reason'])
-        self.assertEqual(-15.,evidence['observed_height'])
+        with mock.patch.object(grid,'_live_baked_egress_clear') as live:
+            self.assertTrue(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
+        live.assert_not_called()
 
-    def test_lower_storey_can_still_leave_on_its_actual_ground(self):
-        grid=self.scene()
-        self.assertTrue(grid.segment_clear((6.,-15.,6.),(10.,-15.,6.)))
-
-    def test_existing_local_candidate_fan_resolves_lower_storey_height(self):
+    def test_local_candidates_keep_original_baked_height(self):
         grid=self.scene()
         target=grid.safe_local_target((6.,-15.,6.),(30.,0.,6.),0.)
         self.assertIsNotNone(target)
-        self.assertEqual(-15.,target[1])
-        self.assertTrue(grid.segment_clear((6.,-15.,6.),target))
-        self.assertEqual(0.,grid._baked_cell_height(grid.cell_for(target)))
+        self.assertEqual(0.,target[1])
+        self.assertEqual(0.,grid._ground(6.,6.,-15.))
 
-    def test_native_start_query_cannot_teleport_onto_an_upper_layer(self):
-        grid=self.scene();grid.ground_probe=lambda *args:0.
-        evidence={}
-        self.assertFalse(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.),evidence=evidence))
-        self.assertEqual('start_support_layer',evidence['egress_reason'])
-
-    def test_authored_route_anchor_height_does_not_become_an_actual_pose(self):
-        graph=StaticHullNavigationTests._flat_graph()
-        graph['heights_mm']=[-15000]*len(graph['heights_mm'])
-        grid=TerrainGrid(lambda *args:-15.,obstacle_probe=lambda *args:False,
-                         baked_graph=graph,cell_size=4.)
-        self.assertTrue(grid.segment_clear((6.,0.,6.),(10.,-15.,6.)))
-        self.assertEqual(-15.,grid._ground(6.,6.,0.))
-
-    def test_supported_deck_keeps_the_existing_cheap_bake(self):
+    def test_existing_short_egress_has_no_added_endpoint_storey_gate(self):
         grid=self.scene()
-        with mock.patch.object(grid,'_live_baked_egress_clear') as live:
-            self.assertTrue(grid.segment_clear((6.,0.,6.),(10.,0.,6.)))
-        live.assert_not_called()
+        self.assertTrue(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.)))
 
 
 class PhysicalPointTests(unittest.TestCase):

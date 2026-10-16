@@ -673,22 +673,11 @@ class TerrainGrid(object):
 				return True
 		return False
 
-	def _ground(self, x, z, hint_y, actual_layer=False):
+	def _ground(self, x, z, hint_y):
 		if not self._inside(x, z):
 			return None
 		if self.prebaked:
-			height = self._baked_cell_height(self.cell_for((x, hint_y, z)))
-			layer_slack = .8 + self.cell_size * .71 * NAVIGATION_MAX_GRADE
-			if actual_layer and height is not None and abs(height-float(hint_y)) > layer_slack:
-				# Keep the existing candidate fan/scoring. Resolve only this
-				# candidate's actual storey; never rewrite the graph's bridge.
-				try:
-					actual = self.ground_probe(float(x),float(z),float(hint_y))
-				except Exception:
-					return None
-				return (float(actual) if actual is not None and
-					abs(float(actual)-float(hint_y)) <= layer_slack else None)
-			return height
+			return self._baked_cell_height(self.cell_for((x, hint_y, z)))
 		key = (int(math.floor(x * 10.0 + 0.5)),
 		       int(math.floor(z * 10.0 + 0.5)), self._layer(hint_y))
 		if key in self._ground_cache:
@@ -715,22 +704,6 @@ class TerrainGrid(object):
 		if distance < 0.25:
 			return True
 		if self.prebaked:
-			baked_start = self._baked_cell_height(self.cell_for(start))
-			# A 2-D cell may describe a bridge above the actual tank. Its
-			# cached links cannot prove a connection from the lower storey.
-			layer_slack = .8 + self.cell_size * .71 * NAVIGATION_MAX_GRADE
-			if (baked_start is not None and abs(float(start[1])-baked_start) > layer_slack and
-					callable(self.obstacle_probe)):
-				# Authored route anchors may have an unspecified Y. Only an
-				# independently grounded actual pose can claim another storey.
-				try:
-					actual_start = self.ground_probe(start[0],start[2],start[1])
-				except Exception:
-					return False
-				if actual_start is None:
-					return False
-				if abs(float(actual_start)-float(start[1])) <= layer_slack:
-					return self._live_baked_egress_clear(start, end)
 			# Only short joins from an unsupported cell bypass erosion. Test the
 			# actual hull pose and both shoulders every time; never modify the bake.
 			if self._baked_cell_height(self.cell_for(start)) is None:
@@ -987,12 +960,6 @@ class TerrainGrid(object):
 					evidence['egress_reason'] = 'missing_support'
 				combat_count('nav_live_egress_missing_support')
 				return False
-			layer_slack = .8 + self.cell_size * .71 * NAVIGATION_MAX_GRADE
-			if abs(float(start_y)-float(start[1])) > layer_slack:
-				if evidence is not None:
-					evidence.update(egress_reason='start_support_layer',
-						actual_height=float(start[1]), observed_height=float(start_y))
-				return False
 			previous = (float(start[0]), float(start_y), float(start[2]))
 			grounded_start = previous
 			for index in range(1, steps + 1):
@@ -1034,14 +1001,6 @@ class TerrainGrid(object):
 						combat_count('nav_live_egress_shoulder')
 						return False
 				previous = (x, y, z)
-			baked_end = self._baked_cell_height(self.cell_for(end))
-			if (baked_end is not None and abs(float(end[1])-baked_end) <= .8 and
-					abs(previous[1]-float(end[1])) > .8):
-				if evidence is not None:
-					evidence.update(egress_reason='endpoint_support_layer',
-						target_height=float(end[1]), observed_height=previous[1])
-				combat_count('nav_live_egress_endpoint_support_layer')
-				return False
 			# Sweep from the actual hull position, never the snapped cell centre.
 			# Do not cache a live exit as an immutable graph edge: doors and
 			# wrecks can change between requests.
@@ -1441,7 +1400,7 @@ class TerrainGrid(object):
 					continue
 				if diagnostic is not None:
 					diagnostic['attempted'] += 1
-				y = self._ground(x, z, float(current[1]), actual_layer=True)
+				y = self._ground(x, z, float(current[1]))
 				if y is None:
 					# A streaming/eroded cell is unknown, not automatically a wall.
 					# Prove a short actual-pose step without publishing graph terrain.

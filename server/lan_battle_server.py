@@ -15147,6 +15147,13 @@ class BattleState:
                      if p.connected and p.participating],
                     time.monotonic(), self._bot_defense_context(),
                     team_orders=team_orders)
+                for order in self.bot_orders.get('orders', ()):
+                    attempt = order.get('route_attempt') or {}
+                    if attempt.get('action') in ('skip_parking', 'skip_gate',
+                                                 'switch_route', 'no_alternative'):
+                        _server_log('BOT ROUTE ATTEMPT ' + json.dumps(dict(
+                            attempt, bot=order['id'], round=self.round_id),
+                            sort_keys=True, separators=(',', ':')))
                 self._next_bot_planner_tick = (
                     self.tick + BOT_PLANNER_INTERVAL_TICKS)
             # Freeze the one current clock sample shared by this tick's durable
