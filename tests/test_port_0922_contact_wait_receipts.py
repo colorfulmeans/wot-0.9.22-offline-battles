@@ -6,6 +6,21 @@ from test_port_0922_navigation import TerrainNavigator,StaticHullNavigationTests
 
 
 class CarrierReceiptTests(unittest.TestCase):
+    def test_near_zero_roof_gap_is_identified_without_changing_contact_admission(self):
+        params=dict(springs=(dict(x=0.,y=0.,z=0.,side='left',static_compression=.1),),pseudo_contacts=())
+        height=.10021290022334675
+        trace={}
+        result=vehicle_stack.settled_carrier(params,[0.],[],
+            dict(height=height,pitch=0.,roll=0.),(0.,height,0.),0.,0.,0.,
+            [(('bot',9),{},(0.,0.,0.))],trace=trace)
+        self.assertIsNone(result)
+        rejected=trace['rejected_points'][0]
+        self.assertAlmostEqual(-.00021290022334675,rejected['compression_or_gap'])
+        self.assertEqual(0.,rejected['contact_threshold'])
+        self.assertEqual(0.,rejected['nearest_roof']['distance_xz'])
+        self.assertEqual(0.,rejected['nearest_roof']['delta_y'])
+        self.assertEqual(['bot',9],rejected['nearest_roof']['carrier'])
+
     def test_receipt_distinguishes_no_contact_missing_hit_and_misaligned_witness(self):
         params=dict(springs=(dict(x=0.,y=0.,z=0.,side='left',static_compression=.1),),pseudo_contacts=())
         for height,hits,verdict in (

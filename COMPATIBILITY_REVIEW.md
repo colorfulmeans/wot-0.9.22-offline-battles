@@ -8805,3 +8805,45 @@ all four bank directions, backing walls/beams, missing terrain and excessive
 grade. These are host geometry/ownership contracts, not native terrain replay.
 The user's next exact #1513 gameplay session must confirm switching behavior,
 slope traversal and provide the unresolved roof/wait receipts.
+
+
+### 2026-10-16: read back dead compounds and complete uncertain contact receipts
+
+Report 221112 is Windows318. At 22:08:23 Bot 12's source and presented root
+are -14.6673 m, but the native model reads -12.1909 m after death. The remote
+pose signature alone does not prove that a stock death/model callback retained
+the installed provider. Dead native remotes now compare the actual compound's
+translation and axes with the current owned provider, and rebind only a proved
+mismatch. Changed poses check immediately; unchanged corpses check at most twice
+per second, including late replacement models. Live and released native entities
+are excluded. WRECK POSE records before/expected/after and verified readback;
+physics, HP, the pose stream and live interpolation are not rewritten.
+
+The two roof-release episodes differ. The first loses every roof witness while
+the vehicle is nearly on its side; the second retains eight roof hits but no
+final roof contact, including a spring compression of -0.0002129002 m. This is
+not sufficient evidence to turn every roof ray into a persistent constraint.
+Keep the contact and pressure laws unchanged. Rejected-contact receipts now
+include the exact sampled X/Z, nearest roof witness, threshold, previous solver
+state and lower actor lifecycle. Build the detailed point table only on a
+carrier change or the existing log cadence, not every physics substep. The next
+native replay can distinguish a
+substep contact boundary from a genuinely unsupported side contact.
+
+Bot 27 eventually changes routes and leaves the hill. Captured rejected exits
+include planning_grade and planning_ground_missing; do not remove these guards
+or change route policy on this evidence. Motion diagnostics now name the exact
+existing command gates (destroyed mobility/overturn, siege transition, exhausted
+endpoint reach, missing catch-up proof and committed baked-corridor veto), plus
+the final critical state. This distinguishes a legitimately broken track from
+a navigation or command-arbitration failure. The five-point 1/5 support rule,
+route/arrival/retry policies and support geometry remain unchanged.
+
+The separate Lakeville report uses an earlier build. One exact truck instance
+32893/152 is successfully destroyed; other observed surfaces cannot yet be
+joined to a proved resource. Extend the existing bounded crush-gate receipt to
+fragile/falling props, including their actual stock mass correction, scaled HP,
+physical and directional-cap energies. Hard catalog receipts identify unresolved
+instances and commit/proposal flags. Native destroy rejection is logged before
+the existing failure path. Diagnostics never guess a resource from proximity or
+change the destruction gate, material ownership, or damaged replacement BSP.

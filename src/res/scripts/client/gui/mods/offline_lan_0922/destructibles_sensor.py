@@ -5547,6 +5547,9 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			blocked = True
 			continue
 		if not accepted:
+			_diagnostic_contact_1513('swept_native_reject',chunk_id,item_index,
+				fields=(('kind',kind),('mat',mat_kind),('resource',candidate[3]),
+					('speed','%.3f' % float(gate_speed))),now=now)
 			raise RuntimeError(
 				'native catalog contact destroy was not accepted: '
 				'chunk=%s item=%s' % (chunk_id, item_index))
@@ -5588,6 +5591,12 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				'space': spaceID, 'vehicle_sweep': vehicle_box,
 				'owners': owners, 'owners_omitted': max(0, len(grouped) - 8),
 				'unidentified': bool(unidentified), 'status': status,
+				'sampled_at':now,'speed':vel,'kinetic_speed':kinetic_speed,
+				'commit_enabled':bool(commit_enabled),'kinetic_commit':bool(kinetic_commit),
+				'proposal_only':bool(proposal_only),
+				'unresolved_instances':[dict(identity=identity,boxes=boxes)
+					for identity,boxes in unresolved[:8]],
+				'unresolved_omitted':max(0,len(unresolved)-8),
 				'geometry': 'compiled collision bounds; not triangle surfaces'})
 		except Exception:
 			pass
@@ -8077,8 +8086,6 @@ def _registered_shot_exit_1513(chunkID, itemIndex, matKind, filename,
 def _crush_gate_diagnostic_1513(candidate, speed, cap, td,
 		physical, kinetic, contact, now):
 	'''Bounded per-module evidence; diagnostics never choose a collision result.'''
-	if candidate[4] != 'structure':
-		return
 	key = tuple(candidate[:3])
 	times = globals().setdefault('g_offh_destr_crush_gate_times', {})
 	if now < times.get(key, -1.0e30) + 2.0:
@@ -8093,17 +8100,24 @@ def _crush_gate_diagnostic_1513(candidate, speed, cap, td,
 		# Read the already-proved resource directly. A diagnostic lookup must
 		# never quarantine an item or alter collision admission on failure.
 		desc = AreaDestructibles.g_cache.getDescByFilename(candidate[3]) or {}
-		health = (desc.get('modules') or {}).get(candidate[2], {}).get('health')
+		health = ((desc.get('modules') or {}).get(candidate[2], {}).get('health')
+			if candidate[4]=='structure' else desc.get('health'))
 		mass = float(_descriptor_value(_descriptor_value(td, 'physics'), 'weight'))
+		correction = (pow(mass/float(AreaDestructibles.g_cache.unitVehicleMass),
+			float(desc['kineticDamageCorrection'])) if candidate[4]!='structure' and
+			desc.get('kineticDamageCorrection') is not None else 1.)
 		scaled = (None if health is None else
 			DestructiblesCache.scaledDestructibleHealth(candidate[5], health))
 		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE %s\n' %
-			json.dumps(dict(identity=key, resource=candidate[3],
+			json.dumps(dict(identity=key, resource=candidate[3],kind=candidate[4],
+				sampled_at=now,descriptor_found=bool(desc),descriptor_type=desc.get('type'),
+				kinetic_correction=correction,
+				gate=('physical_speed' if physical else 'directional_cap' if kinetic else 'energy_rejected'),
 				health=health, scaled_health=scaled, scale=candidate[5], mass=mass,
 				speed=speed, cap=cap, physical=bool(physical),
 				kinetic=bool(kinetic), hull_contact=bool(contact),
-				energy=0.5*mass*speed*speed*0.00015,
-				cap_energy=None if cap is None else 0.5*mass*cap*cap*0.00015)))
+				energy=0.5*mass*speed*speed*0.00015*correction,
+				cap_energy=None if cap is None else 0.5*mass*cap*cap*0.00015*correction)))
 	except Exception as error:
 		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE unavailable %s\n' % error)
 

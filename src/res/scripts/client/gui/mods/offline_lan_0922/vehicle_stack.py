@@ -102,7 +102,16 @@ def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
                     continue
                 height=heights[index]
                 rigid=vp._rigid_point_height(solved,point,rotation)
+                ox,unused,oz = vp.suspension_point_offset(point,sample_pitch,sample_roll)
+                x=position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
+                z=position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
+                candidates=[(math.hypot(w[0]-x,w[2]-z),abs(w[1]-float(height)),key,w)
+                    for key,lower,w in hits] if height is not None else []
+                nearest=min(candidates,key=lambda row:row[0]+row[1]) if candidates else None
                 rejected.append(dict(kind=kind,index=index,ground=None if height is None else float(height),
+                    sampled_xz=(x,z),contact_threshold=0. if kind=='spring' else -vp.CONTACT_PENETRATION,
+                    nearest_roof=(dict(distance_xz=nearest[0],delta_y=nearest[1],
+                        carrier=list(nearest[2]),witness=nearest[3]) if nearest else None),
                     rigid_height=rigid,compression_or_gap=(None if height is None else
                         float(height)-rigid+(point['static_compression'] if kind=='spring' else 0.)),
                     reason='missing_ground' if height is None else 'not_in_final_contact_set'))

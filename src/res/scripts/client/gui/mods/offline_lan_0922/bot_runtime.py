@@ -7179,6 +7179,7 @@ class BotRuntime(object):
                     (state.get('_support_mode_sample') or (None, []))[1]],
                 slope_samples=state.get('_basic_slope_samples')),
             'control_arbitration': dict(command.get('control_trace') or {}),
+            'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'withdrawal': command.get('withdrawal'),
@@ -7292,6 +7293,8 @@ class BotRuntime(object):
                 'shape': other.get('collision_shape'),
             })
         trace.update({
+            'motion_control_gates': list(state.get('_motion_control_gates') or ()),
+            'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
@@ -14890,6 +14893,7 @@ class BotRuntime(object):
                     command['movement_intent'] = False
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
+            state['_motion_control_gates'] = []
             throttle = max(-1.0, min(1.0, command['throttle']))
             turn = max(-1.0, min(1.0, command.get('turn', 0.0)))
             aim_fallback = (target.get('position') if target is not None
@@ -14999,6 +15003,7 @@ class BotRuntime(object):
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             if siege_motion_locked:
+                state['_motion_control_gates'].append('siege_transition')
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
                 # completes the state edge.  Clear both planner intent and the
@@ -15023,6 +15028,8 @@ class BotRuntime(object):
                     destroyed_devices.intersection((
                     'engineHealth', 'leftTrackHealth',
                     'rightTrackHealth'))):
+                state['_motion_control_gates'].append(dict(reason='critical_mobility',
+                    overturned=bool(state.get('_overturned')),destroyed=sorted(destroyed_devices)))
                 throttle = 0.0
                 turn = 0.0
             elif abs(throttle) > 0.01:
@@ -15095,6 +15102,7 @@ class BotRuntime(object):
                     maximum_probe_distance = max(
                         leading + frame_reach, maximum_probe_distance)
                     if remaining <= 0.0:
+                        state['_motion_control_gates'].append(dict(reason='endpoint_reach',remaining=remaining))
                         throttle = 0.0
                         turn = 0.0
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
@@ -15139,6 +15147,7 @@ class BotRuntime(object):
                 not refresh_control and not motion_probe_reusable and
                 not catchup_motion_reprobe)
             if catchup_motion_hold:
+                state['_motion_control_gates'].append('catchup_without_clear_receipt')
                 # With no prior clear physical proof, this callback may not
                 # turn a missing/deferred/blocked sample into motion. A valid
                 # command which merely consumed or turned beyond its old clear
@@ -15481,6 +15490,7 @@ class BotRuntime(object):
                     allow_shallow=committed_shallow_admitted,
                     hazard_only=True, maximum_distance=maximum_probe_distance)
                 if committed_corridor is False:
+                    state['_motion_control_gates'].append('committed_baked_corridor')
                     # Copied physics integrates the post-turn hull yaw, while
                     # the native motion receipt above proves the pre-turn
                     # corridor. Keep the baked hazard veto on every slice, but

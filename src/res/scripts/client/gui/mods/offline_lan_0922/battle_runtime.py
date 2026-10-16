@@ -24933,19 +24933,32 @@ class BattleRuntime(object):
             self._local_fall_armed = True
         context = getattr(self,'_stack_context',None)
         if context is not None:
-            carrier_receipt=({} if context['hits'] or getattr(self,'_local_stack_carrier',None) else None)
             context['contact_carrier'] = vehicle_stack.settled_carrier(
                 params,ground,pseudo_ground,solved,position,yaw,
-                previous_pitch,previous_roll,context['hits'],trace=carrier_receipt)
+                previous_pitch,previous_roll,context['hits'])
+            carrier_changed=(context['contact_carrier'] != getattr(self,'_local_stack_carrier',None))
+            carrier_due=(now >= getattr(self,'_carrier_commit_log_at',-1.e30))
+            carrier_receipt=None
+            if carrier_changed or (context['hits'] and carrier_due):
+                # Enrich a pure receipt only when it will be logged. Steady
+                # roof support must not build every rejected-point candidate
+                # table on every physics substep.
+                carrier_receipt={}
+                vehicle_stack.settled_carrier(params,ground,pseudo_ground,solved,
+                    position,yaw,previous_pitch,previous_roll,context['hits'],trace=carrier_receipt)
             context['carrier_receipt']=carrier_receipt
-            if (context['hits'] and (now >= getattr(self,'_carrier_commit_log_at',-1.e30) or
-                    context['contact_carrier'] != getattr(self,'_local_stack_carrier',None))):
+            if context['hits'] and (carrier_due or carrier_changed):
                 native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
                     phase='carrier_commit',position=position,
                     carrier=context['contact_carrier'],contacts=solved['contact_count'],
                     touched_contacts=solved.get('touched_contact_count'),airborne=solved.get('airborne'),
                     vertical_speed=solved.get('vertical_velocity'),dt=dt,
                     matching=carrier_receipt,
+                    before=physics_state,
+                    carrier_states=[dict(identity=list(key),alive=lower.get('alive'),
+                        health=lower.get('health'),position=(lower.get('x'),lower.get('y'),lower.get('z')),
+                        pitch=lower.get('pitch'),roll=lower.get('roll'),witness=point)
+                        for key,lower,point in context['hits'][-12:]],
                     sampled_pose=(previous_pitch,previous_roll),
                     solved_pose=(solved['pitch'],solved['roll']),
                     witnesses=[(list(key),point) for key,lower,point in context['hits'][-12:]]))
@@ -28088,6 +28101,12 @@ class BattleRuntime(object):
                         if settled:
                             record['_remote_motion_settled_signature'] = \
                                 signature
+            if record.get('native_remote') and not alive:
+                vehicle = self._remote_factory.get(record['engine_id'])
+                reconcile = getattr(vehicle, 'reconcile_wreck_pose', None)
+                if callable(reconcile):
+                    self._run_optional_feature('dead remote pose readback',
+                        reconcile, (now, pose_changed), disable=False)
             # XYZ/roll do not change the aim input. Pitch remains an input
             # for a worker's hydraulic geometry, and an applied Siege edge
             # can replace the installed gun's static component angles.
