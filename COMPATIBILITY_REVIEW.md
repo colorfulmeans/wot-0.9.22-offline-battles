@@ -8681,3 +8681,34 @@ Final full-Bot validation caught attempt telemetry advancing the strategic order
 revision despite unchanged driving orders. Exclude route_attempt from the order
 signature and assert revision invariance as elapsed diagnostics change. Build
 315 is an intermediate build and must not be delivered.
+
+
+## 2026-10-16: diagnose support transitions before changing their policy
+
+User observation: repeated reports gave transition counts without establishing
+which physical change restored support. The Windows316 20:27 report already
+contains enough point witnesses to separate all eleven enable/disable pairs:
+seven have unchanged XZ and nearly unchanged ground but solver height/attitude
+correction; two recover during slope travel; two belong to Bot 12 at the bridge
+edge (a brief right-side deck return, followed by a 2.657-second descent).
+The seven stationary pairs lower the root by approximately 0.15-0.69 metres.
+Point gaps cross the existing reach limit; this is not evidence that the same
+static ground vanished and reappeared. Three early Bot 21 pairs occur during a
+moving descent, not repeated toggles while parked at one fixed world point.
+
+Add diagnostics only. Preserve the incoming support plane before a valid sample
+replaces it, whether plane projection was used or skipped, input pose/airborne
+state, reach interval, and sampling time. Link enable/disable with a per-Bot
+episode, save opening point witnesses, record point expected-height versus
+observed-ground changes, and attach the existing accepted solver values.
+The solver receipt explicitly identifies its pre-turret-check stage. Clear it
+at the next episode so no old solve can be presented as a new one. No additional
+native query, support threshold, timer, navigation choice or physics correction
+is introduced. These receipts expose remaining basic-follow/solver mismatch;
+they do not claim every short owner handoff is a defect or that it is fixed.
+
+Focused tests distinguish root settling from real ground return, preserve input
+plane identity across cache reuse, verify unchanged native query count and show
+why airborne sampling skips plane projection. Five isolated related suites pass
+and the edited source compiles under CPython 2.7. Native gameplay confirmation
+still needs a later test package; no new package is requested in this audit.

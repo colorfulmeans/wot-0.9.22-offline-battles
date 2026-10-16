@@ -2956,6 +2956,7 @@ class BotRuntime(object):
         sine, cosine = math.sin(yaw), math.cos(yaw)
         basis = state.get('_support_mode_basis')
         support_y = y
+        projected = False
         if (basis and not state.get('_edge_support_active') and
                 not state.get('airborne') and state.get('grounded_once')):
             dx,dz=x-basis[0],z-basis[1]
@@ -2963,6 +2964,7 @@ class BotRuntime(object):
             # replacement physical pose or a remembered ground contact.
             if 1.e-8 < math.hypot(dx,dz) <= max(length,width) and abs(y-basis[2]) <= 0.8:
                 support_y = basis[2]+basis[3]*dx+basis[4]*dz
+                projected = True
         rows = []
         for name, side, forward in (('centre',0.,0.), ('front',0.,length),
                 ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
@@ -3011,6 +3013,22 @@ class BotRuntime(object):
             else:
                 state.pop('_support_mode_basis',None)
         state['_support_mode_sample'] = (key, rows)
+        # Keep the inputs used by this exact sample, before a valid sample
+        # replaces the plane. Diagnostics must never perform another cast.
+        projection_reason = ('projected' if projected else 'no_basis' if not basis else
+            'detailed_owner' if key[-1] else 'airborne' if state.get('airborne') else
+            'not_grounded' if not state.get('grounded_once') else
+            'root_height_mismatch' if abs(y-basis[2]) > 0.8 else
+            'no_horizontal_change' if math.hypot(x-basis[0],z-basis[1]) <= 1.e-8 else
+            'outside_local_span')
+        state['_support_mode_receipt'] = dict(
+            sampled_at=key[0], position=(x,y,z), pose=(yaw,pitch,roll),
+            detailed_at_sample=key[-1], airborne_at_sample=bool(state.get('airborne')),
+            grounded_once=bool(state.get('grounded_once')), basis_before=basis,
+            projected=projected, projection_reason=projection_reason, support_y=support_y,
+            projection_distance=(math.hypot(x-basis[0],z-basis[1]) if basis else None),
+            projection_root_delta=(y-basis[2] if basis else None),
+            reach=(-0.6,vehicle_physics.GROUND_FOLLOW_MIN))
         return rows
 
     def _contact_edge_support_needed(self, state):
@@ -3036,6 +3054,30 @@ class BotRuntime(object):
             return
         state['_support_mode_log_at'] = now+2.
         previous = state.get('_support_mode_transition')
+        episode = state.get('_support_mode_episode', 0)
+        opening = state.get('_support_mode_opening')
+        comparison = None
+        if phase == 'enable':
+            episode += 1
+            state['_support_mode_episode'] = episode
+            opening = dict(position=_position(state),
+                pose=(state.get('yaw'),self._terrain_pitch(state),state.get('roll')),
+                points=[dict(row) for row in rows],
+                sample=state.get('_support_mode_receipt'))
+            state['_support_mode_opening'] = opening
+            state.pop('_support_mode_solver_receipt', None)
+        elif phase == 'disable' and opening:
+            before = dict((row['name'],row) for row in opening['points'])
+            comparison = []
+            for row in rows:
+                old = before.get(row['name'])
+                if old is None:
+                    continue
+                comparison.append(dict(name=row['name'], was_valid=old['valid'],
+                    valid=row['valid'], expected_delta=row['expected']-old['expected'],
+                    ground_delta=(row['ground']-old['ground'] if
+                        row['ground'] is not None and old['ground'] is not None else None),
+                    gap_before=old['gap'], gap_after=row['gap']))
         if phase in ('enable', 'disable'):
             state['_support_mode_transition'] = (phase, now, _position(state))
         from .native_input_diagnostics import write_json_record
@@ -3049,6 +3091,10 @@ class BotRuntime(object):
             roll=state.get('roll'), basic_basis_yaw=state.get('_basic_slope_basis_yaw'),
             support_basis=state.get('_support_mode_basis'),
             previous_transition=previous,
+            episode=episode, sample=state.get('_support_mode_receipt'),
+            opening=opening if phase == 'disable' else None,
+            point_changes=comparison,
+            solver=state.get('_support_mode_solver_receipt') if phase == 'disable' else None,
             transition_age_ms=(max(0.,now-previous[1])*1000. if previous else None),
             reason=('point_support_lost' if phase == 'enable' else
                     'all_points_restored' if phase == 'disable' else 'support_observation')))
@@ -8124,6 +8170,14 @@ class BotRuntime(object):
             return True
 
         state['y'] = solved['height']
+        if state.get('_edge_support_active'):
+            state['_support_mode_solver_receipt'] = dict(
+                sampled_at=getattr(self,'_contact_now',None), step=step,
+                stage='solver_accepted_before_turret_check',
+                before=dict(physics_state),
+                after=dict((name,solved.get(name)) for name in
+                    ('height','pitch','roll','vertical_velocity','airborne',
+                     'contact_count','rigid_contact_count','impact_speed')))
         state['vertical_speed'] = solved['vertical_velocity']
         state['terrain_pitch'] = solved['pitch']
         state['suspension_pitch_velocity'] = solved['pitch_velocity']
