@@ -281,6 +281,8 @@ def _log_destructible_validation_1513(
 	# A systemic offset can affect hundreds of slots at once.  Preserve the
 	# exact runtime action, but report only the first sample of each failure type.
 	key = str(failure_type)
+	if key.startswith('contact_layout'):
+		key = '%s:%s:%s' % (key, chunk_id, item_index)
 	logged = globals().setdefault('g_offh_destr_isolation_logs', set())
 	if key in logged:
 		return
@@ -327,6 +329,15 @@ def _isolate_destructible_1513(
 		failure_type, chunk_id, item_index=None, detail=None):
 	"""Quarantine one unsafe slot/chunk and emit one bounded English line."""
 	chunk_id = int(chunk_id)
+	# Keep per-slot provenance even when the console's per-type log is capped.
+	# Only an identity conflict may be re-proved after an actual native hit;
+	# ABI/count/native-query failures must remain quarantined for this load.
+	identity = (chunk_id, None if item_index is None else int(item_index))
+	reasons = globals().setdefault('g_offh_destr_isolation_reasons', {})
+	previous = reasons.get(identity)
+	logical = ('layout_placement_conflict', 'catalog_signature_miss')
+	if previous is None or failure_type not in logical or previous['reason'] in logical:
+		reasons[identity] = dict(reason=str(failure_type), detail=str(detail)[:1200])
 	if item_index is None:
 		globals().setdefault(
 			'g_offh_destr_isolated_chunks', set()).add(chunk_id)
@@ -585,7 +596,9 @@ def _commit_proved_chunk_layout_1513(entry, chunk_id):
 		entry.setdefault('ignored_items', set()).add(item)
 		_isolate_destructible_1513(
 			'layout_placement_conflict', chunk_id, item,
-			detail='ambiguous_or_duplicate_authored_transform')
+			detail='ambiguous_or_duplicate_authored_transform proof=%r owners=%r' % (
+				matches.get(item) or entry.get('placement_conflict_evidence', {}).get(item),
+				owners.get(matches[item][0], ()) if item in matches else ()))
 		matches.pop(item, None)
 	changed = any(wire != (chunk_id, item) or record != (
 			catalog['baked_instances'].get((chunk_id, item)) or
@@ -781,6 +794,10 @@ def retire_chunk_identity_1513(chunk_id):
 	"""
 	chunk_id = int(chunk_id)
 	globals().get('g_offh_destr_isolated_chunks', set()).discard(chunk_id)
+	reasons = globals().get('g_offh_destr_isolation_reasons', {})
+	for identity in list(reasons):
+		if identity[0] == chunk_id:
+			reasons.pop(identity, None)
 	for name in ('g_offh_destr_isolated_slots',
 			'g_offh_destr_name_unresolved_slots'):
 		values = globals().get(name, set())
@@ -1092,13 +1109,15 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			entry['result'] = (None, 'category_abi', ())
 			_release_item_name_query_focus_1513(space_id, chunk_id)
 			return entry['result']
+		placement_evidence = {}
 		match, placement_status = _probe_authored_placement_detail_1513(
 			bigworld, area_destructibles, space_id, chunk_id, item_index,
-			native_type, names, int(native_count))
+			native_type, names, int(native_count), placement_evidence)
 		if match is not None:
 			entry['placement_matches'][item_index] = match
 		elif placement_status == 'ambiguous':
 			entry['placement_conflicts'].add(item_index)
+			entry.setdefault('placement_conflict_evidence', {})[item_index] = placement_evidence
 		# A later matrix/catalog failure may quarantine this slot. Preserve every
 		# already-proved native group, including ``-1`` (the resolved group with no
 		# filename handler), so rebuilding a compacted name list never escalates one
@@ -1346,15 +1365,20 @@ def _recover_contacted_model_slot_1513(space_id, identity):
 	A completed partial layout used to make every omitted slot permanently
 	mode-excluded, including a shifted anonymous van. Never probe authored
 	absent slots speculatively: this entry is only for a returned native hit.
-	Quarantined slots remain forbidden. The full matrix and live category must
+	Unsafe native quarantines remain forbidden. A logical layout conflict may
+	be re-proved from this returned contact. The full matrix and live category must
 	uniquely identify a resource whose previous owner is absent/quarantined.
 	"""
 	catalog = _destructible_catalog or {}
 	chunk_id, item_index = identity = tuple(int(v) for v in identity)
+	quarantined = identity in globals().get('g_offh_destr_isolated_slots', ())
+	isolation = globals().get('g_offh_destr_isolation_reasons', {}).get(identity, {})
 	if (not catalog.get('layout_repair_supported') or
 			chunk_id in globals().get('g_offh_destr_isolated_chunks', ()) or
-			identity in globals().get('g_offh_destr_isolated_slots', ()) or
-			not is_excluded_1513(*identity) or _layout_repair_pending_1513(chunk_id)):
+			(quarantined and isolation.get('reason') not in (
+				'layout_placement_conflict', 'catalog_signature_miss')) or
+			(not quarantined and not is_excluded_1513(*identity)) or
+			_layout_repair_pending_1513(chunk_id)):
 		return False
 	try:
 		import AreaDestructibles
@@ -1376,6 +1400,8 @@ def _recover_contacted_model_slot_1513(space_id, identity):
 		evidence = {}
 		match, reason = _probe_authored_placement_detail_1513(BigWorld,
 			AreaDestructibles, space_id, chunk_id, item_index, native_type, names, count,evidence)
+		if quarantined:
+			isolation['contact_proof'] = dict(status=reason, evidence=evidence)
 		if match is None or match[1]['kind'] == 'tree':
 			_log_destructible_validation_1513('contact_layout', 'unproved',
 				chunk_id,item_index,detail='placement=%s proof=%r' % (reason,evidence))
@@ -1392,13 +1418,21 @@ def _recover_contacted_model_slot_1513(space_id, identity):
 					return False
 				if proved[0] == match[0]:
 					# Two still-active native owners cannot be disambiguated.
+					_log_destructible_validation_1513('contact_layout_owner', 'unproved',
+						chunk_id,item_index,detail='active_owner=%r proof=%r' % (wire,evidence))
 					return False
 				matches[wire[1]] = proved
 		matches[item_index] = match
 		entry = dict(fingerprint=(count, ()),layout_key=(int(space_id),chunk_id),
 			placement_matches=matches,placement_conflicts=set(),ignored_items=set())
 		mapping = _commit_proved_chunk_layout_1513(entry,chunk_id)
-		return bool(mapping and item_index in mapping)
+		accepted = bool(mapping and item_index in mapping)
+		if accepted and quarantined:
+			globals().get('g_offh_destr_isolated_slots', set()).discard(identity)
+			isolation['recovered'] = True
+			_log_destructible_validation_1513('contact_layout_recovered', 'proved',
+				chunk_id,item_index,detail='previous=%r proof=%r' % (isolation,evidence))
+		return accepted
 	except Exception as error:
 		_log_destructible_validation_1513('contact_layout', 'query_failed',
 			chunk_id,item_index,detail=str(error)[:160])
@@ -1713,6 +1747,7 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_item_name_cache_serial',
 			'g_offh_destr_isolated_chunks',
 			'g_offh_destr_isolated_slots',
+			'g_offh_destr_isolation_reasons',
 			'g_offh_destr_name_unresolved_slots',
 			'g_offh_destr_isolation_logs',
 			'g_offh_destr_isolation_log_capped',
@@ -8329,6 +8364,7 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 		catalog.get('baked_instances', {}).get(identity) or
 		catalog.get('tree_instances', {}).get(identity))
 	result = {
+		'isolation_provenance': globals().get('g_offh_destr_isolation_reasons', {}).get(identity),
 		'layout_generation': _layout_generation_1513(identity[0]),
 		'layout_pending': _layout_repair_pending_1513(identity[0]),
 		'excluded': identity in catalog.get('excluded_instances', ()),

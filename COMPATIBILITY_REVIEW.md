@@ -8905,3 +8905,42 @@ material recovery at the captured contact. All 187 client modules compile
 under CPython 2.7. AST comparisons retain 23 support/slope functions and the
 unchanged physics source. These checks do not establish native roof stability
 or complete hill recovery; both require the next exact-client test package.
+
+## Windows320 follow-up: roof schema, contact quarantine and stale receipts
+
+Report `20261016-235928-e52cc182974c` identifies a Python battle failure at
+23:59:16.195: `_falling_roof_approaches` indexes `point['y']` after landing.
+The actual `derive_suspension_params` spring records have X/Z and static
+compression, but no required local Y. Use the existing posed-point helper
+(optional Y defaults to zero), then subtract spring compression vertically
+in world space, matching the suspension solver. Rotate the original point,
+not a locally pre-compressed point. Place all temporary-context work inside
+`try/finally`. An optional roof-exemption query failure logs its phase and
+retains ordinary solid-body contact instead of ending the battle.
+
+The same report's Lakeville van contact is not merely excluded: live slot
+33149/189 is quarantined. Windows320's blanket quarantine guard therefore
+prevents its new contact-reproof helper from running. The initial cause for
+that specific slot cannot be recovered from the old per-type capped log.
+Retain per-slot isolation provenance for the native chunk lifetime. Only
+logical placement conflicts or catalog-signature misses may enter actual-hit
+reproof; unsafe native queries, malformed counts/ABI and unknown quarantines
+remain blocked. A unique full transform/category/resource proof, with no
+other active owner, reindexes the contacted slot atomically before retiring
+its logical isolation. No alias, fixed slot offset, nearest-object guess,
+group destruction or collision/damage coefficient change is introduced.
+Unresolved conflicts keep their native contact proof and original cause in
+diagnostics. Chunk retirement and battle cleanup clear this provenance.
+
+Endpoint-refusal receipts are cleared on request/goal changes and a proved
+onward plan, preventing a previous target's failure from appearing current.
+The navigation AST otherwise matches Windows320. No new navigation policy,
+height restriction, support threshold or retry budget is added. The five-point
+rule remains any one invalid -> detailed; all five valid -> basic.
+
+Regressions use real generated spring schemas, non-descending landing poses,
+tilt, missing peers and failing queries. Lakeville cases distinguish logical
+quarantine from native-query quarantine, check full-transform disagreement,
+and exercise exact registration plus material recovery. These are engine-free
+contract checks; the exact van's live identity and native roof stability still
+require the next #1513 gameplay replay.

@@ -23364,29 +23364,32 @@ class BattleRuntime(object):
             yaw=yaw, pitch=self._local_pitch, roll=self._local_roll,
             collision_shape=shape)
         previous = self._stack_support_context(actor)
-        admitted = set()
-        sample_points = [dict(x=side*shape[0],y=shape[2],z=forward*shape[1])
-            for side,forward in ((0.,0.),(-1.,0.),(1.,0.),(0.,-1.),(0.,1.),
-                                 (-1.,-1.),(-1.,1.),(1.,-1.),(1.,1.))]
-        params = getattr(self, '_local_suspension_params', None)
-        if not descending and params:
-            sample_points = [dict(point,y=point['y']-point['static_compression'])
-                             for point in params['springs']]
-            sample_points.extend(params.get('pseudo_contacts', ()))
         try:
+            admitted = set()
+            sample_points = [(dict(x=side*shape[0],y=shape[2],z=forward*shape[1]), 0.)
+                for side,forward in ((0.,0.),(-1.,0.),(1.,0.),(0.,-1.),(0.,1.),
+                                     (-1.,-1.),(-1.,1.),(1.,-1.),(1.,1.))]
+            params = getattr(self, '_local_suspension_params', None)
+            if not descending and params:
+                # Real spring records have optional local Y. Compression is
+                # world-vertical, just as in the suspension solver; rotating
+                # a pre-compressed local point changes its XZ on a slope.
+                sample_points = [(point, point['static_compression'])
+                                 for point in params['springs']]
+                sample_points.extend((point, 0.) for point in params.get('pseudo_contacts', ()))
             context = self._stack_context
             candidates = list(context['candidates'])
             for key, state, target in candidates:
                 if not any((p['kind'], p['network_id']) == key for p in peers):
                     continue
                 context['candidates'] = [(key, state, target)]
-                for point in sample_points:
+                for point, compression in sample_points:
                     ox, oy, oz = vehicle_physics.suspension_point_offset(
                         point,
                         self._local_pitch, self._local_roll)
                     x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
                     z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
-                    foot_y = position[1]+oy
+                    foot_y = position[1]+oy-compression
                     context['hits'] = []
                     bottom = (float(state['y'])-.5 if descending else
                               max(float(state['y'])-.5, foot_y-.03))
@@ -23396,6 +23399,16 @@ class BattleRuntime(object):
                         admitted.add(key)
                         break
             return admitted
+        except Exception as error:
+            # This optional planar exemption cannot terminate the battle.
+            # Without fresh roof proof, keep ordinary solid-body contact.
+            moment = self._clock()
+            if moment >= getattr(self, '_roof_approach_error_at', -1.e30):
+                self._roof_approach_error_at = moment + 2.0
+                native_input_diagnostics.write_json_record('VEHICLE STACK', dict(
+                    phase='roof_approach_query_failed', upper=['player', actor['id']],
+                    local_pose=position, descending=descending, error=str(error)[:240]))
+            return set()
         finally:
             self._stack_context = previous
 

@@ -7,6 +7,8 @@ from test_port_0922_navigation import TerrainNavigator
 from gui.mods.offline_lan_0922 import vehicle_stack
 from gui.mods.offline_lan_0922 import tank_collision
 import test_port_0922_battle_runtime as battle_fixture
+import test_port_0922_vehicle_physics as physics_fixture
+from gui.mods.offline_lan_0922 import vehicle_physics
 
 
 class IncompleteEndpointTests(unittest.TestCase):
@@ -47,6 +49,27 @@ class IncompleteEndpointTests(unittest.TestCase):
         self.assertTrue(nav.target_is_terminal(10))
         self.assertNotIn('path_endpoint_refusal',nav.bot_states[10])
 
+    def test_new_request_and_onward_plan_retire_old_refusal(self):
+        for new_goal, new_key in (((-94.896,-14.499,-20.981),('route',10)),
+                                  ((0.,0.,18.),('route',11))):
+            nav=self.scene()
+            current=(-10.28,-14.73,18.20)
+            nav._path=lambda key,*args:(key,((-10.,-14.681,18.),))
+            nav.next_target(10,current,(0.,0.,18.),('route',10),1.)
+            self.assertIn('path_endpoint_refusal',nav.bot_states[10])
+            nav._path=lambda key,*args:(key,(new_goal,))
+            nav.next_target(10,current,new_goal,new_key,2.)
+            self.assertNotIn('path_endpoint_refusal',nav.bot_states[10])
+
+    def test_onward_plan_for_same_request_retires_old_refusal(self):
+        nav=self.scene()
+        current,goal=(-10.28,-14.73,18.20),(0.,0.,18.)
+        nav._path=lambda key,*args:(key,((-10.,-14.681,18.),))
+        nav.next_target(10,current,goal,('route',10),1.)
+        nav._path=lambda key,*args:(key,(goal,))
+        nav.next_target(10,current,goal,('route',10),2.)
+        self.assertNotIn('path_endpoint_refusal',nav.bot_states[10])
+
     def test_report_bot28_repeated_tip_without_search_keeps_bounded_retry(self):
         nav = self.scene()
         current = (-30.4237,1.2487,-168.3943)
@@ -79,6 +102,57 @@ class IncompleteEndpointTests(unittest.TestCase):
 
 
 class RoofPairTests(unittest.TestCase):
+    def roof_scene(self, speed):
+        battle=battle_fixture.BattleRuntime(battle_fixture._runtime())
+        battle.client=types.SimpleNamespace(player_id=1)
+        battle._collision_shape=lambda desc:(1.5,3.,0.,2.)
+        battle._local_pitch=.25; battle._local_roll=-.3
+        battle._local_vertical_speed=speed
+        battle._local_roof_contact_pairs=[('bot',13)]
+        battle._local_suspension_params=vehicle_physics.derive_suspension_params(
+            physics_fixture.VehiclePhysicsSuspensionTrialTests._exact_client_descriptor())
+        self.assertTrue(all('y' not in p for p in battle._local_suspension_params['springs']))
+        entity=types.SimpleNamespace(typeDescriptor=object())
+        previous=object(); battle._stack_context=previous
+        def context(actor):
+            battle._stack_context=dict(actor=actor,candidates=[(('bot',13),dict(y=0.),entity)],hits=[])
+            return previous
+        battle._stack_support_context=context
+        return battle,entity,previous
+
+    def test_real_spring_schema_after_landing_preserves_posed_vertical_compression(self):
+        for speed in (0.,.01):
+            battle,entity,previous=self.roof_scene(speed)
+            rays=[]
+            battle._stack_ground_hit=lambda start,end,unused:rays.append((start,end))
+            self.assertEqual(set(),battle._falling_roof_approaches(
+                entity,(10.,2.,20.),0.,[dict(kind='bot',network_id=13)]))
+            self.assertIs(previous,battle._stack_context)
+            params=battle._local_suspension_params
+            self.assertEqual(len(params['springs'])+len(params['pseudo_contacts']),len(rays))
+            for point,(start,end) in zip(params['springs'],rays):
+                x,y,z=vehicle_physics.suspension_point_offset(point,.25,-.3)
+                self.assertAlmostEqual(10.+x,start.x)
+                self.assertAlmostEqual(20.+z,start.z)
+                self.assertAlmostEqual(2.+y-point['static_compression']+.02,start.y)
+
+    def test_roof_query_failure_restores_context(self):
+        battle,entity,previous=self.roof_scene(.01)
+        def fail(*args):raise RuntimeError('native roof query failed')
+        battle._stack_ground_hit=fail
+        with mock.patch.object(battle_fixture.battle_runtime_module.native_input_diagnostics,'write_json_record') as log:
+            self.assertEqual(set(),battle._falling_roof_approaches(
+                entity,(0.,2.,0.),0.,[dict(kind='bot',network_id=13)]))
+            self.assertEqual('roof_approach_query_failed',log.call_args[0][1]['phase'])
+        self.assertIs(previous,battle._stack_context)
+
+    def test_missing_peer_never_admits_cached_roof(self):
+        battle,entity,previous=self.roof_scene(.01)
+        battle._stack_ground_hit=mock.Mock()
+        self.assertEqual(set(),battle._falling_roof_approaches(entity,(0.,2.,0.),0.,[]))
+        battle._stack_ground_hit.assert_not_called()
+        self.assertIs(previous,battle._stack_context)
+
     def test_first_landing_contact_does_not_reenable_secondary_roof_push(self):
         runtime=battle_fixture._runtime()
         battle=battle_fixture.BattleRuntime(runtime)

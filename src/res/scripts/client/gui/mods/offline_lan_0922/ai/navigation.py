@@ -3563,6 +3563,9 @@ class TerrainNavigator(object):
 			state['planned_goal'] = tuple(goal)
 			state['planned_at'] = float(now)
 		request_key = self._cache_key(path_key, goal)
+		refusal = state.get('path_endpoint_refusal')
+		if refusal and refusal.get('goal') != tuple(goal):
+			state.pop('path_endpoint_refusal', None)
 		had_request = state.get('request_key') is not None
 		request_changed = state.get('request_key') != request_key
 		request_transition = bool(had_request and request_changed)
@@ -3571,6 +3574,7 @@ class TerrainNavigator(object):
 			float(now) - self.path_times.get(request_key, now) >= 8.0)
 		allow_pending_last_target = True
 		if request_changed:
+			state.pop('path_endpoint_refusal', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_target_retired', None)
 			state.pop('local_completed_target', None)
@@ -3694,6 +3698,7 @@ class TerrainNavigator(object):
 				state.pop('controlled_shallow_target', None)
 				state['last_target'] = tuple(goal)
 				state['navigation_status'] = 'safe'
+				state.pop('path_endpoint_refusal', None)
 				state['target_is_terminal'] = True
 				self._set_fallback_mode(bot_id, 'safe_direct')
 				return tuple(goal)
@@ -3707,6 +3712,7 @@ class TerrainNavigator(object):
 				state.pop('controlled_shallow_target', None)
 				state['last_target'] = tuple(goal)
 				state['navigation_status'] = 'safe'
+				state.pop('path_endpoint_refusal', None)
 				state['target_is_terminal'] = True
 				self._set_fallback_mode(bot_id, 'safe_direct')
 				return tuple(goal)
@@ -3826,6 +3832,7 @@ class TerrainNavigator(object):
 					return self._fallback_target(bot_id, current, goal, now,
 						avoid_points, state, False)
 				path = continued
+				state.pop('path_endpoint_refusal', None)
 				state['path_key'] = next_key
 				next_index = 0
 				if (len(path) > 1 and
@@ -3855,6 +3862,9 @@ class TerrainNavigator(object):
 			return self._fallback_target(
 				bot_id, current, goal, now, avoid_points, state, True)
 		selected = tuple(path[lookahead])
+		# A refusal is a receipt for the current exhausted endpoint, not a
+		# permanent property of this vehicle after a successful onward plan.
+		state.pop('path_endpoint_refusal', None)
 		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
 				_distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS and
 				lookahead == len(path) - 1):
