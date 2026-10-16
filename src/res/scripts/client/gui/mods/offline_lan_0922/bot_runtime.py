@@ -14999,6 +14999,10 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                command = roof_crush_test.hold_command(command, position)
+                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []

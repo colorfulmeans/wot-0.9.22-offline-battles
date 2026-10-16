@@ -5688,6 +5688,19 @@ class BattleRuntime(object):
                 self._spawn_planner.assign_artillery_rear(classes))
 
     def _formation_pose(self, team, slot):
+        from . import roof_crush_test
+        if roof_crush_test.enabled() and int(team) == 2:
+            key = (int(team), int(slot))
+            if key not in self._spawn_cache:
+                seed, yaw = roof_crush_test.enemy_seed(slot)
+                height = self._ground_y(seed[0], seed[2], seed[1],
+                                         allow_wide=False)
+                if height is None:
+                    raise ValueError('roof test lower-ground spawn is unproved: %s' % (seed,))
+                self._spawn_cache[key] = ((seed[0], height, seed[2]), yaw)
+                print('[ROOF CRUSH TEST] enemy slot=%s position=%s yaw=%s' %
+                    (slot, self._spawn_cache[key][0], yaw))
+            return self._spawn_cache[key]
         key = (int(team), int(slot))
         cached = self._spawn_cache.get(key)
         if cached is not None:
