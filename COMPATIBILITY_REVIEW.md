@@ -8447,3 +8447,51 @@ mode transitions and nonterminal connector arrival. The 19-file subsystem gate
 passes, and all 187 client sources compile under CPython 2.7.18. This does not
 prove native roof stability, bridge-edge feel, Flash visibility, all Bot escape
 outcomes or net worker cost; those require the matching Windows test package.
+
+
+### Windows308 navigation withdrawal and support datum audit
+
+Report 093639 is Windows308 (colorfulmeans-38834167399-1). It records 198
+support enable/disable pairs, 162 below 200 ms. At 09:34:22.088 Bot10 loses its
+rear sample; at 09:34:22.090 detailed support has raised the root by about
+0.135 m and releases with five valid points. The previous test stopped at
+release, missing the subsequent basic owner's centre-height placement.
+
+Withdraw both Windows308 terminal-connector fallback additions: navigation.py
+is byte-for-byte the Windows305 version. Also withdraw the unproved short
+recovery grade adjustment from battle_runtime.py. Remove their newly added
+behavior assertions. Do not introduce a replacement recovery policy. The
+report shows changing temporary targets and physical refusals, but does not
+prove the entire long-lived blockage chain. Bounded BOT MOTION arbitration
+receipts now retain the driver result before face-position override, strategic
+and local targets, wait status, override inputs and the originating sample time.
+This separates deliberate enemy-facing holds from navigation and later vetoes.
+
+Support handback now records the measured accepted-root minus native-centre
+height datum. Basic grounded placement carries that datum while following real
+ground; its straddle check uses the corresponding ground reference, and its
+continuous-plane basis stores the accepted root rather than the raw centre.
+A missing point immediately restores detailed support and discards the datum;
+airborne motion discards it as well. No fixed hold timer, new missing-point
+threshold, fall damage coefficient or landing damage rule is introduced.
+Multi-tick regressions fail before the fix (0.135 m becomes zero), then cover
+stationary handback, travel on actual sloped ground, ledge reactivation and
+ballistic landing with no retained datum. Native acceptance is still required.
+
+Roof pressure was not admitted in report 093639. Existing success-only logging
+cannot establish which query or planar response ejected a hull. Add bounded
+roof-query hits/misses, native component normals, selected support height and
+local planar corrections against vertically offset peers. These diagnostics
+reuse existing queries and do not exempt unproved overlaps from collision.
+The effective falling damage and previously implemented damage deduplication
+remain; roof stability is unresolved, not claimed fixed.
+
+The driver-only wedged-queue fixture still expects pivot_recovery but observes
+drive/short_forward_escape. Re-executing it with the unmodified Windows305
+driver reproduces the same failure; no driver policy is changed to satisfy it.
+Rotation refusal receipts now include the actual catalog/native surface,
+query ray, hit normal and sampled pose at the existing bounded stall cadence.
+A separate stack contract bug is fixed: when a human snapshot omits chassis
+shape, the worker resolves it but previously left the roof-admission context
+without that geometry, giving tilted contact a zero-size height cap. Pass the
+resolved descriptor shape into that same context; no contact is fabricated.

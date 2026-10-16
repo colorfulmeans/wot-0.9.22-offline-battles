@@ -740,6 +740,18 @@ class BotAdapter(object):
             'movement_intent': movement_intent,
             'withdrawal_aim': bool(local.get('withdrawal_aim', False)),
         }
+        # Evidence only: retain the driver's result before face intent and
+        # the runtime's combat/traffic/track gates can overwrite it.
+        result['control_trace'] = dict(
+            sampled_at=state.get('now'), driver_throttle=local['throttle'],
+            driver_turn=local['turn'], driver_target_yaw=local['target_yaw'],
+            face_override=(recovery_mode == 'arrived' and dx*dx+dz*dz > .01),
+            face_position=face_position, aim_position=aim_position,
+            strategic_move_position=move_position, local_target=target,
+            throttle_override=throttle_override, stop_at_target=stop_at_target,
+            navigation_wait=navigation_wait,
+            navigation_status=state.get('navigation_status'),
+            hull_angle_degrees=strategic.get('hull_angle_degrees'))
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('hull_angle_degrees') is not None:

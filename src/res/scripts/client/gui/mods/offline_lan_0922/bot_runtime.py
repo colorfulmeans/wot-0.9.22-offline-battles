@@ -241,7 +241,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
     '_basic_fall_origin_y', '_basic_continuous_support',
-    '_legacy_straddle_reference_y', '_support_mode_basis',
+    '_legacy_straddle_reference_y', '_support_mode_basis', '_basic_support_datum',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -2821,6 +2821,8 @@ class BotRuntime(object):
         state.pop('_spring_ground_memory', None)
         state.pop('_pseudo_ground_memory', None)
         state.pop('_suspension_ground_plane', None)
+        state.pop('_basic_support_datum', None)
+        state.pop('_support_mode_basis', None)
         if reset_grounded:
             state['grounded_once'] = False
 
@@ -2979,7 +2981,7 @@ class BotRuntime(object):
             residual=max(abs((rows[1]['ground']+rows[2]['ground'])*.5-rows[0]['ground']),
                          abs((rows[3]['ground']+rows[4]['ground'])*.5-rows[0]['ground']))
             if abs(determinant)>1.e-8 and residual<=0.35:
-                state['_support_mode_basis']=(x,z,float(rows[0]['ground']),
+                state['_support_mode_basis']=(x,z,y,
                     (forward*bz-az*side)/determinant,
                     (ax*side-forward*bx)/determinant)
             else:
@@ -2996,6 +2998,7 @@ class BotRuntime(object):
         rows = self._basic_support_status(state)
         missing = any(not row['valid'] for row in rows)
         if missing:
+            state.pop('_basic_support_datum', None)
             state['_edge_support_active'] = True
         self._report_support_mode(state, rows, 'enable' if missing else 'sample')
         return missing
@@ -3011,6 +3014,7 @@ class BotRuntime(object):
             position=_position(state), valid_count=sum(bool(r['valid']) for r in rows),
             total=5, points=rows, airborne=bool(state.get('airborne')),
             vertical_speed=state.get('vertical_speed'),
+            basic_support_datum=state.get('_basic_support_datum'),
             reason=('point_support_lost' if phase == 'enable' else
                     'all_points_restored' if phase == 'disable' else 'support_observation')))
 
@@ -3022,6 +3026,10 @@ class BotRuntime(object):
         if state.get('airborne') or not all(row['valid'] for row in rows):
             self._report_support_mode(state, rows, 'sample')
             return False
+        # The accepted rigid pose need not put its root exactly on the
+        # centre ray. Preserve that measured datum when the basic owner
+        # resumes; dropping it on the next frame recreates point loss.
+        state['_basic_support_datum'] = float(state['y'])-float(rows[0]['ground'])
         state.pop('_edge_support_active', None)
         self._suspension_params.pop(int(state['id']), None)
         # Solver memory must not suppress the basic four-point pose owner.
@@ -6906,7 +6914,7 @@ class BotRuntime(object):
             # drop; the dynamic envelope alone proves no surface continuity.
             support_gap = (None if follow_gap is None else min(
                 float(follow_gap), vehicle_physics.GROUND_FOLLOW_MIN))
-            reference_y = position[1]
+            reference_y = position[1]-_number(state.get('_basic_support_datum'))
             if state.get('grounded_once') and not state.get('airborne'):
                 reference_y = max(reference_y, _number(state.get(
                     '_legacy_straddle_reference_y'), reference_y))
@@ -7075,6 +7083,7 @@ class BotRuntime(object):
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
+            'control_arbitration': dict(command.get('control_trace') or {}),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'withdrawal': command.get('withdrawal'),
@@ -7191,6 +7200,13 @@ class BotRuntime(object):
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
                 for key, deadline in sorted((state.get('_gun_angle_rejected') or {}).items())],
             'nearby': sorted(nearby, key=lambda item: item['id']),
+            'rotation_contact': {key:value for key,value in
+                (state.get('_rotation_contact_trace') or {}).items() if key in (
+                    'reason','status','kinds','position','start_yaw','end_yaw',
+                    'pitch','roll','sampled_at','ray_start','ray_end','hit','normal',
+                    'ground_ahead','profile','native_surface_candidates',
+                    'native_surface_columns','pivot_offset')},
+            'support_datum': state.get('_basic_support_datum'),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
             'pose_rollback': bool(pose_rollback),
@@ -8313,7 +8329,18 @@ class BotRuntime(object):
         # their real CoM distance below so a remote valley floor cannot pull
         # the bot down in one tick.
         ground = centre if centre is not None else highest
+        raw_support_centre = centre
+        if was_basic_airborne or ground is None:
+            state.pop('_basic_support_datum', None)
+        elif '_basic_support_datum' in state:
+            # This is a reference-frame transfer from an admitted detailed
+            # pose, not an invented floor or an upward velocity impulse.
+            datum = state['_basic_support_datum']
+            ground += datum
+            centre = centre+datum if centre is not None else None
         if trace is not None:
+            trace['support_raw_centre'] = raw_support_centre
+            trace['support_datum'] = state.get('_basic_support_datum')
             trace.update({'support_centre': centre, 'support_highest': highest,
                           'grounded_before': state.get('grounded_once', False)})
         if ground is not None:
@@ -8445,6 +8472,7 @@ class BotRuntime(object):
         # the last downward interval so the next query can see a crossed floor,
         # rather than rejecting that floor as an overhead bridge forever.
         if state.get('airborne', False):
+            state.pop('_basic_support_datum', None)
             state['_basic_fall_origin_y'] = fall_origin_y
         else:
             state.pop('_basic_fall_origin_y', None)

@@ -155,6 +155,31 @@ class NativeRoofAdmissionTests(unittest.TestCase):
         battle._warn_optional_failure=mock.Mock()
         return battle,actor
 
+    def test_worker_player_roof_check_uses_the_resolved_chassis_shape(self):
+        battle,unused=self.scene()
+        battle._bots=None
+        battle.client=types.SimpleNamespace(round_id=1,authority_epoch=1)
+        shape=(1.5,3.,0.,2.)
+        battle._collision_shape=lambda descriptor:shape
+        entity=types.SimpleNamespace(typeDescriptor=object())
+        battle._records={'player:1':dict(engine_id=101)}
+        battle._server_entity=lambda identity:entity
+        lower=dict(id=12,x=0.,y=0.,z=0.,alive=True)
+        def context(actor):
+            previous=getattr(battle,'_stack_context',None)
+            battle._stack_context=dict(actor=actor,hits=[],
+                candidates=[(('bot',12),lower,entity)])
+            return previous
+        battle._stack_support_context=context
+        def probe(*args):
+            self.assertEqual(shape,battle._stack_context['actor'].get('collision_shape'))
+            return None
+        battle._stack_ground_hit=probe
+        with mock.patch.object(battle_fixture.battle_runtime_module.vehicle_physics,
+                               'descriptor_mass',return_value=36000.):
+            battle._advance_stack_contacts([dict(id=1,x=0.,y=2.,z=0.,
+                pitch=.3,roll=.2)],.1)
+
     def test_only_upward_non_gun_native_hit_can_support(self):
         for component,normal,expected in (('vehicleHull',1.,True),
                 ('vehicleGun',1.,False),('vehicleHull',-1.,False),
@@ -221,21 +246,6 @@ class SupportAndRecoveryTests(unittest.TestCase):
             runtime._physics_ground_probe=lambda *unused:0.
             self.assertTrue(runtime._release_detailed_support(state))
 
-    def test_short_recovery_grade_excludes_body_ground_clearance(self):
-        runtime=battle_fixture._runtime()
-        battle=battle_fixture.BattleRuntime(runtime)
-        battle._avatar=runtime.bigworld.avatar
-        battle._water_depth=lambda unused:0.
-        battle._support_column=lambda *args,**kwargs:0.
-        def ray(start,end,trace):
-            if start.x==end.x and start.z==end.z:
-                return (battle._vector((start.x,-.35*start.z,start.z)),)
-            return None
-        battle._collide_navigation=ray
-        result=battle._direction_probe((0.,.25,0.),0.,0.,object(),.5,
-                                      corridor_half_width=1.5)
-        self.assertTrue(result['clear'],result)
-        self.assertAlmostEqual(-.35,result['slope'])
 
 
 if __name__=='__main__':unittest.main()

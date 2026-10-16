@@ -34,6 +34,68 @@ class SupportLifecycleTests(unittest.TestCase):
         self.assertNotIn(11,runtime._suspension_params)
         self.assertEqual(retained,{k:state[k] for k in retained})
 
+    def test_handoff_height_survives_subsequent_basic_ticks(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        # The report closes detailed support 0.135 m above its centre ray.
+        state.update(_edge_support_active=True,airborne=False,y=.135,
+                     speed=0.,vertical_speed=0.)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(runtime._release_detailed_support(state))
+            for tick in range(20):
+                runtime._contact_now=tick*.15
+                self.assertFalse(runtime._contact_edge_support_needed(state))
+                runtime._integrate_vertical_motion(state,.15)
+                self.assertAlmostEqual(.135,state['y'])
+                self.assertFalse(state.get('airborne',False))
+
+    def test_handoff_datum_follows_real_slope_and_clears_at_a_ledge(self):
+        import math
+        runtime,state=self.scene(lambda x,z:.1*z)
+        state.update(_edge_support_active=True,airborne=False,y=.135,
+                     speed=0.,vertical_speed=0.,pitch=-math.atan(.1),
+                     terrain_pitch=-math.atan(.1))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(runtime._release_detailed_support(state))
+            for tick in range(1,8):
+                state['z']+=1.
+                runtime._contact_now=tick
+                self.assertFalse(runtime._contact_edge_support_needed(state))
+                runtime._integrate_vertical_motion(state,.15)
+                self.assertAlmostEqual(.135+.1*tick,state['y'])
+            runtime._physics_ground_probe=lambda *args:None
+            runtime._contact_now=9.
+            self.assertTrue(runtime._contact_edge_support_needed(state))
+            self.assertNotIn('_basic_support_datum',state)
+
+    def test_turning_on_supported_slope_keeps_the_admitted_height(self):
+        import math
+        runtime,state=self.scene(lambda x,z:.2*x+.1*z)
+        state.update(_edge_support_active=True,airborne=False,y=.135,
+                     speed=0.,vertical_speed=0.,pitch=-math.atan(.1),
+                     terrain_pitch=-math.atan(.1),roll=math.atan(.2))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(runtime._release_detailed_support(state))
+            for tick in range(1,64):
+                state['yaw']=tick*.1
+                runtime._contact_now=tick*.15
+                runtime._reorient_basic_ground_pose(state)
+                self.assertFalse(runtime._contact_edge_support_needed(state))
+                runtime._integrate_vertical_motion(state,.15)
+                self.assertAlmostEqual(.135,state['y'])
+
+    def test_airborne_fall_does_not_keep_handoff_datum_or_change_landing(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        state.update(_basic_support_datum=.135,airborne=True,y=1.,
+                     speed=0.,vertical_speed=-20.)
+        runtime._suspension_params_for=lambda unused:None
+        runtime._apply_bot_landing_impact=mock.Mock()
+        with contextlib.redirect_stdout(io.StringIO()):
+            runtime._integrate_vertical_motion(state,.15)
+        self.assertNotIn('_basic_support_datum',state)
+        self.assertAlmostEqual(0.,state['y'])
+        self.assertTrue(runtime._apply_bot_landing_impact.called)
+        self.assertGreater(abs(runtime._apply_bot_landing_impact.call_args.args[1]),20.)
+
     def test_one_missing_point_or_uncommitted_airborne_pose_keeps_detailed(self):
         for airborne in (False,True):
             runtime,state=self.scene(lambda x,z:0.)

@@ -5889,6 +5889,28 @@ class BattleRuntime(object):
                     context['hits'].append((key, state, (x,height,z)))
                     # Keep the contact identity with the exact height query.
                     context['actor']['_stack_carrier'] = list(key)
+                # Observe misses as well as admitted pressure. The previous
+                # package logged only success, so it could not explain ejection.
+                now = self._clock()
+                log_times = getattr(self, '_stack_probe_times', None)
+                if log_times is None:
+                    log_times = self._stack_probe_times = {}
+                pair = (context['actor'].get('kind','bot'),context['actor']['id'])+key
+                if now >= log_times.get(pair,-1.e30):
+                    log_times[pair] = now+1.
+                    native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
+                        phase='roof_probe', upper=list(pair[:2]),lower=list(key),
+                        start=_xyz(start),end=_xyz(end),upper_pose=dict(
+                            (name,context['actor'].get(name)) for name in
+                            ('x','y','z','yaw','pitch','roll')),
+                        lower_pose=dict((name,state.get(name)) for name in
+                            ('x','y','z','yaw','pitch','roll')),
+                        native_hits=[dict(component=h.collision.compName,
+                            distance=h.collision.dist,
+                            normal=_xyz(h.worldNormal) if h.worldNormal is not None else None)
+                            for h in hits[:12]],
+                        selected_carrier=context['actor'].get('_stack_carrier'),
+                        selected_height=best_y if best is not None else None))
             except (AttributeError, IndexError, KeyError, TypeError, ValueError,
                     RuntimeError) as error:
                 now = self._clock()
@@ -5956,6 +5978,10 @@ class BattleRuntime(object):
                         if entity is None:
                             continue
                         upper_mass=vehicle_physics.descriptor_mass(entity.typeDescriptor)
+                # The native roof admission cap consumes this same geometry.
+                # Human snapshots do not carry it; resolving only a local
+                # variable left tilted player contacts with a zero-size cap.
+                actor['collision_shape'] = shape
                 yaw = float(actor.get('yaw',0.0))
                 for side, forward in ((0.,0.),(-shape[0],0.),(shape[0],0.),
                                       (0.,-shape[1]),(0.,shape[1])):
@@ -6315,10 +6341,6 @@ class BattleRuntime(object):
                 far_distance, max(0.5, requested_distance))
         near_distance = min(8.0, far_distance)
         previous_y = y
-        if descriptor is not None and maximum_distance is not None and far_distance <= 2.0:
-            origin = self._support_column(x,z,y,maximum_y=y+0.6)
-            if origin is not None and abs(float(origin)-y) <= 0.8:
-                previous_y = float(origin)
         previous_distance = 0.0
         sine = math.sin(float(yaw))
         cosine = math.cos(float(yaw))
@@ -21831,8 +21853,13 @@ class BattleRuntime(object):
             self._bot_motion_kinds[int(bot_id)] = str(
                 detail.get('kinds', '-'))
         if status not in ('clear', 'crushed', 'approach'):
+            bot_state['_rotation_contact_trace'] = dict(
+                reason='destructible_rotation',status=status,
+                kinds=detail.get('kinds'),position=position,
+                start_yaw=start_yaw,end_yaw=end_yaw,pitch=pitch,roll=roll,
+                sampled_at=now)
             return False
-        contact_trace = {}
+        contact_trace = dict(sampled_at=now,pitch=pitch,roll=roll)
         clear = self._native_world_rotation_is_clear(
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
@@ -23346,6 +23373,18 @@ class BattleRuntime(object):
         solved = tank_collision.resolve_pairs(
             [own] + physical_others, dt, anchor=own['id'])
         contact['correction'] = solved[own['id']]['correction']
+        vertical_peers = [other for other in physical_others
+                          if abs(other['y']-own['y']) > .5]
+        if (vertical_peers and contact['correction'] != (0.,0.) and
+                now >= getattr(self,'_stack_planar_log_at',-1.e30)):
+            self._stack_planar_log_at = now+1.
+            native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
+                phase='planar_response',upper_or_local=['player',own['network_id']],
+                local_pose=(own['x'],own['y'],own['z']),
+                local_carrier=own.get('stack_carrier'),
+                correction=contact['correction'],
+                peers=[dict(kind=other['kind'],id=other['network_id'],
+                    position=(other['x'],other['y'],other['z'])) for other in vertical_peers]))
         contact['delta_velocity'] = solved[own['id']]['delta_velocity']
         responses = dict((other['id'], solved[other['id']]['delta_velocity'])
                          for other in physical_others

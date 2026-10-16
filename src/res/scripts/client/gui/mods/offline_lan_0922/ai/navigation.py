@@ -3794,15 +3794,6 @@ class TerrainNavigator(object):
 					lookahead_distance, bot_id)
 				state['index'] = next_index
 				selected = tuple(path[next_index])
-				if (movement_intent and
-						_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
-						_distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS and
-						_distance_2d(selected, goal) > WAYPOINT_ARRIVAL_RADIUS):
-					# A continuation which yields the same occupied connector
-					# has not advanced. Keep the existing native-checked local
-					# attempts instead of publishing a false arrival forever.
-					return self._fallback_target(
-						bot_id,current,goal,now,avoid_points,state,True)
 				state['last_target'] = selected
 				if self.grid.segment_has_baked_hazard(
 						current, selected, BAKED_SHALLOW_WATER):
@@ -3822,14 +3813,7 @@ class TerrainNavigator(object):
 				bot_id, current, goal, now, avoid_points, state, True)
 		selected = tuple(path[lookahead])
 		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
-				(_distance_2d(current, goal) > 15.0 or
-				 (movement_intent and lookahead + 1 == len(path) and
-				  _distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS and
-				  _distance_2d(selected, goal) > WAYPOINT_ARRIVAL_RADIUS))):
-			# A graph can end at its nearest reachable cell inside three cells
-			# of a sparse anchor. That final connector is still temporary: once
-			# reached, use the existing checked fallback/retry law rather than
-			# returning the current location forever as a completed objective.
+				_distance_2d(current, goal) > 15.0):
 			state['index'] = lookahead
 			if movement_intent and lookahead + 1 < len(path):
 				state['reached_path_corner'] = {
