@@ -24616,9 +24616,13 @@ class BattleRuntime(object):
             shape = actor['collision_shape']
             reach = (abs(math.sin(self._local_pitch))*shape[1] +
                      abs(math.sin(self._local_roll))*shape[0])
-            accepted = (hits and not getattr(self,'_local_support_rise_blocked',False)
-                        and abs(result[1]-hits[-1][2][1]) <= reach+0.15)
-            self._local_stack_carrier = actor.get('_stack_carrier') if accepted else None
+            if 'contact_carrier' in self._stack_context:
+                accepted_carrier = self._stack_context['contact_carrier']
+            else:
+                accepted_carrier = (actor.get('_stack_carrier') if hits and
+                    abs(result[1]-hits[-1][2][1]) <= reach+0.15 else None)
+            self._local_stack_carrier = (accepted_carrier if not
+                getattr(self,'_local_support_rise_blocked',False) else None)
             return result
         finally:
             self._stack_context = previous
@@ -24881,6 +24885,20 @@ class BattleRuntime(object):
         self._local_right_flying = bool(solved['right_flying'])
         if solved['contact_count']:
             self._local_fall_armed = True
+        context = getattr(self,'_stack_context',None)
+        if context is not None:
+            context['contact_carrier'] = vehicle_stack.settled_carrier(
+                params,ground,pseudo_ground,solved,position,yaw,
+                previous_pitch,previous_roll,context['hits'])
+            if (context['hits'] and (now >= getattr(self,'_carrier_commit_log_at',-1.e30) or
+                    context['contact_carrier'] != getattr(self,'_local_stack_carrier',None))):
+                native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
+                    phase='carrier_commit',position=position,
+                    carrier=context['contact_carrier'],contacts=solved['contact_count'],
+                    sampled_pose=(previous_pitch,previous_roll),
+                    solved_pose=(solved['pitch'],solved['roll']),
+                    witnesses=[(list(key),point) for key,lower,point in context['hits'][-12:]]))
+                self._carrier_commit_log_at = now+1.
         impact_vertical = vehicle_physics.suspension_impact_velocity(
             before_airborne, before_vertical_speed, solved)
         if impact_vertical is not None:

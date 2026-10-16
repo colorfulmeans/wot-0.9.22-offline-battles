@@ -58,6 +58,30 @@ def planar_pair(first, second):
                 tuple(second.get('stack_carrier') or ()) == first_key)
 
 
+def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
+                    sample_pitch, sample_roll, hits):
+    """Match native roof witnesses to contacts used by the admitted solver.
+
+    A model origin is not the track/body contact point. Comparing its height
+    to the final arbitrary ray loses tilted carriers and can keep distant ones.
+    """
+    from . import vehicle_physics as vp
+    contacts = vp._suspension_contact_keys(params,solved,ground,pseudo_ground)[0]
+    matches = {}
+    for kind,index in contacts:
+        point = params['springs'][index] if kind == 'spring' else params['pseudo_contacts'][index]
+        height = ground[index] if kind == 'spring' else pseudo_ground[index]
+        ox,unused,oz = vp.suspension_point_offset(point,sample_pitch,sample_roll)
+        x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
+        z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
+        for key,state,witness in hits:
+            if (abs(witness[1]-float(height)) <= .03 and
+                    math.hypot(witness[0]-x,witness[2]-z) <= .05):
+                matches[key] = matches.get(key,0)+1
+                break
+    return list(max(matches,key=lambda key:(matches[key],key))) if matches else None
+
+
 class Ledger(object):
     """Cumulative per-pair work survives state coalescing and exact replay."""
     def __init__(self):

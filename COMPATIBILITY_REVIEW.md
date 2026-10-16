@@ -8589,3 +8589,35 @@ handoff stability and gameplay acceptance require the new Windows package.
   roof misses and side contacts. Engine-free checks establish adapter/numeric
   behavior only. Actual bridge release, stacking feel, terrain contacts and the
   remaining hillside cases require the next exact-client session.
+
+
+## Report 184837: lower-storey targets and solver-owned roof carriers
+
+- Reproduce a tank at approximately -14.45 m accepting a local bridge target
+  near +0.89 m. Single-layer baked links no longer prove an edge from a different
+  actual storey. Native local proofs validate both their start layer and the
+  requested baked endpoint layer. The existing candidate fan resolves mismatched
+  candidate heights on actual same-layer ground without modifying graph heights,
+  scoring, retry limits, route choice or terminal-point behavior. Ordinary deck
+  paths keep the existing cheap bake. Regression coverage includes continuing
+  along the lower storey rather than replacing the bad target with a permanent stop.
+- Physical five-point support must not inherit navigation's powered climbing
+  grade. Bound continuous upward support by the existing native normal-Y > 0.5
+  physical law, using intermediate same-layer samples. Keep missing/disconnected
+  ground invalid, one-invalid admission and all-five-restored release. No timer,
+  alternate switching threshold or suspension retention policy is introduced.
+- Match a settled local carrier to native roof witnesses used by final geometric
+  suspension contacts. Root-to-last-ray height was not a contact proof: a tilted
+  real contact could be discarded or a later unrelated ray could select another
+  lower vehicle. Actual contact loss and rejected support still clear the carrier.
+  Retain the damage/pressure laws and module coefficients. Publish committed
+  carrier evidence on changes as well as bounded regular samples.
+- Reports for Bots 24/27 establish persistent small-area recovery, but do not yet
+  prove that another navigation strategy is correct. Retain the driver and route
+  policies. Add the actual origin, time, body attitude and drive direction to the
+  already collected recovery direction receipts; issue no additional diagnostic
+  engine queries and do not introduce terminal local rerouting.
+- New analytic/native-contract reproductions cover storey rejection, lower-floor
+  progress, ordinary deck fast paths, physical support versus drive grade,
+  disconnected decks, tilted contacts, unrelated last rays, carrier loss and
+  support rejection. Exact #1513 terrain/stacking feel remains a gameplay check.

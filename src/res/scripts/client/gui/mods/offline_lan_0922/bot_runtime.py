@@ -2919,6 +2919,27 @@ class BotRuntime(object):
         self._suspension_params[bot_id] = params
         return params
 
+    def _basic_support_rise_is_continuous(self, state, x, z, height, centre):
+        """Physical support is independent of the powered-navigation grade."""
+        dx, dz = x-state['x'], z-state['z']
+        distance = math.hypot(dx,dz)
+        if distance < .001:
+            return False
+        # _support_column already rejects native normals with Y <= .5.
+        # The same 60-degree physical limit must not inherit a drive limit.
+        grade = math.sqrt(3.)
+        previous = float(centre)
+        count = max(2,int(math.ceil(distance/.5)))
+        for index in range(1,count+1):
+            fraction = float(index)/count
+            reach = distance/count*grade+.02
+            observed = self._ground_probe_at(state['x']+dx*fraction,
+                state['z']+dz*fraction,previous,previous+reach)
+            if (observed is None or abs(float(observed)-previous) > reach):
+                return False
+            previous = float(observed)
+        return abs(previous-height) <= .03
+
     def _basic_support_status(self, state):
         """Sample the same centre/front/rear/right/left footprint in its pose."""
         x, y, z = _position(state)
@@ -2952,16 +2973,15 @@ class BotRuntime(object):
             continuous_rise = False
             upper_candidate = None
             # A clipped uphill top is not loss of support. Admit it only with
-            # the same bounded continuous-ground proof used by basic motion;
+            # physical continuous-ground proof, independently of drive grade;
             # a wall/roof/upper bridge with no connecting ground remains invalid.
             if ground is None and rows and rows[0]['ground'] is not None:
                 upper_candidate = self._ground_probe_at(px, pz, expected)
                 if upper_candidate is not None and float(upper_candidate) > expected+0.6:
                     centre = rows[0]
                     distance = math.hypot(px-x, pz-z)
-                    continuous_rise = self._support_rise_follows_tick_path(
-                        dict(state, x=px, z=pz), float(upper_candidate),
-                        (x, float(centre['ground']), z), distance)
+                    continuous_rise = self._basic_support_rise_is_continuous(
+                        state, px, pz, float(upper_candidate), float(centre['ground']))
                     if continuous_rise:
                         ground = float(upper_candidate)
             gap = None if ground is None else expected-float(ground)
@@ -14415,7 +14435,10 @@ class BotRuntime(object):
                         distance = decision_state.get('navigation_probe_distance')
                     key = (round(normalised,4), None if distance is None else round(float(distance),2))
                     planning_verdicts.append(dict(kind='direction', yaw=sample_yaw,
-                        distance=distance, clear=result, reason=planning_reason[0], native_probe=planner_probe_samples.get(key)))
+                        distance=distance, clear=result, reason=planning_reason[0],
+                        origin=position, sampled_at=now, drive_direction=drive_direction,
+                        body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
+                        native_probe=planner_probe_samples.get(key)))
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
