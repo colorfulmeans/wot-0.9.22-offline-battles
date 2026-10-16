@@ -2089,9 +2089,15 @@ class TerrainNavigator(object):
 			self._active_planning_edge_penalties(bot_id, now),
 			0.0, diagnostic=state.setdefault('local_fallback', {}),
 			excluded_target_cells=exclusions)
+		selection=state.setdefault('local_selection',{})
+		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
+			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
+			temporary_stalled=bool(state.get('temporary_stalled')))
 		if fallback is not None and self._temporary_path_repeats(state, (fallback,)):
+			selection.update(outcome='temporary_path_repeats',selected=tuple(current))
 			return tuple(current)
 		connector_clear = True
+		previous_refusal=getattr(self.grid,'_last_native_refusal',None)
 		if fallback is not None and origin != tuple(current):
 			connector_clear = bool(
 				not self._bot_edges_penalized(bot_id, current, fallback, now) and
@@ -2107,6 +2113,7 @@ class TerrainNavigator(object):
 				except Exception:
 					connector_clear = False
 		if not connector_clear:
+			selection.update(outcome='connector_rejected',selected=tuple(current),native_refusal=(dict(self.grid._last_native_refusal) if getattr(self.grid,'_last_native_refusal',None) is not previous_refusal and getattr(self.grid,'_last_native_refusal',None) else None))
 			state.pop('local_completed_target', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
@@ -2117,8 +2124,10 @@ class TerrainNavigator(object):
 		if fallback is not None:
 			retired = state.get('local_target_retired')
 			if retired is not None and float(now) < retired[1] and _distance_2d(fallback, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS:
+				selection.update(outcome='retired_target',retired_until=retired[1],selected=None)
 				return None
 			self._remember_local_fallback(fallback, goal, state, current, now)
+		selection.update(outcome='selected' if fallback is not None else 'no_candidate',selected=fallback)
 		return fallback
 
 	@staticmethod
@@ -2325,8 +2334,13 @@ class TerrainNavigator(object):
 			self.grid._baked_cell_height(self.grid.cell_for(completed[0])) is None and
 			self.grid._baked_cell_height(self.grid.cell_for(current)) is not None)
 		origin = self._local_fallback_origin(current, goal, state)
+		state['local_selection'] = dict(at=float(now),current=tuple(current),origin=tuple(origin),
+			goal=tuple(goal),candidate=None,outcome='retained_check',
+			temporary_stalled=bool(state.get('temporary_stalled')),
+			visited_cells=sorted(state.get('temporary_visited_cells',()))[:32])
 		retained = self._retained_local_fallback(bot_id, current, goal, now, state)
 		if retained is not None:
+			state['local_selection'].update(outcome='retained',selected=retained)
 			return retained
 		return self._new_local_fallback(bot_id, current, origin, goal, now,
 			avoid_points, state, eroded_reentry=eroded_reentry)
@@ -2704,6 +2718,8 @@ class TerrainNavigator(object):
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
 			'local_target': state.get('local_fallback_target'),
+			'local_selection': dict(state.get('local_selection') or {}),
+			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
 			'local_target_end_reason': state.get('local_target_end_reason'),
 			'local_retry_age_ms': int(max(0.0, float(now) - float(
 				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),

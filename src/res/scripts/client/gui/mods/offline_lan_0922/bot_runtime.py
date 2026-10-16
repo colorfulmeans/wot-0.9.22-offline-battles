@@ -2878,7 +2878,8 @@ class BotRuntime(object):
         """Keep basic driving; a shoved ledge hull uses detailed contacts."""
         state = self.states.get(int(bot_id), {})
         edge_support = (not BOT_FULL_SUPPORT_ENABLED and
-                        self._contact_edge_support_needed(state))
+                        self._contact_edge_support_needed(state,
+                            state.get('_support_selection_stage','current_pose')))
         if not BOT_FULL_SUPPORT_ENABLED and not edge_support:
             # Keep this before activation/cache: contact on continuous ground
             # alone does not enable the more expensive spring integration.
@@ -2956,15 +2957,10 @@ class BotRuntime(object):
         sine, cosine = math.sin(yaw), math.cos(yaw)
         basis = state.get('_support_mode_basis')
         support_y = y
+        # Both admission and release read the accepted physical root. The
+        # caller settles basic height before admission; projecting an older
+        # plane here would compare a second, uncommitted pose to the solver.
         projected = False
-        if (basis and not state.get('_edge_support_active') and
-                not state.get('airborne') and state.get('grounded_once')):
-            dx,dz=x-basis[0],z-basis[1]
-            # This is the existing basic ground-follow candidate, not a
-            # replacement physical pose or a remembered ground contact.
-            if 1.e-8 < math.hypot(dx,dz) <= max(length,width) and abs(y-basis[2]) <= 0.8:
-                support_y = basis[2]+basis[3]*dx+basis[4]*dz
-                projected = True
         rows = []
         for name, side, forward in (('centre',0.,0.), ('front',0.,length),
                 ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
@@ -3015,12 +3011,7 @@ class BotRuntime(object):
         state['_support_mode_sample'] = (key, rows)
         # Keep the inputs used by this exact sample, before a valid sample
         # replaces the plane. Diagnostics must never perform another cast.
-        projection_reason = ('projected' if projected else 'no_basis' if not basis else
-            'detailed_owner' if key[-1] else 'airborne' if state.get('airborne') else
-            'not_grounded' if not state.get('grounded_once') else
-            'root_height_mismatch' if abs(y-basis[2]) > 0.8 else
-            'no_horizontal_change' if math.hypot(x-basis[0],z-basis[1]) <= 1.e-8 else
-            'outside_local_span')
+        projection_reason = 'accepted_pose'
         state['_support_mode_receipt'] = dict(
             sampled_at=key[0], position=(x,y,z), pose=(yaw,pitch,roll),
             detailed_at_sample=key[-1], airborne_at_sample=bool(state.get('airborne')),
@@ -3031,7 +3022,7 @@ class BotRuntime(object):
             reach=(-0.6,vehicle_physics.GROUND_FOLLOW_MIN))
         return rows
 
-    def _contact_edge_support_needed(self, state):
+    def _contact_edge_support_needed(self, state, selection_stage='current_pose'):
         """Any missing basic footprint point admits temporary detailed support."""
         if state.get('_edge_support_active'):
             return True
@@ -3041,6 +3032,22 @@ class BotRuntime(object):
         # deciding whether that frame needs the detailed contact owner.
         self._reorient_basic_ground_pose(state)
         rows = self._basic_support_status(state)
+        refreshed = False
+        centre=rows[0]
+        continuous_pose = (centre['valid'] and all(row['ground'] is not None and
+            abs(float(row['ground'])-float(centre['ground'])) <=
+                math.hypot(row['x']-state['x'],row['z']-state['z'])*math.sqrt(3.)+.02
+            for row in rows[1:]))
+        if (selection_stage == 'post_basic_settle' and not state.get('airborne')
+                and any(not row['valid'] for row in rows) and continuous_pose
+                and all(self._basic_support_rise_is_continuous(state,row['x'],row['z'],
+                    float(row['ground']),float(centre['ground'])) for row in rows[1:])):
+            # A staggered four-point pose may lag a curved bank. Refresh only
+            # this failing admission, through the existing body/turret guard.
+            refreshed = self._update_slope_pose(state, force_sample=True)
+            rows = self._basic_support_status(state)
+        state.setdefault('_support_mode_receipt',{}).update(
+            selection_stage=selection_stage, pose_refreshed=bool(refreshed))
         missing = any(not row['valid'] for row in rows)
         if missing:
             state.pop('_basic_support_datum', None)
@@ -7534,7 +7541,7 @@ class BotRuntime(object):
             return None
 
     @timed('bot.slope')
-    def _update_slope_pose(self, state, allow_ungrounded=False):
+    def _update_slope_pose(self, state, allow_ungrounded=False, force_sample=False):
         """Refresh the four-point hull pose after this tick's ground settle."""
         # The ten-spring solver already owns authoritative pitch and roll.
         # A later staggered presentation sample must not overwrite that pose.
@@ -7555,7 +7562,7 @@ class BotRuntime(object):
         exact = not bool(_value(self._descriptors.get(int(state['id']), {}),
                                 'isPitchHullAimingAvailable', False))
         new_target = None
-        if (isinstance(marker, (list, tuple)) and len(marker) == 3 and
+        if (not force_sample and isinstance(marker, (list, tuple)) and len(marker) == 3 and
                 abs(x - marker[0]) < travel and
                 abs(z - marker[1]) < travel and
                 abs(yaw - marker[2]) < turn):
@@ -8383,6 +8390,26 @@ class BotRuntime(object):
                                    attempted_yaw=None,
                                    suspension_motion_pose=None):
         """Run grounded/ballistic phases and reject false raised support."""
+        if not BOT_FULL_SUPPORT_ENABLED and not state.get('_edge_support_active'):
+            was_grounded=bool(state.get('grounded_once'))
+            blocked = self._integrate_basic_vertical_motion(
+                state, step, tick_pose, attempted_yaw)
+            if not blocked and was_grounded:
+                # Select ownership once, after the basic owner's timed solve.
+                # The newly admitted detailed owner starts next slice; never
+                # spend this dt twice or apply a second landing impact.
+                previous_stage=state.get('_support_selection_stage')
+                state['_support_selection_stage']='post_basic_settle'
+                try:
+                    self._suspension_params_for(state['id'])
+                finally:
+                    if previous_stage is None:state.pop('_support_selection_stage',None)
+                    else:state['_support_selection_stage']=previous_stage
+            trace = state.get('_motion_stall_pending')
+            if trace is not None:
+                trace['suspension'] = False
+                trace['support_selected_after_basic'] = bool(state.get('_edge_support_active'))
+            return blocked
         params = self._suspension_params_for(state['id'])
         trace = state.get('_motion_stall_pending')
         if trace is not None:
@@ -8427,6 +8454,12 @@ class BotRuntime(object):
                 state['push_z'] = 0.0
                 self._turn_speeds[int(state['id'])] = 0.0
                 return True
+        return self._integrate_basic_vertical_motion(state, step, tick_pose, attempted_yaw)
+
+    def _integrate_basic_vertical_motion(self, state, step, tick_pose=None,
+                                         attempted_yaw=None):
+        """Advance the original basic owner exactly once before mode selection."""
+        trace = state.get('_motion_stall_pending')
         # Support placement is a constraint correction, not acceleration.
         # Dividing a probe-height change by a short catch-up slice can give a
         # slow hull enough upward momentum to fly tens of metres. Retain only

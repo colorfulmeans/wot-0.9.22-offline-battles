@@ -59,7 +59,7 @@ def planar_pair(first, second):
 
 
 def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
-                    sample_pitch, sample_roll, hits):
+                    sample_pitch, sample_roll, hits, trace=None):
     """Match native roof witnesses to contacts used by the admitted solver.
 
     A model origin is not the track/body contact point. Comparing its height
@@ -68,18 +68,48 @@ def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
     from . import vehicle_physics as vp
     contacts = vp._suspension_contact_keys(params,solved,ground,pseudo_ground)[0]
     matches = {}
-    for kind,index in contacts:
+    rows=[]
+    if trace is not None:
+        trace.update(contact_count=len(contacts),roof_hits=len(hits),points=rows,
+            tolerance_y=.03,tolerance_xz=.05,verdict='no_final_contacts' if not contacts else 'no_roof_match')
+    for kind,index in sorted(contacts):
         point = params['springs'][index] if kind == 'spring' else params['pseudo_contacts'][index]
         height = ground[index] if kind == 'spring' else pseudo_ground[index]
         ox,unused,oz = vp.suspension_point_offset(point,sample_pitch,sample_roll)
         x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
         z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
+        candidates=[]
         for key,state,witness in hits:
-            if (abs(witness[1]-float(height)) <= .03 and
-                    math.hypot(witness[0]-x,witness[2]-z) <= .05):
+            dy=abs(witness[1]-float(height))
+            distance=math.hypot(witness[0]-x,witness[2]-z)
+            candidates.append((distance+dy,key,distance,dy,witness))
+            if dy <= .03 and distance <= .05:
                 matches[key] = matches.get(key,0)+1
                 break
-    return list(max(matches,key=lambda key:(matches[key],key))) if matches else None
+        if trace is not None:
+            nearest=min(candidates,key=lambda row:row[0]) if candidates else None
+            rows.append(dict(kind=kind,index=index,point=(x,float(height),z),
+                nearest=(dict(carrier=list(nearest[1]),distance_xz=nearest[2],
+                    delta_y=nearest[3],witness=nearest[4]) if nearest else None)))
+    result=list(max(matches,key=lambda key:(matches[key],key))) if matches else None
+    if trace is not None:
+        rejected=[]
+        rotation=vp._suspension_rotation(solved.get('pitch',0.),solved.get('roll',0.))
+        for kind,points,heights in (('spring',params['springs'],ground),
+                                   ('pseudo',params.get('pseudo_contacts',()),pseudo_ground)):
+            for index,point in enumerate(points):
+                if (kind,index) in contacts:
+                    continue
+                height=heights[index]
+                rigid=vp._rigid_point_height(solved,point,rotation)
+                rejected.append(dict(kind=kind,index=index,ground=None if height is None else float(height),
+                    rigid_height=rigid,compression_or_gap=(None if height is None else
+                        float(height)-rigid+(point['static_compression'] if kind=='spring' else 0.)),
+                    reason='missing_ground' if height is None else 'not_in_final_contact_set'))
+        trace['rejected_points']=rejected
+        trace.update(selected=result,matches=[(list(key),count) for key,count in sorted(matches.items())])
+        if result is not None:trace['verdict']='matched_final_contact'
+    return result
 
 
 class Ledger(object):

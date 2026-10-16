@@ -22,8 +22,8 @@ class SupportCauseEvidenceTests(unittest.TestCase):
             self.assertEqual(5,probe.call_count)
         receipt = state['_support_mode_receipt']
         self.assertEqual(basis,receipt['basis_before'])
-        self.assertTrue(receipt['projected'])
-        self.assertEqual('projected',receipt['projection_reason'])
+        self.assertFalse(receipt['projected'])
+        self.assertEqual('accepted_pose',receipt['projection_reason'])
         self.assertEqual(1.,state['_support_mode_basis'][0])
 
     def test_airborne_sample_reports_why_previous_plane_was_not_projected(self):
@@ -31,7 +31,7 @@ class SupportCauseEvidenceTests(unittest.TestCase):
         state.update(x=1.,airborne=True,_support_mode_basis=(0.,0.,0.,0.,0.))
         runtime._basic_support_status(state)
         self.assertFalse(state['_support_mode_receipt']['projected'])
-        self.assertEqual('airborne',state['_support_mode_receipt']['projection_reason'])
+        self.assertEqual('accepted_pose',state['_support_mode_receipt']['projection_reason'])
 
     @staticmethod
     def records(text):

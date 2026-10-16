@@ -6515,6 +6515,79 @@ class BattleRuntime(object):
             'direction': (-1 if signed_speed < 0.0 else 1),
         }
 
+    def _navigation_slope_lane_is_clear(self, start, end, half_width,
+                                         offset, hit, trace=None):
+        """Recast a terrain-hit lane above its proved continuous support.
+
+        This changes collision geometry only. The same 25-degree centre and
+        shoulder limits remain; walls, gaps and unproved long lanes still veto.
+        """
+        from .ai.driver import NAVIGATION_MAX_GRADE
+        dx, dz = float(end[0])-float(start[0]), float(end[2])-float(start[2])
+        distance = math.hypot(dx,dz)
+        if not 0.1 <= distance <= 24.0:
+            return False
+        try:
+            if not world_collision._drivable_surface(hit, 1.75):
+                return False
+            point = _xyz(hit[0])
+            exact = self._navigation_ground(point[0],point[2],point[1])
+            if exact is None or abs(float(exact)-point[1]) > .01:
+                return False
+        except (AttributeError,IndexError,TypeError,ValueError):
+            return False
+        lateral_x,lateral_z = dz/distance,-dx/distance
+        cache=[]
+        if trace is not None:
+            for row in trace.get('ground_samples', ()):
+                cache.extend((tuple(row['start']),tuple(row['end'])))
+            for row in trace.get('shoulder_samples', ()):
+                if row.get('shoulder_y') is not None:
+                    cache.append((row['position'][0],row['shoulder_y'],row['position'][1]))
+        def ground(x,z,hint):
+            for old_x,old_y,old_z in cache:
+                if abs(x-old_x) <= 1.e-5 and abs(z-old_z) <= 1.e-5:
+                    return float(old_y)
+            return self._navigation_ground(x,z,hint)
+        count=max(1,int(math.ceil(distance/1.68)))
+        samples=[]
+        proof=dict(offset=float(offset),hit=point,normal=_xyz(hit[1]),
+                   verdict='support_rejected',samples=samples)
+        if trace is not None:
+            trace.setdefault('slope_lane_proofs',[]).append(proof)
+        for i in range(count+1):
+            t=float(i)/count
+            x,z=float(start[0])+dx*t,float(start[2])+dz*t
+            hint=float(start[1])+(float(end[1])-float(start[1]))*t
+            centre=ground(x,z,hint)
+            lane_x,lane_z=x+lateral_x*offset,z+lateral_z*offset
+            height=centre if abs(offset)<1.e-9 else ground(lane_x,lane_z,hint)
+            if centre is None or height is None:
+                proof['verdict']='missing_support';return False
+            centre,height=float(centre),float(height)
+            if any(math.isnan(v) or math.isinf(v) for v in (centre,height)):
+                return False
+            if abs(height-centre) > abs(offset)*NAVIGATION_MAX_GRADE+1.e-6:
+                proof['verdict']='shoulder_grade';return False
+            if samples:
+                run=distance/count
+                if (abs(centre-samples[-1][3]) > run*NAVIGATION_MAX_GRADE+1.e-6 or
+                        abs(height-samples[-1][1]) > run*NAVIGATION_MAX_GRADE+1.e-6):
+                    proof['verdict']='longitudinal_grade';return False
+            samples.append((lane_x,height,lane_z,centre))
+        # Do not merely ignore the terrain hit. Check the entire supported
+        # lane at both original occupied heights, including any backing wall.
+        for first,second in zip(samples,samples[1:]):
+            for height in (.9,1.6):
+                ray_start=self._vector((first[0],first[1]+height,first[2]))
+                ray_end=self._vector((second[0],second[1]+height,second[2]))
+                obstruction=self._collide_navigation(ray_start,ray_end,trace)
+                if obstruction is not None:
+                    proof['verdict']='supported_lane_obstacle'
+                    proof['blocking_hit']=_xyz(obstruction[0]);return False
+        proof['verdict']='continuous_support_lane_clear'
+        return True
+
     def _navigation_obstacle(self, start, end, half_width,
                              native_capability=None, trace=None):
         """Ignore original destructible materials; retain native hard geometry."""
@@ -6542,6 +6615,9 @@ class BattleRuntime(object):
                 # no catalog registration or physical recast can postpone it.
                 hit = self._collide_navigation(ray_start, ray_end, trace)
                 if hit is not None:
+                    if self._navigation_slope_lane_is_clear(
+                            start,end,half_width,offset,hit,trace):
+                        break
                     if trace is not None:
                         trace.update(
                             ray_start=_xyz(ray_start), ray_end=_xyz(ray_end),
@@ -24581,8 +24657,18 @@ class BattleRuntime(object):
             else:
                 accepted_carrier = (actor.get('_stack_carrier') if hits and
                     abs(result[1]-hits[-1][2][1]) <= reach+0.15 else None)
+            previous_carrier=getattr(self,'_local_stack_carrier',None)
             self._local_stack_carrier = (accepted_carrier if not
                 getattr(self,'_local_support_rise_blocked',False) else None)
+            if previous_carrier is not None and previous_carrier != self._local_stack_carrier:
+                native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
+                    phase='carrier_release',previous=previous_carrier,
+                    selected=self._local_stack_carrier,position=result,
+                    reason=('support_guard_rejected' if getattr(self,'_local_support_rise_blocked',False)
+                        else 'solver_no_roof_contact' if 'contact_carrier' in self._stack_context
+                        else 'native_roof_miss' if not hits else 'legacy_height_mismatch'),
+                    matching=self._stack_context.get('carrier_receipt'),
+                    roof_hits=len(hits),pitch=self._local_pitch,roll=self._local_roll))
             return result
         finally:
             self._stack_context = previous
@@ -24847,14 +24933,19 @@ class BattleRuntime(object):
             self._local_fall_armed = True
         context = getattr(self,'_stack_context',None)
         if context is not None:
+            carrier_receipt=({} if context['hits'] or getattr(self,'_local_stack_carrier',None) else None)
             context['contact_carrier'] = vehicle_stack.settled_carrier(
                 params,ground,pseudo_ground,solved,position,yaw,
-                previous_pitch,previous_roll,context['hits'])
+                previous_pitch,previous_roll,context['hits'],trace=carrier_receipt)
+            context['carrier_receipt']=carrier_receipt
             if (context['hits'] and (now >= getattr(self,'_carrier_commit_log_at',-1.e30) or
                     context['contact_carrier'] != getattr(self,'_local_stack_carrier',None))):
                 native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
                     phase='carrier_commit',position=position,
                     carrier=context['contact_carrier'],contacts=solved['contact_count'],
+                    touched_contacts=solved.get('touched_contact_count'),airborne=solved.get('airborne'),
+                    vertical_speed=solved.get('vertical_velocity'),dt=dt,
+                    matching=carrier_receipt,
                     sampled_pose=(previous_pitch,previous_roll),
                     solved_pose=(solved['pitch'],solved['roll']),
                     witnesses=[(list(key),point) for key,lower,point in context['hits'][-12:]]))

@@ -36,8 +36,9 @@ class SupportLifecycleTests(unittest.TestCase):
                         for tick in range(40):
                             state['z']+=travel
                             runtime._contact_now=tick*.15
+                            previous=(state['x'],state['y'],state['z']-travel)
+                            runtime._integrate_vertical_motion(state,.15,previous)
                             self.assertFalse(runtime._contact_edge_support_needed(state), tick)
-                            runtime._integrate_vertical_motion(state,.15)
                             self.assertFalse(state.get('_edge_support_active',False), tick)
                             self.assertAlmostEqual(-grade*state['z'],state['y'])
 

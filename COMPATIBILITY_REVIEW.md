@@ -8754,3 +8754,54 @@ without extra engine queries. Failed native rotation receipts now include the
 actual slice yaw/pitch/roll and whether the support plane was followed. These
 allow further traps to be diagnosed without another speculative driver change.
 The one-invalid/all-five-restored support selection remains unchanged.
+
+
+## 2026-10-16: select support after basic settlement; prove sloped lanes
+
+Windows317 report 211816 contains 13 support admissions/releases. Several
+admissions immediately reverse after the solver changes root height/attitude,
+while the sampled terrain does not change. Bot 13's front gap is 0.894 m;
+the detailed solve lowers its root by 0.675 m. Bot 27 also exceeds the old
+projection span. The selector ran before the basic owner's timed settlement,
+and basic admission projected an old plane whereas detailed release read the
+actual accepted root.
+
+Split the original basic integrator without changing its movement, gravity or
+landing law. Run it once before basic-to-detailed admission. If a grounded
+footprint still fails, prove continuous physical support across the footprint
+before refreshing its four-point slope pose through the existing body/turret
+guard. A cliff or trench must never be fitted into an invented support plane.
+Keep the existing support adapter as the selection entry, including its
+disabled/test seam, and retain first-spawn sampling behavior. Both admission and release sample
+the actual root; retire the old-plane projection. One invalid point still
+opens detailed ownership in this slice, all five valid still close it. A newly
+opened detailed owner integrates on the next slice: never spend the current dt
+or landing effects twice. No timer, threshold, missing-point count, global
+slope/route limit or navigation strategy changes. Diagnostics identify the
+post-basic selection stage and whether a fresh pose was necessary.
+
+Bot 27's native egress receipt validates centre/shoulder grade but the fixed
+height lateral lane then hits the same shoulder surface (approximately 7 mm
+in XZ and 3 mm in Y from the support sample). On a drivable native top hit,
+prove a bounded continuous centre/shoulder lane using the existing 25-degree
+limit. Reuse exact support samples already present in the receipt, and recast
+both original occupied heights along the support profile. A hit is not simply
+ignored: walls or beams behind it, missing ground and excessive grade still
+veto. Clear ordinary lanes incur no new support queries. Keep the existing
+candidate selection, retry, route switching and pending-path policies.
+
+Roof-carrier loss and Bot 28's wait are not sufficiently isolated for another
+behavioral patch. Add carrier final-contact indices/positions, nearest native
+witness distances, matching thresholds, solver/touched counts and explicit
+release reasons. Keep carrier matching and planar-contact law unchanged. Add
+local selection receipts identifying retained targets, repeat protection,
+connector rejection, retired targets, no candidate or actual selection, with
+sample time/age so an older candidate cannot be mistaken for a current refusal.
+Tests compare the unchanged selection/carrier outputs with and without receipts.
+
+Focused analytic regressions cover accepted-pose equality, a descent outside
+the old projection span, real missing-footprint admission, one timed integrator,
+all four bank directions, backing walls/beams, missing terrain and excessive
+grade. These are host geometry/ownership contracts, not native terrain replay.
+The user's next exact #1513 gameplay session must confirm switching behavior,
+slope traversal and provide the unresolved roof/wait receipts.
