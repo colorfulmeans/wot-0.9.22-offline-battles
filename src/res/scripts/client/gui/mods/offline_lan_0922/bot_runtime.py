@@ -2937,10 +2937,29 @@ class BotRuntime(object):
                 dict(x=side, y=0., z=forward), pitch, roll)
             px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, y+oy
             ground = self._ground_probe_at(px, pz, expected, expected+0.6)
+            continuous_rise = False
+            upper_candidate = None
+            # A clipped uphill top is not loss of support. Admit it only with
+            # the same bounded continuous-ground proof used by basic motion;
+            # a wall/roof/upper bridge with no connecting ground remains invalid.
+            if ground is None and rows and rows[0]['ground'] is not None:
+                upper_candidate = self._ground_probe_at(px, pz, expected)
+                if upper_candidate is not None and float(upper_candidate) > expected+0.6:
+                    centre = rows[0]
+                    distance = math.hypot(px-x, pz-z)
+                    continuous_rise = self._support_rise_follows_tick_path(
+                        dict(state, x=px, z=pz), float(upper_candidate),
+                        (x, float(centre['ground']), z), distance)
+                    if continuous_rise:
+                        ground = float(upper_candidate)
             gap = None if ground is None else expected-float(ground)
-            valid = gap is not None and -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN
+            valid = gap is not None and (continuous_rise or
+                -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN)
             rows.append(dict(name=name, x=px, z=pz, expected=expected,
-                             ground=ground, gap=gap, valid=valid))
+                ground=ground, gap=gap, valid=valid, continuous_rise=continuous_rise,
+                upper_candidate=upper_candidate,
+                verdict=('continuous_rise' if continuous_rise else 'supported' if valid
+                         else 'missing_ground' if ground is None else 'outside_reach')))
         state['_support_mode_sample'] = (key, rows)
         return rows
 
@@ -2986,7 +3005,11 @@ class BotRuntime(object):
         for name in ('_spring_ground_memory', '_pseudo_ground_memory',
                      '_suspension_ground_plane', '_suspension_support_gradient'):
             state.pop(name, None)
-        state['pose_sample'] = None
+        # Retire the old basic target together with the detailed owner. A
+        # stale target must not rotate the newly accepted hull back next tick.
+        state['pose_sample'] = (state['x'], state['z'], state.get('yaw', 0.))
+        state['_slope_pose_target'] = (
+            state.get('terrain_pitch', state.get('pitch', 0.)), state.get('roll', 0.))
         state['_basic_slope_basis_yaw'] = state.get('yaw', 0.)
         state.pop('_legacy_straddle_reference_y', None)
         self._report_support_mode(state, rows, 'disable')

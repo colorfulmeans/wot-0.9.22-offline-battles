@@ -15,7 +15,7 @@ class SupportLifecycleTests(unittest.TestCase):
                 runtime,state=self.scene(lambda x,z:0.)
                 state.pop('_contact_dynamics')
                 replies=[0.]*5;replies[missing]=None
-                with mock.patch.object(runtime,'_ground_probe_at',side_effect=replies), contextlib.redirect_stdout(io.StringIO()):
+                with mock.patch.object(runtime,'_ground_probe_at',side_effect=lambda x,z,*args: None if (x,z)==[(0.,0.),(0.,3.5),(0.,-3.5),(1.7,0.),(-1.7,0.)][missing] else 0.), contextlib.redirect_stdout(io.StringIO()):
                     self.assertIsNotNone(runtime._suspension_params_for(11))
                 self.assertTrue(state['_edge_support_active'])
                 self.assertEqual(4,sum(p['valid'] for p in state['_support_mode_sample'][1]))
@@ -38,7 +38,7 @@ class SupportLifecycleTests(unittest.TestCase):
         for airborne in (False,True):
             runtime,state=self.scene(lambda x,z:0.)
             state.update(_edge_support_active=True,airborne=airborne)
-            with mock.patch.object(runtime,'_ground_probe_at',side_effect=([0.]*5 if airborne else [0.,0.,None,0.,0.])), contextlib.redirect_stdout(io.StringIO()):
+            with mock.patch.object(runtime,'_ground_probe_at',side_effect=lambda x,z,*args: None if not airborne and (x,z)==(0.,-3.5) else 0.), contextlib.redirect_stdout(io.StringIO()):
                 self.assertFalse(runtime._release_detailed_support(state))
             self.assertTrue(state['_edge_support_active'])
 

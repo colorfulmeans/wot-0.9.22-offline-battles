@@ -918,10 +918,14 @@ class TerrainGrid(object):
 				not callable(self.obstacle_probe) or
 				self.segment_has_motion_hazard(
 					start, end, 1 | BAKED_SHALLOW_WATER)):
+			if evidence is not None:
+				evidence['egress_reason'] = 'hazard_or_unavailable'
 			combat_count('nav_live_egress_hazard_or_unavailable')
 			return False
 		if (self._baked_cell_height(self.cell_for(end)) is not None and
 				self.point_has_baked_hazard(end, 2)):
+			if evidence is not None:
+				evidence['egress_reason'] = 'endpoint_edge_hazard'
 			return False
 		distance = _distance_2d(start, end)
 		# Edge erosion is advisory only for this bounded native-proved join.
@@ -929,6 +933,8 @@ class TerrainGrid(object):
 		# footprint globally: a wall, cliff or unsupported shoulder must fail
 		# the actual support/width proof below on every use.
 		if distance > 24.0:
+			if evidence is not None:
+				evidence['egress_reason'] = 'requires_local_join'
 			combat_count('nav_live_egress_requires_local_join')
 			return False
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
@@ -942,12 +948,16 @@ class TerrainGrid(object):
 				end[2] + lateral_z * side)
 			if self.segment_has_motion_hazard(
 					shoulder_start, shoulder_end, 1 | BAKED_SHALLOW_WATER):
+				if evidence is not None:
+					evidence['egress_reason'] = 'shoulder_water_hazard'
 				return False
 		try:
 			start_y = self.ground_probe(
 				float(start[0]), float(start[2]), float(start[1]))
 			if (start_y is None or math.isnan(float(start_y)) or
 					math.isinf(float(start_y))):
+				if evidence is not None:
+					evidence['egress_reason'] = 'missing_support'
 				combat_count('nav_live_egress_missing_support')
 				return False
 			previous = (float(start[0]), float(start_y), float(start[2]))
@@ -960,11 +970,15 @@ class TerrainGrid(object):
 				# _ground() deliberately reads only the bake in this grid.
 				y = self.ground_probe(x, z, previous[1])
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					if evidence is not None:
+						evidence['egress_reason'] = 'missing_support'
 					combat_count('nav_live_egress_missing_support')
 					return False
 				y = float(y)
 				run = math.hypot(x - previous[0], z - previous[2])
 				if abs(y - previous[1]) > run * grade:
+					if evidence is not None:
+						evidence['egress_reason'] = 'grade'
 					combat_count('nav_live_egress_grade')
 					return False
 				for side in (-2.15, 2.15):
@@ -973,6 +987,8 @@ class TerrainGrid(object):
 					if (shoulder is None or math.isnan(float(shoulder)) or
 							math.isinf(float(shoulder)) or
 							abs(float(shoulder) - y) > abs(side) * grade):
+						if evidence is not None:
+							evidence['egress_reason'] = 'shoulder'
 						combat_count('nav_live_egress_shoulder')
 						return False
 				previous = (x, y, z)
@@ -983,13 +999,21 @@ class TerrainGrid(object):
 			blocked = self._probe_obstacle(
 				grounded_start, previous, 2.15, native_capability, evidence)
 			if blocked == 'deferred' or revision != self._native_proof_revision:
+				if evidence is not None:
+					evidence['egress_reason'] = 'deferred'
 				return None
 			if blocked:
+				if evidence is not None:
+					evidence['egress_reason'] = 'obstacle'
 				combat_count('nav_live_egress_obstacle')
 				return False
 		except Exception:
+			if evidence is not None:
+				evidence['egress_reason'] = 'probe_failed'
 			combat_count('nav_live_egress_probe_failed')
 			return False
+		if evidence is not None:
+			evidence['egress_reason'] = 'clear'
 		combat_count('nav_live_egress_clear')
 		return True
 
@@ -1375,9 +1399,12 @@ class TerrainGrid(object):
 							callable(self.obstacle_probe)):
 						native_candidates += 1
 						candidate = (x, float(current[1]), z)
+						egress_evidence = dict(start=tuple(current), end=candidate, egress_reason='not_probed')
+						if diagnostic is not None:
+							diagnostic.setdefault('native_egress_attempts', []).append(egress_evidence)
 						if (not self.path_has_edge_penalty((current, candidate), edge_penalties) and
 								self._inside(x, z) and
-								self._live_baked_egress_clear(current, candidate)):
+								self._live_baked_egress_clear(current, candidate, evidence=egress_evidence)):
 							if len(self._live_join_targets) >= 64:
 								self._live_join_targets.pop()
 							self._live_join_targets.add(candidate)

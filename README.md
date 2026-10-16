@@ -609,6 +609,13 @@ Player and Bot landing admission retains a damaging solver contact even if the
 final pose rebounds airborne; observed ground with no selected witness still
 reaches the existing Bot module-contact resolver. Landing and module-query logs
 distinguish physical admission, empty geometry results and actual HP changes.
+Uphill tops clipped by the basic height window require the existing continuous
+ground proof before counting as support; disconnected roofs remain invalid.
+Handback retires the old basic slope target. Local module icons reconcile through
+the stock DEVICES controller without replaying damage messages or voice, with
+bounded recovery refreshes after repair and controller replacement. Live egress
+receipts distinguish missing support, excessive grade, shoulder failure, collision
+and deferred native proof without changing admission or retry rules.
 The impact module coefficient remains 25. Native-client gameplay and query cost
 still require a matching launcher playtest.
 
