@@ -177,6 +177,8 @@ def _bot_rating(raw):
 def _order_signature(order):
     """Return the strategic fields which advance the order revision."""
     signature = dict(order or {})
+    # Attempt observations are telemetry, not a new strategic instruction.
+    signature.pop('route_attempt', None)
     if signature.get("target_id") is not None:
         # The worker overlays these coordinates from the live target pose.
         # Movement of that pose is not a new tactical decision, including

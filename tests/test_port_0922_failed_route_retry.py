@@ -1,7 +1,7 @@
 """Captured no-progress handoffs must permit another bounded route attempt."""
 import unittest
 
-from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state
+from test_port_0922_server_bot_ai import BotPlanner, _bot, _route, _state, _order_signature
 
 
 class FailedRouteRetryTests(unittest.TestCase):
@@ -95,6 +95,14 @@ class FailedRouteRetryTests(unittest.TestCase):
                          (trace['route_id'], trace['next_route'], trace['action']))
         self.assertTrue(trace['retry_previous_route'])
         self.assertEqual(20, trace['elapsed'])
+
+    def test_attempt_telemetry_cannot_advance_strategic_order_revision(self):
+        planner, bot, manifest, order = self.scene()
+        planner._reroute_wreck_stall(order, bot, manifest, 0)
+        before = _order_signature(order)
+        planner._reroute_wreck_stall(order, bot, manifest, 9)
+        self.assertEqual(9, order['route_attempt']['elapsed'])
+        self.assertEqual(before, _order_signature(order))
 
 
 if __name__ == '__main__':

@@ -8664,7 +8664,7 @@ removal of these predicates, rather than another height-dependent strategy.
 - Add current route-attempt evidence to existing Bot motion receipts and log
   server skip/switch/no-alternative events with round, Bot, failed route/index,
   elapsed attempt, distance, arrival, physical blocker and next route/index.
-- Eight focused logic tests include repeated return-to-old-route cycles,
+- Nine focused logic tests include repeated return-to-old-route cycles,
   preference for untried routes, actual arrival, holds, commands, damaged tracks
   and the preserved macro arrival. Three captured scenarios fail before this
   patch. These tests prove algorithm boundaries, not native drivability.
@@ -8676,3 +8676,8 @@ removal of these predicates, rather than another height-dependent strategy.
 Native acceptance must still establish that the tank physically traverses the
 chosen route after a bridge fall or a hillside refusal. No claim is made that
 all terrain traps or the outstanding fast support switches are fixed here.
+
+Final full-Bot validation caught attempt telemetry advancing the strategic order
+revision despite unchanged driving orders. Exclude route_attempt from the order
+signature and assert revision invariance as elapsed diagnostics change. Build
+315 is an intermediate build and must not be delivered.
