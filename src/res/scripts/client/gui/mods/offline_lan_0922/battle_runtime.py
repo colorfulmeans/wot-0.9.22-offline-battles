@@ -12787,56 +12787,10 @@ class BattleRuntime(object):
                     record['engine_id'], int(damage_index), extra_index,
                     int(attacker_id or 0)):
                 shown = True
-        self._refresh_native_device_icons(record, entity, force=True)
         self._report_critical_presentation(record, {
             'phase': 'critical_present', 'events': list(events)[:24],
             'shown': shown})
         return shown
-
-    def _refresh_native_device_icons(self, record, entity, force=False):
-        """Reconcile stock #1513 DEVICES without replaying sounds/messages."""
-        if (self._worker_mode or not record.get('local') or
-                not self._damage_info_is_serviceable() or
-                not self._record_alive(record, entity)):
-            return False
-        provider = getattr(self._avatar, 'guiSessionProvider', None)
-        publish = getattr(provider, 'invalidateVehicleState', None)
-        code = getattr(getattr(self._runtime, 'vehicle_view_state', None), 'DEVICES', None)
-        if not callable(publish) or code is None:
-            return False
-        destroyed = set(getattr(entity, '_destroyed_devices', ()) or ())
-        critical = set(getattr(entity, '_critical_devices', ()) or ())
-        desired = dict((name[:-6], 'destroyed' if name in destroyed else 'critical')
-                       for name in destroyed | critical if name.endswith('Health'))
-        previous = record.get('native_device_icons') or {}
-        identity = (id(provider), id(getattr(getattr(provider, 'shared', None), 'vehicleState', None)))
-        now = self._clock()
-        changed = desired != previous or identity != record.get('native_device_icon_owner')
-        if not force and now < record.get('native_device_icons_retry_at', 0.):
-            return False
-        if not (force or changed) and now < record.get('native_device_icons_at', 0.):
-            return False
-        names = sorted(set(desired) | set(previous))
-        for name in names:
-            state = desired.get(name, 'normal')
-            # Exact Avatar.__showDamageIconAndPlaySound DEVICES payload. This
-            # invokes the existing controller only, not a second display panel.
-            try:
-                publish(code, (name, state, state))
-            except Exception as error:
-                record['native_device_icons_retry_at'] = now+1.
-                self._warn_optional_failure('native device icon refresh', error, disable=False)
-                return False
-        record.pop('native_device_icons_retry_at', None)
-        record['native_device_icons'] = desired
-        record['native_device_icon_owner'] = identity
-        record['native_device_icons_at'] = now+1.
-        if names and (force or changed or now >= record.get('native_device_icons_log_at', 0.)):
-            record['native_device_icons_log_at'] = now+2.
-            self._report_critical_presentation(record, dict(
-                phase='native_device_refresh', refresh_kind='edge' if force or changed else 'recovery', desired=desired, cleared=sorted(set(previous)-set(desired)),
-                published=names, controller_identity=identity))
-        return bool(names)
 
     def _report_critical_presentation(self, record, details):
         """Join repair intent, applied HP and the stock damage-panel state."""
@@ -13013,7 +12967,6 @@ class BattleRuntime(object):
                     now + CRITICAL_REPAIR_NETWORK_SECONDS)
         self._tick_equipment_cooldowns(now)
         self._present_repair_progress(entity)
-        self._refresh_native_device_icons(record, entity)
 
     def _present_repair_progress(self, entity):
         status = getattr(
@@ -21476,7 +21429,8 @@ class BattleRuntime(object):
                         start_yaw, direction, actual_descriptor, False, 0.0,
                         True, False, None, commit_enabled=False,
                         pitch=pitch, roll=roll, trace=previous_trace,
-                        exact_footprint=True, query_owner=self)
+                        exact_footprint=True, motion_yaw=start_yaw,
+                        query_owner=self)
                     if 'hit' in previous_trace and 'normal' in previous_trace:
                         previous_contacts.append((self._vector(previous_trace['hit']),
                                                   self._vector(previous_trace['normal'])))
@@ -21521,7 +21475,10 @@ class BattleRuntime(object):
                     True, False, None, commit_enabled=False,
                     pitch=sweep_pitch, roll=sweep_roll,
                     trace=trace, exact_footprint=not travel_length,
-                    motion_yaw=math.atan2(*slice_travel) if travel_length else None,
+                    # A stationary rotation is also a fully posed body sweep.
+                    # Powered look-ahead rays retain unpitched X/Z and can cut
+                    # through the supporting bank after the hull follows it.
+                    motion_yaw=math.atan2(*slice_travel) if travel_length else slice_yaw,
                     departing_contact=departing, query_owner=self)
                 if isinstance(world_status, bool):
                     world_status = 'hard' if world_status else 'clear'
@@ -21529,7 +21486,10 @@ class BattleRuntime(object):
                     if contact_trace is not None:
                         contact_trace.update(trace)
                         contact_trace.update(pivot_offset=pivot_offset,
-                            start_yaw=start_yaw, end_yaw=end_yaw)
+                            start_yaw=start_yaw, end_yaw=end_yaw,
+                            sweep_yaw=slice_yaw, sweep_pitch=sweep_pitch,
+                            sweep_roll=sweep_roll, follow_ground=bool(follow_ground),
+                            posed_body=True)
                     if record_local:
                         self._local_world_collision_trace = trace
                         self._local_motion_kinds = 'world'

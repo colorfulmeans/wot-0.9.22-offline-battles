@@ -373,15 +373,17 @@ def _hull_pose_endpoint(local_start, local_end, half_width,
 	start_forward = float(local_start[1])
 	delta_right = float(local_end[0]) - start_right
 	delta_forward = float(local_end[1]) - start_forward
+	# World-to-local roundoff on a parallel hull edge must not collapse
+	# the chord to its start and leave its X/Z endpoint at the far edge.
 	fraction = 1.0
 	left, right = lateral_bounds or (-float(half_width), float(half_width))
 	for start, delta, lower, upper in (
 			(start_right, delta_right, left, right),
 			(start_forward, delta_forward, -float(half_length_back),
 				float(half_length_front))):
-		if delta > 0.0:
+		if delta > 1.0e-9:
 			fraction = min(fraction, (upper - start) / delta)
-		elif delta < 0.0:
+		elif delta < -1.0e-9:
 			fraction = min(fraction, (lower - start) / delta)
 	fraction = max(0.0, min(1.0, fraction))
 	return (

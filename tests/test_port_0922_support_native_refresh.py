@@ -1,4 +1,4 @@
-"""Continuous support at the mode boundary and stock module refresh."""
+"""Continuous support at the mode boundary and stock module refresh rollback."""
 import contextlib
 import io
 import types
@@ -39,57 +39,20 @@ class SupportBoundaryTests(unittest.TestCase):
         self.assertEqual((state['x'],state['z'],state['yaw']),state['pose_sample'])
 
 
-class NativeDeviceRefreshTests(unittest.TestCase):
-    def scene(self):
-        runtime=battle_fixture._runtime()
-        runtime.vehicle_view_state=types.SimpleNamespace(DEVICES=99)
-        battle=battle_fixture.BattleRuntime(runtime)
-        provider=types.SimpleNamespace(invalidateVehicleState=mock.Mock(),
-            shared=types.SimpleNamespace(vehicleState=object(),messages=object()))
-        battle._avatar=types.SimpleNamespace(guiSessionProvider=provider)
-        battle._damage_info_is_serviceable=lambda:True
-        battle._record_alive=lambda *args:True
-        battle._clock=mock.Mock(return_value=1.)
-        record=dict(local=True,engine_id=10)
-        entity=types.SimpleNamespace(_destroyed_devices={'leftTrackHealth','rightTrackHealth'},_critical_devices=set())
-        battle._report_critical_presentation=mock.Mock()
-        return battle,record,entity,provider
-
-    def test_destroyed_sides_repaint_through_stock_controller_without_sound(self):
-        battle,record,entity,provider=self.scene()
-        self.assertTrue(battle._refresh_native_device_icons(record,entity))
-        self.assertEqual([mock.call(99,('leftTrack','destroyed','destroyed')),
-            mock.call(99,('rightTrack','destroyed','destroyed'))],provider.invalidateVehicleState.call_args_list)
-        self.assertFalse(battle._refresh_native_device_icons(record,entity))
-        battle._clock.return_value=2.1
-        self.assertTrue(battle._refresh_native_device_icons(record,entity))
-
-    def test_repair_one_side_keeps_other_side_destroyed(self):
-        battle,record,entity,provider=self.scene()
-        battle._refresh_native_device_icons(record,entity)
-        provider.invalidateVehicleState.reset_mock()
-        entity._destroyed_devices.remove('leftTrackHealth')
-        battle._refresh_native_device_icons(record,entity)
-        self.assertEqual([mock.call(99,('leftTrack','normal','normal')),
-            mock.call(99,('rightTrack','destroyed','destroyed'))],provider.invalidateVehicleState.call_args_list)
-
-    def test_retiring_native_controller_failure_is_bounded_and_retryable(self):
-        battle,record,entity,provider=self.scene()
-        battle._warn_optional_failure=mock.Mock()
-        provider.invalidateVehicleState.side_effect=RuntimeError('retiring controller')
-        self.assertFalse(battle._refresh_native_device_icons(record,entity))
-        self.assertNotIn('native_device_icons',record)
-        calls=provider.invalidateVehicleState.call_count
-        self.assertFalse(battle._refresh_native_device_icons(record,entity))
-        self.assertEqual(calls,provider.invalidateVehicleState.call_count)
-        battle._clock.return_value=2.1
-        provider.invalidateVehicleState.side_effect=None
-        self.assertTrue(battle._refresh_native_device_icons(record,entity))
-
-    def test_remote_vehicle_never_repaints_player_devices(self):
-        battle,record,entity,provider=self.scene();record['local']=False
-        self.assertFalse(battle._refresh_native_device_icons(record,entity))
-        provider.invalidateVehicleState.assert_not_called()
+class NativeDeviceRefreshRollbackTests(unittest.TestCase):
+    def test_no_periodic_or_forced_device_icon_writer_remains(self):
+        import inspect
+        cls = battle_fixture.BattleRuntime
+        self.assertFalse(hasattr(cls, '_refresh_native_device_icons'))
+        for method in (cls._tick_critical_states, cls._present_critical):
+            source = inspect.getsource(method)
+            self.assertNotIn('invalidateVehicleState', source)
+            self.assertNotIn('_refresh_native_device_icons', source)
+        # Existing event-owned stock notifications and presentation diagnostics
+        # remain; removing the second writer must not remove damage/repair.
+        source = inspect.getsource(cls._present_critical)
+        self.assertIn('_show_damage_info', source)
+        self.assertIn('_report_critical_presentation', source)
 
 
 if __name__=='__main__':unittest.main()

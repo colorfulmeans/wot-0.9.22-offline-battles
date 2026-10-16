@@ -8712,3 +8712,45 @@ plane identity across cache reuse, verify unchanged native query count and show
 why airborne sampling skips plane projection. Five isolated related suites pass
 and the edited source compiles under CPython 2.7. Native gameplay confirmation
 still needs a later test package; no new package is requested in this audit.
+
+
+## 2026-10-16: slope-follow rotation and module presentation rollback
+
+Report 202714 (Windows316) Bot 9 switches routes, including retrying an earlier
+route, but remains near (-168.758, 1.380, 219.098). It receives native upper-lane
+rotation refusals while its basic grounded pitch is approximately 0.5 radians.
+All 73 stalled samples use basic support, not detailed suspension. Direction
+probes also reject steep uphill candidates. The 25-degree planning gate is
+unchanged from the first v0.10.1; do not label it a newly introduced slope rule.
+
+The native rotation adapter rebases attitude onto the measured support plane,
+but stationary sweeps selected powered look-ahead geometry. That geometry poses
+height without rotating X/Z by pitch/roll, so its rays do not remain parallel to
+the supporting plane. Use the already shared full-pose sweep for stationary
+rotation and its lazy prior-contact witnesses, just as for passive translation.
+Retain solid wall/beam checks and the existing navigation grade/retry policy.
+The independent plane test fails for all four captured/mirrored poses before
+the change. This establishes a geometric incompatibility, not that the complete
+native map trap has already been traversed successfully.
+
+Full-pose testing additionally exposes a parallel-edge numerical defect:
+world/local roundoff can turn a nominally zero lateral delta into an outward
+step from an infinitesimally out-of-bounds edge, collapsing the height chord to
+its start. Ignore only delta magnitudes <=1e-9 in the endpoint intersection,
+in both Python and C++; ordinary outward edge clipping remains unchanged.
+Native host checks compare ordered query/result/effect parity, including the
+captured pitch/roll and nonzero headings. Host tests are not #1513 gameplay.
+
+Revert the entire 08:11 periodic/forced native DEVICES reconciliation writer
+introduced by 40dacdd2. Retain the existing stock damage/repair events, repair
+progress cleanup, HP calculations and one-second network repair checkpoint.
+The player's repair-then-yellow display observation is valid evidence; the
+Avatar device-state cache is not a direct reading of the Flash icon. Removing
+the second writer needs native UI replay to confirm that symptom is gone.
+
+Include support episode/input/solver diagnostics from bfd505ae. Add cached
+support witnesses and their original sampling time to bounded BOTMOTION rows,
+without extra engine queries. Failed native rotation receipts now include the
+actual slice yaw/pitch/roll and whether the support plane was followed. These
+allow further traps to be diagnosed without another speculative driver change.
+The one-invalid/all-five-restored support selection remains unchanged.

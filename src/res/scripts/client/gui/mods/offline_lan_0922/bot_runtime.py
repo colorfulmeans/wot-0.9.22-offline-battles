@@ -7164,6 +7164,13 @@ class BotRuntime(object):
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
+            # Original cached witnesses distinguish grade rejection from a
+            # stale root/pose reference without spending another native query.
+            'support_evidence': dict(
+                sample=dict(state.get('_support_mode_receipt') or {}),
+                points=[dict(row) for row in
+                    (state.get('_support_mode_sample') or (None, []))[1]],
+                slope_samples=state.get('_basic_slope_samples')),
             'control_arbitration': dict(command.get('control_trace') or {}),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
