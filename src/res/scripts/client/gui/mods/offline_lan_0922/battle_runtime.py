@@ -4090,6 +4090,8 @@ class BattleRuntime(object):
                 # overhead bridge and turn every clear step into a rollback.
                 physics_ground_probe=self._support_column,
                 physics_ground_limit_probe=self._bot_support_column,
+                navigation_surface_probe=(self._navigation_surface_observation
+                    if self._worker_mode else None),
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -6035,6 +6037,32 @@ class BattleRuntime(object):
     def _collide_down(self, start, end, ground_filter):
         ground = self._collide_static_down(start, end, ground_filter)
         return self._stack_ground_hit(start, end, ground)
+
+    def _navigation_surface_observation(self, point, yaw):
+        """Read a raw scene normal; never acquire or alter a support context.
+
+        A raw surface can be a roof/object, not necessarily terrain. Preserve
+        the witness and explicit query window rather than inventing flat ground.
+        """
+        start = (point[0], point[1]+8.0, point[2])
+        end = (point[0], point[1]-30.0, point[2])
+        result = dict(status='missing', ray_start=start, ray_end=end,
+            source='raw_scene_surface', decision_input=False)
+        hit = self._runtime.bigworld.wg_collideSegment(
+            self._avatar.spaceID, self._vector(start), self._vector(end),
+            VEHICLE_SKIP_FLAGS)
+        if hit is None:
+            return result
+        position = tuple(float(hit[0][i]) for i in range(3))
+        normal = tuple(float(hit[1][i]) for i in range(3))
+        result.update(status='hit', hit=position, normal=normal)
+        if normal[1] > 0.0001:
+            angle = math.atan2(-(normal[0]*math.sin(yaw)+
+                normal[2]*math.cos(yaw)), normal[1])
+            result['directional_angle_degrees'] = math.degrees(angle)
+        else:
+            result['status'] = 'non_upward_surface'
+        return result
 
     def _collide_static_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""

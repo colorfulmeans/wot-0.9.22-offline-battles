@@ -1223,21 +1223,6 @@ class TerrainGrid(object):
 		mask = int(self._baked_links[index]) & 0xff
 		return self._LINK_COUNTS[mask]
 
-	def _terrain_grade(self, point):
-		"""Read local slope from existing baked heights, without native queries."""
-		if not self.prebaked:
-			return 0.0
-		cell = self.cell_for(point)
-		cache = getattr(self, '_baked_grade_cache', None)
-		if cache is None:
-			cache = self._baked_grade_cache = {}
-		if cell not in cache:
-			y = self._baked_cell_height(cell)
-			cache[cell] = (max([abs(h-y)/(self.cell_size*length)
-				for dx,dz,length,other,h in self._baked_neighbours(cell)] or [0.0])
-				if y is not None else 0.0)
-		return cache[cell]
-
 	def _baked_search_edges(self, cell):
 		"""Share immutable directed-edge inputs across this map's Bot searches.
 
@@ -1358,7 +1343,8 @@ class TerrainGrid(object):
 			diagnostic.clear()
 			diagnostic.update(at=float(now), current=tuple(current), goal=tuple(goal),
 				attempted=0, missing_ground=0, failed_edge=0, shallow_or_unknown=0,
-				corridor_rejected=0, private_edge=0, accepted=0, selected=None)
+				corridor_rejected=0, private_edge=0, accepted=0, selected=None, candidates=[],
+				policy='legacy_distance_turn_avoidance')
 			if excluded_target_cells:
 				diagnostic['visited_rejected'] = 0
 		dx = float(goal[0]) - float(current[0])
@@ -1437,6 +1423,8 @@ class TerrainGrid(object):
 							return candidate
 					if diagnostic is not None:
 						diagnostic['missing_ground'] += 1
+						diagnostic['candidates'].append(dict(point=(x, None, z),
+							rejected='missing_ground', theta=offset))
 					continue
 				candidate = (x, y, z)
 				# Preserve the predicate order and query count while retaining
@@ -1451,6 +1439,8 @@ class TerrainGrid(object):
 				if reason is not None:
 					if diagnostic is not None:
 						diagnostic[reason] += 1
+						diagnostic['candidates'].append(dict(point=candidate,
+							rejected=reason, theta=offset))
 					continue
 				if (edge_penalties and any(
 						edge in edge_penalties
@@ -1458,23 +1448,29 @@ class TerrainGrid(object):
 							current, candidate))):
 					if diagnostic is not None:
 						diagnostic['private_edge'] += 1
+						diagnostic['candidates'].append(dict(point=candidate,
+							rejected='private_edge', theta=offset))
 					continue
 				if diagnostic is not None:
 					diagnostic['accepted'] += 1
 				cell = self.cell_for(candidate)
-				grade = max(self._terrain_grade(candidate),
-					abs(y-float(current[1]))/distance)
-				# Nested preferences: progress first, legal flatness second.
-				# Keep the prior steering/avoidance tie break after both.
-				score = (_distance_2d(candidate, goal), grade,
-					abs(offset)*3.5 + self._penalty(cell, avoid_points, False)*2.0)
+				score = (_distance_2d(candidate, goal) + abs(offset) * 3.5 +
+					         self._penalty(cell, avoid_points, False) * 2.0)
+				if diagnostic is not None:
+					diagnostic['candidates'].append(dict(point=candidate,
+						rejected=None, theta=offset, score=score,
+						D=_distance_2d(candidate, goal),
+						C=score-_distance_2d(candidate, goal),
+						height_delta=y-float(current[1]),
+						chord_angle_degrees=math.degrees(math.atan2(
+							y-float(current[1]), distance)),
+						height_source='navigation_ground_not_surface_normal'))
 				value = (score, abs(offset), candidate)
 				if best is None or value[:2] < best[:2]:
 					best = value
 		selected = best[2] if best is not None else None
 		if diagnostic is not None:
 			diagnostic['selected'] = selected
-			diagnostic['distance_then_grade'] = None if best is None else best[0]
 		return selected
 
 	def plan(self, start, goal, avoid_points=None, max_expansions=1600, now=0.0,
@@ -1527,10 +1523,9 @@ class TerrainGrid(object):
 				start_y = float(start[1])
 		frontier = []
 		sequence = 0
-		heapq.heappush(frontier, (0.0, 0.0, sequence, start_cell, 0.0))
+		heapq.heappush(frontier, (0.0, sequence, start_cell, 0.0))
 		came_from = {}
 		cost_so_far = {start_cell: 0.0}
-		slope_so_far = {start_cell: 0.0}
 		heights = {start_cell: start_y}
 		reached = None
 		closest = start_cell
@@ -1539,11 +1534,11 @@ class TerrainGrid(object):
 			(start_cell[1] - goal_cell[1]) ** 2)
 		expansions = 0
 		while frontier and expansions < int(max_expansions):
-			_unused_priority, queued_slope, _unused_sequence, current, queued_cost = heapq.heappop(frontier)
+			_unused_priority, _unused_sequence, current, queued_cost = heapq.heappop(frontier)
 			# A better route may have reached this cell after an older heap entry
 			# was queued. Expanding stale entries repeatedly exhausted the bounded
 			# search on risk-weighted maps even though every destination was linked.
-			if queued_cost != cost_so_far.get(current) or queued_slope != slope_so_far.get(current):
+			if queued_cost != cost_so_far.get(current):
 				continue
 			expansions += 1
 			combat_count('nav_astar_expansions')
@@ -1610,8 +1605,8 @@ class TerrainGrid(object):
 					failed_penalty = max(
 						self._static_hull_edges.get(edge_key, 0.0),
 						self._failed_edge_timed_penalty(edge_key, now))
-				# Grade remains an eligibility check. Eligible slope preference
-				# is a secondary ordering key, separate from distance cost.
+				# Grade eligibility belongs to the graph/native edge check, not
+				# a comfort surcharge that can turn a legal slope into a detour.
 				new_cost = (cost_so_far[current] + run +
 				            terrain_penalty + failed_penalty + local_penalty)
 				if route_corridor is not None:
@@ -1627,9 +1622,7 @@ class TerrainGrid(object):
 					ox = px - first[0] - fraction * corridor_dx
 					oz = pz - first[2] - fraction * corridor_dz
 					new_cost += run * (ox * ox + oz * oz) / width_sq
-				grade = max(abs(next_y-current_y)/run,self._terrain_grade(self.point_for(next_cell,next_y)))
-				new_slope = slope_so_far[current] + run*grade*grade
-				if next_cell not in cost_so_far or (new_cost,new_slope) < (cost_so_far[next_cell],slope_so_far[next_cell]):
+				if next_cell not in cost_so_far or new_cost < cost_so_far[next_cell]:
 					# An edge that cannot improve this search cannot enter its
 					# result. Spend native queries only on admissible relaxations.
 					if self.prebaked:
@@ -1650,7 +1643,6 @@ class TerrainGrid(object):
 							if not clear:
 								continue
 					cost_so_far[next_cell] = new_cost
-					slope_so_far[next_cell] = new_slope
 					came_from[next_cell] = current
 					heights[next_cell] = next_y
 					dx = next_cell[0] - goal_cell[0]
@@ -1661,7 +1653,7 @@ class TerrainGrid(object):
 					             self.heuristic_weight)
 					sequence += 1
 					heapq.heappush(frontier,
-					               (new_cost + heuristic, new_slope, sequence, next_cell, new_cost))
+					               (new_cost + heuristic, sequence, next_cell, new_cost))
 			yield None
 		if reached is None:
 			if hard_edge_penalties and closest == start_cell:

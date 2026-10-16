@@ -66,18 +66,6 @@ struct Map : MapInput {
             throw std::invalid_argument("invalid navigation map");
         cell_size=std::max(1.,cell_size); max_grade=std::max(.05,max_grade);
     }
-    double grade(Cell cell) const {
-        double result=0.;
-        const double y=heights[index(cell)];
-        const unsigned mask=links[index(cell)];
-        for(size_t i=0;i<DIRECTIONS.size();++i) {
-            if(!(mask&(1U<<i)))continue;
-            const Cell d=DIRECTIONS[i],other={{cell[0]+d[0],cell[1]+d[1]}};
-            if(valid(other))result=std::max(result,std::abs(heights[index(other)]-y)/
-                (cell_size*(d[0]&&d[1]?std::sqrt(2.):1.)));
-        }
-        return result;
-    }
     bool flat(Cell cell) const { return cell[0]>=0 && cell[0]<width && cell[1]>=0 && cell[1]<height; }
     int index(Cell cell) const { return cell[1]*width+cell[0]; }
     bool valid(Cell cell) const { return flat(cell) && std::isfinite(heights[index(cell)]); }
@@ -185,15 +173,15 @@ bool preserves_climb(const std::vector<Point> &path,size_t first,size_t last) {
     return true;
 }
 struct Frontier {
-    double priority,cost,slope; uint64_t sequence; Cell cell;
+    double priority,cost; uint64_t sequence; Cell cell;
 };
 struct CompareFrontier {
     bool operator()(const Frontier &a,const Frontier &b) const {
-        return a.priority>b.priority || (a.priority==b.priority && (a.slope>b.slope || (a.slope==b.slope && a.sequence>b.sequence)));
+        return a.priority>b.priority || (a.priority==b.priority && a.sequence>b.sequence);
     }
 };
-struct Node { double cost,slope; Cell parent; bool has_parent; };
-struct Candidate {Cell cell;double cost,slope;};
+struct Node { double cost; Cell parent; bool has_parent; };
+struct Candidate {Cell cell;double cost;};
 struct PendingQuery { Point start,end; SegmentKey key; };
 enum class Stage { Start, Expand, Relax, Finish, ProvePath, Done };
 enum class RunState { Queued, Running, Waiting, Done };
@@ -349,8 +337,8 @@ struct Job {
                 if (!map->nearest(map->cell_for(input.start),3,start) || !map->nearest(map->cell_for(input.goal),3,goal)) {
                     terminate(0);return;
                 }
-                nodes.emplace(start,Node{0.,0.,{},false});
-                frontier.push({0.,0.,0.,0,start});
+                nodes.emplace(start,Node{0.,{},false});
+                frontier.push({0.,0.,0,start});
                 closest=start;
                 const double dx=start[0]-goal[0],dz=start[1]-goal[1];
                 closest_distance=std::sqrt(dx*dx+dz*dz);
@@ -361,7 +349,7 @@ struct Job {
                 if (frontier.empty() || attempt_expanded>=input.max_expansions) {stage=Stage::Finish;continue;}
                 const Frontier entry=frontier.top();frontier.pop();
                 const auto node=nodes.find(entry.cell);
-                if (node==nodes.end() || (entry.cost!=node->second.cost || entry.slope!=node->second.slope)) continue;
+                if (node==nodes.end() || entry.cost!=node->second.cost) continue;
                 --quantum;++expanded;++attempt_expanded;current=entry.cell;
                 const double dx=current[0]-goal[0],dz=current[1]-goal[1];
                 const double goal_distance=std::sqrt(dx*dx+dz*dz);
@@ -380,7 +368,7 @@ struct Job {
                     const Point b=map->point_for(next);
                     if (reviewed_blocked(a,b)) continue;
                     const double run=map->cell_size*(delta[0] && delta[1]?std::sqrt(2.):1.);
-                    // Distance is primary; legal slope preference is a separate nested key.
+                    // 0.10.0: legal baked slopes carry no comfort surcharge.
                     double corridor_cost=0.;
                     if(input.has_route_corridor) {
                         const double dx=input.route_end[0]-input.route_start[0],
@@ -394,21 +382,18 @@ struct Job {
                     }
                     const double cost=node->second.cost+run+corridor_cost+terrain_penalty(next)+
                         penalty_for(world,key)+penalty_for(penalties,key);
-                    const double grade=std::max(std::abs(b[1]-a[1])/run,map->grade(next));
-                    const double slope=node->second.slope+run*grade*grade;
                     const auto previous=nodes.find(next);
-                    if (previous!=nodes.end() && !(cost<previous->second.cost ||
-                        (cost==previous->second.cost && slope<previous->second.slope))) continue;
-                    candidates.push_back({next,cost,slope});
+                    if (previous!=nodes.end() && !(cost<previous->second.cost)) continue;
+                    candidates.push_back({next,cost});
                 }
                 stage=Stage::Relax;
             }
             if (stage==Stage::Relax) {
                 for (const auto &candidate:candidates) {
-                    nodes[candidate.cell]={candidate.cost,candidate.slope,current,true};
+                    nodes[candidate.cell]={candidate.cost,current,true};
                     const double dx=candidate.cell[0]-goal[0],dz=candidate.cell[1]-goal[1];
                     const double heuristic=std::sqrt(dx*dx+dz*dz)*map->cell_size*map->heuristic_weight;
-                    frontier.push({candidate.cost+heuristic,candidate.cost,candidate.slope,++sequence,candidate.cell});
+                    frontier.push({candidate.cost+heuristic,candidate.cost,++sequence,candidate.cell});
                 }
                 stage=Stage::Expand;continue;
             }

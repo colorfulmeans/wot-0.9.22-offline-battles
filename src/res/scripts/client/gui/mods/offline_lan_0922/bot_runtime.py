@@ -2042,7 +2042,10 @@ class BotRuntime(object):
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
-                 impact_contacts_resolver=None):
+                 impact_contacts_resolver=None, navigation_surface_probe=None):
+        self._navigation_surface_probe = navigation_surface_probe
+        self._navigation_surface_queue = []
+        self._navigation_surface_next = 0.0
         self.impact_contacts_resolver = impact_contacts_resolver
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
@@ -3604,6 +3607,9 @@ class BotRuntime(object):
     def battle_start(self, message):
         """Build a local authority manifest from the server roster once per round."""
         message = message if isinstance(message, dict) else {}
+        if message.get('round_id') != self.round_id:
+            self._navigation_surface_queue = []
+            self._navigation_surface_next = 0.0
         if 'bot_tactics' in message:
             proposed = bot_tactics.canonical(message['bot_tactics'])
             if (message.get('round_id') == self.round_id and self._manifest_sent and
@@ -7123,6 +7129,8 @@ class BotRuntime(object):
         navigation['direct_fallback'] = dict(
             getattr(nav, 'bot_direct_progress', {}).get(int(state['id']), {}).get(
                 'local_fallback') or {})
+        navigation['target_receipt'] = dict(state.get('_navigation_target_receipt') or {})
+        navigation['target_history'] = list(state.get('_navigation_target_history') or ())
         navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
         search_receipt = getattr(nav, 'bot_search_diagnostics', None)
         if callable(search_receipt):
@@ -7167,7 +7175,8 @@ class BotRuntime(object):
         after_traffic = traffic_output if traffic_output is not None else command
         traffic_mode = after_traffic.get('traffic_mode', command.get('traffic_mode'))
         state['_motion_stall_pending'] = {
-            'id': int(state['id']), 'vehicle': state.get('vehicle'),
+            'id': int(state['id']), 'vehicle': state.get('vehicle'), 'at': now,
+            'round_id': self.round_id,
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
@@ -7318,6 +7327,68 @@ class BotRuntime(object):
         })
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT MOTION', trace)
+        self._queue_navigation_surface_trace(state, trace, now)
+
+    def _queue_navigation_surface_trace(self, state, trace, now):
+        # Observation only: never pass these results back to navigation/support.
+        if not callable(getattr(self, '_navigation_surface_probe', None)):
+            return
+        queue = self._navigation_surface_queue
+        if any(row['id'] == state['id'] for row in queue):
+            return
+        position = _position(state)
+        targets = [('travel', None)]
+        receipt = state.get('_navigation_target_receipt') or {}
+        targets.extend((name, receipt.get(key)) for name, key in (
+            ('selected', 'selected_target'), ('final', 'final_target')))
+        radius = max(3.0, float((state.get('collision_shape') or (2., 3.))[1]) + 1.0)
+        rows = []
+        for name, target in targets:
+            if target is None and name != 'travel':
+                continue
+            yaw = float(state.get('yaw', 0.0))
+            if target is None:
+                if trace.get('controls', {}).get('motion', (0.,))[0] < 0.0:
+                    yaw += math.pi
+            else:
+                if _distance(position, target) < 0.01:
+                    continue
+                yaw = math.atan2(target[0]-position[0], target[2]-position[2])
+            rows.append(dict(direction=name, yaw=yaw, point=(
+                position[0]+math.sin(yaw)*radius, position[1],
+                position[2]+math.cos(yaw)*radius)))
+        if len(queue) < 64:
+            queue.append(dict(id=state['id'], at=now, position=position,
+                target_receipt=dict(receipt), rows=rows))
+
+    def _drain_navigation_surface_trace(self, now):
+        # One raw ray per authority update, at most ten per simulation second.
+        # Requests retain their original position/time; delayed data is explicit.
+        if now < self._navigation_surface_next or not self._navigation_surface_queue:
+            return
+        self._navigation_surface_next = now + 0.1
+        item = self._navigation_surface_queue.pop(0)
+        if now-item['at'] > 10.0 or item['id'] not in self.states:
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT SLOPE', dict(id=item['id'],
+                round_id=self.round_id, at=item['at'], sampled_at=now,
+                status='expired', remaining=len(item['rows']), decision_input=False))
+            return
+        rows = item['rows']
+        if not rows:
+            return
+        row = dict(rows.pop(0))
+        try:
+            row['surface'] = self._navigation_surface_probe(row['point'], row['yaw'])
+        except Exception as error:
+            row['surface'] = dict(status='error', error=type(error).__name__)
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT SLOPE', dict(id=item['id'], round_id=self.round_id, at=item['at'],
+            sampled_at=now, position=item['position'], age=now-item['at'],
+            target_receipt=item['target_receipt'], observation=row,
+            decision_input=False, pending=len(self._navigation_surface_queue)))
+        if rows:
+            self._navigation_surface_queue.append(item)
 
     def _reset_planning_observers(self):
         # An invalidated observer must not leave a far command lease behind.
@@ -9429,6 +9500,11 @@ class BotRuntime(object):
         state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
+        target_receipt = dict(at=state.get('now', 0.0), position=tuple(position),
+            requested_goal=tuple(goal), mode=mode, source='no_navigator',
+            final_target=tuple(goal))
+        if authority_state is not None:
+            authority_state['_navigation_target_receipt'] = target_receipt
         if authority_state is not None:
             authority_state['route_wreck_blocked'] = False
             authority_state['_occupied_route_point'] = False
@@ -9467,6 +9543,7 @@ class BotRuntime(object):
                 receipt = (evidence_key, now + 1.0, blocked)
                 authority_state['_route_wreck_receipt'] = receipt
             authority_state['route_wreck_blocked'] = receipt[2] or authority_state.get('_occupied_route_point', False)
+        target_receipt['occupied_goal'] = occupied_goal
         if occupied_goal is not None:
             goal = occupied_goal
             if authority_state is not None:authority_state['route_wreck_blocked'] = True
@@ -9476,6 +9553,7 @@ class BotRuntime(object):
                 # No proved destination is a local unfulfilled order, never an
                 # invented ground height or a whole-round simulation failure.
                 state['navigation_stop_at_target'] = True
+                target_receipt.update(source='radio_ground_missing', final_target=tuple(position))
                 return position
             goal = grounded
         now = state.get('now', 0.0)
@@ -9582,9 +9660,13 @@ class BotRuntime(object):
             ((direct_target and tuple(target) == tuple(goal)) or
              (not direct_target and callable(terminal) and terminal(bot_id))))
         selected_target = tuple(target)
+        target_receipt.update(planning_goal=tuple(goal), path_key=path_key,
+            selected_target=selected_target, source=('retained' if retained is not None
+                else 'direct' if direct_target else 'navigator'))
         if retained is None and mode in ('route', 'advance') and anchor is None:
             target = self._route_lane_target(
                 bot_id, position, goal, target, strategic, now)
+        target_receipt['lane_target'] = tuple(target)
         if retained is None and mode in ('route', 'advance') and strategic.get('throttle_override') is None:
             bypass = self._occupied_route_target(bot_id, position, target, now, True)
             if bypass is not None:
@@ -9600,6 +9682,15 @@ class BotRuntime(object):
             progress_target = progress_receipt(bot_id, position, target, now)
             if progress_target is not None:
                 state['navigation_progress_target'] = progress_target
+        target_receipt.update(final_target=tuple(target),
+            progress_target=state.get('navigation_progress_target'),
+            stop_at_target=state.get('navigation_stop_at_target'))
+        if authority_state is not None:
+            history = authority_state.setdefault('_navigation_target_history', [])
+            if not history or any(history[-1].get(key) != target_receipt.get(key)
+                    for key in ('requested_goal', 'source', 'final_target', 'path_key')):
+                history.append(dict(target_receipt))
+                del history[:-16]
         return target
 
     def _player_neighbours(self, players):
@@ -14031,6 +14122,7 @@ class BotRuntime(object):
         if self._fixed_control:
             self._control_refresh_accumulator += elapsed_input
         now = float(now)
+        self._drain_navigation_surface_trace(now)
         navigator_begin = getattr(self.navigator, 'begin_frame', None)
         navigator_end = getattr(self.navigator, 'end_frame', None)
         if callable(navigator_begin):

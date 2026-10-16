@@ -320,32 +320,6 @@ def main():
         original.close()
         backend.sim_close(handle)
 
-    # Compare the persistent C++ local-candidate implementation itself on
-    # longitudinal and transverse slopes, not only the Python call-out.
-    for gx,gz in ((.05,0.),(0.,.05),(.03,.04)):
-        baked=graph()
-        baked['hazards']=[0]*len(baked['hazards'])
-        baked['heights_mm']=[int(1000.*(gx*(-60.+4*x)+gz*(-60.+4*z)))
-            for z in range(31) for x in range(31)]
-        reference=source.TerrainNavigator(lambda x,z,h:gx*x+gz*z,
-            lambda *args:False,baked_graph=baked)
-        original=source.TerrainNavigator(lambda x,z,h:gx*x+gz*z,
-            lambda *args:False,baked_graph=baked)
-        runtime=types.ModuleType('nested_grade_fixture')
-        runtime.navigator=original
-        handle=backend.sim_open(82,1)
-        native=facade.NativeNavigationCore.install(runtime,backend,handle)
-        try:
-            for goal in ((40.,40*gx,0.),(0.,40*gz,40.),(40.,40*(gx+gz),40.)):
-                compare(reference.grid.safe_local_target((0.,0.,0.),goal,.1),
-                    native.grid.safe_local_target((0.,0.,0.),goal,.1),
-                    'nested distance/grade persistent local selection')
-        finally:
-            native.detach()
-            reference.close()
-            original.close()
-            backend.sim_close(handle)
-
     # Independently compare all baked-grid decision entry points, including
     # current collision review and moving wreck occupancy. Only raw engine
     # proofs cross the callback boundary.

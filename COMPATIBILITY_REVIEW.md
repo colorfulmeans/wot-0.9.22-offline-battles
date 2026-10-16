@@ -8992,3 +8992,36 @@ paths, immutable identity under quarantine, real passive vertical integration,
 dead-pose admission/rejection and nested slope preferences. Native worker
 conformance additionally compares nonuniform-slope C++ paths with Python.
 These checks establish source/data contracts, not BigWorld gameplay acceptance.
+
+
+### Navigation scoring rollback and observational slope evidence
+
+The Windows324 distance/grade ordering is withdrawn. Restore the pre-change
+local `(D + 3.5*abs(theta) + 2*P, abs(theta))` comparator and the original
+Python/C++ A* cost/frontier. Keep validity, avoidance, retry, route handoff,
+and support ownership unchanged. Remove the gate asserting the withdrawn
+policy. This is a scoring rollback, not a branch or physics rollback.
+
+An Airfield flat-ground replay identified a causal regression at t=0.733s:
+Bot18 traded 0.147m of candidate-to-goal distance for a direction offset of
+0.85 rather than 0.45 radians. The restored local comparator selects the
+original candidate. The 15FPS departure case passes after rollback; the known
+24FPS departure failure remains independent evidence, not a hill diagnosis.
+
+Local fallback receipts now retain bounded candidate scores, rejection reasons,
+height chords (explicitly not surface normals), and selection time. Authority
+stall records link requested, planning, lane, and final targets, plus up to16
+target transitions, to existing final controls, contacts and support outcomes.
+The hidden worker queues raw scene-normal observations for travel (including
+reverse), selected and final target directions outside the hull footprint.
+These results never enter navigation, support, collision or driving inputs.
+One ray per authority update and at most10 per simulation second; requests are
+round-local, round-robin, limited to64 hulls, and expire after10 seconds.
+Each observation records its original decision time, query time, position,
+window, normal and provenance. Missing/non-upward surfaces remain unknown;
+a raw scene hit can be an object/roof and is not labelled proven terrain.
+New-round initialization clears queued witnesses. The 1-invalid/5-valid
+support-mode rule and accepted catalog/player-wreck fixes are retained.
+
+These receipts enable a native hill investigation; flat replay and Python
+contract tests do not establish the actual cause of a Windows slope incident.

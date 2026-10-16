@@ -147,8 +147,6 @@ jobs:
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_navigation_query.py \
               /tmp/offline_math_batch_native.so
-            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_distance_grade.py \
-              /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_control.py \
