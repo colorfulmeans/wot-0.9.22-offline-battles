@@ -484,7 +484,7 @@ def _align_native_item_names_1513(
 
 
 def _probe_authored_placement_detail_1513(bigworld, area, space_id, chunk_id,
-		item_index, native_type, names, native_count):
+		item_index, native_type, names, native_count, evidence=None):
 	"""Return one exact authored match or an explicit ambiguity state."""
 	catalog = _destructible_catalog or {}
 	index = catalog.get('authored_placement_index')
@@ -508,6 +508,10 @@ def _probe_authored_placement_detail_1513(bigworld, area, space_id, chunk_id,
 			catalog['quantization'])
 		matches = list(matching_placements(
 			index, int(chunk_id), signature, kind))
+		if evidence is not None:
+			evidence.update(native_signature=signature,native_category=native_type,
+				name_count=len(names),native_count=native_count,
+				candidates=[dict(wire=wire,resource=record['filename']) for wire,record in matches])
 		if signature in catalog.get('ambiguous_instances', ()):
 			return None, 'ambiguous'
 		valid = []
@@ -1334,6 +1338,87 @@ def _resolve_catalog_model_name_1513(bigworld, area, space_id, chunk_id,
 	globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
 		key[:2], {})[int(item_index)] = int(native_type)
 	return baked['descriptor_filename']
+
+
+def _recover_contacted_model_slot_1513(space_id, identity):
+	"""Reprove an omitted live slot named by an actual material contact.
+
+	A completed partial layout used to make every omitted slot permanently
+	mode-excluded, including a shifted anonymous van. Never probe authored
+	absent slots speculatively: this entry is only for a returned native hit.
+	Quarantined slots remain forbidden. The full matrix and live category must
+	uniquely identify a resource whose previous owner is absent/quarantined.
+	"""
+	catalog = _destructible_catalog or {}
+	chunk_id, item_index = identity = tuple(int(v) for v in identity)
+	if (not catalog.get('layout_repair_supported') or
+			chunk_id in globals().get('g_offh_destr_isolated_chunks', ()) or
+			identity in globals().get('g_offh_destr_isolated_slots', ()) or
+			not is_excluded_1513(*identity) or _layout_repair_pending_1513(chunk_id)):
+		return False
+	try:
+		import AreaDestructibles
+		import BigWorld
+		manager = getattr(AreaDestructibles, 'g_destructiblesManager', None)
+		if manager is None or manager.getSpaceID() != space_id:
+			return False
+		count = _native_chunk_destructible_count_1513(manager, chunk_id)
+		if count is None or not 0 <= item_index < count:
+			return False
+		if _item_name_query_allowance_1513(BigWorld, (space_id, chunk_id), 1, contact=True) < 1:
+			return False
+		names, status = _chunk_native_name_list_1513(BigWorld, space_id, chunk_id, count)
+		if names is None:
+			return False
+		native_type = BigWorld.wg_getDestructibleEffectCategory(space_id, chunk_id, item_index, -1)
+		if type(native_type) not in _INTEGER_TYPES:
+			return False
+		evidence = {}
+		match, reason = _probe_authored_placement_detail_1513(BigWorld,
+			AreaDestructibles, space_id, chunk_id, item_index, native_type, names, count,evidence)
+		if match is None or match[1]['kind'] == 'tree':
+			_log_destructible_validation_1513('contact_layout', 'unproved',
+				chunk_id,item_index,detail='placement=%s proof=%r' % (reason,evidence))
+			return False
+		from gui.mods.offline_lan_0922.destructible_layout import match_placement
+		matches = {}
+		for field in ('baked_instances', 'tree_instances'):
+			for wire, record in catalog[field].items():
+				if wire[0] != chunk_id or _destructible_isolated_1513(*wire):
+					continue
+				proved = match_placement(catalog['authored_placement_index'],
+					chunk_id, record['signature'], record['kind'])
+				if proved is None:
+					return False
+				if proved[0] == match[0]:
+					# Two still-active native owners cannot be disambiguated.
+					return False
+				matches[wire[1]] = proved
+		matches[item_index] = match
+		entry = dict(fingerprint=(count, ()),layout_key=(int(space_id),chunk_id),
+			placement_matches=matches,placement_conflicts=set(),ignored_items=set())
+		mapping = _commit_proved_chunk_layout_1513(entry,chunk_id)
+		return bool(mapping and item_index in mapping)
+	except Exception as error:
+		_log_destructible_validation_1513('contact_layout', 'query_failed',
+			chunk_id,item_index,detail=str(error)[:160])
+		return False
+
+
+def _recover_contact_material_1513(space_id, payload, contact):
+	"""Supply a missing name only after exact live placement registration."""
+	decoded = _decode_mat_info_1513(payload)
+	if (decoded is None or _normalized_filename(decoded[5]) or
+			(decoded[0]-contact).length > 1.e-4 or
+			not 71 <= decoded[4] < 86):
+		return payload
+	identity = decoded[2:4]
+	_recover_contacted_model_slot_1513(space_id, identity)
+	instance = _stream_baked_shot_instance_1513(space_id, identity)
+	if instance is None or not any(_point_in_world_box(contact, box) for box in instance['boxes']):
+		return payload
+	return (True, decoded[0], decoded[1], decoded[4],
+		_instance_descriptor_filename_1513(instance), decoded[3], decoded[2])
 
 
 def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
@@ -8456,6 +8541,7 @@ def _try_destroy_solid_hit(spaceID, segment_start, hit_pt, surf_normal,
 			_mi = observed_call(
 				'native.destructible.material', BigWorld.wg_getMatInfoNearPoint,
 				spaceID, _seg_a, _seg_b, hit_pt, lambda *a: False)
+			_mi = _recover_contact_material_1513(spaceID, _mi, hit_pt)
 			_decoded = _decode_mat_info_1513(_mi)
 			if not _solid_destructible_candidate_1513(
 					_mi, hit_pt, _normal):
@@ -8936,6 +9022,7 @@ def _shot_world_distance_impl_1513(bigworld, spaceID, start_pos, end_pos, dir_ve
 			spaceID, start_pos,
 			world_collision[0] + dir_vec.scale(0.3),
 			world_collision[0], lambda *unused: False)
+		mat_info = _recover_contact_material_1513(spaceID, mat_info, world_collision[0])
 		if (_destructible_catalog is not None and shot is not None and
 				_shot_kind_1513(shot) in ('HIGH_EXPLOSIVE', 'ARMOR_PIERCING_HE')):
 			mat_info = _recover_shot_material_1513(measured, bigworld, spaceID,

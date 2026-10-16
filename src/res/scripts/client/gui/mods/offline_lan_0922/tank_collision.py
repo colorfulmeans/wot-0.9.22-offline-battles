@@ -1766,7 +1766,7 @@ _tank_resolve = resolve_tank
 
 
 def contact_roster(tanks, owner_ids, dt, previous_ram_contacts):
-    if any(body.get('stack_carrier') for body in tanks):
+    if any(body.get('stack_carrier') or body.get('roof_contact_pairs') for body in tanks):
         return None
     """Return native contact rows or None for the existing Python chain."""
     return native_math.contact_roster(tanks, owner_ids, dt, previous_ram_contacts)

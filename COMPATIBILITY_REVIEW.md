@@ -8847,3 +8847,61 @@ physical and directional-cap energies. Hard catalog receipts identify unresolved
 instances and commit/proposal flags. Native destroy rejection is logged before
 the existing failure path. Diagnostics never guess a resource from proximity or
 change the destruction gate, material ownership, or damaged replacement BSP.
+
+## Windows319 follow-up: incomplete endpoints and multi-roof contacts
+
+The 230001 report is Windows319. In round two Bot 10 is under the bridge near
+(-10.28, -14.73, 18.20), with a completed one-point result near (-10, -14.681,
+18) for the strategic goal (0, 0, 18). Reissuing that exhausted result must
+not publish safe arrival or perpetually renew a complete-path cache. Classify
+it as incomplete using the existing arrival radius and pass a conclusive
+no-onward-leg result to the existing blocked/reactive retry flow. This adds
+no height prohibition and no new terminal-endpoint local-detour strategy.
+
+Round-one Bot 28 rejects an already visited local tip with no owned search.
+The refusal now consumes the existing local retry budget while retaining its
+physical hold. Returning the distant goal immediately was rejected by the
+Panther II/M36 analytic dead-end replays. Connector wall/water/deferred holds
+are preserved. Intermittent support_hold orders pause the same server gate
+attempt instead of erasing it. Explicit commands, completed gates and disabled
+vehicles retain their previous guards. Route alternatives can still return to
+an earlier route after another bounded failed attempt.
+
+Bot 27's hill candidates include real hard-wall and missing-ground refusals.
+The baked graph alone does not prove a disconnected small island; no blanket
+grade reduction or isolated-cell heuristic is justified. Selected fallback
+receipts now include their baked height and outgoing graph points, alongside
+the existing exact physical refusal and the new incomplete-endpoint receipt.
+The bounded retry fixes address the proved failure handoffs; the next native
+replay must establish whether a remaining hill admission needs another fix.
+
+At 22:56:18 the player has a committed Bot 9 roof contact while the planar
+solver responds against Bot 12. All fresh native roof pairs now participate
+in planar classification, independently of the one primary pressure carrier.
+A first contact need not remain airborne to be a descending roof approach.
+Near-roof classification tolerates a fresh separating gap of at most 3 cm;
+it does not publish contact damage or retain a witness across missing native
+geometry. Local movement rechecks the actual current underside/roof face.
+Worker five-point roof observations retain all touched pairs while keeping
+the original first pressure owner and existing impact/pressure/wreck laws.
+
+Lakeville's failed van has a native contact at 33149/189 with an empty name;
+the authored van is at 33149/188 and the completed partial remap excludes the
+contacted slot. Actual material contacts can now reprove an omitted slot by
+the full native transform and effect category, then reuse atomic layout and
+normal descriptor/registration validation. A live duplicate owner, quarantined
+slot, mismatched name/transform or ambiguous resource remains forbidden.
+No fixed index offset, proximity guess, energy change or replacement-BSP
+exemption is introduced. Failed reproof logs the observed signature/category
+and authored candidates for the next native replay.
+
+The five-point support switch remains any one invalid point -> detailed,
+all five valid -> basic. Support geometry and physics formulas are unchanged.
+
+Validation: 41 isolated engine-free files / 2,378 tests pass with zero skips.
+The final Bot runtime change is separately rechecked by all 542 Bot tests;
+the Lakeville test also exercises actual registration and missing-name
+material recovery at the captured contact. All 187 client modules compile
+under CPython 2.7. AST comparisons retain 23 support/slope functions and the
+unchanged physics source. These checks do not establish native roof stability
+or complete hill recovery; both require the next exact-client test package.

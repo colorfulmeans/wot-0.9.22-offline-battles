@@ -2504,6 +2504,17 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
+        if (order.get('combat_mode') == 'support_hold' and
+                not order.get('team_command') and self._route_donor_eligible(bot)):
+            # An intermittent tactical hold pauses the same gate attempt;
+            # resuming it is not evidence that the previous exit succeeded.
+            progress = self._wreck_route_progress.get(bot_id)
+            if progress is not None:
+                progress.setdefault('paused_at', _number(now))
+                order['route_attempt'] = dict(route_id=progress['key'][0],
+                    route_index=progress['key'][1],action='pause_support_hold',
+                    elapsed=round(progress['paused_at']-progress['since'],3))
+            return
         if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture',
                                             'withdraw', 'under_fire_withdraw', 'low_health_retreat') or
                 order.get('team_command') or
@@ -2545,6 +2556,9 @@ class BotPlanner(object):
                 'key': key, 'goal': goal, 'since': _number(now),
                 'origin': dict(point), 'physical_block': physical_block}
             return
+        paused_at = progress.pop('paused_at', None)
+        if paused_at is not None:
+            progress['since'] += max(0., _number(now) - paused_at)
         if not physical_block:
             origin = progress.get('origin', point)
             net = math.hypot(point['x'] - origin['x'], point['z'] - origin['z'])

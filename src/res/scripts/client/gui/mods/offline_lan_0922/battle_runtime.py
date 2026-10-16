@@ -5954,9 +5954,12 @@ class BattleRuntime(object):
         actors = list(self._bots.states.values()) if self._bots is not None else []
         actors += [dict(row,kind='player') for row in players or ()]
         carriers = {}
+        roof_pairs = {}
         if self._bots is not None:
             self._bots._stack_current_carriers = carriers
+            self._bots._stack_current_roof_pairs = roof_pairs
         for actor in actors:
+            actor['_stack_roof_pairs'] = ()
             if not all(name in actor for name in ('id','x','y','z')):
                 continue
             previous = self._stack_support_context(actor)
@@ -5985,6 +5988,7 @@ class BattleRuntime(object):
                 # variable left tilted player contacts with a zero-size cap.
                 actor['collision_shape'] = shape
                 yaw = float(actor.get('yaw',0.0))
+                primary = None
                 for side, forward in ((0.,0.),(-shape[0],0.),(shape[0],0.),
                                       (0.,-shape[1]),(0.,shape[1])):
                     ox, oy, oz = vehicle_physics.suspension_point_offset(
@@ -5994,11 +5998,14 @@ class BattleRuntime(object):
                     y = actor['y']+oy
                     hit = self._stack_ground_hit(self._vector((x,y+0.15,z)),
                         self._vector((x,y-0.15,z)), None)
-                    if hit is not None:
-                        break
+                    if primary is None and context['hits']:
+                        primary = context['hits'][-1]
                 if not context['hits']:
                     continue
-                key, lower, point = context['hits'][-1]
+                pairs = sorted(set(key for key,unused_lower,unused_point in context['hits']))
+                actor['_stack_roof_pairs'] = pairs
+                roof_pairs[(actor.get('kind','bot'),int(actor['id']))] = pairs
+                key, lower, point = primary
                 carriers[(actor.get('kind','bot'),int(actor['id']))] = list(key)
                 entity = next(e for k,s,e in context['candidates'] if k==key)
                 lower_mass = vehicle_physics.descriptor_mass(entity.typeDescriptor)
@@ -6013,7 +6020,7 @@ class BattleRuntime(object):
                 if now >= log_times.get(log_key,-1.e30):
                     log_times[log_key]=now+1.0
                     native_input_diagnostics.write_json_record('VEHICLE STACK',
-                        dict(row,phase='pressure',point=point,trial_rates=True))
+                        dict(row,phase='pressure',point=point,roof_contact_pairs=pairs,trial_rates=True))
             except (AttributeError, IndexError, KeyError, TypeError, ValueError,
                     RuntimeError, OverflowError) as error:
                 now = self._clock()
@@ -23347,8 +23354,9 @@ class BattleRuntime(object):
         A fresh upward native BSP hit must lie below a posed underside point.
         This is not a settled carrier and never publishes pressure or damage.
         """
-        if (not getattr(self, '_local_airborne', False) or
-                getattr(self, '_local_vertical_speed', 0.0) >= 0.0):
+        descending = getattr(self, '_local_vertical_speed', 0.0) < 0.0
+        if (not descending and not getattr(self, '_local_stack_carrier', None) and
+                not getattr(self, '_local_roof_contact_pairs', ())):
             return set()
         shape = self._collision_shape(entity.typeDescriptor)
         actor = dict(id=int(getattr(self.client, 'player_id', 0) or 0),
@@ -23357,6 +23365,14 @@ class BattleRuntime(object):
             collision_shape=shape)
         previous = self._stack_support_context(actor)
         admitted = set()
+        sample_points = [dict(x=side*shape[0],y=shape[2],z=forward*shape[1])
+            for side,forward in ((0.,0.),(-1.,0.),(1.,0.),(0.,-1.),(0.,1.),
+                                 (-1.,-1.),(-1.,1.),(1.,-1.),(1.,1.))]
+        params = getattr(self, '_local_suspension_params', None)
+        if not descending and params:
+            sample_points = [dict(point,y=point['y']-point['static_compression'])
+                             for point in params['springs']]
+            sample_points.extend(params.get('pseudo_contacts', ()))
         try:
             context = self._stack_context
             candidates = list(context['candidates'])
@@ -23364,18 +23380,18 @@ class BattleRuntime(object):
                 if not any((p['kind'], p['network_id']) == key for p in peers):
                     continue
                 context['candidates'] = [(key, state, target)]
-                for side, forward in ((0.,0.), (-1.,0.), (1.,0.),
-                        (0.,-1.), (0.,1.), (-1.,-1.), (-1.,1.),
-                        (1.,-1.), (1.,1.)):
+                for point in sample_points:
                     ox, oy, oz = vehicle_physics.suspension_point_offset(
-                        dict(x=side*shape[0], y=shape[2], z=forward*shape[1]),
+                        point,
                         self._local_pitch, self._local_roll)
                     x = position[0]+math.cos(yaw)*ox+math.sin(yaw)*oz
                     z = position[2]-math.sin(yaw)*ox+math.cos(yaw)*oz
                     foot_y = position[1]+oy
                     context['hits'] = []
-                    self._stack_ground_hit(self._vector((x,foot_y+.15,z)),
-                        self._vector((x,float(state['y'])-.5,z)),None)
+                    bottom = (float(state['y'])-.5 if descending else
+                              max(float(state['y'])-.5, foot_y-.03))
+                    self._stack_ground_hit(self._vector((x,foot_y+.02,z)),
+                        self._vector((x,bottom,z)),None)
                     if any(point[2][1] <= foot_y+.02 for point in context['hits']):
                         admitted.add(key)
                         break
@@ -24658,6 +24674,9 @@ class BattleRuntime(object):
                 accepted_carrier = (actor.get('_stack_carrier') if hits and
                     abs(result[1]-hits[-1][2][1]) <= reach+0.15 else None)
             previous_carrier=getattr(self,'_local_stack_carrier',None)
+            self._local_roof_contact_pairs = (
+                self._stack_context.get('roof_contact_pairs', ()) if not
+                getattr(self,'_local_support_rise_blocked',False) else ())
             self._local_stack_carrier = (accepted_carrier if not
                 getattr(self,'_local_support_rise_blocked',False) else None)
             if previous_carrier is not None and previous_carrier != self._local_stack_carrier:
@@ -24933,6 +24952,9 @@ class BattleRuntime(object):
             self._local_fall_armed = True
         context = getattr(self,'_stack_context',None)
         if context is not None:
+            context['roof_contact_pairs'] = vehicle_stack.roof_contact_pairs(
+                params,ground,pseudo_ground,solved,position,yaw,
+                previous_pitch,previous_roll,context['hits'])
             context['contact_carrier'] = vehicle_stack.settled_carrier(
                 params,ground,pseudo_ground,solved,position,yaw,
                 previous_pitch,previous_roll,context['hits'])
@@ -24951,6 +24973,7 @@ class BattleRuntime(object):
                 native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
                     phase='carrier_commit',position=position,
                     carrier=context['contact_carrier'],contacts=solved['contact_count'],
+                    roof_contact_pairs=context['roof_contact_pairs'],
                     touched_contacts=solved.get('touched_contact_count'),airborne=solved.get('airborne'),
                     vertical_speed=solved.get('vertical_velocity'),dt=dt,
                     matching=carrier_receipt,

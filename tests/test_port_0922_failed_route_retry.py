@@ -35,6 +35,18 @@ class FailedRouteRetryTests(unittest.TestCase):
             planner._reroute_wreck_stall(order, bot, manifest, now)
         self.assertEqual('west_pass', order['route_id'])
 
+    def test_report_28_short_support_holds_pause_instead_of_erase_attempt(self):
+        planner, bot, manifest, order = self.scene(True)
+        planner._reroute_wreck_stall(order,bot,manifest,0.)
+        for start in (5.,10.,15.,20.):
+            order['combat_mode']='support_hold'
+            planner._reroute_wreck_stall(order,bot,manifest,start)
+            order['combat_mode']='route'
+            planner._reroute_wreck_stall(order,bot,manifest,start+1.)
+            self.assertEqual('center_line',order['route_id'])
+        planner._reroute_wreck_stall(order,bot,manifest,24.)
+        self.assertEqual('west_pass',order['route_id'])
+
     def test_report_24_all_routes_tried_can_retry_old_route_before_120_seconds(self):
         planner, bot, manifest, order = self.scene()
         for now in (0, 20, 40):

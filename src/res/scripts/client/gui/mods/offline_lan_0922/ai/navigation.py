@@ -2093,8 +2093,16 @@ class TerrainNavigator(object):
 		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
 			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
 			temporary_stalled=bool(state.get('temporary_stalled')))
+		if fallback is not None and self.grid.prebaked:
+			cell = self.grid.cell_for(fallback)
+			selection['candidate_graph_height'] = self.grid._baked_cell_height(cell)
+			selection['candidate_graph_exits'] = [self.grid.point_for(row[3],row[4])
+				for row in self.grid._baked_neighbours(cell)]
 		if fallback is not None and self._temporary_path_repeats(state, (fallback,)):
 			selection.update(outcome='temporary_path_repeats',selected=tuple(current))
+			# Rejection consumes a failed local attempt. Keep the physical hold,
+			# but do not wait forever without feeding the existing retry budget.
+			self._record_local_retry_refusal(state, current, goal, now)
 			return tuple(current)
 		connector_clear = True
 		previous_refusal=getattr(self.grid,'_last_native_refusal',None)
@@ -2118,8 +2126,8 @@ class TerrainNavigator(object):
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
 			state.pop('local_fallback_start', None)
-			# The next leg is not admissible from the realised hull pose. Hold
-			# for this decision, then retry from the hull on the next one.
+			# Retire the unreachable anchor but keep the actual hull's wall,
+			# water and deferred-proof hold for this decision.
 			return tuple(current)
 		if fallback is not None:
 			retired = state.get('local_target_retired')
@@ -2717,6 +2725,7 @@ class TerrainNavigator(object):
 		prefix = state.get('pending_prefix') or ()
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
+			'path_endpoint_refusal': state.get('path_endpoint_refusal'),
 			'local_target': state.get('local_fallback_target'),
 			'local_selection': dict(state.get('local_selection') or {}),
 			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
@@ -3295,7 +3304,7 @@ class TerrainNavigator(object):
 				self.path_hull_revisions.get(key) !=
 				self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path))
-			partial = bool(path and _distance_2d(path[-1], goal) > self.grid.cell_size * 3.0)
+			partial = bool(path and _distance_2d(path[-1], goal) > WAYPOINT_ARRIVAL_RADIUS)
 			if (path and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
 					not self.grid.path_has_penalty(path, now) and
 					not self.grid.path_has_edge_penalty(
@@ -3807,6 +3816,15 @@ class TerrainNavigator(object):
 			next_key, continued = self._path(
 				continue_key, current, goal, now, avoid_points)
 			if continued:
+				if (_distance_2d(current, continued[-1]) <= WAYPOINT_ARRIVAL_RADIUS and
+						_distance_2d(continued[-1], goal) > WAYPOINT_ARRIVAL_RADIUS):
+					# A completed search which returns this same exhausted tip did
+					# not prove an onward leg. Keep the ordinary retry/route budget.
+					state['path_endpoint_refusal'] = dict(at=float(now),
+						endpoint=tuple(continued[-1]),goal=tuple(goal),reason='no_onward_leg')
+					self._record_local_retry_refusal(state, current, goal, now)
+					return self._fallback_target(bot_id, current, goal, now,
+						avoid_points, state, False)
 				path = continued
 				state['path_key'] = next_key
 				next_index = 0
@@ -3837,6 +3855,14 @@ class TerrainNavigator(object):
 			return self._fallback_target(
 				bot_id, current, goal, now, avoid_points, state, True)
 		selected = tuple(path[lookahead])
+		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
+				_distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS and
+				lookahead == len(path) - 1):
+			state['path_endpoint_refusal'] = dict(at=float(now),
+				endpoint=selected,goal=tuple(goal),reason='incomplete_endpoint')
+			self._record_local_retry_refusal(state, current, goal, now)
+			return self._fallback_target(bot_id, current, goal, now,
+				avoid_points, state, False)
 		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
 				_distance_2d(current, goal) > 15.0):
 			state['index'] = lookahead

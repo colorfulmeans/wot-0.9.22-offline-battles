@@ -9865,6 +9865,7 @@ class BotRuntime(object):
         body['kind'] = 'player' if body_id is not None else 'bot'
         body['network_id'] = state['id']
         body['stack_carrier'] = state.get('_stack_carrier')
+        body['roof_contact_pairs'] = state.get('_stack_roof_pairs', ())
         return body
 
     def _contact_motion_bodies(self, players=()):
@@ -9874,8 +9875,11 @@ class BotRuntime(object):
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
             profile = self._player_collision_profile(raw)
-            bodies.append(self._contact_motion_body(
-                raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape']))
+            body = self._contact_motion_body(
+                raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape'])
+            body['roof_contact_pairs'] = getattr(self,'_stack_current_roof_pairs',{}).get(
+                ('player',int(raw['id'])),())
+            bodies.append(body)
         return bodies
 
     def _guard_tank_translations(self, players, tick_poses, sample_time_us=None):
@@ -10647,6 +10651,7 @@ class BotRuntime(object):
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
                 'stack_carrier': state.get('_stack_carrier'),
+                'roof_contact_pairs': state.get('_stack_roof_pairs', ()),
                 'team': int(state.get('team', 0)),
                 'vehicle': str(state.get('vehicle') or ''),
                 'x': state['x'], 'y': state['y'],
@@ -10679,6 +10684,7 @@ class BotRuntime(object):
                 'id': player_id, 'kind': 'player',
                 'network_id': int(raw['id']), 'alive': alive,
                 'stack_carrier': getattr(self,'_stack_current_carriers',{}).get(('player',int(raw['id']))),
+                'roof_contact_pairs': getattr(self,'_stack_current_roof_pairs',{}).get(('player',int(raw['id'])),()),
                 'team': int(raw.get('team', 0)),
                 'vehicle': str(raw.get('vehicle') or ''),
                 # Current senders report the human's contact momentum above.
