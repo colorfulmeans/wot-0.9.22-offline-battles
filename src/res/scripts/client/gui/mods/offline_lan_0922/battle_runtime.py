@@ -25417,6 +25417,7 @@ class BattleRuntime(object):
                     _number(getattr(entity, 'health', 0.0)) <= 0.0)
         if dead:
             if not self._local_wreck_active:
+                self._local_siege_braking = None
                 stop_input = getattr(getattr(entity,'filter',None),'notifyInputKeysDown',None)
                 if callable(stop_input):
                     stop_input(0,0)
