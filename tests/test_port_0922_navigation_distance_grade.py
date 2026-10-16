@@ -33,6 +33,19 @@ class DistanceGradeTests(unittest.TestCase):
         self.assertAlmostEqual(.025,grid._terrain_grade((40.,1.,40.)))
         probe.assert_not_called()
 
+    def test_equal_progress_local_candidates_prefer_flat_ground(self):
+        graph=StaticHullNavigationTests._flat_graph()
+        graph['origin']=(-40.,-40.)
+        graph['bounds']=(-42.,-42.,42.,42.)
+        graph['heights_mm']=[int(100.*max(-40.+4*z,0.))
+            for z in range(21) for x in range(21)]
+        grid=TerrainGrid(lambda x,z,h:.1*max(z,0.),lambda *args:False,baked_graph=graph)
+        for side in (-1.,1.):
+            target=grid.safe_local_target((0.,0.,0.),(32.,0.,0.),.1,
+                side_preference=side,minimum_offset=1.)
+            self.assertIsNotNone(target)
+            self.assertLess(target[2],0.)
+
     def test_unavoidable_legal_slope_remains_routable(self):
         graph=StaticHullNavigationTests._flat_graph()
         graph['heights_mm']=[200*z for z in range(21) for x in range(21)]
