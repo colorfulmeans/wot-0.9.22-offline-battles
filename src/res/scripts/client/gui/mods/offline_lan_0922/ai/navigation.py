@@ -1380,8 +1380,7 @@ class TerrainGrid(object):
 					if y is not None:
 						point = self.point_for(key, y)
 						if _distance_2d(current, point) > WAYPOINT_ARRIVAL_RADIUS:
-							candidates.append(((_distance_2d(point, goal), self._terrain_grade(point),
-								_distance_2d(current, point)), point))
+							candidates.append((_distance_2d(current, point), point))
 			# At most one nearby candidate receives a full native query per decision.
 			for unused_distance, point in sorted(candidates)[:1]:
 				if diagnostic is not None:

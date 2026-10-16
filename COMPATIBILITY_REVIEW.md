@@ -8945,7 +8945,7 @@ and exercise exact registration plus material recovery. These are engine-free
 contract checks; the exact van's live identity and native roof stability still
 require the next #1513 gameplay replay.
 
-## Windows323: fixed scene identities, nested terrain preference, passive player wreck
+## Windows324: fixed scene identities, nested terrain preference, passive player wreck
 
 This supersedes Windows320/321's runtime layout-repair interpretation. An
 independent read of the exact #1513 Lakeville WGDE tables finds 222 raw rows
@@ -8961,7 +8961,8 @@ category and transform validation remains slot-local and never changes wires.
 Navigation now compares distance/progress first and slope second, rather
 than adding a slope surcharge to distance. Local candidate ordering uses
 distance to the real goal, then local/longitudinal grade, then the existing
-steering/avoidance tie break. Both local-candidate implementations use the same nested keys.
+steering/avoidance tie break. The existing nearest-cell connector for
+missing-grid starts remains unchanged; it is not a goal-ranking candidate. Both local-candidate implementations use the same nested keys.
 Python and native C++ A* retain existing route,
 obstacle, corridor and failure costs as the primary key and accumulate grade
 as a separate secondary key. Legal slopes remain usable. No retry budget,
