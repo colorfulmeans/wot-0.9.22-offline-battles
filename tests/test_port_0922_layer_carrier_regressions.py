@@ -43,6 +43,14 @@ class LayerTests(unittest.TestCase):
         self.assertFalse(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.),evidence=evidence))
         self.assertEqual('start_support_layer',evidence['egress_reason'])
 
+    def test_authored_route_anchor_height_does_not_become_an_actual_pose(self):
+        graph=StaticHullNavigationTests._flat_graph()
+        graph['heights_mm']=[-15000]*len(graph['heights_mm'])
+        grid=TerrainGrid(lambda *args:-15.,obstacle_probe=lambda *args:False,
+                         baked_graph=graph,cell_size=4.)
+        self.assertTrue(grid.segment_clear((6.,0.,6.),(10.,-15.,6.)))
+        self.assertEqual(-15.,grid._ground(6.,6.,0.))
+
     def test_supported_deck_keeps_the_existing_cheap_bake(self):
         grid=self.scene()
         with mock.patch.object(grid,'_live_baked_egress_clear') as live:

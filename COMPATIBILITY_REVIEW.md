@@ -8621,3 +8621,12 @@ handoff stability and gameplay acceptance require the new Windows package.
   progress, ordinary deck fast paths, physical support versus drive grade,
   disconnected decks, tilted contacts, unrelated last rays, carrier loss and
   support rejection. Exact #1513 terrain/stacking feel remains a gameplay check.
+
+
+Follow-up validation caught the layer gate also being applied to authored route
+anchors with unspecified Y. Scope actual-storey candidate resolution to the
+existing local candidate fan and require independent native start-ground
+agreement before treating a segment origin as a different physical storey.
+Static route-anchor and lateral-lane checks keep their baked height ownership.
+The original Malinovka navigable-water/fatal-hazard lane regression and a new
+nonzero-terrain authored-anchor case both pass with this correction.
