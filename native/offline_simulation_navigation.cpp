@@ -1460,7 +1460,22 @@ bool Grid::safe_local(const Point &current, const Point &goal, double time,
                             -side * 1.30, side * 1.75, -side * 1.75};
   const double spans[] = {cell_size * .78, cell_size * .52};
   bool found = false;
-  std::pair<double, double> best;
+  std::array<double, 4> best{};
+  const auto terrain_grade = [this](const Point &p) {
+    const Cell c = cell(p);
+    const int first = index(c);
+    double result = 0.;
+    if (first < 0) return result;
+    for (size_t bit = 0; bit < NEIGHBOURS.size(); ++bit) {
+      if (!(links[first] & (1u << bit))) continue;
+      const Cell delta = NEIGHBOURS[bit];
+      const int other = index({{c[0]+delta[0],c[1]+delta[1]}});
+      if (other >= 0)
+        result = std::max(result,std::abs(heights_mm[other]-heights_mm[first]) /
+          (1000.*cell_size*(delta[0] && delta[1] ? std::sqrt(2.) : 1.)));
+    }
+    return result;
+  };
   for (double span : spans)
     for (double offset : offsets) {
       if (std::abs(offset) < std::max(0., minimum))
@@ -1483,10 +1498,12 @@ bool Grid::safe_local(const Point &current, const Point &goal, double time,
           }
       if (rejected)
         continue;
-      const std::pair<double, double> score = {
-          distance(candidate, goal) + std::abs(offset) * 3.5 +
-              cell_penalty(cell(candidate), avoid, false) * 2.,
-          std::abs(offset)};
+      // Match TerrainGrid: progress first, legal flatness second; existing
+      // steering and avoidance preferences only break the remaining tie.
+      const std::array<double, 4> score = {{distance(candidate, goal),
+          std::max(terrain_grade(candidate),std::abs(y-current[1])/span),
+          std::abs(offset)*3.5+cell_penalty(cell(candidate),avoid,false)*2.,
+          std::abs(offset)}};
       if (!found || score < best) {
         found = true;
         best = score;

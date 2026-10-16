@@ -13,6 +13,7 @@ class PlayerWreckPhysicsTests(unittest.TestCase):
         battle.client=f._Client()
         battle._avatar=runtime.bigworld.avatar
         entity=f._Vehicle(10,f._suspension_descriptor(),f._Vector(),(0,0,0),{'health':0})
+        entity.filter=types.SimpleNamespace(notifyInputKeysDown=mock.Mock())
         runtime.bigworld.entities[10]=entity
         battle._server=types.SimpleNamespace(vehicle_id=10)
         battle._sender=types.SimpleNamespace(forward=1.,turn=1.,send_current=mock.Mock())
@@ -38,6 +39,7 @@ class PlayerWreckPhysicsTests(unittest.TestCase):
         self.assertTrue(battle._local_wreck_active)
         self.assertEqual(0,entity.health)
         self.assertEqual((0.,0.),(battle._sender.forward,battle._sender.turn))
+        entity.filter.notifyInputKeysDown.assert_called_once_with(0,0)
         self.assertFalse(battle._apply_fall_damage(entity,50.))
 
     def test_auxiliary_roof_pair_exemptions_are_removed(self):

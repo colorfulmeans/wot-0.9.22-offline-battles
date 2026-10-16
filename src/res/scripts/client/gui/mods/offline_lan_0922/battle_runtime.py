@@ -2226,6 +2226,7 @@ class BattleRuntime(object):
         self._hit_impulse_reports = 0
         self._feedback_shell_failures = set()
         self._local_speed = 0.0
+        self._local_wreck_active = False
         self._local_turn_speed = 0.0
         self._local_reaction_rate = 0.0
         self._local_drive_turn = 0.0
@@ -2601,6 +2602,7 @@ class BattleRuntime(object):
         self._hit_impulse_reports = 0
         self._feedback_shell_failures = set()
         self._local_speed = 0.0
+        self._local_wreck_active = False
         self._local_turn_speed = 0.0
         self._local_reaction_rate = 0.0
         self._local_drive_turn = 0.0
@@ -25386,6 +25388,10 @@ class BattleRuntime(object):
         dead = bool(stopped and self._battle_result is None and
                     _number(getattr(entity, 'health', 0.0)) <= 0.0)
         if dead:
+            if not self._local_wreck_active:
+                stop_input = getattr(getattr(entity,'filter',None),'notifyInputKeysDown',None)
+                if callable(stop_input):
+                    stop_input(0,0)
             self._local_wreck_active = True
             self._sender.forward = self._sender.turn = 0.0
             self._local_drive_turn = self._local_drive_throttle = 0.0
