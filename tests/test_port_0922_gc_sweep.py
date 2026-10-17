@@ -92,10 +92,10 @@ class BotUpdateCollectionRegressionTest(unittest.TestCase):
 
     The Python 3 fixture exercises two batches of 200 updates with four Bots and a
     human player on the non-fixed-control path while retaining the runtime.
-    Current runtime permits transient cycles and owns manual collection at
-    teardown. Check that collection reaches a fixed point, keeps live actor
-    state and does not enable automatic GC. This engine-free fixture cannot
-    prove native traversal safety or real frame pacing.
+    Keep the zero-garbage regression separately: manual reclamation is not
+    permission to hide new producer cycles. Also check that teardown's sweep
+    reaches a fixed point, keeps live actor state and leaves automatic GC
+    disabled. Neither engine-free contract certifies native traversal safety.
 
     Run it in a subprocess because BotRuntime changes process-global logging
     state that unrelated loadout tests also exercise.
@@ -129,6 +129,9 @@ with contextlib.redirect_stdout(sink):
     for batch in range(2):
         for tick in range(200):
             runtime.update(0.05, 1.0 + (batch*200+tick) * 0.05, [player])
+        if sys.argv[2]=='zero_garbage':
+            sys.stderr.write('CYCLES=%d\n' % gc.collect())
+            break
         actors={key:id(value) for key,value in runtime.states.items()}
         reclaimed=gc_sweep.sweep('round_end_fixture',batch)
         empty=gc.collect()
@@ -137,7 +140,7 @@ with contextlib.redirect_stdout(sink):
 sys.stderr.write('SWEEPS=%s\n' % json.dumps(observations))
 """
 
-    def test_update_batches_are_reclaimed_at_manual_sweeps_without_losing_live_state(self):
+    def _run_driver(self, mode):
         import subprocess
 
         root = Path(__file__).resolve().parents[1]
@@ -148,13 +151,28 @@ sys.stderr.write('SWEEPS=%s\n' % json.dumps(observations))
             str(root / 'tests'),
         ))
         finished = subprocess.run(
-            [sys.executable, '-c', self.DRIVER, str(root)],
+            [sys.executable, '-c', self.DRIVER, str(root), mode],
             cwd=str(root), env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=300)
         report = finished.stderr.decode('utf-8', 'replace')
         self.assertEqual(
             0, finished.returncode,
             'the Bot update driver failed:\n%s' % report[-2000:])
+        return report
+
+    def test_two_hundred_fixture_updates_leave_no_unreachable_objects(self):
+        # Current failures include the planner_sample_direction/sample_clear
+        # closure family, not the manual collector. Retain this producer
+        # check until production stops creating those unreachable cycles.
+        report=self._run_driver('zero_garbage')
+        marker=[line for line in report.splitlines() if line.startswith('CYCLES=')]
+        self.assertTrue(marker,report[-2000:])
+        cycles=int(marker[-1].split('=',1)[1])
+        self.assertEqual(0,cycles,
+            'the controlled update fixture left %d unreachable objects' % cycles)
+
+    def test_update_batches_are_reclaimed_at_manual_sweeps_without_losing_live_state(self):
+        report=self._run_driver('sweep')
         marker = [line for line in report.splitlines()
                   if line.startswith('SWEEPS=')]
         self.assertTrue(marker, 'driver reported no sweep outcomes:\n%s'
