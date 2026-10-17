@@ -7907,7 +7907,13 @@ class BotRuntime(object):
         if not normal_impact:
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
-        return self._apply_bot_fall_damage(state, impact_speed)
+        damage = self._apply_bot_fall_damage(state, impact_speed)
+        # The turret transaction queues the impact above and returns zero.
+        # Mark it only here, after that transaction actually spends HP.
+        commit = getattr(self, 'stack_impact_commit', None)
+        if callable(commit):
+            commit(state, damage)
+        return damage
 
     def _apply_world_contact_impact(self, state, speed, now):
         """Consume only the realised hull sweep, before escape probes replace it."""
@@ -8295,8 +8301,20 @@ class BotRuntime(object):
             state.pop('_suspension_ground_plane', None)
         impact_vertical = vehicle_physics.suspension_impact_velocity(
             before_airborne, before_vertical_speed, solved)
+        raw_impact = solved.get('impact_speed')
+        contact_velocity = (0., float(raw_impact if raw_impact is not None else before_vertical_speed), 0.)
+        if motion_pose is not None and step > 0.:
+            contact_velocity = ((position[0]-motion_pose[0])/step,
+                contact_velocity[1], (position[2]-motion_pose[2])/step)
+        roof_contact = getattr(self, 'stack_impact_contact', None)
+        impact = (roof_contact(state, params, ground, pseudo_ground, solved,
+            (physics_state['pitch'], physics_state['roll']), contact_velocity,
+            before_airborne, before_vertical_speed, step) if callable(roof_contact) else None)
+        if impact_vertical is None and impact is not None and impact['verdict'] == 'admit':
+            impact_vertical = raw_impact
         if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
+            velocity = (0., float(impact_vertical), 0.)
             if motion_pose is not None and float(step) > 0.0:
                 velocity = (
                     (float(position[0]) - float(motion_pose[0])) /
@@ -8309,11 +8327,14 @@ class BotRuntime(object):
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
+            impact_normal = (current_plane or {}).get('normal', (0., 1., 0.))
+            if impact is not None:
+                impact_speed, impact_normal = impact['speed'], impact['normal']
             from gui.mods.offline_lan_0922 import environment_modules
             state['_landing_contact_witnesses'] = environment_modules.ground_witnesses(
                 params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
                 _number(state.get('yaw')), _number(state.get('pitch')), _number(state.get('roll')))
-            state['_landing_contact_normal'] = (current_plane or {}).get('normal', (0., 1., 0.))
+            state['_landing_contact_normal'] = impact_normal
             state['_landing_ground_observed'] = bool(
                 solved.get('contact_count') or solved.get('touched_contact_count'))
             self._apply_bot_landing_impact(
@@ -8350,16 +8371,23 @@ class BotRuntime(object):
                                 attempted_yaw=None, suspension_motion_pose=None):
         callback = getattr(self,'support_context',None)
         previous = callback(state) if callable(callback) else None
+        owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
+        context = getattr(owner, '_stack_context', None)
+        if isinstance(context, dict):
+            context['physics_dt'] = step
+            context['purpose'] = 'bot_vertical'
         try:
             return self._update_vertical_motion_impl(state,step,tick_pose,
                 attempted_yaw,suspension_motion_pose)
         finally:
             if callable(callback):
-                callback(None)
-                # The BattleRuntime context may nest a zero-time settle.
-                owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
-                if owner is not None:
-                    owner._stack_context = previous
+                finish = getattr(owner, '_finish_stack_support_context', None)
+                if callable(finish):
+                    finish(previous)
+                else:
+                    callback(None)
+                    if owner is not None:
+                        owner._stack_context = previous
 
     def _update_vertical_motion_impl(self, state, step, tick_pose=None,
                                 attempted_yaw=None,
@@ -14344,6 +14372,13 @@ class BotRuntime(object):
         self._advance_probe_timing(now)
         self._advance_equipment_clock(frame_step)
         players = list(players or [])
+        from . import roof_crush_test
+        if roof_crush_test.shot_drop_enabled():
+            queue = getattr(self, '_roof_shot_drop_queue', None)
+            if queue is None or getattr(self, '_roof_shot_drop_round', None) != self.round_id:
+                queue = self._roof_shot_drop_queue = roof_crush_test.ShotDropQueue()
+                self._roof_shot_drop_round = self.round_id
+            queue.observe(players, self.states)
         if refresh_control:
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
@@ -14999,6 +15034,17 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                if roof_crush_test.shot_drop_enabled():
+                    command = self._roof_shot_drop_queue.command(command, state)
+                    from .native_input_diagnostics import write_json_record
+                    for event in self._roof_shot_drop_queue.drain_events():
+                        event['round'] = self.round_id
+                        write_json_record('ROOF SHOT DROP', event)
+                else:
+                    command = roof_crush_test.hold_command(command, position)
+                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
@@ -15426,7 +15472,12 @@ class BotRuntime(object):
                 motion_probe.get('collision', False) and
                 not motion_probe.get('water', False) and
                 abs(_number(motion_probe.get('slope', 0.0))) <= 0.55)
+            # The drop fixture intentionally drives off a cliff. Its scripted
+            # input bypasses only the anticipatory driving veto; the exact
+            # hull sweep, support, gravity and contact response still run.
             path_clear = (True if (catchup_motion_hold or probe_deferred or
+                                   (roof_crush_test.shot_drop_enabled() and
+                                    command.get('recovery_mode') == 'roof_shot_drop') or
                                    motion_probe is None or
                                    exact_motion_owns_collision or
                                    (abs(throttle) <= 0.01 and

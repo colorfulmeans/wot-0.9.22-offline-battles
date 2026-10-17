@@ -126,6 +126,11 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - name: Include opt-in bridge-drop test entry points
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath tools/START_ROOF_CRUSH_TEST.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_ROOF_CRUSH_TEST.bat
+          Copy-Item -LiteralPath tools/START_ROOF_SHOT_DROP_TEST.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_ROOF_SHOT_DROP_TEST.bat
       - name: Include opt-in worker spike timing entry point
         shell: pwsh
         run: Copy-Item -LiteralPath tools/START_SPIKE_PROFILE.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_SPIKE_PROFILE.bat

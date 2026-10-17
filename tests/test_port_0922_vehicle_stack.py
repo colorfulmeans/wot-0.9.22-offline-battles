@@ -268,7 +268,7 @@ class NativeRoofAdmissionTests(unittest.TestCase):
         battle=battle_fixture.BattleRuntime(runtime)
         battle._avatar=runtime.bigworld.avatar
         state=dict(id=12,x=0.,y=0.,z=0.,yaw=0.,collision_shape=(1.5,3.,0.,2.))
-        entity=types.SimpleNamespace(typeDescriptor=object())
+        entity=types.SimpleNamespace(typeDescriptor=battle_fixture._Descriptor())
         actor=dict(id=11,x=0.,y=2.,z=0.,yaw=0.,pitch=0.,roll=0.)
         battle._stack_context=dict(actor=actor,hits=[],candidates=[(('bot',12),state,entity)])
         battle._warn_optional_failure=mock.Mock()

@@ -123,6 +123,78 @@ def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
 
 
 
+def contact_surfaces(params, ground, pseudo_ground, solved, position, yaw,
+                     pitch, roll, surfaces):
+    """Return native roof witnesses used by final suspension contacts."""
+    from . import vehicle_physics as vp
+    keys = vp._suspension_contact_keys(params, solved, ground, pseudo_ground)[0]
+    result = []
+    for kind, index in sorted(keys):
+        point = params['springs'][index] if kind == 'spring' else params['pseudo_contacts'][index]
+        height = ground[index] if kind == 'spring' else pseudo_ground[index]
+        ox, unused, oz = vp.suspension_point_offset(point, pitch, roll)
+        x = position[0] + math.cos(yaw)*ox + math.sin(yaw)*oz
+        z = position[2] - math.sin(yaw)*ox + math.cos(yaw)*oz
+        for surface in surfaces:
+            witness = surface['point']
+            if (abs(witness[1]-float(height)) <= .03 and
+                    math.hypot(witness[0]-x, witness[2]-z) <= .05):
+                result.append(surface)
+                break
+    return result
+
+
+def contact_impact(surfaces, velocity):
+    """Gravity impacts use vertical closing; planar rams own horizontal work."""
+    from . import vehicle_physics as vp
+    if not surfaces:
+        return None
+    vertical = (0.0, float(velocity[1]), 0.0)
+    rows = [dict(surface, speed=vp.landing_impact_speed(vertical, surface['normal']))
+            for surface in surfaces]
+    return max(rows, key=lambda row: row['speed'])
+
+
+class Descent(object):
+    """One unsafe downward excursion, with one impact per contacted vehicle.
+
+    Resting contact flicker is not a new fall. A new unsafe airborne descent
+    after vertical speed has recovered starts a new episode, without timers.
+    """
+    def __init__(self):
+        self.active = False
+        self.sequence = 0
+        self.charged = set()
+
+    def observe(self, before_airborne, before_velocity, solved, dt):
+        from . import vehicle_physics as vp
+        if dt <= 0.0:
+            return
+        if before_velocity >= -vp.FALL_SAFE_SPEED:
+            self.active = False
+        raw = solved.get('impact_speed')
+        unsafe = min(float(before_velocity), float(raw) if raw is not None else 0.) < -vp.FALL_SAFE_SPEED
+        if not self.active and unsafe and (before_airborne or solved.get('airborne')):
+            self.active = True
+            self.sequence += 1
+            self.charged.clear()
+
+    def verdict(self, carrier, speed, legacy, dt):
+        from . import vehicle_physics as vp
+        if dt <= 0.0:
+            return 'zero_elapsed_time'
+        if not legacy and not self.active:
+            return 'no_unsafe_descent'
+        if speed <= vp.FALL_SAFE_SPEED:
+            return 'safe_vertical_closing'
+        if tuple(carrier) in self.charged:
+            return 'already_charged_this_descent'
+        return 'admit'
+
+    def commit(self, carrier):
+        self.charged.add(tuple(carrier))
+
+
 class Ledger(object):
     """Cumulative per-pair work survives state coalescing and exact replay."""
     def __init__(self):

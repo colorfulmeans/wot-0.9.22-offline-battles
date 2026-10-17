@@ -265,6 +265,20 @@ def body(identity, x=0., z=0., **changes):
 
 def controlled_cases():
     cases = []
+    captured_path=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              'tests','fixtures','roof_same_layer_164250.json')
+    with open(captured_path) as stream:
+        captured=json.load(stream)
+    captured_bodies=[]
+    for row in captured:
+        # Python 2 JSON keys are Unicode. The native borrowed-input contract
+        # requires a string-only dict; normalize before constructing the body.
+        values=dict((str(key),value) for key,value in row.items())
+        identity=values.pop('id')
+        values.update(mass=36000.,shape=(1.600411057472229,2.9779720306396484,
+            .004364000167697668,1.5524429678916931))
+        captured_bodies.append(body(identity,**values))
+    cases.append(('captured_same_layer_type59',captured_bodies,.1,(),'valid'))
     for mode in ('valid', 'missing', 'partial', 'zero'):
         cases.append(('armor_'+mode, [body(1, vz=14.), body(2, z=5.5)], .2, (), mode))
     cases.extend([
@@ -278,6 +292,10 @@ def controlled_cases():
         ('player_ledger_impulse_false', [body(1, vz=14.), body(2, z=5.5,
             kind='player', impulse=False, position_fixed=True)], .2, (), 'valid'),
         ('held_track', [body(1, vz=.2), body(2, z=5.5, contact_decel=(4., 10.))], .2, (), 'valid'),
+        ('unmarked_roof', [body(1),body(2,x=.2,z=.1,y=2.7)], .025, (), 'valid'),
+        ('rolled_roof', [body(1),body(2,x=2.8,y=3.,roll=math.pi/2)], .025, (), 'valid'),
+        ('rolled_separated', [body(1),body(2,x=-2.8,y=3.,roll=math.pi/2)], .025, (), 'valid'),
+        ('roof_motor', [body(1,traverse_speed=1.,traverse_torque=100000.),body(2,x=.2,z=.1,y=2.7)], .025, (), 'valid'),
         ('vertical_separated', [body(1, vz=14.), body(2, z=5.5, y=9.)], .2, (), 'valid'),
         ('pitch_roll', [body(1, x=-1., vx=8., vz=4., pitch=.2),
             body(2, x=1., z=2., yaw=.35, pitch=.45, roll=-.3)], .2, (), 'valid'),
