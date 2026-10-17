@@ -38,6 +38,8 @@ class RibbonProbe(object):
         def observe(panel, *args, **kwargs):
             # Diagnose only. The stock method keeps its exact arguments,
             # return value, exception and animation ownership.
+            if getattr(self, 'closed', False):
+                return original(panel, *args, **kwargs)
             try:
                 self._observe(panel, name, args, kwargs)
             except Exception as error:
@@ -94,8 +96,17 @@ class RibbonProbe(object):
                 self._emit('no_hide_callback', ribbon=key[1], age=age,
                            state=dict(row), visibility_basis='stock_callbacks_only')
 
+    def reset(self, token):
+        self._emit('round_changed', next_token=token)
+        self.token, self.last_damage = token, None
+        self.rows.clear()
+        self.next_poll = 0.
+
     def close(self):
+        if getattr(self, 'closed', False):
+            return
         self._emit('closed', remaining=[dict(row, ribbon=key[1]) for key, row in self.rows.items()])
+        self.closed = True
         for name, (original, wrapper) in self.methods.items():
             if self.panel_class.__dict__.get(name) is wrapper:
                 setattr(self.panel_class, name, original)

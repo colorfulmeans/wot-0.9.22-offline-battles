@@ -2926,6 +2926,10 @@ class BattleRuntime(object):
             # ran on different ground than the one before it is visible.
             graphics_probe.log('round_start', round_identity)
             native_input_diagnostics.log_summary('round_start', round_identity)
+            if not self._worker_mode:
+                # Flash may retain bound callbacks when constructing the
+                # panel. Observe before its native registration, not first HP.
+                self._observe_ram_feedback(None, False)
             self._install_battle_gui_guard()
             self._enter_battle_loading()
             self._retire_lobby_entities(lobby_boundary)
@@ -12388,8 +12392,7 @@ class BattleRuntime(object):
                  getattr(self.client, 'authority_epoch', None))
         probe = getattr(self, '_ram_ribbon_probe', None)
         if probe is not None and probe.token != token:
-            probe.close()
-            self._ram_ribbon_probe = probe = None
+            probe.reset(token)
         if probe is None and getattr(self, '_ram_ribbon_probe_attempted', None) != token:
             self._ram_ribbon_probe_attempted = token
             try:
@@ -12401,7 +12404,7 @@ class BattleRuntime(object):
                     self._clock, native_input_diagnostics.write_json_record, token)
             except Exception as error:
                 self._warn_optional_failure('ram ribbon lifecycle observer', error, disable=False)
-        if probe is not None:
+        if probe is not None and event is not None:
             probe.note(event, received)
 
     def _present_combat_feedback(self, event, target_record,

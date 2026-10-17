@@ -159,6 +159,20 @@ class RibbonDiagnosticsTests(unittest.TestCase):
         self.assertIs(original,cls._addRibbon)
         self.assertEqual('stock-add',panel._addRibbon(7,'receivedRam'))
 
+    def test_native_bound_callbacks_remain_observed_across_round_identity(self):
+        cls,panel=self.scene()
+        bound_show,bound_hide=panel.onShow,panel.onHide
+        panel._addRibbon(7,'receivedRam')
+        self.probe.reset((2,2,2))
+        panel._addRibbon(8,'receivedRam');bound_show(8);bound_hide(8)
+        self.assertTrue(any(row['phase']=='onHide' and row['token']==(2,2,2)
+                            for row in self.logs))
+        self.assertEqual({},self.probe.rows)
+        self.probe.close()
+        count=len(self.logs)
+        self.assertEqual('stock-show',bound_show(8))
+        self.assertEqual(count,len(self.logs))
+
     def test_dispose_retires_only_its_panel_and_non_ram_is_ignored(self):
         cls,panel=self.scene();second=cls()
         panel._addRibbon(7,'receivedRam');second._addRibbon(7,'ram')
