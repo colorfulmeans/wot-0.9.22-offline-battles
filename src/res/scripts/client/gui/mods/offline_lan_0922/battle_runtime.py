@@ -42,7 +42,7 @@ from gui.mods.offline_lan_0922.entities.native_remote_vehicle import \
     NativeRemoteVehicleFactory, present_shot_impulse, set_draw_visibility
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     PROJECTILE_VISUAL_START_MAX_DIFF, RemoteVehicleFactory,
-    _collide_vehicle_evidence_at_matrix,
+    _collide_vehicle_evidence_at_matrix, prepare_vehicle_collision_at_matrix,
     _component_aim_angles, _native_ypr, _pose_components, collide_vehicle_at_matrix,
     encode_damage_sticker, pose_animation_writes,
     reset_pose_animation_writes,
@@ -5739,6 +5739,14 @@ class BattleRuntime(object):
             float(position[0]), float(position[1]), float(position[2]))
 
     def _ground_filter(self, x, z):
+        context = getattr(self,'_stack_context',None)
+        batch = context.get('queries') if context else None
+        if batch is None:
+            return self._ground_filter_impl(x, z)
+        return batch.get('filter_prepare',('column',float(x),float(z)),
+            self._ground_filter_impl,x,z)
+
+    def _ground_filter_impl(self, x, z):
         """Build the #1513 fifth-argument filter for this ground column.
 
         Retail keeps a breakable destructible out of the vehicle's collision,
@@ -5753,6 +5761,14 @@ class BattleRuntime(object):
         return ground_filter if callable(ground_filter) else None
 
     def _prepared_ground_filter(self, points):
+        context = getattr(self,'_stack_context',None)
+        batch = context.get('queries') if context else None
+        if batch is None:
+            return self._prepared_ground_filter_impl(points)
+        key = ('envelope',tuple((float(p[0]),float(p[1])) for p in points))
+        return batch.get('filter_prepare',key,self._prepared_ground_filter_impl,points)
+
+    def _prepared_ground_filter_impl(self, points):
         """Build one broken-skin filter covering several ground columns.
 
         A pass that samples many columns of one pose does not need a rebuilt
@@ -5854,12 +5870,73 @@ class BattleRuntime(object):
         if actor is None:
             self._stack_context = None
             return previous
-        self._stack_context = dict(actor=actor, hits=[],
-            candidates=list(self._stack_candidates(actor)))
+        from .support_queries import SupportQueries
+        batch = SupportQueries(_PROFILE_CLOCK)
+        self._stack_context = dict(actor=actor, hits=[], queries=batch,
+            candidates=batch.call('candidate_select', lambda: list(self._stack_candidates(actor))))
         actor.pop('_stack_carrier', None)
         return previous
 
+    def _finish_stack_support_context(self, previous):
+        context = getattr(self, '_stack_context', None)
+        self._stack_context = previous
+        if not context or 'queries' not in context:
+            return
+        batch = context['queries']
+        actor = context['actor']
+        token = (getattr(self.client,'round_id',None),
+                 getattr(self.client,'authority_epoch',None))
+        if getattr(self,'_support_profile_round',None) != token:
+            self._support_profile_round = token
+            self._support_profiles = {}
+        profiles = getattr(self,'_support_profiles',None)
+        if profiles is None:
+            profiles = self._support_profiles = {}
+        identity = (actor.get('kind','bot'),actor['id'])
+        row = profiles.setdefault(identity, dict(contexts=0,physics_dt=0.,calls={},ms={},at=self._clock(),last_emit_ms=0.))
+        row['contexts'] += 1
+        row['physics_dt'] += context.get('physics_dt',0.)
+        for name,value in batch.calls.items():
+            row['calls'][name] = row['calls'].get(name,0)+value
+        for name,value in batch.milliseconds.items():
+            row['ms'][name] = row['ms'].get(name,0.)+value
+        row['ms']['context_total'] = row['ms'].get('context_total',0.)+max(0.,_PROFILE_CLOCK()-batch.started)*1000.
+        now = self._clock()
+        if now-row['at'] >= 1.:
+            started = _PROFILE_CLOCK()
+            native_input_diagnostics.write_json_record('SUPPORT QUERY PERF',dict(
+                actor=list(identity),round=token[0],role='worker' if getattr(self,'_worker_mode',False) else 'visible',
+                window_s=now-row['at'],contexts=row['contexts'],physics_dt_s=row['physics_dt'],
+                calls=row['calls'],wall_ms=row['ms'],previous_emit_ms=row['last_emit_ms'],
+                timing_scope='inclusive: roof_stage includes matrix_prepare, roof and probe_log; roof includes native_bsp; context_total includes all support solve work',
+                position=_xyz(actor)))
+            profiles[identity] = dict(contexts=0,physics_dt=0.,calls={},ms={},at=now,
+                last_emit_ms=max(0.,_PROFILE_CLOCK()-started)*1000.)
+
+    def _prepare_stack_target(self, state, entity):
+        yaw = float(state.get('yaw',0.))
+        matrix = self._ram_pose_matrix(_xyz(state),yaw,state.get('pitch',0.),state.get('roll',0.))
+        chassis = self._ram_pose_matrix(_xyz(state),yaw,state.get('terrain_pitch',state.get('pitch',0.)),state.get('roll',0.))
+        turret,gun = self._runtime.math.Matrix(),self._runtime.math.Matrix()
+        turret.setRotateY(float(state.get('turret_yaw',state.get('aim_yaw',yaw)-yaw)))
+        gun.setRotateX(float(state.get('gun_pitch',0.)))
+        appearance = type('StackAim',(object,),{})()
+        appearance.turretMatrix,appearance.gunMatrix = turret,gun
+        target = vehicle_stack.CollisionPose(entity,appearance)
+        prepared = prepare_vehicle_collision_at_matrix(target,matrix,self._runtime.math,chassis)
+        return target,matrix,chassis,prepared
+
     def _stack_ground_hit(self, start, end, ground):
+        context = getattr(self,'_stack_context',None)
+        if not context:
+            return ground
+        batch = context.get('queries')
+        if batch is None:
+            from .support_queries import SupportQueries
+            batch = context['queries'] = SupportQueries(_PROFILE_CLOCK)
+        return batch.call('roof_stage',self._stack_ground_hit_impl,start,end,ground)
+
+    def _stack_ground_hit_impl(self, start, end, ground):
         context = getattr(self, '_stack_context', None)
         if not context:
             return ground
@@ -5877,21 +5954,18 @@ class BattleRuntime(object):
                     abs(math.sin(yaw)*dx+math.cos(yaw)*dz) > shape[1]+0.5):
                 continue
             try:
-                matrix = self._ram_pose_matrix(_xyz(state), yaw,
-                    state.get('pitch', 0.0), state.get('roll', 0.0))
-                turret = self._runtime.math.Matrix()
-                turret.setRotateY(float(state.get('turret_yaw',
-                    state.get('aim_yaw', yaw)-yaw)))
-                gun = self._runtime.math.Matrix()
-                gun.setRotateX(float(state.get('gun_pitch', 0.0)))
-                appearance = type('StackAim', (object,), {})()
-                appearance.turretMatrix, appearance.gunMatrix = turret, gun
-                target = vehicle_stack.CollisionPose(entity, appearance)
-                hits = _collide_vehicle_evidence_at_matrix(target, matrix,
-                    start, end, self._runtime.math,
-                    chassis_matrix=self._ram_pose_matrix(_xyz(state),yaw,
-                        state.get('terrain_pitch',state.get('pitch',0.0)),state.get('roll',0.0)),
-                    capture_query=False)
+                batch = context.get('queries')
+                if batch is None:
+                    from .support_queries import SupportQueries
+                    batch = context['queries'] = SupportQueries(_PROFILE_CLOCK)
+                pose_key = (key,id(entity),id(entity.typeDescriptor)) + tuple(
+                    state.get(name) for name in ('x','y','z','yaw','pitch','roll',
+                        'terrain_pitch','turret_yaw','aim_yaw','gun_pitch'))
+                target,matrix,chassis,prepared = batch.get('matrix_prepare',pose_key,
+                    self._prepare_stack_target,state,entity)
+                hits = batch.get('roof',(pose_key,_xyz(start),_xyz(end)),
+                    _collide_vehicle_evidence_at_matrix,target,matrix,start,end,self._runtime.math,
+                    chassis_matrix=chassis,capture_query=False,prepared=prepared,diagnostic=batch)
                 for hit in hits:
                     collision, normal = hit.collision, hit.worldNormal
                     if (collision.compName in ('gun','vehicleGun') or normal is None or
@@ -5920,7 +5994,7 @@ class BattleRuntime(object):
                 pair = (context['actor'].get('kind','bot'),context['actor']['id'])+key
                 if now >= log_times.get(pair,-1.e30):
                     log_times[pair] = now+1.
-                    native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
+                    batch.call('probe_log',native_input_diagnostics.write_json_record,'VEHICLE STACK',dict(
                         phase='roof_probe', upper=list(pair[:2]),lower=list(key),
                         start=_xyz(start),end=_xyz(end),upper_pose=dict(
                             (name,context['actor'].get(name)) for name in
@@ -5983,6 +6057,7 @@ class BattleRuntime(object):
                 continue
             previous = self._stack_support_context(actor)
             context = self._stack_context
+            context['physics_dt'] = dt
             try:
                 if not context['candidates']:
                     continue
@@ -6045,13 +6120,21 @@ class BattleRuntime(object):
                     self._stack_scan_log_at = now+2.0
                     self._warn_optional_failure('vertical contact observation',error)
             finally:
-                self._stack_context = previous
+                self._finish_stack_support_context(previous)
 
     def _stack_publication(self):
         return self._stack_ledger_for_round().publication()
 
     def _collide_down(self, start, end, ground_filter):
-        ground = self._collide_static_down(start, end, ground_filter)
+        context = getattr(self,'_stack_context',None)
+        batch = context.get('queries') if context else None
+        if batch is None:
+            ground = self._collide_static_down(start,end,ground_filter)
+        else:
+            batch.count('support_ray')
+            batch.references.append(ground_filter)
+            ground = batch.get('terrain',(_xyz(start),_xyz(end),id(ground_filter)),
+                self._collide_static_down,start,end,ground_filter)
         return self._stack_ground_hit(start, end, ground)
 
     def _navigation_surface_observation(self, point, yaw):
@@ -24653,6 +24736,7 @@ class BattleRuntime(object):
             pitch=self._local_pitch,roll=self._local_roll,
             collision_shape=self._collision_shape(entity.typeDescriptor))
         previous = self._stack_support_context(actor)
+        self._stack_context['physics_dt'] = dt
         try:
             result = self._update_vertical_motion_impl(entity,position,yaw,dt,
                 support_height_delta,support_speed_delta)
@@ -24682,7 +24766,7 @@ class BattleRuntime(object):
                     roof_hits=len(hits),pitch=self._local_pitch,roll=self._local_roll))
             return result
         finally:
-            self._stack_context = previous
+            self._finish_stack_support_context(previous)
 
     def _update_vertical_motion_impl(
             self, entity, position, yaw, dt,

@@ -1880,10 +1880,35 @@ def _collision_interface_evidence(tester, component, component_index,
     return row
 
 
+def prepare_vehicle_collision_at_matrix(vehicle, vehicle_matrix, math_module,
+                                        chassis_matrix=None):
+    """Freeze affine transforms for one synchronous, immutable pose batch."""
+    body_world = math_module.Matrix(vehicle_matrix)
+    body_inverse = math_module.Matrix(vehicle_matrix)
+    body_inverse.invert()
+    chassis_world, chassis_inverse = body_world, body_inverse
+    if chassis_matrix is not None and chassis_matrix is not vehicle_matrix:
+        chassis_world = math_module.Matrix(chassis_matrix)
+        chassis_inverse = math_module.Matrix(chassis_matrix)
+        chassis_inverse.invert()
+    components = tuple((component, math_module.Matrix(matrix), attached)
+        for component, matrix, attached in _pose_components(vehicle, math_module))
+    inverses = []
+    for component, matrix, attached in components:
+        inverse = None
+        if attached and callable(getattr(_component_value(component,'hitTester'), 'localHitTest', None)):
+            inverse = math_module.Matrix(matrix)
+            inverse.invert()
+        inverses.append(inverse)
+    return dict(body_world=body_world, body_inverse=body_inverse,
+        chassis_world=chassis_world, chassis_inverse=chassis_inverse,
+        components=components, inverses=tuple(inverses))
+
+
 def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
                                end_point, math_module, include_world_normal,
                                chassis_matrix=None, diagnostic=None,
-                               capture_query=True):
+                               capture_query=True, prepared=None):
     """Run precise descriptor collision at supplied body/chassis matrices.
 
     #1513's native ``Vehicle.collideSegmentExt`` first rejects rays through
@@ -1894,28 +1919,39 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
     vehicles use ``bodyMatrix`` for hull/turret/gun and the separate
     ``groundPlacingMatrix`` for chassis, matching stock ``getComponents``.
     """
-    vehicle_to_world = None
-    chassis_to_world = None
-    if include_world_normal:
-        vehicle_to_world = math_module.Matrix(vehicle_matrix)
-        chassis_to_world = vehicle_to_world
-    world_to_vehicle = math_module.Matrix(vehicle_matrix)
-    world_to_vehicle.invert()
-    body_start = world_to_vehicle.applyPoint(start_point)
-    body_end = world_to_vehicle.applyPoint(end_point)
-    chassis_start = body_start
-    chassis_end = body_end
-    world_to_chassis = world_to_vehicle
-    if chassis_matrix is not None and chassis_matrix is not vehicle_matrix:
+    if prepared is None:
+        vehicle_to_world = None
+        chassis_to_world = None
         if include_world_normal:
-            chassis_to_world = math_module.Matrix(chassis_matrix)
-        world_to_chassis = math_module.Matrix(chassis_matrix)
-        world_to_chassis.invert()
+            vehicle_to_world = math_module.Matrix(vehicle_matrix)
+            chassis_to_world = vehicle_to_world
+        world_to_vehicle = math_module.Matrix(vehicle_matrix)
+        world_to_vehicle.invert()
+        body_start = world_to_vehicle.applyPoint(start_point)
+        body_end = world_to_vehicle.applyPoint(end_point)
+        chassis_start = body_start
+        chassis_end = body_end
+        world_to_chassis = world_to_vehicle
+        if chassis_matrix is not None and chassis_matrix is not vehicle_matrix:
+            if include_world_normal:
+                chassis_to_world = math_module.Matrix(chassis_matrix)
+            world_to_chassis = math_module.Matrix(chassis_matrix)
+            world_to_chassis.invert()
+            chassis_start = world_to_chassis.applyPoint(start_point)
+            chassis_end = world_to_chassis.applyPoint(end_point)
+        components = _pose_components(vehicle, math_module)
+    else:
+        vehicle_to_world = prepared['body_world']
+        world_to_vehicle = prepared['body_inverse']
+        chassis_to_world = prepared['chassis_world']
+        world_to_chassis = prepared['chassis_inverse']
+        body_start = world_to_vehicle.applyPoint(start_point)
+        body_end = world_to_vehicle.applyPoint(end_point)
         chassis_start = world_to_chassis.applyPoint(start_point)
         chassis_end = world_to_chassis.applyPoint(end_point)
+        components = prepared['components']
     hits = []
-    for component_index, entry in enumerate(_pose_components(
-            vehicle, math_module)):
+    for component_index, entry in enumerate(components):
         component, component_matrix, is_attached = entry
         if not is_attached:
             # Exact #1513 ``Vehicle.__collideSegment`` skips an unattached
@@ -1940,8 +1976,11 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
                 component_start, component_end)
         component_to_vehicle = None
         if include_world_normal:
-            component_to_vehicle = math_module.Matrix(component_matrix)
-            component_to_vehicle.invert()
+            if prepared is None:
+                component_to_vehicle = math_module.Matrix(component_matrix)
+                component_to_vehicle.invert()
+            else:
+                component_to_vehicle = prepared['inverses'][component_index]
         native_query = None
         if include_world_normal and capture_query and type(collisions) in (tuple, list) and collisions:
             native_query = _collision_interface_evidence(tester, component, component_index,
@@ -2018,12 +2057,12 @@ def _collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,
 def _collide_vehicle_evidence_at_matrix(vehicle, vehicle_matrix, start_point,
                                         end_point, math_module,
                                         chassis_matrix=None, diagnostic=None,
-                                        capture_query=True):
+                                        capture_query=True, prepared=None):
     """Return world-normal evidence for the authoritative shot resolver."""
     return _collide_vehicle_at_matrix(
         vehicle, vehicle_matrix, start_point, end_point, math_module, True,
         chassis_matrix=chassis_matrix, diagnostic=diagnostic,
-        capture_query=capture_query)
+        capture_query=capture_query, prepared=prepared)
 
 
 def collide_vehicle_at_matrix(vehicle, vehicle_matrix, start_point,

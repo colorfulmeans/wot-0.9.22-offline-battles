@@ -21,3 +21,18 @@ Native placement and contact still require the exact Windows client test.
 The temporary flag is WOT_OFFLINE_ROOF_CRUSH_TEST=1. No route profiles or
 persistent physics settings are changed. No navigation or support switching algorithm is
 changed. Ordinary launches without this flag retain the baseline behavior.
+
+
+Support sampling reuse is confined to each synchronous support solve. Exact
+terrain rays (including filter identity), roof rays and prepared body/component
+matrices are shared only within that solve; None results are cached, failures
+are not. Different endpoints, poses or later solves query afresh. The full
+elapsed-time physics loop and all support admission rules are unchanged.
+
+SUPPORT QUERY PERF emits per-actor windows with call/cache counts and wall time
+for candidate_select, filter_prepare, terrain, matrix_prepare, roof_stage,
+roof, native_bsp and probe_log. Timings are inclusive: roof_stage contains roof,
+matrix_prepare and probe_log; roof contains native_bsp. context_total includes
+the support solve, while previous_emit_ms reports the preceding summary write.
+physics_dt_s records consumed/observed support intervals. Do not add nested
+timings together. Results still require exact-client dense-stack acceptance.
