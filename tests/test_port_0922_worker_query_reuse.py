@@ -90,6 +90,34 @@ class WorkerQueryReuseTests(unittest.TestCase):
         self.assertAlmostEqual(40.,rows[1]['previous_gap_ms'])
         self.assertEqual(first,rows[1]['previous_impact']['damage'])
 
+    def test_z_bank_entry_receipt_does_not_require_a_local_fallback(self):
+        import test_port_0922_bot_runtime as bots
+        fixture = bots.ShovedWreckTests()
+        fixture.setUp()
+        try:
+            runtime=fixture._runtime()
+            goal=(20.,0.,20.)
+            runtime.navigator=types.SimpleNamespace(
+                grid=types.SimpleNamespace(cell_size=4.),bot_states={},
+                bot_direct_progress={},paths={},
+                retained_local_target=lambda *args:goal)
+            state=runtime.states[11]
+            state.update(pitch=.3,now=1.)
+            order=dict(combat_mode='route',throttle_override=1.)
+            from gui.mods.offline_lan_0922 import native_input_diagnostics
+            with mock.patch.object(native_input_diagnostics,'write_json_record') as write:
+                self.assertEqual(goal,runtime._navigation_target(11,(0.,0.,0.),goal,order,state))
+                state['now']=2.
+                self.assertEqual(goal,runtime._navigation_target(11,(0.,0.,0.),goal,order,state))
+            rows=[c.args[1] for c in write.call_args_list if c.args[0]=='BOT NAV CHOICE']
+            self.assertEqual(1,len(rows))
+            self.assertEqual([],rows[0]['receipt']['local_choices'])
+            self.assertEqual('retained',rows[0]['receipt']['source'])
+            self.assertFalse(rows[0]['decision_input'])
+        finally:
+            fixture.tearDown()
+            fixture.doCleanups()
+
 
 if __name__ == '__main__':
     unittest.main()

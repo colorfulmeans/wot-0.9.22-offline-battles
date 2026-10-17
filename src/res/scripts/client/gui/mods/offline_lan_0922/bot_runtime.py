@@ -9742,13 +9742,16 @@ class BotRuntime(object):
                 abs(_number(authority_state.get('roll'))) > .15 or
                 any(abs(_number(row.get('height_delta'))) > .8
                     for choice in choices for row in choice['ranked'][:1]))
-            if (choices and bank_choice and
+            if (bank_choice and
                     now >= authority_state.get('_navigation_choice_log_at',-1.e30)):
+                from .native_input_diagnostics import write_json_record
                 authority_state['_navigation_choice_log_at'] = now+3.
                 write_json_record('BOT NAV CHOICE',dict(
                     round=self.round_id,bot=bot_id,at=now,
                     pose=(authority_state.get('yaw'),authority_state.get('pitch'),
                           authority_state.get('roll')),
+                    path_state={key:local_state.get(key) for key in (
+                        'navigation_status','index','last_target','planned_goal','planned_at')},
                     receipt=dict(target_receipt),decision_input=False))
         return target
 
