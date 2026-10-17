@@ -8295,6 +8295,17 @@ class BotRuntime(object):
             state.pop('_suspension_ground_plane', None)
         impact_vertical = vehicle_physics.suspension_impact_velocity(
             before_airborne, before_vertical_speed, solved)
+        raw_impact = solved.get('impact_speed')
+        contact_velocity = (0., float(raw_impact if raw_impact is not None else before_vertical_speed), 0.)
+        if motion_pose is not None and step > 0.:
+            contact_velocity = ((position[0]-motion_pose[0])/step,
+                contact_velocity[1], (position[2]-motion_pose[2])/step)
+        roof_contact = getattr(self, 'stack_impact_contact', None)
+        impact = (roof_contact(state, params, ground, pseudo_ground, solved,
+            (physics_state['pitch'], physics_state['roll']), contact_velocity,
+            before_airborne, before_vertical_speed, step) if callable(roof_contact) else None)
+        if impact_vertical is None and impact is not None and impact['verdict'] == 'admit':
+            impact_vertical = raw_impact
         if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
             velocity = (0., float(impact_vertical), 0.)
@@ -8311,12 +8322,8 @@ class BotRuntime(object):
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
             impact_normal = (current_plane or {}).get('normal', (0., 1., 0.))
-            roof_contact = getattr(self, 'stack_impact_contact', None)
-            if callable(roof_contact):
-                impact = roof_contact(state, params, ground, pseudo_ground, solved,
-                    (physics_state['pitch'], physics_state['roll']), velocity)
-                if impact is not None:
-                    impact_speed, impact_normal = impact['speed'], impact['normal']
+            if impact is not None:
+                impact_speed, impact_normal = impact['speed'], impact['normal']
             from gui.mods.offline_lan_0922 import environment_modules
             state['_landing_contact_witnesses'] = environment_modules.ground_witnesses(
                 params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
@@ -8324,8 +8331,11 @@ class BotRuntime(object):
             state['_landing_contact_normal'] = impact_normal
             state['_landing_ground_observed'] = bool(
                 solved.get('contact_count') or solved.get('touched_contact_count'))
-            self._apply_bot_landing_impact(
+            damage = self._apply_bot_landing_impact(
                 state, impact_speed, normal_impact=True)
+            commit = getattr(self, 'stack_impact_commit', None)
+            if callable(commit):
+                commit(state, damage)
         elif not before_airborne and state['airborne']:
             self._turn_speeds[bot_id] = 0.0
             state['rotation_dir'] = 0
@@ -8358,16 +8368,23 @@ class BotRuntime(object):
                                 attempted_yaw=None, suspension_motion_pose=None):
         callback = getattr(self,'support_context',None)
         previous = callback(state) if callable(callback) else None
+        owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
+        context = getattr(owner, '_stack_context', None)
+        if isinstance(context, dict):
+            context['physics_dt'] = step
+            context['purpose'] = 'bot_vertical'
         try:
             return self._update_vertical_motion_impl(state,step,tick_pose,
                 attempted_yaw,suspension_motion_pose)
         finally:
             if callable(callback):
-                callback(None)
-                # The BattleRuntime context may nest a zero-time settle.
-                owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
-                if owner is not None:
-                    owner._stack_context = previous
+                finish = getattr(owner, '_finish_stack_support_context', None)
+                if callable(finish):
+                    finish(previous)
+                else:
+                    callback(None)
+                    if owner is not None:
+                        owner._stack_context = previous
 
     def _update_vertical_motion_impl(self, state, step, tick_pose=None,
                                 attempted_yaw=None,

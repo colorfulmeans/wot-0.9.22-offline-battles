@@ -145,13 +145,54 @@ def contact_surfaces(params, ground, pseudo_ground, solved, position, yaw,
 
 
 def contact_impact(surfaces, velocity):
-    """Use an admitted native face, never a plane fitted across vehicles."""
+    """Gravity impacts use vertical closing; planar rams own horizontal work."""
     from . import vehicle_physics as vp
     if not surfaces:
         return None
-    rows = [dict(surface, speed=vp.landing_impact_speed(velocity, surface['normal']))
+    vertical = (0.0, float(velocity[1]), 0.0)
+    rows = [dict(surface, speed=vp.landing_impact_speed(vertical, surface['normal']))
             for surface in surfaces]
     return max(rows, key=lambda row: row['speed'])
+
+
+class Descent(object):
+    """One unsafe downward excursion, with one impact per contacted vehicle.
+
+    Resting contact flicker is not a new fall. A new unsafe airborne descent
+    after vertical speed has recovered starts a new episode, without timers.
+    """
+    def __init__(self):
+        self.active = False
+        self.sequence = 0
+        self.charged = set()
+
+    def observe(self, before_airborne, before_velocity, solved, dt):
+        from . import vehicle_physics as vp
+        if dt <= 0.0:
+            return
+        if before_velocity >= -vp.FALL_SAFE_SPEED:
+            self.active = False
+        raw = solved.get('impact_speed')
+        unsafe = min(float(before_velocity), float(raw) if raw is not None else 0.) < -vp.FALL_SAFE_SPEED
+        if not self.active and unsafe and (before_airborne or solved.get('airborne')):
+            self.active = True
+            self.sequence += 1
+            self.charged.clear()
+
+    def verdict(self, carrier, speed, legacy, dt):
+        from . import vehicle_physics as vp
+        if dt <= 0.0:
+            return 'zero_elapsed_time'
+        if not legacy and not self.active:
+            return 'no_unsafe_descent'
+        if speed <= vp.FALL_SAFE_SPEED:
+            return 'safe_vertical_closing'
+        if tuple(carrier) in self.charged:
+            return 'already_charged_this_descent'
+        return 'admit'
+
+    def commit(self, carrier):
+        self.charged.add(tuple(carrier))
 
 
 class Ledger(object):

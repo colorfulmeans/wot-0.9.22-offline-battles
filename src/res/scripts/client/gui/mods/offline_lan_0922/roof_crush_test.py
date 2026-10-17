@@ -31,21 +31,33 @@ def enemy_seed(slot):
             105.0+math.cos(yaw)*along-math.sin(yaw)*sideways), yaw
 
 
-def friendly_seed(slot):
-    """One close row on the deck, noses toward the target-side bridge edge.
+DECK_FRIENDLIES = 6
 
-    Slot zero remains the human's ordinary base spawn. The row is centred
-    along the existing enemy array; native collision chooses actual deck Y.
+
+def _deck_seed(along, sideways):
+    yaw = math.atan2(10.0, -7.0)
+    return (2.0+math.sin(yaw)*along+math.cos(yaw)*sideways,
+            1.0, 105.0+math.cos(yaw)*along-math.sin(yaw)*sideways), yaw
+
+
+def player_seed():
+    """Bridge centre lane, behind the first parked hull with room to turn."""
+    return _deck_seed(-14.0, -.7)
+
+
+def friendly_seed(slot):
+    """Six broadside targets along the edge; overflow parks at the bridgehead.
+
+    The hull axes follow the bridge, presenting their sides to the drop.
+    Every Y remains a native surface-query hint, never a fabricated floor.
     """
     index = int(slot)-1
     if not 0 <= index < 14:
         raise ValueError('roof test friendly row uses slots one to fourteen')
-    bridge_yaw = math.atan2(10.0, -7.0)
-    along = index*3.5-9.95
-    sideways = 2.25
-    yaw = bridge_yaw-math.pi*1.5
-    return (2.0+math.sin(bridge_yaw)*along+math.cos(bridge_yaw)*sideways,
-            1.0, 105.0+math.cos(bridge_yaw)*along-math.sin(bridge_yaw)*sideways), yaw
+    if index < DECK_FRIENDLIES:
+        return _deck_seed(index*6.4-3.2, 2.25)
+    row, column = divmod(index-DECK_FRIENDLIES, 2)
+    return _deck_seed(-32.0-row*7.0, -.5+column*3.6)
 
 
 def hold_command(command, position):

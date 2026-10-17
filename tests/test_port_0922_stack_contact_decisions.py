@@ -55,12 +55,132 @@ class ContactDecisionTests(unittest.TestCase):
             pseudo_contacts=[])
         with contextlib.redirect_stdout(io.StringIO()):
             impact=battle._bot_stack_impact_contact(actor,params,[-1.5],[],
-                dict(height=0.,pitch=0.,roll=0.),(0.,0.),(0.,-20.,0.))
+                dict(height=0.,pitch=0.,roll=0.,impact_speed=-20.,airborne=False),
+                (0.,0.),(0.,-20.,0.),True,-20.,.05)
             self.assertEqual(20.,impact['speed'])
             with mock.patch.object(vp,'descriptor_mass',return_value=36000.):
                 self.assertTrue(battle._bot_stack_impact(actor,20.,300))
         row=battle._stack_publication()[0]
         self.assertEqual((['bot',28],300),(row['lower'],row['lower_total']))
+
+    def test_captured_horizontal_travel_cannot_cancel_or_create_gravity_damage(self):
+        normal=(.6119097471,.6520100236,.4477156401)
+        miss=vehicle_stack.contact_impact([dict(carrier=['bot',27],point=(0.,0.,0.),
+            normal=normal)],(21.5953683331,-18.1495018132,-17.7363105315))
+        self.assertGreater(miss['speed'],vp.FALL_SAFE_SPEED)
+        self.assertAlmostEqual(18.1495018132*normal[1],miss['speed'],places=5)
+        repeat=vehicle_stack.contact_impact([dict(carrier=['bot',6],point=(0.,0.,0.),
+            normal=(-.41382095,.87457359,.25273156))],
+            (20.1686531,-.33172475,-11.87789477))
+        self.assertLess(repeat['speed'],1.)
+        self.assertEqual(0,vp.fall_damage(7500,repeat['speed']))
+
+    def test_unspent_descent_accepts_later_impulse_after_early_contact(self):
+        book=vehicle_stack.Descent()
+        first=dict(impact_speed=-18.,vertical_velocity=-18.,airborne=False)
+        book.observe(True,-18.,first,.02)
+        self.assertEqual('safe_vertical_closing',book.verdict(['bot',27],9.,True,.02))
+        later=dict(impact_speed=-18.3,vertical_velocity=-9.,airborne=False)
+        book.observe(False,-18.,later,.02)
+        self.assertIsNone(vp.suspension_impact_velocity(False,-18.,later))
+        self.assertEqual('admit',book.verdict(['bot',27],18.3,False,.02))
+        book.commit(['bot',27])
+        self.assertEqual('already_charged_this_descent',book.verdict(['bot',27],18.3,False,.02))
+        # A different actual lower hull still owns its own first impact.
+        self.assertEqual('admit',book.verdict(['bot',28],18.3,False,.02))
+
+    def test_zero_or_missing_solver_impulse_cannot_reintroduce_horizontal_crush(self):
+        for raw in (0.,None):
+            with self.subTest(raw=raw):
+                battle=fixture.BattleRuntime(fixture._runtime())
+                actor=dict(id=11,x=0.,y=0.,z=0.,yaw=0.)
+                surface=dict(carrier=['bot',28],point=(0.,0.,0.),normal=(-.6,.8,0.))
+                battle._stack_context=dict(actor=actor,hits=[],surfaces=[surface])
+                params=dict(springs=[dict(x=0.,z=0.,static_compression=.2,side='left')],pseudo_contacts=[])
+                with contextlib.redirect_stdout(io.StringIO()):
+                    result=battle._bot_stack_impact_contact(actor,params,[0.],[],
+                        dict(height=0.,pitch=0.,roll=0.,impact_speed=raw,airborne=False),
+                        (0.,0.),(30.,0. if raw==0. else -.1,0.),True,-.1,.05)
+                self.assertIsNotNone(result)
+                self.assertEqual(0.,result['speed'])
+                self.assertEqual('safe_vertical_closing',result['verdict'])
+
+    def test_real_new_fall_rearms_but_zero_time_settle_does_not(self):
+        book=vehicle_stack.Descent()
+        book.observe(True,-20.,dict(impact_speed=-20.,airborne=False),.05)
+        book.commit(['bot',6])
+        sequence=book.sequence
+        book.observe(True,-20.,dict(impact_speed=-20.,airborne=False),0.)
+        self.assertEqual(sequence,book.sequence)
+        self.assertEqual('zero_elapsed_time',book.verdict(['bot',6],20.,True,0.))
+        book.observe(False,0.,dict(impact_speed=None,airborne=False),.05)
+        book.observe(True,-20.,dict(impact_speed=-20.,airborne=False),.05)
+        self.assertEqual(sequence+1,book.sequence)
+        self.assertEqual('admit',book.verdict(['bot',6],20.,True,.05))
+
+    def test_player_deferred_roof_impact_is_queued_once_after_early_safe_touch(self):
+        battle=fixture.BattleRuntime(fixture._runtime())
+        battle._local_fall_armed=battle._local_airborne=True
+        battle._local_vertical_speed=-18.
+        battle._local_support_motion_pose=(0.,0.,0.)
+        entity=fixture._Vehicle(10,fixture._suspension_descriptor(),fixture._Vector(),
+                                (0,0,0),{'health':500})
+        normal=[math.sqrt(1.-.51**2),.51,0.]
+        def ground(x,z,*args,**kwargs):
+            context=battle._stack_context
+            context['hits'].append((('bot',27),{},(x,0.,z)))
+            context.setdefault('surfaces',[]).append(dict(carrier=['bot',27],
+                point=(x,0.,z),normal=tuple(normal)))
+            return 0.
+        battle._suspension_ground_y=ground
+        queued=[]
+        def commit(entity,speed,normal_impact=False):
+            if speed>vp.FALL_SAFE_SPEED:
+                queued.append(speed)
+                return 100
+            return 0
+        battle._apply_landing_impact=commit
+        solved=dict(height=0.,vertical_velocity=-18.,pitch=0.,roll=0.,
+            pitch_velocity=0.,roll_velocity=0.,contact_count=10,airborne=False,
+            left_flying=False,right_flying=False,impact_speed=-18.)
+        with mock.patch.object(vp,'damper_suspension_step',return_value=solved), \
+                contextlib.redirect_stdout(io.StringIO()):
+            battle._update_vertical_motion(entity,(0.,0.,0.),0.,.02)
+            self.assertEqual([],queued)
+            normal[:]=(0.,1.,0.)
+            battle._update_vertical_motion(entity,(0.,0.,0.),0.,.02)
+            self.assertEqual([18.],queued)
+            battle._update_vertical_motion(entity,(0.,0.,0.),0.,.02)
+            self.assertEqual([18.],queued)
+
+    def test_bot_vertical_cost_is_aggregated_and_context_restored_on_error(self):
+        for failure in (False,True):
+            with self.subTest(failure=failure):
+                battle=fixture.BattleRuntime(fixture._runtime())
+                battle.client=types.SimpleNamespace(round_id=1,authority_epoch=1)
+                battle._stack_candidates=lambda actor:[]
+                state=dict(id=11,x=0.,y=1.,z=0.)
+                previous={'outer':True}
+                battle._stack_context=previous
+                def step(*args):
+                    battle._stack_context['queries'].call('roof',lambda:True)
+                    if failure:raise ValueError('sample-failure')
+                    return False
+                bot=types.SimpleNamespace(support_context=battle._stack_support_context,
+                    _update_vertical_motion_impl=step)
+                if failure:
+                    with self.assertRaisesRegex(ValueError,'sample-failure'):
+                        fixture.bot_runtime.BotRuntime._update_vertical_motion(bot,state,.05)
+                else:
+                    self.assertFalse(fixture.bot_runtime.BotRuntime._update_vertical_motion(bot,state,.05))
+                self.assertIs(previous,battle._stack_context)
+                profile=battle._support_profiles[('bot',11)]
+                self.assertEqual(1,profile['contexts'])
+                self.assertEqual(1,profile['calls']['roof'])
+                self.assertEqual(1,profile['calls']['context_bot_vertical'])
+                self.assertAlmostEqual(.05,profile['physics_dt'])
+                self.assertAlmostEqual(profile['ms']['context_total'],profile['ms']['bot_vertical_context'])
+                self.assertGreaterEqual(profile['ms']['context_total'],profile['ms']['roof'])
 
     def test_worker_uses_tilted_spring_at_its_actual_height_and_position(self):
         battle=fixture.BattleRuntime(fixture._runtime())

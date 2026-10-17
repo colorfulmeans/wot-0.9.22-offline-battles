@@ -103,15 +103,14 @@ class RoofCrushEntryTests(unittest.TestCase):
             self.assertNotIn((2, 1), obj._spawn_cache)
 
     def test_friendly_row_spacing_facing_and_native_deck_layer(self):
-        poses = [fixture.friendly_seed(slot) for slot in range(1,15)]
+        poses = [fixture.friendly_seed(slot) for slot in range(1,fixture.DECK_FRIENDLIES+1)]
         for first,second in zip(poses,poses[1:]):
-            self.assertAlmostEqual(3.5,math.hypot(second[0][0]-first[0][0],second[0][2]-first[0][2]))
+            self.assertAlmostEqual(6.4,math.hypot(second[0][0]-first[0][0],second[0][2]-first[0][2]))
         bridge_yaw = math.atan2(10.,-7.)
         for point,yaw in poses:
             self.assertEqual(1.,point[1])
             self.assertAlmostEqual(2.25,(point[0]-2.)*math.cos(bridge_yaw)-(point[2]-105.)*math.sin(bridge_yaw))
-            self.assertAlmostEqual(math.cos(bridge_yaw),math.sin(yaw))
-            self.assertAlmostEqual(-math.sin(bridge_yaw),math.cos(yaw))
+            self.assertAlmostEqual(bridge_yaw,yaw)
         with self.assertRaises(ValueError): fixture.friendly_seed(0)
         tree = ast.parse((SOURCE/'battle_runtime.py').read_text(encoding='utf-8'))
         cls = next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='BattleRuntime')
@@ -125,12 +124,30 @@ class RoofCrushEntryTests(unittest.TestCase):
         with mock.patch.dict(os.environ,{fixture.ENV:'1'}):
             self.assertEqual(1.1,namespace['_formation_pose'](obj,1,1)[0][1])
             self.assertEqual(1.,probe.call_args.args[2])
-            self.assertEqual(((100.,0.,100.),0.),namespace['_formation_pose'](obj,1,0))
+            human=namespace['_formation_pose'](obj,1,0)
+            self.assertEqual(1.1,human[0][1])
+            self.assertEqual(fixture.player_seed()[0][0],human[0][0])
+            planner.pose.assert_not_called()
             probe.return_value=-14.
             with self.assertRaises(ValueError):namespace['_formation_pose'](obj,1,2)
             self.assertNotIn((1,2),obj._spawn_cache)
         with mock.patch.dict(os.environ,{fixture.ENV:'0'}):
             self.assertEqual(((100.,0.,100.),0.),namespace['_formation_pose'](obj,1,3))
+
+    def test_bridge_player_and_overflow_do_not_overlap_parked_hulls(self):
+        poses=[fixture.player_seed()]+[fixture.friendly_seed(slot) for slot in range(1,15)]
+        yaw=math.atan2(10.,-7.)
+        for slot in range(fixture.DECK_FRIENDLIES+1,15):
+            p=poses[slot][0]
+            along=(p[0]-2.)*math.sin(yaw)+(p[2]-105.)*math.cos(yaw)
+            self.assertLessEqual(along,-31.99)
+        for i,(p,a) in enumerate(poses):
+            for j,(q,b) in enumerate(poses[i+1:],i+1):
+                along=abs((p[0]-q[0])*math.sin(yaw)+(p[2]-q[2])*math.cos(yaw))
+                side=abs((p[0]-q[0])*math.cos(yaw)-(p[2]-q[2])*math.sin(yaw))
+                # Descriptor Type 59 is below 6.4m by 3.5m; reserve a longer
+                # human envelope so a large selected tank clears the row.
+                self.assertTrue(along >= (9. if i==0 else 6.3) or side >=3.5,(i,j))
 
 class RuntimeHoldTests(unittest.TestCase):
     def setUp(self):
