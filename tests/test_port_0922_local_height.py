@@ -17,6 +17,22 @@ def face(x,z,height,dx=0.,dz=0.):
 
 
 class LocalHeightTests(unittest.TestCase):
+    def test_remote_prefix_observation_does_not_change_decision_or_exceed_budget(self):
+        links, calls = self.links(lambda x,z:[face(x,z,1.),face(x,z,-15.)])
+        origin = links.origin
+        target = (16., 1., 6.)
+        before = links.inspect(origin, target)
+        self.assertEqual(('unscoped', target), before)
+        receipt = links.observe_prefix(origin, target)
+        self.assertFalse(receipt['decision_input'])
+        self.assertEqual([2.,4.,6.,8.], [s['run'] for s in receipt['samples']])
+        self.assertEqual(before, links.inspect(origin, target))
+        self.assertEqual([], links.receipts)
+        links.queries = MAX_COLUMNS
+        calls_before = len(calls)
+        self.assertEqual('query_budget', links.observe_prefix(origin, target)['status'])
+        self.assertEqual(calls_before, len(calls))
+
     def links(self, surfaces):
         calls=[]
         def probe(x,z,low,high):

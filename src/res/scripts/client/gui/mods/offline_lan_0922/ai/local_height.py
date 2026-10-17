@@ -41,6 +41,33 @@ class LocalHeightLinks(object):
         return self.origin is not None and all(
             abs(float(start[i])-self.origin[i]) < .01 for i in range(3))
 
+    def observe_prefix(self, start, end):
+        """Record near columns for an unscoped target; never admit or reject it.
+
+        Run after the decision, sharing its existing column budget. Endpoint Y
+        only bounds the native search band; no interpolated floor is invented.
+        """
+        distance = math.hypot(end[0]-start[0], end[2]-start[2])
+        result = dict(decision_input=False, target_distance=distance,
+            radius=RADIUS, samples=[], queries_before=self.queries)
+        if distance <= RADIUS or not self.owns(start):
+            result['status'] = 'not_required'
+            return result
+        low, high = min(start[1], end[1])-3., max(start[1], end[1])+3.
+        for run in (2., 4., 6., RADIUS):
+            if self.queries >= MAX_COLUMNS:
+                result['status'] = 'query_budget'
+                break
+            x = start[0]+(end[0]-start[0])*run/distance
+            z = start[2]+(end[2]-start[2])*run/distance
+            rows = self.column(x, z, low, high)
+            result['samples'].append(dict(run=run, x=x, z=z,
+                status='complete' if rows is not None else 'unknown', surfaces=rows))
+        else:
+            result['status'] = 'sampled'
+        result['queries_after'] = self.queries
+        return result
+
     @staticmethod
     def plane(surface, x, z):
         p, n = surface['point'], surface['normal']

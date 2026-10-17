@@ -6655,7 +6655,8 @@ class BattleRuntime(object):
 
     def _direction_probe(self, position, yaw, speed=0.0,
                          descriptor=None, maximum_distance=None,
-                         corridor_half_width=None, native_capability=None):
+                         corridor_half_width=None, native_capability=None,
+                         body_pose=None):
         """Probe the admitted chassis corridor at two heights and distances."""
         if corridor_half_width is None:
             # Passive contact callers have no active-drive descriptor. They
@@ -6702,6 +6703,22 @@ class BattleRuntime(object):
         cosine = math.cos(float(yaw))
         lateral_x = cosine
         lateral_z = -sine
+        # A banked body has different left/right support heights. Fixed world-Y
+        # lanes can start inside that bank even when the forward exit is clear.
+        # Construct the lanes in the occupied support plane, rather than pardon
+        # a collision after it was returned. The existing grade/wall gates stay.
+        def lateral_grade(normal):
+            if normal is None:
+                return 0.0
+            normal = _xyz(normal)
+            return (-(normal[0]*lateral_x+normal[2]*lateral_z)/normal[1]
+                    if normal[1] > .0001 else 0.0)
+        posed_lanes = body_pose is not None
+        start_lateral_grade = 0.0
+        if posed_lanes:
+            from .tank_collision import pose_axes
+            start_lateral_grade = lateral_grade(pose_axes(*body_pose)[1])
+        end_lateral_grade = start_lateral_grade
         # Keep the sign of the steepest sampled grade.  ``longitudinal_step``
         # needs it to distinguish climbing from descending; taking ``abs``
         # here made every clear descent behave like an uphill pull.
@@ -6742,6 +6759,8 @@ class BattleRuntime(object):
                             'slope_valid': False,
                             'reason': 'planning_ground_missing'}
                 next_y = float(ground[0].y)
+                if posed_lanes and len(ground) > 1:
+                    end_lateral_grade = lateral_grade(ground[1])
                 water_depth = self._water_depth((nx, next_y, nz))
                 if (wet_escape and
                         water_depth > current_water +
@@ -6764,10 +6783,10 @@ class BattleRuntime(object):
                             'reason': 'planning_grade', 'native_trace': ground_trace}
             for offset in (-corridor_half_width, 0.0, corridor_half_width):
                 ray_start = self._vector((
-                    x + lateral_x * offset, y + height,
+                    x + lateral_x * offset, y + height + offset*start_lateral_grade,
                     z + lateral_z * offset))
                 ray_end = self._vector((
-                    nx + lateral_x * offset, next_y + height,
+                    nx + lateral_x * offset, next_y + height + offset*end_lateral_grade,
                     nz + lateral_z * offset))
                 collision_trace = {}
                 try:
@@ -6784,6 +6803,11 @@ class BattleRuntime(object):
                 if collision is not None:
                     self._record_navigation_hit(
                         collision_trace, ray_start, ray_end, collision)
+                    collision_trace.update(body_pose=body_pose,
+                        lane_offset=offset, lane_height=height,
+                        start_lateral_grade=start_lateral_grade,
+                        end_lateral_grade=end_lateral_grade,
+                        posed_lanes=posed_lanes)
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': slope,
                             'reason': 'planning_collision', 'native_trace': collision_trace}
@@ -6791,6 +6815,10 @@ class BattleRuntime(object):
             previous_distance = distance
         result = {'clear': True, 'collision': False,
                   'water': False, 'slope': maximum_slope}
+        if posed_lanes:
+            result.update(body_pose=body_pose, posed_lanes=True,
+                start_lateral_grade=start_lateral_grade,
+                end_lateral_grade=end_lateral_grade)
         return result
 
     def _direction_world_receipt(self, position, travel_yaw, signed_speed,

@@ -9139,3 +9139,47 @@ Regression cases first reproduce the contact projection/unchanged reverse speed
 and partial-proof overwrite. Cover both travel directions, real ledge drops,
 missing ground, genuine airborne bodies, no duplicate landing, and a wet lower
 floor. Reference tests and package audits do not replace Windows user acceptance.
+
+
+## Report 003525: retry ownership and banked planning probes (2026-10-18)
+
+The report runs Windows358 / `colorfulmeans-39048651017-1`. BOT21 T55A
+repeats a small local manoeuvre while its route receipt alternates between
+physical and generic blockage; intermittent base-defense orders also erase the
+unfinished gate lease. A stationary server replay with a seven-second contact
+receipt toggle stays on the first gate after sixty seconds, whereas stable
+receipts skip at twenty seconds and switch lanes at forty seconds.
+
+Keep one retry lease per unfinished route gate across blocker receipt changes.
+Pause it during temporary base defense, as already done for support holds;
+resume it when the same gate returns. Actual gate changes, completed progress,
+mobility ownership, twenty-second budgets and repeated route eligibility retain
+their existing owners. The local candidate order (D+C, then abs(theta)), costs,
+avoidance, steering, throttle and recovery algorithms are unchanged. Emit the
+lease origin/start, blocker changes and resumed pause duration in the existing
+route receipt. This is not a claim that every repeated local manoeuvre is fixed.
+
+BOT18 VK4502P has a banked hull and rejects every short forward probe as a
+collision with upward-facing ground. Its old planning lane starts use only
+world Y and yaw. Grounded Bot planning now supplies the occupied YPR support
+plane; lateral lane heights start on that plane and end on the already-sampled
+endpoint surface plane. There are no additional collision rays, changed grade
+thresholds or post-hit exemptions. Airborne probes and callers without an
+occupied pose keep their existing contract. Rejection traces record lane offset,
+height and both lateral grades. Analytic fixtures prove the frame correction,
+not native acceptance of the specific VK position.
+
+BOT7 Object 704 stops firing before it descends. Its later upper local target
+is approximately ten to eleven metres away, outside the eight-metre proof
+radius. The report does not prove that the intermediate terrain is disconnected.
+Do not silently extend admission or install a height/slope veto. Every two
+seconds an applicable out-of-radius target can record native surface columns at
+2/4/6/8 metres after the decision, sharing the existing 64-column budget. The
+prefix is explicitly observation-only and cannot alter targets or verdicts.
+Existing logs already record hull rotation refusal, driver intent and firing;
+the stock damage-panel animation exception remains unconfirmed in cause.
+
+The one-invalid-point enable / all-five-valid disable support rule, crush and
+wreck physics, module damage, HUD dispatch and independent test layouts are
+unchanged. Windows client gameplay acceptance remains required for the new
+planning ray construction.
