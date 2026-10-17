@@ -40,7 +40,7 @@ import navigation_graph_schema
 
 
 FORMAT_NAME = 'offline-lan-0922-destructible-catalog'
-FORMAT_VERSION = 9
+FORMAT_VERSION = 10
 MANIFEST_FORMAT = FORMAT_NAME + '-manifest'
 GAME_VERSION = '0.9.22.0.1-cn-1513'
 DECODER_VERSION = '0.9.22.0.1'
@@ -264,49 +264,11 @@ def _item_scale(transform):
 
 
 def native_wires(compiled, bsmi_count):
-    """Map referenced scene rows to native ``(chunk_id, item_index)`` wires.
+    """Preserve the #1513 WGDE slot namespace, including empty rows.
 
-    Exact pinned #1513 enumeration contract, one rule per WGDE row class:
-
-    * Table "1" rows are ``(chunk_id, global_item_begin, item_count)``.  Sorted
-      by ``global_item_begin`` they must partition table "2" from zero, and no
-      chunk id may repeat.  File order is not significant, and the native item
-      index restarts at zero inside every chunk, so a streamed chunk produces
-      the same wires as the same chunk loaded at battle start.
-    * Table "2" rows are inclusive reference ranges ``[ref_begin, ref_end]``
-      into table "3" and must partition it from zero.  ``ref_end ==
-      ref_begin - 1`` is an authored empty row that references no scene
-      instance.
-    * An empty table "2" row does NOT consume a streamed native item index.
-      The provider enumerates only rows that reference at least one scene
-      instance, so the native item index of a row is the number of non-empty
-      rows before it inside its chunk.
-    * A table "3" reference selects an SpTr row when bit ``0x80000000`` is set
-      and a BSMI row otherwise.  Both classes are scene instances and consume
-      the same item index space: a SpeedTree row advances the index exactly
-      like a BSMI row.
-    * Several references in one row share one native item; that is how the
-      separate BSMO module rows of a structure collapse to one identity.  A
-      single reference may never appear in two rows.
-    * An ignored BSMO entry type (a type-2/type-3 authored effect) is still a
-      referenced scene instance, so its row consumes an item index even though
-      ``bake_compiled_map`` never makes it crushable.
-
-    The empty-row rule is the one class that pinned resource data alone cannot
-    settle, because a compiled empty row is indistinguishable from a row the
-    provider skipped.  It is fixed by exact live #1513 evidence: three separate
-    reports recovered a live destructible matrix whose quantized locator
-    signature is unique in the baked catalog, and in every case the live item
-    index equalled the non-empty-row count and not the table-2 position:
-
-    * ``11_murovanka`` chunk 32124 ``gaf001_WoodFence`` live item 7;
-    * ``18_cliff`` chunk 32893 ``bld704_shed`` live item 6;
-    * ``34_redshire`` chunk 33148 ``env422_WallLamp`` live item 58.
-
-    Counting the empty rows shifted exactly those three slots to 8, 7 and 59.
-    Empty rows exist in only six standard maps, and every reported live wire
-    mismatch came from three of those six; the other 35 maps are unaffected by
-    this rule and reported no wire mismatch.
+    Lakeville chunk 33149 has 222 loaded slots, an empty row at 188 and
+    the van at 189. Empty rows own no resource but still reserve their index.
+    Tree and model references share this same per-chunk namespace.
     """
     wgde = compiled.sections['WGDE']._data
     table1 = wgde.get('1')
@@ -347,12 +309,10 @@ def native_wires(compiled, bsmi_count):
         raise ValueError('WGDE item spans do not cover the reference table')
     item_wires = [None] * len(table2)
     for begin, count, chunk_id in chunk_ranges:
-        native_index = 0
         for position in range(begin, begin + count):
             if spans[position] is None:
                 continue
-            item_wires[position] = (chunk_id, native_index)
-            native_index += 1
+            item_wires[position] = (chunk_id, position - begin)
     row_wires = {}
     wire_rows = {}
     speedtree_wires = {}
@@ -411,6 +371,13 @@ def bake_compiled_map(map_name, map_package_data, space_data,
     if len(masks) != len(model_ids):
         raise ValueError('BSMI visibility masks do not match transforms')
     excluded_instances = []
+    # Empty slots are not queryable models. Keep them excluded without
+    # compacting the identity space shared by live models and trees.
+    for chunk_id, begin, count in compiled.sections['WGDE']._data['1']:
+        for offset, (first, last) in enumerate(
+                compiled.sections['WGDE']._data['2'][begin:begin + count]):
+            if first > last:
+                excluded_instances.append([int(chunk_id), offset, 0])
     for wire, rows in sorted(wire_rows.items()):
         active = {bool(int(masks[index]) & 1) for index in rows}
         if len(active) != 1:

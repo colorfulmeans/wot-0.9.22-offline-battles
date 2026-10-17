@@ -5,9 +5,28 @@ Table: https://eu-wotp.wgcdn.co/dcont/fb/image/medals_en.jpg
 
 These are per-battle awards, not first-time account achievements. Premium
 time, vehicle XP factors and offline reward multipliers do not multiply them.
-The separate all-Tier-X base-XP payout is deliberately not estimated: its
-retail conversion table is not present in the pinned client resources.
+The all-Tier-X base-XP conversion is published by the 2017 official calculator:
+https://worldoftanks.asia/en/news/general-news/update-920-grand-battles/
+https://content-wg.gcdn.co/locdoc/epic_calc/js/main0.2.js
 """
+
+import math
+
+
+def battle_reward(base_xp, eligible):
+    """2017 calculator: 400 base XP minimum, positive JS Math.round.
+
+    Premium, first-win and offline multipliers are downstream of this input.
+    The calculator's 3000-XP slider is a UI range, not a published game cap.
+    Only the signed result-field limit bounds extreme custom offline battles.
+    """
+    if not eligible or base_xp < 400:
+        return 0
+    exponent = (int(base_xp) - 400) / 100.0
+    maximum = 2 ** 31 - 1
+    if exponent >= math.log(maximum / 4.0, 1.18):
+        return maximum
+    return int(math.floor(4.0 * math.pow(1.18, exponent) + 0.5))
 
 
 # Tier IV-VII, VIII-IX, X. A zero means the medal cannot earn bonds there.

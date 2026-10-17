@@ -78,6 +78,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python tools/stage_release_style_ui.py
+      - name: Rebuild and verify the shipping x86 native module
+        run: sh tools/build_math_batch_native.sh
       - name: Build Python 2.7 0.9.22 client package
         run: >-
           docker run --rm --platform linux/amd64 -v "$PWD:/work"
@@ -124,6 +126,11 @@ jobs:
       - name: Build launcher distribution
         shell: pwsh
         run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - name: Include opt-in bridge-drop test entry points
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath tools/START_ROOF_CRUSH_TEST.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_ROOF_CRUSH_TEST.bat
+          Copy-Item -LiteralPath tools/START_ROOF_SHOT_DROP_TEST.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_ROOF_SHOT_DROP_TEST.bat
       - name: Include opt-in worker spike timing entry point
         shell: pwsh
         run: Copy-Item -LiteralPath tools/START_SPIKE_PROFILE.bat -Destination launcher/dist/wot-0.9.22-offline-battles/START_SPIKE_PROFILE.bat
@@ -215,6 +222,8 @@ jobs:
           import sys
           import zipfile
 
+          sys.path.insert(0, os.path.join(os.getcwd(), 'tools'))
+          from verify_native_payload import verify_bytes
           sys.path.insert(0, os.path.join(os.getcwd(), 'launcher'))
           import core
 
@@ -223,6 +232,8 @@ jobs:
               archive_path = os.path.join(payload, 'client', port + '.zip')
               with zipfile.ZipFile(archive_path) as archive:
                   names = archive.namelist()
+                  verify_bytes(os.getcwd(), archive.read(
+                      'mods/0.9.22.0.1/offline_math_batch_native.pyd'))
               assert not any('__pycache__' in name or name.endswith('.sha256')
                              for name in names), port
           assert core.inspect_game_root(fake082)['client'] is None

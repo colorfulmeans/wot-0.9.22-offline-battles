@@ -918,10 +918,14 @@ class TerrainGrid(object):
 				not callable(self.obstacle_probe) or
 				self.segment_has_motion_hazard(
 					start, end, 1 | BAKED_SHALLOW_WATER)):
+			if evidence is not None:
+				evidence['egress_reason'] = 'hazard_or_unavailable'
 			combat_count('nav_live_egress_hazard_or_unavailable')
 			return False
 		if (self._baked_cell_height(self.cell_for(end)) is not None and
 				self.point_has_baked_hazard(end, 2)):
+			if evidence is not None:
+				evidence['egress_reason'] = 'endpoint_edge_hazard'
 			return False
 		distance = _distance_2d(start, end)
 		# Edge erosion is advisory only for this bounded native-proved join.
@@ -929,6 +933,8 @@ class TerrainGrid(object):
 		# footprint globally: a wall, cliff or unsupported shoulder must fail
 		# the actual support/width proof below on every use.
 		if distance > 24.0:
+			if evidence is not None:
+				evidence['egress_reason'] = 'requires_local_join'
 			combat_count('nav_live_egress_requires_local_join')
 			return False
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
@@ -942,12 +948,16 @@ class TerrainGrid(object):
 				end[2] + lateral_z * side)
 			if self.segment_has_motion_hazard(
 					shoulder_start, shoulder_end, 1 | BAKED_SHALLOW_WATER):
+				if evidence is not None:
+					evidence['egress_reason'] = 'shoulder_water_hazard'
 				return False
 		try:
 			start_y = self.ground_probe(
 				float(start[0]), float(start[2]), float(start[1]))
 			if (start_y is None or math.isnan(float(start_y)) or
 					math.isinf(float(start_y))):
+				if evidence is not None:
+					evidence['egress_reason'] = 'missing_support'
 				combat_count('nav_live_egress_missing_support')
 				return False
 			previous = (float(start[0]), float(start_y), float(start[2]))
@@ -960,19 +970,34 @@ class TerrainGrid(object):
 				# _ground() deliberately reads only the bake in this grid.
 				y = self.ground_probe(x, z, previous[1])
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					if evidence is not None:
+						evidence['egress_reason'] = 'missing_support'
 					combat_count('nav_live_egress_missing_support')
 					return False
 				y = float(y)
 				run = math.hypot(x - previous[0], z - previous[2])
+				if evidence is not None:
+					evidence.setdefault('ground_samples', []).append(dict(
+						start=previous, end=(x,y,z), run=run,
+						rise=y-previous[1], grade_limit=grade))
 				if abs(y - previous[1]) > run * grade:
+					if evidence is not None:
+						evidence['egress_reason'] = 'grade'
 					combat_count('nav_live_egress_grade')
 					return False
 				for side in (-2.15, 2.15):
 					shoulder = self.ground_probe(
 						x + lateral_x * side, z + lateral_z * side, y)
+					if evidence is not None:
+						evidence.setdefault('shoulder_samples', []).append(dict(
+							position=(x+lateral_x*side,z+lateral_z*side),
+							centre_y=y, shoulder_y=shoulder, grade_limit=grade,
+							width=abs(side)))
 					if (shoulder is None or math.isnan(float(shoulder)) or
 							math.isinf(float(shoulder)) or
 							abs(float(shoulder) - y) > abs(side) * grade):
+						if evidence is not None:
+							evidence['egress_reason'] = 'shoulder'
 						combat_count('nav_live_egress_shoulder')
 						return False
 				previous = (x, y, z)
@@ -983,13 +1008,21 @@ class TerrainGrid(object):
 			blocked = self._probe_obstacle(
 				grounded_start, previous, 2.15, native_capability, evidence)
 			if blocked == 'deferred' or revision != self._native_proof_revision:
+				if evidence is not None:
+					evidence['egress_reason'] = 'deferred'
 				return None
 			if blocked:
+				if evidence is not None:
+					evidence['egress_reason'] = 'obstacle'
 				combat_count('nav_live_egress_obstacle')
 				return False
 		except Exception:
+			if evidence is not None:
+				evidence['egress_reason'] = 'probe_failed'
 			combat_count('nav_live_egress_probe_failed')
 			return False
+		if evidence is not None:
+			evidence['egress_reason'] = 'clear'
 		combat_count('nav_live_egress_clear')
 		return True
 
@@ -1310,7 +1343,8 @@ class TerrainGrid(object):
 			diagnostic.clear()
 			diagnostic.update(at=float(now), current=tuple(current), goal=tuple(goal),
 				attempted=0, missing_ground=0, failed_edge=0, shallow_or_unknown=0,
-				corridor_rejected=0, private_edge=0, accepted=0, selected=None)
+				corridor_rejected=0, private_edge=0, accepted=0, selected=None, candidates=[],
+				policy='legacy_distance_turn_avoidance')
 			if excluded_target_cells:
 				diagnostic['visited_rejected'] = 0
 		dx = float(goal[0]) - float(current[0])
@@ -1375,9 +1409,12 @@ class TerrainGrid(object):
 							callable(self.obstacle_probe)):
 						native_candidates += 1
 						candidate = (x, float(current[1]), z)
+						egress_evidence = dict(start=tuple(current), end=candidate, egress_reason='not_probed')
+						if diagnostic is not None:
+							diagnostic.setdefault('native_egress_attempts', []).append(egress_evidence)
 						if (not self.path_has_edge_penalty((current, candidate), edge_penalties) and
 								self._inside(x, z) and
-								self._live_baked_egress_clear(current, candidate)):
+								self._live_baked_egress_clear(current, candidate, evidence=egress_evidence)):
 							if len(self._live_join_targets) >= 64:
 								self._live_join_targets.pop()
 							self._live_join_targets.add(candidate)
@@ -1386,6 +1423,8 @@ class TerrainGrid(object):
 							return candidate
 					if diagnostic is not None:
 						diagnostic['missing_ground'] += 1
+						diagnostic['candidates'].append(dict(point=(x, None, z),
+							rejected='missing_ground', theta=offset))
 					continue
 				candidate = (x, y, z)
 				# Preserve the predicate order and query count while retaining
@@ -1400,6 +1439,8 @@ class TerrainGrid(object):
 				if reason is not None:
 					if diagnostic is not None:
 						diagnostic[reason] += 1
+						diagnostic['candidates'].append(dict(point=candidate,
+							rejected=reason, theta=offset))
 					continue
 				if (edge_penalties and any(
 						edge in edge_penalties
@@ -1407,12 +1448,23 @@ class TerrainGrid(object):
 							current, candidate))):
 					if diagnostic is not None:
 						diagnostic['private_edge'] += 1
+						diagnostic['candidates'].append(dict(point=candidate,
+							rejected='private_edge', theta=offset))
 					continue
 				if diagnostic is not None:
 					diagnostic['accepted'] += 1
 				cell = self.cell_for(candidate)
 				score = (_distance_2d(candidate, goal) + abs(offset) * 3.5 +
 					         self._penalty(cell, avoid_points, False) * 2.0)
+				if diagnostic is not None:
+					diagnostic['candidates'].append(dict(point=candidate,
+						rejected=None, theta=offset, score=score,
+						D=_distance_2d(candidate, goal),
+						C=score-_distance_2d(candidate, goal),
+						height_delta=y-float(current[1]),
+						chord_angle_degrees=math.degrees(math.atan2(
+							y-float(current[1]), distance)),
+						height_source='navigation_ground_not_surface_normal'))
 				value = (score, abs(offset), candidate)
 				if best is None or value[:2] < best[:2]:
 					best = value
@@ -2053,9 +2105,23 @@ class TerrainNavigator(object):
 			self._active_planning_edge_penalties(bot_id, now),
 			0.0, diagnostic=state.setdefault('local_fallback', {}),
 			excluded_target_cells=exclusions)
+		selection=state.setdefault('local_selection',{})
+		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
+			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
+			temporary_stalled=bool(state.get('temporary_stalled')))
+		if fallback is not None and self.grid.prebaked:
+			cell = self.grid.cell_for(fallback)
+			selection['candidate_graph_height'] = self.grid._baked_cell_height(cell)
+			selection['candidate_graph_exits'] = [self.grid.point_for(row[3],row[4])
+				for row in self.grid._baked_neighbours(cell)]
 		if fallback is not None and self._temporary_path_repeats(state, (fallback,)):
+			selection.update(outcome='temporary_path_repeats',selected=tuple(current))
+			# Rejection consumes a failed local attempt. Keep the physical hold,
+			# but do not wait forever without feeding the existing retry budget.
+			self._record_local_retry_refusal(state, current, goal, now)
 			return tuple(current)
 		connector_clear = True
+		previous_refusal=getattr(self.grid,'_last_native_refusal',None)
 		if fallback is not None and origin != tuple(current):
 			connector_clear = bool(
 				not self._bot_edges_penalized(bot_id, current, fallback, now) and
@@ -2071,18 +2137,21 @@ class TerrainNavigator(object):
 				except Exception:
 					connector_clear = False
 		if not connector_clear:
+			selection.update(outcome='connector_rejected',selected=tuple(current),native_refusal=(dict(self.grid._last_native_refusal) if getattr(self.grid,'_last_native_refusal',None) is not previous_refusal and getattr(self.grid,'_last_native_refusal',None) else None))
 			state.pop('local_completed_target', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
 			state.pop('local_fallback_start', None)
-			# The next leg is not admissible from the realised hull pose. Hold
-			# for this decision, then retry from the hull on the next one.
+			# Retire the unreachable anchor but keep the actual hull's wall,
+			# water and deferred-proof hold for this decision.
 			return tuple(current)
 		if fallback is not None:
 			retired = state.get('local_target_retired')
 			if retired is not None and float(now) < retired[1] and _distance_2d(fallback, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS:
+				selection.update(outcome='retired_target',retired_until=retired[1],selected=None)
 				return None
 			self._remember_local_fallback(fallback, goal, state, current, now)
+		selection.update(outcome='selected' if fallback is not None else 'no_candidate',selected=fallback)
 		return fallback
 
 	@staticmethod
@@ -2289,8 +2358,13 @@ class TerrainNavigator(object):
 			self.grid._baked_cell_height(self.grid.cell_for(completed[0])) is None and
 			self.grid._baked_cell_height(self.grid.cell_for(current)) is not None)
 		origin = self._local_fallback_origin(current, goal, state)
+		state['local_selection'] = dict(at=float(now),current=tuple(current),origin=tuple(origin),
+			goal=tuple(goal),candidate=None,outcome='retained_check',
+			temporary_stalled=bool(state.get('temporary_stalled')),
+			visited_cells=sorted(state.get('temporary_visited_cells',()))[:32])
 		retained = self._retained_local_fallback(bot_id, current, goal, now, state)
 		if retained is not None:
+			state['local_selection'].update(outcome='retained',selected=retained)
 			return retained
 		return self._new_local_fallback(bot_id, current, origin, goal, now,
 			avoid_points, state, eroded_reentry=eroded_reentry)
@@ -2667,7 +2741,10 @@ class TerrainNavigator(object):
 		prefix = state.get('pending_prefix') or ()
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
+			'path_endpoint_refusal': state.get('path_endpoint_refusal'),
 			'local_target': state.get('local_fallback_target'),
+			'local_selection': dict(state.get('local_selection') or {}),
+			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
 			'local_target_end_reason': state.get('local_target_end_reason'),
 			'local_retry_age_ms': int(max(0.0, float(now) - float(
 				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),
@@ -3243,7 +3320,7 @@ class TerrainNavigator(object):
 				self.path_hull_revisions.get(key) !=
 				self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path))
-			partial = bool(path and _distance_2d(path[-1], goal) > self.grid.cell_size * 3.0)
+			partial = bool(path and _distance_2d(path[-1], goal) > WAYPOINT_ARRIVAL_RADIUS)
 			if (path and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
 					not self.grid.path_has_penalty(path, now) and
 					not self.grid.path_has_edge_penalty(
@@ -3502,6 +3579,9 @@ class TerrainNavigator(object):
 			state['planned_goal'] = tuple(goal)
 			state['planned_at'] = float(now)
 		request_key = self._cache_key(path_key, goal)
+		refusal = state.get('path_endpoint_refusal')
+		if refusal and refusal.get('goal') != tuple(goal):
+			state.pop('path_endpoint_refusal', None)
 		had_request = state.get('request_key') is not None
 		request_changed = state.get('request_key') != request_key
 		request_transition = bool(had_request and request_changed)
@@ -3510,6 +3590,7 @@ class TerrainNavigator(object):
 			float(now) - self.path_times.get(request_key, now) >= 8.0)
 		allow_pending_last_target = True
 		if request_changed:
+			state.pop('path_endpoint_refusal', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_target_retired', None)
 			state.pop('local_completed_target', None)
@@ -3633,6 +3714,7 @@ class TerrainNavigator(object):
 				state.pop('controlled_shallow_target', None)
 				state['last_target'] = tuple(goal)
 				state['navigation_status'] = 'safe'
+				state.pop('path_endpoint_refusal', None)
 				state['target_is_terminal'] = True
 				self._set_fallback_mode(bot_id, 'safe_direct')
 				return tuple(goal)
@@ -3646,6 +3728,7 @@ class TerrainNavigator(object):
 				state.pop('controlled_shallow_target', None)
 				state['last_target'] = tuple(goal)
 				state['navigation_status'] = 'safe'
+				state.pop('path_endpoint_refusal', None)
 				state['target_is_terminal'] = True
 				self._set_fallback_mode(bot_id, 'safe_direct')
 				return tuple(goal)
@@ -3755,7 +3838,17 @@ class TerrainNavigator(object):
 			next_key, continued = self._path(
 				continue_key, current, goal, now, avoid_points)
 			if continued:
+				if (_distance_2d(current, continued[-1]) <= WAYPOINT_ARRIVAL_RADIUS and
+						_distance_2d(continued[-1], goal) > WAYPOINT_ARRIVAL_RADIUS):
+					# A completed search which returns this same exhausted tip did
+					# not prove an onward leg. Keep the ordinary retry/route budget.
+					state['path_endpoint_refusal'] = dict(at=float(now),
+						endpoint=tuple(continued[-1]),goal=tuple(goal),reason='no_onward_leg')
+					self._record_local_retry_refusal(state, current, goal, now)
+					return self._fallback_target(bot_id, current, goal, now,
+						avoid_points, state, False)
 				path = continued
+				state.pop('path_endpoint_refusal', None)
 				state['path_key'] = next_key
 				next_index = 0
 				if (len(path) > 1 and
@@ -3785,6 +3878,17 @@ class TerrainNavigator(object):
 			return self._fallback_target(
 				bot_id, current, goal, now, avoid_points, state, True)
 		selected = tuple(path[lookahead])
+		# A refusal is a receipt for the current exhausted endpoint, not a
+		# permanent property of this vehicle after a successful onward plan.
+		state.pop('path_endpoint_refusal', None)
+		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
+				_distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS and
+				lookahead == len(path) - 1):
+			state['path_endpoint_refusal'] = dict(at=float(now),
+				endpoint=selected,goal=tuple(goal),reason='incomplete_endpoint')
+			self._record_local_retry_refusal(state, current, goal, now)
+			return self._fallback_target(bot_id, current, goal, now,
+				avoid_points, state, False)
 		if (_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS and
 				_distance_2d(current, goal) > 15.0):
 			state['index'] = lookahead

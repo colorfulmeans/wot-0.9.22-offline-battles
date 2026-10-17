@@ -58,6 +58,39 @@ class RicochetEvidenceTests(unittest.TestCase):
         self.emit(dict(self.meta,ricochet_count=1),self.contact,effect)
         self.assertEqual({'shot_result':2,'damage':504},effect)
 
+    def test_recorded_24mm_rehit_leaves_first_plane_and_keeps_microsecond_flight(self):
+        from gui.mods.offline_lan_0922.projectile_runtime import (
+            ideal_reflection_velocity, ricochet_departure_origin)
+        import math
+        impact = (-142.26346002889326, 2.5354233364855077, 4.089098255990514)
+        normal = (.2917238175868988, .8402507901191711, -.4570293128490448)
+        incoming = (-717.771343, 2.286192, -56.560478)
+        velocity = ideal_reflection_velocity(incoming, normal)
+        origin = ricochet_departure_origin(impact, velocity, normal)
+        dot = lambda a,b: sum(x*y for x,y in zip(a,b))
+        self.assertGreater(dot(velocity, normal), 0.)
+        self.assertAlmostEqual(dot(incoming,incoming), dot(velocity,velocity), places=6)
+        for actual, expected in zip(origin, (-142.262877, 2.537104, 4.088184)):
+            self.assertAlmostEqual(actual, expected, places=6)
+        second_normal = (.8388340473, .1034143269, .5344742537)
+        self.assertLess(dot(velocity, second_normal), 0.)
+        flight = .002417796291410923 / math.sqrt(dot(velocity,velocity))
+        end = tuple(origin[i] + velocity[i] * .05 for i in range(3))
+        self.data.update(query=(origin,end), impact=impact, world_normal=second_normal)
+        self.contact.update(distance=.002417796291410923, result=2)
+        self.meta.update(ricochet_count=1, segment_origin=origin,
+            segment_velocity=velocity, ricochet_first_contact_evidence=dict(
+                impact=impact, normal=normal, component='vehicleGun', material_kind=1))
+        effect = {'shot_result':2,'damage':561}
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.battle._report_ricochet_contact_evidence(self.meta,
+                {'elapsed':flight}, self.data,self.contact,effect,())
+        row=json.loads(output.getvalue().split('RICOCHET SURFACE EVIDENCE ',1)[1])
+        self.assertAlmostEqual(3.35805, row['segment_elapsed_us'], places=3)
+        self.assertGreater(row['contact_first_plane_mm'], 2.)
+        self.assertLess(row['contact_from_bounce_mm'], 4.)
+        self.assertEqual({'shot_result':2,'damage':561},effect)
+
     def test_rehit_preserves_native_surface_and_physical_inputs(self):
         collision=types.SimpleNamespace(compName='_reserved',dist=.26,hitAngleCos=.26,matInfo=self.material)
         self.data.update(penetration_factor=1.1,piercing_loss=3.,

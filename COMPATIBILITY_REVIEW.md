@@ -8404,3 +8404,624 @@ The reader also flags legacy truncated motion rows. Replace the exhausted
 24-transition support log cap with a one-second per-Bot limit and include the
 raw bounded layered queries and round identity. Live Windows acceptance remains
 necessary for the original Type59 fall, player track contact and slope posture.
+
+
+### Vertical vehicle contacts and support handoff (October 16)
+
+The user-supplied historical clip BV1m4411Y7c8 shows perched vehicles and an
+upper wreck remaining over a lower vehicle. Mixed shell hits and montage cuts
+do not establish an exact retail HP-per-second coefficient. This trial uses the
+explicitly authorized offline approximation: equal masses lose 5 HP/second;
+pressure on either live vehicle scales by the opposing/own descriptor mass
+ratio. An upper wreck keeps damaging a live lower vehicle; a lower wreck ends
+sustained damage to both. Landing damage to the lower vehicle uses the existing
+fall curve scaled by the striking/struck mass ratio. Ordinary horizontal ram
+and the fall/ram module coefficient of 25 are unchanged.
+
+Only an upward non-gun native component hit admits a vehicle roof as support.
+OBB overlap is broad phase only. The existing component collider is reused at
+current body, turret and gun poses without mutating the live target. Proved
+carrier pairs bypass planar separation/ram only for that pair, so the planar
+solver does not immediately eject a tank from its actual roof contact.
+Cumulative worker pair totals survive coalescing and exact replay; player
+landing contact identity travels through the existing sequenced landing path.
+Server HP, attribution, friendly damage, blue status, kills and stock combat
+feedback retain their existing owners. No additional damage panel is created.
+VEHICLE STACK records expose pair identity, phase, contact point, elapsed
+contact and cumulative totals; PLAYER LANDING IMPACT includes the carrier.
+
+Support checks retain one-invalid enables / five-valid disables. On a proved
+continuous supported plane, evaluate the next basic ground-follow height at
+the new X/Z instead of mixing new X/Z with the previous frame's Y. Fresh native
+columns must still validate all five samples, and discontinuous planes discard
+the basis. No new fixed hold timer or contact prerequisite is introduced.
+Short recovery probes remove measured body-ground clearance from their grade;
+terminal graph connectors hand back to the existing checked local retry when
+the actual objective remains outside arrival range. Retry budgets, normal
+route advancement, yielding and initial v0.10.1 command ownership are retained.
+
+Focused regressions cover update-rate-independent totals, repeated/reordered
+receipts, human/Bot landing publication, corpse lifecycle, friendly/native
+feedback, real native roof admission, continuous slope translation, five-point
+mode transitions and nonterminal connector arrival. The 19-file subsystem gate
+passes, and all 187 client sources compile under CPython 2.7.18. This does not
+prove native roof stability, bridge-edge feel, Flash visibility, all Bot escape
+outcomes or net worker cost; those require the matching Windows test package.
+
+
+### Windows308 navigation withdrawal and support datum audit
+
+Report 093639 is Windows308 (colorfulmeans-38834167399-1). It records 198
+support enable/disable pairs, 162 below 200 ms. At 09:34:22.088 Bot10 loses its
+rear sample; at 09:34:22.090 detailed support has raised the root by about
+0.135 m and releases with five valid points. The previous test stopped at
+release, missing the subsequent basic owner's centre-height placement.
+
+Withdraw both Windows308 terminal-connector fallback additions: navigation.py
+is byte-for-byte the Windows305 version. Also withdraw the unproved short
+recovery grade adjustment from battle_runtime.py. Remove their newly added
+behavior assertions. Do not introduce a replacement recovery policy. The
+report shows changing temporary targets and physical refusals, but does not
+prove the entire long-lived blockage chain. Bounded BOT MOTION arbitration
+receipts now retain the driver result before face-position override, strategic
+and local targets, wait status, override inputs and the originating sample time.
+This separates deliberate enemy-facing holds from navigation and later vetoes.
+
+Support handback now records the measured accepted-root minus native-centre
+height datum. Basic grounded placement carries that datum while following real
+ground; its straddle check uses the corresponding ground reference, and its
+continuous-plane basis stores the accepted root rather than the raw centre.
+A missing point immediately restores detailed support and discards the datum;
+airborne motion discards it as well. No fixed hold timer, new missing-point
+threshold, fall damage coefficient or landing damage rule is introduced.
+Multi-tick regressions fail before the fix (0.135 m becomes zero), then cover
+stationary handback, travel on actual sloped ground, ledge reactivation and
+ballistic landing with no retained datum. Native acceptance is still required.
+
+Roof pressure was not admitted in report 093639. Existing success-only logging
+cannot establish which query or planar response ejected a hull. Add bounded
+roof-query hits/misses, native component normals, selected support height and
+local planar corrections against vertically offset peers. These diagnostics
+reuse existing queries and do not exempt unproved overlaps from collision.
+The effective falling damage and previously implemented damage deduplication
+remain; roof stability is unresolved, not claimed fixed.
+
+The driver-only wedged-queue fixture still expects pivot_recovery but observes
+drive/short_forward_escape. Re-executing it with the unmodified Windows305
+driver reproduces the same failure; no driver policy is changed to satisfy it.
+Rotation refusal receipts now include the actual catalog/native surface,
+query ray, hit normal and sampled pose at the existing bounded stall cadence.
+A separate stack contract bug is fixed: when a human snapshot omits chassis
+shape, the worker resolves it but previously left the roof-admission context
+without that geometry, giving tilted contact a zero-size height cap. Pass the
+resolved descriptor shape into that same context; no contact is fabricated.
+
+### Windows309 recovery cancellation and support basis reproduction
+
+Report 101752 records Bot10 at a nearby single-point connector with a remote
+objective, mostly returning arrived for about 63 seconds. A driver replay using
+its captured position starts reverse_turn, renews the objective retry clock,
+then cancels recovery on the next decision because the connector is close.
+Retain an already admitted recovery while its actual recovery goal remains
+outside arrival radius. Explicit movement holds and arrival at that actual
+goal still stop it. Do not change navigator endpoint selection, recovery
+budgets, path policy, terrain vetoes or the withdrawn short-distance grade law.
+The new replay fails on Windows309 and passes with this correction, including
+completion of the recovery attempt rather than only its first command.
+
+A second multi-frame reproduction descends a continuous plane with five real
+ground witnesses. The support test predicts the next basic ground-follow root
+but stores the old pre-settle root in its new plane basis. On the following
+tick that stale height falsely exceeds contact reach and enables detailed
+support. Store the same validated support_y used by those witnesses. Nine
+grade/travel combinations cover 360 descent ticks, alongside existing turning,
+ledge, airborne, landing and handback tests. The one-missing/five-restored rule
+and all reach thresholds remain unchanged; no mode hold timer is added.
+
+These reproductions establish local defects, not every native blockage or
+every fast transition in the report. Existing bounded BOT MOTION receipts now
+include arrival distances, progress ages and pre-decision recovery time. Support
+receipts include the evaluated plane basis, previous transition pose and age.
+The next exact-client session must establish bridge traversal, remaining point
+losses, and native support stability; no additional routing change is inferred.
+
+### Windows310 vertical contact credit and yaw-frame audit
+
+Report 170052 uses colorfulmeans-38841483064-1. Player1 struck Bot12 for
+387 HP and died from an ammo-rack failure in that same landing. The wreck then
+dealt 59 HP over roughly nine seconds; all 59 points incorrectly retained the
+player as attacker. The local before/after progress save increased damage by
+837 (84 horizontal ram, 307 pushed fall, 387 strike, 59 wreck pressure).
+
+Freeze first-impact participants before either can die. A live upper landing
+on a live lower vehicle now reports both HP losses as ram, including the upper
+vehicle's existing fall/module HP loss. Bot HP is still spent by its existing
+landing owner; a cumulative upper-impact witness classifies that already spent
+loss rather than applying it twice. Live/live pressure remains mutual ram.
+The worker separately accumulates lower-vehicle pressure from an upper wreck,
+so coalescing a pre-death and post-death interval cannot reassign the entire
+receipt to the last observed life state. Wreck pressure is unowned environment
+damage (reason 3), bypasses remembered push attribution, and earns no damage,
+friendly-fire penalty, frag or blue status. A lower wreck stops pressure.
+Rates, masses, fall/module coefficients and planar ram formulas are unchanged.
+
+The support reproduction rotates a hull on one continuous plane. Previously
+the five-point mode selector ran before the existing yaw-frame slope rebase,
+so old pitch/roll offsets were evaluated at new world positions. Run that
+existing guarded rebase before mode selection; retain native pose vetoes and
+the one-invalid/five-valid rule. Log yaw, pitch/roll and their basis yaw.
+
+Clear the previous arrival receipt before each adapter decision: navigation
+wait, contact and reverse-withdrawal branches do not execute driver.drive.
+No navigation or recovery law is changed in this revision. Existing native
+egress probes now attach their actual longitudinal and shoulder heights,
+distance and grade limit to the existing bounded refusal receipt, without
+extra probes or changed acceptance. Bot10/25's remaining route stagnation is
+not assigned a speculative behavioral fix. Exact native colors, physical
+handoff stability and gameplay acceptance require the new Windows package.
+
+
+## Report 175138: bridge projection and slope ownership
+
+- A stationary tipped hull can already penetrate its last accepted ledge contacts.
+  The former raised-support guard restored the same penetrated pose and zeroed
+  gravity on every retry (Bot 9). Permit only bounded depenetration on a previously
+  accepted support layer, with no appreciable horizontal displacement. Keep the
+  new-layer, translated-step, finite-pose and detached-turret guards. Player and
+  Bot adapters use the same numeric decision. Log accepted recovery and refusals.
+- Keep one invalid five-point witness to enable detailed support and all five
+  restored to release it. Separate basic/detailed point-cache ownership. Remove
+  the basic physical pose's 0.61-radian tilt clamp: it flattened a fully supported
+  steep pose immediately after detailed handback and manufactured new point loss.
+  Navigation's drive-grade limits and suspension availability remain unchanged.
+  Genuine repeated edge crossings may still switch; no holding timer is added.
+- Rebase basic grounded Bot slope attitude for each native rotation-sweep slice.
+  The old query rotated yaw with fixed local pitch/roll, sweeping corners into a
+  different world plane. Do not apply ground following to airborne or detailed
+  tumbling bodies. Existing hard surface queries still veto walls.
+- While falling, fresh upward native component hits below posed underside points
+  defer conservative horizontal separation for that specific lower vehicle.
+  Missing native hits and side contacts keep planar collision. Approach evidence
+  is distinct from settled carrier admission and cannot award crushing damage.
+  Existing impact, pressure, corpse attribution and module coefficients are kept.
+- Regression inputs include the recorded Bot 9 projection, a physical tip-and-fall
+  sequence, steep-plane handback, mode-cache ownership, rotation slice coordinates,
+  roof misses and side contacts. Engine-free checks establish adapter/numeric
+  behavior only. Actual bridge release, stacking feel, terrain contacts and the
+  remaining hillside cases require the next exact-client session.
+
+
+## Report 184837: lower-storey targets and solver-owned roof carriers
+
+- Reproduce a tank at approximately -14.45 m accepting a local bridge target
+  near +0.89 m. Single-layer baked links no longer prove an edge from a different
+  actual storey. Native local proofs validate both their start layer and the
+  requested baked endpoint layer. The existing candidate fan resolves mismatched
+  candidate heights on actual same-layer ground without modifying graph heights,
+  scoring, retry limits, route choice or terminal-point behavior. Ordinary deck
+  paths keep the existing cheap bake. Regression coverage includes continuing
+  along the lower storey rather than replacing the bad target with a permanent stop.
+- Physical five-point support must not inherit navigation's powered climbing
+  grade. Bound continuous upward support by the existing native normal-Y > 0.5
+  physical law, using intermediate same-layer samples. Keep missing/disconnected
+  ground invalid, one-invalid admission and all-five-restored release. No timer,
+  alternate switching threshold or suspension retention policy is introduced.
+- Match a settled local carrier to native roof witnesses used by final geometric
+  suspension contacts. Root-to-last-ray height was not a contact proof: a tilted
+  real contact could be discarded or a later unrelated ray could select another
+  lower vehicle. Actual contact loss and rejected support still clear the carrier.
+  Retain the damage/pressure laws and module coefficients. Publish committed
+  carrier evidence on changes as well as bounded regular samples.
+- Reports for Bots 24/27 establish persistent small-area recovery, but do not yet
+  prove that another navigation strategy is correct. Retain the driver and route
+  policies. Add the actual origin, time, body attitude and drive direction to the
+  already collected recovery direction receipts; issue no additional diagnostic
+  engine queries and do not introduce terminal local rerouting.
+- New analytic/native-contract reproductions cover storey rejection, lower-floor
+  progress, ordinary deck fast paths, physical support versus drive grade,
+  disconnected decks, tilted contacts, unrelated last rays, carrier loss and
+  support rejection. Exact #1513 terrain/stacking feel remains a gameplay check.
+
+
+Follow-up validation caught the layer gate also being applied to authored route
+anchors with unspecified Y. Scope actual-storey candidate resolution to the
+existing local candidate fan and require independent native start-ground
+agreement before treating a segment origin as a different physical storey.
+Static route-anchor and lateral-lane checks keep their baked height ownership.
+The original Malinovka navigable-water/fatal-hazard lane regression and a new
+nonzero-terrain authored-anchor case both pass with this correction.
+
+
+## 2026-10-16: remove navigation storey gates and restore bounded route retries
+
+Supersedes the navigation-height claims in the Windows314 section above.
+The 19:18, 19:24 and 19:38 reports all identify build 38891646252-1. The
+19:24 session proves Bots 12/15 can enter the bridge; this does not validate
+unrelated slopes or the new shared navigation predicates. The user requests
+removal of these predicates, rather than another height-dependent strategy.
+
+- Restore exactly the Windows312 implementations of TerrainGrid._ground,
+  segment_clear, _live_baked_egress_clear and safe_local_target. No added
+  storey test, live-start redirection or endpoint-height rejection remains.
+  Keep the physical suspension and native roof-carrier changes. The 1/5
+  support contract and module damage coefficients are unchanged in this patch.
+- The first 0.10.1 reference is e7d95d56. Its server failed-route algorithm
+  differs from Windows314 only in allowing positive advance overrides to
+  participate. Its 120-second avoided-route preference and 13-metre arrival
+  gate already existed; they were not subsequently deleted retry code.
+- Report 19:38 Bot 24 really switches east -> west -> east, but remains at
+  approximately (336.868,-9.485,-141.528) while both routes are cooling down.
+  After each normal gate/route attempt, prefer untried eligible routes, then
+  permit the oldest failed eligible alternative if all are cooling down.
+  Keep the original 20-second attempt and one-gate skip, class eligibility,
+  explicit commands, mobility checks and real-progress renewal.
+- The same report's Bot 13 repeatedly stops at a local connector about eleven
+  metres from its single automatic objective. Such objectives have no next
+  macro gate: use the driver's 1.5-metre arrival for their failed-route entry.
+  Multi-point macro routes retain their original 13-metre arrival. No vertical
+  criterion is introduced. Travelling withdraw modes join the existing failed
+  attempt budget; intentional combat holds and explicit stops remain excluded.
+- Add current route-attempt evidence to existing Bot motion receipts and log
+  server skip/switch/no-alternative events with round, Bot, failed route/index,
+  elapsed attempt, distance, arrival, physical blocker and next route/index.
+- Nine focused logic tests include repeated return-to-old-route cycles,
+  preference for untried routes, actual arrival, holds, commands, damaged tracks
+  and the preserved macro arrival. Three captured scenarios fail before this
+  patch. These tests prove algorithm boundaries, not native drivability.
+- A pre-existing queue test demanded pivot_recovery even though both the first
+  0.10.1 and Windows314 drivers choose a proved short forward escape. Preserve
+  production driving; correct the assertion to allow valid escapes and assert
+  nonnegative throttle on every step, retaining the no-reverse requirement.
+
+Native acceptance must still establish that the tank physically traverses the
+chosen route after a bridge fall or a hillside refusal. No claim is made that
+all terrain traps or the outstanding fast support switches are fixed here.
+
+Final full-Bot validation caught attempt telemetry advancing the strategic order
+revision despite unchanged driving orders. Exclude route_attempt from the order
+signature and assert revision invariance as elapsed diagnostics change. Build
+315 is an intermediate build and must not be delivered.
+
+
+## 2026-10-16: diagnose support transitions before changing their policy
+
+User observation: repeated reports gave transition counts without establishing
+which physical change restored support. The Windows316 20:27 report already
+contains enough point witnesses to separate all eleven enable/disable pairs:
+seven have unchanged XZ and nearly unchanged ground but solver height/attitude
+correction; two recover during slope travel; two belong to Bot 12 at the bridge
+edge (a brief right-side deck return, followed by a 2.657-second descent).
+The seven stationary pairs lower the root by approximately 0.15-0.69 metres.
+Point gaps cross the existing reach limit; this is not evidence that the same
+static ground vanished and reappeared. Three early Bot 21 pairs occur during a
+moving descent, not repeated toggles while parked at one fixed world point.
+
+Add diagnostics only. Preserve the incoming support plane before a valid sample
+replaces it, whether plane projection was used or skipped, input pose/airborne
+state, reach interval, and sampling time. Link enable/disable with a per-Bot
+episode, save opening point witnesses, record point expected-height versus
+observed-ground changes, and attach the existing accepted solver values.
+The solver receipt explicitly identifies its pre-turret-check stage. Clear it
+at the next episode so no old solve can be presented as a new one. No additional
+native query, support threshold, timer, navigation choice or physics correction
+is introduced. These receipts expose remaining basic-follow/solver mismatch;
+they do not claim every short owner handoff is a defect or that it is fixed.
+
+Focused tests distinguish root settling from real ground return, preserve input
+plane identity across cache reuse, verify unchanged native query count and show
+why airborne sampling skips plane projection. Five isolated related suites pass
+and the edited source compiles under CPython 2.7. Native gameplay confirmation
+still needs a later test package; no new package is requested in this audit.
+
+
+## 2026-10-16: slope-follow rotation and module presentation rollback
+
+Report 202714 (Windows316) Bot 9 switches routes, including retrying an earlier
+route, but remains near (-168.758, 1.380, 219.098). It receives native upper-lane
+rotation refusals while its basic grounded pitch is approximately 0.5 radians.
+All 73 stalled samples use basic support, not detailed suspension. Direction
+probes also reject steep uphill candidates. The 25-degree planning gate is
+unchanged from the first v0.10.1; do not label it a newly introduced slope rule.
+
+The native rotation adapter rebases attitude onto the measured support plane,
+but stationary sweeps selected powered look-ahead geometry. That geometry poses
+height without rotating X/Z by pitch/roll, so its rays do not remain parallel to
+the supporting plane. Use the already shared full-pose sweep for stationary
+rotation and its lazy prior-contact witnesses, just as for passive translation.
+Retain solid wall/beam checks and the existing navigation grade/retry policy.
+The independent plane test fails for all four captured/mirrored poses before
+the change. This establishes a geometric incompatibility, not that the complete
+native map trap has already been traversed successfully.
+
+Full-pose testing additionally exposes a parallel-edge numerical defect:
+world/local roundoff can turn a nominally zero lateral delta into an outward
+step from an infinitesimally out-of-bounds edge, collapsing the height chord to
+its start. Ignore only delta magnitudes <=1e-9 in the endpoint intersection,
+in both Python and C++; ordinary outward edge clipping remains unchanged.
+Native host checks compare ordered query/result/effect parity, including the
+captured pitch/roll and nonzero headings. Host tests are not #1513 gameplay.
+
+Revert the entire 08:11 periodic/forced native DEVICES reconciliation writer
+introduced by 40dacdd2. Retain the existing stock damage/repair events, repair
+progress cleanup, HP calculations and one-second network repair checkpoint.
+The player's repair-then-yellow display observation is valid evidence; the
+Avatar device-state cache is not a direct reading of the Flash icon. Removing
+the second writer needs native UI replay to confirm that symptom is gone.
+
+Include support episode/input/solver diagnostics from bfd505ae. Add cached
+support witnesses and their original sampling time to bounded BOTMOTION rows,
+without extra engine queries. Failed native rotation receipts now include the
+actual slice yaw/pitch/roll and whether the support plane was followed. These
+allow further traps to be diagnosed without another speculative driver change.
+The one-invalid/all-five-restored support selection remains unchanged.
+
+
+## 2026-10-16: select support after basic settlement; prove sloped lanes
+
+Windows317 report 211816 contains 13 support admissions/releases. Several
+admissions immediately reverse after the solver changes root height/attitude,
+while the sampled terrain does not change. Bot 13's front gap is 0.894 m;
+the detailed solve lowers its root by 0.675 m. Bot 27 also exceeds the old
+projection span. The selector ran before the basic owner's timed settlement,
+and basic admission projected an old plane whereas detailed release read the
+actual accepted root.
+
+Split the original basic integrator without changing its movement, gravity or
+landing law. Run it once before basic-to-detailed admission. If a grounded
+footprint still fails, prove continuous physical support across the footprint
+before refreshing its four-point slope pose through the existing body/turret
+guard. A cliff or trench must never be fitted into an invented support plane.
+Keep the existing support adapter as the selection entry, including its
+disabled/test seam, and retain first-spawn sampling behavior. Both admission and release sample
+the actual root; retire the old-plane projection. One invalid point still
+opens detailed ownership in this slice, all five valid still close it. A newly
+opened detailed owner integrates on the next slice: never spend the current dt
+or landing effects twice. No timer, threshold, missing-point count, global
+slope/route limit or navigation strategy changes. Diagnostics identify the
+post-basic selection stage and whether a fresh pose was necessary.
+
+Bot 27's native egress receipt validates centre/shoulder grade but the fixed
+height lateral lane then hits the same shoulder surface (approximately 7 mm
+in XZ and 3 mm in Y from the support sample). On a drivable native top hit,
+prove a bounded continuous centre/shoulder lane using the existing 25-degree
+limit. Reuse exact support samples already present in the receipt, and recast
+both original occupied heights along the support profile. A hit is not simply
+ignored: walls or beams behind it, missing ground and excessive grade still
+veto. Clear ordinary lanes incur no new support queries. Keep the existing
+candidate selection, retry, route switching and pending-path policies.
+
+Roof-carrier loss and Bot 28's wait are not sufficiently isolated for another
+behavioral patch. Add carrier final-contact indices/positions, nearest native
+witness distances, matching thresholds, solver/touched counts and explicit
+release reasons. Keep carrier matching and planar-contact law unchanged. Add
+local selection receipts identifying retained targets, repeat protection,
+connector rejection, retired targets, no candidate or actual selection, with
+sample time/age so an older candidate cannot be mistaken for a current refusal.
+Tests compare the unchanged selection/carrier outputs with and without receipts.
+
+Focused analytic regressions cover accepted-pose equality, a descent outside
+the old projection span, real missing-footprint admission, one timed integrator,
+all four bank directions, backing walls/beams, missing terrain and excessive
+grade. These are host geometry/ownership contracts, not native terrain replay.
+The user's next exact #1513 gameplay session must confirm switching behavior,
+slope traversal and provide the unresolved roof/wait receipts.
+
+
+### 2026-10-16: read back dead compounds and complete uncertain contact receipts
+
+Report 221112 is Windows318. At 22:08:23 Bot 12's source and presented root
+are -14.6673 m, but the native model reads -12.1909 m after death. The remote
+pose signature alone does not prove that a stock death/model callback retained
+the installed provider. Dead native remotes now compare the actual compound's
+translation and axes with the current owned provider, and rebind only a proved
+mismatch. Changed poses check immediately; unchanged corpses check at most twice
+per second, including late replacement models. Live and released native entities
+are excluded. WRECK POSE records before/expected/after and verified readback;
+physics, HP, the pose stream and live interpolation are not rewritten.
+
+The two roof-release episodes differ. The first loses every roof witness while
+the vehicle is nearly on its side; the second retains eight roof hits but no
+final roof contact, including a spring compression of -0.0002129002 m. This is
+not sufficient evidence to turn every roof ray into a persistent constraint.
+Keep the contact and pressure laws unchanged. Rejected-contact receipts now
+include the exact sampled X/Z, nearest roof witness, threshold, previous solver
+state and lower actor lifecycle. Build the detailed point table only on a
+carrier change or the existing log cadence, not every physics substep. The next
+native replay can distinguish a
+substep contact boundary from a genuinely unsupported side contact.
+
+Bot 27 eventually changes routes and leaves the hill. Captured rejected exits
+include planning_grade and planning_ground_missing; do not remove these guards
+or change route policy on this evidence. Motion diagnostics now name the exact
+existing command gates (destroyed mobility/overturn, siege transition, exhausted
+endpoint reach, missing catch-up proof and committed baked-corridor veto), plus
+the final critical state. This distinguishes a legitimately broken track from
+a navigation or command-arbitration failure. The five-point 1/5 support rule,
+route/arrival/retry policies and support geometry remain unchanged.
+
+The separate Lakeville report uses an earlier build. One exact truck instance
+32893/152 is successfully destroyed; other observed surfaces cannot yet be
+joined to a proved resource. Extend the existing bounded crush-gate receipt to
+fragile/falling props, including their actual stock mass correction, scaled HP,
+physical and directional-cap energies. Hard catalog receipts identify unresolved
+instances and commit/proposal flags. Native destroy rejection is logged before
+the existing failure path. Diagnostics never guess a resource from proximity or
+change the destruction gate, material ownership, or damaged replacement BSP.
+
+## Windows319 follow-up: incomplete endpoints and multi-roof contacts
+
+The 230001 report is Windows319. In round two Bot 10 is under the bridge near
+(-10.28, -14.73, 18.20), with a completed one-point result near (-10, -14.681,
+18) for the strategic goal (0, 0, 18). Reissuing that exhausted result must
+not publish safe arrival or perpetually renew a complete-path cache. Classify
+it as incomplete using the existing arrival radius and pass a conclusive
+no-onward-leg result to the existing blocked/reactive retry flow. This adds
+no height prohibition and no new terminal-endpoint local-detour strategy.
+
+Round-one Bot 28 rejects an already visited local tip with no owned search.
+The refusal now consumes the existing local retry budget while retaining its
+physical hold. Returning the distant goal immediately was rejected by the
+Panther II/M36 analytic dead-end replays. Connector wall/water/deferred holds
+are preserved. Intermittent support_hold orders pause the same server gate
+attempt instead of erasing it. Explicit commands, completed gates and disabled
+vehicles retain their previous guards. Route alternatives can still return to
+an earlier route after another bounded failed attempt.
+
+Bot 27's hill candidates include real hard-wall and missing-ground refusals.
+The baked graph alone does not prove a disconnected small island; no blanket
+grade reduction or isolated-cell heuristic is justified. Selected fallback
+receipts now include their baked height and outgoing graph points, alongside
+the existing exact physical refusal and the new incomplete-endpoint receipt.
+The bounded retry fixes address the proved failure handoffs; the next native
+replay must establish whether a remaining hill admission needs another fix.
+
+At 22:56:18 the player has a committed Bot 9 roof contact while the planar
+solver responds against Bot 12. All fresh native roof pairs now participate
+in planar classification, independently of the one primary pressure carrier.
+A first contact need not remain airborne to be a descending roof approach.
+Near-roof classification tolerates a fresh separating gap of at most 3 cm;
+it does not publish contact damage or retain a witness across missing native
+geometry. Local movement rechecks the actual current underside/roof face.
+Worker five-point roof observations retain all touched pairs while keeping
+the original first pressure owner and existing impact/pressure/wreck laws.
+
+Lakeville's failed van has a native contact at 33149/189 with an empty name;
+the authored van is at 33149/188 and the completed partial remap excludes the
+contacted slot. Actual material contacts can now reprove an omitted slot by
+the full native transform and effect category, then reuse atomic layout and
+normal descriptor/registration validation. A live duplicate owner, quarantined
+slot, mismatched name/transform or ambiguous resource remains forbidden.
+No fixed index offset, proximity guess, energy change or replacement-BSP
+exemption is introduced. Failed reproof logs the observed signature/category
+and authored candidates for the next native replay.
+
+The five-point support switch remains any one invalid point -> detailed,
+all five valid -> basic. Support geometry and physics formulas are unchanged.
+
+Validation: 41 isolated engine-free files / 2,378 tests pass with zero skips.
+The final Bot runtime change is separately rechecked by all 542 Bot tests;
+the Lakeville test also exercises actual registration and missing-name
+material recovery at the captured contact. All 187 client modules compile
+under CPython 2.7. AST comparisons retain 23 support/slope functions and the
+unchanged physics source. These checks do not establish native roof stability
+or complete hill recovery; both require the next exact-client test package.
+
+## Windows320 follow-up: roof schema, contact quarantine and stale receipts
+
+Report `20261016-235928-e52cc182974c` identifies a Python battle failure at
+23:59:16.195: `_falling_roof_approaches` indexes `point['y']` after landing.
+The actual `derive_suspension_params` spring records have X/Z and static
+compression, but no required local Y. Use the existing posed-point helper
+(optional Y defaults to zero), then subtract spring compression vertically
+in world space, matching the suspension solver. Rotate the original point,
+not a locally pre-compressed point. Place all temporary-context work inside
+`try/finally`. An optional roof-exemption query failure logs its phase and
+retains ordinary solid-body contact instead of ending the battle.
+
+The same report's Lakeville van contact is not merely excluded: live slot
+33149/189 is quarantined. Windows320's blanket quarantine guard therefore
+prevents its new contact-reproof helper from running. The initial cause for
+that specific slot cannot be recovered from the old per-type capped log.
+Retain per-slot isolation provenance for the native chunk lifetime. Only
+logical placement conflicts or catalog-signature misses may enter actual-hit
+reproof; unsafe native queries, malformed counts/ABI and unknown quarantines
+remain blocked. A unique full transform/category/resource proof, with no
+other active owner, reindexes the contacted slot atomically before retiring
+its logical isolation. No alias, fixed slot offset, nearest-object guess,
+group destruction or collision/damage coefficient change is introduced.
+Unresolved conflicts keep their native contact proof and original cause in
+diagnostics. Chunk retirement and battle cleanup clear this provenance.
+
+Endpoint-refusal receipts are cleared on request/goal changes and a proved
+onward plan, preventing a previous target's failure from appearing current.
+The navigation AST otherwise matches Windows320. No new navigation policy,
+height restriction, support threshold or retry budget is added. The five-point
+rule remains any one invalid -> detailed; all five valid -> basic.
+
+Regressions use real generated spring schemas, non-descending landing poses,
+tilt, missing peers and failing queries. Lakeville cases distinguish logical
+quarantine from native-query quarantine, check full-transform disagreement,
+and exercise exact registration plus material recovery. These are engine-free
+contract checks; the exact van's live identity and native roof stability still
+require the next #1513 gameplay replay.
+
+## Windows324: fixed scene identities, nested terrain preference, passive player wreck
+
+This supersedes Windows320/321's runtime layout-repair interpretation. An
+independent read of the exact #1513 Lakeville WGDE tables finds 222 raw rows
+in chunk 33149: row 188 is empty and row 189 references the env420 van. The
+baker incorrectly skipped empty rows when assigning native item numbers.
+Rebuild all 41 destructible and foliage catalogs together, preserving empty
+slots and excluding them from native model queries (formats 10 and 5).
+Resource descriptions, collision boxes and authored transforms are unchanged.
+Remove live placement reindexing, contacted-material recovery, logical
+unquarantine/reproof and the unused placement matcher. Normal native name,
+category and transform validation remains slot-local and never changes wires.
+
+Navigation now compares distance/progress first and slope second, rather
+than adding a slope surcharge to distance. Local candidate ordering uses
+distance to the real goal, then local/longitudinal grade, then the existing
+steering/avoidance tie break. The existing nearest-cell connector for
+missing-grid starts remains unchanged; it is not a goal-ranking candidate. Both local-candidate implementations use the same nested keys.
+Python and native C++ A* retain existing route,
+obstacle, corridor and failure costs as the primary key and accumulate grade
+as a separate secondary key. Legal slopes remain usable. No retry budget,
+route-switch rule, path-end strategy, or height-layer exclusion is added.
+
+The fatal-contact player 113 case exposed two lifecycle stops: the local
+driver stopped physics on death, and the server ignored dead-owner poses.
+Continue passive gravity, suspension and existing wreck contact laws after
+death; publish only the dead body's validated pose during the active round.
+Controls, weapons and damage inputs remain inactive and ordered retries stay
+idempotent. A round result, leave or new round still terminates this path.
+
+Withdraw the later falling-roof approach and near-roof pair exemptions.
+Retain the original native support sampling, suspension solver, proved carrier,
+first-impact and pressure laws. Add bounded carrier receipts containing full
+solver input/output, patch offsets and actual carrier witnesses, so a replay
+can distinguish support-query, solver and planar-separation failures. No new
+roof fallback is added; stable roof support still requires native acceptance.
+The support-mode transition rule is unchanged: one of five invalid enables
+detailed support, all five valid disables it. Fall/ram module coefficients,
+native module presentation and unrelated damage/economy rules are unchanged.
+
+Regression coverage replaces tests requiring compacted WGDE indices and the
+withdrawn remapping/roof exemptions. It includes raw empty-slot classes, all
+map identity disjointness, Lakeville's ordinary crush and shot-registration
+paths, immutable identity under quarantine, real passive vertical integration,
+dead-pose admission/rejection and nested slope preferences. Native worker
+conformance additionally compares nonuniform-slope C++ paths with Python.
+These checks establish source/data contracts, not BigWorld gameplay acceptance.
+
+
+### Navigation scoring rollback and observational slope evidence
+
+The Windows324 distance/grade ordering is withdrawn. Restore the pre-change
+local `(D + 3.5*abs(theta) + 2*P, abs(theta))` comparator and the original
+Python/C++ A* cost/frontier. Keep validity, avoidance, retry, route handoff,
+and support ownership unchanged. Remove the gate asserting the withdrawn
+policy. This is a scoring rollback, not a branch or physics rollback.
+
+An Airfield flat-ground replay identified a causal regression at t=0.733s:
+Bot18 traded 0.147m of candidate-to-goal distance for a direction offset of
+0.85 rather than 0.45 radians. The restored local comparator selects the
+original candidate. The 15FPS departure case passes after rollback; the known
+24FPS departure failure remains independent evidence, not a hill diagnosis.
+
+Local fallback receipts now retain bounded candidate scores, rejection reasons,
+height chords (explicitly not surface normals), and selection time. Authority
+stall records link requested, planning, lane, and final targets, plus up to16
+target transitions, to existing final controls, contacts and support outcomes.
+The hidden worker queues raw scene-normal observations for travel (including
+reverse), selected and final target directions outside the hull footprint.
+These results never enter navigation, support, collision or driving inputs.
+One ray per authority update and at most10 per simulation second; requests are
+round-local, round-robin, limited to64 hulls, and expire after10 seconds.
+Each observation records its original decision time, query time, position,
+window, normal and provenance. Missing/non-upward surfaces remain unknown;
+a raw scene hit can be an object/roof and is not labelled proven terrain.
+New-round initialization clears queued witnesses. The 1-invalid/5-valid
+support-mode rule and accepted catalog/player-wreck fixes are retained.
+
+These receipts enable a native hill investigation; flat replay and Python
+contract tests do not establish the actual cause of a Windows slope incident.

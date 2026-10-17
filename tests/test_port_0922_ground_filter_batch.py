@@ -7,6 +7,24 @@ from gui.mods import offline_lan_0922 as package
 
 
 class GroundFilterBatchTests(unittest.TestCase):
+    def test_region_signatures_are_prepared_once_per_published_revision(self):
+        with mock.patch.dict(sensor.__dict__, {
+                'xrange': range, 'g_offh_destr_spatial_cell_generations': {},
+                'g_offh_destr_spatial_global_generation': 0,
+                'g_offh_destr_spatial_published_revision': 0}), \
+                mock.patch.object(sensor, '_spatial_cell_signature_1513',
+                    wraps=sensor._spatial_cell_signature_1513) as signature:
+            with sensor.collision_preparation_scope_1513():
+                first = sensor._collision_region_revision_1513((0, 0), (2, 2))
+                for unused in range(100):
+                    self.assertEqual(first, sensor._collision_region_revision_1513((0, 0), (2, 2)))
+                self.assertEqual(1, signature.call_count)
+                sensor._bump_spatial_revision_1513(bin_keys={(0, 0)})
+                self.assertNotEqual(first, sensor._collision_region_revision_1513((0, 0), (2, 2)))
+                self.assertEqual(2, signature.call_count)
+            sensor._collision_region_revision_1513((0, 0), (2, 2))
+            self.assertEqual(3, signature.call_count)
+
     def setUp(self):
         patcher = mock.patch.dict(sensor.__dict__, {
             'g_offh_destr_runtime_space': 1, 'g_offh_destr_spatial_revision': 0,

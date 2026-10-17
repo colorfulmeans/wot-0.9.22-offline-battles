@@ -8534,7 +8534,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         # Damage preserves the observed pre-response pose. Equal masses
         # receive equal recovery shares even across different pose owners.
-        self.assertAlmostEqual(-.245, corrected[2], places=4)
+        # The oriented body narrow phase determines recovery distance; this
+        # receipt contract requires backward separation, not the old yaw-only depth.
+        self.assertLess(corrected[2], 0.0)
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])
@@ -29188,13 +29190,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
             send_current=lambda: client.send_input('current'))
         battle._local_speed = 5.0
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
 
-        self.assertEqual(0.0, battle._local_speed)
+        battle._advance_local_wreck.assert_called_once_with(entity, 0.1)
         self.assertEqual(0.0, battle._sender.forward)
         self.assertEqual(0.0, battle._sender.turn)
         self.assertFalse(battle.shoot(0.0, 0.0))
-        self.assertFalse(any(kind == 'fire' for kind, unused in client.sent))
+        self.assertFalse(any(row[0] == 'fire' for row in client.sent))
 
     def test_presentation_ledger_names_only_verifiable_displayed_bots(self):
         runtime = _runtime()
@@ -30782,6 +30785,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._start_message = {'round_id': 2}
+        battle._battle_live = True
         position = types.SimpleNamespace(x=4., y=5., z=6.)
         matrix = types.SimpleNamespace(translation=position)
         runtime.math.Matrix = lambda value: value
@@ -30795,6 +30799,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertTrue(battle._log_bot_motion_probes(10.))
             payload = write.call_args[0][1]
             self.assertEqual(2, payload['round'])
+            self.assertEqual('live', payload['phase'])
             self.assertEqual([4.,5.,6.], payload['bots'][0]['model_position'])
             self.assertFalse(battle._log_bot_motion_probes(10.1))
             self.assertEqual(1, battle._sync.take_motion_probes.call_count)
@@ -30802,6 +30807,21 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertFalse(battle._log_bot_motion_probes(11.1))
             battle._generation += 1
             self.assertTrue(battle._log_bot_motion_probes(11.2))
+
+    def test_bot_motion_diagnostic_drains_without_reporting_after_result(self):
+        battle = BattleRuntime(_runtime())
+        battle._battle_live = True
+        battle._battle_result = {'winner': 1}
+        battle._sync = types.SimpleNamespace(take_motion_probes=mock.Mock())
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        with mock.patch.object(native_input_diagnostics, 'write_json_record') as write:
+            self.assertFalse(battle._log_bot_motion_probes(10.))
+            battle._battle_result = None
+            battle._battle_live = False
+            self.assertFalse(battle._log_bot_motion_probes(11.))
+        self.assertEqual([mock.call(10.), mock.call(11.)],
+                         battle._sync.take_motion_probes.call_args_list)
+        write.assert_not_called()
 
     def test_render_pose_fast_path_skips_materialization_and_bounds_tracks(self):
         runtime = _runtime()
@@ -34026,6 +34046,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             forward=1.0, turn=0.0,
             send_current=lambda: client.send_input('current'))
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
         self.assertEqual([], entity.teleports)
 

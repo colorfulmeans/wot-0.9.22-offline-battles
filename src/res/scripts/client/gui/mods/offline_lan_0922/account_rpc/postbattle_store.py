@@ -237,6 +237,9 @@ def _receipt(value):
     if not 0 <= battle_booster <= 2 ** 31 - 1:
         raise ValueError('battle receipt directive is invalid')
     crystal_rewards = value.get('crystal_rewards') or {}
+    eligible_for_crystal = value.get('eligible_for_crystal_rewards', False)
+    if type(eligible_for_crystal) is not bool:
+        raise ValueError('battle receipt bond eligibility is invalid')
     if (not isinstance(crystal_rewards, dict) or
             not set(crystal_rewards).issubset(battle_bonds.MEDAL_BONDS)):
         raise ValueError('battle receipt medal bonds are invalid')
@@ -417,6 +420,7 @@ def _receipt(value):
         'equipment_used': equipment_used,
         'battle_booster': battle_booster,
         'crystal_rewards': crystal_rewards,
+        'eligible_for_crystal_rewards': eligible_for_crystal,
         'public_results': public_results,
         'interactions': interactions,
     }
@@ -937,6 +941,10 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
     quests_progress.update(personal_campaign_results.quests_progress(
         receipt.get('personal_missions')))
     avatar = {
+        # #1513's native TotalCrystalDetailsBlock is hidden without this flag.
+        # Medal-only and older positive receipts also need the native section.
+        'eligibleForCrystalRewards': bool(
+            receipt.get('eligible_for_crystal_rewards') or rewards['crystal']),
         'questsProgress': quests_progress,
         'accountDBID': account_dbid, 'team': receipt['team'],
         'credits': rewards['credits'], 'xp': rewards['xp'],

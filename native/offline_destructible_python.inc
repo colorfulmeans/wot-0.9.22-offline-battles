@@ -164,6 +164,40 @@ PyObject *WOT_CDECL destr_box_geometry(PyObject *,PyObject *args) {
     try {
         namespace d=offline_destructible;namespace b=destructible_bridge;
         require_sequence(args,2,true);auto **v=items(args);const int op=index_value(v[0]);profile.opcode(op);
+        if(op==3){
+            // Sorted union of the exact spatial invalidation cells. Generation
+            // values stay with the Python mutation owner; no stale native copy.
+            require_sequence(v[1],0);
+            if(size(v[1])>256)throw Unsupported();
+            std::vector<std::array<int,4>> rectangles;
+            std::uint64_t visits=0;
+            for(Py_ssize_t i=0;i<size(v[1]);++i){
+                PyObject *rectangle=items(v[1])[i];require_sequence(rectangle,4,true);
+                std::array<int,4> bounds;
+                for(int j=0;j<4;++j){const double value=finite_number(items(rectangle)[j]);
+                    if(std::abs(value)>1000000.)throw Unsupported();
+                    bounds[j]=static_cast<int>(value);
+                }
+                if(bounds[1]<bounds[0]||bounds[3]<bounds[2])continue;
+                visits+=std::uint64_t(bounds[1]-bounds[0]+1)*std::uint64_t(bounds[3]-bounds[2]+1);
+                if(visits>131072)throw Unsupported();
+                rectangles.push_back(bounds);
+            }
+            const auto cells=profile.run([&rectangles,visits](){
+                std::vector<d::Cell> result;result.reserve(visits);
+                for(const auto &bounds:rectangles)
+                    for(int x=bounds[0];x<=bounds[1];++x)
+                        for(int z=bounds[2];z<=bounds[3];++z)result.emplace_back(x,z);
+                // One rectangle already has the required lexicographic order.
+                if(rectangles.size()>1){std::sort(result.begin(),result.end());
+                    result.erase(std::unique(result.begin(),result.end()),result.end());}
+                return result;
+            });
+            OwnedTuple result(cells.size());Py_ssize_t i=0;
+            for(const auto &cell:cells){OwnedTuple row(2);row.set(0,int_new(cell.first));
+                row.set(1,int_new(cell.second));result.set(i++,row.release());}
+            return result.release();
+        }
         if(op==1){const auto boxes=b::boxes(v[1]);d::Box envelope;
             const bool ready=profile.run(d::motion_envelope,boxes,envelope);
             OwnedTuple result(1);result.set(0,ready?b::box_result(envelope):fallback());return result.release();

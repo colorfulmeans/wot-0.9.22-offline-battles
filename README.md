@@ -570,6 +570,55 @@ python3 tools/run_test_suite.py --jobs 4 --logs build/client-test-results
 python3 tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
 ```
 
+The runner isolates module fakes by test file, fails empty discovery, and writes
+`summary.json` with failing assertion/subtest identities and skips alongside the
+complete logs. Compare the actual published release source with the candidate;
+equal failure counts between neighboring test builds are not regression proof.
+Recovery checks include continuous traffic departure, terminal arrival, real
+contact separation, returned connectors, deferred proofs, and physical departure
+from a recovery pocket. A control command alone does not demonstrate escape.
+Engine-free fixtures and CPython 2.7 native parity do not replace acceptance on
+the pinned Windows client.
+
+Bot navigation, driving and recovery have been restored to the **initial**
+`v0.10.1` tag (`e7d95d56`), not the subsequently replaced release assets.
+Retain only the separate support/contact-point corrections in the Bot runtime.
+Do not restore cross-order recovery memory, first-refusal route retirement,
+new local bypass ownership or arrival handbraking as incidental fixes.
+Audit the original failure and its existing retry/route progression first.
+Focused corrections on that baseline preserve local alignment/safety braking
+when strategy requests forward travel, avoid contact escape for a merely
+tangent parallel hull, and include ordinary forward `advance` in the existing
+20-second authored-gate retry budget. Actual overlap and movement into a peer
+retain the original checked escape; holds and explicit team commands remain
+outside the route-stall timer. No global recovery state or replacement route
+law is introduced.
+The retained physical boundary also applies the existing ground-exit proof to
+upper hull rays, so leaving a slope is not rejected as an upper wall; real
+walls and beams still require a clear remainder and continue to block.
+Known test-build map identities remain readable so saved user route points
+are preserved when returning to the original navigation resources.
+
+Temporary Bot suspension uses the basic centre/front/rear/right/left footprint:
+any missing valid support point enables the detailed solver without a vehicle
+contact prerequisite. After accepted landing effects, all five restored points
+and a grounded pose return ownership to basic support without moving the hull
+or zeroing its velocities. Support samples are reused at an identical pose in
+the same tick. BOT SUPPORT MODE logs transitions and bounded per-point evidence.
+Player and Bot landing admission retains a damaging solver contact even if the
+final pose rebounds airborne; observed ground with no selected witness still
+reaches the existing Bot module-contact resolver. Landing and module-query logs
+distinguish physical admission, empty geometry results and actual HP changes.
+Uphill tops clipped by the basic height window require the existing continuous
+ground proof before counting as support; disconnected roofs remain invalid.
+Handback retires the old basic slope target. Local module icons reconcile through
+the stock DEVICES controller without replaying damage messages or voice, with
+bounded recovery refreshes after repair and controller replacement. Live egress
+receipts distinguish missing support, excessive grade, shoulder failure, collision
+and deferred native proof without changing admission or retry rules.
+The impact module coefficient remains 25. Native-client gameplay and query cost
+still require a matching launcher playtest.
+
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
 assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage

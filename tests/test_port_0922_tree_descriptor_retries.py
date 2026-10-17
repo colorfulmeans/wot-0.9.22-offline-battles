@@ -54,7 +54,7 @@ class TreeDescriptorRetryTests(unittest.TestCase):
         self.assertFalse(self.callbacks)
         self.assertFalse(compat._DESC_PENDING_CALLS)
 
-    def test_layout_repair_keeps_the_pending_callback_in_the_same_lifetime(self):
+    def test_descriptor_cache_refresh_keeps_pending_callback_in_same_lifetime(self):
         wrapped = compat._tree_descriptor_boundary(self.area, mock.Mock())
         with mock.patch.object(compat, 'inspect_destructible_desc', return_value=('pending', None)):
             wrapped(self.manager, 22, 7, 'fractureEffect', 0.)
@@ -75,7 +75,6 @@ class TreeDescriptorRetryTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, {'Math': math}), \
                 mock.patch.object(sensor, '_destructible_catalog', catalog), \
                 mock.patch.dict(sensor.__dict__, {'g_offh_destr_catalog_tree_names': {}}), \
-                mock.patch.object(sensor, '_layout_repair_pending_1513', return_value=False), \
                 mock.patch.object(sensor, '_catalog_instance_for_matrix_1513',
                     return_value=(signature, None)) as locate:
             self.assertEqual(('exact', 'tree'), sensor._resolve_catalog_tree_name_1513(

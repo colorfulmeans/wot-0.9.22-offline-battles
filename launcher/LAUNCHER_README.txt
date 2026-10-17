@@ -26,6 +26,11 @@ original vehicle profile. Playback does not award battle rewards.
 Use the launcher's built-in vehicle editor and error-report controls. The player
 download includes START_SPIKE_PROFILE.bat for optional detailed profiling.
 
+Normal battles use wot-0.9.22-offline-battles.exe. START_ROOF_CRUSH_TEST.bat
+and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.
+Exit both the game and launcher before switching entrances. The fixtures do
+not change saved room presets; the contact fixes also apply in normal battles.
+
 Customize save -> Coatings edits preset-style inventory, including hidden styles.
 Select one vehicle or all compatible vehicles, add copies or fill missing styles,
 then Save with the game closed. One rental copy grants its original battle count.

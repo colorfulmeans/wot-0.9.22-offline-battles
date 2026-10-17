@@ -531,6 +531,41 @@ class OrderedInputLedgerTests(unittest.TestCase):
                 self.assertTrue(state.update_input(1, _frame(state)))
                 self.assertEqual(3, player.input_processed_seq)
 
+    def test_dead_owner_passive_pose_keeps_weapons_and_damage_inactive(self):
+        state = _state(players=1)
+        player = self._admit_base_frame(state)
+        player.alive, player.health = False, 0
+        previous_fire = player.fire_seq
+        previous_input = player.input_seq
+        message = _frame(state, wreck_pose=True, x=40.3864, y=-11.2, z=65.0813,
+                         forward=1., turn=1., speed=20., fire_seq=previous_fire+1)
+        self.assertTrue(state.update_input(1, message))
+        self.assertEqual((40.3864,-11.2,65.0813),(player.x,player.y,player.z))
+        self.assertEqual((0.,0.,0.),(player.forward,player.turn,player.speed))
+        self.assertEqual(previous_fire, player.fire_seq)
+        self.assertEqual(previous_input, player.input_seq)
+        self.assertEqual((False,0),(player.alive,player.health))
+        self.assertEqual('inactive',player.input_decisions[2]['outcome'])
+        before=_mutable_state(player)
+        self.assertTrue(state.update_input(1,message))
+        self.assertEqual(before,_mutable_state(player))
+
+    def test_passive_wreck_pose_rejects_invalid_or_inactive_rounds(self):
+        for condition in ('nan','finished','waiting','nonparticipating','old_round'):
+            with self.subTest(condition=condition):
+                state=_state(players=1)
+                player=self._admit_base_frame(state)
+                player.alive,player.health=False,0
+                if condition=='finished':state.battle_result={'winner':1}
+                if condition=='waiting':state.phase='waiting'
+                if condition=='nonparticipating':player.participating=False
+                message=_frame(state,wreck_pose=True,y=-18.)
+                if condition=='nan':message['x']=float('nan')
+                if condition=='old_round':message['round_id']=state.round_id-1
+                before=_mutable_state(player)
+                state.update_input(1,message)
+                self.assertEqual(before,_mutable_state(player))
+
     def test_an_inactive_frame_with_a_bad_contact_row_is_terminal(self):
         state = _state(players=1)
         player = self._admit_base_frame(state)

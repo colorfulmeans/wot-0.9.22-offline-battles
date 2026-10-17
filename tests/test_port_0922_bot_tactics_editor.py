@@ -374,6 +374,22 @@ class RealRuntimeIntegrationTests(unittest.TestCase):
 
 
 class PragueRouteResourceIdentityTests(unittest.TestCase):
+    def test_initial_release_rollback_preserves_saved_test_build_route_edits(self):
+        self.assertEqual(11, len(cfg.NAVIGATION_ROLLBACK_IDENTITIES))
+        for name, successor in cfg.NAVIGATION_ROLLBACK_IDENTITIES.items():
+            with self.subTest(map=name):
+                raw = cfg.empty('Saved test-build route edits')
+                settings = copy.deepcopy(cfg.default_map(name))
+                settings['resource_sha256'] = successor
+                self.assertTrue(settings['default_routes'])
+                settings['default_routes'][0]['disabled'] = True
+                raw['maps'][name] = settings
+                normalized = cfg.canonical(raw)['maps'][name]
+                self.assertEqual(cfg.MAPS[name]['resource_sha256'],
+                                 normalized['resource_sha256'])
+                self.assertEqual(settings['default_routes'],
+                                 normalized['default_routes'])
+
     def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
         raw = cfg.empty('Existing Prague profile')
         raw['maps']['114_czech'] = copy.deepcopy(cfg.default_map('114_czech'))

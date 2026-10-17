@@ -22,6 +22,12 @@ def point(value):
         return tuple(float(value[index]) for index in range(3))
 
 
+def spatial_cells(rectangles):
+    """Union exact collision-grid rectangles without Python sets/sorting."""
+    from . import native_math
+    return native_math.call('destr_box_geometry', 3, rectangles)
+
+
 def pose(position, yaw, bbox, travel=0., motion_yaw=None, pitch=0., roll=0.):
     return (point(position), float(yaw), float(pitch), float(roll), float(travel),
             None if motion_yaw is None else float(motion_yaw),

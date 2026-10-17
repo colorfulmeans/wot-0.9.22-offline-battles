@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import math
 import struct
 import sys
@@ -233,6 +234,88 @@ class TankCollisionTests(unittest.TestCase):
         self.assertFalse(tank_collision.vertical_overlap(
             0.0, lower, 3.02, upper))
 
+    def test_unmarked_vertical_overlap_has_no_horizontal_response_on_either_owner(self):
+        lower = _tank(1, 0., 0.)
+        upper = _tank(2, .2, .1, y=2.7)
+        for first, second in ((lower, upper), (upper, lower)):
+            trace = {}
+            self.assertFalse(tank_collision.planar_body_contact(first, second, trace))
+            self.assertEqual('vertical', trace['verdict'])
+            self.assertTrue(tank_collision.vertical_overlap(first['y'],first['shape'],second['y'],second['shape']))
+            result = tank_collision.resolve_tank(first, [second], dt=.025)
+            self.assertEqual((0.,0.), result['correction'])
+            self.assertEqual((0.,0.), result['delta_velocity'])
+        solved = tank_collision.resolve_pairs([upper, lower], .025)
+        self.assertTrue(all(v['correction'] == (0.,0.) for v in solved.values()))
+
+    def test_tilted_volumes_can_be_separate_inside_the_old_footprint(self):
+        first = _tank(1, 0., 0.)
+        second = _tank(2, 2.8, 0., y=3.)
+        second['roll'] = math.pi/2
+        # Minimum translation is vertical here, despite positive yaw-only SAT.
+        self.assertIsNotNone(tank_collision.obb_contact(0.,0.,0.,first['shape'],2.8,0.,0.,second['shape']))
+        self.assertIsNone(tank_collision.physical_planar_contact(first, second))
+        second['x'] = -2.8
+        trace = {}
+        self.assertFalse(tank_collision.planar_body_contact(first, second, trace))
+        self.assertEqual('separated', trace['verdict'])
+
+    def test_captured_three_type59_bodies_separate_without_motor_or_ram_damage(self):
+        rows=json.loads((ROOT/'tests/fixtures/roof_same_layer_164250.json').read_text())
+        shape=(1.600411057472229,2.9779720306396484,.004364000167697668,1.5524429678916931)
+        bodies=[]
+        for row in rows:
+            body=_tank(row['id'],row['x'],row['z'],y=row['y'],yaw=row['yaw'],shape=shape,mass=36000.)
+            body.update(pitch=row['pitch'],roll=row['roll'],alive=True,kind='bot')
+            bodies.append(body)
+        for other in bodies[1:]:
+            trace={}
+            self.assertTrue(tank_collision.planar_body_contact(bodies[0],other,trace))
+            self.assertTrue(trace['same_layer'])
+        positions=[(b['x'],b['z']) for b in bodies]
+        for unused in range(12):
+            result=tank_collision.resolve_pairs(bodies,.1)
+            for b in bodies:
+                receipt=result[b['id']]
+                self.assertEqual((0.,0.),receipt['delta_velocity'])
+                b['x']+=receipt['correction'][0]
+                b['z']+=receipt['correction'][1]
+        self.assertNotEqual(positions,[(b['x'],b['z']) for b in bodies])
+        for i,a in enumerate(bodies):
+            for b in bodies[i+1:]:
+                trace={}
+                tank_collision.planar_body_contact(a,b,trace)
+                self.assertLessEqual(trace.get('depth',0.),.011)
+                self.assertEqual((),tank_collision.resolve_tank(a,[b],dt=.1)['ram_events'])
+
+    def test_same_layer_classification_is_symmetric_across_small_ground_height_changes(self):
+        for dy in (-.04,0.,.04):
+            first=_tank(1,0.,0.)
+            second=_tank(2,1.,0.,y=dy)
+            first['roll']=.02
+            for a,b in ((first,second),(second,first)):
+                trace={}
+                self.assertTrue(tank_collision.planar_body_contact(a,b,trace))
+                self.assertTrue(trace['same_layer'])
+                self.assertIsNotNone(tank_collision.physical_planar_contact(a,b))
+
+    def test_real_side_contact_retains_reciprocal_shove(self):
+        first = _tank(1, 0., 0., vx=10.)
+        second = _tank(2, 2.8, 0., y=.5)
+        trace = {}
+        self.assertTrue(tank_collision.planar_body_contact(first, second, trace))
+        self.assertEqual('side', trace['verdict'])
+        solved = tank_collision.resolve_pairs([first,second], .025)
+        self.assertLess(solved[1]['correction'][0],0.)
+        self.assertGreater(solved[2]['correction'][0],0.)
+        self.assertAlmostEqual(solved[1]['delta_velocity'][0],-solved[2]['delta_velocity'][0])
+
+    def test_vertical_overlap_cannot_create_motor_traverse_impulse(self):
+        first = _tank(1, 0., 0.)
+        second = _tank(2, .2, .1, y=2.7)
+        first.update(traverse_speed=1., traverse_torque=100000.)
+        self.assertEqual({1:(0.,0.),2:(0.,0.)},tank_collision.traverse_impulses([first,second],.025))
+
     def test_pair_solver_reuses_vertical_bounds_but_updates_each_horizontal_contact(self):
         first = _tank(1, 0., 0., mass=20000., vx=10.)
         second = _tank(2, 2.8, 0., mass=30000.)
@@ -265,7 +348,7 @@ class TankCollisionTests(unittest.TestCase):
         for update, admitted in (
                 ({'y': 10.}, False), ({'y': 0.}, True),
                 ({'y': 3.}, False), ({'pitch': math.pi/2}, True),
-                ({'pitch': 0.}, False), ({'roll': math.pi/2}, True),
+                ({'pitch': 0.}, False), ({'roll': math.pi/2}, False),
                 ({'roll': 0.}, False), ({'shape': (1.5, 3.5, -2., 2.)}, True)):
             with self.subTest(update=update):
                 second.update(update)
@@ -273,7 +356,8 @@ class TankCollisionTests(unittest.TestCase):
                                        wraps=tank_collision._obb_contact_projected) as horizontal:
                     result = tank_collision.resolve_pairs([first, second], .025)
                 if admitted:
-                    self.assertEqual(contact, result)
+                    self.assertTrue(any(value['correction'] != (0., 0.)
+                                        for value in result.values()))
                 else:
                     horizontal.assert_not_called()
                     self.assertTrue(all(value['correction'] == (0., 0.) and

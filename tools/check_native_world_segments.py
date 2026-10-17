@@ -38,9 +38,10 @@ try:
             owner = base.object_for(_avatar=base.object_for(spaceID=1),
                 _runtime=base.object_for(bigworld=scene, math=math_module))
             args = dict(arguments, query_owner=owner)
+            probe_yaw = args.pop('yaw', 0.)
             trace = {}
             status = base.world.check_horizontal_collision(scene, math_module,
-                1, FloatVector(), .0, speed, base.descriptor,
+                1, FloatVector(), probe_yaw, speed, base.descriptor,
                 return_status=True, trace=trace, **args)
             arms.append((status, queries, trace, owner._native_world_query.counts))
         base.equal(arms[1][:3], arms[0][:3])
@@ -133,9 +134,10 @@ try:
                     owner = base.object_for(_avatar=base.object_for(spaceID=1),
                         _runtime=base.object_for(bigworld=scene, math=math_module))
                     args = dict(arguments, query_owner=owner)
+                    probe_yaw = args.pop('yaw', 0.)
                     trace = {}
                     result = base.world.check_horizontal_collision(scene, math_module,
-                        1, FloatVector(), 0., speed, base.descriptor,
+                        1, FloatVector(), probe_yaw, speed, base.descriptor,
                         return_status=True, trace=trace, **args)
                     arms.append((result, queries, trace, owner._native_world_query.skin_calls))
                 base.equal(arms[0][:3], arms[1][:3])
@@ -144,7 +146,7 @@ try:
                 else:
                     removed_skins += arms[0][3] - arms[1][3]
         assert removed_skins > 0
-        print('Pinned skin prefilter parity: 125 scenes;', removed_skins,
+        print('Pinned skin prefilter parity:', 5*len(base.cases), 'scenes;', removed_skins,
               'no-op callbacks removed; relevant surfaces, rays and verdicts retained')
     finally:
         sensor._destructible_catalog, sensor.g_offh_tree_state = saved_catalog, saved_trees
