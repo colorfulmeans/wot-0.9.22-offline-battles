@@ -745,17 +745,29 @@ def slope_pose(probe, position, yaw, half_length, half_width,
     length = max(3.0, 2.0 * float(half_length))
     width = max(2.0, 2.0 * float(half_width))
     sine, cosine = math.sin(yaw), math.cos(yaw)
-    front = probe(position[0] + sine * length * 0.5,
-                  position[2] + cosine * length * 0.5, position[1])
-    rear = probe(position[0] - sine * length * 0.5,
-                 position[2] - cosine * length * 0.5, position[1])
-    right = probe(position[0] + cosine * width * 0.5,
-                  position[2] - sine * width * 0.5, position[1])
-    left = probe(position[0] - cosine * width * 0.5,
-                 position[2] + sine * width * 0.5, position[1])
+    normal = vehicle_physics.suspension_point_offset(
+        dict(x=0.0, y=1.0, z=0.0), last_pitch, last_roll)
+    values = []
+    points = []
+    for name, local_x, local_z in (
+            ('front', 0.0, length * 0.5), ('rear', 0.0, -length * 0.5),
+            ('right', width * 0.5, 0.0), ('left', -width * 0.5, 0.0)):
+        x = position[0] + cosine * local_x + sine * local_z
+        z = position[2] - sine * local_x + cosine * local_z
+        # The ray starts two metres above its datum. On a long tilted hull,
+        # the uphill end can already be higher than centre + two metres.
+        # Reuse the accepted plane only as a ray origin, never as a hit.
+        hint = position[1]
+        if exact and normal[1] > 0.01:
+            hint -= (normal[0] * local_x + normal[2] * local_z) / normal[1]
+        value = probe(x, z, hint)
+        values.append(value)
+        points.append(dict(name=name, x=x, z=z, hint_y=hint, height=value))
+    front, rear, right, left = values
     if receipt is not None:
         receipt.update(front=front, rear=rear, right=right, left=left,
-                       length=length, width=width, sample_yaw=yaw)
+                       length=length, width=width, sample_yaw=yaw,
+                       points=points, complete=None not in values)
     if None in (front, rear, right, left):
         return None if exact else (float(last_pitch), float(last_roll))
     if exact:
@@ -6940,24 +6952,40 @@ class BotRuntime(object):
         return self._suspension_path_supports_plane(
             previous_plane, motion_pose, position)
 
-    def _ground_probe_at(self, x, z, hint, maximum_y=None):
+    def _ground_probe_at(self, x, z, hint, maximum_y=None, receipt=None):
         """Run one accounted physics ground column."""
         self._probe_totals[3] += 1
         probe_started = self._probe_started()
+        if receipt is not None:
+            receipt.update(x=x, z=z, hint_y=hint, maximum_y=maximum_y,
+                           outcome='query_started', height=None)
         try:
-            if maximum_y is not None and callable(self._physics_ground_limit_probe):
+            if (maximum_y is not None or receipt is not None) and callable(self._physics_ground_limit_probe):
                 result = self._physics_ground_limit_probe(x,z,hint,maximum_y)
                 if isinstance(result,dict):
+                    if receipt is not None:
+                        receipt.update(result)
+                        receipt['outcome'] = 'hit' if result['height'] is not None else 'unavailable'
                     queries = getattr(self,'_basic_support_queries',None)
                     if queries is not None and len(queries)<16:queries.append(result)
                     return result['height']
+                if receipt is not None:
+                    receipt.update(height=result, outcome='untraced_hit' if result is not None else 'untraced_miss')
                 return result
             value = self._physics_ground_probe(x, z, hint)
             # Narrow test/custom probes may not expose layered queries. They
             # cannot turn an overhead return into a physical landing either.
             if maximum_y is not None and value is not None and float(value) > maximum_y:
+                if receipt is not None:
+                    receipt.update(returned_height=value, outcome='above_limit')
                 return None
+            if receipt is not None:
+                receipt.update(height=value, outcome='untraced_hit' if value is not None else 'untraced_miss')
             return value
+        except Exception as error:
+            if receipt is not None:
+                receipt.update(outcome='query_exception', error_type=type(error).__name__)
+            raise
         finally:
             self._probe_finished(3, probe_started)
 
@@ -7704,15 +7732,50 @@ class BotRuntime(object):
 
     @timed('bot.slope')
     def _update_slope_pose(self, state, allow_ungrounded=False, force_sample=False):
+        """Publish one terminal receipt even for cached and skipped refreshes."""
+        now = getattr(self, '_contact_now', None)
+        state['_slope_refresh_sequence'] = state.get('_slope_refresh_sequence', 0) + 1
+        before = self._turret_state_pose(state)
+        previous = state.get('_basic_slope_samples') or {}
+        sampled_at = previous.get('sampled_at')
+        receipt = dict(
+            sequence=state['_slope_refresh_sequence'], at=now,
+            measured_pose=state.get('pose_sample'), current_pose=(state['x'], state['z'], state['yaw']),
+            basis_yaw=state.get('_basic_slope_basis_yaw'), force=bool(force_sample),
+            accepted_sample_at=sampled_at,
+            accepted_sample_age=(now-sampled_at if now is not None and sampled_at is not None else None),
+            reason='evaluate', queries=[], guard='not_run', marker_advanced=False,
+            changed=False)
+        state['_slope_pose_refresh'] = receipt
+        try:
+            changed = self._refresh_slope_pose(state, allow_ungrounded, force_sample)
+            receipt['changed'] = bool(changed)
+            return changed
+        except Exception as error:
+            receipt.update(reason='refresh_exception', error_type=type(error).__name__)
+            raise
+        finally:
+            receipt['applied_pose'] = dict((key, state.get(key)) for key in
+                ('yaw', 'pitch', 'terrain_pitch', 'roll'))
+            receipt['final_measured_pose'] = state.get('pose_sample')
+            receipt['final_basis_yaw'] = state.get('_basic_slope_basis_yaw')
+            receipt['final_sample_at'] = (state.get('_basic_slope_samples') or {}).get('sampled_at')
+            self._report_basic_slope_pose(state, before, self._turret_state_pose(state),
+                receipt['changed'], 'sample')
+
+    def _refresh_slope_pose(self, state, allow_ungrounded, force_sample):
         """Refresh the four-point hull pose after this tick's ground settle."""
+        refresh = state['_slope_pose_refresh']
         # The ten-spring solver already owns authoritative pitch and roll.
         # A later staggered presentation sample must not overwrite that pose.
         if getattr(self, '_suspension_params', {}).get(
                 int(state.get('id', -1))) is not None:
+            refresh['reason'] = 'detailed_solver_owns_pose'
             return False
         if (state.get('airborne', False) or
                 (not allow_ungrounded and not state.get(
                     'grounded_once', False))):
+            refresh['reason'] = 'airborne' if state.get('airborne') else 'not_grounded'
             return False
         yaw = state['yaw']
         x = state['x']
@@ -7721,10 +7784,7 @@ class BotRuntime(object):
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]
         marker = state.get('pose_sample')
-        state['_slope_pose_refresh'] = dict(
-            at=getattr(self, '_contact_now', None), measured_pose=marker,
-            current_pose=(x, z, yaw), basis_yaw=state.get('_basic_slope_basis_yaw'),
-            force=bool(force_sample), reason='evaluate')
+        refresh['thresholds'] = dict(travel=travel, turn=turn)
         exact = not bool(_value(self._descriptors.get(int(state['id']), {}),
                                 'isPitchHullAimingAvailable', False))
         new_target = None
@@ -7735,6 +7795,7 @@ class BotRuntime(object):
             state['_slope_pose_refresh']['reason'] = 'measurement_reused'
             target = state.get('_slope_pose_target')
             if target is None:
+                refresh['reason'] = 'cached_target_missing'
                 return False
             terrain_pitch = self._terrain_pitch(state)
             if max(abs(target[0] - terrain_pitch),
@@ -7747,23 +7808,29 @@ class BotRuntime(object):
             state['_slope_pose_refresh']['reason'] = 'measurement_requested'
             state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
             slope_receipt = {}
+            refresh['attempted_samples'] = slope_receipt
+            slope_receipt['sampled_at'] = getattr(self, '_contact_now', None)
+            def probe(px, pz, hint):
+                query = dict(name=('front', 'rear', 'right', 'left')[len(refresh['queries'])])
+                refresh['queries'].append(query)
+                return self._ground_probe_at(px, pz, hint, receipt=query)
             sampled = slope_pose(
-                self._ground_probe_at, (x, state['y'], z), yaw,
+                probe, (x, state['y'], z), yaw,
                 state.get('half_length', 3.5), state.get('half_width', 1.7),
                 self._terrain_pitch(state), state.get('roll', 0.0),
                 exact=exact, receipt=slope_receipt)
-            if sampled is None:
+            if sampled is None or slope_receipt.get('complete') is False:
                 state['_slope_pose_refresh']['reason'] = 'measurement_unavailable'
                 return False
             pitch, roll = sampled
-            slope_receipt['sampled_at'] = getattr(self, '_contact_now', None)
-            state['_slope_pose_refresh']['attempted_samples'] = slope_receipt
             new_target = (
                 (pitch, roll) if exact else
                 (pitch * 2.0 - self._terrain_pitch(state),
                  roll * 2.0 - state.get('roll', 0.0)))
 
         suspension_pitch = state.get('suspension_pitch', 0.0)
+        refresh['proposed_pose'] = dict(yaw=yaw, pitch=pitch+suspension_pitch,
+                                       terrain_pitch=pitch, roll=roll)
         if self._turret_motion_probe is not None:
             before = self._turret_state_pose(state)
             after = dict(before)
@@ -7771,10 +7838,12 @@ class BotRuntime(object):
             after['chassis'] = dict(before['chassis'], pitch=pitch, roll=roll)
             if not self._turret_motion_probe(
                     before, after, self._descriptors.get(int(state['id']))):
+                refresh['guard'] = 'rejected_detached_turret_sweep'
                 state['_slope_pose_refresh']['reason'] = 'body_pose_rejected'
-                self._report_basic_slope_pose(state, before, after, False, 'sample')
                 return False
-            self._report_basic_slope_pose(state, before, after, True, 'sample')
+            refresh['guard'] = 'clear_detached_turret_sweep'
+        else:
+            refresh['guard'] = 'no_detached_turret_probe'
         state['terrain_pitch'] = pitch
         state['pitch'] = pitch + suspension_pitch
         state['roll'] = roll
@@ -7784,6 +7853,9 @@ class BotRuntime(object):
             state['_slope_pose_target'] = new_target
             state['pose_sample'] = (x, z, yaw)
             state['_slope_pose_refresh']['reason'] = 'measurement_accepted'
+            refresh['marker_advanced'] = True
+        else:
+            refresh['reason'] = 'cached_target_applied'
         return True
 
     def _reorient_basic_ground_pose(self, state):
@@ -7826,9 +7898,10 @@ class BotRuntime(object):
 
     def _report_basic_slope_pose(self, state, before, after, accepted, phase):
         now = getattr(self, '_contact_now', None)
-        if now is None or now < state.get('_basic_slope_pose_log_at', -1.e30):
+        log_key = '_basic_slope_pose_log_at_' + phase
+        if now is None or now < state.get(log_key, -1.e30):
             return
-        state['_basic_slope_pose_log_at'] = now + 2.0
+        state[log_key] = now + 2.0
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT SLOPE POSE', dict(
             actor=int(state['id']), round=self.round_id, phase=phase,
@@ -7836,7 +7909,7 @@ class BotRuntime(object):
             before=dict((key, before.get(key)) for key in ('yaw', 'pitch', 'roll')),
             after=dict((key, after.get(key)) for key in ('yaw', 'pitch', 'roll')),
             samples=state.get('_basic_slope_samples'),
-            refresh=state.get('_slope_pose_refresh'),
+            refresh=state.get('_slope_pose_refresh') if phase == 'sample' else None,
             measured_pose=state.get('pose_sample'),
             basis_yaw=state.get('_basic_slope_basis_yaw'),
             airborne=bool(state.get('airborne'))))

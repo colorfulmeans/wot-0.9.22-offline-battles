@@ -24259,35 +24259,56 @@ class BattleRuntime(object):
         ray_start = self._vector((x, float(hint_y) + 2.0, z))
         ground_filter = self._ground_filter(x, z)
         for unused_layer in range(4):
+            query = None
+            if trace is not None:
+                query = dict(layer=unused_layer, start=list(_xyz(ray_start)),
+                             end=list(_xyz(ray_end)), outcome='query_started')
+                trace.append(query)
             try:
                 hit = self._collide_down(
                     ray_start, ray_end, ground_filter)
-            except Exception:
+            except Exception as error:
+                if query is not None:
+                    query.update(outcome='query_exception', error_type=type(error).__name__)
                 hit = None
             if hit is None:
-                if trace is not None: trace.append(dict(miss=True,start=list(_xyz(ray_start)),end=list(_xyz(ray_end))))
+                if query is not None:
+                    query['miss'] = True
+                    if query['outcome'] != 'query_exception':
+                        query['outcome'] = 'ray_miss'
                 return None
             candidate = float(hit[0].y)
             above_limit = (maximum_y is not None and
                            candidate > float(maximum_y))
             ground_facing = True
+            normal = None
             try:
                 ground_facing = float(hit[1].y) > 0.5
+                if trace is not None:
+                    normal = list(_xyz(hit[1]))
             except (AttributeError, IndexError, TypeError, ValueError):
                 # Engine-free compatibility probes historically supplied
                 # only the hit point. Production #1513 always supplies the
                 # normal, so this fallback cannot turn a live wall into
                 # support.
                 ground_facing = maximum_y is None
-            if trace is not None:
-                trace.append(dict(hit=list(_xyz(hit[0])), normal=list(_xyz(hit[1])) if len(hit)>1 else None,
-                    above_limit=above_limit, ground_facing=ground_facing))
+            if query is not None:
+                query.update(hit=list(_xyz(hit[0])), normal=normal,
+                             above_limit=above_limit, ground_facing=ground_facing)
             if not above_limit and ground_facing:
+                if query is not None:
+                    query['outcome'] = 'accepted'
                 return candidate
+            if query is not None:
+                query['outcome'] = 'above_limit' if above_limit else 'not_ground_facing'
             next_y = candidate - 0.05
             if next_y <= float(ray_end.y) + 0.01:
+                if query is not None:
+                    query['terminal'] = 'column_floor'
                 return None
             ray_start = self._vector((x, next_y, z))
+        if query is not None:
+            query['terminal'] = 'layer_budget_exhausted'
         return None
 
     def _terrain_support(self, position, yaw, descriptor=None,
