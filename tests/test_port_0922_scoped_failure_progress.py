@@ -35,6 +35,7 @@ class ScopedFailureTests(unittest.TestCase):
         self.remember('realised_motion')
         self.assertTrue(self.driver._short_failure_applies(self.state, self.origin, math.pi, .5))
         self.assertFalse(self.driver._short_failure_applies(self.state, (1., 0., 0.), math.pi, .5))
+        self.assertFalse(self.driver._short_failure_applies(self.state, (0., -14., 0.), math.pi, .5))
         self.state['clock'] = 5.
         self.assertFalse(self.driver._short_failure_applies(self.state, self.origin, math.pi, .5))
 

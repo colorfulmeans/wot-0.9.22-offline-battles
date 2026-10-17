@@ -475,6 +475,12 @@ class LocalDriver(object):
 			from_anchor * FAILED_YAW_BUCKET_COUNT / turn + 0.5))
 		return bucket % FAILED_YAW_BUCKET_COUNT
 
+	@staticmethod
+	def _failure_origin_matches(first, second):
+		# Refusals belong to a local physical pose, including its surface layer.
+		return sum((float(first[i]) - float(second[i])) ** 2
+			for i in range(3)) <= 0.25 ** 2
+
 	def remember_failure(self, bot_id, yaw, ttl=None, evidence=None):
 		"""Temporarily penalize a direction after a caller-observed bad path.
 
@@ -502,7 +508,7 @@ class LocalDriver(object):
 			previous.get('source') != 'motion_forecast' and
 			record.get('source') == 'motion_forecast' and
 			previous.get('origin') is not None and record.get('origin') is not None and
-			_distance(previous['origin'], record['origin']) <= 0.25)
+			self._failure_origin_matches(previous['origin'], record['origin']))
 		if not keep_contact:
 			records[key] = record
 		else:
@@ -536,7 +542,7 @@ class LocalDriver(object):
 		origin = evidence.get('origin')
 		# Legacy callers retain their actual-contact veto. Scoped forecasts
 		# cannot suppress a fresh shorter proof or follow a tank elsewhere.
-		if origin is not None and _distance(position, origin) > 0.25:
+		if origin is not None and not self._failure_origin_matches(position, origin):
 			return False
 		if evidence.get('source') == 'motion_forecast':
 			return float(evidence.get('distance', 0.0)) <= float(distance)
