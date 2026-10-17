@@ -78,11 +78,16 @@ class LocalHeightLinks(object):
                                 for v in p+n)):
                         rows.append(dict(point=p, normal=n,
                             navigation_water=bool(row.get('navigation_water',False))))
-        except (ValueError, TypeError, KeyError, RuntimeError):
+        except Exception as error:
+            # Native/space teardown failures are local unknown evidence, never
+            # an exception that terminates every Bot or the battle.
+            query_error = '%s: %s' % (type(error).__name__,str(error)[:160])
             rows = None
         self.column_evidence.append(dict(position=(x,z),band=(low,high),
             status=(raw.get('status') if isinstance(raw,dict) else 'invalid')
                 if 'raw' in locals() else 'query_error', surfaces=rows))
+        if 'query_error' in locals():
+            self.column_evidence[-1]['error'] = query_error
         self.columns[key] = rows
         if rows is not None and self.generation is not None and self.now is not None:
             if len(self._column_history) >= 512:

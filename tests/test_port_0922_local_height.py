@@ -96,6 +96,14 @@ class LocalHeightTests(unittest.TestCase):
             links=LocalHeightLinks(probe);links.begin((6.,-15.,6.))
             self.assertEqual('unknown',links.inspect((6.,-15.,6.),(9.,1.,6.),1.)[0])
 
+    def test_native_space_teardown_failure_is_local_and_logged(self):
+        def probe(*args):raise AttributeError('space retired')
+        links=LocalHeightLinks(probe);links.begin((6.,-15.,6.))
+        self.assertEqual('unknown',links.inspect((6.,-15.,6.),(9.,1.,6.),1.)[0])
+        self.assertIn('space retired',links.column_evidence[0]['error'])
+        links.begin((6.,1.,6.))
+        self.assertEqual('unchanged',links.inspect((6.,1.,6.),(9.,1.,6.),1.)[0])
+
     def test_query_budget_is_bounded_and_never_calls_unknown_a_disconnection(self):
         links,_=self.links(lambda x,z:[face(x,z,1.),face(x,z,-15.)])
         links.queries=MAX_COLUMNS
