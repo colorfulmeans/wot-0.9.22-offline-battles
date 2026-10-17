@@ -9083,3 +9083,29 @@ or invalid normals and captured 34-degree admission. Pure tests prove these loca
 rules only. Exact #1513 Windows playtesting must still establish M48A5 hillside
 recovery, Victory Gate underpass routing, El Halluf climbs and the native timing
 cost; no claim is made that all rotation refusals have been diagnosed or fixed.
+
+
+## 2026-10-17: withdraw Windows350 slope policy pending design agreement
+
+The user requests rollback only in this turn. Supersede the slope-policy claims
+in the preceding section; do not replace the withdrawn policy with new scoring.
+
+- Remove both new single-normal hard vetoes: local candidate exclusion and
+  `planning_surface_grade` movement rejection, including reverse/recovery calls.
+- Remove the entire 2.0-score / 0.45-radian / five-degree local preference and
+  its added synchronous surface queries and adapter binding. Restore the old
+  complete D+C, then abs(theta), local candidate choice without a new slope term.
+  Keep the earlier observation-only raw `BOT SLOPE` and `BOT NAV CHOICE` logging.
+- Preserve the actual-support-layer bridge fix, native continuous connector and
+  endpoint proof, authored-anchor distinction and unknown-layer diagnostics.
+- Preserve missing-ground ray evidence, realised rotation-refusal receipts and
+  per-decision layer-receipt reset. Do not change legacy grade, water, hull-width,
+  collision, support, damage, route retries/switching or fixture layouts.
+- Replace the withdrawn slope-policy assertions with rollback regressions:
+  steep single normals cannot alone reject forward/reverse movement, a mandatory
+  admitted climb/descent remains drivable, full old D+C/C avoidance survives,
+  and original continuous-grade and solid-wall rejection remains in force.
+
+No new strong slope-preference rule is implemented here. The intended priority
+and acceptable distance/avoidance tradeoffs will be discussed separately after
+this rollback. Unit contracts do not establish exact-client gameplay acceptance.

@@ -2042,10 +2042,8 @@ class BotRuntime(object):
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
-                 impact_contacts_resolver=None, navigation_surface_probe=None,
-                 navigation_directional_probe=None):
+                 impact_contacts_resolver=None, navigation_surface_probe=None):
         self._navigation_surface_probe = navigation_surface_probe
-        self._navigation_directional_probe = navigation_directional_probe
         self._navigation_surface_queue = []
         self._navigation_surface_next = 0.0
         self.impact_contacts_resolver = impact_contacts_resolver
@@ -2132,8 +2130,6 @@ class BotRuntime(object):
         self.navigator = (TerrainNavigator(
             ground_probe, obstacle_probe, bounds, 18.0)
             if callable(ground_probe) else None)
-        if self.navigator is not None:
-            self.navigator.grid.directional_surface_probe = navigation_directional_probe
         self.cover_probe = cover_probe
         self.native_motion = bool(native_motion)
         self.motion_resolver = motion_resolver
@@ -2483,7 +2479,6 @@ class BotRuntime(object):
         navigator.grid.native_query_oracle = getattr(
             getattr(previous_navigator, 'grid', None),
             'native_query_oracle', None)
-        navigator.grid.directional_surface_probe = self._navigation_directional_probe
         self.navigator = navigator
         close = getattr(previous_navigator, 'close', None)
         if callable(close):
@@ -9735,9 +9730,7 @@ class BotRuntime(object):
                 choices.append(dict(owner=owner, at=fallback.get('at'),
                     current=fallback.get('current'), goal=fallback.get('goal'),
                     selected=fallback.get('selected'), ranked=ranked,
-                    shortest_distance=shortest,
-                    surface_choices=fallback.get('surface_choices', []),
-                    legacy_selected=fallback.get('legacy_selected')))
+                    shortest_distance=shortest))
         target_receipt['local_choices'] = choices
         target_receipt['support_layer'] = dict(getattr(
             getattr(self.navigator, 'grid', None), '_last_layer_receipt', {}) or {})
