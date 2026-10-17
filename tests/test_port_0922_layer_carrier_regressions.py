@@ -32,6 +32,11 @@ class BakedNavigationLayerTests(unittest.TestCase):
         # Authored/grid consumers retain their own height owner.
         self.assertEqual(0.,grid._ground(6.,6.,-15.))
 
+    def test_unknown_actual_floor_does_not_authorize_the_bridge(self):
+        grid=self.scene(lambda *args:None)
+        self.assertFalse(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
+        self.assertEqual('support_layer_unknown',grid._last_layer_receipt['reason'])
+
     def test_short_egress_requires_the_explicit_endpoint_layer(self):
         grid=self.scene()
         self.assertFalse(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.)))

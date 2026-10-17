@@ -737,7 +737,11 @@ class TerrainGrid(object):
 					actual = self.ground_probe(start[0], start[2], start[1])
 				except Exception:
 					actual = None
-				if actual is not None and abs(float(actual)-float(start[1])) <= self._layer_slack():
+				if actual is None or math.isnan(float(actual)) or math.isinf(float(actual)):
+					self._last_layer_receipt = dict(start=tuple(start), end=tuple(end),
+						baked_height=baked_start, actual_height=None, reason='support_layer_unknown')
+					return False
+				if abs(float(actual)-float(start[1])) <= self._layer_slack():
 					evidence = dict(start=tuple(start), end=tuple(end),
 						baked_height=baked_start, actual_height=float(actual))
 					clear = self._live_baked_egress_clear(start, end, evidence=evidence)

@@ -6373,7 +6373,7 @@ class BattleRuntime(object):
         hit = self._collide_navigation(start, end, trace)
         self._record_navigation_hit(trace, start, end, hit)
         result = dict(status='missing', native_trace=trace, distance=run,
-                      origin=(x,y,z), yaw=yaw)
+                      origin=(x,y,z), yaw=yaw, decision_input=True)
         if hit is None:
             return result
         normal = _xyz(hit[1])
