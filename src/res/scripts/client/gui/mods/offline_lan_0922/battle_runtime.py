@@ -2926,10 +2926,6 @@ class BattleRuntime(object):
             # ran on different ground than the one before it is visible.
             graphics_probe.log('round_start', round_identity)
             native_input_diagnostics.log_summary('round_start', round_identity)
-            if not self._worker_mode:
-                # Flash may retain bound callbacks when constructing the
-                # panel. Observe before its native registration, not first HP.
-                self._observe_ram_feedback(None, False)
             self._install_battle_gui_guard()
             self._enter_battle_loading()
             self._retire_lobby_entities(lobby_boundary)
@@ -12461,26 +12457,6 @@ class BattleRuntime(object):
                 target=self._event_entity_key(event, 'target'), presented=result))
         return result
 
-    def _observe_ram_feedback(self, event, received):
-        token = (self._generation, getattr(self.client, 'round_id', None),
-                 getattr(self.client, 'authority_epoch', None))
-        probe = getattr(self, '_ram_ribbon_probe', None)
-        if probe is not None and probe.token != token:
-            probe.reset(token)
-        if probe is None and getattr(self, '_ram_ribbon_probe_attempted', None) != token:
-            self._ram_ribbon_probe_attempted = token
-            try:
-                from .ram_feedback_diagnostics import RibbonProbe
-                from gui.Scaleform.daapi.view.battle.shared.ribbons_panel import BattleRibbonsPanel
-                from gui.Scaleform.genConsts.BATTLE_EFFICIENCY_TYPES import BATTLE_EFFICIENCY_TYPES
-                probe = self._ram_ribbon_probe = RibbonProbe(BattleRibbonsPanel,
-                    (BATTLE_EFFICIENCY_TYPES.RAM, BATTLE_EFFICIENCY_TYPES.RECEIVED_RAM),
-                    self._clock, native_input_diagnostics.write_json_record, token)
-            except Exception as error:
-                self._warn_optional_failure('ram ribbon lifecycle observer', error, disable=False)
-        if probe is not None and event is not None:
-            probe.note(event, received)
-
     def _present_combat_feedback(self, event, target_record,
                                  attacker_record, reason_id=None):
         """Feed accepted server combat through stock #1513 feedback RPCs."""
@@ -12684,7 +12660,10 @@ class BattleRuntime(object):
                         shell_is_gold))})
         if output:
             if damage > 0 and reason_id == self._attack_reason('RAM', 2):
-                self._observe_ram_feedback(event, bool(target_record.get('local')))
+                native_input_diagnostics.write_json_record('RAM FEEDBACK', dict(
+                    event_id=event.get('event_id'), damage=damage,
+                    received=bool(target_record.get('local')),
+                    source=event.get('source'), reason=reason_id))
             callback = getattr(self._avatar, 'onBattleEvents', None)
             if not callable(callback):
                 raise RuntimeError(
@@ -19145,9 +19124,6 @@ class BattleRuntime(object):
     def _frame(self):
         if self.state != 'running':
             return
-        probe = getattr(self, '_ram_ribbon_probe', None)
-        if probe is not None:
-            probe.poll()
         if self._worker_mode:
             self._worker_frame_callbacks += 1
         diagnostics = self._frame_diagnostics
@@ -31251,15 +31227,10 @@ class BattleRuntime(object):
             raise cleanup_error
 
     def _cleanup(self):
-        probe = getattr(self, '_ram_ribbon_probe', None)
-        if probe is not None:
-            probe.close()
-            self._ram_ribbon_probe = None
         self._stack_pressure_params = {}
         self._stack_pressure_sample_times = {}
         self._impact_descents = {}
         self._impact_descent_round = None
-        self._ram_ribbon_probe_attempted = None
         # Cancel native CPU work while its Python round owner still exists.
         native_visibility = getattr(self, '_native_visibility', None)
         if native_visibility is not None:

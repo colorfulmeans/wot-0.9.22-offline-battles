@@ -1,4 +1,4 @@
-"""Contact provenance, pressure geometry and non-mutating stock UI diagnostics."""
+"""Contact provenance, deferred impact commits and stock feedback dispatch."""
 import io
 import contextlib
 import math
@@ -8,7 +8,6 @@ from unittest import mock
 
 import test_port_0922_battle_runtime as fixture
 from gui.mods.offline_lan_0922 import vehicle_stack, vehicle_physics as vp
-from gui.mods.offline_lan_0922.ram_feedback_diagnostics import RibbonProbe
 
 
 class ContactDecisionTests(unittest.TestCase):
@@ -244,73 +243,97 @@ class ContactDecisionTests(unittest.TestCase):
         self.assertAlmostEqual(17.5656679792,battle._apply_landing_impact.call_args[0][1])
 
 
-class RibbonDiagnosticsTests(unittest.TestCase):
-    def scene(self):
-        class Panel(object):
-            def _addRibbon(self,ribbonID,ribbonType):return 'stock-add'
-            def _updateRibbon(self,ribbonID,ribbonType):return 'stock-update'
-            def onShow(self,ribbonID):return 'stock-show'
-            def onChange(self,ribbonID):return 'stock-change'
-            def onHide(self,ribbonID):return 'stock-hide'
-            def _dispose(self):return 'stock-dispose'
-        self.now=0.;self.logs=[]
-        self.probe=RibbonProbe(Panel,('ram','receivedRam'),lambda:self.now,
-            lambda event,row:self.logs.append(dict(row)),(1,1,1))
-        self.addCleanup(self.probe.close)
-        return Panel,Panel()
+class DeferredBotImpactTests(unittest.TestCase):
+    def scene(self, accepted=True, deferred=True, damage=300):
+        battle=fixture.BattleRuntime(fixture._runtime())
+        book=vehicle_stack.Descent()
+        book.observe(True,-18.,dict(impact_speed=-18.,airborne=False),.05)
+        battle._stack_context=dict(impact_descent=book,
+            impact_decision=dict(verdict='admit',carrier=['bot',27],
+                                 descent=book.sequence,speed=18.))
+        state=dict(id=11,alive=True,x=0.,y=0.,z=0.,yaw=0.)
+        paid=[]
+        def spend(actor,speed):
+            paid.append(speed)
+            return damage
+        bot=types.SimpleNamespace(_turret_motion_probe=(lambda *args:accepted) if deferred else None,
+            _turret_pending_landing_impacts=None,
+            _turret_state_pose=lambda s:dict(s),
+            _snapshot_bot_suspension_state=lambda s:dict(s),
+            _restore_bot_suspension_state=lambda s,snapshot:s.update(snapshot),
+            _descriptors={11:{}},_turn_speeds={},round_id=1,
+            _invalidate_realised_motion=lambda *args:None,
+            _release_detailed_support=lambda s:None,
+            _apply_bot_fall_damage=spend,stack_impact_commit=battle._commit_stack_impact)
+        bot._apply_bot_landing_impact=types.MethodType(
+            fixture.bot_runtime.BotRuntime._apply_bot_landing_impact,bot)
+        def integrate(s,*args):
+            bot._apply_bot_landing_impact(s,18.,True)
+            if deferred:
+                self.assertEqual([],paid)
+                self.assertEqual('admit',book.verdict(['bot',27],18.,True,.05))
+            return False
+        bot._integrate_vertical_motion=integrate
+        return bot,state,book,paid
 
-    def test_no_hide_after_last_damage_is_observable_without_forcing_it(self):
-        cls,panel=self.scene()
-        self.assertEqual('stock-add',panel._addRibbon(7,'receivedRam'))
-        panel.onShow(7)
-        self.probe.note(dict(event_id='1:2:0',damage=1,source='ram',attack_reason=2),True)
-        self.now=30.
-        self.probe.poll()
-        row=next(r for r in self.logs if r['phase']=='no_hide_callback')
-        self.assertEqual((7,30.,True),(row['ribbon'],row['age'],row['state']['shown']))
-        self.assertEqual(0.,row['last_damage'])
-        self.assertEqual('stock-hide',panel.onHide(7))
-        self.assertEqual({},self.probe.rows)
+    def test_deferred_and_immediate_damage_commit_once_after_hp_spend(self):
+        for deferred in (False,True):
+            with self.subTest(deferred=deferred),contextlib.redirect_stdout(io.StringIO()):
+                bot,state,book,paid=self.scene(deferred=deferred)
+                fixture.bot_runtime.BotRuntime._update_vertical_motion_impl(bot,state,.05)
+                self.assertEqual([18.],paid)
+                self.assertEqual('already_charged_this_descent',
+                                 book.verdict(['bot',27],18.,True,.05))
+                self.assertEqual({('bot',27)},book.charged)
 
-    def test_close_restores_exact_stock_methods(self):
-        cls,panel=self.scene()
-        original=self.probe.methods['_addRibbon'][0]
-        self.probe.close()
-        self.assertIs(original,cls._addRibbon)
-        self.assertEqual('stock-add',panel._addRibbon(7,'receivedRam'))
+    def test_rejected_pose_discards_damage_and_dedup_commit(self):
+        bot,state,book,paid=self.scene(accepted=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(fixture.bot_runtime.BotRuntime._update_vertical_motion_impl(bot,state,.05))
+        self.assertEqual([],paid)
+        self.assertEqual('admit',book.verdict(['bot',27],18.,True,.05))
 
-    def test_native_bound_callbacks_remain_observed_across_round_identity(self):
-        cls,panel=self.scene()
+    def test_zero_damage_does_not_consume_later_valid_impact(self):
+        bot,state,book,paid=self.scene(damage=0)
+        fixture.bot_runtime.BotRuntime._update_vertical_motion_impl(bot,state,.05)
+        self.assertEqual([18.],paid)
+        self.assertEqual('admit',book.verdict(['bot',27],18.,True,.05))
+
+
+class StockFeedbackEntryTests(unittest.TestCase):
+    def test_ram_dispatch_preserves_shared_panel_methods_and_bound_callbacks(self):
+        class Panel:
+            def _addRibbon(self,*args):pass
+            def _updateRibbon(self,*args):pass
+            def onShow(self):return 'stock-show'
+            def onChange(self):return 'stock-change'
+            def onHide(self,ribbonID):return ribbonID
+            def _dispose(self):pass
+        name='gui.Scaleform.daapi.view.battle.shared.ribbons_panel'
+        panel=Panel()
+        original=dict(Panel.__dict__)
         bound_show,bound_hide=panel.onShow,panel.onHide
-        panel._addRibbon(7,'receivedRam')
-        self.probe.reset((2,2,2))
-        panel._addRibbon(8,'receivedRam');bound_show(8);bound_hide(8)
-        self.assertTrue(any(row['phase']=='onHide' and row['token']==(2,2,2)
-                            for row in self.logs))
-        self.assertEqual({},self.probe.rows)
-        self.probe.close()
-        count=len(self.logs)
-        self.assertEqual('stock-show',bound_show(8))
-        self.assertEqual(count,len(self.logs))
-
-    def test_dispose_retires_only_its_panel_and_non_ram_is_ignored(self):
-        cls,panel=self.scene();second=cls()
-        panel._addRibbon(7,'receivedRam');second._addRibbon(7,'ram')
-        panel._addRibbon(8,'damage')
-        panel._dispose()
-        self.assertEqual([(id(second),7)],list(self.probe.rows))
-
-    def test_stock_exceptions_are_not_swallowed_by_observation(self):
-        class Bad(object):
-            def method(self,*args,**kwargs):raise ValueError('native-stock-error')
-        for name in RibbonProbe.METHODS:setattr(Bad,name,Bad.method)
-        logs=[]
-        probe=RibbonProbe(Bad,('ram',),lambda:0.,lambda event,row:logs.append(row),(1,1,1))
-        try:
-            with self.assertRaisesRegex(ValueError,'native-stock-error'):
-                Bad()._addRibbon(1,'ram')
-            self.assertTrue(any(row['phase']=='stock_call_error' for row in logs))
-        finally:probe.close()
+        runtime=fixture._runtime()
+        battle=fixture.BattleRuntime(runtime)
+        battle._avatar=runtime.bigworld.avatar
+        battle._avatar.playerVehicleID=10
+        battle._synchronise_player_identity(10)
+        local=dict(engine_id=10,local=True,kind='player',network_id=1,state=dict(team=1))
+        enemy=dict(engine_id=11,local=False,kind='bot',network_id=2,state=dict(team=2))
+        module=types.ModuleType(name)
+        module.BattleRibbonsPanel=Panel
+        constants_name='gui.Scaleform.genConsts.BATTLE_EFFICIENCY_TYPES'
+        constants=types.ModuleType(constants_name)
+        constants.BATTLE_EFFICIENCY_TYPES=types.SimpleNamespace(RAM='ram',RECEIVED_RAM='receivedRam')
+        with mock.patch.dict('sys.modules',{name:module,constants_name:constants}),contextlib.redirect_stdout(io.StringIO()):
+            for target,attacker in ((enemy,local),(local,enemy)):
+                self.assertTrue(battle._present_combat_feedback(dict(
+                    event_id='1:1:0',source='ram',attack_reason=2,damage=100,dead=False),
+                    target,attacker))
+        self.assertEqual(2,len(battle._avatar.battle_events))
+        self.assertEqual(original,dict(Panel.__dict__))
+        self.assertEqual('stock-show',bound_show())
+        self.assertEqual(7,bound_hide(7))
 
 
 if __name__=='__main__':unittest.main()

@@ -7907,7 +7907,13 @@ class BotRuntime(object):
         if not normal_impact:
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
-        return self._apply_bot_fall_damage(state, impact_speed)
+        damage = self._apply_bot_fall_damage(state, impact_speed)
+        # The turret transaction queues the impact above and returns zero.
+        # Mark it only here, after that transaction actually spends HP.
+        commit = getattr(self, 'stack_impact_commit', None)
+        if callable(commit):
+            commit(state, damage)
+        return damage
 
     def _apply_world_contact_impact(self, state, speed, now):
         """Consume only the realised hull sweep, before escape probes replace it."""
@@ -8331,11 +8337,8 @@ class BotRuntime(object):
             state['_landing_contact_normal'] = impact_normal
             state['_landing_ground_observed'] = bool(
                 solved.get('contact_count') or solved.get('touched_contact_count'))
-            damage = self._apply_bot_landing_impact(
+            self._apply_bot_landing_impact(
                 state, impact_speed, normal_impact=True)
-            commit = getattr(self, 'stack_impact_commit', None)
-            if callable(commit):
-                commit(state, damage)
         elif not before_airborne and state['airborne']:
             self._turn_speeds[bot_id] = 0.0
             state['rotation_dir'] = 0
