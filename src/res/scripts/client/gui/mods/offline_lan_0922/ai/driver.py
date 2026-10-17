@@ -475,7 +475,7 @@ class LocalDriver(object):
 			from_anchor * FAILED_YAW_BUCKET_COUNT / turn + 0.5))
 		return bucket % FAILED_YAW_BUCKET_COUNT
 
-	def remember_failure(self, bot_id, yaw, ttl=None):
+	def remember_failure(self, bot_id, yaw, ttl=None, evidence=None):
 		"""Temporarily penalize a direction after a caller-observed bad path.
 
 		Use this when a terrain probe was clear but later movement establishes that
@@ -489,6 +489,29 @@ class LocalDriver(object):
 		ttl = max(0.1, float(ttl))
 		state['failed_yaws'][self._yaw_key(yaw)] = state['clock'] + ttl
 		state.setdefault('real_failed_yaws', {})[self._yaw_key(yaw)] = state['clock'] + ttl
+		key = self._yaw_key(yaw)
+		records = state.setdefault('real_failure_evidence', {})
+		previous = records.get(key)
+		record = dict(evidence or {})
+		record.update(yaw=float(yaw), created_at=state['clock'],
+			expires_at=state['clock'] + ttl,
+			renewed=bool(previous and previous['expires_at'] > state['clock']))
+		# Preserve a live, local realised-contact witness when a later long
+		# forecast reports the same bucket. The forecast still gets a receipt.
+		keep_contact = bool(previous and previous['expires_at'] > state['clock'] and
+			previous.get('source') != 'motion_forecast' and
+			record.get('source') == 'motion_forecast' and
+			previous.get('origin') is not None and record.get('origin') is not None and
+			_distance(previous['origin'], record['origin']) <= 0.25)
+		if not keep_contact:
+			records[key] = record
+		else:
+			state['real_failed_yaws'][key] = previous['expires_at']
+		record['preserved_contact'] = keep_contact
+		history = state.setdefault('failure_receipts', [])
+		history.append(dict(record))
+		del history[:-16]
+
 		desired = state.get('last_desired_yaw')
 		offset = _angle_delta(yaw, desired) if desired is not None else 0.0
 		if abs(offset) >= 0.10:
@@ -503,6 +526,21 @@ class LocalDriver(object):
 			state['clock'] + min(2.0, max(0.8, ttl)))
 		state['steering_yaw'] = None
 		state['plan_age'] = 999.0
+
+
+	def _short_failure_applies(self, state, position, yaw, distance):
+		key = self._yaw_key(yaw)
+		if state.get('real_failed_yaws', {}).get(key, 0.0) <= state['clock']:
+			return False
+		evidence = state.get('real_failure_evidence', {}).get(key) or {}
+		origin = evidence.get('origin')
+		# Legacy callers retain their actual-contact veto. Scoped forecasts
+		# cannot suppress a fresh shorter proof or follow a tank elsewhere.
+		if origin is not None and _distance(position, origin) > 0.25:
+			return False
+		if evidence.get('source') == 'motion_forecast':
+			return float(evidence.get('distance', 0.0)) <= float(distance)
+		return True
 
 	def _failure_penalty(self, state, yaw):
 		key = self._yaw_key(yaw)
@@ -930,12 +968,15 @@ class LocalDriver(object):
 			for sign in (-1.0, 1.0):
 				heading = float(yaw) + (math.pi if sign < 0 else 0.0)
 				# Long-ray/candidate failures cannot veto a fresh shorter proof.
-				real_failure = state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock']
+				real_failure = self._short_failure_applies(state, position, heading, distance)
 				clear = not real_failure and self._clear(direction_clear, heading, distance)
 				blocker = self._reverse_blocked_by_vehicle(
 					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
 					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
-				probes.append(dict(sign=sign, distance=distance, clear=clear, blocker=blocker, real_failure=real_failure))
+				probes.append(dict(sign=sign, distance=distance, clear=clear,
+					blocker=blocker, real_failure=real_failure,
+					failure_evidence=dict(state.get('real_failure_evidence', {}).get(
+						self._yaw_key(heading)) or {})))
 				if clear and blocker is None:
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
@@ -955,7 +996,7 @@ class LocalDriver(object):
 		travelled = ((position[0]-escape['start'][0])*math.sin(heading) +
 			(position[2]-escape['start'][2])*math.cos(heading))
 		remaining = max(0.0, escape['distance'] - travelled)
-		if (state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock'] or
+		if (self._short_failure_applies(state, position, heading, remaining) or
 				remaining <= 0.05 or state['clock'] >= escape['until'] or
 				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
 				not self._clear(direction_clear, heading, remaining) or
@@ -1081,11 +1122,21 @@ class LocalDriver(object):
 		if progress_target is not None:
 			progress = state.get('objective_progress')
 			distance = _distance(position, progress_target)
-			if (progress is None or _distance(progress['goal'], progress_target) > 2.0 or
-					distance <= arrival):
+			goal_changed = bool(progress is not None and
+				_distance(progress.get('order_goal', progress['goal']), pocket_goal) > 2.0)
+			if (progress is None or goal_changed or distance <= arrival):
 				progress = {'goal': tuple(progress_target), 'best': distance,
-				            'at': state['clock']}
+				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
+				            'reset_reason': 'order_changed' if goal_changed else 'initial_or_arrived'}
 				state['objective_progress'] = progress
+			elif _distance(progress['goal'], progress_target) > 2.0:
+				# A different local connector is not physical progress. Rebase
+				# its incomparable distance without renewing this order's clock
+				# or granting the same hull alignment a second time.
+				progress['goal'] = tuple(progress_target)
+				progress['best'] = distance
+				progress['local_rebases'] = progress.get('local_rebases', 0) + 1
+				progress['reset_reason'] = 'local_rebase_without_credit'
 			elif distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance
