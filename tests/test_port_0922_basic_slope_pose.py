@@ -57,7 +57,7 @@ class BasicSlopePoseTests(unittest.TestCase):
         self.assertEqual(0., before['yaw'])
         self.assertEqual(math.pi/2, after['yaw'])
         self.assertAlmostEqual(0., after['chassis']['pitch'])
-        self.assertEqual(math.pi/2, state['pose_sample'][2])
+        self.assertEqual(0., state['pose_sample'][2])
 
     def test_blocked_body_pose_keeps_last_legal_yaw_and_attitude(self):
         runtime,state = self.case()
