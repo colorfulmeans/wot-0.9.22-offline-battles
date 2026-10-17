@@ -126,8 +126,7 @@ PyObject *WOT_CDECL driver_geometry(PyObject *,PyObject *args) {
                     if(hit[2]>=-1.e-9) {
                         const double bx=-std::sin(v[3]),bz=-std::cos(v[3]);
                         const double outward=bx*hit[0]+bz*hit[1];
-                        const double away=bx*(v[0]-p.x)+bz*(v[2]-p.z);
-                        if(outward>=-1.e-9 && away>=-1.e-9)continue;
+                        if(outward>=-1.e-9)continue;
                     }
                 }
                 if(overlaps(sx,sz,v[3],v[4]+v[6]*.5,v[5],p))return op==0?p.index:1;

@@ -643,12 +643,18 @@ class LocalDriver(object):
 			else max(0.0, float(maximum_distance)))
 		result = self._native_geometry(0, position, yaw, neighbours, half_length, half_width, distance)
 		if result is not None:
-			if result < 0:
-				return None
-			peer = neighbours[result]
-			return peer['id'] if isinstance(peer, dict) and peer.get('id') is not None else True
-		return self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
-			half_length, half_width, maximum_distance)
+			peer = neighbours[result] if result >= 0 else None
+			blocker = (peer['id'] if isinstance(peer, dict) and peer.get('id') is not None
+				else True) if result >= 0 else None
+		else:
+			blocker = self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
+				half_length, half_width, maximum_distance)
+		self._last_reverse_receipt = dict(origin=tuple(position), yaw=float(yaw),
+			distance=distance, half_length=half_length, half_width=half_width,
+			backend='native' if result is not None else 'reference', blocker=blocker,
+			rule='full_sweep_except_initial_non_deepening_contact',
+			result='vehicle_occupied' if blocker is not None else 'clear')
+		return blocker
 
 	def _native_geometry(self, op, position, yaw, neighbours, half_length, half_width, amount):
 		if not isinstance(neighbours, (tuple, list)):
@@ -708,14 +714,13 @@ class LocalDriver(object):
 				if contact[2] >= -1.0e-9:
 					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
 					outward = back_x*contact[0] + back_z*contact[1]
-					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
-					if outward >= -1.0e-9 and away >= -1.0e-9:
+					if outward >= -1.0e-9:
 						# The sweep includes the current hull. Its front/side
 						# contact is not a new rear obstacle when every point
 						# moves out or tangentially along that face. Centre
 						# distance may stay constant in an exactly parallel
 						# side hug; neither direction may be denied for that.
-						# At an offset prefer the nearer end of the overlap.
+						# Centre approach cannot veto a non-deepening face.
 						# Other peers still veto the complete swept corridor.
 						continue
 				if self._obb_overlap(
@@ -999,7 +1004,8 @@ class LocalDriver(object):
 					reason=('realized_failure' if real_failure else
 						'vehicle_occupied' if blocker is not None else
 						proof.get('reason') or ('clear' if clear else 'direction_callback_rejected')),
-					probe_receipt=proof,
+					probe_receipt=proof, vehicle_receipt=(dict(getattr(self,
+						'_last_reverse_receipt', {})) if clear else None),
 					sampled_at=state['clock'], sample_sequence=sequence,
 					blocker=blocker, real_failure=real_failure,
 					failure_evidence=dict(state.get('real_failure_evidence', {}).get(
@@ -1049,6 +1055,7 @@ class LocalDriver(object):
 				blocker = self._reverse_blocked_by_vehicle(position,
 					yaw if sign < 0 else yaw + math.pi, neighbours,
 					half_length, half_width, remaining)
+				validation['vehicle_receipt'] = dict(getattr(self, '_last_reverse_receipt', {}))
 				validation['blocker'] = blocker
 				if blocker is not None:
 					reason = 'vehicle_occupied'

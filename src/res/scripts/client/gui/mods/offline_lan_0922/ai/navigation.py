@@ -16,6 +16,7 @@ import math
 from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
+from gui.mods.offline_lan_0922 import tank_collision
 
 from gui.mods.offline_lan_0922.ai.driver import (
 	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS,
@@ -162,6 +163,7 @@ class TerrainGrid(object):
 		self._slope_corridor_cache = {}
 		self._failed_edges = {}
 		self._static_hull_edges = {}
+		self._static_hulls = ()
 		self._static_hull_key = None
 		self._static_hull_padding = None
 		self.static_hull_revision = 0
@@ -457,6 +459,9 @@ class TerrainGrid(object):
 
 		Returns whether the published set changed.
 		"""
+		hulls = tuple(hulls or ())
+		# Keep exact poses even when rounding leaves the advisory graph unchanged.
+		self._static_hulls = tuple(tuple(hull) for hull in hulls)
 		key = tuple(sorted(
 			(int(hull[0]), round(float(hull[1]), 2), round(float(hull[2]), 2),
 			 round(float(hull[3]), 3), round(float(hull[4]), 2),
@@ -621,24 +626,65 @@ class TerrainGrid(object):
 		return bool(index is not None and
 		            int(self._baked_hazards[index]) & int(hazard_mask))
 
-	def dry_segment_clear(self, start, end, now):
-		"""Prove one preferred direct segment without entering shallow water.
+	def _live_exit_clear(self, start, end, now, evidence=None, native_capability=None):
+		"""Admit a bounded native exit without treating a coarse cost as a wall.
 
-		Shallow cells remain linked for the weighted A* fallback.  This predicate
-		is only for raw goals, smoothing and reactive shortcuts which have not
-		been selected by that planner.
+		Timed failures remain vetoes. Published wrecks use their exact oriented
+		footprint against the same 2.15 m corridor as the native proof; the driver
+		and final full-hull collision owner still check the realised movement.
+		No admission is cached across moving wrecks or changing native geometry.
 		"""
+		if evidence is None:
+			evidence = {}
+		evidence.update(start=tuple(start), end=tuple(end), at=float(now),
+			coarse_penalty=self.segment_penalty(start, end, now),
+			static_hull_revision=self.static_hull_revision)
+		if self.path_has_penalty((start, end), now):
+			evidence['egress_reason'] = 'timed_failed_edge'
+			return False
+		distance = _distance_2d(start, end)
+		if distance > 24.0:
+			evidence['egress_reason'] = 'requires_local_join'
+			return False
+		yaw = math.atan2(end[0]-start[0], end[2]-start[2])
+		cx, cz = (start[0]+end[0])*0.5, (start[2]+end[2])*0.5
+		evidence['static_hulls_checked'] = 0
+		for actor, x, z, angle, length, width in self._static_hulls:
+			contact = tank_collision._obb_overlap(cx, cz, yaw, (2.15, distance*0.5),
+				x, z, angle, (width, length))
+			evidence['static_hulls_checked'] += 1
+			nearest = evidence.get('nearest_static_hull')
+			if nearest is None or contact[2] > nearest['contact'][2]:
+				evidence['nearest_static_hull'] = dict(id=actor, contact=contact)
+			if contact[2] >= 0.0:
+				evidence.update(egress_reason='static_hull_corridor', blocker=actor,
+					contact=contact)
+				return False
+		return self._live_baked_egress_clear(start, end, native_capability, evidence)
+
+	def dry_segment_clear(self, start, end, now, evidence=None):
+		"""Prove one preferred direct segment without entering shallow water."""
+		if evidence is not None:
+			evidence.update(start=tuple(start), end=tuple(end), at=float(now))
 		if (self.prebaked and self._baked_corridor(start, end)[1] is None and
 				_distance_2d(start, end) <= 24.0 and
 				(self._baked_cell_height(self.cell_for(start)) is None or
 				 tuple(end) in self._live_join_targets)):
-			return (self.segment_penalty(start, end, now) <= 0.0 and
-				self._inside(float(end[0]), float(end[2])) and
-				self._live_baked_egress_clear(start, end))
-		return (self.segment_penalty(start, end, now) <= 0.0 and
-		        not self.segment_has_baked_hazard(
-		            start, end, BAKED_SHALLOW_WATER) and
-		        self.segment_clear(start, end))
+			if not self._inside(float(end[0]), float(end[2])):
+				if evidence is not None:
+					evidence['egress_reason'] = 'outside_bounds'
+				return False
+			return self._live_exit_clear(start, end, now, evidence)
+		reason = 'clear'
+		if self.segment_penalty(start, end, now) > 0.0:
+			reason = 'timed_failed_edge' if self.path_has_penalty((start, end), now) else 'coarse_static_hull'
+		elif self.segment_has_baked_hazard(start, end, BAKED_SHALLOW_WATER):
+			reason = 'shallow_water'
+		elif not self.segment_clear(start, end):
+			reason = 'terrain_or_native_rejected'
+		if evidence is not None:
+			evidence['egress_reason'] = reason
+		return reason == 'clear'
 
 	def path_has_penalty(self, path, now):
 		if not self._failed_edges:
@@ -1431,9 +1477,11 @@ class TerrainGrid(object):
 						egress_evidence = dict(start=tuple(current), end=candidate, egress_reason='not_probed')
 						if diagnostic is not None:
 							diagnostic.setdefault('native_egress_attempts', []).append(egress_evidence)
-						if (not self.path_has_edge_penalty((current, candidate), edge_penalties) and
-								self._inside(x, z) and
-								self._live_baked_egress_clear(current, candidate, evidence=egress_evidence)):
+						if self.path_has_edge_penalty((current, candidate), edge_penalties):
+							egress_evidence['egress_reason'] = 'bot_private_edge'
+						elif not self._inside(x, z):
+							egress_evidence['egress_reason'] = 'outside_bounds'
+						elif self._live_exit_clear(current, candidate, now, evidence=egress_evidence):
 							if len(self._live_join_targets) >= 64:
 								self._live_join_targets.pop()
 							self._live_join_targets.add(candidate)
@@ -1977,7 +2025,10 @@ class TerrainNavigator(object):
 				not self._local_fallback_passed(current, target, state) and
 				not self._bot_edges_penalized(bot_id, current, target, now)):
 			revision = self.grid._native_proof_revision
-			clear = self.grid.dry_segment_clear(current, target, now)
+			proof = {}
+			clear = self.grid.dry_segment_clear(current, target, now, proof)
+			state['local_retained_proof'] = dict(at=float(now), target=tuple(target),
+				clear=bool(clear), proof=proof)
 			deferred = (revision != self.grid._native_proof_revision or
 				getattr(self.grid, '_proof_deferred', False))
 			if not clear and not deferred:
@@ -2140,11 +2191,17 @@ class TerrainNavigator(object):
 			self._record_local_retry_refusal(state, current, goal, now)
 			return tuple(current)
 		connector_clear = True
+		connector = dict(reason='not_required', start=tuple(current), end=fallback)
+		selection['connector'] = connector
 		previous_refusal=getattr(self.grid,'_last_native_refusal',None)
 		if fallback is not None and origin != tuple(current):
-			connector_clear = bool(
-				not self._bot_edges_penalized(bot_id, current, fallback, now) and
-				self.grid.dry_segment_clear(current, fallback, now))
+			if self._bot_edges_penalized(bot_id, current, fallback, now):
+				connector_clear = False
+				connector['reason'] = 'bot_private_or_retired_edge'
+			else:
+				proof = {}
+				connector_clear = bool(self.grid.dry_segment_clear(current, fallback, now, proof))
+				connector.update(reason=proof.get('egress_reason'), proof=proof)
 			if connector_clear and self.grid.prebaked:
 				# Centre-to-centre baked edge receipts cannot prove the diagonal
 				# from an off-centre hull still inside the arrival disk.
@@ -2153,7 +2210,11 @@ class TerrainNavigator(object):
 					blocked = self.grid._probe_obstacle(current, fallback, 2.15,
 						state.get('native_capability'))
 					connector_clear = not blocked and revision == self.grid._native_proof_revision
-				except Exception:
+					connector.update(reason=('native_revision_changed' if revision != self.grid._native_proof_revision
+						else 'native_deferred' if blocked == 'deferred' else 'native_obstacle' if blocked else 'clear'),
+						native_revision=revision, native_result=blocked)
+				except Exception as error:
+					connector.update(reason='native_probe_exception', exception=type(error).__name__)
 					connector_clear = False
 		if not connector_clear:
 			selection.update(outcome='connector_rejected',selected=tuple(current),native_refusal=(dict(self.grid._last_native_refusal) if getattr(self.grid,'_last_native_refusal',None) is not previous_refusal and getattr(self.grid,'_last_native_refusal',None) else None))
@@ -2763,6 +2824,7 @@ class TerrainNavigator(object):
 			'path_endpoint_refusal': state.get('path_endpoint_refusal'),
 			'local_target': state.get('local_fallback_target'),
 			'local_selection': dict(state.get('local_selection') or {}),
+			'local_retained_proof': dict(state.get('local_retained_proof') or {}),
 			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
 			'local_target_end_reason': state.get('local_target_end_reason'),
 			'local_retry_age_ms': int(max(0.0, float(now) - float(

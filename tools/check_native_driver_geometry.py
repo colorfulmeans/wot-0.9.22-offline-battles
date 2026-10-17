@@ -1,6 +1,6 @@
 """Current-release driver sweeps through the actual CPython 2.7 frontier."""
 from __future__ import print_function
-import os,sys,imp,random,math,time,gc
+import os,sys,imp,random,math,time,gc,json
 sys.platform='linux';sys.dont_write_bytecode=True
 root=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0]=[os.path.join(root,'tools'),os.path.join(root,'src/res/scripts/client')]
@@ -11,6 +11,27 @@ backend=imp.load_dynamic('offline_math_batch_native',sys.argv[1])
 rng=random.Random(134232);driver=LocalDriver();checks=0
 def reference():native_math._backend=None;native_math._attempted=True
 def native():native_math._backend=backend;native_math._attempted=True
+# Captured T95 side contact: centres approach, but overlap does not deepen.
+with open(os.path.join(root,'tests','fixtures','caucasus_043353_contact_exits.json')) as stream:
+ captured=json.load(stream)['t95']
+for rotation in (0.,.4,-1.2,math.pi):
+ c=captured;sn,cs=math.sin(rotation),math.cos(rotation)
+ def rotate(p):return (p[0]*cs+p[2]*sn,p[1],p[2]*cs-p[0]*sn)
+ position=rotate(c['position']);yaw=c['yaw']+rotation
+ peers=[dict(p,position=rotate(p['position']),yaw=p['yaw']+rotation) for p in c['peers']]
+ for distance in (.05,.1,.5,1.,2.):
+  reference();expected=driver._reference_reverse_blocked_by_vehicle(position,yaw,peers,c['half_length'],c['half_width'],distance)
+  assert expected is None,(rotation,distance,expected)
+  native();before=native_math.snapshot()['driver_geometry']
+  actual=driver._reverse_blocked_by_vehicle(position,yaw,peers,c['half_length'],c['half_width'],distance)
+  assert actual==expected,(rotation,distance,actual,expected)
+  assert native_math.snapshot()['driver_geometry']==before+1
+  checks+=1
+ # A second hull still vetoes the full rear corridor.
+ rear=dict(id=99,position=(position[0]-math.sin(yaw)*8.,position[1],position[2]-math.cos(yaw)*8.),
+           yaw=yaw,half_length=3.,half_width=2.)
+ native();assert driver._reverse_blocked_by_vehicle(position,yaw,peers+[rear],c['half_length'],c['half_width'],2.)==99
+ checks+=1
 for case in range(1500):
  position=(rng.uniform(-10.,10.),rng.uniform(-2.,2.),rng.uniform(-10.,10.))
  yaw=rng.uniform(-math.pi,math.pi);length=rng.uniform(2.,5.);width=rng.uniform(1.,2.5)
