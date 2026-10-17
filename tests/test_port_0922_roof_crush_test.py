@@ -283,6 +283,18 @@ class SpawnGeometryStartupTests(unittest.TestCase):
         obj._create_entities.assert_not_called()
         obj._schedule.assert_not_called()
 
+    def test_lower_player_floor_does_not_admit_missing_upper_bot_spawn(self):
+        with mock.patch.dict(os.environ, {fixture.ENV:'1',fixture.SHOT_ENV:'1'}):
+            obj=self.runtime(1., -14.)
+            obj._ground_y.side_effect=lambda x,z,y,**kw: -14. if y < 0. else None
+            obj._wait_for_roof_test_geometry()
+            obj._create_entities.assert_not_called()
+            obj._schedule.assert_called_once()
+            obj._ground_y.side_effect=lambda x,z,y,**kw: -14. if y < 0. else 1.1
+            obj._wait_for_roof_test_geometry()
+            obj._create_entities.assert_called_once()
+            self.assertEqual(18,obj._ground_y.call_count)
+
 
 class RuntimeHoldTests(unittest.TestCase):
     def setUp(self):

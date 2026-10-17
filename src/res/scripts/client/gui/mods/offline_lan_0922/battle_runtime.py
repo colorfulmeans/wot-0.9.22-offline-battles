@@ -3735,7 +3735,17 @@ class BattleRuntime(object):
             seed, unused_yaw = roof_crush_test.player_seed()
             height = (self._ground_y(seed[0], seed[2], seed[1], allow_wide=False)
                       if progress >= 1.0 else None)
-            if height is not None and abs(height-seed[1]) <= 4.0:
+            ready = height is not None and abs(height-seed[1]) <= 4.0
+            if ready and roof_crush_test.shot_drop_enabled():
+                # The player's lower floor cannot prove the upper bridge
+                # exists. Wait for every queued native spawn column as well.
+                for slot in range(15):
+                    upper, unused = roof_crush_test.enemy_seed(slot)
+                    upper_y = self._ground_y(upper[0], upper[2], upper[1], allow_wide=False)
+                    if upper_y is None or abs(upper_y-upper[1]) > 4.0:
+                        ready = False
+                        break
+            if ready:
                 print('[ROOF CRUSH TEST] native spawn geometry ready '
                       'space_load=%s player_ground=%s position=%s' %
                       (progress, height, seed))
