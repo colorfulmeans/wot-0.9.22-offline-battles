@@ -271,7 +271,9 @@ def controlled_cases():
         captured=json.load(stream)
     captured_bodies=[]
     for row in captured:
-        values=dict(row)
+        # Python 2 JSON keys are Unicode. The native borrowed-input contract
+        # requires a string-only dict; normalize before constructing the body.
+        values=dict((str(key),value) for key,value in row.items())
         identity=values.pop('id')
         values.update(mass=36000.,shape=(1.600411057472229,2.9779720306396484,
             .004364000167697668,1.5524429678916931))
