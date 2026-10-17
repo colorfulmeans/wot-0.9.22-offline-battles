@@ -2042,8 +2042,10 @@ class BotRuntime(object):
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
-                 impact_contacts_resolver=None, navigation_surface_probe=None):
+                 impact_contacts_resolver=None, navigation_surface_probe=None,
+                 navigation_directional_probe=None):
         self._navigation_surface_probe = navigation_surface_probe
+        self._navigation_directional_probe = navigation_directional_probe
         self._navigation_surface_queue = []
         self._navigation_surface_next = 0.0
         self.impact_contacts_resolver = impact_contacts_resolver
@@ -2130,6 +2132,8 @@ class BotRuntime(object):
         self.navigator = (TerrainNavigator(
             ground_probe, obstacle_probe, bounds, 18.0)
             if callable(ground_probe) else None)
+        if self.navigator is not None:
+            self.navigator.grid.directional_surface_probe = navigation_directional_probe
         self.cover_probe = cover_probe
         self.native_motion = bool(native_motion)
         self.motion_resolver = motion_resolver
@@ -2479,6 +2483,7 @@ class BotRuntime(object):
         navigator.grid.native_query_oracle = getattr(
             getattr(previous_navigator, 'grid', None),
             'native_query_oracle', None)
+        navigator.grid.directional_surface_probe = self._navigation_directional_probe
         self.navigator = navigator
         close = getattr(previous_navigator, 'close', None)
         if callable(close):
@@ -7315,6 +7320,10 @@ class BotRuntime(object):
                     'pitch','roll','sampled_at','ray_start','ray_end','hit','normal',
                     'ground_ahead','profile','native_surface_candidates',
                     'native_surface_columns','pivot_offset')},
+            'rotation_rejections': [dict(side=side, origin=entry[0],
+                yaw=entry[1], rejected_delta=entry[2], until=entry[3],
+                remaining=max(0.,entry[3]-now)) for side,entry in
+                sorted((state.get('_blocked_rotations') or {}).items())],
             'support_datum': state.get('_basic_support_datum'),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
@@ -9528,6 +9537,9 @@ class BotRuntime(object):
         state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
+        grid = getattr(self.navigator, 'grid', None)
+        if grid is not None:
+            grid._last_layer_receipt = {}
         target_receipt = dict(at=state.get('now', 0.0), position=tuple(position),
             requested_goal=tuple(goal), mode=mode, source='no_navigator',
             final_target=tuple(goal))
@@ -9723,8 +9735,12 @@ class BotRuntime(object):
                 choices.append(dict(owner=owner, at=fallback.get('at'),
                     current=fallback.get('current'), goal=fallback.get('goal'),
                     selected=fallback.get('selected'), ranked=ranked,
-                    shortest_distance=shortest))
+                    shortest_distance=shortest,
+                    surface_choices=fallback.get('surface_choices', []),
+                    legacy_selected=fallback.get('legacy_selected')))
         target_receipt['local_choices'] = choices
+        target_receipt['support_layer'] = dict(getattr(
+            getattr(self.navigator, 'grid', None), '_last_layer_receipt', {}) or {})
         target_receipt.update(final_target=tuple(target),
             progress_target=state.get('navigation_progress_target'),
             stop_at_target=state.get('navigation_stop_at_target'))

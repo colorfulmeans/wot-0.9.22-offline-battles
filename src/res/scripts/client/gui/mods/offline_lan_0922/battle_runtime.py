@@ -4138,6 +4138,7 @@ class BattleRuntime(object):
                 physics_ground_limit_probe=self._bot_support_column,
                 navigation_surface_probe=(self._navigation_surface_observation
                     if self._worker_mode else None),
+                navigation_directional_probe=self._navigation_direction_surface,
                 obstacle_probe=self._navigation_obstacle,
                 bounds=getattr(self._spawn_planner, 'bounds', None),
                 arena_bounds=self._arena_bounds,
@@ -6354,6 +6355,41 @@ class BattleRuntime(object):
             result['status'] = 'non_upward_surface'
         return result
 
+    @observed('navigation.directional_surface')
+    def _navigation_direction_surface(self, position, yaw, distance):
+        """Read the near travel surface using the navigation collision policy.
+
+        Y is anchored to the realised hull, not the highest XZ graph storey.
+        Forward/reverse callers supply the actual travel yaw. Normals describe
+        that direction, not a chord between distant cell-centre heights.
+        """
+        run = min(3.0, max(0.1, float(distance)))
+        sine, cosine = math.sin(yaw), math.cos(yaw)
+        x, y, z = _xyz(position)
+        nx, nz = x+sine*run, z+cosine*run
+        start = self._vector((nx, y+4.5, nz))
+        end = self._vector((nx, y-5.0, nz))
+        trace = {}
+        hit = self._collide_navigation(start, end, trace)
+        self._record_navigation_hit(trace, start, end, hit)
+        result = dict(status='missing', native_trace=trace, distance=run,
+                      origin=(x,y,z), yaw=yaw, decision_input=True)
+        if hit is None:
+            return result
+        normal = _xyz(hit[1])
+        height = float(hit[0].y)
+        if normal[1] <= .0001:
+            result['status'] = 'non_upward_surface'
+            return result
+        grade = -(normal[0]*sine+normal[2]*cosine)/normal[1]
+        if any(math.isnan(value) or math.isinf(value) for value in normal+(height, grade)):
+            result['status'] = 'invalid_surface'
+            return result
+        result.update(status='hit', grade=grade,
+            directional_angle_degrees=math.degrees(math.atan(grade)),
+            height=height, chord_grade=(height-y)/run)
+        return result
+
     def _collide_static_down(self, start, end, ground_filter):
         """Vertical probe that skips the skin of an already broken item."""
         collide = getattr(self._destructibles, 'collide_motion_segment', None)
@@ -6681,6 +6717,21 @@ class BattleRuntime(object):
         # fed a false blocked edge into recovery. Keep the same two samples,
         # but let their vertical casts cover the whole admitted grade.
         grade_limit = NAVIGATION_MAX_GRADE
+        # A low-resolution/long chord can hide a steep bank at the front of
+        # the hull. Keep the existing two full corridor samples; this one
+        # additional near-surface normal shares their navigation filter.
+        surface = None
+        if descriptor is not None:
+            try:
+                surface = self._navigation_direction_surface(
+                    position, yaw, near_distance)
+            except Exception as error:
+                surface = dict(status='query_failed', error=type(error).__name__)
+            if (surface.get('status') == 'hit' and
+                    abs(surface['grade']) > grade_limit):
+                return dict(clear=False, collision=False, water=False,
+                    slope=surface['grade'], reason='planning_surface_grade',
+                    surface=surface)
         for height, distance in (
                 (0.7, near_distance), (1.5, far_distance)):
             nx = x + sine * distance
@@ -6695,9 +6746,11 @@ class BattleRuntime(object):
                 probe_up = max(4.5, run * grade_limit + 0.02)
                 probe_down = max(5.0, run * grade_limit + 0.02)
                 ground_trace = {}
+                ground_start = (nx, previous_y + probe_up, nz)
+                ground_end = (nx, previous_y - probe_down, nz)
                 try:
-                    ground_start = self._vector((nx, previous_y + probe_up, nz))
-                    ground_end = self._vector((nx, previous_y - probe_down, nz))
+                    ground_start = self._vector(ground_start)
+                    ground_end = self._vector(ground_end)
                     ground = (self._collide_navigation(ground_start, ground_end, ground_trace)
                               if descriptor is not None else self._collide_down(
                                   ground_start, ground_end, self._ground_filter(nx, nz)))
@@ -6705,12 +6758,19 @@ class BattleRuntime(object):
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0,
                             'slope_valid': False, 'probe_failed': True,
-                            'reason': 'planning_ground_query_failed'}
+                            'reason': 'planning_ground_query_failed',
+                            'native_trace': dict(ground_trace,
+                                ray_start=_xyz(ground_start), ray_end=_xyz(ground_end)),
+                            'surface': surface}
                 if ground is None:
                     return {'clear': False, 'collision': False,
                             'water': False, 'slope': 99.0,
                             'slope_valid': False,
-                            'reason': 'planning_ground_missing'}
+                            'reason': 'planning_ground_missing',
+                            'native_trace': dict(ground_trace,
+                                ray_start=_xyz(ground_start), ray_end=_xyz(ground_end),
+                                previous_y=previous_y, run=run),
+                            'surface': surface}
                 next_y = float(ground[0].y)
                 water_depth = self._water_depth((nx, next_y, nz))
                 if (wet_escape and
@@ -6761,6 +6821,8 @@ class BattleRuntime(object):
             previous_distance = distance
         result = {'clear': True, 'collision': False,
                   'water': False, 'slope': maximum_slope}
+        if surface is not None:
+            result['surface'] = surface
         return result
 
     def _direction_world_receipt(self, position, travel_yaw, signed_speed,
