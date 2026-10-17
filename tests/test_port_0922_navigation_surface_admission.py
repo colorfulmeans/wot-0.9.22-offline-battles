@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from test_port_0922_navigation import TerrainGrid, StaticHullNavigationTests
+from gui.mods.offline_lan_0922.ai.driver import NAVIGATION_MAX_GRADE
 
 
 class DirectionPreferenceTests(unittest.TestCase):
@@ -95,7 +96,7 @@ class NativeSurfaceContractTests(unittest.TestCase):
         cls.probe=staticmethod(namespace['_navigation_direction_surface'])
         method=next(n for n in node.body if isinstance(n,ast.FunctionDef)
                     and n.name=='_direction_probe')
-        namespace.update(NAVIGATION_MAX_GRADE=math.tan(math.radians(26.)),
+        namespace.update(NAVIGATION_MAX_GRADE=NAVIGATION_MAX_GRADE,
             BOT_WATER_AVOID_DEPTH=1.2,BOT_WATER_ESCAPE_DEEPEN_EPSILON=.05)
         exec(compile(ast.Module(body=[method],type_ignores=[]),'direction_contract','exec'),namespace)
         cls.direction=staticmethod(namespace['_direction_probe'])

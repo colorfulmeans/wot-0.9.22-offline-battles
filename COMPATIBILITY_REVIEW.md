@@ -9061,7 +9061,7 @@ planning-ground samples. These are distinct admission/execution boundaries.
   A per-selection normal receipt documents the old/new choice and every query.
 - The native movement corridor keeps its original two ground samples and six
   horizontal rays. One additional near-body ground normal rejects a locally
-  over-limit bank using the existing 26-degree navigation limit, even when the
+  over-limit bank using the existing 25-degree navigation limit, even when the
   distant chord averages out flat. An admitted continuous 19-degree climb remains
   legal; this is not a flat-only policy. Missing extra normals do not invent a
   collision or bypass the existing ground/collision proof. The added work has its
