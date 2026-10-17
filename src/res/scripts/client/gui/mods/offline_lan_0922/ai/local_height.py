@@ -31,6 +31,7 @@ class LocalHeightLinks(object):
         self.results = {}
         self.receipts = []
         self.queries = 0
+        self.budget_exhausted = False
         self.column_evidence = []
         self.now = now
         self.generation = None
@@ -59,6 +60,7 @@ class LocalHeightLinks(object):
                 status='complete',reused=True,surfaces=cached[2]))
             return cached[2]
         if self.queries >= MAX_COLUMNS:
+            self.budget_exhausted = True
             if not self.column_evidence or self.column_evidence[-1].get('status') != 'budget':
                 self.column_evidence.append(dict(status='budget',position=(x,z)))
             return None
@@ -186,7 +188,7 @@ class LocalHeightLinks(object):
             else:
                 receipt['unknown_reason'] = 'accepted_pose_has_no_nearby_ground'
         if status == 'unknown' and 'unknown_reason' not in receipt:
-            receipt['unknown_reason'] = ('query_budget' if self.queries >= MAX_COLUMNS
+            receipt['unknown_reason'] = ('query_budget' if self.budget_exhausted
                 else 'missing_or_incomplete_surface')
         receipt['resolved_height_delta'] = resolved[1]-end[1]
         receipt.update(status=status,resolved=resolved,columns=self.queries,

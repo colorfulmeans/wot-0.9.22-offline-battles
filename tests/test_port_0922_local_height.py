@@ -124,6 +124,13 @@ class LocalHeightTests(unittest.TestCase):
             self.assertEqual(('connected',(9.,-15.,6.)),
                 links.inspect((6.,-15.,6.),(9.,old_height,6.),old_height))
 
+    def test_last_completed_empty_column_is_not_logged_as_a_budget_refusal(self):
+        links,_=self.links(lambda x,z:[face(x,z,-15.)] if x==6. else [])
+        links.queries=MAX_COLUMNS-2
+        self.assertEqual('unknown',links.inspect((6.,-15.,6.),(9.,-15.,6.))[0])
+        self.assertEqual(MAX_COLUMNS,links.queries)
+        self.assertEqual('missing_or_incomplete_surface',links.receipts[0]['unknown_reason'])
+
     def test_captured_round_one_ground_error_keeps_the_existing_clear_segment(self):
         root=Path(__file__).resolve().parents[1]
         captured=json.loads((root/'tests/fixtures/local-height-231310-connected-ground.json'
