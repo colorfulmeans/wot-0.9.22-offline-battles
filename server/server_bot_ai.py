@@ -781,6 +781,15 @@ class BotPlanner(object):
                 self._reroute_wreck_stall(order, bot, manifest, now)
                 order['route_assignment'] = dict(
                     self._route_assignment_receipts.get(bot['id']) or {})
+                progress = (self._route_states.get(bot['id']) or {}).get('progress_receipt')
+                progress = dict(progress or dict(outcome='no_active_route_evaluation', at=None))
+                progress.update(
+                    observation='evaluated' if progress['at'] == now else 'previous_or_unavailable',
+                    age_seconds=now-progress['at'] if progress['at'] is not None else None,
+                    final_order=dict(mode=order.get('combat_mode'),
+                        route_id=order.get('route_id'), route_index=order.get('route_index'),
+                        move_position=order.get('move_position')))
+                order['route_assignment']['progress'] = progress
                 lease = self._route_assignments.get(bot['id']) or {}
                 if _number(lease.get('until')) > 0.0:
                     order['route_assignment']['lease'] = dict(
@@ -2904,6 +2913,11 @@ class BotPlanner(object):
         # The pinned route geometry is immutable for this round. Keep progress
         # and completed waits when temporary assignments retire the active state.
         history[route_id] = state
+        requested_limit = route_limit
+        previous_index = max(0, _integer(state.get('index')))
+        # Screening may stop an approaching tank before the flag. It cannot
+        # rewind a tank which already passed that gate while assigned capture.
+        route_limit = min(len(waypoints)-1, max(route_limit, previous_index))
         index = min(max(0, _integer(state.get("index"))), route_limit)
         state["index"] = index
         point = _point(waypoints[index])
@@ -2944,6 +2958,12 @@ class BotPlanner(object):
             anchor = _point(state["join_anchor"])
         else:
             anchor = _point(waypoints[max(0, index - 1)])
+        state['progress_receipt'] = dict(at=now, route_id=route_id,
+            stop_before_objective=bool(stop_before_objective),
+            requested_limit=requested_limit, effective_limit=route_limit,
+            previous_index=previous_index, selected_index=index,
+            point=dict(point), anchor=dict(anchor), route_join=route_join,
+            outcome='preserve_passed_screen' if requested_limit < previous_index else 'normal_progress')
         return route_id, index, point, anchor, route_join
 
     def _wait_place_occupied(self, bot_id, place, radius, height):

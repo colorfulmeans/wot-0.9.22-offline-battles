@@ -34380,6 +34380,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bots._probe_started = lambda: None
             bots._probe_finished = lambda index, started: None
             bots._physics_ground_probe = lambda x, z, hint: 2.0
+            bots._physics_ground_limit_probe = None
             bots._turret_motion_probe = None
             bots.set_camera_position((0.0, 0.0, 0.0))
             for step in range(20):
