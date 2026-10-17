@@ -3,6 +3,28 @@
 This branch is a test entrance based on Windows325. It must not be merged into
 main as a gameplay change.
 
+## Shot-triggered drop onto the player
+
+Run START_ROOF_SHOT_DROP_TEST.bat for the second fixture. The player spawns
+below the same bridge edge; fifteen enemy Type 59s wait in two lanes above
+and on its approach, leaving the deck edge clear until released.
+There are no friendly Bots in this fixture. Every acknowledged player shell
+launch releases exactly one living, unreleased Bot in slot order. Reload clicks
+and repeated snapshots do not release another Bot; missed snapshot sequences
+still release one Bot per accepted shot. After fifteen releases, start a new
+battle to reset. Bots never fire. Wait for the preceding Bot to fall before
+firing again if separate impacts are desired.
+
+Released Bots use fixture-only steering through the clear deck apron and off
+a common edge toward the fixed player spawn lane. Stay near spawn to receive
+the drops. The endpoint is fixed, not a homing or guaranteed-impact mechanic:
+native placement, descent and actual contact must be tested in the client.
+No teleport, position lock, synthetic support, impact or damage is added.
+ROOF SHOT DROP records releases, apron waypoints, falls and queue exhaustion.
+The extra process-only flag is WOT_OFFLINE_ROOF_SHOT_DROP=1, in addition to
+WOT_OFFLINE_ROOF_CRUSH_TEST=1. Close both game and launcher before switching
+entrances. The old START_ROOF_CRUSH_TEST.bat arrangement is unchanged.
+
 Extract the complete Windows package and run START_ROOF_CRUSH_TEST.bat.
 Create a room and start normally. The server pins Victory Gate (37_caucasus),
 15 versus 15, and human players to team 1. Enemy slots contain fifteen Type 59s

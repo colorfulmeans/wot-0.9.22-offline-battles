@@ -149,6 +149,94 @@ class RoofCrushEntryTests(unittest.TestCase):
                 # human envelope so a large selected tank clears the row.
                 self.assertTrue(along >= (9. if i==0 else 6.3) or side >=3.5,(i,j))
 
+class ShotDropTests(unittest.TestCase):
+    def setUp(self):
+        self.flag = mock.patch.dict(os.environ, {fixture.ENV: '1', fixture.SHOT_ENV: '1'})
+        self.flag.start()
+        self.addCleanup(self.flag.stop)
+
+    def states(self):
+        result = {}
+        for slot in range(15):
+            p, yaw = fixture.enemy_seed(slot)
+            result[slot+2] = dict(id=slot+2, alive=True, x=p[0], y=p[1],
+                                  z=p[2], yaw=yaw, speed=0.)
+        return result
+
+    def test_player_below_deck_and_all_fifteen_bots_clear_of_apron(self):
+        self.assertEqual(-14., fixture.player_seed()[0][1])
+        states = self.states()
+        self.assertEqual(15, len(set((s['x'], s['z']) for s in states.values())))
+        for state in states.values():
+            self.assertEqual(1., state['y'])
+            along = (state['x']-2.)*math.sin(state['yaw'])+(state['z']-105.)*math.cos(state['yaw'])
+            self.assertLessEqual(along, -7.999)
+        with mock.patch.dict(os.environ, {fixture.ENV: '0'}):
+            self.assertFalse(fixture.shot_drop_enabled())
+
+    def test_only_confirmed_shot_advances_one_bot_and_snapshot_gaps_are_preserved(self):
+        queue, states = fixture.ShotDropQueue(), self.states()
+        queue.observe([dict(id=1, fire_seq=0)], states)
+        self.assertFalse(queue.released)
+        queue.observe([dict(id=1, fire_seq=1)], states)
+        self.assertEqual({2}, queue.released)
+        for unused in range(10): queue.observe([dict(id=1, fire_seq=1)], states)
+        self.assertEqual({2}, queue.released)
+        queue.observe([dict(id=1, fire_seq=3)], states)
+        self.assertEqual({2,3,4}, queue.released)
+        queue.observe([dict(id=1, fire_seq=2)], states)
+        self.assertEqual({2,3,4}, queue.released)
+        self.assertEqual([1,2,3], [e['shot'] for e in queue.drain_events()])
+
+    def test_skips_dead_queue_entries_and_exhausts_without_releasing_twice(self):
+        queue, states = fixture.ShotDropQueue(), self.states()
+        states[2]['alive'] = False
+        queue.observe([dict(id=1, fire_seq=16)], states)
+        self.assertEqual(set(range(3,17)), queue.released)
+        self.assertEqual(2, sum(e['phase']=='exhausted' for e in queue.drain_events()))
+        queue.observe([dict(id=1, fire_seq=16)], states)
+        self.assertEqual([], queue.drain_events())
+
+    def test_fixture_orders_preserve_physics_and_only_released_bot_drives(self):
+        queue, states = fixture.ShotDropQueue(), self.states()
+        queue.observe([dict(id=1, fire_seq=1)], states)
+        state = states[2]
+        before = dict(state)
+        command = queue.command(dict(fire_allowed=True), state)
+        self.assertGreater(command['throttle'], 0.)
+        self.assertFalse(command['brake'])
+        self.assertFalse(command['fire_allowed'])
+        self.assertEqual(before, state)
+        self.assertEqual(0., queue.command({}, states[3])['throttle'])
+        # Traverse the two real deck waypoints, then request outward drive.
+        for unused in range(2):
+            goal = queue.routes[2][0]
+            state.update(x=goal[0], z=goal[2])
+            queue.command({}, state)
+        goal = queue.routes[2][0]
+        state['yaw'] = math.atan2(goal[0]-state['x'],goal[2]-state['z'])
+        outward = queue.command({}, state)
+        self.assertGreater(outward['throttle'],0.)
+        state.update(y=-4., vertical_speed=-8.)
+        falling = dict(state)
+        self.assertEqual(0., queue.command({},state)['throttle'])
+        self.assertNotIn(2, queue.routes)
+        self.assertEqual(falling,state)
+        self.assertIn('falling', [e['phase'] for e in queue.drain_events()])
+
+    def test_new_server_mode_has_one_human_and_fifteen_enemy_bots(self):
+        class Battle:
+            def __init__(self, **kw): self.initial=kw
+            def request_start(self, *a, **kw): return kw
+        class Planner: pass
+        fixture.install_server(Battle,Planner)
+        args=Battle().initial
+        self.assertEqual(1,args['team1_size'])
+        self.assertEqual(15,args['team2_size'])
+        self.assertEqual(15,len(args['bot_lineup']))
+        self.assertEqual({2},{b['team'] for b in args['bot_lineup']})
+
+
 class SpawnGeometryStartupTests(unittest.TestCase):
     def runtime(self, progress=.5, height=None, now=1.):
         from test_port_0922_battle_runtime import BattleRuntime
@@ -225,6 +313,41 @@ class RuntimeHoldTests(unittest.TestCase):
         state.update(y=10., airborne=True, vertical_speed=-2., grounded_once=True)
         for i in range(10): runtime.update(.04, 1.+i*.04)
         self.assertLess(state['y'], 9.)
+
+    def test_shot_fixture_releases_in_real_update_and_resets_on_new_round(self):
+        with mock.patch.dict(os.environ, {fixture.SHOT_ENV: '1'}):
+            runtime = self.host._runtime()
+            # One Bot on a clear native-query seam; this tests the complete
+            # input-to-motion pipeline, not native bridge contact acceptance.
+            state = runtime.states[11]
+            point,yaw = fixture.enemy_seed(0)
+            state.update(x=point[0], y=0., z=point[2], yaw=yaw,
+                         speed=0., grounded_once=True)
+            runtime.states[12].update(x=1000.,z=1000.)
+            player = dict(id=1,team=1,alive=True,x=1000.,y=0.,z=1200.,
+                          yaw=0.,fire_seq=0,
+                          effective_params=self.support._effective_params_snapshot())
+            runtime.update(.04,1.,players=[player])
+            self.assertFalse(runtime._roof_shot_drop_queue.released)
+            player['fire_seq']=1
+            before=(state['x'],state['z'])
+            for i in range(25):runtime.update(.04,1.04+i*.04,players=[player])
+            self.assertEqual({11},runtime._roof_shot_drop_queue.released)
+            self.assertGreater(math.hypot(state['x']-before[0],state['z']-before[1]),.05)
+            self.assertEqual(0,state.get('fire_seq',0))
+            reached_edge = False
+            for i in range(1000):
+                runtime.update(.04,2.04+i*.04,players=[player])
+                lateral=(state['x']-2.)*math.cos(yaw)-(state['z']-105.)*math.sin(yaw)
+                if lateral > 7.:
+                    reached_edge = True
+                    break
+            self.assertTrue(reached_edge, (state['x'],state['z'],state['yaw'],
+                runtime._roof_shot_drop_queue.routes.get(11)))
+            runtime.round_id += 1
+            player['fire_seq']=0
+            runtime.update(.04,44.,players=[player])
+            self.assertFalse(runtime._roof_shot_drop_queue.released)
 
 if __name__ == '__main__': unittest.main()
 

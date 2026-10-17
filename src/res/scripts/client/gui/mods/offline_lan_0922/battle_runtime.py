@@ -5732,11 +5732,13 @@ class BattleRuntime(object):
                     else roof_crush_test.enemy_seed(slot))
                 height = self._ground_y(seed[0], seed[2], seed[1],
                                          allow_wide=False)
-                if height is None or (test_friendly and abs(height-seed[1]) > 4.):
+                if height is None or ((test_friendly or roof_crush_test.shot_drop_enabled()) and abs(height-seed[1]) > 4.):
                     raise ValueError('roof test native spawn layer is unproved: %s' % (seed,))
                 self._spawn_cache[key] = ((seed[0], height, seed[2]), yaw)
                 print('[ROOF CRUSH TEST] team=%s slot=%s layer=%s position=%s yaw=%s' %
-                    (team, slot, ('bridgehead' if test_friendly and int(slot)>roof_crush_test.DECK_FRIENDLIES
+                    (team, slot, ('below_deck' if roof_crush_test.shot_drop_enabled() and test_friendly
+                                 else 'deck' if roof_crush_test.shot_drop_enabled()
+                                 else 'bridgehead' if test_friendly and int(slot)>roof_crush_test.DECK_FRIENDLIES
                                  else 'deck' if test_friendly else 'below_deck'),
                      self._spawn_cache[key][0], yaw))
             return self._spawn_cache[key]

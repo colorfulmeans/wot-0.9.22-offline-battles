@@ -1,6 +1,7 @@
 @echo off
 setlocal
 set "WOT_OFFLINE_ROOF_CRUSH_TEST=1"
+set "WOT_OFFLINE_ROOF_SHOT_DROP=0"
 cd /d "%~dp0"
 echo Temporary bridge-drop test: Victory Gate, enemy Type 59s below the bridge.
 echo Player starts on the bridge; six friendly Type 59s park broadside along its edge.
