@@ -9757,8 +9757,8 @@ class BotRuntimeTests(unittest.TestCase):
             'shell_index': 0, 'fire_allowed': False,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
-            'aim_position': (0.0, 1.0, 100.0),
-            'face_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
+            'face_position': (0.0, 1.0, 0.0),
             'move_position': (0.0, 0.0, 0.0),
             'recovery_mode': 'arrived', 'movement_intent': False,
         }
@@ -9793,9 +9793,10 @@ class BotRuntimeTests(unittest.TestCase):
 
         runtime._ballistic_solution = counted_solve
         runtime._update_gun_aim = counted_aim
+        # Bot spawns at z=100: keep this aiming fixture clear of its hull.
         player = _admit_player({
             'id': 2, 'team': 1, 'alive': True,
-            'x': 0.0, 'y': 1.0, 'z': 100.0,
+            'x': 0.0, 'y': 1.0, 'z': 0.0,
         })
 
         for frame in range(60):
@@ -9856,8 +9857,8 @@ class BotRuntimeTests(unittest.TestCase):
             'shell_index': 0, 'fire_allowed': True,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
-            'aim_position': (0.0, 1.0, 100.0),
-            'face_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
+            'face_position': (0.0, 1.0, 0.0),
             'move_position': (0.0, 0.0, 0.0),
             'recovery_mode': 'arrived', 'movement_intent': False,
         }
@@ -9878,16 +9879,17 @@ class BotRuntimeTests(unittest.TestCase):
         runtime._next_shot_lane_refresh = 100.0
         runtime._next_cover_refresh = 100.0
         solution = {
-            'aim_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
             'yaw': 0.0, 'pitch': 0.0, 'flight_time': 0.1,
             'arc': 'low', '_origin': (0.0, 1.0, 0.0),
         }
         freshness = [False]
         runtime._cadenced_ballistic_solution = lambda *unused, **kwargs: (
             solution, freshness[0])
+        # Bot spawns at z=100: keep this aiming fixture clear of its hull.
         player = _admit_player({
             'id': 2, 'team': 1, 'alive': True,
-            'x': 0.0, 'y': 1.0, 'z': 100.0,
+            'x': 0.0, 'y': 1.0, 'z': 0.0,
         })
 
         stale = bot_state_rows.bots(runtime.update(0.2, 1.0, players=[player])[0])[0]
