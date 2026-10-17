@@ -781,6 +781,11 @@ class BotPlanner(object):
                 self._reroute_wreck_stall(order, bot, manifest, now)
                 order['route_assignment'] = dict(
                     self._route_assignment_receipts.get(bot['id']) or {})
+                lease = self._route_assignments.get(bot['id']) or {}
+                if _number(lease.get('until')) > 0.0:
+                    order['route_assignment']['lease'] = dict(
+                        until=_number(lease['until']),
+                        observation=dict(lease.get('_lease_observation') or {}))
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -2350,6 +2355,11 @@ class BotPlanner(object):
             sequence=old.get('sequence', 0) + 1, at=_number(now),
             previous_route=str(previous or ''), route=str(current or ''),
             reason=reason, position=_point(bot.get('state') or {}))
+        previous_lease = self._route_assignments.get(bot['id']) or {}
+        if _number(previous_lease.get('until')) > 0.0:
+            self._route_assignment_receipts[bot['id']]['previous_lease'] = dict(
+                until=_number(previous_lease['until']),
+                observation=dict(previous_lease.get('_lease_observation') or {}))
 
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
@@ -2413,6 +2423,12 @@ class BotPlanner(object):
                                max(1.0, _number(contact.get("max_health"), 1.0)))
             pressure[route_id] += max(0.3, health_fraction)
         if not pressure or max(pressure.values()) <= 0.0:
+            for bot in bots:
+                assignment = self._route_assignments.get(bot['id']) or {}
+                if _number(assignment.get('until')) > 0.0:
+                    assignment['_lease_observation'] = dict(
+                        evaluated_at=_number(now), outcome='no_known_pressure',
+                        until=_number(assignment['until']))
             return
         # SPGs stage behind a lane and do not provide its front-line coverage.
         # Counting them here made a road look defended while also preventing
@@ -2441,15 +2457,29 @@ class BotPlanner(object):
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
         for bot in bots:
-            if not any(self._nearest_route(contact, catalog) == target_route
-                       for contact in self._contacts_for_bot(bot, contacts, now)):
-                continue
+            knows_target = any(self._nearest_route(contact, catalog) == target_route
+                               for contact in self._contacts_for_bot(bot, contacts, now))
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
+            if isinstance(assignment, dict) and _number(assignment.get('until')) > 0.0:
+                own_id = str((route or {}).get('id') or '')
+                assignment['_lease_observation'] = dict(
+                    evaluated_at=_number(now), target_route=target_route,
+                    own_route=own_id, own_pressure=pressure.get(own_id, 0.0),
+                    target_pressure=pressure[target_route],
+                    own_contributors=counts.get(own_id, 0),
+                    target_contributors=counts[target_route],
+                    knows_target=knows_target, until=_number(assignment['until']),
+                    outcome=('no_target_contact' if not knows_target else
+                             'different_pressure_target'))
+            if not knows_target:
+                continue
             if (isinstance(route, dict) and
                     str(route.get("id") or "") == target_route and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
+                assignment['_lease_observation'].update(
+                    outcome='renewed', until=assignment['until'])
         candidates = []
         for bot in bots:
             if class_counts.get((target_route, bot.get("profile", {}).get("class_tag")), 0) >= 3:
@@ -2518,6 +2548,11 @@ class BotPlanner(object):
             "until": _number(now) + ROUTE_LEASE_SECONDS,
             "radio_scoped": any("radio_bot_until" in contact
                                 for contact in contacts),
+            "_lease_observation": dict(evaluated_at=_number(now),
+                outcome='assigned', target_route=target_route,
+                target_pressure=pressure[target_route],
+                target_contributors=counts[target_route],
+                until=_number(now) + ROUTE_LEASE_SECONDS),
         }
         self._route_states.pop(donor["id"], None)
 
@@ -3836,7 +3871,10 @@ class BotPlanner(object):
               self._apply_cover_order(order, bot, focus, personality, now)):
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
-        elif distance < close_limit and dominant != "brawler":
+        elif (distance < close_limit and dominant != "brawler" and
+              math.hypot(retreat_point['x'] - _number(state.get('x')),
+                         retreat_point['z'] - _number(state.get('z'))) >
+              RETREAT_ARRIVAL_RADIUS):
             # This must precede the general firing-envelope hold below because
             # close_limit is always inside that envelope. Keep firing while a
             # ranged vehicle opens space along its already validated route.
@@ -3844,7 +3882,10 @@ class BotPlanner(object):
             self._combat_states.pop(bot["id"], None)
             self._cover_states.pop(bot["id"], None)
             order["combat_mode"] = "withdraw"
-            order["move_position"] = dict(route_anchor)
+            # A newly created join anchor may be the current position. Use
+            # the same proved retreat point as the other withdrawal owners.
+            # If it is already reached, retain the existing firing hold below.
+            order["move_position"] = dict(retreat_point)
             order["throttle_override"] = None
         elif distance <= min(fire_range, max(150.0, desired_range * 1.35)):
             # A visible enemy inside an effective firing envelope interrupts
