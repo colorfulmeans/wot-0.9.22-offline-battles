@@ -215,6 +215,81 @@ def body_contains_point(body, point, slop=POSITION_SLOP):
         return False
 
 
+def planar_body_contact(first, second, trace=None):
+    """Narrow-phase oriented volumes before spending a horizontal response.
+
+    A world-Y interval plus a yaw-only footprint is a broad phase, not proof
+    of a side collision. Vertical minimum-translation axes belong to the
+    existing suspension solver, including intervals between roof contacts.
+    No carrier grace period or persistent collision exemption is involved.
+    """
+    if first.get('y') is None or second.get('y') is None:
+        if trace is not None: trace.update(verdict='unknown_height')
+        return True
+    if (first['y'] == second['y'] and
+            not any(body.get(k, 0.0) for body in (first, second)
+                    for k in ('pitch', 'roll'))):
+        if trace is not None: trace.update(verdict='coplanar')
+        return True
+
+    def dot(a, b):
+        return sum(a[i]*b[i] for i in range(3))
+
+    def geometry(body):
+        shape = _tank_shape(body)
+        axes = pose_axes(body['yaw'], body.get('pitch', 0.0), body.get('roll', 0.0))
+        local_y = (shape[2]+shape[3])*.5
+        centre = tuple(body[k]+axes[1][i]*local_y
+                       for i,k in enumerate(('x','y','z')))
+        return centre, axes, (shape[0], (shape[3]-shape[2])*.5, shape[1])
+
+    ca, aa, ea = geometry(first)
+    cb, ab, eb = geometry(second)
+    delta = tuple(ca[i]-cb[i] for i in range(3))
+    candidates = list(aa+ab)
+    for a in aa:
+        for b in ab:
+            cross = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+                     a[0]*b[1]-a[1]*b[0])
+            length = math.sqrt(dot(cross, cross))
+            if length > 1.e-8:
+                candidates.append(tuple(c/length for c in cross))
+    minimum = None
+    for axis in candidates:
+        radius = (sum(ea[i]*abs(dot(axis, aa[i])) for i in range(3)) +
+                  sum(eb[i]*abs(dot(axis, ab[i])) for i in range(3)))
+        depth = radius-abs(dot(delta, axis))
+        if depth <= 0.0:
+            if trace is not None: trace.update(verdict='separated',axis=axis,depth=depth)
+            return False
+        if minimum is None or depth < minimum[0]:
+            minimum = (depth, axis)
+    depth, axis = minimum
+    if dot(delta, axis) < 0.0:
+        axis = tuple(-value for value in axis)
+    # Partition the contact by its dominant world component. Horizontal
+    # motors must not turn vertical penetration into a full-width shove.
+    side = axis[1]*axis[1] < axis[0]*axis[0]+axis[2]*axis[2]
+    if trace is not None:
+        trace.update(verdict='side' if side else 'vertical',axis=axis,depth=depth)
+    return side
+
+
+def physical_planar_contact(first, second, projection=None):
+    """Use the narrow-phase depth/normal for tilted side contacts as well."""
+    trace = {}
+    if not planar_body_contact(first, second, trace):
+        return None
+    if trace['verdict'] == 'side':
+        axis = trace['axis']
+        length = math.hypot(axis[0], axis[2])
+        return axis[0]/length, axis[2]/length, trace['depth']/length
+    if projection is None:
+        return obb_contact(first['x'], first['z'], first['yaw'], _tank_shape(first),
+                           second['x'], second['z'], second['yaw'], _tank_shape(second))
+    return _obb_contact_projected(first['x'], first['z'], second['x'], second['z'], projection)
+
+
 def forget_chassis_shape(type_descriptor):
     """Release one descriptor-derived shape at its BSP owner boundary."""
     cache_key = id(type_descriptor)
@@ -738,6 +813,8 @@ def traverse_impulses(tanks, dt, anchor=None, angular_results=None):
                         a.get('y'), shape, b.get('y'), other_shape,
                         pitch_a=a.get('pitch', 0.0), roll_a=a.get('roll', 0.0),
                         pitch_b=b.get('pitch', 0.0), roll_b=b.get('roll', 0.0))):
+                continue
+            if not planar_body_contact(a, b):
                 continue
             nx, nz, depth = _obb_overlap(a['x'], a['z'], a['yaw'], shape,
                                          b['x'], b['z'], b['yaw'], other_shape)
@@ -1348,8 +1425,7 @@ def resolve_pairs(tanks, dt, anchor=None):
                 pairs.append((a, b, projection))
     for unused_pass in range(4):
         for a, b, projection in pairs:
-            hit = _obb_contact_projected(
-                a['x'], a['z'], b['x'], b['z'], projection)
+            hit = physical_planar_contact(a, b, projection)
             hit = _owner_oriented_contact(hit, a['x']-b['x'], a['z']-b['z'], a['id'], b['id'])
             if hit is None:
                 continue
@@ -1629,8 +1705,11 @@ def resolve_tank(tank, others, now=None, ram_cooldowns=None,
             (other_velocity_x, other_velocity_z))
         mobility_self, mobility_other = grounded_inverse_masses(
             contact, tank, other, inverse_self, inverse_other, dt)
+        physical_contact = _owner_oriented_contact(
+            physical_planar_contact(tank, other), center_dx, center_dz,
+            self_id, other_id)
         response = pair_response(
-            contact, mobility_self, mobility_other,
+            physical_contact, mobility_self, mobility_other,
             (velocity_x, velocity_z),
             (other_velocity_x, other_velocity_z),
             friction_inverse=(inverse_self, inverse_other))

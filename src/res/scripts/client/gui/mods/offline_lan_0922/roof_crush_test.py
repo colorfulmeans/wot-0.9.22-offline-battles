@@ -17,17 +17,18 @@ def enabled():
 
 
 def enemy_seed(slot):
-    """Fifteen separated targets along/beside the bridge's lower corridor.
+    """Fifteen close targets below one edge of the bridge's lower corridor.
 
     Y is only a below-deck query hint. The real native surface owns spawn Y.
     """
     row, column = divmod(int(slot), 5)
     if not 0 <= row < 3:
         raise ValueError('roof test supports fifteen enemy slots')
-    sideways = (row-1)*7.0
+    sideways = 6.0+row*3.5
     yaw = math.atan2(10.0, -7.0)
-    return (2.0+column*10.0+math.cos(yaw)*sideways, -14.0,
-            105.0-column*7.0-math.sin(yaw)*sideways), yaw
+    along = column*6.4
+    return (2.0+math.sin(yaw)*along+math.cos(yaw)*sideways, -14.0,
+            105.0+math.cos(yaw)*along-math.sin(yaw)*sideways), yaw
 
 
 def hold_command(command, position):

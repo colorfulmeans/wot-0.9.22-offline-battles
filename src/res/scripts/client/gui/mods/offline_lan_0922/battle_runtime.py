@@ -23468,13 +23468,19 @@ class BattleRuntime(object):
         contact['correction'] = solved[own['id']]['correction']
         vertical_peers = [other for other in physical_others
                           if abs(other['y']-own['y']) > .5]
-        if (vertical_peers and contact['correction'] != (0.,0.) and
+        if (vertical_peers and
                 now >= getattr(self,'_stack_planar_log_at',-1.e30)):
-            self._stack_planar_log_at = now+1.
+            self._stack_planar_log_at = now+.25
+            classifications = []
+            for other in vertical_peers:
+                evidence = dict(kind=other['kind'], id=other['network_id'])
+                tank_collision.planar_body_contact(own, other, evidence)
+                classifications.append(evidence)
             native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
                 phase='planar_response',upper_or_local=['player',own['network_id']],
                 local_pose=(own['x'],own['y'],own['z']),
                 local_carrier=own.get('stack_carrier'),
+                body_contacts=classifications,
                 correction=contact['correction'],
                 peers=[dict(kind=other['kind'],id=other['network_id'],
                     position=(other['x'],other['y'],other['z'])) for other in vertical_peers]))

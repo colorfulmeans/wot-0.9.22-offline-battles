@@ -54,8 +54,21 @@ class RoofCrushEntryTests(unittest.TestCase):
         self.assertEqual(15, len(set(points)))
         for i, a in enumerate(points):
             for b in points[i+1:]:
-                self.assertGreaterEqual(math.hypot(a[0]-b[0], a[2]-b[2]), 6.99)
+                self.assertGreaterEqual(math.hypot(a[0]-b[0], a[2]-b[2]), 3.49)
         with self.assertRaises(ValueError): fixture.enemy_seed(15)
+
+    def test_target_array_is_tight_and_entirely_on_one_bridge_side(self):
+        yaw = fixture.enemy_seed(0)[1]
+        import math
+        for slot in range(15):
+            point, unused = fixture.enemy_seed(slot)
+            dx, dz = point[0]-2., point[2]-105.
+            lateral = dx*math.cos(yaw)-dz*math.sin(yaw)
+            self.assertGreaterEqual(lateral,5.999)
+            self.assertLessEqual(lateral,13.001)
+        points = [fixture.enemy_seed(i)[0] for i in range(15)]
+        self.assertAlmostEqual(3.5,math.hypot(points[5][0]-points[0][0],points[5][2]-points[0][2]))
+        self.assertAlmostEqual(6.4,math.hypot(points[1][0]-points[0][0],points[1][2]-points[0][2]))
 
     def test_hold_does_not_mutate_physical_state_or_input(self):
         incoming = dict(throttle=1., turn=1., fire_allowed=True, target_id=12)
