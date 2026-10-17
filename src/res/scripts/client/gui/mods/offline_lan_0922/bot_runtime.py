@@ -8297,6 +8297,7 @@ class BotRuntime(object):
             before_airborne, before_vertical_speed, solved)
         if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
+            velocity = (0., float(impact_vertical), 0.)
             if motion_pose is not None and float(step) > 0.0:
                 velocity = (
                     (float(position[0]) - float(motion_pose[0])) /
@@ -8309,11 +8310,18 @@ class BotRuntime(object):
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
+            impact_normal = (current_plane or {}).get('normal', (0., 1., 0.))
+            roof_contact = getattr(self, 'stack_impact_contact', None)
+            if callable(roof_contact):
+                impact = roof_contact(state, params, ground, pseudo_ground, solved,
+                    (physics_state['pitch'], physics_state['roll']), velocity)
+                if impact is not None:
+                    impact_speed, impact_normal = impact['speed'], impact['normal']
             from gui.mods.offline_lan_0922 import environment_modules
             state['_landing_contact_witnesses'] = environment_modules.ground_witnesses(
                 params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
                 _number(state.get('yaw')), _number(state.get('pitch')), _number(state.get('roll')))
-            state['_landing_contact_normal'] = (current_plane or {}).get('normal', (0., 1., 0.))
+            state['_landing_contact_normal'] = impact_normal
             state['_landing_ground_observed'] = bool(
                 solved.get('contact_count') or solved.get('touched_contact_count'))
             self._apply_bot_landing_impact(

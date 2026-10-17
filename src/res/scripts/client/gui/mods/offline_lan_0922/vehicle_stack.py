@@ -123,6 +123,37 @@ def settled_carrier(params, ground, pseudo_ground, solved, position, yaw,
 
 
 
+def contact_surfaces(params, ground, pseudo_ground, solved, position, yaw,
+                     pitch, roll, surfaces):
+    """Return native roof witnesses used by final suspension contacts."""
+    from . import vehicle_physics as vp
+    keys = vp._suspension_contact_keys(params, solved, ground, pseudo_ground)[0]
+    result = []
+    for kind, index in sorted(keys):
+        point = params['springs'][index] if kind == 'spring' else params['pseudo_contacts'][index]
+        height = ground[index] if kind == 'spring' else pseudo_ground[index]
+        ox, unused, oz = vp.suspension_point_offset(point, pitch, roll)
+        x = position[0] + math.cos(yaw)*ox + math.sin(yaw)*oz
+        z = position[2] - math.sin(yaw)*ox + math.cos(yaw)*oz
+        for surface in surfaces:
+            witness = surface['point']
+            if (abs(witness[1]-float(height)) <= .03 and
+                    math.hypot(witness[0]-x, witness[2]-z) <= .05):
+                result.append(surface)
+                break
+    return result
+
+
+def contact_impact(surfaces, velocity):
+    """Use an admitted native face, never a plane fitted across vehicles."""
+    from . import vehicle_physics as vp
+    if not surfaces:
+        return None
+    rows = [dict(surface, speed=vp.landing_impact_speed(velocity, surface['normal']))
+            for surface in surfaces]
+    return max(rows, key=lambda row: row['speed'])
+
+
 class Ledger(object):
     """Cumulative per-pair work survives state coalescing and exact replay."""
     def __init__(self):
