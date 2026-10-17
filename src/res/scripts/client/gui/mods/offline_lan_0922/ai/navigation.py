@@ -43,6 +43,7 @@ MAX_BAKED_SEARCH_EDGE_CACHE = 2048
 LOCAL_SLOPE_SCORE_WINDOW = 2.0
 LOCAL_SLOPE_YAW_WINDOW = 0.45
 LOCAL_SLOPE_PROBES = 3
+LOCAL_SLOPE_IMPROVEMENT = math.radians(5.0)
 BAKED_SHALLOW_WATER_PENALTY = 4.0
 BAKED_EDGE_CLEARANCE_WEIGHT = 0.20
 BAKED_FORMAT_NAME = 'offline-lan-0922-navgraph'
@@ -1554,7 +1555,13 @@ class TerrainGrid(object):
 				if preferred is None or rank < preferred[0]:
 					preferred = (rank, point)
 			# Unknown normals retain the old result, never masquerade as flat.
-			if preferred is not None:
+			base_surface = next((row for row in observations if row['point'] == best[2]), {})
+			base_grade = base_surface.get('grade')
+			base_known = (base_surface.get('status') == 'hit' and base_grade is not None and
+				not math.isnan(float(base_grade)) and not math.isinf(float(base_grade)))
+			if (preferred is not None and base_known and
+					(best[2] in rejected_surfaces or
+					 math.atan(abs(float(base_grade)))-math.atan(preferred[0][0]) >= LOCAL_SLOPE_IMPROVEMENT)):
 				selected = preferred[1]
 			elif selected in rejected_surfaces:
 				remaining = [value for value, offset in eligible
@@ -1563,7 +1570,8 @@ class TerrainGrid(object):
 			if diagnostic is not None:
 				diagnostic.update(surface_choices=observations, legacy_selected=best[2],
 					slope_score_window=LOCAL_SLOPE_SCORE_WINDOW,
-					slope_yaw_window=LOCAL_SLOPE_YAW_WINDOW)
+					slope_yaw_window=LOCAL_SLOPE_YAW_WINDOW,
+					slope_improvement_degrees=math.degrees(LOCAL_SLOPE_IMPROVEMENT))
 		if diagnostic is not None:
 			diagnostic['selected'] = selected
 		return selected

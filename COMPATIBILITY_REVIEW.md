@@ -9047,7 +9047,10 @@ planning-ground samples. These are distinct admission/execution boundaries.
   route retry/switch owners. Among already admissible local choices, inspect at
   most three real travel-direction normals within 2.0 score units of the old
   winner and 0.45 radians of its direction. Only this near-equivalent subset may
-  prefer a gentler surface; outside it the old route cost remains authoritative.
+  prefer a gentler surface, and only when the known old direction improves by
+  at least five degrees. Tiny normal noise and unknown old normals retain the
+  old winner; physically over-limit normals still fail admission. Outside this
+  subset the old route cost remains authoritative.
   This 2.0-unit window is a deliberate small route-cost tradeoff for this test
   build, not a claim of retail calibration. Missing normals are unknown, not
   zero grade. C is neither removed nor recomputed as slope.

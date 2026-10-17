@@ -45,6 +45,20 @@ class DirectionPreferenceTests(unittest.TestCase):
         target = grid.safe_local_target((20.,0.,20.), (20.,0.,70.), 0.,diagnostic=receipt)
         self.assertEqual(receipt['legacy_selected'],target)
 
+    def test_tiny_normal_noise_does_not_start_side_to_side_steering(self):
+        grid=self.grid(lambda position,yaw,distance:dict(status='hit',
+            grade=.003 if abs(yaw)<.1 else .001))
+        receipt={}
+        target=grid.safe_local_target((20.,0.,20.),(20.,0.,70.),0.,diagnostic=receipt)
+        self.assertEqual(receipt['legacy_selected'],target)
+
+    def test_unknown_old_direction_cannot_be_ranked_as_a_steep_surface(self):
+        def probe(position,yaw,distance):
+            return dict(status='missing') if abs(yaw)<.1 else dict(status='hit',grade=0.)
+        grid=self.grid(probe);receipt={}
+        target=grid.safe_local_target((20.,0.,20.),(20.,0.,70.),0.,diagnostic=receipt)
+        self.assertEqual(receipt['legacy_selected'],target)
+
     def test_avoidance_penalty_cannot_be_erased_by_a_flat_surface(self):
         grid = self.grid(lambda position,yaw,distance:dict(status='hit',grade=0.))
         receipt = {}
