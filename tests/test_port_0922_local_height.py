@@ -2,10 +2,12 @@
 import ast
 import contextlib
 import io
+import json
 import math
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from test_port_0922_navigation import TerrainGrid, StaticHullNavigationTests
 from gui.mods.offline_lan_0922.ai.local_height import LocalHeightLinks, MAX_COLUMNS
 
@@ -116,6 +118,66 @@ class LocalHeightTests(unittest.TestCase):
         self.assertEqual('unknown',links.inspect((6.,-15.,6.),(9.,1.,6.),1.)[0])
         self.assertEqual(MAX_COLUMNS,links.queries)
 
+    def test_connected_floor_with_coarse_height_error_is_not_another_storey(self):
+        for old_height in (-14.4, -15.6):
+            links,_=self.links(lambda x,z:[face(x,z,-15.)])
+            self.assertEqual(('connected',(9.,-15.,6.)),
+                links.inspect((6.,-15.,6.),(9.,old_height,6.),old_height))
+
+    def test_captured_round_one_ground_error_keeps_the_existing_clear_segment(self):
+        root=Path(__file__).resolve().parents[1]
+        captured=json.loads((root/'tests/fixtures/local-height-231310-connected-ground.json'
+            ).read_text())['receipt']
+        def probe(x,z,low,high):
+            for row in captured['column_evidence']:
+                if math.hypot(x-row['position'][0],z-row['position'][1])<.001:
+                    return dict(status=row['status'],surfaces=row['surfaces'])
+            raise AssertionError('uncaptured native query')
+        def unavailable(*args):raise AssertionError('native collision not captured')
+        from gui.mods.offline_lan_0922 import prebaked_navigation
+        grid=TerrainGrid(unavailable,unavailable,
+            baked_graph=prebaked_navigation.load_graph('37_caucasus',str(root)))
+        start,end=captured['origin'],captured['target']
+        self.assertTrue(grid.segment_clear(start,end))
+        links=LocalHeightLinks(probe);links.begin(start)
+        status,resolved=links.inspect(start,end,captured['baked_origin_height'])
+        self.assertEqual('connected',status)
+        self.assertAlmostEqual(1.5099358558654785,resolved[1])
+        self.assertFalse(links.receipts[0]['expected_surface_observed'])
+        grid.local_height_links=links
+        self.assertTrue(grid.segment_clear(start,end))
+
+    def test_unknown_columns_preserve_legacy_candidate_ranking_and_avoidance(self):
+        for failure in ('budget','empty','error'):
+            for avoid in (None,[(6.,0.,9.)]):
+                with self.subTest(failure=failure,avoid=avoid):
+                    make=lambda:TerrainGrid(lambda *a:0.,lambda *a:False,
+                        baked_graph=StaticHullNavigationTests._flat_graph())
+                    origin,goal=(6.,0.,6.),(6.,0.,30.)
+                    old,new=make(),make()
+                    expected=old.safe_local_target(origin,goal,0.,avoid_points=avoid)
+                    def probe(*args):
+                        if failure=='error':raise RuntimeError('fixture unavailable')
+                        return dict(status='complete',surfaces=[])
+                    links=LocalHeightLinks(probe);links.begin(origin)
+                    if failure=='budget':links.queries=MAX_COLUMNS
+                    new.local_height_links=links;receipt={}
+                    actual=new.safe_local_target(origin,goal,0.,
+                        avoid_points=avoid,diagnostic=receipt)
+                    self.assertIsNotNone(expected)
+                    self.assertEqual(expected,actual)
+                    self.assertNotIn('height_unknown',
+                        [r.get('rejected') for r in receipt['candidates']])
+
+    def test_unknown_query_does_not_bypass_old_collision_rejection(self):
+        grid=TerrainGrid(lambda *a:0.,lambda *a:True,
+            baked_graph=StaticHullNavigationTests._flat_graph())
+        # Force the existing native review; unknown must not mean clear.
+        grid._native_review_cells.add(grid.cell_for((6.,0.,6.)))
+        links=LocalHeightLinks(lambda *a:dict(status='complete',surfaces=[]))
+        links.begin((6.,0.,6.));grid.local_height_links=links
+        self.assertFalse(grid.segment_clear((6.,0.,6.),(9.,0.,6.)))
+
     def test_reuse_requires_a_fresh_root_generation_and_expires_when_idle(self):
         generation=[1,0];calls=[]
         def probe(x,z,low,high):
@@ -155,7 +217,10 @@ class LocalHeightTests(unittest.TestCase):
             self.assertLessEqual(links.queries,MAX_COLUMNS)
         self.assertEqual(['other_surface']*18,results)
 
+    @patch('gui.mods.offline_lan_0922.ai.local_height.MAX_COLUMNS',512)
     def test_grid_uses_old_complete_ranking_after_resolving_the_local_floor(self):
+        # This fixture proves complete surface evidence plus unchanged ranking.
+        # Incomplete evidence follows legacy admission, covered independently.
         grid=TerrainGrid(lambda *a:1.,lambda *a:False,
             baked_graph=StaticHullNavigationTests._flat_graph())
         # A deck-only XZ graph must not force the real lower pose onto its deck.

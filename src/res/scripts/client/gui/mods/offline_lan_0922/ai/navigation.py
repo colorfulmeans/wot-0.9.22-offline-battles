@@ -1414,11 +1414,13 @@ class TerrainGrid(object):
 						self._baked_cell_height(self.cell_for(current)) if self.prebaked else None)
 					if status in ('connected', 'other_surface'):
 						y = resolved[1]
-					elif status in ('disconnected','unknown','water'):
+					elif status in ('disconnected','water'):
 						if diagnostic is not None:
 							diagnostic['candidates'].append(dict(point=(x,y,z),
 								rejected='height_'+status, theta=offset))
 						continue
+					# Unknown is not a proved height break. Keep the original
+					# ground, corridor, collision and cost checks below unchanged.
 				if y is None:
 					# A streaming/eroded cell is unknown, not automatically a wall.
 					# Prove a short actual-pose step without publishing graph terrain.

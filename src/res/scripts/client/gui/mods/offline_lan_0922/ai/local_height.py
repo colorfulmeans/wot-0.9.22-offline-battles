@@ -161,13 +161,20 @@ class LocalHeightLinks(object):
                         alternatives.append(surface['point'])
                     unknown |= connected is None
                 expected = [p for p in alternatives if abs(p[1]-end[1]) <= JOIN_ERROR]
+                expected_observed = any(abs(s['height']-end[1]) <= JOIN_ERROR
+                    for s in receipt.get('end_surfaces',()))
+                receipt['expected_surface_observed'] = expected_observed
                 expected_unknown = any(s['connected'] is None and
                     abs(s['height']-end[1]) <= JOIN_ERROR
                     for s in receipt.get('end_surfaces',()))
                 if expected or alternatives and not explicit:
                     status, resolved = 'connected', (expected or alternatives)[0]
                 elif alternatives and not expected_unknown:
-                    status, resolved = 'other_surface', alternatives[0]
+                    # A coarse height is not itself an observed second storey.
+                    # Only keep the other-surface veto when a real surface at
+                    # that height exists but is not connected to this origin.
+                    status = 'other_surface' if expected_observed else 'connected'
+                    resolved = alternatives[0]
                 elif not unknown:
                     status = 'disconnected'
                 if status in ('connected','other_surface') and any(
@@ -178,6 +185,10 @@ class LocalHeightLinks(object):
                     status = 'water'
             else:
                 receipt['unknown_reason'] = 'accepted_pose_has_no_nearby_ground'
+        if status == 'unknown' and 'unknown_reason' not in receipt:
+            receipt['unknown_reason'] = ('query_budget' if self.queries >= MAX_COLUMNS
+                else 'missing_or_incomplete_surface')
+        receipt['resolved_height_delta'] = resolved[1]-end[1]
         receipt.update(status=status,resolved=resolved,columns=self.queries,
             column_evidence=self.column_evidence[evidence_start:evidence_start+16])
         result = (status, tuple(resolved))

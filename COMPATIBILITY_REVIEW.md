@@ -9058,8 +9058,9 @@ These are initial geometry/probe parameters, not an official retail calibration.
 
 A proved disconnected upper endpoint cannot borrow XZ bridge links. A connected
 lower endpoint at the same XZ remains eligible for the unchanged old D+C then
-abs(theta) ranking. Unknown local candidates are recorded as height_unknown and
-await proof, not blacklisted as disconnected terrain. If a final target is
+abs(theta) ranking. Unknown local candidates retain their legacy ground,
+corridor, collision and cost checks; missing or exhausted native evidence does
+not remove a candidate. If a final target is
 proved disconnected, use the existing safe-fallback owner; no new retry count,
 route switch, wait timer or failed-edge policy is installed.
 
@@ -9084,3 +9085,25 @@ mask ownership, unchanged complete C/avoidance ranking, cache invalidation and
 progress under a bounded probe budget, real BotRuntime target integration, and
 scope cleanup after exceptions. Native Windows bridge behavior and timing still
 require the generated package and user report; reference tests do not prove them.
+
+### Report 20261017-231310: unknown admission and coarse-height correction
+
+The Windows354 report demonstrates real lower-floor resolution, but also
+exhausted-column candidates removed as height_unknown. Restore the existing
+candidate checks for unknowns; this does not authorize a missing floor, bypass
+an old obstacle, or change C, avoidance, driver commands or route retries.
+The native query limit remains 64. Unknown receipts now distinguish budget
+exhaustion from missing/incomplete surfaces, retaining native error details.
+
+A candidate's coarse Y differing by more than .20m is not proof of a second
+storey. Return other_surface only when a native face at the requested height
+was observed and proved unconnected while a connected alternative exists.
+Otherwise resolve the connected floor as connected. Log whether the requested
+surface was actually observed and the applied Y correction. The captured first
+round Bot 6 sample (1.034m coarse, 1.5099359m native) is a replay fixture against
+the unchanged Caucasus grid. Existing upper/lower bridge, real-step, water,
+complete C/avoidance and teardown tests remain applicable. Unknown budget,
+empty and throwing queries also preserve legacy ranking and collision refusal.
+Full-candidate lower-floor ranking is tested with a larger fixture-only budget;
+production-budget unknown behavior is tested separately against legacy output.
+These source and replay checks do not establish native Windows acceptance.
