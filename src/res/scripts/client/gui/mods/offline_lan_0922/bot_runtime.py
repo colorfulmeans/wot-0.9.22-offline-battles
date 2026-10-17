@@ -7315,10 +7315,6 @@ class BotRuntime(object):
                     'pitch','roll','sampled_at','ray_start','ray_end','hit','normal',
                     'ground_ahead','profile','native_surface_candidates',
                     'native_surface_columns','pivot_offset')},
-            'rotation_rejections': [dict(side=side, origin=entry[0],
-                yaw=entry[1], rejected_delta=entry[2], until=entry[3],
-                remaining=max(0.,entry[3]-now)) for side,entry in
-                sorted((state.get('_blocked_rotations') or {}).items())],
             'support_datum': state.get('_basic_support_datum'),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
@@ -9532,9 +9528,6 @@ class BotRuntime(object):
         state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
-        grid = getattr(self.navigator, 'grid', None)
-        if grid is not None:
-            grid._last_layer_receipt = {}
         target_receipt = dict(at=state.get('now', 0.0), position=tuple(position),
             requested_goal=tuple(goal), mode=mode, source='no_navigator',
             final_target=tuple(goal))
@@ -9732,8 +9725,6 @@ class BotRuntime(object):
                     selected=fallback.get('selected'), ranked=ranked,
                     shortest_distance=shortest))
         target_receipt['local_choices'] = choices
-        target_receipt['support_layer'] = dict(getattr(
-            getattr(self.navigator, 'grid', None), '_last_layer_receipt', {}) or {})
         target_receipt.update(final_target=tuple(target),
             progress_target=state.get('navigation_progress_target'),
             stop_at_target=state.get('navigation_stop_at_target'))

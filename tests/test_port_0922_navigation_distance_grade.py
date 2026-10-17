@@ -9,9 +9,9 @@ import test_port_0922_bot_runtime as bots
 
 class NavigationObservationTests(unittest.TestCase):
     def grid(self):
-        grid = TerrainGrid(lambda x,z,h,**unused: .1*x, lambda *args: False,
+        grid = TerrainGrid(lambda x,z,h: .1*x, lambda *args: False,
             baked_graph=StaticHullNavigationTests._flat_graph())
-        grid._ground = lambda x,z,h,**unused: .1*x
+        grid._ground = lambda x,z,h: .1*x
         grid.segment_penalty = lambda *args: 0.
         grid.segment_has_baked_hazard = lambda *args: False
         grid.segment_clear = lambda *args: True
@@ -33,7 +33,7 @@ class NavigationObservationTests(unittest.TestCase):
             self.assertNotIn('distance_then_grade', receipt)
 
     def test_recorded_airfield_choice_retains_turn_cost(self):
-        grid=self.grid(); grid._ground=lambda *args,**kwargs:0.; grid._penalty=lambda *args:0.
+        grid=self.grid(); grid._ground=lambda *args:0.; grid._penalty=lambda *args:0.
         # Replay two captured eligible endpoints, not an invented flat-world
         # collision result. The full traffic fixture covers end-to-end behavior.
         eligible=((-300.7803088521,0.,-192.5842730889),
@@ -49,7 +49,7 @@ class NavigationObservationTests(unittest.TestCase):
         self.assertNotEqual(shortest['point'],target)
 
     def test_bad_ground_is_unknown_not_zero_slope(self):
-        grid=self.grid(); grid._ground=lambda *args,**kwargs:None; grid.obstacle_probe=None; receipt={}
+        grid=self.grid(); grid._ground=lambda *args:None; grid.obstacle_probe=None; receipt={}
         self.assertIsNone(grid.safe_local_target((20.,0.,20.),(20.,0.,80.),1.,
             diagnostic=receipt))
         self.assertTrue(receipt['candidates'])
