@@ -23473,7 +23473,9 @@ class BattleRuntime(object):
             self._stack_planar_log_at = now+.25
             classifications = []
             for other in vertical_peers:
-                evidence = dict(kind=other['kind'], id=other['network_id'])
+                evidence = dict(kind=other['kind'], id=other['network_id'],
+                    body=dict((key, other.get(key)) for key in
+                        ('x','y','z','yaw','pitch','roll','shape')))
                 tank_collision.planar_body_contact(own, other, evidence)
                 classifications.append(evidence)
             native_input_diagnostics.write_json_record('VEHICLE STACK',dict(
@@ -23481,6 +23483,8 @@ class BattleRuntime(object):
                 local_pose=(own['x'],own['y'],own['z']),
                 local_carrier=own.get('stack_carrier'),
                 body_contacts=classifications,
+                local_body=dict((key, own.get(key)) for key in
+                    ('x','y','z','yaw','pitch','roll','shape')),
                 correction=contact['correction'],
                 peers=[dict(kind=other['kind'],id=other['network_id'],
                     position=(other['x'],other['y'],other['z'])) for other in vertical_peers]))
