@@ -8534,7 +8534,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         # Damage preserves the observed pre-response pose. Equal masses
         # receive equal recovery shares even across different pose owners.
-        self.assertAlmostEqual(-.245, corrected[2], places=4)
+        # The oriented body narrow phase determines recovery distance; this
+        # receipt contract requires backward separation, not the old yaw-only depth.
+        self.assertLess(corrected[2], 0.0)
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])

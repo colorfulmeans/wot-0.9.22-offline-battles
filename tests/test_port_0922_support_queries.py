@@ -55,6 +55,31 @@ class SupportReuseTests(unittest.TestCase):
                 self.assertEqual(tuple(calls[-1].args[0]),tuple(calls[-2].args[0]))
                 self.assertEqual(tuple(calls[-1].args[1]),tuple(calls[-2].args[1]))
 
+    def test_twenty_five_distinct_rays_reuse_inverses_without_skipping_bsp(self):
+        inversions=[0]
+        class Matrix(engine._Matrix):
+            def invert(self):
+                inversions[0]+=1
+                return super().invert()
+        math=types.SimpleNamespace(Matrix=Matrix,Vector3=engine._Vector)
+        descriptor=engine._Descriptor()
+        tester=mock.Mock(return_value=[])
+        descriptor.chassis.hitTester=types.SimpleNamespace(localHitTest=tester)
+        for part in (descriptor.hull,descriptor.turret,descriptor.gun):part.hitTester=None
+        vehicle=engine._Vehicle(11,descriptor,engine._Vector(),(0.,0.,0.),{'health':500})
+        matrix=Matrix()
+        for i in range(25):
+            remote_vehicle._collide_vehicle_evidence_at_matrix(vehicle,matrix,engine._Vector(i*.01,1.,0.),engine._Vector(i*.01,-1.,0.),math,capture_query=False)
+        original=inversions[0]
+        self.assertEqual(25,tester.call_count)
+        tester.reset_mock();inversions[0]=0
+        prepared=remote_vehicle.prepare_vehicle_collision_at_matrix(vehicle,matrix,math)
+        for i in range(25):
+            remote_vehicle._collide_vehicle_evidence_at_matrix(vehicle,matrix,engine._Vector(i*.01,1.,0.),engine._Vector(i*.01,-1.,0.),math,capture_query=False,prepared=prepared)
+        self.assertEqual(25,tester.call_count)
+        self.assertEqual(50,original)
+        self.assertEqual(2,inversions[0])
+
     def test_runtime_memoizes_terrain_only_inside_one_support_context(self):
         battle=engine.BattleRuntime(engine._runtime())
         battle._collide_static_down=mock.Mock(return_value=None)

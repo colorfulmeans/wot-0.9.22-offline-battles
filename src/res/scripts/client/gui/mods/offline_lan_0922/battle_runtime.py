@@ -306,6 +306,8 @@ EVENT_ID_MEMORY = 8192
 _PROFILE_CLOCK = getattr(time, 'perf_counter', None)
 if not callable(_PROFILE_CLOCK):
     _PROFILE_CLOCK = time.clock
+# Independent handle for support profiling; frame timing keeps its own seam.
+_SUPPORT_PROFILE_CLOCK = _PROFILE_CLOCK
 
 
 class _RecentIdSet(object):
@@ -5871,7 +5873,7 @@ class BattleRuntime(object):
             self._stack_context = None
             return previous
         from .support_queries import SupportQueries
-        batch = SupportQueries(_PROFILE_CLOCK)
+        batch = SupportQueries(_SUPPORT_PROFILE_CLOCK)
         self._stack_context = dict(actor=actor, hits=[], queries=batch,
             candidates=batch.call('candidate_select', lambda: list(self._stack_candidates(actor))))
         actor.pop('_stack_carrier', None)
@@ -5900,10 +5902,10 @@ class BattleRuntime(object):
             row['calls'][name] = row['calls'].get(name,0)+value
         for name,value in batch.milliseconds.items():
             row['ms'][name] = row['ms'].get(name,0.)+value
-        row['ms']['context_total'] = row['ms'].get('context_total',0.)+max(0.,_PROFILE_CLOCK()-batch.started)*1000.
+        row['ms']['context_total'] = row['ms'].get('context_total',0.)+max(0.,_SUPPORT_PROFILE_CLOCK()-batch.started)*1000.
         now = self._clock()
         if now-row['at'] >= 1.:
-            started = _PROFILE_CLOCK()
+            started = _SUPPORT_PROFILE_CLOCK()
             native_input_diagnostics.write_json_record('SUPPORT QUERY PERF',dict(
                 actor=list(identity),round=token[0],role='worker' if getattr(self,'_worker_mode',False) else 'visible',
                 window_s=now-row['at'],contexts=row['contexts'],physics_dt_s=row['physics_dt'],
@@ -5911,7 +5913,7 @@ class BattleRuntime(object):
                 timing_scope='inclusive: roof_stage includes matrix_prepare, roof and probe_log; roof includes native_bsp; context_total includes all support solve work',
                 position=_xyz(actor)))
             profiles[identity] = dict(contexts=0,physics_dt=0.,calls={},ms={},at=now,
-                last_emit_ms=max(0.,_PROFILE_CLOCK()-started)*1000.)
+                last_emit_ms=max(0.,_SUPPORT_PROFILE_CLOCK()-started)*1000.)
 
     def _prepare_stack_target(self, state, entity):
         yaw = float(state.get('yaw',0.))
@@ -5933,7 +5935,7 @@ class BattleRuntime(object):
         batch = context.get('queries')
         if batch is None:
             from .support_queries import SupportQueries
-            batch = context['queries'] = SupportQueries(_PROFILE_CLOCK)
+            batch = context['queries'] = SupportQueries(_SUPPORT_PROFILE_CLOCK)
         return batch.call('roof_stage',self._stack_ground_hit_impl,start,end,ground)
 
     def _stack_ground_hit_impl(self, start, end, ground):
@@ -5957,7 +5959,7 @@ class BattleRuntime(object):
                 batch = context.get('queries')
                 if batch is None:
                     from .support_queries import SupportQueries
-                    batch = context['queries'] = SupportQueries(_PROFILE_CLOCK)
+                    batch = context['queries'] = SupportQueries(_SUPPORT_PROFILE_CLOCK)
                 pose_key = (key,id(entity),id(entity.typeDescriptor)) + tuple(
                     state.get(name) for name in ('x','y','z','yaw','pitch','roll',
                         'terrain_pitch','turret_yaw','aim_yaw','gun_pitch'))
