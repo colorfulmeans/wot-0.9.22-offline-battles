@@ -11,7 +11,7 @@ RADIUS = 8.0
 STEP = 1.0
 MIN_STEP = .25
 JOIN_ERROR = .20
-QUERY_TRIGGER = .50
+ROOT_ERROR = .50
 MAX_COLUMNS = 64
 
 
@@ -132,10 +132,6 @@ class LocalHeightLinks(object):
         distance = math.hypot(end[0]-start[0],end[2]-start[2])
         if not self.owns(start) or distance > RADIUS:
             return 'unscoped', end
-        # This is only a query trigger. It never rejects a grade or a point.
-        if (abs(end[1]-start[1]) <= QUERY_TRIGGER and
-                (baked_start is None or abs(baked_start-start[1]) <= QUERY_TRIGGER)):
-            return 'unchanged', end
         key = (start,end)
         if key in self.results:
             return self.results[key]
@@ -143,30 +139,17 @@ class LocalHeightLinks(object):
         receipt = dict(origin=start, target=end, radius=RADIUS,
             baked_origin_height=baked_start,scope='realised_pose_only',
             query_band=(low,high), step=STEP, minimum_step=MIN_STEP,
-            join_error=JOIN_ERROR, query_trigger=QUERY_TRIGGER, samples=[])
+            join_error=JOIN_ERROR, root_error=ROOT_ERROR, samples=[])
         self.receipts.append(receipt)
         evidence_start = len(self.column_evidence)
         roots = self.column(start[0],start[2],low,high)
-        if roots and baked_start is not None and abs(baked_start-start[1]) <= QUERY_TRIGGER:
-            root = min(roots,key=lambda row:abs(row['point'][1]-start[1]))
-            residual = end[1]-self.plane(root,end[0],end[2])
-            if (abs(root['point'][1]-start[1]) <= QUERY_TRIGGER and
-                    abs(residual) <= JOIN_ERROR):
-                # Ordinary same-layer baked corridors keep their original
-                # admission owner. A continuous steep plane is not a jump.
-                receipt.update(status='unchanged',reason='same_layer_plane',
-                    root_surface=root,residual=residual,resolved=end,
-                    columns=self.queries,column_evidence=self.column_evidence[
-                        evidence_start:evidence_start+16])
-                self.results[key] = ('unchanged',end)
-                return self.results[key]
         ends = self.column(end[0],end[2],low,high)
         status, resolved = 'unknown', end
         if roots and ends:
             root = min(roots,key=lambda row:abs(row['point'][1]-start[1]))
             receipt['root_surface'] = root
             # Root height is an accepted near-ground pose, never a remote hint.
-            if abs(root['point'][1]-start[1]) <= QUERY_TRIGGER:
+            if abs(root['point'][1]-start[1]) <= ROOT_ERROR:
                 alternatives, unknown = [], False
                 explicit = end not in self.authored
                 for surface in sorted(ends,key=lambda row:abs(row['point'][1]-root['point'][1])):

@@ -9047,10 +9047,11 @@ layers per column are read; truncation, failed queries and missing support are
 unknown, never proof of disconnection. Lower surfaces retain the existing native
 navigation-water limit rather than inheriting a dry bridge cell's hazard mask.
 
-Only a discrepant local height starts detailed native proof: .50m is a query
-trigger, not an admission cap. A same-layer tangent plane that agrees with the
-bake retains the original corridor owner. Otherwise recursively sample at most
-1m spacing and refine disagreeing surfaces to .25m. Compare tangent-plane
+Every scoped local endpoint receives native surface proof, even when both
+baked endpoint heights are equal: a coarse flat cell can conceal a real step.
+The root must match an actual nearby floor within .50m; failure is unknown,
+not a height rejection. Recursively sample at most 1m spacing and refine
+disagreeing surfaces to .25m. Compare tangent-plane
 residuals using .20m geometric seam tolerance, allowing intersecting facets at
 a continuous slope bend. No normal-angle or rise/run rejection is added.
 These are initial geometry/probe parameters, not an official retail calibration.

@@ -70,6 +70,11 @@ class LocalHeightTests(unittest.TestCase):
         links,_=self.links(lambda x,z:[face(x,z,-15. if x<7. else 1.)])
         self.assertEqual('disconnected',links.inspect((6.,-15.,6.),(9.,1.,6.),1.)[0])
 
+    def test_flat_baked_endpoints_cannot_hide_a_native_height_step(self):
+        links,_=self.links(lambda x,z:[face(x,z,0. if x<7. else 1.5)])
+        links.begin((6.,0.,6.))
+        self.assertEqual('disconnected',links.inspect((6.,0.,6.),(9.,0.,6.),0.)[0])
+
     def test_rearward_and_sideways_candidates_use_their_own_columns(self):
         for end in ((3.,1.,6.),(6.,1.,9.),(6.,1.,3.)):
             links,_=self.links(lambda x,z:[face(x,z,-15.),face(x,z,1.)])
@@ -101,8 +106,9 @@ class LocalHeightTests(unittest.TestCase):
         links=LocalHeightLinks(probe);links.begin((6.,-15.,6.))
         self.assertEqual('unknown',links.inspect((6.,-15.,6.),(9.,1.,6.),1.)[0])
         self.assertIn('space retired',links.column_evidence[0]['error'])
+        links.probe=lambda x,z,low,high:dict(status='complete',surfaces=[face(x,z,1.)])
         links.begin((6.,1.,6.))
-        self.assertEqual('unchanged',links.inspect((6.,1.,6.),(9.,1.,6.),1.)[0])
+        self.assertEqual('connected',links.inspect((6.,1.,6.),(9.,1.,6.),1.)[0])
 
     def test_query_budget_is_bounded_and_never_calls_unknown_a_disconnection(self):
         links,_=self.links(lambda x,z:[face(x,z,1.),face(x,z,-15.)])
@@ -178,7 +184,7 @@ class LocalHeightTests(unittest.TestCase):
         links.begin((6.,1.,6.))
         self.assertEqual([],links.receipts)
         self.assertEqual({},links.columns)
-        self.assertEqual('unchanged',links.inspect((6.,1.,6.),(9.,1.,6.),1.)[0])
+        self.assertEqual('connected',links.inspect((6.,1.,6.),(9.,1.,6.),1.)[0])
 
 
 class NativeColumnContractTests(unittest.TestCase):
