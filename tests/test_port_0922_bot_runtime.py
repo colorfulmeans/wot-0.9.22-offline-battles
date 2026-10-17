@@ -20006,7 +20006,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual('withdraw', order['combat_mode'])
         self.assertIsNone(order['throttle_override'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
+        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': -120.0},
                          order['move_position'])
         runtime.apply_snapshot({
             'bot_order_revision': payload['revision'],
@@ -20040,6 +20040,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(max(abs(value) for value in yaws), 0.001)
         self.assertTrue(runtime.states[11]['gun_aligned'])
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
+        self.assertLess(runtime.states[11]['z'], -1.0)
 
     def test_non_close_support_target_still_uses_engage_hold(self):
         planner = BotPlanner()
