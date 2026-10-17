@@ -169,14 +169,21 @@ class LocalHeightLinks(object):
                 expected_unknown = any(s['connected'] is None and
                     abs(s['height']-end[1]) <= JOIN_ERROR
                     for s in receipt.get('end_surfaces',()))
+                receipt['requested_surface_unknown'] = expected_unknown
                 if expected or alternatives and not explicit:
                     status, resolved = 'connected', (expected or alternatives)[0]
-                elif alternatives and not expected_unknown:
+                elif alternatives:
                     # A coarse height is not itself an observed second storey.
                     # Only keep the other-surface veto when a real surface at
                     # that height exists but is not connected to this origin.
-                    status = 'other_surface' if expected_observed else 'connected'
+                    # Unknown upper links cannot overwrite a proved floor at
+                    # this exact endpoint. Resolve that floor without claiming
+                    # the unfinished upper proof established disconnection.
+                    status = ('other_surface' if expected_observed and
+                        not expected_unknown else 'connected')
                     resolved = alternatives[0]
+                    if expected_unknown:
+                        receipt['resolution_reason'] = 'proved_floor_requested_surface_unknown'
                 elif not unknown:
                     status = 'disconnected'
                 if status in ('connected','other_surface') and any(
