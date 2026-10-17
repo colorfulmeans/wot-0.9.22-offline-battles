@@ -1920,6 +1920,10 @@ def _server_order_signature(order):
     them as a new strategic decision only flushes valid perception caches.
     """
     result = dict(order or {})
+    # Match the server's diagnostic-only fields. A changing attempt age or
+    # assignment receipt must not flush commands at the same order revision.
+    result.pop('route_attempt', None)
+    result.pop('route_assignment', None)
     if result.get('target_id') is not None:
         result.pop('aim_position', None)
         if not result.get('stable_hull_face', False):
@@ -7169,6 +7173,7 @@ class BotRuntime(object):
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
+        driver_trace['failure_receipts'] = list(driver_state.get('failure_receipts') or ())
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
@@ -7201,7 +7206,7 @@ class BotRuntime(object):
             'strategic': {key: strategic.get(key) for key in (
                 'combat_mode', 'move_position', 'route_id', 'route_index',
                 'route_anchor', 'route_join', 'target_id', 'parking_phase',
-                'parking_slot', 'arrival_radius', 'route_attempt',
+                'parking_slot', 'arrival_radius', 'route_attempt', 'route_assignment',
                 'route_switch_reason', 'previous_route_id',
                 'route_point_skip_reason', 'previous_route_index')},
             # Reuse current state at the existing bounded stall cadence.
@@ -7710,7 +7715,7 @@ class BotRuntime(object):
             state['yaw'] = old_yaw
             state['rotation_dir'] = 0
             self._turn_speeds[int(state['id'])] = 0.0
-            self._invalidate_realised_motion(int(state['id']), rejected_yaw)
+            self._invalidate_realised_motion(int(state['id']), rejected_yaw, 'yaw_rebase')
             return False
         target = state.get('_slope_pose_target')
         if target is not None:
@@ -7815,14 +7820,19 @@ class BotRuntime(object):
                 (position[0] + delta_x, position[1], position[2] + delta_z),
                 slide_yaw is not None)
 
-    def _invalidate_realised_motion(self, bot_id, attempted_yaw):
+    def _invalidate_realised_motion(self, bot_id, attempted_yaw, source='realised_motion'):
         """Forget a command whose committed pose hit a real obstacle."""
         self._decision_cache.pop(bot_id, None)
         self._motion_probe_cache.pop(bot_id, None)
         driver = getattr(self.adapter, 'driver', None)
         remember = getattr(driver, 'remember_failure', None)
         if callable(remember):
-            remember(bot_id, attempted_yaw, 5.0)
+            state = self.states.get(bot_id) or {}
+            remember(bot_id, attempted_yaw, 5.0, dict(
+                source=source, origin=_position(state),
+                distance=0.0, speed=state.get('speed'),
+                hull_yaw=state.get('yaw'), pitch=BotRuntime._terrain_pitch(state),
+                roll=state.get('roll')))
 
     def _apply_bot_fall_damage(self, state, impact_speed):
         """Apply the shared landing law to one hidden-worker Bot."""
@@ -8262,7 +8272,7 @@ class BotRuntime(object):
             self._turn_speeds[bot_id] = 0.0
             self._invalidate_realised_motion(
                 bot_id, (_number(state.get('yaw'))
-                         if attempted_yaw is None else attempted_yaw))
+                         if attempted_yaw is None else attempted_yaw), 'vertical_contact_pose')
             return True
 
         state['y'] = solved['height']
@@ -8427,7 +8437,7 @@ class BotRuntime(object):
             self._turn_speeds[int(state['id'])] = 0.0
             self._invalidate_realised_motion(
                 int(state['id']), before['yaw'] if attempted_yaw is None
-                else attempted_yaw)
+                else attempted_yaw, 'vertical_hull_guard')
             moment = float(getattr(self, '_contact_now', None) or 0.)
             if moment >= state.get('_vertical_rejection_log_at', -1.e30):
                 from .native_input_diagnostics import write_json_record
@@ -8676,7 +8686,7 @@ class BotRuntime(object):
                 self._invalidate_realised_motion(
                     state['id'],
                     (state['yaw'] if attempted_yaw is None
-                     else attempted_yaw))
+                     else attempted_yaw), 'support_rise_obstacle')
                 return True
             elif (continuous_support or state['y'] < ground - 0.002 or
                   (state['y'] <= ground and
@@ -8805,7 +8815,7 @@ class BotRuntime(object):
             # The contact batch belongs to the rejected realised pose. Drop
             # it with the angular solver history before restoring tick_pose.
             self._reset_bot_suspension_state(state)
-        self._invalidate_realised_motion(state['id'], attempted_yaw)
+        self._invalidate_realised_motion(state['id'], attempted_yaw, 'baked_pose_guard')
         return True
 
     def _baked_boundary_overflow(self, state, position, yaw):
@@ -15588,7 +15598,15 @@ class BotRuntime(object):
                 driver = getattr(self.adapter, 'driver', None)
                 remember = getattr(driver, 'remember_failure', None)
                 if callable(remember) and not probe_deferred:
-                    remember(state['id'], travel_yaw)
+                    remember(state['id'], travel_yaw, None, dict(
+                        source='motion_forecast', origin=_position(state),
+                        distance=float((self._motion_probe_cache.get(state['id']) or {}).get(
+                            'probe_distance', maximum_probe_distance or
+                            (20.0 if abs(state['speed']) > 5.0 else 15.0))),
+                        speed=state.get('speed'), hull_yaw=state.get('yaw'),
+                        pitch=BotRuntime._terrain_pitch(state), roll=state.get('roll'),
+                        probe={key: motion_probe.get(key) for key in (
+                            'clear', 'collision', 'water', 'slope', 'probe_failed')}))
                 report_blocked = getattr(
                     self.navigator, 'report_blocked_step', None)
                 # A hull contact escalates from its realised status below.
@@ -15895,7 +15913,7 @@ class BotRuntime(object):
                             if contact_v0 < 0.0:
                                 realised_contact_yaw += math.pi
                             self._invalidate_realised_motion(
-                                state['id'], realised_contact_yaw)
+                                state['id'], realised_contact_yaw, 'hard_translation_contact')
                             hard_contact = True
                             state.pop('destructible_contact_speed', None)
                     else:
@@ -16351,7 +16369,7 @@ class BotRuntime(object):
                 if callable(report):
                     report(bot_id, tick_poses[bot_id], goal,
                            attempted_yaw, now)
-                self._invalidate_realised_motion(bot_id, attempted_yaw)
+                self._invalidate_realised_motion(bot_id, attempted_yaw, 'post_contact_support')
             elif (not pose_rollback and not ballistic_ticks.get(bot_id, False)
                   and ((tick_poses[bot_id][0] - settled[0]) ** 2 +
                        (tick_poses[bot_id][2] - settled[2]) ** 2) > 1.0e-12):

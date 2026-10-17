@@ -179,6 +179,7 @@ def _order_signature(order):
     signature = dict(order or {})
     # Attempt observations are telemetry, not a new strategic instruction.
     signature.pop('route_attempt', None)
+    signature.pop('route_assignment', None)
     if signature.get("target_id") is not None:
         # The worker overlays these coordinates from the live target pose.
         # Movement of that pose is not a new tactical decision, including
@@ -207,6 +208,7 @@ class BotPlanner(object):
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
+        self._route_assignment_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
         self._firing_holds = {}
@@ -241,6 +243,7 @@ class BotPlanner(object):
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
+        self._route_assignment_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
         self._firing_holds = {}
@@ -776,6 +779,8 @@ class BotPlanner(object):
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point, now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
+                order['route_assignment'] = dict(
+                    self._route_assignment_receipts.get(bot['id']) or {})
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
         payload = {"orders": orders}
@@ -2338,6 +2343,14 @@ class BotPlanner(object):
                 best = route_id
         return best
 
+    def _record_route_assignment(self, bot, now, previous, current, reason):
+        """Diagnostic provenance only; never participates in route selection."""
+        old = self._route_assignment_receipts.get(bot['id']) or {}
+        self._route_assignment_receipts[bot['id']] = dict(
+            sequence=old.get('sequence', 0) + 1, at=_number(now),
+            previous_route=str(previous or ''), route=str(current or ''),
+            reason=reason, position=_point(bot.get('state') or {}))
+
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
         """Move at most one adaptable tank toward a pressured route every 4s."""
@@ -2371,6 +2384,11 @@ class BotPlanner(object):
             if (knowledge_lost or assigned_id not in catalog or
                     assigned_route != catalog.get(assigned_id) or
                     (assigned_until > 0.0 and assigned_until <= _number(now))):
+                if assigned is not None:
+                    self._record_route_assignment(bot, now, assigned_id, route_id,
+                        'radio_knowledge_lost' if knowledge_lost else
+                        ('lease_expired' if assigned_until > 0.0 and
+                         assigned_until <= _number(now) else 'catalog_reset'))
                 if route_id in catalog:
                     self._route_assignments[bot["id"]] = {
                         "route": catalog[route_id], "until": 0.0,
@@ -2491,6 +2509,10 @@ class BotPlanner(object):
         if not candidates:
             return
         donor = max(candidates)[2]
+        previous = self._route_assignments.get(donor['id']) or {}
+        previous_route = previous.get('route') or donor.get('route') or {}
+        self._record_route_assignment(donor, now, previous_route.get('id'),
+                                      target_route, 'pressure_rebalance')
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
             "until": _number(now) + ROUTE_LEASE_SECONDS,
@@ -2689,6 +2711,7 @@ class BotPlanner(object):
             return
         chosen = min(candidates, key=lambda value: value[:3])
         route, entry = chosen[3:]
+        self._record_route_assignment(bot, now, route_id, route.get('id'), 'wreck_stall')
         self._route_assignments[bot_id] = {
             'route': route, 'until': 0.0, 'wreck_detour': True}
         # Join the evaluated entry from the current hull position, rather than
