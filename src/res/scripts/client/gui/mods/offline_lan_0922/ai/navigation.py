@@ -175,6 +175,7 @@ class TerrainGrid(object):
 		# The runtime explicitly binds its synchronous main-thread corridor oracle.
 		# Pure-data grids retain the same Python proof without an engine owner.
 		self.native_query_oracle = None
+		self.local_height_links = None
 		self._native_review_pending = None
 
 	def _install_baked_graph(self, graph):
@@ -694,6 +695,12 @@ class TerrainGrid(object):
 	def segment_clear(self, start, end, native_capability=None):
 		"""Check continuous support and drivable grade, not just both endpoints."""
 		self._validate_planning_policy(native_capability)
+		local = getattr(self,'local_height_links',None)
+		if local is not None:
+			status, unused = local.inspect(start, end,
+				self._baked_cell_height(self.cell_for(start)) if self.prebaked else None)
+			if status in ('disconnected', 'other_surface', 'water'):
+				return False
 		# In a prebaked graph, rounding can map a raw point just beyond the
 		# authored rectangle back onto the last valid edge cell. The cell is safe;
 		# the out-of-bounds world pose is not. A hull already outside may still use
@@ -1402,6 +1409,18 @@ class TerrainGrid(object):
 				if diagnostic is not None:
 					diagnostic['attempted'] += 1
 				y = self._ground(x, z, float(current[1]))
+				if y is not None and self.local_height_links is not None:
+					status, resolved = self.local_height_links.inspect(current, (x,y,z),
+						self._baked_cell_height(self.cell_for(current)) if self.prebaked else None)
+					if status in ('connected', 'other_surface'):
+						y = resolved[1]
+					elif status in ('disconnected','water'):
+						if diagnostic is not None:
+							diagnostic['candidates'].append(dict(point=(x,y,z),
+								rejected='height_'+status, theta=offset))
+						continue
+					# Unknown is not a proved height break. Keep the original
+					# ground, corridor, collision and cost checks below unchanged.
 				if y is None:
 					# A streaming/eroded cell is unknown, not automatically a wall.
 					# Prove a short actual-pose step without publishing graph terrain.

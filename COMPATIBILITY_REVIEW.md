@@ -9025,3 +9025,85 @@ support-mode rule and accepted catalog/player-wreck fixes are retained.
 
 These receipts enable a native hill investigation; flat replay and Python
 contract tests do not establish the actual cause of a Windows slope incident.
+
+
+## 2026-10-17: local surface connectivity on the restored Windows346 tree
+
+Start from the complete Windows346 recovery tree (8bdf37f2, identical tracked
+contents to 96a6aba3). Do not reinstate Windows350/351 layer slack, global height
+admission, the 24m layer connector, directional slope veto or slope preference.
+
+The new LocalHeightLinks context belongs only to the realised Bot pose during
+one navigation-target decision. It covers endpoints within 8m in any direction;
+remote targets and synthetic authored anchors remain outside the local proof.
+Authored placeholder heights are explicitly identified by the caller. A finally
+block releases the context on every return and exception. Background shared
+route searches cannot inherit a previous Bot's storey.
+
+Use the existing #1513 navigation-filtered segment query to enumerate upward
+static collision faces, retaining multiple heights and normals per XZ column.
+No new BigWorld API or physical collision exemption is introduced. Up to twelve
+layers per column are read; truncation, failed queries and missing support are
+unknown, never proof of disconnection. Lower surfaces retain the existing native
+navigation-water limit rather than inheriting a dry bridge cell's hazard mask.
+
+Every scoped local endpoint receives native surface proof, even when both
+baked endpoint heights are equal: a coarse flat cell can conceal a real step.
+The root must match an actual nearby floor within .50m; failure is unknown,
+not a height rejection. Recursively sample at most 1m spacing and refine
+disagreeing surfaces to .25m. Compare tangent-plane
+residuals using .20m geometric seam tolerance, allowing intersecting facets at
+a continuous slope bend. No normal-angle or rise/run rejection is added.
+These are initial geometry/probe parameters, not an official retail calibration.
+
+A proved disconnected upper endpoint cannot borrow XZ bridge links. A connected
+lower endpoint at the same XZ remains eligible for the unchanged old D+C then
+abs(theta) ranking. Unknown local candidates retain their legacy ground,
+corridor, collision and cost checks; missing or exhausted native evidence does
+not remove a candidate. If a final target is
+proved disconnected, use the existing safe-fallback owner; no new retry count,
+route switch, wait timer or failed-edge policy is installed.
+
+Native column work is bounded to 64 new columns per decision, with at most 512
+exact-coordinate cached columns. Every new decision queries its root freshly;
+only after that query supplies the same space and destructible spatial revision
+can other columns be reused within .5s of their last use. Query-budget unknowns
+are not cached as terrain failures. This permits later decisions to complete
+unprobed directions rather than starving candidates behind the first spokes.
+
+BOT HEIGHT LINKS records Bot/round/time, actual origin, goal/final target, native
+column count/reuse, query bands, faces/normals, refined discontinuity witnesses,
+resolution status, and selected alternate height. Fragment-safe evidence reader
+recognizes the label. Timing stages navigation.height_link and
+navigation.height_columns separate this work from other navigation/physics.
+
+Validation covers the captured FV4005 underpass endpoint, upper/lower same-XZ
+and tiny-XZ jumps, reverse/sideways candidates, continuous 19/35/55-degree planes
+in both directions, a sharp but continuous ramp entry, a real height step,
+placeholder goals, the M4 remote-anchor coordinate, native layer recasts, water
+mask ownership, unchanged complete C/avoidance ranking, cache invalidation and
+progress under a bounded probe budget, real BotRuntime target integration, and
+scope cleanup after exceptions. Native Windows bridge behavior and timing still
+require the generated package and user report; reference tests do not prove them.
+
+### Report 20261017-231310: unknown admission and coarse-height correction
+
+The Windows354 report demonstrates real lower-floor resolution, but also
+exhausted-column candidates removed as height_unknown. Restore the existing
+candidate checks for unknowns; this does not authorize a missing floor, bypass
+an old obstacle, or change C, avoidance, driver commands or route retries.
+The native query limit remains 64. Unknown receipts now distinguish budget
+exhaustion from missing/incomplete surfaces, retaining native error details.
+
+A candidate's coarse Y differing by more than .20m is not proof of a second
+storey. Return other_surface only when a native face at the requested height
+was observed and proved unconnected while a connected alternative exists.
+Otherwise resolve the connected floor as connected. Log whether the requested
+surface was actually observed and the applied Y correction. The captured first
+round Bot 6 sample (1.034m coarse, 1.5099359m native) is a replay fixture against
+the unchanged Caucasus grid. Existing upper/lower bridge, real-step, water,
+complete C/avoidance and teardown tests remain applicable. Unknown budget,
+empty and throwing queries also preserve legacy ranking and collision refusal.
+Full-candidate lower-floor ranking is tested with a larger fixture-only budget;
+production-budget unknown behavior is tested separately against legacy output.
+These source and replay checks do not establish native Windows acceptance.
