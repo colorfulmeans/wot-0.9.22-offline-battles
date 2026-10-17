@@ -970,6 +970,12 @@ class LocalDriver(object):
 			abs(float(speed)) * max(step, float(horizon)))
 		probes = []
 		state['short_escape_probes'] = probes
+		sequence = state.get('short_escape_sample_sequence', 0) + 1
+		state['short_escape_sample_sequence'] = sequence
+		state['short_escape_sample'] = dict(sequence=sequence,
+			sampled_at=state['clock'], origin=tuple(position), yaw=float(yaw),
+			clock_basis='driver_elapsed_seconds', phase='candidate_selection')
+		state.pop('short_escape_validation', None)
 		for distance in (max(2.0, minimum), max(1.0, minimum), minimum):
 			for sign in (-1.0, 1.0):
 				heading = float(yaw) + (math.pi if sign < 0 else 0.0)
@@ -980,6 +986,7 @@ class LocalDriver(object):
 					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
 					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
 				probes.append(dict(sign=sign, distance=distance, clear=clear,
+					sampled_at=state['clock'], sample_sequence=sequence,
 					blocker=blocker, real_failure=real_failure,
 					failure_evidence=dict(state.get('real_failure_evidence', {}).get(
 						self._yaw_key(heading)) or {})))
@@ -1002,6 +1009,12 @@ class LocalDriver(object):
 		travelled = ((position[0]-escape['start'][0])*math.sin(heading) +
 			(position[2]-escape['start'][2])*math.cos(heading))
 		remaining = max(0.0, escape['distance'] - travelled)
+		validation = dict(sampled_at=state['clock'], origin=tuple(position),
+			clock_basis='driver_elapsed_seconds', phase='retained_execution_check',
+			remaining=remaining, yaw=heading,
+			selection_sequence=state.get('short_escape_sample_sequence'),
+			result='released')
+		state['short_escape_validation'] = validation
 		if (self._short_failure_applies(state, position, heading, remaining) or
 				remaining <= 0.05 or state['clock'] >= escape['until'] or
 				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
@@ -1011,9 +1024,32 @@ class LocalDriver(object):
 					half_length, half_width, remaining) is not None):
 			state.pop('short_translation_escape', None)
 			return None
+		validation['result'] = 'retained'
 		return dict(throttle=sign * 1.0, turn=0.0, target_yaw=escape['yaw'],
 			recovery_probe_distance=remaining,
 			recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
+
+	@staticmethod
+	def short_escape_diagnostics(state):
+		"""Describe observation age without recasting or changing a decision."""
+		clock = state.get('clock')
+		escape = state.get('short_translation_escape')
+		result = dict(retained_escape_present=bool(escape),
+			lease_unexpired=bool(escape and clock is not None and clock < escape['until']),
+			observed_at=clock, clock_basis='driver_elapsed_seconds',
+			freshness_basis='driver_step')
+		for field, key in (('selection', 'short_escape_sample'),
+				('execution_check', 'short_escape_validation')):
+			sample = state.get(key)
+			if sample is None or (field == 'selection' and
+					'short_escape_probes' not in state):
+				continue
+			sample = dict(sample)
+			age = max(0.0, clock - sample['sampled_at']) if clock is not None else None
+			sample.update(age_seconds=age,
+				historical=age > 1.0e-6 if age is not None else None)
+			result[field] = sample
+		return result
 
 	def _retained_translation_escape(self, state, position, yaw, neighbours,
 			direction_clear, half_length, half_width):

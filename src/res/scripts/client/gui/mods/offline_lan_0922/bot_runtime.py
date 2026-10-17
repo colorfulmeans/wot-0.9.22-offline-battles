@@ -7173,6 +7173,12 @@ class BotRuntime(object):
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
+        if driver_state:
+            driver_trace['short_escape_observation'] = ai_driver.LocalDriver.short_escape_diagnostics(driver_state)
+            driver_trace['short_escape_observation'].update(
+                observed_simulation_at=now,
+                control_sampled_simulation_at=(command.get('control_trace') or {}).get('sampled_at'),
+                command_mode=command.get('recovery_mode'))
         driver_trace['failure_receipts'] = list(driver_state.get('failure_receipts') or ())
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
