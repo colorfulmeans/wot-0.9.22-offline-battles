@@ -6,7 +6,6 @@ Only validated numeric geometry is copied here; calls never invoke BigWorld.
 from __future__ import print_function
 
 import types
-from .worker_diagnostics import count as combat_count
 try:
     _CHUNK_ID_TYPES = (int, long, float, bool)
 except NameError:
@@ -397,6 +396,7 @@ def neighbourhood(sensor, area, position, sin_yaw, cos_yaw, speed, neighbours):
     owner = _get(sensor)
     if owner is None:
         return None
+    from .worker_diagnostics import count as combat_count
     payload = (point(position), float(sin_yaw), float(cos_yaw),
                float(speed), int(bool(neighbours)))
     # Opcode 7 only maps exact coordinates to chunk IDs. It reads no loaded
