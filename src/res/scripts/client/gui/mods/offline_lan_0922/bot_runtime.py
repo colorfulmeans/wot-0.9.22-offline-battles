@@ -7086,6 +7086,66 @@ class BotRuntime(object):
                   bool(path_clear), verdict))
         return True
 
+    @staticmethod
+    def _record_planning_verdict(receipt, row):
+        """Retain bounded witnesses and every reason count on the decision owner."""
+        row = dict(row)
+        row['decision_id'] = receipt['id']
+        row['sampled_at'] = receipt['sampled_at']
+        row['query_index'] = receipt['query_count'] + 1
+        row['reason'] = row.get('reason') or ('clear' if row.get('clear') else 'unspecified_callback_rejection')
+        receipt['query_count'] += 1
+        counts = receipt['reason_counts']
+        counts[row['reason']] = counts.get(row['reason'], 0) + 1
+        receipt['queries'].append(row)
+        if len(receipt['queries']) > 48:
+            del receipt['queries'][0]
+            receipt['dropped_queries'] += 1
+        return row
+
+    @staticmethod
+    def _planning_observation(command, now, disposition):
+        receipt = command.get('planning_receipt')
+        if receipt is None:
+            return dict(disposition=disposition, observed_at=now,
+                status='missing_decision_receipt', reason='command_has_no_planning_receipt')
+        return dict(disposition=disposition, observed_at=now,
+            sampled_at=receipt['sampled_at'], decision_id=receipt['id'],
+            age_seconds=max(0.0, now - receipt['sampled_at']),
+            status='recorded', receipt=receipt)
+
+    def _log_route_connection(self, state, command, now):
+        """Observe moving route joins as well as stationary failures; no probes."""
+        order = self._server_orders.get(state['id']) or {}
+        assignment = order.get('route_assignment') or {}
+        if not (order.get('route_join') or assignment.get('entry_selection')):
+            return
+        if now < state.get('_route_connection_log_at', -1e30):
+            return
+        state['_route_connection_log_at'] = now + 3.0
+        nav = self.navigator
+        local = getattr(nav, 'bot_states', {}).get(int(state['id']), {})
+        path = getattr(nav, 'paths', {}).get(local.get('path_key')) or ()
+        index = max(0, int(local.get('index', 0)))
+        target = state.get('_navigation_target_receipt') or {}
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT ROUTE CONNECTION', dict(
+            round=self.round_id, bot=state['id'], team=state.get('team'),
+            vehicle=state.get('vehicle'), at=now, position=_position(state),
+            decision_id=(command.get('planning_receipt') or {}).get('id'),
+            disposition=state.get('_planning_disposition'),
+            order={key:order.get(key) for key in ('combat_mode', 'route_id',
+                'route_index', 'route_join', 'move_position', 'route_switch_reason')},
+            assignment=assignment,
+            navigation_status=local.get('navigation_status'),
+            planned_at=local.get('planned_at'), planned_goal=local.get('planned_goal'),
+            path_key=local.get('path_key'), path_index=index, path_length=len(path),
+            path_points=tuple(path[max(0, index - 1):index + 24]),
+            path_points_truncated=max(0, len(path) - index - 24),
+            target={key:target.get(key) for key in ('at', 'source', 'requested_goal',
+                'planning_goal', 'selected_target', 'final_target')},
+            query_policy='existing_receipts_only'))
+
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
                           traffic_input=None, traffic_output=None):
@@ -7193,6 +7253,8 @@ class BotRuntime(object):
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
+            'planning_observation': self._planning_observation(
+                command, now, state.get('_planning_disposition', 'external_command')),
             # Original cached witnesses distinguish grade rejection from a
             # stale root/pose reference without spending another native query.
             'support_evidence': dict(
@@ -7338,6 +7400,18 @@ class BotRuntime(object):
             'contact_pairs': sorted(pair for pair in self._ram_contacts
                                     if int(state['id']) in pair),
         })
+        trace['execution_receipt'] = dict(
+            decision_id=(trace.get('planning_observation') or {}).get('decision_id'),
+            sampled_at=now, phase='after_contacts_and_support',
+            start=trace['start'], final=position,
+            horizontal_displacement=math.hypot(position[0]-trace['start'][0],
+                                               position[2]-trace['start'][2]),
+            requested=(trace.get('requested_throttle'), trace.get('requested_turn')),
+            applied=trace['controls']['motion'], path_clear=trace.get('path_clear'),
+            motion_probe=trace.get('world_status'),
+            gates=trace['motion_control_gates'],
+            support_rollback=bool(support_rollback), pose_rollback=bool(pose_rollback),
+            rotation_contact=trace['rotation_contact'])
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
@@ -14701,9 +14775,12 @@ class BotRuntime(object):
             raw_command = None
             planner_probe_samples = {}
             planning_verdicts = []
-            planner_state = getattr(getattr(self.adapter, 'driver', None), 'states', {}).get(int(state['id']), {})
-            collect_planning = (planner_state.get('stuck_time', 0.) >= 1.0 or
-                                planner_state.get('recovery_time', 0.) > 0.)
+            planning_receipt = dict(
+                id=[self.round_id, int(state['id']),
+                    self._decision_counts.get(int(state['id']), 0) + 1, now],
+                sampled_at=now, origin=position, yaw=state['yaw'],
+                clock_basis='simulation_seconds', query_count=0,
+                dropped_queries=0, queries=planning_verdicts, reason_counts={})
             planning_reason = [None]
 
             def planner_sample_direction(sample_yaw, maximum_distance=None):
@@ -14762,8 +14839,10 @@ class BotRuntime(object):
                     # Only that inconsistent current pose delegates the turn
                     # to native commit. Valid corridors retain their complete
                     # rectangle guard before the driver selects a recovery arc.
+                    planning_reason[0] = 'current_baked_pose_missing_defer_native_commit'
                     return True
                 if not callable(pose_probe):
+                    planning_reason[0] = 'baked_pose_probe_unavailable_defer_native_commit'
                     return True
                 try:
                     planning_reason[0] = 'baked_hull_pose'
@@ -14772,29 +14851,43 @@ class BotRuntime(object):
                         state.get('half_length', 3.5),
                         state.get('half_width', 1.7)))
                 except Exception:
+                    planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
                     return True
 
             def sample_pose_clear(sample_yaw, allow_wreck_push=False):
                 planning_reason[0] = None
-                result = sample_pose_clear_impl(sample_yaw, allow_wreck_push)
-                if collect_planning and len(planning_verdicts) < 48:
-                    planning_verdicts.append(dict(kind='rotation', yaw=sample_yaw, clear=result, reason=planning_reason[0]))
+                try:
+                    result = sample_pose_clear_impl(sample_yaw, allow_wreck_push)
+                except Exception as error:
+                    self._record_planning_verdict(planning_receipt, dict(
+                        kind='rotation', yaw=sample_yaw, clear=False,
+                        reason='rotation_callback_exception', exception_type=type(error).__name__))
+                    raise
+                self._record_planning_verdict(planning_receipt, dict(
+                    kind='rotation', yaw=sample_yaw, clear=result,
+                    reason=planning_reason[0] or 'baked_pose_clear_or_native_commit'))
                 return result
 
             def sample_clear(sample_yaw, maximum_distance=None, drive_direction=1.0):
                 planning_reason[0] = None
-                result = sample_clear_impl(sample_yaw, maximum_distance, drive_direction)
-                if collect_planning and len(planning_verdicts) < 48:
-                    normalised = (float(sample_yaw)+math.pi) % (2.0*math.pi)-math.pi
-                    distance = maximum_distance
-                    if distance is None and decision_state is not None:
-                        distance = decision_state.get('navigation_probe_distance')
-                    key = (round(normalised,4), None if distance is None else round(float(distance),2))
-                    planning_verdicts.append(dict(kind='direction', yaw=sample_yaw,
-                        distance=distance, clear=result, reason=planning_reason[0],
-                        origin=position, sampled_at=now, drive_direction=drive_direction,
-                        body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
-                        native_probe=planner_probe_samples.get(key)))
+                try:
+                    result = sample_clear_impl(sample_yaw, maximum_distance, drive_direction)
+                except Exception as error:
+                    sample_clear.last_receipt = self._record_planning_verdict(planning_receipt, dict(
+                        kind='direction', yaw=sample_yaw, distance=maximum_distance,
+                        clear=False, reason='direction_callback_exception',
+                        exception_type=type(error).__name__, origin=position))
+                    raise
+                normalised = (float(sample_yaw)+math.pi) % (2.0*math.pi)-math.pi
+                distance = maximum_distance
+                if distance is None and decision_state is not None:
+                    distance = decision_state.get('navigation_probe_distance')
+                key = (round(normalised,4), None if distance is None else round(float(distance),2))
+                sample_clear.last_receipt = self._record_planning_verdict(planning_receipt, dict(kind='direction', yaw=sample_yaw,
+                    distance=distance, clear=result, reason=planning_reason[0],
+                    origin=position, sampled_at=now, drive_direction=drive_direction,
+                    body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
+                    native_probe=planner_probe_samples.get(key)))
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
@@ -14820,6 +14913,7 @@ class BotRuntime(object):
                     planning_reason[0] = 'baked_motion_hazard'
                     return False
                 if advisory is True and not bounded_recovery:
+                    planning_reason[0] = 'baked_corridor_clear'
                     return True
                 sample = planner_sample_direction(
                     sample_yaw, maximum_distance)
@@ -14829,17 +14923,22 @@ class BotRuntime(object):
                 if (sample is None or
                         (isinstance(sample, dict) and
                          sample.get('deferred', False))):
+                    planning_reason[0] = ('native_probe_deferred' if isinstance(sample, dict)
+                                          else 'native_probe_unavailable')
                     return not bounded_recovery
-                planning_reason[0] = sample.get('reason') if isinstance(sample, dict) else 'native_direction'
-                return self._probe_is_clear(sample)
-
-            state['_planning_verdicts'] = planning_verdicts
+                clear = self._probe_is_clear(sample)
+                planning_reason[0] = (sample.get('reason') or
+                    ('native_probe_clear' if clear else 'native_probe_rejected')) if isinstance(sample, dict) else 'native_direction'
+                return clear
 
             if decision_cache_valid and not decision_due:
+                state['_planning_disposition'] = 'cache_reused'
                 command = dict(decision_cache[3])
                 contacts = decision_cache[4]
                 targets = decision_cache[5]
             elif not refresh_control:
+                state['_planning_disposition'] = 'physical_hold'
+                planning_receipt['not_queried_reason'] = 'physical_veto_invalidated_same_callback'
                 # A completed physical veto may invalidate the command chosen
                 # by the first slice. Do not run the planner again in the same
                 # render callback and do not keep driving into proved danger.
@@ -14859,7 +14958,9 @@ class BotRuntime(object):
                 }
                 contacts = ()
                 targets = {}
+                command['planning_receipt'] = planning_receipt
             else:
+                state['_planning_disposition'] = 'new_decision'
                 contacts_for = (native_control.contacts_for
                                 if native_control is not None else
                                 self._contacts_for)
@@ -14992,7 +15093,13 @@ class BotRuntime(object):
                     now, state['id'], decision_interval,
                     3, decision_cache is None)
                 self._planning_decision_intervals[bot_id] = decision_interval
+                if not planning_receipt['query_count']:
+                    planning_receipt['not_queried_reason'] = 'planner_and_traffic_returned_without_world_query'
+                planning_receipt['command_mode'] = command.get('recovery_mode')
+                planning_receipt['combat_mode'] = command.get('combat_mode')
+                command['planning_receipt'] = planning_receipt
                 raw_command = dict(command)
+            state['_planning_verdicts'] = (command.get('planning_receipt') or {}).get('queries', [])
             # Keep this decision until the next scheduled refresh. Friendly
             # following uses contact physics; crossing yields have a fixed
             # deadline and never renew LocalDriver's stuck timer.
@@ -15002,6 +15109,7 @@ class BotRuntime(object):
                 self._decision_cache[state['id']] = (
                     cache_key, decision_deadline, now, raw_command,
                     contacts, targets)
+            self._log_route_connection(state, command, now)
             # Preserve the old refresh point: in copied-physics mode, a later
             # bot observes poses integrated by earlier bots in this same tick.
             # Human records do not change inside update, so index them once at

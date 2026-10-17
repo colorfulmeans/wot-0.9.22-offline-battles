@@ -588,12 +588,21 @@ class LocalDriver(object):
 			variadic = bool(code.co_flags & 0x04)
 		try:
 			if count >= 3:
-				return bool(direction_clear(yaw, maximum_distance, drive_direction))
-			if (maximum_distance is not None and (count >= 2 or variadic)):
-				return bool(direction_clear(yaw, maximum_distance))
-			return bool(direction_clear(yaw))
-		except Exception:
+				result = bool(direction_clear(yaw, maximum_distance, drive_direction))
+			elif (maximum_distance is not None and (count >= 2 or variadic)):
+				result = bool(direction_clear(yaw, maximum_distance))
+			else:
+				result = bool(direction_clear(yaw))
+		except Exception as error:
+			self._last_direction_receipt = dict(reason='direction_callback_exception',
+				exception_type=type(error).__name__, yaw=yaw, distance=maximum_distance)
 			return False
+		try:
+			self._last_direction_receipt = dict(getattr(direction_clear, 'last_receipt', {}) or {})
+		except Exception as error:
+			self._last_direction_receipt = dict(reason='callback_receipt_unavailable',
+				exception_type=type(error).__name__, clear=result)
+		return result
 
 	@staticmethod
 	def _pose_fits(pose_clear, yaw):
@@ -982,10 +991,15 @@ class LocalDriver(object):
 				# Long-ray/candidate failures cannot veto a fresh shorter proof.
 				real_failure = self._short_failure_applies(state, position, heading, distance)
 				clear = not real_failure and self._clear(direction_clear, heading, distance)
+				proof = dict(self._last_direction_receipt) if not real_failure else {}
 				blocker = self._reverse_blocked_by_vehicle(
 					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
 					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
 				probes.append(dict(sign=sign, distance=distance, clear=clear,
+					reason=('realized_failure' if real_failure else
+						'vehicle_occupied' if blocker is not None else
+						proof.get('reason') or ('clear' if clear else 'direction_callback_rejected')),
+					probe_receipt=proof,
 					sampled_at=state['clock'], sample_sequence=sequence,
 					blocker=blocker, real_failure=real_failure,
 					failure_evidence=dict(state.get('real_failure_evidence', {}).get(
@@ -1015,13 +1029,31 @@ class LocalDriver(object):
 			selection_sequence=state.get('short_escape_sample_sequence'),
 			result='released')
 		state['short_escape_validation'] = validation
-		if (self._short_failure_applies(state, position, heading, remaining) or
-				remaining <= 0.05 or state['clock'] >= escape['until'] or
-				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
-				not self._clear(direction_clear, heading, remaining) or
-				self._reverse_blocked_by_vehicle(position,
+		# Preserve the existing short-circuit order and query count. Record the
+		# first owner that releases the manoeuvre, including non-query exits.
+		reason = None
+		if self._short_failure_applies(state, position, heading, remaining):
+			reason = 'realized_failure'
+		elif remaining <= 0.05:
+			reason = 'distance_completed'
+		elif state['clock'] >= escape['until']:
+			reason = 'lease_expired'
+		elif abs(_angle_delta(yaw, escape['yaw'])) > 0.30:
+			reason = 'heading_changed'
+		else:
+			clear = self._clear(direction_clear, heading, remaining)
+			validation['probe_receipt'] = dict(self._last_direction_receipt)
+			if not clear:
+				reason = validation['probe_receipt'].get('reason') or 'direction_callback_rejected'
+			else:
+				blocker = self._reverse_blocked_by_vehicle(position,
 					yaw if sign < 0 else yaw + math.pi, neighbours,
-					half_length, half_width, remaining) is not None):
+					half_length, half_width, remaining)
+				validation['blocker'] = blocker
+				if blocker is not None:
+					reason = 'vehicle_occupied'
+		validation['reason'] = reason or 'clear'
+		if reason is not None:
 			state.pop('short_translation_escape', None)
 			return None
 		validation['result'] = 'retained'

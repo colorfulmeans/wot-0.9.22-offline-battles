@@ -55,6 +55,8 @@ jobs:
           --pattern 'test_port_0922_rear_limited_aim.py'
           --pattern 'test_port_0922_wait_parking.py'
           --pattern 'test_port_0922_server_bot_ai.py'
+          --pattern 'test_port_0922_complete_navigation_receipts.py'
+          --pattern 'test_port_0922_withdraw_receipts.py'
 
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
