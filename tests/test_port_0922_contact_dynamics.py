@@ -334,7 +334,9 @@ class GroundContactTests(unittest.TestCase):
         side = dict(id=2, position=(2.99, 0., -1.), yaw=0., half_length=3.5, half_width=1.5)
         rear = dict(side, id=3, position=(0., 0., -8.))
         front = dict(side, id=4, position=(0., 0., 8.))
-        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'short_forward_escape')):
+        # With both ends occupied, the side hug is tangent in either direction.
+        # The first 0.5 m reverse is clear; the rear hull starts 1 m away.
+        for peers, mode in (([side, rear], 'forward_escape'), ([side, rear, front], 'short_reverse_escape')):
             driver = LocalDriver()
             driver._state(1, 0, (0., 0., 0.)).update(recovery_time=.5, recovery_side=1.)
             order = driver.drive(1, 0, (0., 0., 0.), 0., 0., .04,
@@ -342,8 +344,11 @@ class GroundContactTests(unittest.TestCase):
                                  half_width=1.5, pose_clear=lambda yaw: False)
             self.assertEqual(mode, order['recovery_mode'])
             self.assertEqual(0., order['turn'])
-            self.assertEqual(1.0, order['throttle'])
-            if mode=='short_forward_escape':self.assertLessEqual(order['recovery_probe_distance'],4.0)
+            self.assertEqual(-1.0 if mode=='short_reverse_escape' else 1.0, order['throttle'])
+            if mode=='short_reverse_escape':
+                self.assertLess(order['recovery_probe_distance'],1.0)
+                self.assertEqual(3,driver._reverse_blocked_by_vehicle(
+                    (0.,0.,0.),0.,peers,3.5,1.5,1.1))
 
     def test_contact_oscillation_cannot_renew_driver_wait_forever(self):
         from gui.mods.offline_lan_0922.ai.driver import LocalDriver
