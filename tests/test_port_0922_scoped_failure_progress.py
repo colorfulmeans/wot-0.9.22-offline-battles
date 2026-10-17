@@ -127,6 +127,28 @@ class ConnectorProgressTests(unittest.TestCase):
         self.assertEqual(changed['route_assignment']['route'], changed['route_id'])
         self.assertEqual(changed['route_assignment']['at'], 40.)
 
+    def test_worker_receives_diagnostics_without_invalidating_control_cache(self):
+        from test_port_0922_bot_runtime import _load
+        module = _load()
+        runtime = module.BotRuntime(1)
+        original = dict(id=11, route_id='east', route_index=1,
+            move_position=dict(x=0., y=0., z=100.),
+            route_attempt=dict(elapsed=1.), route_assignment=dict(sequence=1))
+        self.assertTrue(runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[original])))
+        command = object()
+        runtime._decision_cache[11] = command
+        runtime._control_refresh_accumulator = 0.
+        observed = dict(original, route_attempt=dict(elapsed=2.),
+            route_assignment=dict(sequence=2, reason='pressure_rebalance'))
+        self.assertTrue(runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[observed])))
+        self.assertIs(command, runtime._decision_cache[11])
+        self.assertEqual(runtime._control_refresh_accumulator, 0.)
+        self.assertEqual(runtime._server_orders[11]['route_attempt']['elapsed'], 2.)
+        self.assertEqual(runtime._server_orders[11]['route_assignment']['sequence'], 2)
+        changed = dict(observed, route_id='central')
+        self.assertTrue(runtime._apply_orders(dict(bot_order_revision=2, bot_orders=[changed])))
+        self.assertNotIn(11, runtime._decision_cache)
+
 
 if __name__ == '__main__':
     unittest.main()

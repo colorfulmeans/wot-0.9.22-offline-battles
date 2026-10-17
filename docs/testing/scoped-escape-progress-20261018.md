@@ -31,7 +31,10 @@ Report: `wot-error-report-20261018-012526-f80e722e28ca.zip`, Windows359.
    rebase, vertical guards, support rise, hard translation and post-contact
    support. Server route receipts identify pressure rebalance, lease expiry,
    loss of radio knowledge, catalog reset and wreck-stall switching. Receipt
-   changes are excluded from strategic order revisions.
+   changes are excluded from strategic order revisions and the worker's order
+   comparison. Previously the worker still treated changing `route_attempt`
+   telemetry as a new command and invalidated its control cache; the two ends
+   now use the same diagnostic-only contract.
 
 Preserved: D+C / heading ordering, C and avoidance, original finite retry and
 route-switch behavior, height connectivity rules, support 1-invalid-on /

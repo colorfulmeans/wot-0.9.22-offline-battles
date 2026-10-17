@@ -1920,6 +1920,10 @@ def _server_order_signature(order):
     them as a new strategic decision only flushes valid perception caches.
     """
     result = dict(order or {})
+    # Match the server's diagnostic-only fields. A changing attempt age or
+    # assignment receipt must not flush commands at the same order revision.
+    result.pop('route_attempt', None)
+    result.pop('route_assignment', None)
     if result.get('target_id') is not None:
         result.pop('aim_position', None)
         if not result.get('stable_hull_face', False):
