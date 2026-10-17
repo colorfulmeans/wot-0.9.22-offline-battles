@@ -2966,11 +2966,18 @@ class BattleRuntime(object):
             # battle, not the viewer mode used by OfflineMapCreator.  destroy()
             # does not require Active(), so it still owns the exact space ids.
             self._runtime.offline_map_creator.SetActive(False)
-            # Arena metadata exists while geometry and Vehicle prerequisites
-            # are still loading in a normal battle.  Publishing it now gives
-            # ArenaDataProvider a player id before a fast space-complete
-            # callback can request the final battle page.
-            self._create_entities()
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                # Fixture poses require a native bridge-layer query. Unlike
+                # ordinary authored spawn hints, they cannot be resolved while
+                # OfflineMapCreator is still streaming collision geometry.
+                print('[ROOF CRUSH TEST] waiting for native spawn geometry')
+                self._wait_for_roof_test_geometry()
+            else:
+                # Ordinary spawn hints need no collision query. Publish arena
+                # metadata before a fast space-complete callback requests the
+                # final battle page, while geometry is still loading.
+                self._create_entities()
             return self.state != 'failed'
         except Exception as error:
             self._fail(error)
@@ -3722,6 +3729,29 @@ class BattleRuntime(object):
         else:
             if self._callback_token is token:
                 self._callback_id = callback_id
+
+    def _wait_for_roof_test_geometry(self):
+        if self.state != 'creating_map':
+            return
+        try:
+            from . import roof_crush_test
+            progress = float(self._runtime.bigworld.spaceLoadStatus())
+            seed, unused_yaw = roof_crush_test.player_seed()
+            height = (self._ground_y(seed[0], seed[2], seed[1], allow_wide=False)
+                      if progress >= 1.0 else None)
+            if height is not None and abs(height-seed[1]) <= 4.0:
+                print('[ROOF CRUSH TEST] native spawn geometry ready '
+                      'space_load=%s player_ground=%s position=%s' %
+                      (progress, height, seed))
+                self._create_entities()
+                return
+            if self._clock() >= self._deadline:
+                raise RuntimeError('roof test spawn geometry timed out: '
+                    'space_load=%s player_ground=%s position=%s' %
+                    (progress, height, seed))
+            self._schedule(0.05, self._wait_for_roof_test_geometry)
+        except Exception as error:
+            self._fail(error)
 
     def _local_battle_descriptor(self, vehicle_name):
         """Return the player's own descriptor with the garage fitting on it.

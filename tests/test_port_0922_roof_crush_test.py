@@ -149,6 +149,53 @@ class RoofCrushEntryTests(unittest.TestCase):
                 # human envelope so a large selected tank clears the row.
                 self.assertTrue(along >= (9. if i==0 else 6.3) or side >=3.5,(i,j))
 
+class SpawnGeometryStartupTests(unittest.TestCase):
+    def runtime(self, progress=.5, height=None, now=1.):
+        from test_port_0922_battle_runtime import BattleRuntime
+        obj = types.SimpleNamespace(state='creating_map', _deadline=30.,
+            _clock=mock.Mock(return_value=now),
+            _runtime=types.SimpleNamespace(bigworld=types.SimpleNamespace(
+                spaceLoadStatus=mock.Mock(return_value=progress))),
+            _ground_y=mock.Mock(return_value=height),
+            _create_entities=mock.Mock(), _schedule=mock.Mock(), _fail=mock.Mock())
+        obj._wait_for_roof_test_geometry = types.MethodType(
+            BattleRuntime._wait_for_roof_test_geometry, obj)
+        return obj
+
+    def test_streaming_then_missing_collision_then_native_bridge_ready(self):
+        obj = self.runtime()
+        obj._wait_for_roof_test_geometry()
+        obj._ground_y.assert_not_called()
+        obj._create_entities.assert_not_called()
+        obj._runtime.bigworld.spaceLoadStatus.return_value = 1.
+        obj._schedule.call_args.args[1]()
+        obj._create_entities.assert_not_called()
+        obj._fail.assert_not_called()
+        obj._ground_y.return_value = .8602447509765625
+        obj._schedule.call_args.args[1]()
+        obj._create_entities.assert_called_once_with()
+        obj._ground_y.assert_called_with(*fixture.player_seed()[0][::2],
+            fixture.player_seed()[0][1], allow_wide=False)
+        self.assertEqual(2, obj._schedule.call_count)
+        obj._fail.assert_not_called()
+
+    def test_missing_or_wrong_layer_times_out_without_fabricated_floor(self):
+        for progress, height in ((.9,None),(1.,None),(1.,-14.)):
+            obj = self.runtime(progress, height, now=30.)
+            obj._wait_for_roof_test_geometry()
+            obj._create_entities.assert_not_called()
+            obj._schedule.assert_not_called()
+            self.assertIn('spawn geometry timed out', str(obj._fail.call_args.args[0]))
+
+    def test_cancelled_startup_callback_cannot_create_entities(self):
+        obj = self.runtime(1., .86)
+        obj.state = 'stopped'
+        obj._wait_for_roof_test_geometry()
+        obj._ground_y.assert_not_called()
+        obj._create_entities.assert_not_called()
+        obj._schedule.assert_not_called()
+
+
 class RuntimeHoldTests(unittest.TestCase):
     def setUp(self):
         import test_port_0922_bot_runtime as support
