@@ -326,7 +326,7 @@ class LocalDriver(object):
 
 	def wait_for_navigation(self, bot_id, team_slot, position, yaw, speed, dt,
 			neighbours, direction_clear, half_length=3.5, half_width=1.7,
-			recovery_allowed=False):
+			recovery_allowed=False, body=None):
 		"""Hold a pending path, or back out once after proved local blockage.
 
 		The caller owns evidence that the current support/last physical movement
@@ -335,6 +335,7 @@ class LocalDriver(object):
 		Its deadline and distance never renew while the same path wait continues.
 		"""
 		state = self._state(bot_id, team_slot, position)
+		state['collision_body'] = body
 		step = max(0.0, float(dt))
 		state['last_step'] = step
 		state['clock'] += step
@@ -397,7 +398,7 @@ class LocalDriver(object):
 				not self._clear(direction_clear, reverse_yaw, remaining,
 					drive_direction=-1.0) or
 				self._reverse_blocked_by_vehicle(position, yaw, neighbours,
-					length, width, remaining) is not None)
+					length, width, remaining, body=state.get('collision_body')) is not None)
 		if finished:
 			wait['completed'] = True
 			diagnostic['reason'] = 'recovery_finished_or_rear_denied'
@@ -638,9 +639,24 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width, maximum_distance=None):
+			half_length, half_width, maximum_distance=None, body=None):
 		distance = (max(0.0, float(half_length)) * 1.6 if maximum_distance is None
 			else max(0.0, float(maximum_distance)))
+		separated = []
+		# A candidate pivot has not yet committed its new attitude. Only
+		# refine translation along the actual frozen body's forward/back axis.
+		pose_refinement = body is not None and abs(math.sin(yaw-body['yaw'])) < 1.e-9
+		if pose_refinement:
+			retained = []
+			movement = (-math.sin(yaw)*distance, 0.0, -math.cos(yaw)*distance)
+			for peer in neighbours or ():
+				other = self.collision_body(peer)
+				proof = {}
+				if other is not None and tank_collision.swept_body_separated(body, other, movement, proof):
+					separated.append(dict(peer=peer.get('id'), proof=proof))
+				else:
+					retained.append(peer)
+			neighbours = retained
 		result = self._native_geometry(0, position, yaw, neighbours, half_length, half_width, distance)
 		if result is not None:
 			peer = neighbours[result] if result >= 0 else None
@@ -650,11 +666,24 @@ class LocalDriver(object):
 			blocker = self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
 				half_length, half_width, maximum_distance)
 		self._last_reverse_receipt = dict(origin=tuple(position), yaw=float(yaw),
+			body=body, separated=separated, pose_refinement=bool(pose_refinement),
 			distance=distance, half_length=half_length, half_width=half_width,
 			backend='native' if result is not None else 'reference', blocker=blocker,
 			rule='full_sweep_except_initial_non_deepening_contact',
 			result='vehicle_occupied' if blocker is not None else 'clear')
 		return blocker
+
+	@staticmethod
+	def collision_body(state):
+		"""Only use authoritative pose/shape; absent data keeps broad phase."""
+		if not isinstance(state, dict):
+			return None
+		shape = state.get('collision_shape', state.get('shape'))
+		position = state.get('position')
+		if shape is None or position is None or any(state.get(k) is None for k in ('yaw', 'pitch', 'roll')):
+			return None
+		return dict(x=position[0], y=position[1], z=position[2], shape=shape,
+			yaw=state['yaw'], pitch=state['pitch'], roll=state['roll'])
 
 	def _native_geometry(self, op, position, yaw, neighbours, half_length, half_width, amount):
 		if not isinstance(neighbours, (tuple, list)):
@@ -999,7 +1028,7 @@ class LocalDriver(object):
 				proof = dict(self._last_direction_receipt) if not real_failure else {}
 				blocker = self._reverse_blocked_by_vehicle(
 					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
-					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
+					neighbours, half_length, half_width, maximum_distance=distance, body=state.get('collision_body')) if clear else None
 				probes.append(dict(sign=sign, distance=distance, clear=clear,
 					reason=('realized_failure' if real_failure else
 						'vehicle_occupied' if blocker is not None else
@@ -1054,7 +1083,7 @@ class LocalDriver(object):
 			else:
 				blocker = self._reverse_blocked_by_vehicle(position,
 					yaw if sign < 0 else yaw + math.pi, neighbours,
-					half_length, half_width, remaining)
+					half_length, half_width, remaining, body=state.get('collision_body'))
 				validation['vehicle_receipt'] = dict(getattr(self, '_last_reverse_receipt', {}))
 				validation['blocker'] = blocker
 				if blocker is not None:
@@ -1103,7 +1132,7 @@ class LocalDriver(object):
 				self._failure_penalty(state, yaw) > 0.0 or
 				not self._clear(direction_clear, yaw, remaining) or
 				self._reverse_blocked_by_vehicle(position, yaw + math.pi,
-					neighbours, half_length, half_width, remaining) is not None):
+					neighbours, half_length, half_width, remaining, body=state.get('collision_body')) is not None):
 			state.pop('translation_escape', None)
 			return None
 		return dict(throttle=1.0, turn=0.0, target_yaw=escape['yaw'],
@@ -1116,7 +1145,7 @@ class LocalDriver(object):
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
 			progress_target=None, turn_speed_limit=None, arrival_radius=None,
-			rotation_refused=False, recovery_goal=None):
+			rotation_refused=False, recovery_goal=None, body=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1128,6 +1157,7 @@ class LocalDriver(object):
 		"""
 		arrival = WAYPOINT_ARRIVAL_RADIUS if arrival_radius is None else max(0.1, float(arrival_radius))
 		state = self._state(bot_id, team_slot, position)
+		state['collision_body'] = body
 		alignment = state.get('alignment_target')
 		if (not movement_intent or float(speed) < -0.05 or
 				turn_speed_limit is None or
@@ -1373,7 +1403,7 @@ class LocalDriver(object):
 			if reverse_clear:
 				reverse_blocker = self._reverse_blocked_by_vehicle(
 					position, yaw, neighbours,
-					own_half_length, own_half_width)
+					own_half_length, own_half_width, body=state.get('collision_body'))
 			if not reverse_clear or reverse_blocker is not None:
 				if objective_stalled or translation_stalled or pocket_stalled:
 					# A slope may permit a short straight exit while rejecting
@@ -1399,7 +1429,7 @@ class LocalDriver(object):
 					else:
 						forward_blocker = self._reverse_blocked_by_vehicle(
 							position, float(yaw) + math.pi, neighbours,
-							own_half_length, own_half_width)
+							own_half_length, own_half_width, body=state.get('collision_body'))
 						if (forward_blocker is None and
 								self._failure_penalty(state, float(yaw)) <= 0.0 and self._clear(
 								direction_clear, float(yaw), escape_distance)):

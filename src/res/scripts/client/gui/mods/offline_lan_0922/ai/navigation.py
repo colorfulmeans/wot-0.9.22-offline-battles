@@ -2100,14 +2100,23 @@ class TerrainNavigator(object):
 		return True
 
 	def _remember_local_fallback(self, target, goal, state, start=None, now=None):
-		if state.get('local_fallback_target') != tuple(target):
+		previous = state.get('local_fallback_target')
+		intent = self._local_fallback_intent(goal, state)
+		# Native float32 ground resolution may vary by a few ulps. It is
+		# still the same leg, not realised travel or a new recovery deadline.
+		same_leg = (previous is not None and
+			state.get('local_fallback_intent') == intent and
+			all(abs(float(previous[i])-float(target[i])) <= 1.e-4 for i in range(3)))
+		if not same_leg:
 			state.pop('local_target_best_heading', None)
 			state['local_target_progress_at'] = float(now if now is not None else state.get('macro_progress_at', 0.0))
 			state['local_target_best_distance'] = _distance_2d(start, target) if start is not None else float('inf')
+			state['local_fallback_start'] = tuple(start) if start is not None else None
+		state['local_target_update'] = dict(at=now, previous=previous, target=tuple(target),
+			reason='same_leg' if same_leg else 'new_leg', deadline_renewed=not same_leg)
 		state['local_fallback_target'] = tuple(target)
-		state['local_fallback_intent'] = self._local_fallback_intent(goal, state)
-		state['local_fallback_episode'] = self._local_fallback_intent(goal, state)
-		state['local_fallback_start'] = tuple(start) if start is not None else None
+		state['local_fallback_intent'] = intent
+		state['local_fallback_episode'] = intent
 
 	def retained_local_target(self, bot_id, current, goal, path_key, now, movement_intent=True, yaw=None):
 		"""Let the runtime's direct shortcut respect an already issued local leg."""
@@ -2166,7 +2175,7 @@ class TerrainNavigator(object):
 		return tuple(current)
 
 	def _new_local_fallback(self, bot_id, current, origin, goal, now,
-			avoid_points, state, eroded_reentry=False):
+			avoid_points, state, eroded_reentry=False, consumed_once=False):
 		exclusions = (state.get('temporary_visited_cells', ())
 		              if eroded_reentry and state.get('temporary_stalled') else ())
 		fallback = self.grid.safe_local_target(
@@ -2179,6 +2188,26 @@ class TerrainNavigator(object):
 		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
 			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
 			temporary_stalled=bool(state.get('temporary_stalled')))
+		if (fallback is not None and
+				_distance_2d(current, fallback) <= WAYPOINT_ARRIVAL_RADIUS and
+				_distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS):
+			# A fixed consumed anchor can put the selected fan point inside the
+			# actual hull's arrival disk. Consume it and advance the unchanged
+			# fixed-anchor selector once, proving the connector from the real
+			# hull below. Regenerating the fan at the moving hull changes the
+			# original retry behaviour and can oscillate at a cell boundary.
+			consumed = dict(origin=tuple(origin), candidate=tuple(fallback),
+				actual_distance=_distance_2d(current, fallback), at=float(now))
+			if not consumed_once:
+				state.pop('local_completed_target', None)
+				result = self._new_local_fallback(bot_id, current, tuple(fallback),
+					goal, now, avoid_points, state, eroded_reentry, consumed_once=True)
+				state['local_selection']['consumed_anchor'] = consumed
+				return result
+			selection.update(outcome='already_arrived_candidate', selected=tuple(current),
+				consumed_anchor=consumed)
+			self._record_local_retry_refusal(state, current, goal, now)
+			return tuple(current)
 		if fallback is not None and self.grid.prebaked:
 			cell = self.grid.cell_for(fallback)
 			selection['candidate_graph_height'] = self.grid._baked_cell_height(cell)
@@ -2218,6 +2247,9 @@ class TerrainNavigator(object):
 					connector_clear = False
 		if not connector_clear:
 			selection.update(outcome='connector_rejected',selected=tuple(current),native_refusal=(dict(self.grid._last_native_refusal) if getattr(self.grid,'_last_native_refusal',None) is not previous_refusal and getattr(self.grid,'_last_native_refusal',None) else None))
+			deferred = (connector.get('reason') in ('native_revision_changed', 'native_deferred') or
+				getattr(self.grid, '_proof_deferred', False))
+			selection['connector_deferred'] = bool(deferred)
 			state.pop('local_completed_target', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
@@ -2755,7 +2787,6 @@ class TerrainNavigator(object):
 			self._reset_macro_progress(state, current, target, now, kind)
 			return False
 		if (target is None or
-				_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
 				_distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS):
 			self._reset_macro_progress(state, current, target, now, kind)
 			return False
@@ -2827,6 +2858,7 @@ class TerrainNavigator(object):
 			'local_retained_proof': dict(state.get('local_retained_proof') or {}),
 			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
 			'local_target_end_reason': state.get('local_target_end_reason'),
+			'local_target_update': dict(state.get('local_target_update') or {}),
 			'local_retry_age_ms': int(max(0.0, float(now) - float(
 				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),

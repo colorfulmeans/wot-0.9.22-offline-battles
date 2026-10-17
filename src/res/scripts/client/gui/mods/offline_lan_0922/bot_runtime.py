@@ -7261,7 +7261,8 @@ class BotRuntime(object):
                 sample=dict(state.get('_support_mode_receipt') or {}),
                 points=[dict(row) for row in
                     (state.get('_support_mode_sample') or (None, []))[1]],
-                slope_samples=state.get('_basic_slope_samples')),
+                slope_samples=state.get('_basic_slope_samples'),
+                slope_refresh=state.get('_slope_pose_refresh')),
             'control_arbitration': dict(command.get('control_trace') or {}),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'contact_escape': command.get('contact_escape'),
@@ -7720,13 +7721,18 @@ class BotRuntime(object):
         travel = SLOPE_SAMPLE_METRES[tier]
         turn = SLOPE_SAMPLE_RADIANS[tier]
         marker = state.get('pose_sample')
+        state['_slope_pose_refresh'] = dict(
+            at=getattr(self, '_contact_now', None), measured_pose=marker,
+            current_pose=(x, z, yaw), basis_yaw=state.get('_basic_slope_basis_yaw'),
+            force=bool(force_sample), reason='evaluate')
         exact = not bool(_value(self._descriptors.get(int(state['id']), {}),
                                 'isPitchHullAimingAvailable', False))
         new_target = None
         if (not force_sample and isinstance(marker, (list, tuple)) and len(marker) == 3 and
                 abs(x - marker[0]) < travel and
                 abs(z - marker[1]) < travel and
-                abs(yaw - marker[2]) < turn):
+                abs(_angle_delta(yaw, marker[2])) < turn):
+            state['_slope_pose_refresh']['reason'] = 'measurement_reused'
             target = state.get('_slope_pose_target')
             if target is None:
                 return False
@@ -7738,6 +7744,7 @@ class BotRuntime(object):
             pitch = target[0] if exact else terrain_pitch + (target[0] - terrain_pitch) * 0.5
             roll = target[1] if exact else state.get('roll', 0.0) + (target[1] - state.get('roll', 0.0)) * 0.5
         else:
+            state['_slope_pose_refresh']['reason'] = 'measurement_requested'
             state['_slope_pose_attempt'] = state.get('_slope_pose_attempt', 0) + 1
             slope_receipt = {}
             sampled = slope_pose(
@@ -7746,9 +7753,11 @@ class BotRuntime(object):
                 self._terrain_pitch(state), state.get('roll', 0.0),
                 exact=exact, receipt=slope_receipt)
             if sampled is None:
+                state['_slope_pose_refresh']['reason'] = 'measurement_unavailable'
                 return False
             pitch, roll = sampled
-            state['_basic_slope_samples'] = slope_receipt
+            slope_receipt['sampled_at'] = getattr(self, '_contact_now', None)
+            state['_slope_pose_refresh']['attempted_samples'] = slope_receipt
             new_target = (
                 (pitch, roll) if exact else
                 (pitch * 2.0 - self._terrain_pitch(state),
@@ -7762,6 +7771,7 @@ class BotRuntime(object):
             after['chassis'] = dict(before['chassis'], pitch=pitch, roll=roll)
             if not self._turret_motion_probe(
                     before, after, self._descriptors.get(int(state['id']))):
+                state['_slope_pose_refresh']['reason'] = 'body_pose_rejected'
                 self._report_basic_slope_pose(state, before, after, False, 'sample')
                 return False
             self._report_basic_slope_pose(state, before, after, True, 'sample')
@@ -7770,8 +7780,10 @@ class BotRuntime(object):
         state['roll'] = roll
         state['_basic_slope_basis_yaw'] = yaw
         if new_target is not None:
+            state['_basic_slope_samples'] = slope_receipt
             state['_slope_pose_target'] = new_target
             state['pose_sample'] = (x, z, yaw)
+            state['_slope_pose_refresh']['reason'] = 'measurement_accepted'
         return True
 
     def _reorient_basic_ground_pose(self, state):
@@ -7800,9 +7812,9 @@ class BotRuntime(object):
         target = state.get('_slope_pose_target')
         if target is not None:
             state['_slope_pose_target'] = ground_pose_for_yaw(target[0], target[1], old_yaw, state['yaw'])
-        marker = state.get('pose_sample')
-        if isinstance(marker, (list, tuple)) and len(marker) == 3:
-            state['pose_sample'] = (marker[0], marker[1], state['yaw'])
+        # Re-expressing the old world plane is not a new terrain measurement.
+        # Keep its original footprint/yaw so the ordinary sampling thresholds
+        # can refresh a turned hull on a non-planar shoulder.
         state['terrain_pitch'] = pitch
         state['pitch'] = after['pitch']
         state['roll'] = roll
@@ -7823,7 +7835,11 @@ class BotRuntime(object):
             accepted=bool(accepted), position=list(_position(state)),
             before=dict((key, before.get(key)) for key in ('yaw', 'pitch', 'roll')),
             after=dict((key, after.get(key)) for key in ('yaw', 'pitch', 'roll')),
-            samples=state.get('_basic_slope_samples'), airborne=bool(state.get('airborne'))))
+            samples=state.get('_basic_slope_samples'),
+            refresh=state.get('_slope_pose_refresh'),
+            measured_pose=state.get('pose_sample'),
+            basis_yaw=state.get('_basic_slope_basis_yaw'),
+            airborne=bool(state.get('airborne'))))
 
     def _passive_motion_status(self, state, position, yaw, speed,
                                descriptor, step, now, commit_enabled=False):
@@ -14998,6 +15014,8 @@ class BotRuntime(object):
                     'slot': int(state.get('slot', 0)),
                     'position': position,
                     'yaw': state['yaw'],
+                    'pitch': state.get('pitch', 0.0),
+                    'roll': state.get('roll', 0.0),
                     # Connector selection distinguishes parked/forward motion
                     # from a deliberate reverse.  Preserve the authoritative
                     # sign here; LocalDriver applies abs only where magnitude

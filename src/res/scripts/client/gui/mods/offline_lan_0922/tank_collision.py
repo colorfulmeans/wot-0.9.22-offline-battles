@@ -215,6 +215,48 @@ def body_contains_point(body, point, slop=POSITION_SLOP):
         return False
 
 
+def swept_body_separated(first, second, movement, trace=None):
+    """Certify a separating plane for the complete fixed-pose translation.
+
+    This only refines a broad-phase rejection. Missing geometry, initial
+    overlap or a possible intervening hit retains the original rejection.
+    Terrain following and changing attitude still belong to native motion.
+    """
+    try:
+        def dot(a, b):
+            return sum(a[i]*b[i] for i in range(3))
+        def geometry(body):
+            shape = body['shape']
+            axes = pose_axes(body['yaw'], body['pitch'], body['roll'])
+            local_y = (shape[2]+shape[3])*.5
+            centre = tuple(body[k]+axes[1][i]*local_y
+                           for i,k in enumerate(('x','y','z')))
+            return centre, axes, (shape[0], (shape[3]-shape[2])*.5, shape[1])
+        ca, aa, ea = geometry(first)
+        cb, ab, eb = geometry(second)
+        delta = tuple(ca[i]-cb[i] for i in range(3))
+        candidates = list(aa+ab)
+        for a in aa:
+            for b in ab:
+                cross = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2],
+                         a[0]*b[1]-a[1]*b[0])
+                length = math.sqrt(dot(cross, cross))
+                if length > 1.e-8:
+                    candidates.append(tuple(c/length for c in cross))
+        for axis in candidates:
+            radius = (sum(ea[i]*abs(dot(axis, aa[i])) for i in range(3)) +
+                      sum(eb[i]*abs(dot(axis, ab[i])) for i in range(3)))
+            start = dot(delta, axis)
+            end = start+dot(movement, axis)
+            if min(start, end) > radius+1.e-9 or max(start, end) < -radius-1.e-9:
+                if trace is not None:
+                    trace.update(axis=axis, start=start, end=end, radius=radius)
+                return True
+    except (KeyError, TypeError, ValueError, IndexError, OverflowError):
+        pass
+    return False
+
+
 def planar_body_contact(first, second, trace=None):
     """Narrow-phase oriented volumes before spending a horizontal response.
 

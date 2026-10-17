@@ -183,7 +183,7 @@ class EscapeTerminalReceiptTests(unittest.TestCase):
                 def clear(yaw, distance):
                     clear.last_receipt = dict(reason='water' if not blocked else 'native_probe_clear')
                     return blocked
-                self.driver._reverse_blocked_by_vehicle = lambda *args: 19
+                self.driver._reverse_blocked_by_vehicle = lambda *args, **kwargs: 19
                 self.assertIsNone(self.driver._retained_short_escape(self.state,
                     (0., 0., 0.), 0., [], clear, 3.5, 1.7))
                 validation = self.state['short_escape_validation']

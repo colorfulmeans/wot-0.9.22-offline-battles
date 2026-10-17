@@ -70,6 +70,8 @@ class BotAdapter(object):
             state.get('half_width', 1.7), state.get('half_length', 3.5),
             tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
         previous = self._contact_peers.get(bot_id)
+        own_body = self.driver.collision_body(state)
+        state['_hull_contact_receipt'] = dict(at=state.get('now'), separated=[])
         for peer in state.get('neighbours', ()):
             where = _position(peer.get('position', peer))
             other_shape = tank_collision._tank_shape(peer)
@@ -82,6 +84,13 @@ class BotAdapter(object):
                       if not peer.get('alive', True) or peer.get('id') == previous
                       else tank_collision.POSITION_SLOP)
             if overlap[2] >= -margin:
+                other_body = self.driver.collision_body(peer)
+                proof = {}
+                if (own_body is not None and other_body is not None and
+                        tank_collision.swept_body_separated(own_body, other_body, (0., 0., 0.), proof)):
+                    state['_hull_contact_receipt']['separated'].append(dict(peer=peer.get('id'), proof=proof))
+                    continue
+                state['_hull_contact_receipt']['blocker'] = peer.get('id')
                 self._contact_peers[bot_id] = peer.get('id')
                 return {
                     'peer_id': peer.get('id'),
@@ -158,7 +167,7 @@ class BotAdapter(object):
                 reason = 'terrain_withdrawn'
             elif self.driver._reverse_blocked_by_vehicle(
                     position, current_heading+math.pi, state.get('neighbours', ()),
-                    escape['half_length'], escape['half_width']) is not None:
+                    escape['half_length'], escape['half_width'], body=self.driver.collision_body(state)) is not None:
                 reason = 'vehicle_withdrawn'
         if reason is not None:
             self._contact_escapes.pop(bot_id, None)
@@ -231,7 +240,7 @@ class BotAdapter(object):
             # axis equal this candidate's direction of travel.
             blocker = self.driver._reverse_blocked_by_vehicle(
                 position, heading + math.pi, neighbours,
-                half_length, half_width)
+                half_length, half_width, body=self.driver.collision_body(state))
             if blocker is not None:
                 continue
             distance = 2.0 * half_length + WAYPOINT_ARRIVAL_RADIUS
@@ -366,7 +375,7 @@ class BotAdapter(object):
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]
         if self.driver._reverse_blocked_by_vehicle(
-                position, yaw+math.pi, living, length, width) is not None:
+                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state)) is not None:
             evidence['phase'] = 'live_hull_blocked'
             return None
         # Keep forward torque throughout one admitted episode. Side contact
@@ -511,7 +520,7 @@ class BotAdapter(object):
             clear = clear and self.driver._clear(
                 direction_clear, sample_yaw + math.pi, reach)
             blocker = blocker or self.driver._reverse_blocked_by_vehicle(
-                position, sample_yaw, state.get('neighbours', ()), length, width)
+                position, sample_yaw, state.get('neighbours', ()), length, width, body=self.driver.collision_body(state))
             try:
                 if pose_clear is not None:
                     clear = clear and bool(pose_clear(sample_yaw))
@@ -665,7 +674,8 @@ class BotAdapter(object):
                 float(state.get('dt', 0.0)), state.get('neighbours', ()),
                 direction_clear, half_length=float(state.get('half_length', 3.5)),
                 half_width=float(state.get('half_width', 1.7)),
-                recovery_allowed=bool(state.get('navigation_recovery_allowed')))
+                recovery_allowed=bool(state.get('navigation_recovery_allowed')),
+                body=self.driver.collision_body(state))
         else:
             local = self._reverse_withdrawal(
                 state, strategic, position, target, move_position, direction_clear)
@@ -675,6 +685,7 @@ class BotAdapter(object):
                     float(state.get('yaw', 0.0)),
                     float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
                     target, state.get('neighbours', ()), direction_clear,
+                    body=self.driver.collision_body(state),
                     velocity=state.get('velocity'),
                     half_length=float(state.get('half_length', 3.5)),
                     half_width=float(state.get('half_width', 1.7)),
@@ -754,6 +765,7 @@ class BotAdapter(object):
             throttle_override=throttle_override, stop_at_target=stop_at_target,
             navigation_wait=navigation_wait,
             navigation_status=state.get('navigation_status'),
+            hull_contact=state.get('_hull_contact_receipt'),
             arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
             hull_angle_degrees=strategic.get('hull_angle_degrees'))
         if strategic.get('parking_phase') is not None:
