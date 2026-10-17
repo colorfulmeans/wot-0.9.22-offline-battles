@@ -425,19 +425,19 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     min(x for x, unused_z in upper_road), -80.0)
                 self.assertLess(max(heading_changes(route)), 80.0)
 
-    def test_canada_west_hills_bypasses_the_south_railway_consist(self):
+    def test_canada_west_hills_preserves_reviewed_corridor_and_hold(self):
         graph = load_graph('47_canada_a')
         for team in ('1', '2'):
             with self.subTest(team=team):
                 route = route_points(graph, 'west_hills', team)
-                # Both reports converged at x=-212..-216, z=-258..-269. Keep
-                # the whole route corridor clear, not merely its sampled dots.
-                self.assertGreater(
-                    point_to_polyline_distance((-214.0, -264.0), route),
-                    24.0)
-                self.assertLess(
-                    point_to_polyline_distance((-190.0, -230.0), route),
-                    8.0)
+                # A later native obstacle fix retained the reviewed lane;
+                # the retired southern train detour is no longer authored.
+                # Check its installed western gates and tactical hold instead
+                # of reintroducing that detour through a test assertion.
+                for gate in ((-410.,-38.),(-442.,86.),(-410.,262.),(70.,410.)):
+                    self.assertLess(point_to_polyline_distance(gate,route),8.)
+                record=next(r for r in graph['routes'][team] if r['id']=='west_hills')
+                self.assertIn([-410.,262.,True],record['waypoints'])
 
     def test_round_two_great_wall_routes_keep_three_distinct_roles(self):
         graph = load_graph('59_asia_great_wall')

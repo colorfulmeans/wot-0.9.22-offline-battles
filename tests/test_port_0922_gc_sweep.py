@@ -88,23 +88,28 @@ class GcSweepTest(unittest.TestCase):
 
 
 class BotUpdateCollectionRegressionTest(unittest.TestCase):
-    """Check unreachable garbage left by one controlled update fixture.
+    """Check manual reclamation after controlled update batches.
 
-    The Python 3 fixture exercises 200 stationary updates with four Bots and a
+    The Python 3 fixture exercises two batches of 200 updates with four Bots and a
     human player on the non-fixed-control path while retaining the runtime.
-    A zero result excludes neither live reference cycles nor behavior absent
-    from this fake scene, including native calls and worker publication. It
-    does not rule out the production update path.
+    Keep the zero-garbage regression separately: manual reclamation is not
+    permission to hide new producer cycles. Also check that teardown's sweep
+    reaches a fixed point, keeps live actor state and leaves automatic GC
+    disabled. Neither engine-free contract certifies native traversal safety.
 
     Run it in a subprocess because BotRuntime changes process-global logging
     state that unrelated loadout tests also exercise.
     """
 
     DRIVER = r"""
-import contextlib, gc, io, sys
+import contextlib, gc, io, sys, json
+from pathlib import Path
+root=Path(sys.argv[1])
+sys.path[:0]=[str(root/'tests'),str(root/'server'),str(root/'src/res/scripts/client')]
 from unittest import mock
 import test_port_0922_bot_runtime as driver
 import effective_params_fixture as fixture
+from gui.mods.offline_lan_0922 import gc_sweep
 
 case = driver.BotRuntimeTests('run')
 case.setUp()
@@ -119,14 +124,23 @@ player.setdefault('yaw', 0.0)
 gc.collect()
 gc.disable()
 sink = io.StringIO()
+observations=[]
 with contextlib.redirect_stdout(sink):
-    for tick in range(200):
-        runtime.update(0.05, 1.0 + tick * 0.05, [player])
-cycles = gc.collect()
-sys.stderr.write('CYCLES=%d\n' % cycles)
+    for batch in range(2):
+        for tick in range(200):
+            runtime.update(0.05, 1.0 + (batch*200+tick) * 0.05, [player])
+        if sys.argv[2]=='zero_garbage':
+            sys.stderr.write('CYCLES=%d\n' % gc.collect())
+            break
+        actors={key:id(value) for key,value in runtime.states.items()}
+        reclaimed=gc_sweep.sweep('round_end_fixture',batch)
+        empty=gc.collect()
+        assert actors=={key:id(value) for key,value in runtime.states.items()}
+        observations.append(dict(reclaimed=reclaimed,empty=empty,enabled=gc.isenabled(),actors=len(actors)))
+sys.stderr.write('SWEEPS=%s\n' % json.dumps(observations))
 """
 
-    def test_two_hundred_fixture_updates_leave_no_unreachable_objects(self):
+    def _run_driver(self, mode):
         import subprocess
 
         root = Path(__file__).resolve().parents[1]
@@ -137,21 +151,41 @@ sys.stderr.write('CYCLES=%d\n' % cycles)
             str(root / 'tests'),
         ))
         finished = subprocess.run(
-            [sys.executable, '-c', self.DRIVER],
+            [sys.executable, '-c', self.DRIVER, str(root), mode],
             cwd=str(root), env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, timeout=300)
         report = finished.stderr.decode('utf-8', 'replace')
         self.assertEqual(
             0, finished.returncode,
             'the Bot update driver failed:\n%s' % report[-2000:])
-        marker = [line for line in report.splitlines()
-                  if line.startswith('CYCLES=')]
-        self.assertTrue(marker, 'driver reported no cycle count:\n%s'
-                        % report[-2000:])
-        cycles = int(marker[-1].split('=', 1)[1])
-        self.assertEqual(
-            0, cycles,
+        return report
+
+    def test_two_hundred_fixture_updates_leave_no_unreachable_objects(self):
+        # Current failures include the planner_sample_direction/sample_clear
+        # closure family, not the manual collector. Retain this producer
+        # check until production stops creating those unreachable cycles.
+        report=self._run_driver('zero_garbage')
+        marker=[line for line in report.splitlines() if line.startswith('CYCLES=')]
+        self.assertTrue(marker,report[-2000:])
+        cycles=int(marker[-1].split('=',1)[1])
+        self.assertEqual(0,cycles,
             'the controlled update fixture left %d unreachable objects' % cycles)
+
+    def test_update_batches_are_reclaimed_at_manual_sweeps_without_losing_live_state(self):
+        report=self._run_driver('sweep')
+        marker = [line for line in report.splitlines()
+                  if line.startswith('SWEEPS=')]
+        self.assertTrue(marker, 'driver reported no sweep outcomes:\n%s'
+                        % report[-2000:])
+        import json
+        observations=json.loads(marker[-1].split('=',1)[1])
+        self.assertEqual(2,len(observations))
+        for row in observations:
+            self.assertGreaterEqual(row['reclaimed'],0)
+            self.assertEqual(0,row['empty'])
+            self.assertFalse(row['enabled'])
+            self.assertEqual(observations[0]['actors'],row['actors'])
+            self.assertGreater(row['actors'],0)
 
 
 if __name__ == '__main__':

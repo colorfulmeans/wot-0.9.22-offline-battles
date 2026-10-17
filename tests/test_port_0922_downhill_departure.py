@@ -45,6 +45,7 @@ class ReportedTerrain(object):
         self.wall_hits = 0
         self.exit_recasts = 0
         self.native_filters = []
+        self.native_rays = []
         self.sine, self.cosine = math.sin(captured['yaw']), math.cos(captured['yaw'])
         self.origin = _Vector(*captured['position'])
         self.side_grade = (-captured['normal'][0] * self.cosine +
@@ -78,6 +79,7 @@ class ReportedTerrain(object):
 
     def collide(self, space, start, end, mask, collision_filter=None):
         self.native_filters.append((mask, collision_filter))
+        self.native_rays.append((start, end))
         u0, v0 = self.coordinates(start)
         u1, v1 = self.coordinates(end)
         du, dv, dy = u1 - u0, v1 - v0, end.y - start.y
@@ -204,7 +206,19 @@ class DownhillDepartureTests(unittest.TestCase):
 
     def test_low_wall_behind_ground_is_seen_by_same_lane_recast(self):
         for captured in CAPTURED:
-            base = captured['hit'][1]
+            # The current sweep uses the posed hull, not the old yaw-only
+            # ray at the historical hit height. Put the thin control wall
+            # on an actual lower lane; a wall outside every ray proves nothing.
+            unused_status, unused_trace, baseline = self.check_scene(
+                captured, replay_captured_lane=True)
+            heights = []
+            for start, end in baseline.native_rays:
+                u0, unused = baseline.coordinates(start)
+                u1, unused = baseline.coordinates(end)
+                if abs(u1-u0) > 1.e-10 and min(u0,u1) <= 1.3 <= max(u0,u1):
+                    heights.append(start.y+(end.y-start.y)*(1.3-u0)/(u1-u0))
+            self.assertTrue(heights)
+            base = min(heights)
             status, trace, terrain = self.check_scene(
                 captured, wall=1.3, wall_band=(base - 0.02, base + 0.02),
                 replay_captured_lane=True)

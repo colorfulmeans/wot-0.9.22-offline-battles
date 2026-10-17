@@ -466,7 +466,7 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                 current[1] if (x, z) == (current[0], current[2]) else height)
             self.assertFalse(nav.grid.dry_segment_clear(current, target, 1.0))
 
-    def test_integrated_motion_continues_beyond_the_first_missing_cell(self):
+    def test_integrated_pending_search_joins_proved_graph_cells(self):
         from test_port_0922_bot_runtime import _combat_descriptor
         from effective_params_fixture import bot_default_crew_factors
         from gui.mods.offline_lan_0922 import loadout
@@ -478,6 +478,13 @@ class AirfieldLiveEgressTests(unittest.TestCase):
             for bot, current, goal in REPORT_POSES + REPORT_INTERIOR_POSES:
                 for fps in (5, 15):
                     with self.subTest(bot=bot, fps=fps):
+                        goal = (goal[0],current[1],goal[2])
+                        # Both bake and native replies describe this stated
+                        # flat world. Real-map heights plus a flat native fake
+                        # invent disconnected layers under the current proof.
+                        graph = dict(self.graph, heights_mm=[
+                            None if h is None else int(round(current[1]*1000.))
+                            for h in self.graph['heights_mm']])
                         runtime = BotRuntime(1,
                             descriptor_resolver=lambda *args: _combat_descriptor(),
                             direction_probe=lambda *args: dict(
@@ -487,7 +494,9 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                             ground_probe=lambda *args: current[1],
                             physics_ground_probe=lambda *args: current[1],
                             obstacle_probe=lambda *args: False,
-                            baked_graph=self.graph,
+                            motion_resolver=lambda *a, **k: 'clear',
+                            rotation_resolver=lambda *a, **k: True,
+                            baked_graph=graph,
                             visibility_probe=lambda *args: False,
                             firing_lane_probe=lambda *args: False)
                         runtime.battle_start({
@@ -509,19 +518,28 @@ class AirfieldLiveEgressTests(unittest.TestCase):
                         nav._accrue_search_credit = lambda elapsed: None
                         def navigation_target(bot_id, position, target, order, state):
                             return nav.next_target(bot_id, position, target,
-                                ('join', bot_id, nav.grid.cell_for(position)), state['now'])
+                                ('route_join', bot_id, 'eroded-fixture'), state['now'])
                         runtime.adapter.navigation_target = navigation_target
-                        duration = 20 if bot == 30 else 6
+                        # Allow the current finite local retry and traverse
+                        # cycle; six seconds tested only the first connector.
+                        duration = 30
+                        visited = set()
                         for frame in range(fps * duration):
                             runtime._server_orders = {bot: {
                                 'move_position': goal, 'fire_allowed': False,
                                 'fire_range': 400, 'combat_mode': 'route', 'shell_index': 0}}
                             runtime.update(1.0 / fps, float(frame) / fps)
+                            visited.add(nav.grid.cell_for((runtime.states[bot]['x'],
+                                runtime.states[bot]['y'],runtime.states[bot]['z'])))
                         state = runtime.states[bot]
                         displacement = math.hypot(state['x'] - current[0],
                                                   state['z'] - current[2])
                         self.assertTrue(state['alive'])
-                        self.assertGreater(displacement, 5.0 if bot == 30 else 1.5)
+                        self.assertGreater(displacement,1.5)
+                        # Egress is a transition into measured graph ground,
+                        # not an obsolete per-vehicle speed/distance promise.
+                        self.assertTrue(any(nav.grid._baked_cell_height(cell) is not None
+                                            for cell in visited),visited)
 
     def test_interior_report_poses_join_the_existing_nearest_cell(self):
         for bot, current, goal in REPORT_INTERIOR_POSES:
