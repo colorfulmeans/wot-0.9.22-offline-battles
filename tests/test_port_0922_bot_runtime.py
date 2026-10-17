@@ -4191,7 +4191,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
         self.assertEqual([(11, attempted_yaw, 5.0)],
-                         adapter.driver.calls)
+                         [call[:3] for call in adapter.driver.calls])
+        self.assertEqual('hard_translation_contact', adapter.driver.calls[0][3]['source'])
+        self.assertEqual(before_position, adapter.driver.calls[0][3]['origin'])
         self.assertEqual(1, len(contact_reports))
         realised_edge = (math.sin(attempted_yaw) * 4.0, 0.0,
                          math.cos(attempted_yaw) * 4.0)
@@ -4458,7 +4460,10 @@ class BotRuntimeTests(unittest.TestCase):
                         'hard_contact_episode'][
                             'uses_navigation_target'])
                 self.assertEqual([(11, report_yaw, 5.0)],
-                                 adapter.driver.calls)
+                                 [call[:3] for call in adapter.driver.calls])
+                self.assertEqual('hard_translation_contact',
+                                 adapter.driver.calls[0][3]['source'])
+                self.assertEqual(.25, adapter.driver.calls[0][3]['hull_yaw'])
 
     def test_unresolved_reverse_hard_contact_reports_a_stable_episode_edge(self):
         yaw = 0.25
@@ -6258,7 +6263,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn('destructible_contact_speed', state)
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
-        self.assertEqual([(11, 0.75, 5.0)], failures)
+        self.assertEqual([(11, 0.75, 5.0)], [call[:3] for call in failures])
+        self.assertEqual('support_rise_obstacle', failures[0][3]['source'])
 
     def test_vertical_motion_uses_edge_fallback_or_ballistic_fall(self):
         def edge_ground(unused_x, z, unused_y):
@@ -21366,7 +21372,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0.0, state['vertical_speed'])
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
-        self.assertEqual([(11, 0.25, 5.0)], failures)
+        self.assertEqual([(11, 0.25, 5.0)], [call[:3] for call in failures])
+        self.assertEqual('baked_pose_guard', failures[0][3]['source'])
+        self.assertEqual((state['x'], state['y'], state['z']), failures[0][3]['origin'])
 
     def test_realised_guard_rejects_only_outward_map_boundary_progress(self):
         graph = _graph()
