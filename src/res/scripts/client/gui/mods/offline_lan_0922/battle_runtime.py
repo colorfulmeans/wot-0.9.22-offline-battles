@@ -2345,6 +2345,8 @@ class BattleRuntime(object):
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
+        self._landing_diagnostic_sequence = 0
+        self._landing_diagnostic_previous = None
         self._input_accumulator = 0.0
         self._gun_state = None
         self._gun_last_tick = None
@@ -2713,6 +2715,8 @@ class BattleRuntime(object):
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
+        self._landing_diagnostic_sequence = 0
+        self._landing_diagnostic_previous = None
         self._input_accumulator = 0.0
         self._gun_state = None
         self._gun_last_tick = None
@@ -5805,7 +5809,15 @@ class BattleRuntime(object):
             self._destructibles, 'ground_collision_filter', None)
         if not callable(probe):
             return None
-        ground_filter = probe(x, z)
+        # The worker already owns a synchronous collision-preparation scope.
+        # Reuse its live per-cell member filter instead of rescanning the same
+        # destructibles for every basic support/slope column. Custom providers
+        # retain their original call path; the batch validates their identity.
+        from . import destructibles_sensor
+        scope = destructibles_sensor.__dict__.get('g_offh_destr_collision_preparation_scope')
+        batch = (destructibles_sensor.ground_filter_batch_1513(probe)
+                 if isinstance(scope,dict) else None)
+        ground_filter = batch(x, z) if callable(batch) else probe(x, z)
         return ground_filter if callable(ground_filter) else None
 
     def _prepared_ground_filter(self, points):
@@ -24708,9 +24720,20 @@ class BattleRuntime(object):
             observation['vehicle_contact'] = list(carrier)
         self._pending_landing_impacts.append(observation if contacts or carrier else impact_speed)
         from .native_input_diagnostics import write_json_record
+        clock = self._clock()
+        previous_impact = getattr(self, '_landing_diagnostic_previous', None)
+        sequence = getattr(self, '_landing_diagnostic_sequence', 0) + 1
+        self._landing_diagnostic_sequence = sequence
+        current_impact = dict(sequence=sequence, at=clock, pose=landing_pose,
+            speed=impact_speed, damage=damage, carrier=carrier)
+        self._landing_diagnostic_previous = current_impact
         write_json_record('PLAYER LANDING IMPACT', dict(speed=impact_speed, damage=damage,
             witnesses=list(witnesses), normal=normal, landing_pose=landing_pose,
             contacts=contacts, vehicle_contact=carrier,
+            diagnostic_sequence=sequence, previous_impact=previous_impact,
+            previous_gap_ms=(None if previous_impact is None else
+                (clock-previous_impact['at'])*1000.),
+            round=getattr(self.client,'round_id',None),
             queued=len(self._pending_landing_impacts)))
         return damage
 
@@ -24949,6 +24972,8 @@ class BattleRuntime(object):
                         else 'solver_no_roof_contact' if 'contact_carrier' in self._stack_context
                         else 'native_roof_miss' if not hits else 'legacy_height_mismatch'),
                     matching=self._stack_context.get('carrier_receipt'),
+                    solver_contact=self._stack_context.get('solver_contact'),
+                    physics_dt=dt,
                     roof_hits=len(hits),pitch=self._local_pitch,roll=self._local_roll))
             return result
         finally:
@@ -25219,6 +25244,17 @@ class BattleRuntime(object):
             context['contact_carrier'] = vehicle_stack.settled_carrier(
                 params,ground,pseudo_ground,solved,position,yaw,
                 previous_pitch,previous_roll,context['hits'])
+            if context['hits'] or getattr(self,'_local_stack_carrier',None) is not None:
+                context['solver_contact'] = dict(
+                    before_pose=(physics_state['height'],previous_pitch,previous_roll),
+                    after_pose=(solved['height'],solved['pitch'],solved['roll']),
+                    contact_count=solved.get('contact_count'),
+                    rigid_contact_count=solved.get('rigid_contact_count'),
+                    touched_contact_count=solved.get('touched_contact_count'),
+                    before_velocity=before_vertical_speed,
+                    after_velocity=solved.get('vertical_velocity'),
+                    impact_speed=solved.get('impact_speed'),
+                    before_airborne=before_airborne,after_airborne=solved.get('airborne'))
             carrier_changed=(context['contact_carrier'] != getattr(self,'_local_stack_carrier',None))
             carrier_due=(now >= getattr(self,'_carrier_commit_log_at',-1.e30))
             carrier_receipt=None
@@ -31556,6 +31592,8 @@ class BattleRuntime(object):
         self._local_surface_up_cosine = None
         self._local_air_lateral = (0.0, 0.0)
         self._pending_landing_impacts = []
+        self._landing_diagnostic_sequence = 0
+        self._landing_diagnostic_previous = None
         self._local_pitch = 0.0
         self._local_roll = 0.0
         self._local_suspension_pitch_velocity = 0.0

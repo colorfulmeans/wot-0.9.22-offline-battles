@@ -9734,6 +9734,25 @@ class BotRuntime(object):
                     for key in ('requested_goal', 'source', 'final_target', 'path_key')):
                 history.append(dict(target_receipt))
                 del history[:-16]
+            # Stationary receipts start after a hull is already trapped.
+            # Preserve the existing choice on a bank while it is still moving,
+            # so its entry can be reconstructed without another native query.
+            now = float(state.get('now',0.0))
+            bank_choice = (abs(_number(authority_state.get('pitch'))) > .15 or
+                abs(_number(authority_state.get('roll'))) > .15 or
+                any(abs(_number(row.get('height_delta'))) > .8
+                    for choice in choices for row in choice['ranked'][:1]))
+            if (bank_choice and
+                    now >= authority_state.get('_navigation_choice_log_at',-1.e30)):
+                from .native_input_diagnostics import write_json_record
+                authority_state['_navigation_choice_log_at'] = now+3.
+                write_json_record('BOT NAV CHOICE',dict(
+                    round=self.round_id,bot=bot_id,at=now,
+                    pose=(authority_state.get('yaw'),authority_state.get('pitch'),
+                          authority_state.get('roll')),
+                    path_state={key:local_state.get(key) for key in (
+                        'navigation_status','index','last_target','planned_goal','planned_at')},
+                    receipt=dict(target_receipt),decision_input=False))
         return target
 
     def _player_neighbours(self, players):
