@@ -6,7 +6,7 @@ main as a gameplay change.
 Extract the complete Windows package and run START_ROOF_CRUSH_TEST.bat.
 Create a room and start normally. The server pins Victory Gate (37_caucasus),
 15 versus 15, and human players to team 1. Enemy slots contain fifteen Type 59s
-in a close 3-by-5 array below one bridge edge (3.5 m lateral, 6.4 m longitudinal). Friendly Bots keep their normal base spawns. All Bots hold
+in a close 3-by-5 array below one bridge edge (3.5 m lateral, 6.4 m longitudinal). The fourteen friendly Bots form one 3.5 m-spaced row on the same-side deck edge, noses outward, centred along the enemy array. Human slot zero keeps its normal base spawn. All Bots hold
 and do not fire; gravity, support, external pushing and damage remain active. Physical pair responses now classify oriented 3D body contact before horizontal separation; vertical contact remains with suspension. Initial impact damage is unchanged.
 Drive to the bridge and drop onto a target. Start another battle to reset targets.
 

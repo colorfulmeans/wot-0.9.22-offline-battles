@@ -31,6 +31,23 @@ def enemy_seed(slot):
             105.0+math.cos(yaw)*along-math.sin(yaw)*sideways), yaw
 
 
+def friendly_seed(slot):
+    """One close row on the deck, noses toward the target-side bridge edge.
+
+    Slot zero remains the human's ordinary base spawn. The row is centred
+    along the existing enemy array; native collision chooses actual deck Y.
+    """
+    index = int(slot)-1
+    if not 0 <= index < 14:
+        raise ValueError('roof test friendly row uses slots one to fourteen')
+    bridge_yaw = math.atan2(10.0, -7.0)
+    along = index*3.5-9.95
+    sideways = 2.25
+    yaw = bridge_yaw-math.pi*1.5
+    return (2.0+math.sin(bridge_yaw)*along+math.cos(bridge_yaw)*sideways,
+            1.0, 105.0+math.cos(bridge_yaw)*along-math.sin(bridge_yaw)*sideways), yaw
+
+
 def hold_command(command, position):
     command = dict(command)
     command.update(throttle=0.0, turn=0.0, brake=True,

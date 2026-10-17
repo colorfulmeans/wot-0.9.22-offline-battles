@@ -5689,17 +5689,20 @@ class BattleRuntime(object):
 
     def _formation_pose(self, team, slot):
         from . import roof_crush_test
-        if roof_crush_test.enabled() and int(team) == 2:
+        test_friendly = int(team) == 1 and 1 <= int(slot) < 15
+        if roof_crush_test.enabled() and (int(team) == 2 or test_friendly):
             key = (int(team), int(slot))
             if key not in self._spawn_cache:
-                seed, yaw = roof_crush_test.enemy_seed(slot)
+                seed, yaw = (roof_crush_test.friendly_seed(slot) if test_friendly
+                             else roof_crush_test.enemy_seed(slot))
                 height = self._ground_y(seed[0], seed[2], seed[1],
                                          allow_wide=False)
-                if height is None:
-                    raise ValueError('roof test lower-ground spawn is unproved: %s' % (seed,))
+                if height is None or (test_friendly and abs(height-seed[1]) > 4.):
+                    raise ValueError('roof test native spawn layer is unproved: %s' % (seed,))
                 self._spawn_cache[key] = ((seed[0], height, seed[2]), yaw)
-                print('[ROOF CRUSH TEST] enemy slot=%s position=%s yaw=%s' %
-                    (slot, self._spawn_cache[key][0], yaw))
+                print('[ROOF CRUSH TEST] team=%s slot=%s layer=%s position=%s yaw=%s' %
+                    (team, slot, 'deck' if test_friendly else 'below_deck',
+                     self._spawn_cache[key][0], yaw))
             return self._spawn_cache[key]
         key = (int(team), int(slot))
         cached = self._spawn_cache.get(key)

@@ -102,6 +102,36 @@ class RoofCrushEntryTests(unittest.TestCase):
             with self.assertRaises(ValueError): namespace['_formation_pose'](obj, 2, 1)
             self.assertNotIn((2, 1), obj._spawn_cache)
 
+    def test_friendly_row_spacing_facing_and_native_deck_layer(self):
+        poses = [fixture.friendly_seed(slot) for slot in range(1,15)]
+        for first,second in zip(poses,poses[1:]):
+            self.assertAlmostEqual(3.5,math.hypot(second[0][0]-first[0][0],second[0][2]-first[0][2]))
+        bridge_yaw = math.atan2(10.,-7.)
+        for point,yaw in poses:
+            self.assertEqual(1.,point[1])
+            self.assertAlmostEqual(2.25,(point[0]-2.)*math.cos(bridge_yaw)-(point[2]-105.)*math.sin(bridge_yaw))
+            self.assertAlmostEqual(math.cos(bridge_yaw),math.sin(yaw))
+            self.assertAlmostEqual(-math.sin(bridge_yaw),math.cos(yaw))
+        with self.assertRaises(ValueError): fixture.friendly_seed(0)
+        tree = ast.parse((SOURCE/'battle_runtime.py').read_text(encoding='utf-8'))
+        cls = next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='BattleRuntime')
+        method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='_formation_pose')
+        method.body[0]=ast.parse('roof_crush_test=fixture').body[0]
+        namespace=dict(fixture=fixture)
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[method],type_ignores=[])),'formation-contract','exec'),namespace)
+        probe=mock.Mock(return_value=1.1)
+        planner=types.SimpleNamespace(pose=mock.Mock(return_value=((100.,0.,100.),0.)))
+        obj=types.SimpleNamespace(_spawn_cache={},_ground_y=probe,_spawn_planner=planner)
+        with mock.patch.dict(os.environ,{fixture.ENV:'1'}):
+            self.assertEqual(1.1,namespace['_formation_pose'](obj,1,1)[0][1])
+            self.assertEqual(1.,probe.call_args.args[2])
+            self.assertEqual(((100.,0.,100.),0.),namespace['_formation_pose'](obj,1,0))
+            probe.return_value=-14.
+            with self.assertRaises(ValueError):namespace['_formation_pose'](obj,1,2)
+            self.assertNotIn((1,2),obj._spawn_cache)
+        with mock.patch.dict(os.environ,{fixture.ENV:'0'}):
+            self.assertEqual(((100.,0.,100.),0.),namespace['_formation_pose'](obj,1,3))
+
 class RuntimeHoldTests(unittest.TestCase):
     def setUp(self):
         import test_port_0922_bot_runtime as support
