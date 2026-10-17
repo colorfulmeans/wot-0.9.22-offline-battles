@@ -13,7 +13,9 @@ def reference():native_math._backend=None;native_math._attempted=True
 def native():native_math._backend=backend;native_math._attempted=True
 # Captured T95 side contact: centres approach, but overlap does not deepen.
 with open(os.path.join(root,'tests','fixtures','caucasus_043353_contact_exits.json')) as stream:
- captured=json.load(stream)['t95']
+ # Runtime driver rosters have byte-string keys on CPython 2.7. JSON
+ # otherwise creates unicode keys, outside the native plain-dict contract.
+ captured=json.load(stream,object_hook=lambda row:dict((str(k),v) for k,v in row.items()))['t95']
 for rotation in (0.,.4,-1.2,math.pi):
  c=captured;sn,cs=math.sin(rotation),math.cos(rotation)
  def rotate(p):return (p[0]*cs+p[2]*sn,p[1],p[2]*cs-p[0]*sn)
