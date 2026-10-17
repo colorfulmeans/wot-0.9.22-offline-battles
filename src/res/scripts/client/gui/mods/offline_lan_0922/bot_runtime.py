@@ -2042,7 +2042,9 @@ class BotRuntime(object):
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
-                 impact_contacts_resolver=None, navigation_surface_probe=None):
+                 impact_contacts_resolver=None, navigation_surface_probe=None,
+                 navigation_height_columns=None):
+        self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
         self._navigation_surface_next = 0.0
@@ -9525,14 +9527,32 @@ class BotRuntime(object):
 
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
+        try:
+            return self._navigation_target_impl(bot_id,position,goal,strategic,state)
+        finally:
+            links = getattr(getattr(self.navigator,'grid',None),'local_height_links',None)
+            if links is not None:
+                links.origin = None
+
+    def _navigation_target_impl(self, bot_id, position, goal, strategic, state):
         state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
+        grid = getattr(self.navigator,'grid',None)
         target_receipt = dict(at=state.get('now', 0.0), position=tuple(position),
             requested_goal=tuple(goal), mode=mode, source='no_navigator',
             final_target=tuple(goal))
         if authority_state is not None:
             authority_state['_navigation_target_receipt'] = target_receipt
+        local_height = None
+        if grid is not None and callable(getattr(self,'_navigation_height_columns',None)):
+            from .ai.local_height import LocalHeightLinks
+            local_height = getattr(grid,'local_height_links',None)
+            if local_height is None:
+                local_height = LocalHeightLinks(self._navigation_height_columns)
+                grid.local_height_links = local_height
+            local_height.begin(position, (goal, _point(strategic.get('route_anchor'), position)),
+                float(state.get('now',0.)))
         if authority_state is not None:
             authority_state['route_wreck_blocked'] = False
             authority_state['_occupied_route_point'] = False
@@ -9700,6 +9720,23 @@ class BotRuntime(object):
             if bypass is not None:
                 target = bypass
                 state['navigation_stop_at_target'] = False
+        if local_height is not None:
+            status, resolved = local_height.inspect(position,target,
+                grid._baked_cell_height(grid.cell_for(position)) if grid.prebaked else None)
+            if status in ('other_surface','connected'):
+                target = resolved
+            elif status in ('disconnected','water'):
+                target_receipt['height_rejected_target'] = tuple(target)
+                # Use the existing candidate fan, costs and retry owner. Do not
+                # install a new route switch, edge blacklist or wait timer.
+                nav_state = self.navigator.bot_states.get(int(bot_id))
+                if nav_state is not None:
+                    candidate = self.navigator._safe_fallback_target(
+                        bot_id,position,goal,now,avoid,nav_state)
+                else:
+                    candidate = grid.safe_local_target(position,goal,now,avoid)
+                target = candidate if candidate is not None else tuple(position)
+                state['navigation_stop_at_target'] = False
         remember = getattr(self.navigator, 'remember_runtime_target', None)
         if movement_intent and tuple(target) != selected_target and callable(remember):
             remember(bot_id, position, goal, target, now)
@@ -9725,6 +9762,23 @@ class BotRuntime(object):
                     selected=fallback.get('selected'), ranked=ranked,
                     shortest_distance=shortest))
         target_receipt['local_choices'] = choices
+        if local_height is not None:
+            target_receipt['height_links'] = list(local_height.receipts)
+            if authority_state is not None:
+                from .native_input_diagnostics import write_json_record
+                now = float(state.get('now',0.))
+                statuses = tuple(sorted(set(r['status'] for r in local_height.receipts)))
+                if now >= authority_state.get('_height_link_log_at',-1.e30):
+                    authority_state['_height_link_status'] = statuses
+                    authority_state['_height_link_log_at'] = now+2.
+                    write_json_record('BOT HEIGHT LINKS',dict(round=self.round_id,
+                        bot=bot_id,at=now,origin=position,goal=goal,target=target,
+                        columns=local_height.queries,receipts=local_height.receipts,
+                        reused_columns=local_height.cache_hits,
+                        decision_input=True))
+            # A shared grid must not apply this Bot's local origin to a later
+            # background route job or another Bot's physical storey.
+            local_height.origin = None
         target_receipt.update(final_target=tuple(target),
             progress_target=state.get('navigation_progress_target'),
             stop_at_target=state.get('navigation_stop_at_target'))

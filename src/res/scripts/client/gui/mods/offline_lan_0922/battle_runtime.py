@@ -4131,6 +4131,8 @@ class BattleRuntime(object):
                 spawn_resolver=self._formation_pose,
                 impact_contacts_resolver=self._bot_impact_module_contacts,
                 ground_probe=self._navigation_ground,
+                navigation_height_columns=(self._navigation_height_columns
+                    if self._worker_mode else None),
                 # Use the player's near-body support layer for Bot height
                 # and attitude. The wider placement query can acquire an
                 # overhead bridge and turn every clear step into a rollback.
@@ -6516,6 +6518,34 @@ class BattleRuntime(object):
                 trace[name] = _xyz(hit[index])
             except (AttributeError, IndexError, TypeError, ValueError):
                 pass
+
+    @observed('navigation.height_columns')
+    def _navigation_height_columns(self, x, z, low, high):
+        """Enumerate static upward faces without choosing a navigation layer.
+
+        Reuse the established navigation collision filter; no new BigWorld
+        interface, support context, or actor/model collision exemption.
+        """
+        rows = []
+        top = float(high)
+        revision = getattr(getattr(self,'_destructibles',None),
+            '_spatial_revision_1513',None)
+        generation = ((self._avatar.spaceID,revision()) if callable(revision) else None)
+        for unused in range(12):
+            hit = self._collide_navigation(self._vector((x,top,z)),
+                self._vector((x,float(low),z)))
+            if hit is None:
+                return dict(status='complete', surfaces=rows,generation=generation)
+            p, n = _xyz(hit[0]), _xyz(hit[1])
+            if p[1] > top+.001 or p[1] < low-.001:
+                return dict(status='invalid_hit', surfaces=rows,generation=generation)
+            if n[1] > .0001:
+                rows.append(dict(point=p,normal=n,
+                    navigation_water=self._water_depth(p)>BOT_WATER_AVOID_DEPTH))
+            top = p[1]-.02
+            if top <= low:
+                return dict(status='complete',surfaces=rows,generation=generation)
+        return dict(status='layer_limit',surfaces=rows,generation=generation)
 
     def _navigation_ground(self, x, z, hint_y=0.0):
         """Copy the 0.8.2 same-layer graph probe, including ford depth."""
