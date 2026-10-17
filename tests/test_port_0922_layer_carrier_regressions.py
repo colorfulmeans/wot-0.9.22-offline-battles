@@ -11,50 +11,28 @@ from test_port_0922_navigation import StaticHullNavigationTests, TerrainGrid
 from gui.mods.offline_lan_0922 import vehicle_stack, vehicle_physics as vp
 
 
-class BakedNavigationLayerTests(unittest.TestCase):
-    def scene(self, ground=None):
+class BakedNavigationRollbackTests(unittest.TestCase):
+    def scene(self):
         graph=StaticHullNavigationTests._flat_graph()
-        return TerrainGrid(ground or (lambda x,z,hint:-15.),
-                           obstacle_probe=lambda *args:False,
+        return TerrainGrid(lambda x,z,hint:-15.,obstacle_probe=lambda *args:False,
                            baked_graph=graph,cell_size=4.)
 
-    def test_lower_floor_cannot_borrow_bridge_links(self):
+    def test_baked_corridor_does_not_add_a_current_height_gate(self):
         grid=self.scene()
-        self.assertFalse(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
-        self.assertEqual('endpoint_support_layer',grid._last_layer_receipt['egress_reason'])
-        self.assertTrue(grid.segment_clear((6.,-15.,6.),(10.,-15.,6.)))
+        with mock.patch.object(grid,'_live_baked_egress_clear') as live:
+            self.assertTrue(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
+        live.assert_not_called()
 
-    def test_local_candidates_follow_the_lower_physical_floor(self):
+    def test_local_candidates_keep_original_baked_height(self):
         grid=self.scene()
         target=grid.safe_local_target((6.,-15.,6.),(30.,0.,6.),0.)
         self.assertIsNotNone(target)
-        self.assertEqual(-15.,target[1])
-        # Authored/grid consumers retain their own height owner.
+        self.assertEqual(0.,target[1])
         self.assertEqual(0.,grid._ground(6.,6.,-15.))
 
-    def test_unknown_actual_floor_does_not_authorize_the_bridge(self):
-        grid=self.scene(lambda *args:None)
-        self.assertFalse(grid.segment_clear((6.,-15.,6.),(10.,0.,6.)))
-        self.assertEqual('support_layer_unknown',grid._last_layer_receipt['reason'])
-
-    def test_short_egress_requires_the_explicit_endpoint_layer(self):
+    def test_existing_short_egress_has_no_added_endpoint_storey_gate(self):
         grid=self.scene()
-        self.assertFalse(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.)))
-        self.assertTrue(grid._live_baked_egress_clear((6.,-15.,6.),(10.,-15.,6.)))
-
-    def test_route_anchor_zero_is_not_a_realised_lower_floor(self):
-        grid=self.scene(lambda x,z,hint:7.)
-        with mock.patch.object(grid,'_live_baked_egress_clear') as live:
-            self.assertTrue(grid.segment_clear((6.,0.,6.),(10.,0.,6.)))
-        live.assert_not_called()
-
-    def test_a_real_ramp_can_connect_the_two_floors(self):
-        # Rise six metres over twenty metres: inside the existing grade.
-        grid=self.scene(lambda x,z,hint:-6.+.3*(x-6.))
-        self.assertTrue(grid.segment_clear((6.,-6.,6.),(26.,0.,6.)))
-        # Teleporting to the deck at the same XZ still cannot pass.
-        grid=self.scene()
-        self.assertFalse(grid.segment_clear((6.,-15.,6.),(6.1,0.,6.)))
+        self.assertTrue(grid._live_baked_egress_clear((6.,-15.,6.),(10.,0.,6.)))
 
 
 class PhysicalPointTests(unittest.TestCase):

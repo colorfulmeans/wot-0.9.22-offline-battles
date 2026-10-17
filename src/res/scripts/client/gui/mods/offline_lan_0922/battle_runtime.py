@@ -6695,11 +6695,9 @@ class BattleRuntime(object):
                 probe_up = max(4.5, run * grade_limit + 0.02)
                 probe_down = max(5.0, run * grade_limit + 0.02)
                 ground_trace = {}
-                ground_start = (nx, previous_y + probe_up, nz)
-                ground_end = (nx, previous_y - probe_down, nz)
                 try:
-                    ground_start = self._vector(ground_start)
-                    ground_end = self._vector(ground_end)
+                    ground_start = self._vector((nx, previous_y + probe_up, nz))
+                    ground_end = self._vector((nx, previous_y - probe_down, nz))
                     ground = (self._collide_navigation(ground_start, ground_end, ground_trace)
                               if descriptor is not None else self._collide_down(
                                   ground_start, ground_end, self._ground_filter(nx, nz)))
@@ -6707,17 +6705,12 @@ class BattleRuntime(object):
                     return {'clear': False, 'collision': True,
                             'water': False, 'slope': 99.0,
                             'slope_valid': False, 'probe_failed': True,
-                            'reason': 'planning_ground_query_failed',
-                            'native_trace': dict(ground_trace,
-                                ray_start=_xyz(ground_start), ray_end=_xyz(ground_end))}
+                            'reason': 'planning_ground_query_failed'}
                 if ground is None:
                     return {'clear': False, 'collision': False,
                             'water': False, 'slope': 99.0,
                             'slope_valid': False,
-                            'reason': 'planning_ground_missing',
-                            'native_trace': dict(ground_trace,
-                                ray_start=_xyz(ground_start), ray_end=_xyz(ground_end),
-                                previous_y=previous_y, run=run)}
+                            'reason': 'planning_ground_missing'}
                 next_y = float(ground[0].y)
                 water_depth = self._water_depth((nx, next_y, nz))
                 if (wet_escape and
