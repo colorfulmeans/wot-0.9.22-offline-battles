@@ -167,6 +167,11 @@ def _pause_after_error():
 
 def _load_server():
     from lan_battle_server import DEFAULT_MAP, run_server
+    from gui.mods.offline_lan_0922 import roof_crush_test
+    if roof_crush_test.enabled():
+        from lan_battle_server import BattleState
+        from server_bot_ai import BotPlanner
+        roof_crush_test.install_server(BattleState, BotPlanner)
     return (DEFAULT_MAP, run_server)
 
 

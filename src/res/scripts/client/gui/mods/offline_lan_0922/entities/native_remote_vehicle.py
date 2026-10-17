@@ -554,6 +554,56 @@ class _NativeRemoteState(object):
         self._publish_pose()
         return True
 
+    def reconcile_wreck_pose(self, now=None, force=False):
+        """Restore a dead compound whose native death writer retained an old pose.
+
+        Never change physics or the pose stream. Read the actual compound,
+        then rebind the already-owned provider only on a proved mismatch.
+        """
+        entity = self.entity
+        if not self._engine_owns_entity():
+            return False
+        alive = getattr(entity, 'isAlive', None)
+        if (alive() if callable(alive) else bool(alive) if alive is not None
+                else float(getattr(entity, 'health', 1.0)) > 0.0):
+            return False
+        model = getattr(entity, 'model', None)
+        if model is None:
+            return False
+        stamp = float(now) if now is not None else 0.0
+        previous = getattr(self, '_wreck_pose_probe', None)
+        if (not force and previous is not None and previous[0] is model and
+                0.0 <= stamp-previous[1] < .5):
+            return False
+        def point(value):
+            return (float(value.x), float(value.y), float(value.z))
+        expected = self._math.Matrix(self.provider)
+        actual = self._math.Matrix(model.matrix)
+        target = point(expected.translation)
+        before = point(actual.translation)
+        position_error = math.sqrt(sum((a-b)**2 for a,b in zip(before,target)))
+        axis_error = max(abs(a-b) for index in range(3)
+            for a,b in zip(point(actual.applyToAxis(index)),
+                           point(expected.applyToAxis(index))))
+        self._wreck_pose_probe = (model,stamp)
+        if position_error <= .001 and axis_error <= .0001:
+            return False
+        # Death/model callbacks can replace or copy the provider after the
+        # final pose was deduplicated. Bind the current model, never an old one.
+        model.matrix = self.provider
+        after = self._math.Matrix(model.matrix)
+        after_position = point(after.translation)
+        verified = (all(abs(a-b) <= .001 for a,b in zip(after_position,target)) and
+            all(abs(a-b) <= .0001 for index in range(3)
+                for a,b in zip(point(after.applyToAxis(index)),
+                               point(expected.applyToAxis(index)))))
+        from ..native_input_diagnostics import write_json_record
+        write_json_record('WRECK POSE',dict(entity=int(entity.id),phase='rebind',
+            expected=target,before=before,after=after_position,
+            position_error=position_error,axis_error=axis_error,verified=verified,
+            forced=bool(force),provider=type(self.provider).__name__))
+        return verified
+
     def set_interpolate_motion(self, enabled):
         """Follow live bot-authority handoffs without retaining two filters."""
         enabled = bool(enabled)
@@ -872,6 +922,7 @@ class _NativeRemoteState(object):
         entity.set_pose = self.set_pose
         entity.set_aim = self.set_aim
         entity.settle_motion = self.settle_motion
+        entity.reconcile_wreck_pose = self.reconcile_wreck_pose
         entity.update_tracks = self.update_tracks
         entity.track_scroll_readback = self.track_scroll_readback
         entity.track_feed_state = self.track_feed_state

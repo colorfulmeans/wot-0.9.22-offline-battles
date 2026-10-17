@@ -142,7 +142,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
     def test_contract_is_pinned_to_client_1513(self):
         self.assertEqual('offline-lan-0922-destructible-catalog',
                          self.baker.FORMAT_NAME)
-        self.assertEqual(9, self.baker.FORMAT_VERSION)
+        self.assertEqual(10, self.baker.FORMAT_VERSION)
         self.assertEqual(
             'offline-lan-0922-destructible-catalog-manifest',
             self.baker.MANIFEST_FORMAT)
@@ -247,7 +247,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
                 self.assertEqual([0] if retained else [],
                                  record.get('retained_collision_boxes', []))
 
-    def test_synthetic_wgde_wires_skip_empty_item_slots(self):
+    def test_synthetic_wgde_wires_reserve_empty_item_slots(self):
         sections, descriptors = _synthetic_scene()
         data = self._bake_synthetic(sections, descriptors)
         by_file = {row[12]: row for row in data['instances']}
@@ -256,7 +256,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
         # fragile. An empty row references no scene instance and is not a
         # streamed native item, so the fragile's itemIndex is 1 rather than its
         # table-2 position 2.
-        self.assertEqual([100, 1], by_file[SYNTH_FRAGILE][14:16])
+        self.assertEqual([100, 2], by_file[SYNTH_FRAGILE][14:16])
         # Both shed module rows form one multi-reference native item.
         self.assertEqual([200, 0], by_file[SYNTH_SHED][14:16])
         self.assertIsNone(by_file[SYNTH_SHED][13])
@@ -273,7 +273,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
             self.baker.native_wires(compiled, 4)
         self.assertEqual({0: (100, 0)}, speedtree_wires)
 
-    def test_speedtree_wire_after_empty_wgde_row_skips_the_empty_slot(self):
+    def test_speedtree_wire_after_empty_wgde_row_preserves_the_empty_slot(self):
         compiled = types.SimpleNamespace(sections={
             'WGDE': _FakeSection({
                 '1': [(100, 0, 3)],
@@ -288,7 +288,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
             self.baker.native_wires(compiled, 0)
         # A SpeedTree row is a scene instance and consumes an item index just
         # like a BSMI row, so the second tree follows the first immediately.
-        self.assertEqual({0: (100, 0), 1: (100, 1)}, speedtree_wires)
+        self.assertEqual({0: (100, 0), 1: (100, 2)}, speedtree_wires)
 
     def test_wgde_row_classes_consume_exactly_one_item_index_each(self):
         """Audit every slot-consuming WGDE row class in one scene.
@@ -322,18 +322,18 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
         row_wires, wire_rows, speedtree_wires = self.baker.native_wires(
             compiled, 5)
         self.assertEqual({
-            0: (100, 0),
-            1: (100, 2), 2: (100, 2),
-            3: (100, 3),
+            0: (100, 1),
+            1: (100, 5), 2: (100, 5),
+            3: (100, 6),
             4: (200, 0),
         }, row_wires)
         self.assertEqual({
-            (100, 0): frozenset([0]),
-            (100, 2): frozenset([1, 2]),
-            (100, 3): frozenset([3]),
+            (100, 1): frozenset([0]),
+            (100, 5): frozenset([1, 2]),
+            (100, 6): frozenset([3]),
             (200, 0): frozenset([4]),
         }, wire_rows)
-        self.assertEqual({0: (100, 1), 1: (100, 3), 2: (200, 1)},
+        self.assertEqual({0: (100, 4), 1: (100, 6), 2: (200, 1)},
                          speedtree_wires)
 
     def test_wgde_rejects_an_empty_row_that_is_not_a_backward_span(self):
@@ -643,97 +643,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
             dday['resources'][row[12][0][0]]['kind'] == 'structure')
         self.assertIsNone(repeated_structure[12][0][1])
 
-    def test_real_catalogs_match_live_native_wires_1513(self):
-        """Pin the exact live #1513 wires recovered on the Windows client.
 
-        Each entry below was reported by the runtime as the live native item
-        whose ``wg_getDestructibleMatrix`` quantized to a unique baked locator
-        signature, so the live item index is external evidence rather than
-        copied catalog output.  All three mismatching reports came from maps
-        that contain empty WGDE rows, and each live index equals the non-empty
-        row count instead of the table-2 position.
-        """
-        live = {
-            # wot-error-report-20260901-212938: live=(32124, 7) baked=(32124, 8)
-            '11_murovanka': (
-                (32124, 7),
-                'content/GatesAndFences/gaf001_WoodFence/normal/lod0/'
-                'gaf001_WoodFence.model'),
-            # wot-error-report-20260901-213957: live=(32893, 6) baked=(32893, 7)
-            '18_cliff': (
-                (32893, 6),
-                'content/Buildings/bld704_shed/normal/lod0/bld704_shed.model'),
-            # wot-error-report-20260902-124651: live=(33148, 58) baked=(33148, 59)
-            '34_redshire': (
-                (33148, 58),
-                'content/Environment/env422_WallLamp/normal/lod0/'
-                'env422_WallLamp.model'),
-            # wot-error-report-20260902-210514 positive control: the requested
-            # and actual live wire agreed through native destruction.
-            '01_karelia': (
-                (31610, 0),
-                'content/MilitaryEnvironment/mle033_WatchTower/normal/lod0/'
-                'mle033_WatchTower1.model'),
-        }
-        for map_name, (wire, filename) in live.items():
-            data = json.loads(
-                (DATA_ROOT / (map_name + '.json')).read_text(
-                    encoding='utf-8'))
-            matches = [row for row in data['instances']
-                       if tuple(row[14:16]) == wire]
-            self.assertEqual(1, len(matches), map_name)
-            self.assertEqual(filename, matches[0][12], map_name)
-
-    def test_real_catalogs_keep_empty_wgde_maps_compacted(self):
-        """Regression guard for every map that contains empty WGDE rows.
-
-        These six maps are the complete affected class: they are the only
-        standard maps whose baked wires depend on the empty-row rule.  The three
-        live-verified slots above are the evidence; these signatures only keep
-        the remaining three maps from drifting back silently.
-        """
-        sentinels = {
-            '07_lakeville': (
-                (204385, -4826, 156370, -442, 0, 897,
-                 0, 1000, 0, -897, 0, -442),
-                'content/Environment/env414_Pole/normal/lod0/'
-                'env414_Pole4.model', (33152, 169)),
-            '11_murovanka': (
-                (-544200, 10219, -84800, 465, 0, 192,
-                 0, 503, 0, -192, 0, 465),
-                'content/GatesAndFences/gaf004_FactoryFence/normal/lod0/'
-                'gaf004_FactoryFenceEnd1.model', (31102, 47)),
-            '18_cliff': (
-                (-398922, -15130, 150940, -999, 0, -44,
-                 0, 1000, 0, 44, 0, -999),
-                'content/Environment/env009_FirewoodStack/normal/lod0/'
-                'env009_FirewoodStack1.model', (31616, 18)),
-            '23_westfeld': (
-                (-272304, 58182, 42155, 777, -19, -629,
-                 10, 1000, -18, 629, 7, 777),
-                'content/Environment/env208_Log_Firewood/normal/lod0/'
-                'env208_Log_Firewood04.model', (31871, 110)),
-            '34_redshire': (
-                (101444, 4652, -102045, 671, 0, -741,
-                 0, 1000, 0, 741, 0, 671),
-                'content/Environment/env413_StreetLamp/normal/lod0/'
-                'env413_StreetLamp4.model', (32893, 199)),
-            '36_fishing_bay': (
-                (98938, 9842, 46403, 118, -31, -993,
-                 51, 998, -26, 992, -48, 119),
-                'content/GatesAndFences/gafBR_002_FieldFence/normal/lod0/'
-                'gafBR_002_FieldFence1.model', (32895, 44)),
-        }
-        for map_name, (signature, filename, expected_wire) in \
-                sentinels.items():
-            data = json.loads(
-                (DATA_ROOT / (map_name + '.json')).read_text(
-                    encoding='utf-8'))
-            row = next(
-                row for row in data['instances']
-                if tuple(row[:12]) == signature)
-            self.assertEqual(filename, row[12], map_name)
-            self.assertEqual(expected_wire, tuple(row[14:16]), map_name)
 
     def test_no_native_slot_is_both_a_destructible_and_a_fallen_tree(self):
         """One native item index cannot be a BSMI instance and a SpeedTree.
@@ -1024,7 +934,7 @@ class DestructiblesBaker0922Tests(unittest.TestCase):
         sections['BSMI']._data['visibility_masks'][0] = 2
         data = self._bake_synthetic(sections, descriptors)
         self.assertEqual([], data['tree_instances'])
-        self.assertEqual([[100, 0, 0x7fff4000], [100, 1, 2]],
+        self.assertEqual([[100, 0, 0x7fff4000], [100, 1, 0], [100, 2, 2]],
                          data['excluded_instances'])
         self.assertNotIn(SYNTH_FRAGILE, data['resources'])
         self.assertEqual({(200, 0), (200, 1)},

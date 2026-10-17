@@ -88,6 +88,7 @@ class BotAdapter(object):
                     'peer_team': peer.get('team'),
                     'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
+                    'depth': overlap[2],
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
@@ -554,6 +555,9 @@ class BotAdapter(object):
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                               direction_clear):
+        # Navigation waits, withdrawal and contact plans do not execute drive.
+        # Their receipts must not reuse the previous drive call's distances.
+        self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
         state.pop('_withdrawal_evidence', None)
@@ -597,6 +601,15 @@ class BotAdapter(object):
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
+        if side_contact:
+            # Touching a parallel hull does not obstruct travel along its side.
+            # Keep the original escape for penetration or a goal into the peer;
+            # do not turn a clear route (or a deliberate hold) into a reversal.
+            into_contact = (
+                (target[0]-position[0])*contact['normal'][0] +
+                (target[2]-position[2])*contact['normal'][1])
+            side_contact = (contact['depth'] > 1.e-9 or
+                            into_contact < -tank_collision.POSITION_SLOP)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
@@ -730,6 +743,19 @@ class BotAdapter(object):
             'movement_intent': movement_intent,
             'withdrawal_aim': bool(local.get('withdrawal_aim', False)),
         }
+        # Evidence only: retain the driver's result before face intent and
+        # the runtime's combat/traffic/track gates can overwrite it.
+        result['control_trace'] = dict(
+            sampled_at=state.get('now'), driver_throttle=local['throttle'],
+            driver_turn=local['turn'], driver_target_yaw=local['target_yaw'],
+            face_override=(recovery_mode == 'arrived' and dx*dx+dz*dz > .01),
+            face_position=face_position, aim_position=aim_position,
+            strategic_move_position=move_position, local_target=target,
+            throttle_override=throttle_override, stop_at_target=stop_at_target,
+            navigation_wait=navigation_wait,
+            navigation_status=state.get('navigation_status'),
+            arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
+            hull_angle_degrees=strategic.get('hull_angle_degrees'))
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('hull_angle_degrees') is not None:
@@ -753,8 +779,11 @@ class BotAdapter(object):
         while difference < -math.pi:
             difference += 2.0 * math.pi
         if (throttle_override is not None and
+                not result['brake'] and
                 recovery_mode in ('drive', 'arrived') and
                 abs(difference) < 0.65):
+            # Strategic travel requests cannot override local turn alignment,
+            # arrival or safety braking. The driver owns pedal arbitration.
             result['throttle'] = max(
                 -1.0, min(1.0, float(throttle_override)))
         if throttle_override is not None and float(throttle_override) == 0.0:

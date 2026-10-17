@@ -2689,8 +2689,12 @@ class BotAiPortTests(unittest.TestCase):
                 9, 0, (0.0, 0.0, 0.0), 0.0, 0.0, 1.0 / 30.0,
                 (0.0, 0.0, 50.0), behind, lambda unused_yaw: True)
             modes.add(order['recovery_mode'])
+            self.assertGreaterEqual(order['throttle'], 0.0)
 
-        self.assertIn('pivot_recovery', modes)
+        # A proved forward escape also respects the vehicle behind. Both the
+        # first 0.10.1 driver and the current driver choose it in this scene.
+        self.assertTrue(modes.intersection(('pivot_recovery', 'partial_pivot_recovery',
+                                           'forward_escape', 'short_forward_escape')))
         self.assertNotIn('reverse_turn', modes)
 
     def test_wedged_hull_uses_bounded_backing_distance(self):

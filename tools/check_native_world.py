@@ -128,9 +128,21 @@ for motion_yaw in (0., .55, math.pi/2., math.pi):
 cases.append((dict(grade=.135, corner=True), dict(motion_yaw=.55, dt=.5), 5.))
 cases.append((dict(beam=True), dict(airborne=True, dt=.296), 0.))
 cases.append((dict(wall=True), dict(exact_footprint=True, dt=.296), 5.))
+# Report 202714 BOT9 and mirrored headings: stationary full-pose rotation
+# must preserve Python/C++ query and wall/beam parity, including parallel-edge
+# roundoff at nonzero map coordinates/headings.
+for yaw, pitch, roll in ((-.2184827413, .5006023335, .0561246412),
+                         (-.28824, .502435, .033785),
+                         (1.4, -.6, -.15), (-2., .8, .3)):
+    for obstacle in ('clear', 'wall', 'beam'):
+        cases.append((dict(grade=.35, wall=obstacle=='wall', beam=obstacle=='beam'),
+                      dict(yaw=yaw, motion_yaw=yaw, pitch=pitch, roll=roll,
+                           exact_footprint=True, dt=0.), 1.e-6))
 checks = 0
 ray_count = 0
 for config, arguments, speed in cases:
+    arguments = dict(arguments)
+    probe_yaw = arguments.pop('yaw', 0.)
     arms = []
     for selected, batch in ((None,False),(backend,False),(backend,True)):
         native_math._backend = selected
@@ -140,7 +152,7 @@ for config, arguments, speed in cases:
             arguments = dict(arguments, query_owner=object_for(
                 _avatar=object_for(spaceID=1), _runtime=object_for(bigworld=scene, math=math_module)))
         status = world.check_horizontal_collision(scene, math_module, 1, Vector(),
-                    0., speed, descriptor, return_status=True, trace=trace, **arguments)
+                    probe_yaw, speed, descriptor, return_status=True, trace=trace, **arguments)
         arms.append((status, queries, trace))
     equal(arms[1], arms[0])
     equal(arms[2], arms[0])

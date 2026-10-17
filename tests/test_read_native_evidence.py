@@ -27,6 +27,17 @@ class EvidenceReaderTests(unittest.TestCase):
             self.writer.write_json_record('RICOCHET SURFACE EVIDENCE',{'damage':448})
         return output.getvalue().splitlines()
 
+    def test_support_and_native_module_diagnostics_roundtrip(self):
+        for label in ('MODULE PRESENT','BOT SUPPORT MODE','BOT LANDING IMPACT','PLAYER LANDING IMPACT'):
+            with self.subTest(label=label):
+                output=io.StringIO()
+                payload=dict(phase='sample',points=[dict(valid=True)]*5)
+                with mock.patch('sys.stdout',output):
+                    self.writer.write_json_record(label,payload)
+                result=self.reader.parse_lines(output.getvalue().splitlines())
+                self.assertEqual([],result['issues'])
+                self.assertEqual(payload,result['records'][0]['data'])
+
     def test_environment_critical_native_feedback_roundtrips(self):
         payload = dict(event_id='3:3357:0', cause='world_collision', count=3,
                        mask=134479874, reason=3, target='bot:9', presented=True)

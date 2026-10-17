@@ -2,6 +2,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -26,6 +27,7 @@ class IsolatedRunnerTests(unittest.TestCase):
                     contextlib.redirect_stdout(output):
                 failed=runner.main()
             logs={path.name:path.read_text(encoding='utf-8') for path in (root/'logs').glob('*.log')}
+            self.summary=json.loads((root/'logs/summary.json').read_text(encoding='utf-8'))
             return failed,output.getvalue(),logs
 
     def test_an_assertion_failure_keeps_a_nonzero_result_and_full_log(self):
@@ -39,6 +41,30 @@ class IsolatedRunnerTests(unittest.TestCase):
         failed,output,logs=self.run_files({'test_bad.py':"raise RuntimeError('fixture import failed')\n"})
         self.assertTrue(failed)
         self.assertIn('fixture import failed',logs['test_bad.log'])
+
+    def test_empty_test_file_cannot_silently_pass(self):
+        failed,unused,logs=self.run_files({'test_empty.py':'# No discoverable cases\n'})
+        self.assertTrue(failed)
+        self.assertEqual(0,self.summary[0]['tests'])
+        self.assertIn('no_tests_discovered',logs['test_empty.log'])
+
+    def test_summary_preserves_subtest_failures_skips_and_nonzero_status(self):
+        failed,unused,logs=self.run_files({'test_cases.py':
+            "import unittest\nclass Checks(unittest.TestCase):\n"
+            " def test_cases(self):\n"
+            "  for vehicle in ('IS-7','704'):\n"
+            "   with self.subTest(vehicle=vehicle):self.assertEqual(1,2)\n"
+            " @unittest.skip('native client required')\n"
+            " def test_native(self):pass\n"})
+        self.assertTrue(failed)
+        self.assertEqual(1,len(self.summary))
+        row=self.summary[0]
+        self.assertNotEqual(0,row['returncode'])
+        self.assertEqual(2,row['tests'])
+        self.assertEqual(2,len(row['issues']))
+        self.assertIn('IS-7',row['issues'][0])
+        self.assertIn('704',row['issues'][1])
+        self.assertEqual(1,len(row['skips']))
 
     def test_module_fakes_do_not_escape_into_the_next_test_file(self):
         failed,output,logs=self.run_files({

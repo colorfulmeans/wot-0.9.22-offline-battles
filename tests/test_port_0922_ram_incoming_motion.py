@@ -150,6 +150,19 @@ class TransportTests(unittest.TestCase):
             self.assertLess(hp, 50000)
             self.assertTrue(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, message))
             self.assertEqual(hp, player.health)
+            bot_hp = s.bot_states[message['bot_id']]['health']
+            events = len(s.pending_events)
+            # Transport may use another report sequence for the same frozen
+            # player contact. The contact identity still owns exactly one HP
+            # and module commit, even after its FIFO entry was consumed.
+            replay = dict(message, ram_seq=message['ram_seq']+100)
+            self.assertTrue(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, replay))
+            self.assertEqual((hp,bot_hp,events),
+                (player.health,s.bot_states[message['bot_id']]['health'],len(s.pending_events)))
+            conflict = dict(replay, damage_to_bot=message['damage_to_bot']+1)
+            self.assertFalse(s.report_bot_ram(chain.SIMULATION_WORKER_AUTHORITY_ID, conflict))
+            self.assertEqual((hp,bot_hp,events),
+                (player.health,s.bot_states[message['bot_id']]['health'],len(s.pending_events)))
 
     def test_stationary_render_history_reads_paired_incoming_sample(self):
         b = visible.BattleRuntime(visible._runtime())
@@ -204,6 +217,8 @@ class VisibleAdmissionTests(unittest.TestCase):
         # The renderer has moved; the incoming witness still owns the first
         # contact and native plate proof must use its matrices.
         own['z'] = -1.
+        b._local_pitch,b._local_roll=.3,-.2
+        own.update(pitch=.3,roll=-.2)
         b._records['bot:22']['presented_pose'] = dict(
             b._records['bot:22']['presented_pose'], z=8.)
         others = b._contact_tanks((0.,0.,-1.), PLAYER_SHAPE)
@@ -211,6 +226,7 @@ class VisibleAdmissionTests(unittest.TestCase):
             self.assertTrue(b._poll_local_ram_contact_episodes(object(),own,others))
         kwargs = b._queue_ram_contact_proof.call_args.kwargs
         self.assertEqual((0.,0.,0.), kwargs['own_pose'][:3])
+        self.assertEqual((0.,0.),kwargs['own_pose'][4:])
         self.assertEqual((0.,0.,6.8), kwargs['bot_pose'][:3])
 
     def test_neutral_stationary_pair_does_not_borrow_predicted_motor_speed(self):

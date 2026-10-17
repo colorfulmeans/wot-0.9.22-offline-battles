@@ -13,6 +13,46 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver, WAYPOINT_ARRIVAL_RA
 
 
 class DriverArrivalTests(unittest.TestCase):
+    def test_navigation_wait_does_not_publish_old_drive_arrival(self):
+        adapter=BotAdapter('airfield',11,
+            navigation_target=lambda bot,position,*args:position)
+        adapter.driver._state(17,1,(0.,0.,0.))['arrival_trace']={'local_distance':123.}
+        command=adapter.decide_with_order(dict(id=17,team=2,slot=1,
+            position=(0.,0.,0.),yaw=0.,speed=0.,dt=.15,navigation_status='pending'),
+            dict(combat_mode='route',move_position=(0.,0.,200.)),lambda *args:True)
+        self.assertEqual('nav_wait',command['recovery_mode'])
+        self.assertEqual({},command['control_trace']['arrival'])
+
+    def test_near_connector_does_not_cancel_started_recovery(self):
+        position = (-9.335251321555758, -14.392024747126916, 17.37296667813116)
+        connector = (-10., -14.681, 18.)
+        goal = (0., 0., 18.)
+        driver = LocalDriver()
+        state = driver._state(10, 9, position)
+        state.update(clock=10., translation_progress_at=0., recovery_count=1,
+                     objective_progress=dict(goal=goal, best=9.23, at=0.))
+        commands = []
+        for unused in range(50):
+            commands.append(driver.drive(10, 9, position, 1.4, 0., .15,
+                connector, (), lambda *args, **kwargs: True,
+                movement_intent=True, stop_at_target=False,
+                progress_target=goal, recovery_goal=goal, turn_speed_limit=.6))
+        self.assertEqual('reverse_turn', commands[0]['recovery_mode'])
+        self.assertNotEqual('arrived', commands[1]['recovery_mode'])
+        self.assertGreaterEqual(state['recovery_count'], 2)
+
+    def test_actual_arrival_and_explicit_hold_cancel_recovery(self):
+        for hold in (False, True):
+            driver = LocalDriver()
+            state = driver._state(10, 9, (0., 0., 0.))
+            state.update(recovery_time=1., recovery_side=1.)
+            command = driver.drive(10, 9, (0., 0., 0.), 0., 0., .15,
+                (0., 0., 0.), (), lambda *args: True,
+                movement_intent=not hold,
+                progress_target=(0., 0., 20.) if hold else (0., 0., 0.))
+            self.assertEqual('arrived', command['recovery_mode'])
+            self.assertEqual(0., state['recovery_time'])
+
     @staticmethod
     def _params(rate=26.0):
         # Airfield 20260922-113632 Object 730 motion rows publish these

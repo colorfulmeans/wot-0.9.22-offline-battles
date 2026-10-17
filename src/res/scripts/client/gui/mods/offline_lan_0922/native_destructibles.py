@@ -22,6 +22,12 @@ def point(value):
         return tuple(float(value[index]) for index in range(3))
 
 
+def spatial_cells(rectangles):
+    """Union exact collision-grid rectangles without Python sets/sorting."""
+    from . import native_math
+    return native_math.call('destr_box_geometry', 3, rectangles)
+
+
 def pose(position, yaw, bbox, travel=0., motion_yaw=None, pitch=0., roll=0.):
     return (point(position), float(yaw), float(pitch), float(roll), float(travel),
             None if motion_yaw is None else float(motion_yaw),
@@ -390,8 +396,26 @@ def neighbourhood(sensor, area, position, sin_yaw, cos_yaw, speed, neighbours):
     owner = _get(sensor)
     if owner is None:
         return None
-    return owner.query(7, (point(position), float(sin_yaw), float(cos_yaw),
-                           float(speed), int(bool(neighbours))))
+    from .worker_diagnostics import count as combat_count
+    payload = (point(position), float(sin_yaw), float(cos_yaw),
+               float(speed), int(bool(neighbours)))
+    # Opcode 7 only maps exact coordinates to chunk IDs. It reads no loaded
+    # registry, damage state or animation matrix. Those remain live in the
+    # caller on every scan, including scans served by this bounded cache.
+    scope = sensor.__dict__.get('g_offh_destr_collision_preparation_scope')
+    cache = scope.setdefault('neighbourhood', {}) if isinstance(scope, dict) else None
+    key = (owner, area.chunkIDFromPosition,
+           sensor.__dict__.get('g_offh_destr_runtime_space'), payload)
+    if cache is not None and key in cache:
+        combat_count('destructible_neighbourhood_cache_hits')
+        return cache[key]
+    combat_count('destructible_neighbourhood_queries')
+    result = owner.query(7, payload)
+    if cache is not None and result is not None:
+        if len(cache) >= 128:
+            cache.clear()
+        cache[key] = result
+    return result
 
 
 def catalog(sensor, vehicle, contact=None):

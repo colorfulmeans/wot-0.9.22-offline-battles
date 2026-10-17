@@ -595,7 +595,7 @@ class AirfieldLiveEgressTests(unittest.TestCase):
         nav, samples, rays = self.scene(current, goal)
         nav.bot_states[bot] = {'navigation_status': 'pending',
                                'pending_since': 0.0}
-        runtime = BotRuntime.__new__(BotRuntime)
+        runtime = BotRuntime(1)
         runtime.navigator = nav
         runtime.native_motion = False
         runtime._decision_cache = {}

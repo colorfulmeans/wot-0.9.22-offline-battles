@@ -187,7 +187,7 @@ class DepotStyleTests(unittest.TestCase):
                          'Requires pinned #1513 archive and Python 2.7')
     def test_actual_python27_native_filter_function_with_new_category(self):
         code=r'''
-import copy,marshal,sys,types,zipfile
+import copy,marshal,os,sys,types,zipfile
 archive=zipfile.ZipFile(sys.argv[1]+'/res/packages/scripts.pkg')
 root=marshal.loads(archive.read('scripts/client/gui/Scaleform/daapi/view/lobby/store/StoreComponent.pyc')[8:])
 def find(code,name):
@@ -239,6 +239,8 @@ for name in list(modules):
 for name in sorted(modules,key=lambda v:v.count('.'),reverse=True):
  if '.' in name:
   parent,child=name.rsplit('.',1);setattr(modules[parent],child,modules[name])
+# Retain actual sibling imports in the fake package.
+modules['gui.mods.offline_lan_0922'].__path__=[os.path.dirname(sys.argv[2])]
 sys.modules.update(modules)
 depot=module('depot');exec compile(open(sys.argv[2],'rb').read(),sys.argv[2],'exec') in depot.__dict__
 depot.install();instance=Inventory();instance._StoreComponent__updateFilterOptions(depot.TAB)

@@ -373,15 +373,17 @@ def _hull_pose_endpoint(local_start, local_end, half_width,
 	start_forward = float(local_start[1])
 	delta_right = float(local_end[0]) - start_right
 	delta_forward = float(local_end[1]) - start_forward
+	# World-to-local roundoff on a parallel hull edge must not collapse
+	# the chord to its start and leave its X/Z endpoint at the far edge.
 	fraction = 1.0
 	left, right = lateral_bounds or (-float(half_width), float(half_width))
 	for start, delta, lower, upper in (
 			(start_right, delta_right, left, right),
 			(start_forward, delta_forward, -float(half_length_back),
 				float(half_length_front))):
-		if delta > 0.0:
+		if delta > 1.0e-9:
 			fraction = min(fraction, (upper - start) / delta)
-		elif delta < 0.0:
+		elif delta < -1.0e-9:
 			fraction = min(fraction, (lower - start) / delta)
 	fraction = max(0.0, min(1.0, fraction))
 	return (
@@ -695,9 +697,14 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		# second destroy attempt, while every unrelated solid still fails closed.
 		cleared = _catalog_soft_static_path(
 			spaceID, segment_start, segment_end, collision, vel, td,
-			[_WORLD_SOFT_RECAST_BUDGET])
+			[_WORLD_SOFT_RECAST_BUDGET],
+			allow_kinetic_first=allow_kinetic, kinetic_speed=kinetic_speed)
 		_diagnostic_static_recast_1513(cleared)
-		return cleared is True
+		# Another lane may meet a different live house module. Keep that
+		# exact kinetic candidate for the hull/catalog commit seam instead of
+		# turning it into a hard wall after the first lane succeeded. Unknown
+		# solids still fail closed; this read-only branch never destroys them.
+		return 'kinetic' if cleared == 'kinetic' else cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
 	# keeps the 0.2 s native callback window out of the hot path and still
 	# requires the exact accepted identity and a filtered query of the whole ray.
@@ -1273,6 +1280,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							_ray_end, _ray_hit))
 				_upper_hits.sort(key=lambda value: value[0])
 				for _unused_distance, _ray_start, _ray_end, _ray_hit in _upper_hits:
+					# A lower-lane miss does not turn an outward terrain top into
+					# an upper wall. Apply the same exact-top and remainder proof
+					# used by the lower lane; a beam, wall, unknown top or later
+					# obstruction still fails this proof and remains solid.
+					if _ground_exit_is_clear(
+							spaceID, Math, profile_pos, _ray_start, _ray_end,
+							_ray_hit, profile_look, lane_ground_plane, _sweep_filter):
+						continue
 					_resolve_args = (
 						spaceID, _ray_start, _ray_end, _ray_hit,
 						yaw, vel, td, _crush_state, allow_kinetic,

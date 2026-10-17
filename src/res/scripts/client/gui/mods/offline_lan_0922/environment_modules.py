@@ -80,7 +80,7 @@ def apply_losses(vehicle, losses, cause, allow_terminal=True):
         print('[Offline LAN 0.9.22] ENV MODULE DAMAGE ' + json.dumps(dict(
             actor=getattr(vehicle, 'id', None), actor_kind=getattr(vehicle, 'actor_kind', 'unknown'), cause=cause, trial_rates=True, applied=applied,
             terminal=terminal, fire_before=before['fire'], fire_after=bool(getattr(vehicle,'is_on_fire',False)),
-            ignited=bool(not before['fire'] and getattr(vehicle,'is_on_fire',False))), sort_keys=True))
+            ignited=bool(not before['fire'] and getattr(vehicle,'is_on_fire',False)))))
     return int(vehicle.health) if terminal else 0, payload
 
 
@@ -158,6 +158,7 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
     depth = min(6.0, max(0.25, (abs(float(impact_speed))-10.0)*IMPACT_REACH_PER_EXCESS_MS))
     errors = []
     evidence = []
+    query_results = []
     directions = _shock_directions(normal)
     for point in witnesses[:8]:
         start = math_module.Vector3(*(point[i]-normal[i]*0.03 for i in range(3)))
@@ -175,6 +176,8 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
             for source, query in queries:
                 try:
                     hits = query()
+                    query_results.append(dict(source=source, witness=point, ray=ray_index,
+                        count=None if hits is None else len(hits)))
                     if hits is None:
                         errors.append(dict(source=source, ray=ray_index, error='geometry_unavailable'))
                     for distance, name in hits or ():
@@ -198,6 +201,6 @@ def collect_contacts(vehicle, witnesses, normal, impact_speed, math_module):
     from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
     write_json_record('ENV MODULE CONTACT', dict(
         actor=vehicle.id, actor_kind=getattr(vehicle, 'actor_kind', 'unknown'), witnesses=list(witnesses), normal=normal, depth=depth,
-        speed=impact_speed, contacts=contacts, evidence=evidence, errors=errors,
+        speed=impact_speed, contacts=contacts, evidence=evidence, errors=errors, query_results=query_results,
         fan_half_angle_degrees=25., distance_decay=IMPACT_DISTANCE_DECAY, trial_reach=True))
     return contacts

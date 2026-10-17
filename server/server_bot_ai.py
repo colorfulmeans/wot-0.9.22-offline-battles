@@ -177,6 +177,8 @@ def _bot_rating(raw):
 def _order_signature(order):
     """Return the strategic fields which advance the order revision."""
     signature = dict(order or {})
+    # Attempt observations are telemetry, not a new strategic instruction.
+    signature.pop('route_attempt', None)
     if signature.get("target_id") is not None:
         # The worker overlays these coordinates from the live target pose.
         # Movement of that pose is not a new tactical decision, including
@@ -2502,20 +2504,46 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture') or
+        if (order.get('combat_mode') == 'support_hold' and
+                not order.get('team_command') and self._route_donor_eligible(bot)):
+            # An intermittent tactical hold pauses the same gate attempt;
+            # resuming it is not evidence that the previous exit succeeded.
+            progress = self._wreck_route_progress.get(bot_id)
+            if progress is not None:
+                progress.setdefault('paused_at', _number(now))
+                order['route_attempt'] = dict(route_id=progress['key'][0],
+                    route_index=progress['key'][1],action='pause_support_hold',
+                    elapsed=round(progress['paused_at']-progress['since'],3))
+            return
+        if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture',
+                                            'withdraw', 'under_fire_withdraw', 'low_health_retreat') or
                 order.get('team_command') or
-                order.get('throttle_override') is not None or
+                (order.get('throttle_override') is not None and
+                 _number(order.get('throttle_override')) <= 0.0) or
                 not self._route_donor_eligible(bot)):
             self._wreck_route_progress.pop(bot_id, None)
             return
+        # Normal advance carries a positive travel override. It is still the
+        # same authored gate attempt, with the original retry/skip budget.
         point = _point(state)
         goal = _point(order.get('move_position') or {})
         physical_block = bool(state.get('route_wreck_blocked'))
         distance = math.hypot(goal['x'] - point['x'], goal['z'] - point['z'])
+        route = (self._route_assignments.get(bot_id) or {}).get('route') or bot.get('route') or {}
+        waypoints = route.get('waypoints') or []
+        # A one-point automatic objective has no next macro gate. A local
+        # connector eleven metres away cannot consume that destination.
+        arrival = max(1.5 if len(waypoints) <= 1 else ROUTE_ARRIVAL_RADIUS,
+                      _number(order.get('arrival_radius')))
+        trace = dict(route_id=route_id, route_index=order.get('route_index'),
+                     distance=round(distance, 3), arrival=arrival,
+                     physical_block=physical_block, action='attempt', elapsed=0.)
+        order['route_attempt'] = trace
         # Completed arrivals, intentional holds and unowned poses are not
         # failed travel. Native geometry refusal need not be a wreck receipt.
         if not physical_block and (not state.get('world_pose') or
-                distance <= max(13.0, _number(order.get('arrival_radius')))):
+                distance <= arrival):
+            trace['action'] = 'arrived_or_unowned'
             self._wreck_route_progress.pop(bot_id, None)
             return
         key = (route_id, order.get('route_index'))
@@ -2528,6 +2556,9 @@ class BotPlanner(object):
                 'key': key, 'goal': goal, 'since': _number(now),
                 'origin': dict(point), 'physical_block': physical_block}
             return
+        paused_at = progress.pop('paused_at', None)
+        if paused_at is not None:
+            progress['since'] += max(0., _number(now) - paused_at)
         if not physical_block:
             origin = progress.get('origin', point)
             net = math.hypot(point['x'] - origin['x'], point['z'] - origin['z'])
@@ -2537,11 +2568,10 @@ class BotPlanner(object):
                 return
         # A moving recovery orbit still has a finite attempt budget. Only
         # consuming the gate or clearing the physical blocker ends this attempt.
+        trace['elapsed'] = round(_number(now) - progress['since'], 3)
         if _number(now) - progress['since'] < WRECK_ROUTE_WAIT_SECONDS:
             return
         route_state = self._route_states.get(bot_id) or {}
-        route = (self._route_assignments.get(bot_id) or {}).get('route') or bot.get('route') or {}
-        waypoints = route.get('waypoints') or []
         index = _integer(order.get('route_index'))
         if order.get('combat_mode') == 'parking_approach':
             # The small parking place is optional. Decline it first and use
@@ -2562,6 +2592,7 @@ class BotPlanner(object):
                          route_anchor=anchor, route_join=join,
                          parking_skip_reason='blocked_approach_timeout')
             self._apply_authored_route_order(order, bot, move, now)
+            trace.update(action='skip_parking', next_route=new_id, next_index=new_index)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
                 'since': _number(now), 'origin': dict(point),
@@ -2588,6 +2619,7 @@ class BotPlanner(object):
                          route_point_skip_reason='blocked_timeout',
                          previous_route_index=index)
             self._apply_authored_route_order(order, bot, move, now)
+            trace.update(action='skip_gate', next_route=new_id, next_index=new_index)
             self._wreck_route_progress[bot_id] = {
                 'key': (new_id, new_index), 'goal': _point(move),
                 'since': _number(now), 'origin': dict(point),
@@ -2599,10 +2631,10 @@ class BotPlanner(object):
             raw for raw in manifest or ()
             if _integer(raw.get('team')) == bot['team']])
         candidates = []
+        retry_candidates = []
         class_tag = str(bot.get('profile', {}).get('class_tag') or '')
         for candidate_id, route in sorted(catalog.items()):
-            if (candidate_id == route_id or
-                    _number(avoided.get(candidate_id)) > _number(now)):
+            if candidate_id == route_id:
                 continue
             config = bot_tactics.route_config(
                 self.tactics, self.tactics_map, candidate_id, bot['team'])
@@ -2629,8 +2661,19 @@ class BotPlanner(object):
                 _number(p.get('x')) - point['x'],
                 _number(p.get('z')) - point['z'])
                 for p in route['waypoints'])
-            candidates.append((-affinity, nearest, candidate_id, route, entry))
+            candidate = (-affinity, nearest, candidate_id, route, entry)
+            if _number(avoided.get(candidate_id)) > _number(now):
+                retry_candidates.append((_number(avoided[candidate_id]), candidate))
+            else:
+                candidates.append(candidate)
+        # The delay prefers untried routes; it must not turn an exhausted
+        # catalogue into a parked tank. After the current bounded attempt,
+        # allow the oldest failed alternative to be tried again.
+        if not candidates and retry_candidates:
+            candidates = [min(retry_candidates, key=lambda value: (value[0], value[1][:3]))[1]]
+            trace['retry_previous_route'] = True
         if not candidates:
+            trace['action'] = 'no_alternative'
             # No suitable alternative: keep the physical hold, never force
             # through a wreck or repeat a route-switch storm each tick.
             progress['since'] = _number(now)
@@ -2656,6 +2699,7 @@ class BotPlanner(object):
                      route_anchor=anchor, route_join=join,
                      route_switch_reason='wreck_stall' if physical_block else 'no_route_progress',
                      previous_route_id=route_id)
+        trace.update(action='switch_route', next_route=new_id, next_index=index)
         self._apply_authored_route_order(order, bot, move, now)
 
     def _route(self, bot, now, stop_before_objective=False):

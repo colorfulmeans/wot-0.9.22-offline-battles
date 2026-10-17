@@ -31,11 +31,20 @@ jobs:
           --pattern 'test_port_0922_ai.py'
           --pattern 'test_port_0922_eroded_fallback_cycle.py'
           --pattern 'test_port_0922_initial_allocation.py'
+          --pattern 'test_port_0922_initial_navigation_handoffs.py'
           --pattern 'test_port_0922_navigation*.py'
           --pattern 'test_port_0922_driver*.py'
           --pattern 'test_port_0922_traffic*.py'
           --pattern 'test_port_0922_bot*.py'
           --pattern 'test_port_0922_contact*.py'
+          --pattern 'test_port_0922_connector*.py'
+          --pattern 'test_port_0922_local_refusal*.py'
+          --pattern 'test_port_0922_recovery*.py'
+          --pattern 'test_port_0922_runtime_bypass*.py'
+          --pattern 'test_port_0922_oct03_bot_egress.py'
+          --pattern 'test_port_0922_separation_progress.py'
+          --pattern 'test_port_0922_fjord_departure.py'
+          --pattern 'test_port_0922_airfield_live_egress.py'
           --pattern 'test_port_0922_wreck*.py'
           --pattern 'test_port_0922_artillery*.py'
           --pattern 'test_port_0922_spg*.py'
@@ -43,6 +52,7 @@ jobs:
           --pattern 'test_port_0922_parking*.py'
           --pattern 'test_port_0922_withdrawal*.py'
           --pattern 'test_port_0922_gun_angle*.py'
+          --pattern 'test_port_0922_rear_limited_aim.py'
           --pattern 'test_port_0922_wait_parking.py'
           --pattern 'test_port_0922_server_bot_ai.py'
 
@@ -53,6 +63,17 @@ jobs:
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+      - name: Check bonds settlement and worker collision preparation
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern test_port_0922_ground_filter_batch.py
+          --pattern test_port_0922_destructibles.py
+          --pattern test_port_0922_world_collision.py
       - name: Compile all client code under Python 2.7
         if: ${{ !cancelled() }}
         run: |
@@ -137,6 +158,8 @@ jobs:
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \
               /tmp/offline_math_batch_native.so
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_box_geometry.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_visibility_frontier.py \
               /tmp/offline_math_batch_native.so
             g++ -std=c++17 -O2 -Wall -Wextra -Wpedantic -Werror -pthread \
@@ -158,6 +181,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p test_port_0922_worker_diagnostics.py
           python3 -m unittest discover -s tests -p test_port_0922_battle_visibility.py
+          python3 -m unittest discover -s tests -p test_native_payload_identity.py
   test:
     needs: windows-server
     runs-on: ubuntu-latest
@@ -463,7 +487,7 @@ jobs:
       - name: Install pinned Windows packager
         run: >-
           python -m pip install
-          -r server/requirements-windows-build.txt
+          -r launcher/requirements-build.txt
       - name: Take the built 0.9.22 client package
         uses: actions/download-artifact@v4
         with:

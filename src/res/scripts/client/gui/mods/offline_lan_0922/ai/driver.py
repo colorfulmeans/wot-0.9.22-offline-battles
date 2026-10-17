@@ -1024,6 +1024,7 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			state.pop('arrival_trace', None)
 			state['native_translation_stalled'] = False
 			state.pop('short_translation_escape', None)
 			state.pop('translation_escape', None)
@@ -1111,8 +1112,21 @@ class LocalDriver(object):
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
+		# Starting recovery renews its retry clock, not arrival at the remote
+		# objective. A close connector must not cancel the next recovery frame.
+		retained_recovery = bool(state['recovery_time'] > 0.0 and
+			_distance(position, pocket_goal) > arrival)
+		state['arrival_trace'] = dict(local_distance=target_distance,
+			goal_distance=_distance(position, pocket_goal), arrival_radius=arrival,
+			objective_stalled=objective_stalled,
+			objective_age=(state['clock']-state['objective_progress']['at']
+				if progress_target is not None else None),
+			translation_age=state['clock']-state['translation_progress_at'],
+			rotation_refused=bool(rotation_refused),
+			recovery_time_before=state['recovery_time'],
+			retained_recovery=retained_recovery)
 		if (target_distance <= arrival and not objective_stalled and
-				not native_translation_stalled):
+				not native_translation_stalled and not retained_recovery):
 			state.pop('short_translation_escape', None)
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.

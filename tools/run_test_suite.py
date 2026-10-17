@@ -5,6 +5,7 @@ the dependencies of another module. Isolation is by file, not by assertion:
 all tests, failures and unittest skips in each file remain visible.
 """
 import argparse
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -43,14 +44,23 @@ def main():
             [sys.executable, '-B', '-X', 'utf8', '-c', BOOTSTRAP, str(ROOT), args.directory, path.name],
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             encoding='utf-8', errors='replace')
+        ran = re.search(r'^Ran (\d+) tests?', result.stdout, re.M)
+        if ran is None or int(ran.group(1)) == 0:
+            result.returncode = result.returncode or 1
+            result.stdout += '\nERROR: no_tests_discovered (%s)\n' % path.name
         (args.logs/(path.stem+'.log')).write_text(result.stdout, encoding='utf-8')
         return path, result
 
-    failed = []
+    failed, records = [], []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         pending = [pool.submit(run, path) for path in files]
         for future in as_completed(pending):
             path, result = future.result()
+            ran = re.search(r'^Ran (\d+) tests?', result.stdout, re.M)
+            records.append(dict(file=path.name, returncode=result.returncode,
+                tests=int(ran.group(1)) if ran else None,
+                issues=re.findall(r'^(?:FAIL|ERROR): (.+)$', result.stdout, re.M),
+                skips=re.findall(r'^(.+) \.\.\. skipped (.+)$', result.stdout, re.M)))
             print(('FAIL' if result.returncode else 'PASS')+' '+path.name, flush=True)
             if result.returncode:
                 failed.append(path.name)
@@ -65,6 +75,10 @@ def main():
                         print(line,flush=True)
                 if not any(block.startswith(('FAIL:', 'ERROR:')) for block in blocks):
                     print(result.stdout[-3500:],flush=True)
+    # Preserve assertion identities, subtest cases and skips. Equal failure
+    # counts between two builds do not establish equal behavior.
+    (args.logs/'summary.json').write_text(json.dumps(
+        sorted(records, key=lambda row: row['file']), indent=2), encoding='utf-8')
     print('%d files: %d passed, %d failed' % (len(files), len(files)-len(failed), len(failed)))
     return bool(failed)
 

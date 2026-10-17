@@ -241,7 +241,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     '_suspension_support_gradient', 'slide_speed', 'air_lateral_x', 'air_lateral_z',
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
     '_basic_fall_origin_y', '_basic_continuous_support',
-    '_legacy_straddle_reference_y',
+    '_legacy_straddle_reference_y', '_support_mode_basis', '_basic_support_datum',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -765,9 +765,9 @@ def slope_pose(probe, position, yaw, half_length, half_width,
         # over-tilt a diagonal grade; fit one plane normal in that order.
         pitch = -math.atan(forward_grade)
         roll = math.atan2(lateral_grade, math.sqrt(1.0 + forward_grade**2))
-        tilt = math.hypot(pitch, roll)
-        if tilt > 0.61:
-            pitch, roll = pitch * 0.61/tilt, roll * 0.61/tilt
+        # Physical attitude follows measured terrain. Driving grade limits
+        # belong to navigation; clamping this pose after detailed handback
+        # repeatedly makes the same five grounded points appear unsupported.
         return pitch, roll
     pitch = -math.atan2(float(front) - float(rear), length) * 0.9
     roll = math.atan2(float(right) - float(left), width) * 0.9
@@ -2042,7 +2042,10 @@ class BotRuntime(object):
                  turret_motion_probe=None, turret_hulls_provider=None,
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
-                 impact_contacts_resolver=None):
+                 impact_contacts_resolver=None, navigation_surface_probe=None):
+        self._navigation_surface_probe = navigation_surface_probe
+        self._navigation_surface_queue = []
+        self._navigation_surface_next = 0.0
         self.impact_contacts_resolver = impact_contacts_resolver
         self.local_player_id = local_player_id
         self.artillery_status_probe = artillery_status_probe
@@ -2821,6 +2824,8 @@ class BotRuntime(object):
         state.pop('_spring_ground_memory', None)
         state.pop('_pseudo_ground_memory', None)
         state.pop('_suspension_ground_plane', None)
+        state.pop('_basic_support_datum', None)
+        state.pop('_support_mode_basis', None)
         if reset_grounded:
             state['grounded_once'] = False
 
@@ -2873,10 +2878,14 @@ class BotRuntime(object):
         return True
 
     def _suspension_params_for(self, bot_id):
-        """Select detailed support, or the explicit Test8L basic-ground path."""
-        if not BOT_FULL_SUPPORT_ENABLED:
-            # Keep this before both activation and the cache. Neither contact,
-            # motion, nor death may re-enable expensive spring integration.
+        """Keep basic driving; a shoved ledge hull uses detailed contacts."""
+        state = self.states.get(int(bot_id), {})
+        edge_support = (not BOT_FULL_SUPPORT_ENABLED and
+                        self._contact_edge_support_needed(state,
+                            state.get('_support_selection_stage','current_pose')))
+        if not BOT_FULL_SUPPORT_ENABLED and not edge_support:
+            # Keep this before activation/cache: contact on continuous ground
+            # alone does not enable the more expensive spring integration.
             self._report_suspension_trial(
                 'disabled: Test8L basic ground for live Bots and wrecks')
             return None
@@ -2884,7 +2893,7 @@ class BotRuntime(object):
         if (self._suspension_ground_probe is None and
                 (self._wreck_ground_probe is None or
                  (self.states.get(bot_id, {}).get('alive', True) and
-                  not self.states.get(bot_id, {}).get('_contact_dynamics')))):
+                  not self.states.get(bot_id, {}).get('_edge_support_active')))):
             return None
         if bot_id in self._suspension_params:
             return self._suspension_params[bot_id]
@@ -2913,6 +2922,221 @@ class BotRuntime(object):
             self._report_suspension_trial('active')
         self._suspension_params[bot_id] = params
         return params
+
+    def _basic_support_rise_is_continuous(self, state, x, z, height, centre):
+        """Physical support is independent of the powered-navigation grade."""
+        dx, dz = x-state['x'], z-state['z']
+        distance = math.hypot(dx,dz)
+        if distance < .001:
+            return False
+        # _support_column already rejects native normals with Y <= .5.
+        # The same 60-degree physical limit must not inherit a drive limit.
+        grade = math.sqrt(3.)
+        previous = float(centre)
+        count = max(2,int(math.ceil(distance/.5)))
+        for index in range(1,count+1):
+            fraction = float(index)/count
+            reach = distance/count*grade+.02
+            observed = self._ground_probe_at(state['x']+dx*fraction,
+                state['z']+dz*fraction,previous,previous+reach)
+            if (observed is None or abs(float(observed)-previous) > reach):
+                return False
+            previous = float(observed)
+        return abs(previous-height) <= .03
+
+    def _basic_support_status(self, state):
+        """Sample the same centre/front/rear/right/left footprint in its pose."""
+        x, y, z = _position(state)
+        yaw = _number(state.get('yaw'))
+        pitch = _number(state.get('terrain_pitch', state.get('pitch')))
+        roll = _number(state.get('roll'))
+        key = (getattr(self, '_contact_now', None), x, y, z, yaw, pitch, roll,
+               bool(state.get('_edge_support_active')))
+        cached = state.get('_support_mode_sample')
+        if key[0] is not None and cached and cached[0] == key:
+            return cached[1]
+        length = max(1.5, _number(state.get('half_length'), 3.5))
+        width = max(1.0, _number(state.get('half_width'), 1.7))
+        sine, cosine = math.sin(yaw), math.cos(yaw)
+        basis = state.get('_support_mode_basis')
+        support_y = y
+        # Both admission and release read the accepted physical root. The
+        # caller settles basic height before admission; projecting an older
+        # plane here would compare a second, uncommitted pose to the solver.
+        projected = False
+        rows = []
+        for name, side, forward in (('centre',0.,0.), ('front',0.,length),
+                ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
+            ox, oy, oz = vehicle_physics.suspension_point_offset(
+                dict(x=side, y=0., z=forward), pitch, roll)
+            px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, support_y+oy
+            ground = self._ground_probe_at(px, pz, expected, expected+0.6)
+            continuous_rise = False
+            upper_candidate = None
+            # A clipped uphill top is not loss of support. Admit it only with
+            # physical continuous-ground proof, independently of drive grade;
+            # a wall/roof/upper bridge with no connecting ground remains invalid.
+            if ground is None and rows and rows[0]['ground'] is not None:
+                upper_candidate = self._ground_probe_at(px, pz, expected)
+                if upper_candidate is not None and float(upper_candidate) > expected+0.6:
+                    centre = rows[0]
+                    distance = math.hypot(px-x, pz-z)
+                    continuous_rise = self._basic_support_rise_is_continuous(
+                        state, px, pz, float(upper_candidate), float(centre['ground']))
+                    if continuous_rise:
+                        ground = float(upper_candidate)
+            gap = None if ground is None else expected-float(ground)
+            valid = gap is not None and (continuous_rise or
+                -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN)
+            rows.append(dict(name=name, x=px, z=pz, expected=expected,
+                raw_expected=y+oy, basic_follow_y=support_y,
+                ground=ground, gap=gap, valid=valid, continuous_rise=continuous_rise,
+                upper_candidate=upper_candidate,
+                verdict=('continuous_rise' if continuous_rise else 'supported' if valid
+                         else 'missing_ground' if ground is None else 'outside_reach')))
+        if all(row['valid'] for row in rows) and not state.get('airborne'):
+            ax,az=(rows[1]['x']-rows[2]['x'],rows[1]['z']-rows[2]['z'])
+            bx,bz=(rows[3]['x']-rows[4]['x'],rows[3]['z']-rows[4]['z'])
+            forward= float(rows[1]['ground'])-float(rows[2]['ground'])
+            side= float(rows[3]['ground'])-float(rows[4]['ground'])
+            determinant=ax*bz-az*bx
+            residual=max(abs((rows[1]['ground']+rows[2]['ground'])*.5-rows[0]['ground']),
+                         abs((rows[3]['ground']+rows[4]['ground'])*.5-rows[0]['ground']))
+            if abs(determinant)>1.e-8 and residual<=0.35:
+                # These five witnesses were validated against support_y.
+                # Storing the old pre-settle root here reintroduces one tick
+                # of descent at every sample and falsely loses all contacts.
+                state['_support_mode_basis']=(x,z,support_y,
+                    (forward*bz-az*side)/determinant,
+                    (ax*side-forward*bx)/determinant)
+            else:
+                state.pop('_support_mode_basis',None)
+        state['_support_mode_sample'] = (key, rows)
+        # Keep the inputs used by this exact sample, before a valid sample
+        # replaces the plane. Diagnostics must never perform another cast.
+        projection_reason = 'accepted_pose'
+        state['_support_mode_receipt'] = dict(
+            sampled_at=key[0], position=(x,y,z), pose=(yaw,pitch,roll),
+            detailed_at_sample=key[-1], airborne_at_sample=bool(state.get('airborne')),
+            grounded_once=bool(state.get('grounded_once')), basis_before=basis,
+            projected=projected, projection_reason=projection_reason, support_y=support_y,
+            projection_distance=(math.hypot(x-basis[0],z-basis[1]) if basis else None),
+            projection_root_delta=(y-basis[2] if basis else None),
+            reach=(-0.6,vehicle_physics.GROUND_FOLLOW_MIN))
+        return rows
+
+    def _contact_edge_support_needed(self, state, selection_stage='current_pose'):
+        """Any missing basic footprint point admits temporary detailed support."""
+        if state.get('_edge_support_active'):
+            return True
+        if not state.get('grounded_once') or self._physics_ground_probe is None:
+            return False
+        # Five-point offsets must use the current yaw's slope frame before
+        # deciding whether that frame needs the detailed contact owner.
+        self._reorient_basic_ground_pose(state)
+        rows = self._basic_support_status(state)
+        refreshed = False
+        centre=rows[0]
+        continuous_pose = (centre['valid'] and all(row['ground'] is not None and
+            abs(float(row['ground'])-float(centre['ground'])) <=
+                math.hypot(row['x']-state['x'],row['z']-state['z'])*math.sqrt(3.)+.02
+            for row in rows[1:]))
+        if (selection_stage == 'post_basic_settle' and not state.get('airborne')
+                and any(not row['valid'] for row in rows) and continuous_pose
+                and all(self._basic_support_rise_is_continuous(state,row['x'],row['z'],
+                    float(row['ground']),float(centre['ground'])) for row in rows[1:])):
+            # A staggered four-point pose may lag a curved bank. Refresh only
+            # this failing admission, through the existing body/turret guard.
+            refreshed = self._update_slope_pose(state, force_sample=True)
+            rows = self._basic_support_status(state)
+        state.setdefault('_support_mode_receipt',{}).update(
+            selection_stage=selection_stage, pose_refreshed=bool(refreshed))
+        missing = any(not row['valid'] for row in rows)
+        if missing:
+            state.pop('_basic_support_datum', None)
+            state['_edge_support_active'] = True
+        self._report_support_mode(state, rows, 'enable' if missing else 'sample')
+        return missing
+
+    def _report_support_mode(self, state, rows, phase):
+        now = _number(getattr(self, '_contact_now', None))
+        if phase == 'sample' and now < state.get('_support_mode_log_at', -1.e30):
+            return
+        state['_support_mode_log_at'] = now+2.
+        previous = state.get('_support_mode_transition')
+        episode = state.get('_support_mode_episode', 0)
+        opening = state.get('_support_mode_opening')
+        comparison = None
+        if phase == 'enable':
+            episode += 1
+            state['_support_mode_episode'] = episode
+            opening = dict(position=_position(state),
+                pose=(state.get('yaw'),self._terrain_pitch(state),state.get('roll')),
+                points=[dict(row) for row in rows],
+                sample=state.get('_support_mode_receipt'))
+            state['_support_mode_opening'] = opening
+            state.pop('_support_mode_solver_receipt', None)
+        elif phase == 'disable' and opening:
+            before = dict((row['name'],row) for row in opening['points'])
+            comparison = []
+            for row in rows:
+                old = before.get(row['name'])
+                if old is None:
+                    continue
+                comparison.append(dict(name=row['name'], was_valid=old['valid'],
+                    valid=row['valid'], expected_delta=row['expected']-old['expected'],
+                    ground_delta=(row['ground']-old['ground'] if
+                        row['ground'] is not None and old['ground'] is not None else None),
+                    gap_before=old['gap'], gap_after=row['gap']))
+        if phase in ('enable', 'disable'):
+            state['_support_mode_transition'] = (phase, now, _position(state))
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT SUPPORT MODE', dict(round=self.round_id,
+            bot=state['id'], phase=phase, detailed=bool(state.get('_edge_support_active')),
+            position=_position(state), valid_count=sum(bool(r['valid']) for r in rows),
+            total=5, points=rows, airborne=bool(state.get('airborne')),
+            vertical_speed=state.get('vertical_speed'),
+            basic_support_datum=state.get('_basic_support_datum'),
+            yaw=state.get('yaw'), terrain_pitch=self._terrain_pitch(state),
+            roll=state.get('roll'), basic_basis_yaw=state.get('_basic_slope_basis_yaw'),
+            support_basis=state.get('_support_mode_basis'),
+            previous_transition=previous,
+            episode=episode, sample=state.get('_support_mode_receipt'),
+            opening=opening if phase == 'disable' else None,
+            point_changes=comparison,
+            solver=state.get('_support_mode_solver_receipt') if phase == 'disable' else None,
+            transition_age_ms=(max(0.,now-previous[1])*1000. if previous else None),
+            reason=('point_support_lost' if phase == 'enable' else
+                    'all_points_restored' if phase == 'disable' else 'support_observation')))
+
+    def _release_detailed_support(self, state):
+        """Hand back only after admitted landing effects, without moving the hull."""
+        if BOT_FULL_SUPPORT_ENABLED or not state.get('_edge_support_active'):
+            return False
+        rows = self._basic_support_status(state)
+        if state.get('airborne') or not all(row['valid'] for row in rows):
+            self._report_support_mode(state, rows, 'sample')
+            return False
+        # The accepted rigid pose need not put its root exactly on the
+        # centre ray. Preserve that measured datum when the basic owner
+        # resumes; dropping it on the next frame recreates point loss.
+        state['_basic_support_datum'] = float(state['y'])-float(rows[0]['ground'])
+        state.pop('_edge_support_active', None)
+        self._suspension_params.pop(int(state['id']), None)
+        # Solver memory must not suppress the basic four-point pose owner.
+        # Keep the accepted pose and all velocities at the ownership boundary.
+        for name in ('_spring_ground_memory', '_pseudo_ground_memory',
+                     '_suspension_ground_plane', '_suspension_support_gradient'):
+            state.pop(name, None)
+        # Retire the old basic target together with the detailed owner. A
+        # stale target must not rotate the newly accepted hull back next tick.
+        state['pose_sample'] = (state['x'], state['z'], state.get('yaw', 0.))
+        state['_slope_pose_target'] = (
+            state.get('terrain_pitch', state.get('pitch', 0.)), state.get('roll', 0.))
+        state['_basic_slope_basis_yaw'] = state.get('yaw', 0.)
+        state.pop('_legacy_straddle_reference_y', None)
+        self._report_support_mode(state, rows, 'disable')
+        return True
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -3383,6 +3607,9 @@ class BotRuntime(object):
     def battle_start(self, message):
         """Build a local authority manifest from the server roster once per round."""
         message = message if isinstance(message, dict) else {}
+        if message.get('round_id') != self.round_id:
+            self._navigation_surface_queue = []
+            self._navigation_surface_next = 0.0
         if 'bot_tactics' in message:
             proposed = bot_tactics.canonical(message['bot_tactics'])
             if (message.get('round_id') == self.round_id and self._manifest_sent and
@@ -4758,6 +4985,8 @@ class BotRuntime(object):
                 'siege_time_left_ms', 'siege_transition_total_ms',
                 'equipment_states', 'stun_end_server_time_ms')
         result = dict((key, state[key]) for key in keys)
+        if state.get('mass') is not None:
+            result['stack_mass'] = float(state['mass'])
         result['profile'] = dict(result['profile'], parking_radius=math.hypot(
             float(state.get('half_length', 3.5)), float(state.get('half_width', 1.7))))
         # The rating rides the manifest so a takeover installs the same
@@ -6779,7 +7008,7 @@ class BotRuntime(object):
             # drop; the dynamic envelope alone proves no surface continuity.
             support_gap = (None if follow_gap is None else min(
                 float(follow_gap), vehicle_physics.GROUND_FOLLOW_MIN))
-            reference_y = position[1]
+            reference_y = position[1]-_number(state.get('_basic_support_datum'))
             if state.get('grounded_once') and not state.get('airborne'):
                 reference_y = max(reference_y, _number(state.get(
                     '_legacy_straddle_reference_y'), reference_y))
@@ -6900,6 +7129,8 @@ class BotRuntime(object):
         navigation['direct_fallback'] = dict(
             getattr(nav, 'bot_direct_progress', {}).get(int(state['id']), {}).get(
                 'local_fallback') or {})
+        navigation['target_receipt'] = dict(state.get('_navigation_target_receipt') or {})
+        navigation['target_history'] = list(state.get('_navigation_target_history') or ())
         navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
         search_receipt = getattr(nav, 'bot_search_diagnostics', None)
         if callable(search_receipt):
@@ -6944,10 +7175,20 @@ class BotRuntime(object):
         after_traffic = traffic_output if traffic_output is not None else command
         traffic_mode = after_traffic.get('traffic_mode', command.get('traffic_mode'))
         state['_motion_stall_pending'] = {
-            'id': int(state['id']), 'vehicle': state.get('vehicle'),
+            'id': int(state['id']), 'vehicle': state.get('vehicle'), 'at': now,
+            'round_id': self.round_id,
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
+            # Original cached witnesses distinguish grade rejection from a
+            # stale root/pose reference without spending another native query.
+            'support_evidence': dict(
+                sample=dict(state.get('_support_mode_receipt') or {}),
+                points=[dict(row) for row in
+                    (state.get('_support_mode_sample') or (None, []))[1]],
+                slope_samples=state.get('_basic_slope_samples')),
+            'control_arbitration': dict(command.get('control_trace') or {}),
+            'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'withdrawal': command.get('withdrawal'),
@@ -6958,7 +7199,9 @@ class BotRuntime(object):
             'strategic': {key: strategic.get(key) for key in (
                 'combat_mode', 'move_position', 'route_id', 'route_index',
                 'route_anchor', 'route_join', 'target_id', 'parking_phase',
-                'parking_slot', 'arrival_radius')},
+                'parking_slot', 'arrival_radius', 'route_attempt',
+                'route_switch_reason', 'previous_route_id',
+                'route_point_skip_reason', 'previous_route_index')},
             # Reuse current state at the existing bounded stall cadence.
             # These distinguish strategic range/readiness denial from a
             # rendered gun-elevation or physical alignment problem.
@@ -7059,11 +7302,20 @@ class BotRuntime(object):
                 'shape': other.get('collision_shape'),
             })
         trace.update({
+            'motion_control_gates': list(state.get('_motion_control_gates') or ()),
+            'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
                 for key, deadline in sorted((state.get('_gun_angle_rejected') or {}).items())],
             'nearby': sorted(nearby, key=lambda item: item['id']),
+            'rotation_contact': {key:value for key,value in
+                (state.get('_rotation_contact_trace') or {}).items() if key in (
+                    'reason','status','kinds','position','start_yaw','end_yaw',
+                    'pitch','roll','sampled_at','ray_start','ray_end','hit','normal',
+                    'ground_ahead','profile','native_surface_candidates',
+                    'native_surface_columns','pivot_offset')},
+            'support_datum': state.get('_basic_support_datum'),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
             'pose_rollback': bool(pose_rollback),
@@ -7075,6 +7327,68 @@ class BotRuntime(object):
         })
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT MOTION', trace)
+        self._queue_navigation_surface_trace(state, trace, now)
+
+    def _queue_navigation_surface_trace(self, state, trace, now):
+        # Observation only: never pass these results back to navigation/support.
+        if not callable(getattr(self, '_navigation_surface_probe', None)):
+            return
+        queue = self._navigation_surface_queue
+        if any(row['id'] == state['id'] for row in queue):
+            return
+        position = _position(state)
+        targets = [('travel', None)]
+        receipt = state.get('_navigation_target_receipt') or {}
+        targets.extend((name, receipt.get(key)) for name, key in (
+            ('selected', 'selected_target'), ('final', 'final_target')))
+        radius = max(3.0, float((state.get('collision_shape') or (2., 3.))[1]) + 1.0)
+        rows = []
+        for name, target in targets:
+            if target is None and name != 'travel':
+                continue
+            yaw = float(state.get('yaw', 0.0))
+            if target is None:
+                if trace.get('controls', {}).get('motion', (0.,))[0] < 0.0:
+                    yaw += math.pi
+            else:
+                if _distance(position, target) < 0.01:
+                    continue
+                yaw = math.atan2(target[0]-position[0], target[2]-position[2])
+            rows.append(dict(direction=name, yaw=yaw, point=(
+                position[0]+math.sin(yaw)*radius, position[1],
+                position[2]+math.cos(yaw)*radius)))
+        if len(queue) < 64:
+            queue.append(dict(id=state['id'], at=now, position=position,
+                target_receipt=dict(receipt), rows=rows))
+
+    def _drain_navigation_surface_trace(self, now):
+        # One raw ray per authority update, at most ten per simulation second.
+        # Requests retain their original position/time; delayed data is explicit.
+        if now < self._navigation_surface_next or not self._navigation_surface_queue:
+            return
+        self._navigation_surface_next = now + 0.1
+        item = self._navigation_surface_queue.pop(0)
+        if now-item['at'] > 10.0 or item['id'] not in self.states:
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT SLOPE', dict(id=item['id'],
+                round_id=self.round_id, at=item['at'], sampled_at=now,
+                status='expired', remaining=len(item['rows']), decision_input=False))
+            return
+        rows = item['rows']
+        if not rows:
+            return
+        row = dict(rows.pop(0))
+        try:
+            row['surface'] = self._navigation_surface_probe(row['point'], row['yaw'])
+        except Exception as error:
+            row['surface'] = dict(status='error', error=type(error).__name__)
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT SLOPE', dict(id=item['id'], round_id=self.round_id, at=item['at'],
+            sampled_at=now, position=item['position'], age=now-item['at'],
+            target_receipt=item['target_receipt'], observation=row,
+            decision_input=False, pending=len(self._navigation_surface_queue)))
+        if rows:
+            self._navigation_surface_queue.append(item)
 
     def _reset_planning_observers(self):
         # An invalidated observer must not leave a far command lease behind.
@@ -7301,7 +7615,7 @@ class BotRuntime(object):
             return None
 
     @timed('bot.slope')
-    def _update_slope_pose(self, state, allow_ungrounded=False):
+    def _update_slope_pose(self, state, allow_ungrounded=False, force_sample=False):
         """Refresh the four-point hull pose after this tick's ground settle."""
         # The ten-spring solver already owns authoritative pitch and roll.
         # A later staggered presentation sample must not overwrite that pose.
@@ -7322,7 +7636,7 @@ class BotRuntime(object):
         exact = not bool(_value(self._descriptors.get(int(state['id']), {}),
                                 'isPitchHullAimingAvailable', False))
         new_target = None
-        if (isinstance(marker, (list, tuple)) and len(marker) == 3 and
+        if (not force_sample and isinstance(marker, (list, tuple)) and len(marker) == 3 and
                 abs(x - marker[0]) < travel and
                 abs(z - marker[1]) < travel and
                 abs(yaw - marker[2]) < turn):
@@ -7531,7 +7845,17 @@ class BotRuntime(object):
                 if payload.get('fire') and not (state.get('critical') or {}).get('fire'):
                     state['_environment_fire'] = True
                 state['critical'] = _canonical_critical(payload)
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT LANDING IMPACT', dict(round=self.round_id, bot=state['id'],
+            speed=impact_speed, damage=damage, witnesses=list(witnesses), normal=normal,
+            ground_observed=ground_observed, module_resolver=callable(self.impact_contacts_resolver),
+            contacts=contacts if (witnesses or ground_observed) and callable(self.impact_contacts_resolver) else [],
+            critical=state.get('critical'), position=_position(state)))
         before_health = int(state.get('health', maximum))
+        stack_impact = getattr(self,'stack_impact',None)
+        struck_vehicle = False
+        if callable(stack_impact):
+            struck_vehicle = stack_impact(state,impact_speed,min(before_health,damage))
         health = max(0, before_health - damage)
         totals = getattr(self, '_environment_fall_totals', {})
         self._environment_fall_totals = totals
@@ -7548,7 +7872,7 @@ class BotRuntime(object):
         state['combat_fire_elapsed'] = 0.0
         state['combat_fire_timer'] = 0.0
         self._friendly_repositions.pop(state['id'], None)
-        state['death_reason'] = 3
+        state['death_reason'] = 2 if struck_vehicle else 3
         state['speed'] = 0.0
         state['movement_dir'] = 0
         state['rotation_dir'] = 0
@@ -7583,7 +7907,13 @@ class BotRuntime(object):
         if not normal_impact:
             impact_speed = math.sqrt(
                 impact_speed * impact_speed + lateral_speed * lateral_speed)
-        return self._apply_bot_fall_damage(state, impact_speed)
+        damage = self._apply_bot_fall_damage(state, impact_speed)
+        # The turret transaction queues the impact above and returns zero.
+        # Mark it only here, after that transaction actually spends HP.
+        commit = getattr(self, 'stack_impact_commit', None)
+        if callable(commit):
+            commit(state, damage)
+        return damage
 
     def _apply_world_contact_impact(self, state, speed, now):
         """Consume only the realised hull sweep, before escape probes replace it."""
@@ -7779,6 +8109,7 @@ class BotRuntime(object):
             params['contact_reference_plane'] = previous_plane
         ground = self._suspension_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
+        params = vehicle_physics.suspension_contact_params(params, ground)
         pseudo_ground = self._suspension_pseudo_ground_samples(
             state, params, probe_height, support_gradient, sweep_drop)
         current_plane = self._suspension_world_ground_plane(
@@ -7849,6 +8180,17 @@ class BotRuntime(object):
         solved = vehicle_physics.damper_suspension_step(
             params, physics_state, ground, step, pseudo_ground,
             support_vertical_speed)
+        moment = float(getattr(self, '_contact_now', None) or 0.0)
+        if (state.get('_edge_support_active') and
+                moment >= state.get('_next_edge_support_log', -1.e30)):
+            state['_next_edge_support_log'] = moment + 2.0
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT EDGE DYNAMICS', dict(round=self.round_id,
+                bot=state['id'], position=position, before=physics_state, solved=solved,
+                spring_columns='local_x,local_y,local_z,height,patch_offset',
+                springs=[(p['x'],p.get('y',0.),p['z'],height,getattr(height,'offset',None))
+                    for p,height in zip(params['springs'],ground)],
+                pseudo_ground=pseudo_ground))
         values = (
             solved['height'], solved['vertical_velocity'],
             solved['pitch'], solved['pitch_velocity'],
@@ -7867,6 +8209,19 @@ class BotRuntime(object):
             not solved.get('rigid_contact_count') and
             self._suspension_rise_exceeds_base(
                 state.get('y'), solved['height']))
+        contact_recovery = bool(raised_support and vehicle_physics.suspension_contact_recovery(
+            params, physics_state, solved, ground, pseudo_ground,
+            previous_plane, position, motion_pose))
+        if raised_support and contact_recovery:
+            raised_support = False
+            moment = float(getattr(self, '_contact_now', None) or 0.)
+            if moment >= state.get('_support_recovery_log_at', -1.e30):
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT SUPPORT RECOVERY', dict(
+                    round=self.round_id, bot=bot_id, before=physics_state,
+                    solved=solved, previous_plane=previous_plane,
+                    position=position, motion_pose=motion_pose))
+                state['_support_recovery_log_at'] = moment + 1.
         if raised_support:
             raised_support = not self._suspension_rise_has_continuous_support(
                 previous_plane, current_plane, motion_pose,
@@ -7876,6 +8231,14 @@ class BotRuntime(object):
         # centre when all of them miss repeatedly cancels gravity beneath
         # the deck, even without horizontal movement (report 004720).
         if invalid_pose or raised_support:
+            moment = float(getattr(self, '_contact_now', None) or 0.)
+            if moment >= state.get('_support_rejection_log_at', -1.e30):
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT SUPPORT REJECTION', dict(
+                    round=self.round_id, bot=bot_id, before=physics_state, solved=solved,
+                    invalid_pose=invalid_pose, raised_support=raised_support,
+                    contact_recovery=contact_recovery, position=position))
+                state['_support_rejection_log_at'] = moment + 1.
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)
             if tick_pose is not None:
@@ -7901,6 +8264,14 @@ class BotRuntime(object):
             return True
 
         state['y'] = solved['height']
+        if state.get('_edge_support_active'):
+            state['_support_mode_solver_receipt'] = dict(
+                sampled_at=getattr(self,'_contact_now',None), step=step,
+                stage='solver_accepted_before_turret_check',
+                before=dict(physics_state),
+                after=dict((name,solved.get(name)) for name in
+                    ('height','pitch','roll','vertical_velocity','airborne',
+                     'contact_count','rigid_contact_count','impact_speed')))
         state['vertical_speed'] = solved['vertical_velocity']
         state['terrain_pitch'] = solved['pitch']
         state['suspension_pitch_velocity'] = solved['pitch_velocity']
@@ -7928,12 +8299,22 @@ class BotRuntime(object):
             state['_suspension_ground_plane'] = current_plane
         else:
             state.pop('_suspension_ground_plane', None)
-        if (before_airborne and not state['airborne'] and
-                before_vertical_speed < 0.0):
-            impact_vertical = solved.get('impact_speed')
-            if impact_vertical is None:
-                impact_vertical = before_vertical_speed
+        impact_vertical = vehicle_physics.suspension_impact_velocity(
+            before_airborne, before_vertical_speed, solved)
+        raw_impact = solved.get('impact_speed')
+        contact_velocity = (0., float(raw_impact if raw_impact is not None else before_vertical_speed), 0.)
+        if motion_pose is not None and step > 0.:
+            contact_velocity = ((position[0]-motion_pose[0])/step,
+                contact_velocity[1], (position[2]-motion_pose[2])/step)
+        roof_contact = getattr(self, 'stack_impact_contact', None)
+        impact = (roof_contact(state, params, ground, pseudo_ground, solved,
+            (physics_state['pitch'], physics_state['roll']), contact_velocity,
+            before_airborne, before_vertical_speed, step) if callable(roof_contact) else None)
+        if impact_vertical is None and impact is not None and impact['verdict'] == 'admit':
+            impact_vertical = raw_impact
+        if impact_vertical is not None:
             impact_speed = max(0.0, -float(impact_vertical))
+            velocity = (0., float(impact_vertical), 0.)
             if motion_pose is not None and float(step) > 0.0:
                 velocity = (
                     (float(position[0]) - float(motion_pose[0])) /
@@ -7946,11 +8327,16 @@ class BotRuntime(object):
                           if isinstance(current_plane, dict) else None)
                 impact_speed = vehicle_physics.landing_impact_speed(
                     velocity, normal)
+            impact_normal = (current_plane or {}).get('normal', (0., 1., 0.))
+            if impact is not None:
+                impact_speed, impact_normal = impact['speed'], impact['normal']
             from gui.mods.offline_lan_0922 import environment_modules
             state['_landing_contact_witnesses'] = environment_modules.ground_witnesses(
                 params, ground, pseudo_ground, (state['x'], state['y'], state['z']),
                 _number(state.get('yaw')), _number(state.get('pitch')), _number(state.get('roll')))
-            state['_landing_contact_normal'] = (current_plane or {}).get('normal', (0., 1., 0.))
+            state['_landing_contact_normal'] = impact_normal
+            state['_landing_ground_observed'] = bool(
+                solved.get('contact_count') or solved.get('touched_contact_count'))
             self._apply_bot_landing_impact(
                 state, impact_speed, normal_impact=True)
         elif not before_airborne and state['airborne']:
@@ -7982,13 +8368,37 @@ class BotRuntime(object):
 
     @timed('bot.vertical')
     def _update_vertical_motion(self, state, step, tick_pose=None,
+                                attempted_yaw=None, suspension_motion_pose=None):
+        callback = getattr(self,'support_context',None)
+        previous = callback(state) if callable(callback) else None
+        owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
+        context = getattr(owner, '_stack_context', None)
+        if isinstance(context, dict):
+            context['physics_dt'] = step
+            context['purpose'] = 'bot_vertical'
+        try:
+            return self._update_vertical_motion_impl(state,step,tick_pose,
+                attempted_yaw,suspension_motion_pose)
+        finally:
+            if callable(callback):
+                finish = getattr(owner, '_finish_stack_support_context', None)
+                if callable(finish):
+                    finish(previous)
+                else:
+                    callback(None)
+                    if owner is not None:
+                        owner._stack_context = previous
+
+    def _update_vertical_motion_impl(self, state, step, tick_pose=None,
                                 attempted_yaw=None,
                                 suspension_motion_pose=None):
         """Commit suspension and landing only after the full turret sweep."""
         if self._turret_motion_probe is None:
-            return self._integrate_vertical_motion(
-                state, step, tick_pose, attempted_yaw,
-                suspension_motion_pose)
+            blocked = self._integrate_vertical_motion(
+                state, step, tick_pose, attempted_yaw, suspension_motion_pose)
+            if not blocked:
+                self._release_detailed_support(state)
+            return blocked
         before = self._turret_state_pose(state)
         snapshot = self._snapshot_bot_suspension_state(state)
         pending = []
@@ -8032,6 +8442,8 @@ class BotRuntime(object):
             state['_landing_contact_normal'] = normal
             state['_landing_ground_observed'] = ground_observed
             self._apply_bot_landing_impact(state, impact_speed, normal_impact)
+        if not blocked:
+            self._release_detailed_support(state)
         return blocked
 
     def _apply_suspension_slope_slide(self, state, step):
@@ -8080,6 +8492,26 @@ class BotRuntime(object):
                                    attempted_yaw=None,
                                    suspension_motion_pose=None):
         """Run grounded/ballistic phases and reject false raised support."""
+        if not BOT_FULL_SUPPORT_ENABLED and not state.get('_edge_support_active'):
+            was_grounded=bool(state.get('grounded_once'))
+            blocked = self._integrate_basic_vertical_motion(
+                state, step, tick_pose, attempted_yaw)
+            if not blocked and was_grounded:
+                # Select ownership once, after the basic owner's timed solve.
+                # The newly admitted detailed owner starts next slice; never
+                # spend this dt twice or apply a second landing impact.
+                previous_stage=state.get('_support_selection_stage')
+                state['_support_selection_stage']='post_basic_settle'
+                try:
+                    self._suspension_params_for(state['id'])
+                finally:
+                    if previous_stage is None:state.pop('_support_selection_stage',None)
+                    else:state['_support_selection_stage']=previous_stage
+            trace = state.get('_motion_stall_pending')
+            if trace is not None:
+                trace['suspension'] = False
+                trace['support_selected_after_basic'] = bool(state.get('_edge_support_active'))
+            return blocked
         params = self._suspension_params_for(state['id'])
         trace = state.get('_motion_stall_pending')
         if trace is not None:
@@ -8124,6 +8556,12 @@ class BotRuntime(object):
                 state['push_z'] = 0.0
                 self._turn_speeds[int(state['id'])] = 0.0
                 return True
+        return self._integrate_basic_vertical_motion(state, step, tick_pose, attempted_yaw)
+
+    def _integrate_basic_vertical_motion(self, state, step, tick_pose=None,
+                                         attempted_yaw=None):
+        """Advance the original basic owner exactly once before mode selection."""
+        trace = state.get('_motion_stall_pending')
         # Support placement is a constraint correction, not acceleration.
         # Dividing a probe-height change by a short catch-up slice can give a
         # slow hull enough upward momentum to fly tens of metres. Retain only
@@ -8146,7 +8584,18 @@ class BotRuntime(object):
         # their real CoM distance below so a remote valley floor cannot pull
         # the bot down in one tick.
         ground = centre if centre is not None else highest
+        raw_support_centre = centre
+        if was_basic_airborne or ground is None:
+            state.pop('_basic_support_datum', None)
+        elif '_basic_support_datum' in state:
+            # This is a reference-frame transfer from an admitted detailed
+            # pose, not an invented floor or an upward velocity impulse.
+            datum = state['_basic_support_datum']
+            ground += datum
+            centre = centre+datum if centre is not None else None
         if trace is not None:
+            trace['support_raw_centre'] = raw_support_centre
+            trace['support_datum'] = state.get('_basic_support_datum')
             trace.update({'support_centre': centre, 'support_highest': highest,
                           'grounded_before': state.get('grounded_once', False)})
         if ground is not None:
@@ -8278,6 +8727,7 @@ class BotRuntime(object):
         # the last downward interval so the next query can see a crossed floor,
         # rather than rejecting that floor as an overhead bridge forever.
         if state.get('airborne', False):
+            state.pop('_basic_support_datum', None)
             state['_basic_fall_origin_y'] = fall_origin_y
         else:
             state.pop('_basic_fall_origin_y', None)
@@ -9078,6 +9528,11 @@ class BotRuntime(object):
         state.pop('navigation_progress_target', None)
         mode = strategic.get('combat_mode', 'route')
         authority_state = self.states.get(int(bot_id))
+        target_receipt = dict(at=state.get('now', 0.0), position=tuple(position),
+            requested_goal=tuple(goal), mode=mode, source='no_navigator',
+            final_target=tuple(goal))
+        if authority_state is not None:
+            authority_state['_navigation_target_receipt'] = target_receipt
         if authority_state is not None:
             authority_state['route_wreck_blocked'] = False
             authority_state['_occupied_route_point'] = False
@@ -9116,6 +9571,7 @@ class BotRuntime(object):
                 receipt = (evidence_key, now + 1.0, blocked)
                 authority_state['_route_wreck_receipt'] = receipt
             authority_state['route_wreck_blocked'] = receipt[2] or authority_state.get('_occupied_route_point', False)
+        target_receipt['occupied_goal'] = occupied_goal
         if occupied_goal is not None:
             goal = occupied_goal
             if authority_state is not None:authority_state['route_wreck_blocked'] = True
@@ -9125,6 +9581,7 @@ class BotRuntime(object):
                 # No proved destination is a local unfulfilled order, never an
                 # invented ground height or a whole-round simulation failure.
                 state['navigation_stop_at_target'] = True
+                target_receipt.update(source='radio_ground_missing', final_target=tuple(position))
                 return position
             goal = grounded
         now = state.get('now', 0.0)
@@ -9231,9 +9688,13 @@ class BotRuntime(object):
             ((direct_target and tuple(target) == tuple(goal)) or
              (not direct_target and callable(terminal) and terminal(bot_id))))
         selected_target = tuple(target)
+        target_receipt.update(planning_goal=tuple(goal), path_key=path_key,
+            selected_target=selected_target, source=('retained' if retained is not None
+                else 'direct' if direct_target else 'navigator'))
         if retained is None and mode in ('route', 'advance') and anchor is None:
             target = self._route_lane_target(
                 bot_id, position, goal, target, strategic, now)
+        target_receipt['lane_target'] = tuple(target)
         if retained is None and mode in ('route', 'advance') and strategic.get('throttle_override') is None:
             bypass = self._occupied_route_target(bot_id, position, target, now, True)
             if bypass is not None:
@@ -9249,6 +9710,49 @@ class BotRuntime(object):
             progress_target = progress_receipt(bot_id, position, target, now)
             if progress_target is not None:
                 state['navigation_progress_target'] = progress_target
+        local_state = getattr(self.navigator, 'bot_states', {}).get(int(bot_id), {})
+        direct_state = getattr(self.navigator, 'bot_direct_progress', {}).get(int(bot_id), {})
+        choices = []
+        for owner, local in (('path', local_state), ('direct', direct_state)):
+            fallback = local.get('local_fallback') or {}
+            rows = [row for row in fallback.get('candidates', ())
+                    if row.get('rejected') is None]
+            if rows:
+                ranked = sorted(rows, key=lambda row:(row['score'], abs(row['theta'])))[:3]
+                shortest = min(rows, key=lambda row:row['D'])
+                choices.append(dict(owner=owner, at=fallback.get('at'),
+                    current=fallback.get('current'), goal=fallback.get('goal'),
+                    selected=fallback.get('selected'), ranked=ranked,
+                    shortest_distance=shortest))
+        target_receipt['local_choices'] = choices
+        target_receipt.update(final_target=tuple(target),
+            progress_target=state.get('navigation_progress_target'),
+            stop_at_target=state.get('navigation_stop_at_target'))
+        if authority_state is not None:
+            history = authority_state.setdefault('_navigation_target_history', [])
+            if not history or any(history[-1].get(key) != target_receipt.get(key)
+                    for key in ('requested_goal', 'source', 'final_target', 'path_key')):
+                history.append(dict(target_receipt))
+                del history[:-16]
+            # Stationary receipts start after a hull is already trapped.
+            # Preserve the existing choice on a bank while it is still moving,
+            # so its entry can be reconstructed without another native query.
+            now = float(state.get('now',0.0))
+            bank_choice = (abs(_number(authority_state.get('pitch'))) > .15 or
+                abs(_number(authority_state.get('roll'))) > .15 or
+                any(abs(_number(row.get('height_delta'))) > .8
+                    for choice in choices for row in choice['ranked'][:1]))
+            if (bank_choice and
+                    now >= authority_state.get('_navigation_choice_log_at',-1.e30)):
+                from .native_input_diagnostics import write_json_record
+                authority_state['_navigation_choice_log_at'] = now+3.
+                write_json_record('BOT NAV CHOICE',dict(
+                    round=self.round_id,bot=bot_id,at=now,
+                    pose=(authority_state.get('yaw'),authority_state.get('pitch'),
+                          authority_state.get('roll')),
+                    path_state={key:local_state.get(key) for key in (
+                        'navigation_status','index','last_target','planned_goal','planned_at')},
+                    receipt=dict(target_receipt),decision_input=False))
         return target
 
     def _player_neighbours(self, players):
@@ -9511,6 +10015,9 @@ class BotRuntime(object):
         if body_id is not None:
             body['id'] = body_id
         body['shape'] = shape or state.get('collision_shape')
+        body['kind'] = 'player' if body_id is not None else 'bot'
+        body['network_id'] = state['id']
+        body['stack_carrier'] = state.get('_stack_carrier')
         return body
 
     def _contact_motion_bodies(self, players=()):
@@ -9520,8 +10027,9 @@ class BotRuntime(object):
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
             profile = self._player_collision_profile(raw)
-            bodies.append(self._contact_motion_body(
-                raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape']))
+            body = self._contact_motion_body(
+                raw, HUMAN_TARGET_ID_BASE+int(raw['id']), profile['shape'])
+            bodies.append(body)
         return bodies
 
     def _guard_tank_translations(self, players, tick_poses, sample_time_us=None):
@@ -9645,6 +10153,9 @@ class BotRuntime(object):
             push_x, push_z = self._bleed_contact_push(state, push_x, push_z, step)
         correction_x, correction_z = (result['correction'] if
                                       apply_correction else (0.0, 0.0))
+        if delta_x or delta_z or correction_x or correction_z:
+            state['_contact_dynamics'] = True
+            state['_contact_edge_check'] = True
         move_x = correction_x + (push_x * step if advance_push else 0.0)
         move_z = correction_z + (push_z * step if advance_push else 0.0)
         if advance_forward:
@@ -10265,6 +10776,9 @@ class BotRuntime(object):
         self._contact_players = players or ()
         self._contact_now = now
         self._consume_human_contact_pushes(players, now)
+        stack_update = getattr(self,'stack_update',None)
+        if callable(stack_update):
+            stack_update(players,step)
         tanks = []
         for state in self._ordered_states():
             alive = bool(state.get('alive', True))
@@ -10286,6 +10800,7 @@ class BotRuntime(object):
                 'contact_decel': grip,
                 'id': int(state['id']), 'kind': 'bot',
                 'network_id': int(state['id']), 'alive': alive,
+                'stack_carrier': state.get('_stack_carrier'),
                 'team': int(state.get('team', 0)),
                 'vehicle': str(state.get('vehicle') or ''),
                 'x': state['x'], 'y': state['y'],
@@ -10317,6 +10832,7 @@ class BotRuntime(object):
             tanks.append({
                 'id': player_id, 'kind': 'player',
                 'network_id': int(raw['id']), 'alive': alive,
+                'stack_carrier': getattr(self,'_stack_current_carriers',{}).get(('player',int(raw['id']))),
                 'team': int(raw.get('team', 0)),
                 'vehicle': str(raw.get('vehicle') or ''),
                 # Current senders report the human's contact momentum above.
@@ -11605,6 +12121,7 @@ class BotRuntime(object):
             abs(_angle_delta(raw_relative, state['turret_yaw'])) <= 1.0e-6 and
             abs(raw_pitch - state['gun_pitch']) <= 1.0e-6)
         return desired_yaw, horizontal
+
 
     @staticmethod
     def _shot_los_key(source, target):
@@ -13667,6 +14184,7 @@ class BotRuntime(object):
         if self._fixed_control:
             self._control_refresh_accumulator += elapsed_input
         now = float(now)
+        self._drain_navigation_surface_trace(now)
         navigator_begin = getattr(self.navigator, 'begin_frame', None)
         navigator_end = getattr(self.navigator, 'end_frame', None)
         if callable(navigator_begin):
@@ -13873,6 +14391,13 @@ class BotRuntime(object):
         self._advance_probe_timing(now)
         self._advance_equipment_clock(frame_step)
         players = list(players or [])
+        from . import roof_crush_test
+        if roof_crush_test.shot_drop_enabled():
+            queue = getattr(self, '_roof_shot_drop_queue', None)
+            if queue is None or getattr(self, '_roof_shot_drop_round', None) != self.round_id:
+                queue = self._roof_shot_drop_queue = roof_crush_test.ShotDropQueue()
+                self._roof_shot_drop_round = self.round_id
+            queue.observe(players, self.states)
         if refresh_control:
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
@@ -14171,7 +14696,10 @@ class BotRuntime(object):
                         distance = decision_state.get('navigation_probe_distance')
                     key = (round(normalised,4), None if distance is None else round(float(distance),2))
                     planning_verdicts.append(dict(kind='direction', yaw=sample_yaw,
-                        distance=distance, clear=result, reason=planning_reason[0], native_probe=planner_probe_samples.get(key)))
+                        distance=distance, clear=result, reason=planning_reason[0],
+                        origin=position, sampled_at=now, drive_direction=drive_direction,
+                        body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
+                        native_probe=planner_probe_samples.get(key)))
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
@@ -14525,8 +15053,20 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                if roof_crush_test.shot_drop_enabled():
+                    command = self._roof_shot_drop_queue.command(command, state)
+                    from .native_input_diagnostics import write_json_record
+                    for event in self._roof_shot_drop_queue.drain_events():
+                        event['round'] = self.round_id
+                        write_json_record('ROOF SHOT DROP', event)
+                else:
+                    command = roof_crush_test.hold_command(command, position)
+                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
+            state['_motion_control_gates'] = []
             throttle = max(-1.0, min(1.0, command['throttle']))
             turn = max(-1.0, min(1.0, command.get('turn', 0.0)))
             aim_fallback = (target.get('position') if target is not None
@@ -14636,6 +15176,7 @@ class BotRuntime(object):
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             if siege_motion_locked:
+                state['_motion_control_gates'].append('siege_transition')
                 # Stock Siege transitions immobilize the hull for the whole
                 # transition tick, including the publication which starts or
                 # completes the state edge.  Clear both planner intent and the
@@ -14660,6 +15201,8 @@ class BotRuntime(object):
                     destroyed_devices.intersection((
                     'engineHealth', 'leftTrackHealth',
                     'rightTrackHealth'))):
+                state['_motion_control_gates'].append(dict(reason='critical_mobility',
+                    overturned=bool(state.get('_overturned')),destroyed=sorted(destroyed_devices)))
                 throttle = 0.0
                 turn = 0.0
             elif abs(throttle) > 0.01:
@@ -14732,6 +15275,7 @@ class BotRuntime(object):
                     maximum_probe_distance = max(
                         leading + frame_reach, maximum_probe_distance)
                     if remaining <= 0.0:
+                        state['_motion_control_gates'].append(dict(reason='endpoint_reach',remaining=remaining))
                         throttle = 0.0
                         turn = 0.0
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
@@ -14776,6 +15320,7 @@ class BotRuntime(object):
                 not refresh_control and not motion_probe_reusable and
                 not catchup_motion_reprobe)
             if catchup_motion_hold:
+                state['_motion_control_gates'].append('catchup_without_clear_receipt')
                 # With no prior clear physical proof, this callback may not
                 # turn a missing/deferred/blocked sample into motion. A valid
                 # command which merely consumed or turned beyond its old clear
@@ -14946,7 +15491,12 @@ class BotRuntime(object):
                 motion_probe.get('collision', False) and
                 not motion_probe.get('water', False) and
                 abs(_number(motion_probe.get('slope', 0.0))) <= 0.55)
+            # The drop fixture intentionally drives off a cliff. Its scripted
+            # input bypasses only the anticipatory driving veto; the exact
+            # hull sweep, support, gravity and contact response still run.
             path_clear = (True if (catchup_motion_hold or probe_deferred or
+                                   (roof_crush_test.shot_drop_enabled() and
+                                    command.get('recovery_mode') == 'roof_shot_drop') or
                                    motion_probe is None or
                                    exact_motion_owns_collision or
                                    (abs(throttle) <= 0.01 and
@@ -15118,6 +15668,7 @@ class BotRuntime(object):
                     allow_shallow=committed_shallow_admitted,
                     hazard_only=True, maximum_distance=maximum_probe_distance)
                 if committed_corridor is False:
+                    state['_motion_control_gates'].append('committed_baked_corridor')
                     # Copied physics integrates the post-turn hull yaw, while
                     # the native motion receipt above proves the pre-turn
                     # corridor. Keep the baked hazard veto on every slice, but
@@ -15827,6 +16378,9 @@ class BotRuntime(object):
                              sorted(self._environment_critical_totals.items())],
             environment_fires=[int(state['id']) for state in ordered_states
                                if state.get('_environment_fire')])
+        stack_publication = getattr(self,'stack_publication',None)
+        if callable(stack_publication):
+            publication['push_contacts']['stacks'] = stack_publication()
         if launches:
             # Never put these local-only SPG proof receipts on the LAN wire.
             # BattleRuntime retries an unaccepted launch from this compact list.
