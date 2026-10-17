@@ -2504,7 +2504,7 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        if (order.get('combat_mode') == 'support_hold' and
+        if (order.get('combat_mode') in ('support_hold', 'base_defense') and
                 not order.get('team_command') and self._route_donor_eligible(bot)):
             # An intermittent tactical hold pauses the same gate attempt;
             # resuming it is not evidence that the previous exit succeeded.
@@ -2512,7 +2512,7 @@ class BotPlanner(object):
             if progress is not None:
                 progress.setdefault('paused_at', _number(now))
                 order['route_attempt'] = dict(route_id=progress['key'][0],
-                    route_index=progress['key'][1],action='pause_support_hold',
+                    route_index=progress['key'][1],action='pause_'+order['combat_mode'],
                     elapsed=round(progress['paused_at']-progress['since'],3))
             return
         if (order.get('combat_mode') not in ('route', 'advance', 'parking_approach', 'base_capture',
@@ -2548,17 +2548,26 @@ class BotPlanner(object):
             return
         key = (route_id, order.get('route_index'))
         progress = self._wreck_route_progress.get(bot_id)
-        if (progress is None or progress['key'] != key or
-                progress.get('physical_block') != physical_block):
+        if progress is None or progress['key'] != key:
             progress = None
         if progress is None:
             self._wreck_route_progress[bot_id] = {
                 'key': key, 'goal': goal, 'since': _number(now),
                 'origin': dict(point), 'physical_block': physical_block}
+            trace.update(attempt_started_at=_number(now), reset_reason='new_gate')
             return
+        # A receipt describes the current blocker, not a new gate attempt.
+        # Contact flicker must not renew an unmoved tank's twenty-second lease.
+        previous_block = progress.get('physical_block')
+        progress['physical_block'] = physical_block
+        trace['previous_physical_block'] = previous_block
+        trace['blocker_changed'] = previous_block != physical_block
         paused_at = progress.pop('paused_at', None)
         if paused_at is not None:
             progress['since'] += max(0., _number(now) - paused_at)
+            trace['resumed_after_pause'] = max(0., _number(now) - paused_at)
+        trace.update(attempt_started_at=progress['since'],
+            attempt_origin=dict(progress.get('origin', point)))
         if not physical_block:
             origin = progress.get('origin', point)
             net = math.hypot(point['x'] - origin['x'], point['z'] - origin['z'])

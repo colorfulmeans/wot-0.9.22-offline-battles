@@ -2551,7 +2551,7 @@ class BotRuntime(object):
 
     def _probe_direction(self, position, yaw, speed=0.0, descriptor=None,
                          maximum_distance=None, corridor_half_width=None,
-                         native_capability=None):
+                         native_capability=None, body_pose=None):
         """Return one canonical direction sample for planning and physics."""
         self._probe_totals[4] += 1
         probe_started = self._probe_started()
@@ -2564,13 +2564,13 @@ class BotRuntime(object):
                 function = getattr(callback, '__func__', getattr(callback, 'im_func', callback))
                 function = getattr(function, '__wrapped__', function)
                 code = getattr(function, '__code__', getattr(function, 'func_code', None))
-                count = 7 if native_capability is not None else 6
+                count = 8 if body_pose is not None else (7 if native_capability is not None else 6)
                 if code is not None and not code.co_flags & 4:
                     count = code.co_argcount - (1 if getattr(callback, '__self__', getattr(callback, 'im_self', None)) is not None else 0)
                 receipt = (callback, count)
                 self._direction_callback_abi = receipt
             arguments = (position, yaw, speed, descriptor, maximum_distance,
-                         corridor_half_width, native_capability)
+                         corridor_half_width, native_capability, body_pose)
             result = callback(*arguments[:receipt[1]])
         except Exception:
             return {'clear': False, 'collision': True,
@@ -9785,10 +9785,19 @@ class BotRuntime(object):
                 if now >= authority_state.get('_height_link_log_at',-1.e30):
                     authority_state['_height_link_status'] = statuses
                     authority_state['_height_link_log_at'] = now+2.
+                    target_distance = _distance(position, target)
+                    prefix = None
+                    if target_distance > 8. and (abs(target[1]-position[1]) > .5 or
+                            getattr(getattr(self.adapter, 'driver', None), 'states', {}).get(
+                                int(bot_id), {}).get('stuck_time', 0.) >= 1.):
+                        prefix = local_height.observe_prefix(position, target)
                     write_json_record('BOT HEIGHT LINKS',dict(round=self.round_id,
                         bot=bot_id,at=now,origin=position,goal=goal,target=target,
                         columns=local_height.queries,receipts=local_height.receipts,
                         reused_columns=local_height.cache_hits,
+                        target_distance=target_distance,
+                        target_scope='local' if target_distance <= 8. else 'outside_local_radius',
+                        prefix_observation=prefix,
                         decision_input=True))
             # A shared grid must not apply this Bot's local origin to a later
             # background route job or another Bot's physical storey.
@@ -14694,7 +14703,9 @@ class BotRuntime(object):
                     planner_probe_samples[key] = self._probe_direction(
                         position, sample_yaw, state.get('speed', 0.0),
                         self._descriptors.get(state['id']),
-                        maximum_distance)
+                        maximum_distance, body_pose=((state['yaw'],
+                            self._terrain_pitch(state), state.get('roll', 0.))
+                            if not state.get('airborne', False) else None))
                 return planner_probe_samples[key]
 
             grid = getattr(self.navigator, 'grid', None)
