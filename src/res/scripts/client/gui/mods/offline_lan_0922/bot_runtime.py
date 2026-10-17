@@ -8497,7 +8497,7 @@ class BotRuntime(object):
         if not BOT_FULL_SUPPORT_ENABLED and not state.get('_edge_support_active'):
             was_grounded=bool(state.get('grounded_once'))
             blocked = self._integrate_basic_vertical_motion(
-                state, step, tick_pose, attempted_yaw)
+                state, step, tick_pose, attempted_yaw, suspension_motion_pose)
             if not blocked and was_grounded:
                 # Select ownership once, after the basic owner's timed solve.
                 # The newly admitted detailed owner starts next slice; never
@@ -8558,10 +8558,11 @@ class BotRuntime(object):
                 state['push_z'] = 0.0
                 self._turn_speeds[int(state['id'])] = 0.0
                 return True
-        return self._integrate_basic_vertical_motion(state, step, tick_pose, attempted_yaw)
+        return self._integrate_basic_vertical_motion(state, step, tick_pose,
+            attempted_yaw, suspension_motion_pose)
 
     def _integrate_basic_vertical_motion(self, state, step, tick_pose=None,
-                                         attempted_yaw=None):
+                                         attempted_yaw=None, support_motion_pose=None):
         """Advance the original basic owner exactly once before mode selection."""
         trace = state.get('_motion_stall_pending')
         # Support placement is a constraint correction, not acceleration.
@@ -8581,7 +8582,14 @@ class BotRuntime(object):
         previous_fall_origin = state.get('_basic_fall_origin_y')
         state['_basic_continuous_support'] = False
         self._basic_support_queries = []
-        highest, centre = self._terrain_support(state, snap_gap, tick_pose)
+        # Contact clipping changes X/Z after the timed support solve. Its
+        # rollback pose already contains the final X/Z and therefore cannot
+        # prove the intervening continuous ground. Use the accepted settled
+        # pose for this geometry only; retain tick_pose as the rollback owner.
+        # A real airborne body cannot borrow a grounded projection reference.
+        support_pose = (support_motion_pose if step <= 0. and
+            not was_basic_airborne and support_motion_pose is not None else tick_pose)
+        highest, centre = self._terrain_support(state, snap_gap, support_pose)
         # Front/rear hits keep a bot supported across a narrow ditch, but use
         # their real CoM distance below so a remote valley floor cannot pull
         # the bot down in one tick.
@@ -8598,6 +8606,8 @@ class BotRuntime(object):
         if trace is not None:
             trace['support_raw_centre'] = raw_support_centre
             trace['support_datum'] = state.get('_basic_support_datum')
+            trace['support_motion_pose'] = support_pose
+            trace['support_projection_only'] = step <= 0.
             trace.update({'support_centre': centre, 'support_highest': highest,
                           'grounded_before': state.get('grounded_once', False)})
         if ground is not None:
@@ -8736,11 +8746,15 @@ class BotRuntime(object):
         self._reorient_basic_ground_pose(state)
         moment = getattr(self, '_contact_now', None)
         transition = was_basic_airborne != bool(state.get('airborne', False))
-        if ((transition or ground is None or was_basic_airborne) and
+        contact_projection = bool(step <= 0. and support_motion_pose is not None
+            and support_pose != tick_pose)
+        if ((transition or ground is None or was_basic_airborne or contact_projection) and
                 (moment is None and transition or moment is not None and
                  moment >= state.get('_basic_vertical_log_at', -1.e30))):
             from .native_input_diagnostics import write_json_record
             write_json_record('BOT VERTICAL SUPPORT', dict(actor=int(state['id']), round=self.round_id,
+                step=step, support_motion_pose=support_pose, projection_only=step <= 0.,
+                contact_projection=contact_projection, speed=state.get('speed'),
                 continuity_recovered=bool(state.get('_basic_continuous_support')),
                 tick_pose=tick_pose,
                 horizontal_travel=self._tick_horizontal_travel(state, tick_pose),

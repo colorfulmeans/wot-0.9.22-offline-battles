@@ -35,6 +35,28 @@ class LocalHeightTests(unittest.TestCase):
         links.inspect((6.,-15.,6.),(9.,1.,6.),1.)
         self.assertEqual(before,len(calls))
 
+    def test_proved_floor_survives_unknown_upper_connection_at_query_limit(self):
+        # Round 2 WZ-111G FT: the second target moved about 5mm, with a proved
+        # lower face but unknown upper links after the 64-column budget.
+        origin=(9.427737630211562,-14.861078262329102,104.35341621625808)
+        target=(1.9548214691137655,.974,105.15099152270032)
+        floor=-14.873424530029297
+        for wet in (False,True):
+            def probe(x,z,low,high):
+                lower=face(x,z,floor);lower['navigation_water']=wet
+                return dict(status='complete',surfaces=[lower,face(x,z,.9740817546844482)])
+            links=LocalHeightLinks(probe);links.begin(origin)
+            def proof(a,b,*args):
+                if b['point'][1]<0.:return True
+                links.queries=MAX_COLUMNS;links.budget_exhausted=True
+                return None
+            with patch.object(links,'_join',side_effect=proof):
+                status,resolved=links.inspect(origin,target)
+            self.assertEqual('water' if wet else 'connected',status)
+            self.assertEqual((target[0],floor,target[2]),resolved)
+            self.assertTrue(links.receipts[0]['requested_surface_unknown'])
+            self.assertLessEqual(links.queries,MAX_COLUMNS)
+
     def test_same_xz_jump_and_tiny_horizontal_jump_are_disconnected(self):
         for dx in (0.,.1):
             with self.subTest(dx=dx):

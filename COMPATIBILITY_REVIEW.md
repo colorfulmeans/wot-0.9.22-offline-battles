@@ -9107,3 +9107,35 @@ empty and throwing queries also preserve legacy ranking and collision refusal.
 Full-candidate lower-floor ranking is tested with a larger fixture-only budget;
 production-budget unknown behavior is tested separately against legacy output.
 These source and replay checks do not establish native Windows acceptance.
+
+### Report 20261018-000108: contact grounding and partial height proofs
+
+T54E1 Bot 22 exhausted the original 14-second wreck push but repeated reverse
+recovery with five valid footprint points, zero accepted XZ travel and a retained
+forward speed of 5.2374539m/s. The zero-time post-contact basic solve received a
+rollback pose already at the final XZ. It ignored suspension_motion_pose (the
+accepted, previously settled pose), so continuity travel was zero and a .036898m
+ground gap created false airborne state. The unchanged airborne drive law then
+kept forward momentum despite reverse input, while the translation sweep refused
+that forward travel against wreck 10. RU 251 showed the same state inconsistency.
+
+Pass the existing settled reference to the basic owner as well as the detailed
+owner. Only an already grounded, zero-time correction uses it for the existing
+terrain continuity proof; rollback retains the accepted contact XZ. Real airborne
+motion cannot borrow this reference. Do not change grade thresholds, footprint
+admission/release, friction/braking, contact impulses or elapsed time. The original
+drive law can brake once false airtime is removed. Bounded vertical receipts now
+include step, projection reference, projection phase, continuity and speed.
+
+Bot 27's later endpoint had its lower face proved connected, but budget exhaustion
+left its upper connections unknown. Preserve the connected alternative rather
+than discarding the entire result as unknown and publishing baked deck Y again.
+Record requested_surface_unknown and the resolution reason; do not label the
+unfinished upper proof disconnected. The normal native water limit belongs to
+the selected lower face. Missing all proofs still delegates to legacy admission;
+the 64-column limit, C/avoidance and retry/route-switch owners are unchanged.
+
+Regression cases first reproduce the contact projection/unchanged reverse speed
+and partial-proof overwrite. Cover both travel directions, real ledge drops,
+missing ground, genuine airborne bodies, no duplicate landing, and a wet lower
+floor. Reference tests and package audits do not replace Windows user acceptance.
