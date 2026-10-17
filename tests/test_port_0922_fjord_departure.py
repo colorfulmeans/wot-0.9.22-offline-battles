@@ -8,6 +8,7 @@ from unittest import mock
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
+from server_bot_ai import BotPlanner
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,6 +205,10 @@ class SpawnDepartureTests(unittest.TestCase):
                 starts = dict(
                     (bot_id, (state['x'], state['z']))
                     for bot_id, state in runtime.states.items())
+                # The server owns route expiry/skip/switch. A client-only
+                # loop cannot exercise the current complete departure law.
+                planner = BotPlanner()
+                manifest = [runtime._manifest_entry(s) for s in runtime.states.values()]
                 monitor = _EpisodeMonitor()
                 now = [0.0]
                 macro_goals = {}
@@ -254,6 +259,11 @@ class SpawnDepartureTests(unittest.TestCase):
                 # departure and stall bound over one minute of simulation.
                 for frame in range(1, fps * 60 + 1):
                     now[0] = frame / float(fps)
+                    if (frame-1) % fps == 0:
+                        states = [dict(s,world_pose=True) for s in runtime.states.values()]
+                        orders = planner.build_orders(manifest,states,[],now[0])
+                        runtime._apply_orders(dict(bot_order_revision=orders['revision'],
+                                                   bot_orders=orders['orders']))
                     runtime.update(1.0 / float(fps), now[0])
 
                 non_spg_ids = [

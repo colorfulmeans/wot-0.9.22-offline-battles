@@ -122,8 +122,17 @@ class EmbeddedSlopeTests(unittest.TestCase):
         runtime._turret_motion_probe = mock.Mock(return_value=False)
         calls[:] = []
         runtime.update(.04, 1.)
-        self.assertEqual(29 + 4 * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, len(calls))
+        # Every hull owns a centre settle and all five support witnesses.
+        # Only the additional four-column attitude refresh is staggered.
+        self.assertEqual(29 * 6 + 4 * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, len(calls))
         self.assertEqual(self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME,
             sum(state.get('_slope_pose_attempt', 0) for state in runtime.states.values()))
         self.assertFalse(any('_slope_pose_target' in state for state in runtime.states.values()))
+        for frame in range(1, 6):
+            before = sum(s.get('_slope_pose_attempt', 0) for s in runtime.states.values())
+            runtime.update(.04, 1. + .04*frame)
+            after = sum(s.get('_slope_pose_attempt', 0) for s in runtime.states.values())
+            self.assertLessEqual(after-before, self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
+        self.assertTrue(all(s.get('_slope_pose_attempt', 0) for s in runtime.states.values()))
+        self.assertFalse(any('pose_sample' in s for s in runtime.states.values()))
 if __name__ == '__main__':unittest.main()

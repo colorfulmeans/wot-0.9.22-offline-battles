@@ -31,6 +31,7 @@ jobs:
           --pattern 'test_port_0922_ai.py'
           --pattern 'test_port_0922_motion_052854.py'
           --pattern 'test_port_0922_motion_064702.py'
+          --pattern 'test_port_0922_current_rule_lifecycle.py'
           --pattern 'test_port_0922_basic_slope_pose.py'
           --pattern 'test_port_0922_eroded_fallback_cycle.py'
           --pattern 'test_port_0922_initial_allocation.py'

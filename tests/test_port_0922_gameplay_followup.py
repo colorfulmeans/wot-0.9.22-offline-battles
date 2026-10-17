@@ -850,7 +850,7 @@ class AimProgressTests(unittest.TestCase):
 
 
 class PresentedCollisionTests(unittest.TestCase):
-    def test_oriented_height_culling_keeps_a_real_sloped_hull_overlap(self):
+    def test_sloped_top_overlap_is_owned_by_vertical_support_not_side_separation(self):
         from gui.mods.offline_lan_0922 import tank_collision as collision
         shape = (1.5, 3.5, -0.8, 2.0)
         first = {'id': 1, 'kind': 'bot', 'x': 0.0, 'y': 0.0, 'z': 0.0,
@@ -860,12 +860,24 @@ class PresentedCollisionTests(unittest.TestCase):
         contact_point = (0.0, 2.4, 2.5)
         self.assertTrue(collision.body_contains_point(first, contact_point))
         self.assertTrue(collision.body_contains_point(second, contact_point))
+        trace = {}
+        self.assertFalse(collision.planar_body_contact(first, second, trace))
+        self.assertEqual('vertical', trace['verdict'])
         for owner in ('single', 'pairs'):
             with self.subTest(owner=owner):
                 result = (collision.resolve_tank(first, [second], dt=0.1)
                           if owner == 'single' else
                           collision.resolve_pairs([first, second], 0.1)[1])
-                self.assertNotEqual((0.0, 0.0), result['correction'])
+                self.assertEqual((0.0, 0.0), result['correction'])
+                if owner == 'single':
+                    self.assertFalse(result['ram_events'])
+        # Moving the same bodies onto one layer must restore side response;
+        # vertical ownership is not a permanent pair exemption.
+        beside = dict(second, y=0.0, x=2.0)
+        self.assertTrue(collision.planar_body_contact(first, beside))
+        for result in (collision.resolve_tank(first, [beside], dt=.1),
+                       collision.resolve_pairs([first, beside], .1)[1]):
+            self.assertNotEqual((0.0, 0.0), result['correction'])
         above = dict(second, y=10.0)
         self.assertEqual((0.0, 0.0),
             collision.resolve_tank(first, [above], dt=0.1)['correction'])

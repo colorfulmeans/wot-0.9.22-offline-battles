@@ -83,7 +83,6 @@ class NativeBoxAdapterTests(unittest.TestCase):
                 'g_offh_destr_instances': {(22, 7): {'kind': 'structure', 'boxes': boxes}},
                 'g_offh_destr_speculative': set()}), \
                 mock.patch.object(sensor, '_destructible_isolated_1513', return_value=False), \
-                mock.patch.object(sensor, '_layout_repair_pending_1513', return_value=False), \
                 mock.patch.object(sensor, '_get_destr_authority', return_value=authority), \
                 mock.patch.object(native, 'box_probe', return_value=rows) as probe:
             result = sensor._owned_component_skin_1513(
@@ -101,6 +100,27 @@ class NativeBoxAdapterTests(unittest.TestCase):
             self.assertFalse(sensor._point_in_world_box(Vector(100.), box))
             self.assertIsNone(sensor._segment_world_box_interval(Vector(100.), Vector(200.), box))
             self.assertIsNone(sensor._projected_box_interval_1513(Vector(100.), Vector(200.), box))
+
+    def test_component_alias_never_excludes_an_intact_or_unowned_component(self):
+        axes=((1.,0.,0.),(0.,1.,0.),(0.,0.,1.))
+        boxes=[((20.,0.,0.),axes,73),((5.,0.,0.),axes,74)]
+        for case in ('intact','isolated','unknown_item'):
+            with self.subTest(case=case):
+                authority=types.SimpleNamespace(is_destroyed=mock.Mock(return_value=False))
+                surfaces={(73,0,8 if case=='unknown_item' else 7,22)}
+                with mock.patch.dict(sensor.__dict__,{
+                        'g_offh_destr_instances':{(22,7):{'kind':'structure','boxes':boxes}},
+                        'g_offh_destr_speculative':set()}), \
+                        mock.patch.object(sensor,'_destructible_isolated_1513',return_value=case=='isolated'), \
+                        mock.patch.object(sensor,'_get_destr_authority',return_value=authority), \
+                        mock.patch.object(native,'box_probe',return_value=((0,(.9,1.),None),(1,(.1,.8),None))) as probe:
+                    self.assertIsNone(sensor._owned_component_skin_1513(Vector(3.),Vector(0.),Vector(10.),surfaces))
+                if case=='intact':
+                    probe.assert_called_once()
+                    authority.is_destroyed.assert_called_with(22,7,74)
+                else:
+                    probe.assert_not_called()
+                    authority.is_destroyed.assert_not_called()
 
 
 class MotionWitnessTests(unittest.TestCase):
