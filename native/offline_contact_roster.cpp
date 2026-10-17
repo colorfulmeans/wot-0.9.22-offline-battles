@@ -109,7 +109,8 @@ Hit physical_contact(const Body &a,const Body &b,const Projection &p) {
         const double length=std::sqrt(dot(cross,cross));
         if(length>1.e-8) {for(double &v:cross)v/=length;candidates[count++]=cross;}
     }
-    double minimum=0.;V normal{};bool first=true;
+    double minimum=0.,horizontal_minimum=0.;V normal{},horizontal_normal{};
+    bool first=true,first_horizontal=true;
     for(size_t j=0;j<count;++j) {
         const V &axis=candidates[j];double ra=0.,rb=0.;
         for(size_t i=0;i<3;++i)ra+=ea[i]*std::abs(dot(axis,aa[i]));
@@ -117,6 +118,18 @@ Hit physical_contact(const Body &a,const Body &b,const Projection &p) {
         const double depth=(ra+rb)-std::abs(dot(delta,axis));
         if(depth<=0.)return Hit{0.,0.,0.,false};
         if(first || depth<minimum) {minimum=depth;normal=axis;first=false;}
+        if(axis[1]*axis[1]<axis[0]*axis[0]+axis[2]*axis[2] &&
+           (first_horizontal || depth<horizontal_minimum)) {
+            horizontal_minimum=depth;horizontal_normal=axis;first_horizontal=false;
+        }
+    }
+    // Match the Python same-layer slab test; do not delegate a deeply
+    // intersecting side pair to a suspension owner which cannot separate it.
+    const bool same_layer=std::abs(dot(delta,aa[1]))<ea[1] &&
+                          std::abs(dot(delta,ab[1]))<eb[1];
+    if(same_layer && !first_horizontal &&
+       normal[1]*normal[1]>=normal[0]*normal[0]+normal[2]*normal[2]) {
+        minimum=horizontal_minimum;normal=horizontal_normal;
     }
     if(dot(delta,normal)<0.)for(double &v:normal)v=-v;
     if(normal[1]*normal[1]>=normal[0]*normal[0]+normal[2]*normal[2])

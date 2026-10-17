@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import math
 import struct
 import sys
@@ -258,6 +259,45 @@ class TankCollisionTests(unittest.TestCase):
         trace = {}
         self.assertFalse(tank_collision.planar_body_contact(first, second, trace))
         self.assertEqual('separated', trace['verdict'])
+
+    def test_captured_three_type59_bodies_separate_without_motor_or_ram_damage(self):
+        rows=json.loads((ROOT/'tests/fixtures/roof_same_layer_164250.json').read_text())
+        shape=(1.600411057472229,2.9779720306396484,.004364000167697668,1.5524429678916931)
+        bodies=[]
+        for row in rows:
+            body=_tank(row['id'],row['x'],row['z'],y=row['y'],yaw=row['yaw'],shape=shape,mass=36000.)
+            body.update(pitch=row['pitch'],roll=row['roll'],alive=True,kind='bot')
+            bodies.append(body)
+        for other in bodies[1:]:
+            trace={}
+            self.assertTrue(tank_collision.planar_body_contact(bodies[0],other,trace))
+            self.assertTrue(trace['same_layer'])
+        positions=[(b['x'],b['z']) for b in bodies]
+        for unused in range(12):
+            result=tank_collision.resolve_pairs(bodies,.1)
+            for b in bodies:
+                receipt=result[b['id']]
+                self.assertEqual((0.,0.),receipt['delta_velocity'])
+                b['x']+=receipt['correction'][0]
+                b['z']+=receipt['correction'][1]
+        self.assertNotEqual(positions,[(b['x'],b['z']) for b in bodies])
+        for i,a in enumerate(bodies):
+            for b in bodies[i+1:]:
+                trace={}
+                tank_collision.planar_body_contact(a,b,trace)
+                self.assertLessEqual(trace.get('depth',0.),.011)
+                self.assertEqual((),tank_collision.resolve_tank(a,[b],dt=.1)['ram_events'])
+
+    def test_same_layer_classification_is_symmetric_across_small_ground_height_changes(self):
+        for dy in (-.04,0.,.04):
+            first=_tank(1,0.,0.)
+            second=_tank(2,1.,0.,y=dy)
+            first['roll']=.02
+            for a,b in ((first,second),(second,first)):
+                trace={}
+                self.assertTrue(tank_collision.planar_body_contact(a,b,trace))
+                self.assertTrue(trace['same_layer'])
+                self.assertIsNotNone(tank_collision.physical_planar_contact(a,b))
 
     def test_real_side_contact_retains_reciprocal_shove(self):
         first = _tank(1, 0., 0., vx=10.)

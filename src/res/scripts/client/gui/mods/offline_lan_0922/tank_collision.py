@@ -255,6 +255,7 @@ def planar_body_contact(first, second, trace=None):
             if length > 1.e-8:
                 candidates.append(tuple(c/length for c in cross))
     minimum = None
+    horizontal_minimum = None
     for axis in candidates:
         radius = (sum(ea[i]*abs(dot(axis, aa[i])) for i in range(3)) +
                   sum(eb[i]*abs(dot(axis, ab[i])) for i in range(3)))
@@ -264,14 +265,27 @@ def planar_body_contact(first, second, trace=None):
             return False
         if minimum is None or depth < minimum[0]:
             minimum = (depth, axis)
+        if (axis[1]*axis[1] < axis[0]*axis[0]+axis[2]*axis[2] and
+                (horizontal_minimum is None or depth < horizontal_minimum[0])):
+            horizontal_minimum = (depth, axis)
+    # A vertical MTV is not evidence of roof support. When both body centres
+    # lie inside the other's thickness slab, they occupy the same layer:
+    # retain 3D intersection testing but separate along its horizontal axes.
+    # Top/bottom contacts outside those slabs remain with suspension.
+    same_layer = (abs(dot(delta, aa[1])) < ea[1] and
+                  abs(dot(delta, ab[1])) < eb[1])
     depth, axis = minimum
+    if (same_layer and horizontal_minimum is not None and
+            axis[1]*axis[1] >= axis[0]*axis[0]+axis[2]*axis[2]):
+        depth, axis = horizontal_minimum
     if dot(delta, axis) < 0.0:
         axis = tuple(-value for value in axis)
     # Partition the contact by its dominant world component. Horizontal
     # motors must not turn vertical penetration into a full-width shove.
     side = axis[1]*axis[1] < axis[0]*axis[0]+axis[2]*axis[2]
     if trace is not None:
-        trace.update(verdict='side' if side else 'vertical',axis=axis,depth=depth)
+        trace.update(verdict='side' if side else 'vertical',axis=axis,depth=depth,
+                     same_layer=same_layer)
     return side
 
 

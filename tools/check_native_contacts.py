@@ -265,6 +265,18 @@ def body(identity, x=0., z=0., **changes):
 
 def controlled_cases():
     cases = []
+    captured_path=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              'tests','fixtures','roof_same_layer_164250.json')
+    with open(captured_path) as stream:
+        captured=json.load(stream)
+    captured_bodies=[]
+    for row in captured:
+        values=dict(row)
+        identity=values.pop('id')
+        values.update(mass=36000.,shape=(1.600411057472229,2.9779720306396484,
+            .004364000167697668,1.5524429678916931))
+        captured_bodies.append(body(identity,**values))
+    cases.append(('captured_same_layer_type59',captured_bodies,.1,(),'valid'))
     for mode in ('valid', 'missing', 'partial', 'zero'):
         cases.append(('armor_'+mode, [body(1, vz=14.), body(2, z=5.5)], .2, (), mode))
     cases.extend([
