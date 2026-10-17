@@ -54,7 +54,9 @@ def _deck_seed(along, sideways):
 def player_seed():
     """Bridge centre lane, behind the first parked hull with room to turn."""
     if shot_drop_enabled():
-        point, yaw = _deck_seed(4.0, 9.0)
+        # Windows340 report 175512: the first two drops contact at lateral
+        # 12.775m and 12.207m. Centre the player there, not at the exit ray.
+        point, yaw = _deck_seed(4.0, 12.5)
         return (point[0], -14.0, point[2]), yaw
     return _deck_seed(-14.0, -.7)
 

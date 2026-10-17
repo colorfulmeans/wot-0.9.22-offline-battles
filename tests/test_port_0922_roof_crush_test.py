@@ -174,6 +174,16 @@ class ShotDropTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {fixture.ENV: '0'}):
             self.assertFalse(fixture.shot_drop_enabled())
 
+    def test_player_seed_centres_captured_175512_landing_positions(self):
+        seed,yaw=fixture.player_seed()
+        previous=fixture._deck_seed(4.,9.)[0]
+        self.assertAlmostEqual(3.5,math.hypot(seed[0]-previous[0],seed[2]-previous[2]))
+        # First contact centres before higher stacked hulls alter descent.
+        for x,z in ((-2.036114508388348,92.23160223399242),
+                    (-1.7330605556782988,92.71278446318803)):
+            self.assertLess(math.hypot(seed[0]-x,seed[2]-z),.35)
+        self.assertAlmostEqual(4.,(seed[0]-2.)*math.sin(yaw)+(seed[2]-105.)*math.cos(yaw))
+
     def test_only_confirmed_shot_advances_one_bot_and_snapshot_gaps_are_preserved(self):
         queue, states = fixture.ShotDropQueue(), self.states()
         queue.observe([dict(id=1, fire_seq=0)], states)

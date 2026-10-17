@@ -19,6 +19,9 @@ Released Bots use fixture-only steering through the clear deck apron and off
 a common edge toward the fixed player spawn lane. Stay near spawn to receive
 the drops. The endpoint is fixed, not a homing or guaranteed-impact mechanic:
 native placement, descent and actual contact must be tested in the client.
+The player seed is 3.5m farther outward than Windows340, centred at lateral
+12.5m from the bridge baseline. This matches the first two recorded contact
+centres (12.775m and 12.207m) in report 20261017-175512; Bot driving is unchanged.
 No teleport, position lock, synthetic support, impact or damage is added.
 ROOF SHOT DROP records releases, apron waypoints, falls and queue exhaustion.
 The extra process-only flag is WOT_OFFLINE_ROOF_SHOT_DROP=1, in addition to
