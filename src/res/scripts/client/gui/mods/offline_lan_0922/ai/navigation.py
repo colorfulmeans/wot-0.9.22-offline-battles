@@ -38,6 +38,11 @@ BAKED_SHALLOW_WATER = 4
 MAX_BAKED_CORRIDOR_CACHE = 2048
 # Share only visited cells, never expand the complete graph in the x86 worker.
 MAX_BAKED_SEARCH_EDGE_CACHE = 2048
+# Only near-equivalent old D+C choices in the same forward sector may trade
+# at most this much route progress for a gentler real surface. C remains intact.
+LOCAL_SLOPE_SCORE_WINDOW = 2.0
+LOCAL_SLOPE_YAW_WINDOW = 0.45
+LOCAL_SLOPE_PROBES = 3
 BAKED_SHALLOW_WATER_PENALTY = 4.0
 BAKED_EDGE_CLEARANCE_WEIGHT = 0.20
 BAKED_FORMAT_NAME = 'offline-lan-0922-navgraph'
@@ -175,6 +180,8 @@ class TerrainGrid(object):
 		# The runtime explicitly binds its synchronous main-thread corridor oracle.
 		# Pure-data grids retain the same Python proof without an engine owner.
 		self.native_query_oracle = None
+		self.directional_surface_probe = None
+		self._last_layer_receipt = {}
 		self._native_review_pending = None
 
 	def _install_baked_graph(self, graph):
@@ -673,11 +680,22 @@ class TerrainGrid(object):
 				return True
 		return False
 
-	def _ground(self, x, z, hint_y):
+	def _ground(self, x, z, hint_y, actual_layer=False):
 		if not self._inside(x, z):
 			return None
 		if self.prebaked:
-			return self._baked_cell_height(self.cell_for((x, hint_y, z)))
+			height = self._baked_cell_height(self.cell_for((x, hint_y, z)))
+			if (actual_layer and height is not None and
+					abs(height-float(hint_y)) > self._layer_slack()):
+				try:
+					actual = self.ground_probe(float(x), float(z), float(hint_y))
+				except Exception:
+					actual = None
+				self._last_layer_receipt = dict(position=(x,hint_y,z),
+					baked_height=height, actual_height=actual, reason='local_support_layer')
+				return (float(actual) if actual is not None and
+					abs(float(actual)-float(hint_y)) <= self._layer_slack() else None)
+			return height
 		key = (int(math.floor(x * 10.0 + 0.5)),
 		       int(math.floor(z * 10.0 + 0.5)), self._layer(hint_y))
 		if key in self._ground_cache:
@@ -691,6 +709,11 @@ class TerrainGrid(object):
 		self._ground_cache[key] = height
 		return height
 
+	def _layer_slack(self):
+		# A cell-centre height may differ from a realised point on an ordinary
+		# admitted slope. This is a mismatch trigger, never a global height cap.
+		return .8 + self.cell_size * .71 * NAVIGATION_MAX_GRADE
+
 	def segment_clear(self, start, end, native_capability=None):
 		"""Check continuous support and drivable grade, not just both endpoints."""
 		self._validate_planning_policy(native_capability)
@@ -702,8 +725,23 @@ class TerrainGrid(object):
 			return False
 		distance = _distance_2d(start, end)
 		if distance < 0.25:
-			return True
+			return abs(float(start[1])-float(end[1])) <= self._layer_slack()
 		if self.prebaked:
+			baked_start = self._baked_cell_height(self.cell_for(start))
+			if (baked_start is not None and
+					abs(float(start[1])-baked_start) > self._layer_slack()):
+				# Route anchors can have placeholder Y=0. Only independently
+				# grounded actual poses may claim that they occupy another layer.
+				try:
+					actual = self.ground_probe(start[0], start[2], start[1])
+				except Exception:
+					actual = None
+				if actual is not None and abs(float(actual)-float(start[1])) <= self._layer_slack():
+					evidence = dict(start=tuple(start), end=tuple(end),
+						baked_height=baked_start, actual_height=float(actual))
+					clear = self._live_baked_egress_clear(start, end, evidence=evidence)
+					self._last_layer_receipt = evidence
+					return clear
 			# Only short joins from an unsupported cell bypass erosion. Test the
 			# actual hull pose and both shoulders every time; never modify the bake.
 			if self._baked_cell_height(self.cell_for(start)) is None:
@@ -960,6 +998,11 @@ class TerrainGrid(object):
 					evidence['egress_reason'] = 'missing_support'
 				combat_count('nav_live_egress_missing_support')
 				return False
+			if abs(float(start_y)-float(start[1])) > self._layer_slack():
+				if evidence is not None:
+					evidence.update(egress_reason='start_support_layer',
+						observed_height=float(start_y))
+				return False
 			previous = (float(start[0]), float(start_y), float(start[2]))
 			grounded_start = previous
 			for index in range(1, steps + 1):
@@ -1001,6 +1044,14 @@ class TerrainGrid(object):
 						combat_count('nav_live_egress_shoulder')
 						return False
 				previous = (x, y, z)
+			# An explicit target must be reached on its own physical layer.
+			# Otherwise a successful lower-floor sweep would authorize an upper
+			# bridge target. Authored placeholders are resolved before live joins.
+			if abs(previous[1]-float(end[1])) > self._layer_slack():
+				if evidence is not None:
+					evidence.update(egress_reason='endpoint_support_layer',
+						observed_height=previous[1], target_height=float(end[1]))
+				return False
 			# Sweep from the actual hull position, never the snapped cell centre.
 			# Do not cache a live exit as an immutable graph edge: doors and
 			# wrecks can change between requests.
@@ -1387,6 +1438,7 @@ class TerrainGrid(object):
 		           side * 1.75, -side * 1.75)
 		distances = (self.cell_size * 0.78, self.cell_size * 0.52)
 		best = None
+		eligible = []
 		native_candidates = 0
 		for distance in distances:
 			for offset in offsets:
@@ -1401,7 +1453,7 @@ class TerrainGrid(object):
 					continue
 				if diagnostic is not None:
 					diagnostic['attempted'] += 1
-				y = self._ground(x, z, float(current[1]))
+				y = self._ground(x, z, float(current[1]), actual_layer=True)
 				if y is None:
 					# A streaming/eroded cell is unknown, not automatically a wall.
 					# Prove a short actual-pose step without publishing graph terrain.
@@ -1466,9 +1518,52 @@ class TerrainGrid(object):
 							y-float(current[1]), distance)),
 						height_source='navigation_ground_not_surface_normal'))
 				value = (score, abs(offset), candidate)
+				eligible.append((value, offset))
 				if best is None or value[:2] < best[:2]:
 					best = value
 		selected = best[2] if best is not None else None
+		probe = self.directional_surface_probe
+		if best is not None and callable(probe):
+			preferred = None
+			observations = []
+			rejected_surfaces = set()
+			base_theta = next(offset for value, offset in eligible if value == best)
+			for value, offset in sorted(eligible, key=lambda item:item[0][:2]):
+				if (value[0] > best[0] + LOCAL_SLOPE_SCORE_WINDOW or
+						abs(offset-base_theta) > LOCAL_SLOPE_YAW_WINDOW + 1e-8):
+					continue
+				if len(observations) >= LOCAL_SLOPE_PROBES:
+					break
+				point = value[2]
+				candidate_yaw = math.atan2(point[0]-current[0], point[2]-current[2])
+				try:
+					surface = probe(current, candidate_yaw, _distance_2d(current, point))
+				except Exception:
+					surface = dict(status='query_failed')
+				surface = dict(surface or {}, point=point, score=value[0], theta=offset)
+				observations.append(surface)
+				grade = surface.get('grade')
+				if surface.get('status') != 'hit' or grade is None:
+					continue
+				if math.isnan(float(grade)) or math.isinf(float(grade)):
+					continue
+				if abs(float(grade)) > NAVIGATION_MAX_GRADE:
+					rejected_surfaces.add(point)
+					continue
+				rank = (abs(float(grade)), value[0], value[1])
+				if preferred is None or rank < preferred[0]:
+					preferred = (rank, point)
+			# Unknown normals retain the old result, never masquerade as flat.
+			if preferred is not None:
+				selected = preferred[1]
+			elif selected in rejected_surfaces:
+				remaining = [value for value, offset in eligible
+					if value[2] not in rejected_surfaces]
+				selected = min(remaining, key=lambda value:value[:2])[2] if remaining else None
+			if diagnostic is not None:
+				diagnostic.update(surface_choices=observations, legacy_selected=best[2],
+					slope_score_window=LOCAL_SLOPE_SCORE_WINDOW,
+					slope_yaw_window=LOCAL_SLOPE_YAW_WINDOW)
 		if diagnostic is not None:
 			diagnostic['selected'] = selected
 		return selected
