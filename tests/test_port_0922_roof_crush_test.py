@@ -175,7 +175,8 @@ class ShotDropTests(unittest.TestCase):
             self.assertFalse(fixture.shot_drop_enabled())
 
     def test_player_seed_centres_captured_175512_landing_positions(self):
-        seed,yaw=fixture.player_seed()
+        seed,unused_player_yaw=fixture.player_seed()
+        unused_point,yaw=fixture._deck_seed(4.,0.)
         previous=fixture._deck_seed(4.,9.)[0]
         self.assertAlmostEqual(3.5,math.hypot(seed[0]-previous[0],seed[2]-previous[2]))
         # First contact centres before higher stacked hulls alter descent.
@@ -183,6 +184,21 @@ class ShotDropTests(unittest.TestCase):
                     (-1.7330605556782988,92.71278446318803)):
             self.assertLess(math.hypot(seed[0]-x,seed[2]-z),.35)
         self.assertAlmostEqual(4.,(seed[0]-2.)*math.sin(yaw)+(seed[2]-105.)*math.cos(yaw))
+
+    def test_player_faces_same_as_drop_leg_with_rear_toward_bridge(self):
+        point,yaw=fixture.player_seed()
+        bridge_point,bridge_yaw=fixture._deck_seed(4.,0.)
+        self.assertAlmostEqual(math.pi*.5,(yaw-bridge_yaw) % (math.pi*2.))
+        # Outward Bot travel is local bridge +side, and player front is +Z.
+        front=(math.sin(yaw),math.cos(yaw))
+        outward=(math.cos(bridge_yaw),-math.sin(bridge_yaw))
+        self.assertAlmostEqual(1.,sum(a*b for a,b in zip(front,outward)))
+        toward_bridge=(bridge_point[0]-point[0],bridge_point[2]-point[2])
+        self.assertGreater(-front[0]*toward_bridge[0]-front[1]*toward_bridge[1],0.)
+        self.assertAlmostEqual(-1.8913516224654456,point[0])
+        self.assertAlmostEqual(92.46575161605868,point[2])
+        with mock.patch.dict(os.environ,{fixture.SHOT_ENV:'0'}):
+            self.assertEqual(fixture._deck_seed(-14.,-.7),fixture.player_seed())
 
     def test_only_confirmed_shot_advances_one_bot_and_snapshot_gaps_are_preserved(self):
         queue, states = fixture.ShotDropQueue(), self.states()

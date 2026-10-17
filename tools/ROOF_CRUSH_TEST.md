@@ -22,6 +22,8 @@ native placement, descent and actual contact must be tested in the client.
 The player seed is 3.5m farther outward than Windows340, centred at lateral
 12.5m from the bridge baseline. This matches the first two recorded contact
 centres (12.775m and 12.207m) in report 20261017-175512; Bot driving is unchanged.
+The player faces outward along the falling Bots' final driving direction, with
+its rear toward the bridge (90 degrees from the original bridge-axis heading).
 No teleport, position lock, synthetic support, impact or damage is added.
 ROOF SHOT DROP records releases, apron waypoints, falls and queue exhaustion.
 The extra process-only flag is WOT_OFFLINE_ROOF_SHOT_DROP=1, in addition to

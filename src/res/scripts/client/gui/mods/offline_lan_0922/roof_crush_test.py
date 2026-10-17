@@ -52,11 +52,13 @@ def _deck_seed(along, sideways):
 
 
 def player_seed():
-    """Bridge centre lane, behind the first parked hull with room to turn."""
+    """Fixture player placement; the native terrain query owns final height."""
     if shot_drop_enabled():
         # Windows340 report 175512: the first two drops contact at lateral
         # 12.775m and 12.207m. Centre the player there, not at the exit ray.
         point, yaw = _deck_seed(4.0, 12.5)
+        # Face outward along the dropping Bots' final leg, rear toward bridge.
+        yaw = (yaw+math.pi*.5+math.pi) % (2.*math.pi)-math.pi
         return (point[0], -14.0, point[2]), yaw
     return _deck_seed(-14.0, -.7)
 
