@@ -1143,6 +1143,14 @@ class LocalDriver(object):
 				progress['best'] = distance
 				progress['local_rebases'] = progress.get('local_rebases', 0) + 1
 				progress['reset_reason'] = 'local_rebase_without_credit'
+				if displacement >= 0.08:
+					# Keep the original physical travel credit even if every
+					# planner sample supplies a new connector. Only a stationary
+					# representation change must leave the lease untouched.
+					progress['at'] = state['clock']
+					progress.pop('alignment_yaw', None)
+					progress.pop('alignment_best', None)
+					progress['reset_reason'] = 'local_rebase_with_translation'
 			elif distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance

@@ -104,6 +104,17 @@ class ConnectorProgressTests(unittest.TestCase):
         self.assertNotIn('objective_progress', driver.states[11])
         self.assertEqual(driver.states[11]['recovery_time'], 0.)
 
+    def test_moving_between_new_connectors_is_not_a_stationary_loop(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        for frame in range(200):
+            position = (0., 0., frame * .2)
+            target = ((-10., 0., 10.), (10., 0., 10.))[frame % 2]
+            target = (target[0], 0., position[2] + target[2])
+            driver.drive(11, 0, position, 0., 2., .1, target, [],
+                lambda *args: True, progress_target=target,
+                recovery_goal=(0., 0., 200.), turn_speed_limit=.15)
+            self.assertEqual(driver.states[11]['recovery_time'], 0.)
+
     def test_assignment_provenance_is_telemetry_not_new_order_revision(self):
         planner = BotPlanner()
         bot = {'id': 11, 'state': dict(x=1., y=2., z=3.)}
