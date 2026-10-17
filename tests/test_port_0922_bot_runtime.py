@@ -31,6 +31,19 @@ from server_bot_ai import BotPlanner
 PACKAGE_ROOT = PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' / 'gui' / 'mods' / 'offline_lan_0922'
 
 
+def _motion_rows(text):
+    # Native records may fragment after additional execution evidence is added.
+    # Exercise the shipped diagnostic reader rather than assuming one log line.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('motion_evidence_reader', ROOT / 'tools/read_native_evidence.py')
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    parsed = reader.parse_lines(text.splitlines(), 'worker')
+    if parsed['issues']:
+        raise AssertionError(parsed['issues'])
+    return [row['data'] for row in parsed['records'] if row['label'] == 'BOT MOTION']
+
+
 def _graph(map_name='01_karelia', waypoint_count=2):
     waypoints = tuple((float(index * 4), 0.0, False)
                       for index in range(waypoint_count))
@@ -17083,13 +17096,13 @@ class BotRuntimeTests(unittest.TestCase):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)
         state=self.runtime.states[11]
-        state['_motion_stall_pending']={}
+        state['_motion_stall_pending']={'start': (state['x'],state['y'],state['z']), 'controls': {'motion': (0.,0.)}}
         state['_gun_angle_rejected']={('bot',2):108.0,('human',1):99.0}
         position=(state['x'],state['y'],state['z'])
         output=io.StringIO()
         with redirect_stdout(output):
             self.runtime._finish_motion_stall(state,False,False,position,100.0)
-        row=json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ',1)[1])
+        row=_motion_rows(output.getvalue())[0]
         self.assertEqual([8.0,0.0],[r['seconds_left'] for r in row['gun_angle_rejected']])
         self.assertNotIn('_motion_stall_pending',state)
 
@@ -17116,7 +17129,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 3.0)
             self.runtime._finish_motion_stall(state, False, False,
                 (state['x'], state['y'], state['z']),3.0)
-        row = json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         receipt = row['navigation']
         self.assertEqual(7, len(receipt['path_near_target']))
         self.assertEqual(200, receipt['path_length'])
@@ -17163,7 +17176,7 @@ class BotRuntimeTests(unittest.TestCase):
                 traffic_input=order, traffic_output=safety)
             self.runtime._finish_motion_stall(state, False, False, position,3.0)
         self.assertIn('traffic=vehicle_brake', output.getvalue())
-        row = json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual('vehicle_brake', row['traffic_mode'])
         self.assertEqual(1.0, row['requested_turn'])
         self.assertEqual([0.0, 1.0], row['controls']['before_traffic'])
@@ -17201,7 +17214,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
-        row = json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual(5.0,row['gun_angle_rejected'][0]['seconds_left'])
         self.assertNotIn('_motion_stall_pending',state)
 
@@ -17233,7 +17246,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
-        row = json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual(1.0, row['requested_throttle'])
         self.assertEqual([1.0, -0.4], row['controls']['planner'])
         self.assertEqual([1.0, -0.4], row['controls']['before_traffic'])
@@ -17260,8 +17273,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.runtime._traffic_coordinator, 'safe_controls',
                 side_effect=lambda body, command, *args: dict(command)):
             self.runtime.update(.04, 3.0)
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines() if '[Offline LAN 0.9.22] BOT MOTION ' in line]
+        rows = _motion_rows(output.getvalue())
         self.assertTrue(rows)
         row = next(row for row in rows if row['id'] == 11)
         self.assertTrue(row['hull_rotation_contact_blocked'])
@@ -17290,9 +17302,7 @@ class BotRuntimeTests(unittest.TestCase):
                 if '_motion_stall_pending' in state:
                     self.runtime._finish_motion_stall(
                         state, False, False, (state['x'], state['y'], state['z']),float(second))
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines()
-                if line.startswith('[Offline LAN 0.9.22] BOT MOTION ')]
+        rows = _motion_rows(output.getvalue())
         self.assertEqual(2, len(rows))
         self.assertEqual([15.0, 30.0],
                          [row['local_roaming']['elapsed'] for row in rows])
@@ -21463,9 +21473,7 @@ class BotRuntimeTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             runtime.update(.04, 1.0)
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines()
-                if '[Offline LAN 0.9.22] BOT MOTION ' in line]
+        rows = _motion_rows(output.getvalue())
         self.assertEqual(1, len(rows))
         self.assertTrue(rows[0]['pose_rollback'])
         self.assertFalse(rows[0]['support_rollback'])

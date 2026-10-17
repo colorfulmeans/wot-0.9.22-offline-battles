@@ -785,6 +785,7 @@ class BotPlanner(object):
                 if _number(lease.get('until')) > 0.0:
                     order['route_assignment']['lease'] = dict(
                         until=_number(lease['until']),
+                        check=dict(lease.get('_lease_check') or {}),
                         observation=dict(lease.get('_lease_observation') or {}))
                 orders.append(order)
         orders.sort(key=lambda value: value["id"])
@@ -2359,6 +2360,7 @@ class BotPlanner(object):
         if _number(previous_lease.get('until')) > 0.0:
             self._route_assignment_receipts[bot['id']]['previous_lease'] = dict(
                 until=_number(previous_lease['until']),
+                check=dict(previous_lease.get('_lease_check') or {}),
                 observation=dict(previous_lease.get('_lease_observation') or {}))
 
     def _rebalance_routes(self, team, bots, contacts, now,
@@ -2407,8 +2409,10 @@ class BotPlanner(object):
                     self._route_assignments.pop(bot["id"], None)
                 self._route_states.pop(bot["id"], None)
         if len(catalog) < 2:
+            self._observe_route_leases(bots, now, 'catalog_has_no_alternative')
             return
         if _number(now) < _number(self._next_route_rebalance.get(team)):
+            self._observe_route_leases(bots, now, 'rebalance_not_due', evaluation=False)
             return
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
         pressure = dict((route_id, 0.0) for route_id in catalog)
@@ -2423,6 +2427,7 @@ class BotPlanner(object):
                                max(1.0, _number(contact.get("max_health"), 1.0)))
             pressure[route_id] += max(0.3, health_fraction)
         if not pressure or max(pressure.values()) <= 0.0:
+            self._observe_route_leases(bots, now, 'no_known_pressure')
             for bot in bots:
                 assignment = self._route_assignments.get(bot['id']) or {}
                 if _number(assignment.get('until')) > 0.0:
@@ -2451,7 +2456,13 @@ class BotPlanner(object):
         target_route = max(sorted(catalog), key=lambda route_id:
                            pressure[route_id] - counts[route_id] * 0.45)
         if pressure[target_route] - counts[target_route] * 0.45 <= 0.0:
+            self._observe_route_leases(bots, now, 'pressure_already_covered',
+                target_route=target_route, target_pressure=pressure[target_route],
+                target_contributors=counts[target_route],
+                target_score=pressure[target_route] - counts[target_route] * 0.45)
             return
+        self._observe_route_leases(bots, now, 'pressure_evaluated',
+            target_route=target_route)
         target_record = catalog[target_route]
         # Re-evaluation happens before a temporary assignment expires. Renew
         # the same pressured route in place so its waypoint index survives;
@@ -2554,7 +2565,21 @@ class BotPlanner(object):
                 target_contributors=counts[target_route],
                 until=_number(now) + ROUTE_LEASE_SECONDS),
         }
+        self._route_assignments[donor['id']]['_lease_check'] = dict(
+            self._route_assignments[donor['id']]['_lease_observation'])
         self._route_states.pop(donor["id"], None)
+
+    def _observe_route_leases(self, bots, now, outcome, evaluation=True, **values):
+        """Record early exits without renewing leases or altering allocation."""
+        for bot in bots:
+            lease = self._route_assignments.get(bot['id']) or {}
+            if _number(lease.get('until')) <= 0.0:
+                continue
+            receipt = dict(values, evaluated_at=_number(now), outcome=outcome,
+                until=_number(lease['until']))
+            lease['_lease_check'] = dict(receipt)
+            if evaluation:
+                lease['_lease_observation'] = receipt
 
     def _reroute_wreck_stall(self, order, bot, manifest, now):
         """Bound each blocked gate attempt; skip once before changing lanes."""
@@ -2698,17 +2723,23 @@ class BotPlanner(object):
             if _integer(raw.get('team')) == bot['team']])
         candidates = []
         retry_candidates = []
+        entry_receipts = []
         class_tag = str(bot.get('profile', {}).get('class_tag') or '')
         for candidate_id, route in sorted(catalog.items()):
+            entry_receipt = dict(route=candidate_id, outcome='eligible')
+            entry_receipts.append(entry_receipt)
             if candidate_id == route_id:
+                entry_receipt['outcome'] = 'current_route'
                 continue
             config = bot_tactics.route_config(
                 self.tactics, self.tactics_map, candidate_id, bot['team'])
             if config is not None and not bot_tactics.matches(config, bot):
+                entry_receipt['outcome'] = 'class_mismatch'
                 continue
             affinity = _number((route.get('class_weights') or {}).get(
                 class_tag), 0.5)
             if affinity < MIN_ROUTE_CLASS_AFFINITY:
+                entry_receipt.update(outcome='class_affinity', affinity=affinity)
                 continue
             points = route['waypoints']
             entry = min(range(len(points)), key=lambda i: math.hypot(
@@ -2722,12 +2753,20 @@ class BotPlanner(object):
             # Do not call that an alternative exit.
             if math.hypot(_number(points[entry].get('x')) - goal['x'],
                           _number(points[entry].get('z')) - goal['z']) < 16.0:
+                entry_receipt.update(outcome='same_failed_gate', entry=entry,
+                                     point=_point(points[entry]))
                 continue
             nearest = min(math.hypot(
                 _number(p.get('x')) - point['x'],
                 _number(p.get('z')) - point['z'])
                 for p in route['waypoints'])
             candidate = (-affinity, nearest, candidate_id, route, entry)
+            entry_receipt.update(entry=entry,
+                point=_point(points[entry]), affinity=affinity,
+                nearest_distance=nearest,
+                entry_distance=math.hypot(_number(points[entry].get('x')) - point['x'],
+                                          _number(points[entry].get('z')) - point['z']),
+                retry_after=_number(avoided.get(candidate_id)))
             if _number(avoided.get(candidate_id)) > _number(now):
                 retry_candidates.append((_number(avoided[candidate_id]), candidate))
             else:
@@ -2735,6 +2774,8 @@ class BotPlanner(object):
         # The delay prefers untried routes; it must not turn an exhausted
         # catalogue into a parked tank. After the current bounded attempt,
         # allow the oldest failed alternative to be tried again.
+        trace['entry_selection'] = dict(sampled_at=_number(now), origin=dict(point),
+            policy='existing_affinity_then_nearest_route_point', candidates=entry_receipts)
         if not candidates and retry_candidates:
             candidates = [min(retry_candidates, key=lambda value: (value[0], value[1][:3]))[1]]
             trace['retry_previous_route'] = True
@@ -2747,6 +2788,11 @@ class BotPlanner(object):
         chosen = min(candidates, key=lambda value: value[:3])
         route, entry = chosen[3:]
         self._record_route_assignment(bot, now, route_id, route.get('id'), 'wreck_stall')
+        self._route_assignment_receipts[bot_id]['entry_selection'] = dict(
+            sampled_at=_number(now), origin=dict(point),
+            policy='existing_affinity_then_nearest_route_point',
+            candidates=entry_receipts, selected_route=str(route.get('id')),
+            selected_index=entry, selected_point=_point(route['waypoints'][entry]))
         self._route_assignments[bot_id] = {
             'route': route, 'until': 0.0, 'wreck_detour': True}
         # Join the evaluated entry from the current hull position, rather than
