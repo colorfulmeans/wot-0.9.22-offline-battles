@@ -62,6 +62,18 @@ class SupportLifecycleTests(unittest.TestCase):
         retained={k:state[k] for k in ('x','y','z','yaw','pitch','roll','speed','vertical_speed',
             'suspension_pitch_velocity','suspension_roll_velocity')}
         with contextlib.redirect_stdout(io.StringIO()):
+            # Four restored points must never release detailed ownership,
+            # regardless of which of the five witnesses is still missing.
+            points=[(row['x'],row['z']) for row in runtime._basic_support_status(state)]
+            for missing in points:
+                with self.subTest(missing=missing), mock.patch.object(
+                        runtime,'_ground_probe_at',side_effect=lambda x,z,*args:
+                        None if (x,z)==missing else 0.):
+                    self.assertFalse(runtime._release_detailed_support(state))
+                    self.assertTrue(state['_edge_support_active'])
+                    self.assertEqual(4,sum(row['valid'] for row in
+                                          state['_support_mode_sample'][1]))
+                    self.assertEqual(retained,{k:state[k] for k in retained})
             self.assertTrue(runtime._release_detailed_support(state))
             self.assertIsNone(runtime._suspension_params_for(11))
         self.assertNotIn(11,runtime._suspension_params)
