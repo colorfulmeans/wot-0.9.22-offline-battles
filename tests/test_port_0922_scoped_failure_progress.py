@@ -76,6 +76,29 @@ class ScopedFailureTests(unittest.TestCase):
 
 
 class ConnectorProgressTests(unittest.TestCase):
+    def test_nearby_point_change_cannot_compare_two_different_distances(self):
+        driver=LocalDriver(stuck_seconds=100.)
+        self.drive(driver,(0.,0.,10.))
+        before=dict(driver.states[11]['objective_progress'])
+        self.drive(driver,(0.,0.,8.5))
+        progress=driver.states[11]['objective_progress']
+        self.assertEqual(before['best'],progress['best'])
+        self.assertEqual(before['at'],progress['at'])
+        self.assertEqual(10.,progress['measured_distance'])
+        self.assertEqual(8.5,progress['steering_distance'])
+
+    def test_translation_does_not_reissue_an_already_earned_alignment(self):
+        driver=LocalDriver(stuck_seconds=100.)
+        self.drive(driver,(0.,0.,3.))
+        progress=driver.states[11]['objective_progress']
+        progress.update(alignment_yaw=.7,alignment_best=.1)
+        driver.drive(11,0,(0.,0.,.1),math.pi/2,0.,.1,(0.,0.,3.),[],
+            lambda *args:True,progress_target=(0.,0.,3.),
+            recovery_goal=(0.,0.,200.),turn_speed_limit=.15)
+        self.assertEqual(.7,progress['alignment_yaw'])
+        self.assertEqual(.1,progress['alignment_best'])
+        self.assertEqual('new_best_distance',progress['credit_reason'])
+
     def test_elc_revisiting_connectors_cannot_reissue_distance_and_alignment_credit(self):
         driver = LocalDriver(stuck_seconds=100.)
         modes = []

@@ -65,13 +65,23 @@ class ReceiptPlanner(object):
         self.completed = self.cancelled = 0
 
     def submit(self, start, goal, now, max_expansions, prefer_clearance,
-               edge_penalties=None, hard_edge_penalties=None, avoid_points=None):
+               edge_penalties=None, hard_edge_penalties=None, avoid_points=None,
+               route_corridor=None):
         self.next_job_id += 1
         job = self.source.NativeSearch(self.next_job_id,
                                       self.grid.static_hull_revision, now)
-        job.fixture_result = (() if self.force_empty else self.grid.plan(
-            start, goal, avoid_points, max_expansions, now, prefer_clearance,
-            edge_penalties, hard_edge_penalties))
+        job.progress.update(start=tuple(start), goal=tuple(goal))
+        job.fixture_result = ()
+        if not self.force_empty:
+            search = self.grid.begin_plan(
+                start, goal, avoid_points, max_expansions, now, prefer_clearance,
+                edge_penalties, hard_edge_penalties, route_corridor=route_corridor)
+            while not search.done:
+                search.step(256)
+                if search.progress.get('deferred'):
+                    break
+            job.fixture_result = (None if search.progress.get('deferred')
+                                  else search.result)
         self.jobs[job.job_id] = job
         return job
 
@@ -172,6 +182,42 @@ def main():
             'invalid metadata did not partially install the grid')
         backend.sim_close(handle)
         navigator.close()
+
+    # Unknown support is distinct from a genuine ford, including water
+    # behind the first eroded cell. Both owners retain fatal/physical gates.
+    for water_x in (None, 11, 13):
+        baked = graph()
+        baked['hazards'] = [0] * len(baked['hazards'])
+        baked['heights_mm'][15*31+12] = None
+        if water_x is not None:
+            baked['hazards'][15*31+water_x] = 4
+        nav = source.TerrainNavigator(lambda x,z,hint:0., baked_graph=baked)
+        runtime = types.ModuleType('unknown_water_fixture')
+        runtime.navigator = nav
+        handle = backend.sim_open(91,1)
+        native = facade.NativeNavigationCore.install(runtime, backend, handle)
+        a,b = (-20.,0.,0.),(-4.,0.,0.)
+        for start,end in ((a,b),(b,a)):
+            for mask in (4,3,7):
+                expected = nav.grid.segment_has_baked_hazard(start,end,mask)
+                compare(expected,native.grid.segment_has_baked_hazard(start,end,mask),
+                        'unknown support / actual water parity')
+                if mask == 4:
+                    compare(water_x is not None,expected,'only actual water sets ford hazard')
+            compare(nav.grid.dry_segment_clear(start,end,1.),
+                    native.grid.dry_segment_clear(start,end,1.),
+                    'unknown corridor cannot bypass physical proof')
+        native.detach()
+        nav.close()
+        backend.sim_close(handle)
+
+    if '--water-only' in sys.argv:
+        # Shipping retains the Python route/recovery owner. The dormant
+        # persistent owner below intentionally predates that owner's state;
+        # its complete migration probe remains available, not a shipping gate.
+        print(json.dumps(dict(checks=checks[0], status='water/grid parity passed'),
+                         sort_keys=True))
+        return
 
     for scenario in range(5):
         queries = [[], []]

@@ -1125,10 +1125,19 @@ std::vector<Cell> Grid::cells(const Point &a, const Point &b,
   return line_cells(start, end);
 }
 std::vector<Edge> Grid::edges(const Point &a, const Point &b) const {
-  const auto row = line_cells(cell(a), cell(b));
+  const Edge key = {cell(a), cell(b)};
+  const auto cached = segment_edges.find(key);
+  if (cached != segment_edges.end())
+    return cached->second;
+  const auto row = line_cells(key.first, key.second);
   std::vector<Edge> out;
   for (size_t i = 1; i < row.size(); ++i)
     out.push_back(edge_key(row[i - 1], row[i]));
+  if (row.size() <= 9) {
+    if (segment_edges.size() >= 2048)
+      segment_edges.clear();
+    segment_edges[key] = out;
+  }
   return out;
 }
 Grid::Corridor Grid::corridor(const Point &a, const Point &b) {
@@ -1171,6 +1180,27 @@ Grid::Corridor Grid::corridor(const Point &a, const Point &b) {
 }
 bool Grid::hazard(const Point &a, const Point &b, int mask) {
   const auto c = corridor(a, b);
+  if (!c.known && mask == 4) {
+    // Unknown routing support is not a water witness. Keep fatal/unknown
+    // rejection and the independent segment/physical proof unchanged.
+    const Edge key = {cell(a), cell(b)};
+    const auto cached = shallow_corridors.find(key);
+    if (cached != shallow_corridors.end())
+      return cached->second;
+    bool water = false;
+    const auto row = cells(a, b, false);
+    for (size_t i = 1; i < row.size(); ++i) {
+      const int j = flat(row[i]);
+      if (j >= 0 && (hazards[j] & 4u)) {
+        water = true;
+        break;
+      }
+    }
+    if (shallow_corridors.size() >= 2048)
+      shallow_corridors.clear();
+    shallow_corridors[key] = water;
+    return water;
+  }
   return !c.known || (c.hazards & unsigned(mask));
 }
 bool Grid::motion_hazard(const Point &a, const Point &b, int mask) const {

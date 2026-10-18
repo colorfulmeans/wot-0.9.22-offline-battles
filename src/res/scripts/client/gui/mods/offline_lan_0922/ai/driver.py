@@ -1236,9 +1236,15 @@ class LocalDriver(object):
 			goal_changed = bool(progress is not None and
 				_distance(progress.get('order_goal', progress['goal']), pocket_goal) > 2.0)
 			if progress is None or goal_changed or _distance(position, pocket_goal) <= arrival:
+				reset_receipt = dict(at=state['clock'], position=tuple(position),
+					previous_order=progress.get('order_goal') if progress else None,
+					previous_goal=progress.get('goal') if progress else None,
+					previous_credit_age=state['clock']-progress['at'] if progress else None,
+					new_order=tuple(pocket_goal))
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
 				            'connectors': [],
+				            'reset_receipt': reset_receipt,
 				            'credit_reason': 'new_order_or_destination',
 				            'reset_reason': 'order_changed' if goal_changed else 'initial_or_arrived'}
 				state['objective_progress'] = progress
@@ -1276,13 +1282,19 @@ class LocalDriver(object):
 					progress.pop('alignment_yaw', None)
 					progress.pop('alignment_best', None)
 					progress['reset_reason'] = 'local_rebase_with_translation'
-			elif distance + 0.08 <= progress['best']:
+			# A connector's best distance and its current distance must use
+			# the SAME fixed point. Native rebasing/steering may supply another
+			# point within the existing 2 m identity tolerance without travel.
+			distance = _distance(position, progress['goal'])
+			progress['measured_distance'] = distance
+			progress['steering_distance'] = _distance(position, progress_target)
+			if distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance
 				progress['at'] = state['clock']
 				progress['credit_reason'] = 'new_best_distance'
-				progress.pop('alignment_yaw', None)
-				progress.pop('alignment_best', None)
+				# Real translation earns distance credit, but must not grant
+				# the same already-earned turn a fresh alignment anchor.
 			elif distance + 0.002 < progress['best']:
 				# Slow uphill travel can take longer than the local stuck timeout
 				# to accumulate 8 cm. Credit its direction while the independent

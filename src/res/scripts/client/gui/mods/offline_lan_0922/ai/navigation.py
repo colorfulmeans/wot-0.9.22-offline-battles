@@ -161,6 +161,7 @@ class TerrainGrid(object):
 		self._corridor_cache = {}
 		self._edge_cache = {}
 		self._segment_cache = {}
+		self._segment_edge_keys = {}
 		self._slope_corridor_cache = {}
 		self._failed_edges = {}
 		self._static_hull_edges = {}
@@ -208,6 +209,7 @@ class TerrainGrid(object):
 		self.prebaked = True
 		self._baked_corridor_cache = {}
 		self._baked_corridor_order = deque()
+		self._baked_shallow_cache = {}
 		self._baked_search_edge_cache = {}
 		self._baked_search_edge_order = deque()
 
@@ -432,6 +434,10 @@ class TerrainGrid(object):
 			return base + tuple(edge for edge in local if edge not in base)
 		start_cell = self.cell_for(start)
 		end_cell = self.cell_for(end)
+		cache_key = (start_cell, end_cell)
+		if cache_key in self._segment_edge_keys:
+			combat_count('nav_edge_geometry_reused')
+			return self._segment_edge_keys[cache_key]
 		if start_cell == end_cell:
 			return ()
 		x, z = start_cell
@@ -451,8 +457,15 @@ class TerrainGrid(object):
 				error += dx
 				z += step_z
 			cells.append((x, z))
-		return tuple(tuple(sorted((cells[index], cells[index + 1])))
-		             for index in range(len(cells) - 1))
+		result = tuple(tuple(sorted((cells[index], cells[index + 1])))
+		               for index in range(len(cells) - 1))
+		# Retain only short local geometry in the 32-bit worker. A long
+		# route can contain hundreds of edges and is not a small receipt.
+		if max(dx, dz) <= 8:
+			if len(self._segment_edge_keys) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+				self._segment_edge_keys.clear()
+			self._segment_edge_keys[cache_key] = result
+		return result
 
 	def prune_failed_edges(self, now):
 		for key, value in list(self._failed_edges.items()):
@@ -632,6 +645,25 @@ class TerrainGrid(object):
 			return False
 		unused_clear, hazards = self._baked_corridor(start, end)
 		# The summary excludes the occupied start cell so a tank can leave a ford.
+		if hazards is None and int(hazard_mask) == BAKED_SHALLOW_WATER:
+			# Missing routing height is not evidence of water. Read the actual
+			# immutable hazard bits even beyond an eroded cell; segment_clear
+			# still owns support, bounds and the live physical corridor proof.
+			key = (self.cell_for(start), self.cell_for(end))
+			if self._local_meshes is not None and self._local_meshes.touches(start, end):
+				# Mixed-resolution crossings depend on exact sub-cell geometry.
+				key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]))
+			if key in self._baked_shallow_cache:
+				combat_count('nav_actual_shallow_cache_hits')
+				return self._baked_shallow_cache[key]
+			cells = self._baked_segment_cells(start, end, require_height=False)
+			water = any(index is not None and self._baked_hazards[index] & BAKED_SHALLOW_WATER
+				for index in (self._baked_flat_index(cell) for cell in cells[1:]))
+			if len(self._baked_shallow_cache) >= MAX_BAKED_CORRIDOR_CACHE:
+				self._baked_shallow_cache.clear()
+			self._baked_shallow_cache[key] = bool(water)
+			combat_count('nav_actual_shallow_queries')
+			return bool(water)
 		return hazards is None or bool(hazards & int(hazard_mask))
 
 	def segment_has_motion_hazard(self, start, end, hazard_mask):

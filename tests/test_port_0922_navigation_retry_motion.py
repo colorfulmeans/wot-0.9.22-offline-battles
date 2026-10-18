@@ -44,13 +44,21 @@ class NavigationRetryMotionTests(unittest.TestCase):
         request = ('route_join', bot, 'retry_wall')
         yaw, speed, omega = math.pi, 0.0, 0.0
         starts = []
+        replan_origins = []
         begin_plan = nav.grid.begin_plan
+        request_replan = nav.request_replan
+
+        def observed_replan(bot_id, current, now):
+            replan_origins.append((tuple(current), position))
+            return request_replan(bot_id, current, now)
 
         def observed_plan(start, *args, **kwargs):
-            starts.append((tuple(start), position))
+            captured = nav.bot_states.get(bot, {}).get('recovery_start')
+            starts.append((tuple(start), position, captured))
             return begin_plan(start, *args, **kwargs)
 
         nav.grid.begin_plan = observed_plan
+        nav.request_replan = observed_replan
 
         def local_target(bot_id, current, target, order, state):
             return nav.next_target(bot_id, current, target, request,
@@ -197,6 +205,7 @@ class NavigationRetryMotionTests(unittest.TestCase):
                 break
         return dict(position=position, goal=goal, elapsed=elapsed,
                     failed=nav.search_failed, starts=starts, exited=exited,
+                    replan_origins=replan_origins,
                     failed_positions=failed_positions, name=name,
                     reverse_distance=reverse_distance,
                     navigation_reverse_distance=navigation_reverse_distance,
@@ -215,10 +224,17 @@ class NavigationRetryMotionTests(unittest.TestCase):
                         WAYPOINT_ARRIVAL_RADIUS, result)
                     # The published route anchor lies behind this already
                     # advanced hull. Every actual private retry belongs to the
-                    # live pose, not a new connector back to the spawn anchor.
+                    # live request pose, not the spawn anchor. A deferred
+                    # search may start after another physics tick; preserve
+                    # the exact captured request origin in that case.
                     self.assertGreaterEqual(len(result['starts']), 3)
-                    for start, live in result['starts']:
-                        self.assertEqual(start, live)
+                    for origin, live in result['replan_origins']:
+                        self.assertEqual(origin, live)
+                    origins = [origin for origin, live in result['replan_origins']]
+                    for start, live, captured in result['starts']:
+                        if start != live:
+                            self.assertEqual(start, captured)
+                            self.assertIn(start, origins)
 
 
 if __name__ == '__main__':

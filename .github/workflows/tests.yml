@@ -94,6 +94,7 @@ jobs:
           --pattern 'test_port_0922_scoped_failure_progress.py'
           --pattern 'test_port_0922_near_goal_evidence.py'
           --pattern 'test_port_0922_worker_query_reuse.py'
+          --pattern 'test_port_0922_unknown_water.py'
 
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
@@ -191,6 +192,8 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_control.py \
               --extension /tmp/offline_math_batch_native.so \
               --client-scripts /src/src/res/scripts/client
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_navigation.py \
+              /tmp/offline_math_batch_native.so /src/src/res/scripts/client --water-only
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_control_projection.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \
