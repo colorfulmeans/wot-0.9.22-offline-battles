@@ -557,14 +557,15 @@ python3 tools/bake_navigation_0922.py --client "$WOT_0922_CLIENT" --map 31_airfi
 python3 tools/bake_all_navigation_0922.py --client "$WOT_0922_CLIENT" --output-dir /tmp/navgraphs-clean --jobs 1
 ```
 
-The two Himmelsdorf maps use a reviewed 2 m refinement aligned to the old
-4 m centres. Reproduce either map with `tools/rebake_navigation_resolution.py
---client "$WOT_0922_CLIENT" --map 04_himmelsdorf --cell-size 2 --previous
-/path/to/previous/04_himmelsdorf.json --output /tmp/himmelsdorf.json`.
-This retains authored routes and spawn layouts, validates complete routed
-segments in both directions at 0.25 m collision sampling, and records the
-previous profile identity. Update the manifest and generated editor registry
-after reviewing the result. It does not change runtime driving laws.
+The two Himmelsdorf maps retain the original 4 m graph and driving scale.
+Only the two reviewed passage regions per map have additive 2 m meshes;
+coincident supported vertices join both graphs in each direction. Reproduce
+these resources with `python3 tools/build_local_navigation_meshes.py`, then
+regenerate the editor registry with `python3 tools/build_bot_editor_maps.py`.
+The local geometry comes from the exact #1513 collision review at 0.25 m
+spacing. The retained base nodes, links, routes and spawns are unchanged.
+Local mesh support is shared by Python geometry and the shipping C++ search;
+it does not change C, avoidance, retry/route-switch or local driving distances.
 
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after

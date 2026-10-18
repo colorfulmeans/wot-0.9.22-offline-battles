@@ -145,6 +145,7 @@ class TerrainGrid(object):
 		self._baked_width = 0
 		self._baked_height = 0
 		self._baked_heights = ()
+		self._local_meshes = None
 		self._baked_links = ()
 		self._baked_hazards = ()
 		self._baked_max_grade = 0.30
@@ -209,6 +210,23 @@ class TerrainGrid(object):
 		self._baked_corridor_order = deque()
 		self._baked_search_edge_cache = {}
 		self._baked_search_edge_order = deque()
+
+		if graph.get('local_meshes'):
+			from gui.mods.offline_lan_0922.local_navigation_mesh import LocalMeshes
+			self._local_meshes = LocalMeshes(self, graph['local_meshes'])
+
+	def _cell_distance(self, first, second):
+		if self._local_meshes is not None:
+			a, b = self.point_for(first, 0.), self.point_for(second, 0.)
+			return math.hypot(a[0]-b[0], a[2]-b[2])/self.cell_size
+		return math.hypot(first[0]-second[0], first[1]-second[1])
+
+	def _routing_height(self, point):
+		if self._local_meshes is not None:
+			cell = self._local_meshes.cell(point)
+			if cell is not None:
+				return self._baked_cell_height(cell)
+		return self._baked_cell_height(self.cell_for(point))
 
 	def cell_for(self, point):
 		origin_x, origin_z = self._baked_origin if self.prebaked else (0.0, 0.0)
@@ -284,6 +302,9 @@ class TerrainGrid(object):
 		return True
 
 	def point_for(self, cell, height):
+		if self._local_meshes is not None and cell in self._local_meshes.points:
+			point = self._local_meshes.points[cell]
+			return (point[0], float(height), point[2])
 		origin_x, origin_z = self._baked_origin if self.prebaked else (0.0, 0.0)
 		return (origin_x + cell[0] * self.cell_size, float(height),
 		        origin_z + cell[1] * self.cell_size)
@@ -291,6 +312,9 @@ class TerrainGrid(object):
 	def _baked_index(self, cell):
 		if not self.prebaked:
 			return None
+		if self._local_meshes is not None and cell in self._local_meshes.indices:
+			index = self._local_meshes.indices[cell]
+			return index if self._baked_heights[index] is not None else None
 		x, z = cell
 		if x < 0 or x >= self._baked_width or z < 0 or z >= self._baked_height:
 			return None
@@ -300,6 +324,8 @@ class TerrainGrid(object):
 		return index
 
 	def _baked_flat_index(self, cell):
+		if self._local_meshes is not None and cell in self._local_meshes.indices:
+			return self._local_meshes.indices[cell]
 		if not self.prebaked:
 			return None
 		x, z = cell
@@ -334,9 +360,15 @@ class TerrainGrid(object):
 					return True
 		return False
 
-	def _nearest_baked_cell(self, cell, max_radius):
+	def _nearest_baked_cell(self, cell, max_radius, use_local=True):
 		if self._baked_index(cell) is not None:
 			return cell
+		if use_local and self._local_meshes is not None and cell in self._local_meshes.points:
+			return self._local_meshes.nearest(cell, max_radius)
+		if use_local and self._local_meshes is not None:
+			local = self._local_meshes.near_point(self.point_for(cell, 0.), max_radius)
+			if local is not None:
+				return local
 		best = None
 		best_distance = None
 		for radius in range(1, max(0, int(max_radius)) + 1):
@@ -388,6 +420,9 @@ class TerrainGrid(object):
 		return edges[0] if edges else None
 
 	def _edge_keys_for_segment(self, start, end):
+		if self._local_meshes is not None and self._local_meshes.touches(start, end):
+			cells = self._local_meshes.crossed(start, end, False)
+			return tuple(tuple(sorted((a,b))) for a,b in zip(cells,cells[1:]))
 		start_cell = self.cell_for(start)
 		end_cell = self.cell_for(end)
 		if start_cell == end_cell:
@@ -517,11 +552,13 @@ class TerrainGrid(object):
 			              self._failed_edge_penalty(key[0], key[1], now))
 		return penalty
 
-	def _baked_segment_cells(self, start, end, require_height=True):
+	def _baked_segment_cells(self, start, end, require_height=True, use_local=True):
 		"""Return graph cells crossed by a straight segment, start included."""
 		if not self.prebaked:
 			return ()
-		start_cell = (self._nearest_baked_cell(self.cell_for(start), 2)
+		if use_local and self._local_meshes is not None and self._local_meshes.touches(start, end):
+			return self._local_meshes.crossed(start, end, require_height)
+		start_cell = (self._nearest_baked_cell(self.cell_for(start), 2, use_local)
 					  if require_height else self.cell_for(start))
 		end_cell = self.cell_for(end)
 		lookup = self._baked_index if require_height else self._baked_flat_index
@@ -554,10 +591,16 @@ class TerrainGrid(object):
 		callers, and never cache live failed-edge penalties or native probes.
 		"""
 		key = (self.cell_for(start), self.cell_for(end))
+		if self._local_meshes is not None and self._local_meshes.touches(start, end):
+			key = (self._local_meshes.cell(start) or key[0], self._local_meshes.cell(end) or key[1])
 		cached = self._baked_corridor_cache.get(key)
 		if cached is not None:
 			return cached
 		cells = self._baked_segment_cells(start, end)
+		if self._local_meshes is not None and self._local_meshes.touches(start, end):
+			base = self._baked_segment_cells(start, end, True, False)
+			if base and all(self._baked_edge_height(a,b) is not None for a,b in zip(base,base[1:])):
+				cells = base
 		clear = bool(cells)
 		hazards = 0 if cells else None
 		for offset in range(1, len(cells)):
@@ -724,7 +767,7 @@ class TerrainGrid(object):
 		if not self._inside(x, z):
 			return None
 		if self.prebaked:
-			return self._baked_cell_height(self.cell_for((x, hint_y, z)))
+			return self._routing_height((x, hint_y, z))
 		key = (int(math.floor(x * 10.0 + 0.5)),
 		       int(math.floor(z * 10.0 + 0.5)), self._layer(hint_y))
 		if key in self._ground_cache:
@@ -759,7 +802,7 @@ class TerrainGrid(object):
 		if self.prebaked:
 			# Only short joins from an unsupported cell bypass erosion. Test the
 			# actual hull pose and both shoulders every time; never modify the bake.
-			if self._baked_cell_height(self.cell_for(start)) is None:
+			if self._routing_height(start) is None:
 				return self._live_baked_egress_clear(start, end)
 			if not self._baked_corridor(start, end)[0]:
 				# A diagonal can exceed the old 0.38 bake grade even when both
@@ -854,7 +897,7 @@ class TerrainGrid(object):
 
 	def _needs_native_review(self, start, end):
 		return bool(self._native_review_cells and any(
-			cell in self._native_review_cells for cell in
+			(cell in self._native_review_cells or self.cell_for(self.point_for(cell, 0.)) in self._native_review_cells) for cell in
 			self._baked_segment_cells(start, end, require_height=False)))
 
 	def _supported_slope_corridor(self, start, end):
@@ -1242,6 +1285,8 @@ class TerrainGrid(object):
 		return result
 
 	def _baked_edge_height(self, cell, next_cell):
+		if self._local_meshes is not None and next_cell in self._local_meshes.edges.get(cell, ()):
+			return self._baked_cell_height(next_cell)
 		index = self._baked_index(cell)
 		next_index = self._baked_index(next_cell)
 		if index is None or next_index is None:
@@ -1258,6 +1303,12 @@ class TerrainGrid(object):
 		index = self._baked_index(cell)
 		if index is None:
 			return
+		if self._local_meshes is not None:
+			for other in sorted(self._local_meshes.edges.get(cell, ())):
+				a, b = self.point_for(cell, 0.), self.point_for(other, 0.)
+				yield (0, 0, math.hypot(a[0]-b[0], a[2]-b[2])/self.cell_size, other, self._baked_cell_height(other))
+			if cell[0] < 0:
+				return
 		mask = int(self._baked_links[index])
 		for direction, (dx, dz, length) in enumerate(self._NEIGHBOURS):
 			if not (mask & (1 << direction)):
@@ -1273,6 +1324,8 @@ class TerrainGrid(object):
 		index = self._baked_index(cell)
 		if index is None:
 			return 0
+		if self._local_meshes is not None and cell[0] < 0:
+			return min(8, len(self._local_meshes.edges.get(cell, ())))
 		mask = int(self._baked_links[index]) & 0xff
 		return self._LINK_COUNTS[mask]
 
@@ -1596,9 +1649,7 @@ class TerrainGrid(object):
 		heights = {start_cell: start_y}
 		reached = None
 		closest = start_cell
-		closest_distance = math.sqrt(
-			(start_cell[0] - goal_cell[0]) ** 2 +
-			(start_cell[1] - goal_cell[1]) ** 2)
+		closest_distance = self._cell_distance(start_cell, goal_cell)
 		expansions = 0
 		while frontier and expansions < int(max_expansions):
 			_unused_priority, _unused_sequence, current, queued_cost = heapq.heappop(frontier)
@@ -1609,9 +1660,7 @@ class TerrainGrid(object):
 				continue
 			expansions += 1
 			combat_count('nav_astar_expansions')
-			goal_distance = math.sqrt(
-				(current[0] - goal_cell[0]) ** 2 +
-				(current[1] - goal_cell[1]) ** 2)
+			goal_distance = self._cell_distance(current, goal_cell)
 			if goal_distance < closest_distance:
 				closest = current
 				closest_distance = goal_distance
@@ -1716,7 +1765,7 @@ class TerrainGrid(object):
 					dz = next_cell[1] - goal_cell[1]
 					# A modest weighted heuristic keeps the old 32-bit client from
 					# exploring a broad irrelevant front around long ridges.
-					heuristic = (math.sqrt(dx * dx + dz * dz) * self.cell_size *
+					heuristic = (self._cell_distance(next_cell, goal_cell) * self.cell_size *
 					             self.heuristic_weight)
 					sequence += 1
 					heapq.heappush(frontier,

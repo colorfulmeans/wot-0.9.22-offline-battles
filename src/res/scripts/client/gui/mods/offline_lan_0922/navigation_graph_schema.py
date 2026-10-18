@@ -151,4 +151,29 @@ def validate_graph(graph, map_name):
 				raise ValueError('objective base radius must be positive')
 	_spawn_formations(graph)
 	_routes(graph)
+	for patch in graph.get('local_meshes', ()):
+		if not isinstance(patch, dict):
+			raise ValueError('local navigation mesh is not an object')
+		w, h = int(patch['width']), int(patch['height'])
+		if w <= 1 or h <= 1 or w*h > 1000000:
+			raise ValueError('local navigation mesh dimensions are invalid')
+		size = _finite(patch['cell_size'], 'local navigation mesh cell size')
+		if not 0. < size < float(graph['cell_size']):
+			raise ValueError('local navigation mesh is not a refinement')
+		_point(patch['origin'], 'local navigation mesh origin', exact_length=2)
+		for field in ('heights_mm', 'links', 'hazards'):
+			if len(patch[field]) != w*h:
+				raise ValueError('local navigation mesh array is incomplete')
+		for i, mask in enumerate(patch['links']):
+			if not 0 <= int(mask) <= 255:
+				raise ValueError('local navigation mesh link mask is invalid')
+			for bit, (dx, dz) in enumerate(graph['directions']):
+				if not int(mask) & (1 << bit):
+					continue
+				x, z = i % w+dx, i // w+dz
+				if not (0 <= x < w and 0 <= z < h) or patch['heights_mm'][z*w+x] is None:
+					raise ValueError('local navigation mesh link leaves support')
+				reverse = graph['directions'].index([-dx, -dz])
+				if not int(patch['links'][z*w+x]) & (1 << reverse):
+					raise ValueError('local navigation mesh link has no reverse')
 	return graph

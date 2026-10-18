@@ -52,7 +52,7 @@ std::vector<offline_navigation::EdgePenalty> edge_values(PyObject *object) {
 PyObject *WOT_CDECL nav_open(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(nav_open);
     try {
-        require_sequence(args,1,true);PyObject *value=items(args)[0];require_sequence(value,11,true);
+        require_sequence(args,1,true);PyObject *value=items(args)[0];require_sequence(value,11);if(size(value)>12)throw Unsupported();
         PyObject **row=items(value);offline_navigation::MapInput map;
         map.origin_x=finite_number(row[0]);map.origin_z=finite_number(row[1]);map.cell_size=finite_number(row[2]);
         map.width=index_value(row[3]);map.height=index_value(row[4]);
@@ -71,6 +71,24 @@ PyObject *WOT_CDECL nav_open(PyObject *,PyObject *args) {
             for (size_t index=0;index<4;++index) map.bounds[index]=finite_number(items(row[8])[index]);
         }
         map.max_grade=finite_number(row[9]);map.heuristic_weight=finite_number(row[10]);
+        if(size(value)==12) {
+            require_sequence(row[11],0);
+            for(Py_ssize_t n=0;n<size(row[11]);++n) {
+                PyObject *p=items(row[11])[n];require_sequence(p,8,true);PyObject **v=items(p);
+                offline_navigation::LocalMeshInput mesh;
+                mesh.origin_x=finite_number(v[0]);mesh.origin_z=finite_number(v[1]);mesh.cell_size=finite_number(v[2]);
+                mesh.width=index_value(v[3]);mesh.height=index_value(v[4]);
+                if(mesh.width<=0 || mesh.height<=0 || static_cast<int64_t>(mesh.width)*mesh.height>1000000 || mesh.cell_size<=0.)throw Unsupported();
+                const size_t count=static_cast<size_t>(mesh.width)*mesh.height;
+                for(int field=5;field<8;++field)require_sequence(v[field],count,true);
+                for(size_t i=0;i<count;++i) {
+                    PyObject *h=items(v[5])[i];mesh.heights.push_back(h==none_object?std::numeric_limits<double>::quiet_NaN():finite_number(h)/1000.);
+                    mesh.links.push_back(static_cast<unsigned>(index_value(items(v[6])[i])));
+                    mesh.hazards.push_back(static_cast<unsigned>(index_value(items(v[7])[i])));
+                }
+                map.local_meshes.push_back(std::move(mesh));
+            }
+        }
         return integer_result(profile.run(offline_navigation::open,std::move(map)));
     } catch (const PythonAllocationFailed &) { profile.fail();return 0;} catch (...) { profile.fail();return fallback();}
 }

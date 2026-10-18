@@ -34,6 +34,8 @@ def build():
             entries[name]['terrain_edge_previous_sha256'] = graph['terrain_edge_previous_sha256']
         if graph.get('navigation_previous_sha256'):
             entries[name]['navigation_previous_sha256'] = graph['navigation_previous_sha256']
+        if graph.get('navigation_previous_sha256s'):
+            entries[name]['navigation_previous_sha256s'] = graph['navigation_previous_sha256s']
     if len(entries) != 41:
         raise RuntimeError('Expected the pinned 41-map registry')
     return entries

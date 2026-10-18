@@ -213,7 +213,7 @@ def canonical(raw):
         fingerprints = (meta['resource_sha256'], meta.get('capture_coordinate_previous_sha256'),
                         meta.get('terrain_edge_previous_sha256'), meta.get('route_previous_sha256'),
                         NAVIGATION_ROLLBACK_IDENTITIES.get(name),
-                        meta.get('navigation_previous_sha256'))
+                        meta.get('navigation_previous_sha256')) + tuple(meta.get('navigation_previous_sha256s', ()))
         if settings['mode'] != 'regular' or settings['resource_sha256'] not in fingerprints or not settings['resource_sha256']:
             raise TacticsError('Map mode or resource fingerprint mismatch: %s' % name)
         entry = dict(mode='regular', resource_sha256=meta['resource_sha256'], routes=[], positions=[])
