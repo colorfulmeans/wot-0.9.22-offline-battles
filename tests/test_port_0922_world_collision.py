@@ -1014,6 +1014,29 @@ class WorldCollisionTests(unittest.TestCase):
                     1, _Vector(), 0.0, direction * 2.0, descriptor, False, 0.04,
                     motion_yaw=0.0 if direction > 0 else math.pi))
 
+    def test_report_su122a_contact_log_distinguishes_existing_edge_from_safe_departure(self):
+        pos=(-196.8437635,1.4555323,-228.0199790)
+        trace=dict(position=pos,yaw=-2.4260271601,pitch=.04100092,roll=-1.12e-5,
+            motion_yaw=.71556549346,speed=-5.,dt=.1,
+            lateral_bounds=(-1.3567670584,1.3567670584),
+            extents=(1.3567670584,2.4903841019,2.2507559657))
+        hit=(_Vector(-199.265976,1.9671428,-228.7384033),
+             _Vector(.0091512,-.0350958,-.9993421),0)
+        world_collision._record_hard_contact(trace,'solid_lane',_Vector(*pos),
+                                            _Vector(-195.96,2.15,-224.94),hit)
+        geometry=trace['contact_geometry']
+        self.assertEqual('inward',geometry['relation'])
+        self.assertLess(geometry['signed_normal_displacement'],-.3)
+        self.assertAlmostEqual(1.3567670584,geometry['local_hit'][0],places=4)
+        self.assertTrue(geometry['observed_only'])
+        # Being inside the current footprint does not alone authorize crossing
+        # a solid. The existing departure law still rejects inward movement.
+        release=world_collision._translation_departing_contact(_Vector(*pos),trace['yaw'],
+            (-1.3567670584,1.3567670584,2.4903841019,2.2507559657),
+            world_collision._hull_pose_y(trace['pitch'],trace['roll']),
+            math.sin(trace['motion_yaw'])*.5,math.cos(trace['motion_yaw'])*.5)
+        self.assertFalse(release(hit))
+
     def test_departing_wall_retains_inward_corner_and_unwitnessed_face(self):
         departing = world_collision._translation_departing_contact(
             _Vector(), 0.0, (-1.5, 1.5, 3.0, 3.0),

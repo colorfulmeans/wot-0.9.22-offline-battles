@@ -175,8 +175,9 @@ def _capture_defense():
     }
 
 
-class _CountingPlanner(object):
+class _CountingPlanner(BotPlanner):
     def __init__(self, state):
+        BotPlanner.__init__(self)
         self.state = state
         self.build_ticks = []
         self.reset_count = 0
@@ -187,6 +188,7 @@ class _CountingPlanner(object):
         return {"revision": len(self.build_ticks), "orders": []}
 
     def reset(self, round_id=None):
+        BotPlanner.reset(self, round_id)
         self.reset_count += 1
         self.reset_round_id = round_id
 

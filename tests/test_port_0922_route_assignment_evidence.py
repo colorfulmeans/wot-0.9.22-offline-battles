@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 import test_port_0922_withdraw_receipts as fixture
 import lan_battle_server as server
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 
 
 class RouteAssignmentEvidenceTests(unittest.TestCase):
@@ -73,11 +74,39 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
             self.assertEqual(decisions(control),decisions(actual))
             self.assertEqual(control.planner._route_states,actual.planner._route_states)
 
+    def test_defense_log_retains_actual_input_eligibility_and_final_orders(self):
+        case=self.scene();p=case.planner
+        states=[dict(bot['state']) for bot in case.bots]
+        states[0]['world_pose']=False
+        state=types.SimpleNamespace(round_id=1,bot_planner=p,
+            bot_manifest=case.bots,bot_states={s['id']:s for s in states},
+            bot_orders={'orders':[dict(id=43,combat_mode='artillery_deploy')]})
+        context=dict(bases={'1':[dict(x=4,z=9,radius=50)]},
+                     states={'1':dict(invaders=1)},contributors={'1':[dict(kind='bot',id=18)]})
+        output=[];before=copy.deepcopy(p._base_defense)
+        with mock.patch.object(server,'_server_log',side_effect=output.append):
+            server.BattleState._log_bot_defense(state,context,10.)
+            server.BattleState._log_bot_defense(state,context,11.)
+            server.BattleState._log_bot_defense(state,context,13.)
+            state.round_id=2
+            server.BattleState._log_bot_defense(state,context,13.1)
+        self.assertEqual(3,len(output))
+        from read_native_evidence import parse_lines
+        parsed=parse_lines(output,'server')
+        self.assertEqual([],parsed['issues'])
+        self.assertEqual(3,len(parsed['records']))
+        row=parsed['records'][0]['data']
+        self.assertEqual(context,row['context'])
+        self.assertFalse(row['candidates'][0]['eligible'])
+        self.assertFalse(row['candidates'][0]['world_pose'])
+        self.assertEqual('artillery_deploy',row['final_orders'][0]['mode'])
+        self.assertEqual(before,p._base_defense)
+
     def test_server_logs_all_same_update_events_once_and_resets_each_round(self):
         case=self.scene();p=case.planner;bot=case.donor
         p._record_route_assignment(bot,7.,'target','source','lease_expired')
         p._record_route_assignment(bot,7.,'source','target','pressure_rebalance')
-        state=types.SimpleNamespace(round_id=0,bot_orders={'orders':[
+        state=types.SimpleNamespace(round_id=1,bot_orders={'orders':[
             dict(id=bot['id'],route_assignment=p._route_assignment_receipts[bot['id']])]})
         output=[]
         with mock.patch.object(server,'_server_log',side_effect=output.append):
@@ -96,7 +125,8 @@ class RouteAssignmentEvidenceTests(unittest.TestCase):
         rows=[r['data'] for r in parsed['records']]
         self.assertEqual([1,2,3,1],[r['sequence'] for r in rows])
         self.assertEqual([0,1,2,0],[r['prior_logged_sequence'] for r in rows])
-        self.assertEqual([0,0,0,2],[r['round'] for r in rows])
+        self.assertEqual([1,1,1,2],[r['round'] for r in rows])
+        self.assertEqual([0,0,0,2],[r['planner_round'] for r in rows])
         self.assertEqual('lease_expired',rows[1]['reason'])
         self.assertEqual('pressure_rebalance',rows[2]['reason'])
         self.assertTrue(rows[0]['selection']['candidates'])

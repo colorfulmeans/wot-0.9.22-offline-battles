@@ -335,6 +335,29 @@ class InitialPositionIntegrationTests(unittest.TestCase):
         self.assertEqual(plan, state['_spg_initial'])
         self.assertNotIn('_spg_failed_parking', state)
 
+    def test_fourth_blocked_goal_still_selects_a_checked_connected_alternate(self):
+        runtime=self._runtime();runtime.baked_graph=_graph()
+        states=_states(runtime.baked_graph,1)
+        plans,unused=positions.assign_initial_positions('08_ruinberg',runtime.baked_graph,states)
+        state=states[0];state['_spg_initial']=plans[state['id']]
+        runtime.states={s['id']:s for s in states}
+        pose=tuple(state[k] for k in ('x','y','z','yaw'))
+        seen=[]
+        grid=positions._Graph(runtime.baked_graph,positions.CATALOG['maps']['08_ruinberg']['bounds'])
+        connected=grid.distances(pose[:3])
+        for attempt in range(5):
+            initial=state['_spg_initial'];point=tuple(initial['point'][k] for k in ('x','y','z'))
+            seen.append(point)
+            runtime._retry_spg_deployment(state,initial,100.,attempt*21.)
+            replacement=runtime._retry_spg_deployment(state,initial,100.,attempt*21.+20.1)
+            goal=tuple(replacement['point'][k] for k in ('x','y','z'))
+            self.assertNotIn(goal,seen)
+            self.assertIn(grid.closest(goal),connected)
+            self.assertTrue(grid.parking_clear(grid.closest(goal),replacement['clearance']))
+            self.assertEqual('alternate_selected',state['_spg_deployment_retry_receipt']['outcome'])
+        self.assertEqual(5,state['_spg_parking_retries'])
+        self.assertEqual(pose,tuple(state[k] for k in ('x','y','z','yaw')))
+
     def test_airfield_su14_bake_hole_can_select_alternate_without_moving_pose(self):
         runtime = self._runtime()
         graph = _graph('31_airfield')
@@ -373,7 +396,7 @@ class InitialPositionIntegrationTests(unittest.TestCase):
         self.assertIn(grid.closest(tuple(state['_spg_initial']['point'][k] for k in ('x', 'y', 'z'))),
                       grid.distances(origin))
 
-    def test_rocking_does_not_renew_deployment_timeout_and_retries_are_bounded(self):
+    def test_rocking_does_not_renew_timeout_or_permanently_exhaust_retries(self):
         runtime = self._runtime(); plan, bot, state = self._fixture_bot(40.)
         state.update(_spg_initial=plan, profile={'class_tag': 'SPG'})
         runtime.states = {state['id']: state}
@@ -382,8 +405,11 @@ class InitialPositionIntegrationTests(unittest.TestCase):
             for now in range(110):
                 state['x'] = plan['point']['x'] + 40. + (.1 if now % 2 else 0.)
                 runtime._artillery_position_order(state, order, {}, float(now))
-            self.assertEqual(3, select.call_count)
-        self.assertEqual('parking_retry_exhausted', state['_spg_position_event'])
+            self.assertEqual(5, select.call_count)
+        self.assertEqual('no_safe_alternate_parking', state['_spg_position_event'])
+        self.assertEqual(5, state['_spg_deployment_cycle'])
+        self.assertEqual(100., state['_spg_deployment_retry_receipt']['at'])
+        self.assertEqual(1, len(state['_spg_failed_parking']))
         self.assertEqual(plan, state['_spg_initial'])
 
     def test_arrived_parking_never_retries(self):

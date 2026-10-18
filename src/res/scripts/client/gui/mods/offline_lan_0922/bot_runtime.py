@@ -7462,6 +7462,16 @@ class BotRuntime(object):
             gates=trace['motion_control_gates'],
             support_rollback=bool(support_rollback), pose_rollback=bool(pose_rollback),
             rotation_contact=trace['rotation_contact'])
+        dt = trace.get('dt')
+        if dt is not None and dt > 0.:
+            trace['execution_receipt']['velocity_receipt'] = dict(
+                dt=dt, scalar_speed=state.get('speed', 0.),
+                pre_contact_speed=trace.get('world_speed'),
+                retained_contact_speed=state.get('_contact_forward_speed'),
+                realized_velocity=tuple((position[i]-trace['start'][i])/dt for i in (0, 2)),
+                integrated=trace.get('integrated'), after_contacts=trace.get('after_contacts'),
+                settled=settled_position,
+                basis='same_physics_slice_after_contacts_and_support')
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
@@ -13457,9 +13467,6 @@ class BotRuntime(object):
             return initial
         if not obstructed:progress['since'] = now
         retries = int(state.get('_spg_parking_retries', 0))
-        if not obstructed and retries >= 3:
-            state['_spg_position_event'] = 'parking_retry_exhausted'
-            return initial
         if not obstructed:state['_spg_parking_retries'] = retries + 1
         failed = state.setdefault('_spg_failed_parking', [])
         point = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
@@ -13494,8 +13501,23 @@ class BotRuntime(object):
             plans = {}
         replacement = plans.get(state['id'])
         if replacement is None:
+            # Exhaustion ends this exclusion cycle, not deployment itself.
+            # Keep this failed point excluded; reconsider earlier points only
+            # after the normal progress timeout (or occupied-goal cooldown).
+            # Every new selection still uses connectivity/clearance/occupancy.
+            state['_spg_failed_parking'] = [point]
+            state['_spg_deployment_cycle'] = int(state.get('_spg_deployment_cycle', 0)) + 1
+            state['_spg_deployment_retry_receipt'] = dict(
+                at=now, outcome='no_safe_alternate_cycle_reset',
+                cycle=state['_spg_deployment_cycle'], attempts=retries + int(not obstructed),
+                failed_count=len(failed), point=point, occupied=bool(obstructed))
             state['_spg_position_event'] = 'no_safe_alternate_parking'
             return initial
+        state['_spg_deployment_retry_receipt'] = dict(
+            at=now, outcome='alternate_selected',
+            cycle=state.get('_spg_deployment_cycle', 0),
+            attempts=retries + int(not obstructed), failed_count=len(failed),
+            point=point, replacement=replacement['point'], occupied=bool(obstructed))
         state['_spg_initial'] = replacement
         state.pop('_spg_arrived_identity', None)
         state.pop('_spg_deployment_progress', None)
@@ -13864,6 +13886,7 @@ class BotRuntime(object):
             'intent': state['id'] in self._artillery_intents,
             'reproof': state['id'] in self._artillery_reproofs,
             'position_event': state.get('_spg_position_event'),
+            'deployment_retry': state.get('_spg_deployment_retry_receipt'),
             'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
             'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
