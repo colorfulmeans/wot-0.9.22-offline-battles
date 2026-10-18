@@ -557,6 +557,15 @@ python3 tools/bake_navigation_0922.py --client "$WOT_0922_CLIENT" --map 31_airfi
 python3 tools/bake_all_navigation_0922.py --client "$WOT_0922_CLIENT" --output-dir /tmp/navgraphs-clean --jobs 1
 ```
 
+The two Himmelsdorf maps use a reviewed 2 m refinement aligned to the old
+4 m centres. Reproduce either map with `tools/rebake_navigation_resolution.py
+--client "$WOT_0922_CLIENT" --map 04_himmelsdorf --cell-size 2 --previous
+/path/to/previous/04_himmelsdorf.json --output /tmp/himmelsdorf.json`.
+This retains authored routes and spawn layouts, validates complete routed
+segments in both directions at 0.25 m collision sampling, and records the
+previous profile identity. Update the manifest and generated editor registry
+after reviewing the result. It does not change runtime driving laws.
+
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after
 every map passes. These source changes alone do not disable the live repair

@@ -2498,6 +2498,8 @@ class BotRuntime(object):
             getattr(previous_navigator, 'grid', None),
             'native_query_oracle', None)
         self.navigator = navigator
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT NAV GRID', prebaked_navigation.graph_summary(graph))
         close = getattr(previous_navigator, 'close', None)
         if callable(close):
             close()
@@ -7166,6 +7168,7 @@ class BotRuntime(object):
                 'route_index', 'route_join', 'move_position', 'route_switch_reason')},
             assignment=assignment,
             navigation_status=local.get('navigation_status'),
+            grid=prebaked_navigation.graph_summary(self.baked_graph),
             planned_at=local.get('planned_at'), planned_goal=local.get('planned_goal'),
             path_key=local.get('path_key'), path_index=index, path_length=len(path),
             path_points=tuple(path[max(0, index - 1):index + 24]),
@@ -7219,6 +7222,7 @@ class BotRuntime(object):
             'macro_progress_replans', 'blocked_step_replans', 'replan_active')}
         navigation['path_near_target'] = tuple(path[max(0, index - 1):index + 6])
         navigation['path_length'] = len(path)
+        navigation['grid'] = prebaked_navigation.graph_summary(self.baked_graph)
         navigation['local_fallback'] = dict(nav_state.get('local_fallback') or {})
         navigation['direct_fallback'] = dict(
             getattr(nav, 'bot_direct_progress', {}).get(int(state['id']), {}).get(

@@ -502,6 +502,11 @@ def _target_sampling_bounds(map_name, map_config, cell_size):
         math.ceil(arena[2] / size) * size,
         math.ceil(arena[3] / size) * size,
     )
+    if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and size == 2.0:
+        # Nested refinement: keep the old even-coordinate 4m centres and add
+        # their 2m midpoints. The default odd-coordinate phase replaces every
+        # old centre and leaves the southern rubble neck split diagonally.
+        return tuple(value - 1.0 for value in sampled)
     if (map_name != _GREAT_WALL_MAP or
             float(cell_size) != _GREAT_WALL_GRID_CELL_SIZE):
         return sampled
@@ -1015,6 +1020,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
         def __init__(self):
             self.raster_size = 1.0
             self.cells, self.surface_cells = {}, {}
+            self.height_intervals = {}
             self.instance_count = self.bridge_instance_count = 0
             self.bridge_surface_triangle_count = self.soft_instance_count = 0
             self.local_instance_count = self.skipped = self.invalid_triangles = 0
@@ -1025,6 +1031,35 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
                 original_surfaces_excluded=0, nonvehicle_surfaces_excluded=0,
                 hard_surfaces_retained=0, mixed_instances=0,
                 unselected_component_surfaces=0, empty_collision_resources=0)
+
+        def _mark_cell(self, cell_x, cell_z, minimum_y, maximum_y):
+            # A roof icicle and fallen icicle may share X/Z while leaving the
+            # vehicle-height band empty. A bounding min/max fills that air gap.
+            legacy.ObstacleField._mark_cell(self,cell_x,cell_z,minimum_y,maximum_y)
+            key=(cell_x,cell_z)
+            intervals=sorted(self.height_intervals.get(key,[])+[(minimum_y,maximum_y)])
+            merged=[]
+            for low,high in intervals:
+                if merged and low <= merged[-1][1]:
+                    merged[-1]=(merged[-1][0],max(high,merged[-1][1]))
+                else:
+                    merged.append((low,high))
+            self.height_intervals[key]=merged
+
+        def blocked(self,x,z,ground_y,margin=legacy.VEHICLE_HALF_WIDTH):
+            radius=int(math.ceil(float(margin)/self.raster_size))
+            cx=int(math.floor(float(x)/self.raster_size))
+            cz=int(math.floor(float(z)/self.raster_size))
+            minimum=float(ground_y)+legacy.VEHICLE_GROUND_CLEARANCE
+            maximum=float(ground_y)+legacy.VEHICLE_CLEARANCE_HEIGHT
+            for ix in range(cx-radius,cx+radius+1):
+                for iz in range(cz-radius,cz+radius+1):
+                    if math.hypot((ix+.5)*self.raster_size-x,(iz+.5)*self.raster_size-z) > margin+self.raster_size*math.sqrt(2.)*.5:
+                        continue
+                    if any(high >= minimum and low <= maximum
+                           for low,high in self.height_intervals.get((ix,iz),())):
+                        return True
+            return False
     obstacles = CompiledObstacles()
     mesh_cache = {}
     material_cache = {}
@@ -2558,6 +2593,27 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
     return result
 
 
+def _resolution_segment_clear(terrain, obstacles, start, end, legacy, original):
+    """Keep collision/width/grade laws; densely prove new short grid edges."""
+    if not original(terrain, obstacles, start, end):
+        return False
+    distance = math.hypot(end[0] - start[0], end[2] - start[2])
+    steps = max(1, int(math.ceil(distance / .25)))
+    previous = start
+    for index in range(1, steps + 1):
+        fraction = float(index) / steps
+        x = start[0] + (end[0] - start[0]) * fraction
+        z = start[2] + (end[2] - start[2]) * fraction
+        y = legacy._ground_height(terrain, obstacles, x, z)
+        if y is None:
+            return False
+        current = (x, y, z)
+        if not original(terrain, obstacles, previous, current):
+            return False
+        previous = current
+    return True
+
+
 def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_graph=None):
     """Bake a #1513 CTF map with compiled BSP collision and BWWa water cells."""
     if os.path.basename(NAVIGATION_BAKER) != 'bake_navigation.py':
@@ -2706,10 +2762,14 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             legacy._expanded_bounds = target_expanded_bounds
             legacy.SHALLOW_WATER_THRESHOLD = SHALLOW_WATER_THRESHOLD
             original_terrain, original_obstacles = legacy.Terrain, legacy.ObstacleField
+            original_segment_clear = legacy._segment_clear
             original_validate = legacy.validate_graph
             original_bake_routes = legacy.bake_tactical_routes
             original_retain = legacy.retain_base_component
             legacy.Terrain, legacy.ObstacleField = (lambda unused_resources, unused_map: terrain), (lambda unused_resources, unused_map, soft_models=None: obstacles)
+            if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and float(cell_size) == 2.0:
+                legacy._segment_clear = lambda terrain, obstacles, start, end: _resolution_segment_clear(
+                    terrain, obstacles, start, end, legacy, original_segment_clear)
             ingress_records = {}
             # The stock CTF XML has no teamSpawnPoints: the client forms a
             # safe line around the flag.  Retain the *real* flags while choosing
@@ -2829,11 +2889,13 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             legacy._expanded_bounds = original_expanded_bounds
             legacy.SHALLOW_WATER_THRESHOLD = original_shallow_threshold
             legacy.Terrain, legacy.ObstacleField = original_terrain, original_obstacles
+            legacy._segment_clear = original_segment_clear
             legacy.validate_graph = original_validate
             legacy.bake_tactical_routes = original_bake_routes
             legacy.retain_base_component = original_retain
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
+        graph['bake']['collision_height_intervals'] = 'overlapping_union_preserves_vertical_gaps-v1'
         graph['bake']['original_destructible_surfaces_excluded'] = True
         graph['bake']['compiled_collision_filter'] = obstacles.collision_stats
         graph['bake']['water_mode'] = ('BWWa-cell-surface-depth' if water_cells else

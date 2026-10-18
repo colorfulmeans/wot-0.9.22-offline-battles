@@ -721,6 +721,17 @@ class CompiledSpace0922Test(unittest.TestCase):
                             self.assertGreaterEqual(row, 0)
                             self.assertLess(row, data['height'])
                             index = row * data['width'] + column
+                            if (data['heights_mm'][index] is None and
+                                    data.get('bake',{}).get('resolution_rebake')):
+                                # Keep authored macro targets exact. The live
+                                # search already snaps eroded goals within three
+                                # cells; require a measured nearby safe anchor,
+                                # not a fabricated node under a locomotive.
+                                nearest,offset=baker._legacy_baker()._nearest_node(
+                                    data,(x,z),max_distance=4.001)
+                                self.assertIsNotNone(nearest)
+                                self.assertLessEqual(offset,4.)
+                                index=nearest
                             self.assertIsNotNone(data['heights_mm'][index])
                             self.assertEqual(0, data['hazards'][index] & 3)
                         if (route.get('terminal_hold', False) or
