@@ -1,10 +1,11 @@
 """Small additive navigation meshes; the parent grid keeps its metre scale."""
 import math
+import weakref
 
 
 class LocalMeshes(object):
     def __init__(self, grid, patches):
-        self.grid = grid
+        self.grid = weakref.proxy(grid)
         self.patches = patches
         self.points = {}
         self.indices = {}

@@ -170,6 +170,17 @@ class ResolutionTests(unittest.TestCase):
             self.assertEqual(identity,bot_tactics.MAPS[name]['resource_sha256'])
             self.assertEqual(identity,next(row['sha256'] for row in rows if row['map']==name))
 
+    def test_retained_local_mesh_receipt_does_not_keep_previous_round_grid_alive(self):
+        import weakref
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        graph=json.loads((ROOT/'navgraphs/04_himmelsdorf.json').read_bytes())
+        grid=TerrainGrid(lambda *args:1.1,baked_graph=graph)
+        mesh=grid._local_meshes
+        previous=weakref.ref(grid)
+        del grid
+        self.assertIsNone(previous())
+        self.assertTrue(mesh.points)
+
     def test_grid_identity_reaches_serialized_final_motion_and_cached_state(self):
         import test_port_0922_complete_navigation_receipts as fixture
         f = fixture.RuntimeReceiptTests(); f.setUp()
