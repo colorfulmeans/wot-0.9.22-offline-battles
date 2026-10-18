@@ -154,6 +154,18 @@ _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'stun_end_server_time_ms',
 )
 _PUBLICATION_EDGE_MISSING = object()
+
+
+def _order_evidence(order):
+    """Freeze the bounded tactical inputs, without another decision or probe."""
+    result = {}
+    for key in ('combat_mode', 'move_position', 'face_position', 'aim_position',
+                'throttle_override', 'fire_allowed', 'target_id', 'route_id',
+                'route_index', 'stop_at_target', 'stable_hull_face'):
+        value = order.get(key)
+        result[key] = dict(value) if isinstance(value, dict) else (
+            tuple(value) if isinstance(value, (list, tuple)) else value)
+    return result
 # The server never assigns a visible target beyond 560 metres. Keep a
 # conservative 25-metre broad-phase margin for the advisory roster scan; the
 # selected target's independent 0.20-second final-fire check does not use this
@@ -7302,6 +7314,7 @@ class BotRuntime(object):
             'native_motion': bool(self.native_motion),
             'navigation': navigation, 'driver': driver_trace,
             'planning_verdicts': list(state.get('_planning_verdicts') or ()),
+            'motion_probe_evidence': dict(probe),
             'planning_observation': self._planning_observation(
                 command, now, state.get('_planning_disposition', 'external_command')),
             # Original cached witnesses distinguish grade rejection from a
@@ -7313,6 +7326,16 @@ class BotRuntime(object):
                 slope_samples=state.get('_basic_slope_samples'),
                 slope_refresh=state.get('_slope_pose_refresh')),
             'control_arbitration': dict(command.get('control_trace') or {}),
+            'tactical_order': dict(command.get('order_evidence') or {}),
+            'spg_deployment': dict(
+                observed_at=now, initial=state.get('_spg_initial'),
+                progress=state.get('_spg_deployment_progress'),
+                retries=state.get('_spg_parking_retries', 0),
+                failed_points=list(state.get('_spg_failed_parking') or ()),
+                cycle=state.get('_spg_deployment_cycle', 0),
+                retry_receipt=state.get('_spg_deployment_retry_receipt'),
+                position_event=state.get('_spg_position_event'),
+                occupied=state.get('_spg_parking_occupied')),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
@@ -7460,6 +7483,7 @@ class BotRuntime(object):
                 'shape': other.get('collision_shape'),
             })
         trace.update({
+            'primary_world_contact': dict(state.get('_primary_world_contact') or {}),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
@@ -8192,6 +8216,13 @@ class BotRuntime(object):
     def _apply_world_contact_impact(self, state, speed, now):
         """Consume only the realised hull sweep, before escape probes replace it."""
         trace = state.pop('_world_contact_trace', None)
+        # The damage consumer used to discard ground contacts before the
+        # final motion diagnostic. Retain the primary witness independently
+        # of later escape probes; this is not another damage submission.
+        state['_primary_world_contact'] = dict(
+            sampled_at=now, phase='realised_translation',
+            origin=_position(state), yaw=state.get('yaw'), speed=speed,
+            trace=dict(trace or {}), trace_available=isinstance(trace, dict))
         if (not state.get('airborne', False) or
                 not isinstance(trace, dict) or 'hit' not in trace):
             return 0
@@ -14982,6 +15013,7 @@ class BotRuntime(object):
                 self._advance_bot_siege(state, step)
             position = _position(state)
             if native_motion is None:
+                state.pop('_primary_world_contact', None)
                 tick_poses[state['id']] = position
                 tick_suspension_states[state['id']] = \
                     self._snapshot_bot_suspension_state(state)
@@ -15315,17 +15347,23 @@ class BotRuntime(object):
                         server_order,
                         targets.get(server_order.get('target_id')),
                         position)
+                    order_steps = [dict(stage='server_live_target', order=_order_evidence(server_order))]
                     server_order = self._rear_laying_order(
                         state, server_order, targets, now)
+                    order_steps.append(dict(stage='rear_laying', order=_order_evidence(server_order)))
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
+                    order_steps.append(dict(stage='artillery_position', order=_order_evidence(server_order)))
                     server_order = self._gun_angle_order(
                         state, server_order, targets, now, sample_clear)
+                    order_steps.append(dict(stage='gun_angle', order=_order_evidence(server_order)))
                     command = timed_call(
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
                         decision_state, server_order,
                         sample_clear)
+                    command['order_evidence'] = dict(sampled_at=now,
+                        stages=order_steps, final_order=_order_evidence(server_order))
                 else:
                     if diagnostic is not None:
                         diagnostic.count('decision_local_planner')

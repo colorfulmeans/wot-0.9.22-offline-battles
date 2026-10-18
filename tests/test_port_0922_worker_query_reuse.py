@@ -9,6 +9,43 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def test_shared_motion_geometry_is_exact_and_reads_the_hull_once(self):
+        import random
+        import struct
+        from gui.mods.offline_lan_0922 import world_collision as world
+        randomizer = random.Random(392)
+        for unused in range(500):
+            descriptor = dict(
+                hull=dict(hitTester=types.SimpleNamespace(bbox=(
+                    tuple(randomizer.uniform(-4, 0) for i in range(3)),
+                    tuple(randomizer.uniform(0, 4) for i in range(3))))),
+                chassis=dict(hitTester=types.SimpleNamespace(bbox=(
+                    (-1., -0., -3.), (1., 0., 3.))),
+                    hullPosition=tuple(randomizer.uniform(-1, 1) for i in range(3))))
+            expected = (world._vehicle_motion_bounds(descriptor),
+                        world._vehicle_motion_heights(descriptor))
+            with mock.patch.object(world, '_vehicle_hull_bbox',
+                                   wraps=world._vehicle_hull_bbox) as read:
+                actual = world._vehicle_motion_geometry(descriptor)
+                self.assertEqual(1, read.call_count)
+            self.assertEqual(struct.pack('6d', *(expected[0]+expected[1])),
+                             struct.pack('6d', *(actual[0]+actual[1])))
+
+    def test_shared_geometry_observes_live_mount_and_bbox_changes(self):
+        from gui.mods.offline_lan_0922 import world_collision as world
+        self.assertEqual((None, (.6, 1.6)), world._vehicle_motion_geometry(None))
+        descriptor = dict(hull=dict(hitTester=types.SimpleNamespace(
+            bbox=((-1., .5, -2.), (1., 2., 2.)))), chassis=dict(
+            hitTester=types.SimpleNamespace(bbox=((-1., 0., -3.), (1., 1., 3.))),
+            hullPosition=(0., 0., 0.)))
+        before = world._vehicle_motion_geometry(descriptor)
+        descriptor['chassis']['hullPosition'] = (2., 3., 4.)
+        descriptor['hull']['hitTester'].bbox = ((-2., -1., -4.), (2., 4., 4.))
+        after = world._vehicle_motion_geometry(descriptor)
+        self.assertNotEqual(before, after)
+        self.assertEqual((world._vehicle_motion_bounds(descriptor),
+                          world._vehicle_motion_heights(descriptor)), after)
+
     def test_ground_preparer_is_reused_but_each_column_remains_live(self):
         with sensor.collision_preparation_scope_1513():
             first = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)
