@@ -76,6 +76,41 @@ class ScopedFailureTests(unittest.TestCase):
 
 
 class ConnectorProgressTests(unittest.TestCase):
+    def test_elc_revisiting_connectors_cannot_reissue_distance_and_alignment_credit(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        modes = []
+        # Reduced 011659 ELC pattern: supported, unblocked, small real travel
+        # between two near connectors while the order remains far away.
+        for frame in range(300):
+            phase = frame % 40
+            x = (phase if phase < 20 else 40-phase) * .1
+            target = ((-2., 0., 3.) if phase < 20 else (4., 0., -3.))
+            command = driver.drive(27, 11, (x, 0., 0.), .2*math.sin(frame*.2),
+                1., .1, target, [], lambda *args: True,
+                progress_target=target, recovery_goal=(0., 0., 400.),
+                turn_speed_limit=.3, stop_at_target=False)
+            modes.append(command['recovery_mode'])
+        self.assertTrue(any(mode in ('reverse_turn', 'pivot_recovery') for mode in modes))
+        self.assertLessEqual(len(driver.states[27]['objective_progress']['connectors']), 16)
+
+    def test_revisiting_arrived_connector_does_not_reset_remote_order_clock(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        modes = []
+        for frame in range(200):
+            target = (1., 0., 0.) if frame % 20 < 10 else (-2., 0., 0.)
+            modes.append(driver.drive(27, 11, (0., 0., 0.), 0., 0., .1,
+                target, [], lambda *args: True, progress_target=target,
+                recovery_goal=(0., 0., 400.), turn_speed_limit=.3)['recovery_mode'])
+        self.assertTrue(any(mode in ('reverse_turn', 'pivot_recovery') for mode in modes))
+
+    def test_arrived_real_destination_and_new_order_still_reset(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        for frame in range(200):
+            command = driver.drive(27, 11, (0., 0., 0.), 0., 0., .1,
+                (0., 0., 0.), [], lambda *args: True,
+                progress_target=(0., 0., 0.), recovery_goal=(0., 0., 0.))
+            self.assertEqual('arrived', command['recovery_mode'])
+
     def drive(self, driver, target, goal=(0., 0., 200.), yaw=math.pi / 2):
         return driver.drive(11, 0, (0., 0., 0.), yaw, 0., .1, target, [],
             lambda *args: True, progress_target=target, recovery_goal=goal,

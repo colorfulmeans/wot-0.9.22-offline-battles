@@ -1235,24 +1235,44 @@ class LocalDriver(object):
 			distance = _distance(position, progress_target)
 			goal_changed = bool(progress is not None and
 				_distance(progress.get('order_goal', progress['goal']), pocket_goal) > 2.0)
-			if (progress is None or goal_changed or distance <= arrival):
+			if progress is None or goal_changed or _distance(position, pocket_goal) <= arrival:
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
+				            'connectors': [],
+				            'credit_reason': 'new_order_or_destination',
 				            'reset_reason': 'order_changed' if goal_changed else 'initial_or_arrived'}
 				state['objective_progress'] = progress
 			elif _distance(progress['goal'], progress_target) > 2.0:
 				# A different local connector is not physical progress. Rebase
 				# its incomparable distance without renewing this order's clock
 				# or granting the same hull alignment a second time.
-				progress['goal'] = tuple(progress_target)
-				progress['best'] = distance
+				# Preserve each connector's best distance and fixed alignment
+				# anchor across revisits. An ELC-sized orbit between two proved
+				# near points is not a fresh journey on every rebase.
+				connectors = progress.setdefault('connectors', [])
+				previous = dict((key, progress[key]) for key in
+					('goal', 'best', 'alignment_yaw', 'alignment_best') if key in progress)
+				revisited = None
+				for index, connector in enumerate(connectors):
+					if _distance(connector['goal'], progress_target) <= 2.0:
+						revisited = connectors.pop(index)
+						break
+				connectors.append(previous)
+				del connectors[:-16]
+				progress.pop('alignment_yaw', None)
+				progress.pop('alignment_best', None)
+				progress.update(revisited or dict(goal=tuple(progress_target), best=distance))
 				progress['local_rebases'] = progress.get('local_rebases', 0) + 1
-				progress['reset_reason'] = 'local_rebase_without_credit'
-				if displacement >= 0.08:
+				progress['reset_reason'] = ('revisited_connector_without_credit' if revisited
+					else 'local_rebase_without_credit')
+				if revisited is not None:
+					progress['revisited_connectors'] = progress.get('revisited_connectors', 0) + 1
+				if revisited is None and displacement >= 0.08:
 					# Keep the original physical travel credit even if every
 					# planner sample supplies a new connector. Only a stationary
 					# representation change must leave the lease untouched.
 					progress['at'] = state['clock']
+					progress['credit_reason'] = 'new_connector_translation'
 					progress.pop('alignment_yaw', None)
 					progress.pop('alignment_best', None)
 					progress['reset_reason'] = 'local_rebase_with_translation'
@@ -1260,6 +1280,7 @@ class LocalDriver(object):
 				objective_advanced = True
 				progress['best'] = distance
 				progress['at'] = state['clock']
+				progress['credit_reason'] = 'new_best_distance'
 				progress.pop('alignment_yaw', None)
 				progress.pop('alignment_best', None)
 			elif distance + 0.002 < progress['best']:
@@ -1281,6 +1302,7 @@ class LocalDriver(object):
 					if error + 0.002 < progress['alignment_best']:
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
+						progress['credit_reason'] = 'new_best_alignment'
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
 		# Starting recovery renews its retry clock, not arrival at the remote
 		# objective. A close connector must not cancel the next recovery frame.
@@ -1366,6 +1388,7 @@ class LocalDriver(object):
 			if state['stuck_time'] >= threshold:
 				if progress_target is not None:
 					state['objective_progress']['at'] = state['clock']
+					state['objective_progress']['credit_reason'] = 'recovery_retry'
 				if rotation_refused and state.get('recovery_pocket') is None:
 					state['recovery_pocket'] = dict(origin=tuple(position),
 						at=state['clock'], goal=tuple(pocket_goal))

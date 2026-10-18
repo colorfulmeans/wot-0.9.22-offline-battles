@@ -23,6 +23,7 @@ spawn overlap is separated using inverse-mass weighting instead of becoming an
 """
 
 import math
+import struct
 from gui.mods.offline_lan_0922 import native_math
 
 
@@ -38,6 +39,7 @@ CONTACT_BROADPHASE_PADDING = 0.25
 # A chassis-end straddle may only stop a descent, never lift the hull.
 SUPPORT_STRADDLE_RISE = 0.12
 _SHAPE_CACHE = {}
+_POSE_AXES_CACHE = {}
 SPATIAL_CELL_SIZE = 24.0
 
 # 0.9.22-era Wargaming Battle Mechanics defines a ram as an HE-like
@@ -178,6 +180,21 @@ def chassis_shape(type_descriptor):
 
 def pose_axes(yaw, pitch=0.0, roll=0.0):
     """Return BigWorld YPR local axes in world coordinates."""
+    angles = (float(yaw), float(pitch), float(roll))
+    key = struct.pack('ddd', *angles)
+    result = _POSE_AXES_CACHE.get(key)
+    if result is not None:
+        return result
+    result = _uncached_pose_axes(*angles)
+    if len(_POSE_AXES_CACHE) >= 256:
+        _POSE_AXES_CACHE.clear()
+    _POSE_AXES_CACHE[key] = result
+    return result
+
+
+def _uncached_pose_axes(yaw, pitch, roll):
+    # Pure numeric preparation only: no pose rounding and no world/support
+    # result survives a query. The returned tuples cannot be mutated by callers.
     sy, cy = math.sin(float(yaw)), math.cos(float(yaw))
     sp, cp = math.sin(float(pitch)), math.cos(float(pitch))
     sr, cr = math.sin(float(roll)), math.cos(float(roll))

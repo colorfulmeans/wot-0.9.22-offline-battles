@@ -9,6 +9,35 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def test_ground_preparer_is_reused_but_each_column_remains_live(self):
+        with sensor.collision_preparation_scope_1513():
+            first = sensor.ground_filter_batch_1513(sensor.ground_collision_filter)
+            for unused in range(100):
+                self.assertIs(first, sensor.ground_filter_batch_1513(sensor.ground_collision_filter))
+        with sensor.collision_preparation_scope_1513():
+            self.assertIsNot(first, sensor.ground_filter_batch_1513(sensor.ground_collision_filter))
+        self.assertIsNone(sensor.ground_filter_batch_1513(lambda *args: None))
+
+    def test_exact_pose_axes_reuse_does_not_round_or_cache_world_answers(self):
+        from gui.mods.offline_lan_0922 import tank_collision as collision
+        collision._POSE_AXES_CACHE.clear()
+        with mock.patch.object(collision, '_uncached_pose_axes', wraps=collision._uncached_pose_axes) as compute:
+            first = collision.pose_axes(.2, .1, -.1)
+            for unused in range(100):
+                self.assertIs(first, collision.pose_axes(.2, .1, -.1))
+            self.assertEqual(1, compute.call_count)
+            collision.pose_axes(.20000001, .1, -.1)
+            self.assertEqual(2, compute.call_count)
+        for index in range(1000):
+            angles = (index*.01, index*.003, -index*.005)
+            self.assertEqual(collision._uncached_pose_axes(*angles), collision.pose_axes(*angles))
+        self.assertLessEqual(len(collision._POSE_AXES_CACHE), 256)
+        import struct
+        for angles in ((0.,0.,0.),(-0.,0.,0.),(0.,-0.,0.),(0.,0.,-0.)):
+            flatten = lambda axes: tuple(v for axis in axes for v in axis)
+            self.assertEqual(struct.pack('9d', *flatten(collision._uncached_pose_axes(*angles))),
+                             struct.pack('9d', *flatten(collision.pose_axes(*angles))))
+
     def test_support_columns_share_live_member_preparation_in_the_worker_scope(self):
         battle = fixtures.BattleRuntime(fixtures._runtime())
         battle._destructibles = sensor
