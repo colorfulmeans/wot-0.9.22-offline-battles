@@ -13624,7 +13624,7 @@ class BotRuntime(object):
             selected_point=replacement.get('point') if replacement else None,
             outcome='selected' if replacement else 'no_safe_alternate')
         state['_spg_position_retry_receipt'] = retry_receipt
-        print('[Offline LAN 0.9.22] SPG POSITION RETRY ' + json.dumps(retry_receipt, sort_keys=True))
+        print('[Offline LAN 0.9.22] SPG POSITION RETRY ' + json.dumps(retry_receipt))
         if replacement is None:
             state['_spg_position_event'] = 'fire_position_no_safe_alternate'
             return initial
