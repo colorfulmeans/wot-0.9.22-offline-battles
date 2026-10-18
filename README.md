@@ -601,7 +601,9 @@ sweep, including both crossings of the -pi/pi boundary.
 Route-assignment evidence includes pressure scores, every donor candidate's
 outcome, the previous waypoint/distance, and the last eight assignment events.
 This preserves expiry followed by reassignment within one server update;
-`history_dropped` explicitly counts older omitted events. These diagnostics do
+`history_dropped` explicitly counts older omitted events. The server also logs
+each new `BOT ROUTE ASSIGNMENT` once, without waiting for an order revision;
+round changes reset the diagnostic sequence tracking. These diagnostics do
 not change route selection, lease renewal/expiry, avoidance or retry policy.
 
 Artillery retains one same-region retry after a confirmed blocked firing
