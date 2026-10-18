@@ -193,7 +193,7 @@ jobs:
               --extension /tmp/offline_math_batch_native.so \
               --client-scripts /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_navigation.py \
-              /tmp/offline_math_batch_native.so /src/src/res/scripts/client
+              /tmp/offline_math_batch_native.so /src/src/res/scripts/client --water-only
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_control_projection.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \

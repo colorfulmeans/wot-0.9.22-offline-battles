@@ -59,3 +59,26 @@ Counters distinguish geometry reuse, actual shallow queries and cache hits.
 Native shipping compilation, strict Python/C++ parity and final downloaded
 package inspection are required before delivery. The one-missing-point enable /
 all-five-restored disable support rule and navigation policy are unchanged.
+
+## Final verification scope
+
+The final reference run is 97 files / 2,522 cases: 96 files pass; the unchanged
+Airfield failure above remains. Downloaded Windows391 has all 190 matching
+client bytecode modules, 28 matching frozen launcher modules, exact graph bytes
+and a matching native source stamp. All three Windows build jobs pass.
+
+Enabling the old full persistent-navigation probe first exposed its obsolete
+receipt fixture (missing `route_corridor`); that fixture now passes the current
+parameter through to the real reference search. The probe then detects missing
+`macro_progress_kind`, prefix bookkeeping and corner receipt fields in the old
+persistent owner. This is not the shipping navigation owner:
+`NativeSimulation.__init__` explicitly leaves `navigation` uninstalled because
+that older owner would replace newer rules. No production owner was enabled,
+normalized or modified to make this full migration probe pass. The full probe
+and its failure are retained for any future migration work.
+
+The shipping native gate runs its explicit `--water-only` mode, covering the
+new unknown/actual-water classification plus grid metadata through the real
+Python 2 C API. The existing active control, motion, geometry, asynchronous
+search and support gates remain in place. This avoids treating an intentionally
+inactive historical state machine as the current gameplay implementation.
