@@ -2084,6 +2084,8 @@ class BotRuntime(object):
         self._wreck_rotation_probe = wreck_rotation_probe
         self._wreck_ground_probe = wreck_ground_probe
         self.local_sweep_probe = local_sweep_probe
+        self._local_sweep_cache = {}
+        self._local_sweep_step = 0.0
         self.rotation_resolver = rotation_resolver
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
@@ -14694,9 +14696,33 @@ class BotRuntime(object):
             self._team_spot_time_left(target_key, now) > 0.0)
         return current, current_source, remembered
 
+    def _planning_local_sweep(self, state, position, sample_yaw, distance, now):
+        probe = self.local_sweep_probe
+        if not callable(probe) or state.get('airborne'):
+            return None
+        step = self._local_sweep_step
+        checked_yaw = float(sample_yaw)
+        if distance is None:
+            cap = max(float(self._physics_params_for(state['id'])['rotSpd']),
+                abs(self._turn_speeds.get(state['id'],0.)))*max(.001,float(step))
+            checked_yaw = state['yaw']+max(-cap,min(cap,_angle_delta(sample_yaw,state['yaw'])))
+        key = (state['id'],tuple(position),state['yaw'],checked_yaw,distance)
+        cache = self._local_sweep_cache
+        reused = key in cache
+        if not reused:
+            cache[key] = timed_call(self._combat_diagnostics, 'bot.local_sweep',
+                probe, state['id'], position, state['yaw'], checked_yaw, distance,
+                self._descriptors.get(state['id'],{}), step, now)
+        value = cache[key]
+        return dict(value,requested_yaw=sample_yaw,cache_reused=reused) if value is not None else None
+
     @timed('bot.slice')
     def _update_once(self, frame_step, now, players=None, neighbours=None):
         """Advance one stable authority substep and preserve its events."""
+        # A runtime-owned cache adds no closure cycle to the hot driver seam.
+        # No proof survives this authority slice or crosses another body pose.
+        self._local_sweep_step = frame_step
+        self._local_sweep_cache.clear()
         publish = bool(self._publish_control_this_step)
         refresh_control = bool(self._refresh_control_this_step)
         diagnostic = self._combat_diagnostics
@@ -14976,30 +15002,6 @@ class BotRuntime(object):
             controlled_shallow_commit = getattr(
                 self.navigator, 'controlled_shallow_committed', None)
 
-            sweep_descriptor = self._descriptors.get(state['id'], {})
-            local_sweeps = {}
-            local_rotation_cap = [None]
-
-            def local_sweep(sample_yaw, distance=None):
-                probe = self.local_sweep_probe
-                if not callable(probe) or state.get('airborne'):
-                    return None
-                checked_yaw = float(sample_yaw)
-                if distance is None:
-                    if local_rotation_cap[0] is None:
-                        local_rotation_cap[0] = max(float(self._physics_params_for(state['id'])['rotSpd']),
-                            abs(self._turn_speeds.get(state['id'],0.)))
-                    cap = local_rotation_cap[0]*max(.001,float(step))
-                    checked_yaw = state['yaw']+max(-cap,min(cap,_angle_delta(sample_yaw,state['yaw'])))
-                key = (checked_yaw, distance)
-                reused = key in local_sweeps
-                if not reused:
-                    local_sweeps[key] = timed_call(self._combat_diagnostics,
-                        'bot.local_sweep', probe, state['id'], position,
-                        state['yaw'], checked_yaw, distance, sweep_descriptor, step, now)
-                value = local_sweeps[key]
-                return dict(value, requested_yaw=sample_yaw, cache_reused=reused) if value is not None else None
-
             def sample_pose_clear_impl(sample_yaw, allow_wreck_push=False):
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
@@ -15028,7 +15030,7 @@ class BotRuntime(object):
                     # Only that inconsistent current pose delegates the turn
                     # to native commit. Valid corridors retain their complete
                     # rectangle guard before the driver selects a recovery arc.
-                    proof = local_sweep(sample_yaw)
+                    proof = self._planning_local_sweep(state, position, sample_yaw, None, now)
                     if proof is not None:
                         self._record_planning_verdict(planning_receipt, dict(
                             kind='local_sweep', action='rotation', yaw=sample_yaw,
@@ -15124,7 +15126,7 @@ class BotRuntime(object):
                     return not bounded_recovery
                 clear = self._probe_is_clear(sample)
                 if clear and bounded_recovery:
-                    proof = local_sweep(sample_yaw, float(maximum_distance))
+                    proof = self._planning_local_sweep(state, position, sample_yaw, float(maximum_distance), now)
                     if proof is not None:
                         self._record_planning_verdict(planning_receipt, dict(
                             kind='local_sweep', action='translation', yaw=sample_yaw,
