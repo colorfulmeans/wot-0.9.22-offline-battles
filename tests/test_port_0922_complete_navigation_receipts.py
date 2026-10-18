@@ -52,6 +52,14 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.runtime.update(.04, 2.04)
         self.assertNotIn('_primary_world_contact', state)
 
+    def test_missing_contact_evidence_keeps_the_existing_no_damage_guard(self):
+        state = self.runtime.states[11]
+        for value in (None, 'unavailable', [1, 2]):
+            state.update(airborne=True, _world_contact_trace=value)
+            self.assertEqual(0,self.runtime._apply_world_contact_impact(state,20.,2.))
+            self.assertFalse(state['_primary_world_contact']['trace_available'])
+            self.assertEqual({},state['_primary_world_contact']['trace'])
+
     def test_serialized_stall_contains_contact_probe_and_spg_retry_values(self):
         self.runtime.update(.04, 1.)
         state = self.runtime.states[11]

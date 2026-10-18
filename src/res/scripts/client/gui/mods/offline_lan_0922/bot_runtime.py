@@ -8222,7 +8222,8 @@ class BotRuntime(object):
         state['_primary_world_contact'] = dict(
             sampled_at=now, phase='realised_translation',
             origin=_position(state), yaw=state.get('yaw'), speed=speed,
-            trace=dict(trace or {}), trace_available=isinstance(trace, dict))
+            trace=dict(trace) if isinstance(trace, dict) else {},
+            trace_available=isinstance(trace, dict))
         if (not state.get('airborne', False) or
                 not isinstance(trace, dict) or 'hit' not in trace):
             return 0
