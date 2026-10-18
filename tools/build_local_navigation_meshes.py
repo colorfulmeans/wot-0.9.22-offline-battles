@@ -1,5 +1,4 @@
 """Restore retained 4 m maps and add only proved local passage meshes."""
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -44,10 +43,10 @@ def build(name):
 if __name__=='__main__':
     for name in MAPS:
         graph=build(name)
-        (ROOT/'navgraphs'/ (name+'.json')).write_text(json.dumps(graph,separators=(',',':'))+'\n')
+        (ROOT/'navgraphs'/ (name+'.json')).write_bytes((json.dumps(graph,separators=(',',':'))+'\n').encode('utf-8'))
         print(name,'base',graph['width']*graph['height'],'local sampled',sum(p['width']*p['height'] for p in graph['local_meshes']))
     path=ROOT/'navgraphs/manifest.json';manifest=json.loads(path.read_bytes())
     for row in manifest['maps']:
         if row.get('map') in MAPS or row.get('file') in tuple(n+'.json' for n in MAPS):
             row['sha256']=hashlib.sha256((ROOT/'navgraphs'/row['file']).read_bytes()).hexdigest()
-    path.write_text(json.dumps(manifest,separators=(',',':'))+'\n')
+    path.write_bytes((json.dumps(manifest,indent=2)+'\n').encode('utf-8'))

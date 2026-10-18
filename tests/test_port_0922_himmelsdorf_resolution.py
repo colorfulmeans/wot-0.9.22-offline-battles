@@ -160,6 +160,16 @@ class ResolutionTests(unittest.TestCase):
                 result=bot_tactics.canonical(profile)
                 self.assertEqual(meta['resource_sha256'],result['maps'][name]['resource_sha256'])
 
+    def test_manifest_editor_and_actual_local_mesh_bytes_have_one_identity(self):
+        import hashlib
+        rows=json.loads((ROOT/'navgraphs/manifest.json').read_bytes())['maps']
+        for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
+            raw=(ROOT/'navgraphs'/(name+'.json')).read_bytes()
+            identity=hashlib.sha256(raw).hexdigest()
+            self.assertNotIn(b'\r\n',raw)
+            self.assertEqual(identity,bot_tactics.MAPS[name]['resource_sha256'])
+            self.assertEqual(identity,next(row['sha256'] for row in rows if row['map']==name))
+
     def test_grid_identity_reaches_serialized_final_motion_and_cached_state(self):
         import test_port_0922_complete_navigation_receipts as fixture
         f = fixture.RuntimeReceiptTests(); f.setUp()
