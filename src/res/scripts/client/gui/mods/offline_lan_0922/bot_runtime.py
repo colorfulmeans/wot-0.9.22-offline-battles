@@ -2073,7 +2073,7 @@ class BotRuntime(object):
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
                  impact_contacts_resolver=None, navigation_surface_probe=None,
-                 navigation_height_columns=None):
+                 navigation_height_columns=None, local_sweep_probe=None):
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -2083,6 +2083,7 @@ class BotRuntime(object):
         self.artillery_status_probe = artillery_status_probe
         self._wreck_rotation_probe = wreck_rotation_probe
         self._wreck_ground_probe = wreck_ground_probe
+        self.local_sweep_probe = local_sweep_probe
         self.rotation_resolver = rotation_resolver
         self._combat_diagnostics = combat_diagnostics
         self.descriptor_resolver = descriptor_resolver or (lambda unused: {})
@@ -13505,6 +13506,10 @@ class BotRuntime(object):
                                    gun_state, ammo_state, reload_factor, now,
                                    launch=None):
         """Track ready time after independent completed firing-lane failures."""
+        sequence = int(state.get('fire_seq', 0))
+        if state.get('_spg_zone_fire_seq', sequence) != sequence:
+            state.pop('_spg_zone_failures', None)
+        state['_spg_zone_fire_seq'] = sequence
         initial = state.get('_spg_initial')
         episode = state.get('_spg_fire_position_failure')
         if (initial is None or command.get('combat_mode') != 'artillery_hold' or
@@ -13579,22 +13584,45 @@ class BotRuntime(object):
         state['_spg_fire_failed_parking'] = failed[-8:]
         excluded = [point for point, unused in failed]
         excluded.extend(state.get('_spg_failed_parking', ()))
+        failures = state.setdefault('_spg_zone_failures', {})
+        zone = initial['zone']
+        failures[zone] = failures.get(zone, 0) + 1
+        exhausted = sorted(z for z, count in failures.items() if count >= 2)
+        retry_receipt = dict(round=self.round_id, bot=state['id'], at=now,
+            previous_zone=zone, failures=dict(failures), excluded_zones=list(exhausted),
+            failed_points=excluded, cycle_restarted=False, attempts=[])
         kwargs = dict(actor_ids=(state['id'],), excluded=excluded,
             occupied=self._physical_parking_occupancy(state),
-            preferred_zone=initial['zone'])
-        try:
+            preferred_zone=zone, excluded_zones=exhausted)
+        def select():
             if initial['source'] == 'launcher_manual_v1':
-                plans, unused = bot_tactics_runtime.assign_manual_positions(
+                return bot_tactics_runtime.assign_manual_positions(
                     self._bot_tactics, initial['map'], self.baked_graph,
                     list(self._ordered_states()), **kwargs)
-            else:
-                plans, unused = spg_positions.assign_initial_positions(
-                    initial['map'], self.baked_graph,
-                    list(self._ordered_states()),
-                    deleted_positions=bot_tactics.map_settings(self._bot_tactics, initial['map']).get('deleted_positions', ()), **kwargs)
-        except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+            return spg_positions.assign_initial_positions(
+                initial['map'], self.baked_graph, list(self._ordered_states()),
+                deleted_positions=bot_tactics.map_settings(self._bot_tactics,
+                    initial['map']).get('deleted_positions', ()), **kwargs)
+        try:
+            plans, outcomes = select()
+            retry_receipt['attempts'].append(dict(excluded_zones=list(exhausted), outcomes=outcomes))
+            if state['id'] not in plans and exhausted:
+                # Every reachable region may be obstructed in a city. Start a
+                # new bounded cycle rather than permanently blacklisting it.
+                failures.clear()
+                kwargs['excluded_zones'] = ()
+                retry_receipt['cycle_restarted'] = True
+                plans, outcomes = select()
+                retry_receipt['attempts'].append(dict(excluded_zones=[], outcomes=outcomes))
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError) as error:
             plans = {}
+            retry_receipt['error'] = type(error).__name__
         replacement = plans.get(state['id'])
+        retry_receipt.update(selected_zone=replacement.get('zone') if replacement else None,
+            selected_point=replacement.get('point') if replacement else None,
+            outcome='selected' if replacement else 'no_safe_alternate')
+        state['_spg_position_retry_receipt'] = retry_receipt
+        print('[Offline LAN 0.9.22] SPG POSITION RETRY ' + json.dumps(retry_receipt, sort_keys=True))
         if replacement is None:
             state['_spg_position_event'] = 'fire_position_no_safe_alternate'
             return initial
@@ -13818,6 +13846,8 @@ class BotRuntime(object):
                       if failure and launch_stage == 'exact_launch_pending'
                       else launch_stage or 'gunner_or_selected_lane')
         print('[SPG FIRE GATE] %s' % json.dumps({
+            'position_retry_receipt':state.get('_spg_position_retry_receipt'),
+            'zone_failures':state.get('_spg_zone_failures',{}),
             'id': state['id'], 'vehicle': state.get('vehicle'), 'reason': reason,
             'mode': command.get('combat_mode'), 'target': target_key,
             'order_target': command.get('target_id'),
@@ -14946,6 +14976,30 @@ class BotRuntime(object):
             controlled_shallow_commit = getattr(
                 self.navigator, 'controlled_shallow_committed', None)
 
+            sweep_descriptor = self._descriptors.get(state['id'], {})
+            local_sweeps = {}
+            local_rotation_cap = [None]
+
+            def local_sweep(sample_yaw, distance=None):
+                probe = self.local_sweep_probe
+                if not callable(probe) or state.get('airborne'):
+                    return None
+                checked_yaw = float(sample_yaw)
+                if distance is None:
+                    if local_rotation_cap[0] is None:
+                        local_rotation_cap[0] = max(float(self._physics_params_for(state['id'])['rotSpd']),
+                            abs(self._turn_speeds.get(state['id'],0.)))
+                    cap = local_rotation_cap[0]*max(.001,float(step))
+                    checked_yaw = state['yaw']+max(-cap,min(cap,_angle_delta(sample_yaw,state['yaw'])))
+                key = (checked_yaw, distance)
+                reused = key in local_sweeps
+                if not reused:
+                    local_sweeps[key] = timed_call(self._combat_diagnostics,
+                        'bot.local_sweep', probe, state['id'], position,
+                        state['yaw'], checked_yaw, distance, sweep_descriptor, step, now)
+                value = local_sweeps[key]
+                return dict(value, requested_yaw=sample_yaw, cache_reused=reused) if value is not None else None
+
             def sample_pose_clear_impl(sample_yaw, allow_wreck_push=False):
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
@@ -14974,6 +15028,13 @@ class BotRuntime(object):
                     # Only that inconsistent current pose delegates the turn
                     # to native commit. Valid corridors retain their complete
                     # rectangle guard before the driver selects a recovery arc.
+                    proof = local_sweep(sample_yaw)
+                    if proof is not None:
+                        self._record_planning_verdict(planning_receipt, dict(
+                            kind='local_sweep', action='rotation', yaw=sample_yaw,
+                            native_sweep=proof, clear=proof['clear']))
+                        planning_reason[0] = proof['reason']
+                        return bool(proof['clear'])
                     planning_reason[0] = 'current_baked_pose_missing_defer_native_commit'
                     return True
                 if not callable(pose_probe):
@@ -15062,6 +15123,15 @@ class BotRuntime(object):
                                           else 'native_probe_unavailable')
                     return not bounded_recovery
                 clear = self._probe_is_clear(sample)
+                if clear and bounded_recovery:
+                    proof = local_sweep(sample_yaw, float(maximum_distance))
+                    if proof is not None:
+                        self._record_planning_verdict(planning_receipt, dict(
+                            kind='local_sweep', action='translation', yaw=sample_yaw,
+                            distance=maximum_distance, native_sweep=proof, clear=proof['clear']))
+                        if proof['clear'] is not None:
+                            planning_reason[0] = proof['reason']
+                            return bool(proof['clear'])
                 planning_reason[0] = (sample.get('reason') or
                     ('native_probe_clear' if clear else 'native_probe_rejected')) if isinstance(sample, dict) else 'native_direction'
                 return clear
