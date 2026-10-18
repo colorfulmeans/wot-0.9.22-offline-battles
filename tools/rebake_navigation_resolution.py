@@ -14,7 +14,8 @@ GAMEPLAY_FIELDS = (
     'spawn_formations', 'spawn_formation_source',
 )
 NARROWS = (((182.606,43.685),(175.887,87.135)),
-           ((175.887,87.135),(180.55,116.688)))
+           ((175.887,87.135),(180.55,116.688)),
+           ((190.536,151.486),(216.694,216.882)))
 
 
 def verify_geometry(graph, terrain, obstacles, legacy):

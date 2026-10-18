@@ -15,7 +15,7 @@
     {
       "file": "04_himmelsdorf.json",
       "map": "04_himmelsdorf",
-      "sha256": "e6ef88b1e0a4efcf4026a0b9d3517a77c23a2aacf66740f416164683746c9ded"
+      "sha256": "8c4a386503db0b33cc95a1d7c4bcb97af785514837712b8992d301dc4faf4068"
     },
     {
       "file": "05_prohorovka.json",
@@ -170,7 +170,7 @@
     {
       "file": "86_himmelsdorf_winter.json",
       "map": "86_himmelsdorf_winter",
-      "sha256": "0e58ae6f268e317c8c25fd1a12a48a9d550c26b9bbeed62dbf431209cd15b3fc"
+      "sha256": "60d022757c69aaef5edc4a3c00560e4a871c08718606d00cd04307fb517aef0b"
     },
     {
       "file": "92_stalingrad.json",

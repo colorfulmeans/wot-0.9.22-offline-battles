@@ -16,6 +16,16 @@ from gui.mods.offline_lan_0922 import bot_tactics, prebaked_navigation
 
 
 class ResolutionTests(unittest.TestCase):
+    def test_sloping_face_keeps_local_height_and_vertical_wall_still_blocks(self):
+        import test_port_0922_navigation_collision_bake as fixture
+        field=baker.compiled_navigation_obstacles(
+            fixture.compiled([]),fixture.VFS([]),baker._legacy_baker())
+        field._raster_triangle(((0.,0.,0.),(20.,10.,0.),(0.,0.,20.)))
+        self.assertFalse(field.blocked(.5,.5,1.1,margin=0.))
+        self.assertTrue(field.blocked(4.5,.5,1.1,margin=0.))
+        field._raster_triangle(((.5,0.,0.),(.5,8.,0.),(.5,8.,1.)))
+        self.assertTrue(field.blocked(.5,.5,1.1,margin=0.))
+
     def test_first_run_and_reset_profile_uses_current_identities(self):
         profile=bot_tactics.default_profile()
         self.assertEqual(profile,bot_tactics.canonical(profile))
@@ -83,6 +93,12 @@ class ResolutionTests(unittest.TestCase):
                 self.assertTrue(path)
                 self.assertLess(distance,60.)
             self.assertEqual([[2.,-250.],[70.,346.]], graph['bases'])
+            a,_=legacy._nearest_node(graph,(190.536,151.486))
+            b,_=legacy._nearest_node(graph,(216.694,216.882))
+            for start,end in ((a,b),(b,a)):
+                path,distance=legacy._graph_path(graph,start,end)
+                self.assertTrue(path)
+                self.assertLess(distance,100.)
 
     def test_previous_profile_identity_preserves_custom_waypoints(self):
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):

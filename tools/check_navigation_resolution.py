@@ -10,7 +10,8 @@ import bake_navigation_0922 as baker
 
 MAPS = ('04_himmelsdorf', '86_himmelsdorf_winter')
 NARROWS = (((182.606, 43.685), (175.887, 87.135)),
-           ((175.887, 87.135), (180.55, 116.688)))
+           ((175.887, 87.135), (180.55, 116.688)),
+           ((190.536,151.486),(216.694,216.882)))
 
 
 def route_cases(graph):

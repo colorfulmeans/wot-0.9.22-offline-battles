@@ -36,6 +36,7 @@ int main(int argc, char **argv) {
     if (!input) throw std::runtime_error("incomplete benchmark input");
     const auto context=offline_navigation::open(std::move(map));
     std::vector<double> times;
+    std::vector<offline_navigation::Completion> incomplete;
     unsigned expanded=0, partial=0;
     const auto started=std::chrono::steady_clock::now();
     int submitted=0, completed=0;
@@ -49,7 +50,9 @@ int main(int argc, char **argv) {
         for (const auto &c:result.completed) {
             if (c.status != 0) throw std::runtime_error("search failed");
             const auto &goal=cases[(c.job_id-1)%count].goal;
-            if (c.path.empty() || std::hypot(c.path.back()[0]-goal[0],c.path.back()[2]-goal[2])>8.) ++partial;
+            if (c.path.empty() || std::hypot(c.path.back()[0]-goal[0],c.path.back()[2]-goal[2])>8.) {
+                ++partial; incomplete.push_back(c);
+            }
             times.push_back(c.worker_seconds*1000); expanded+=c.expanded; ++completed;
         }
         if (std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count()>90.)
@@ -61,5 +64,14 @@ int main(int argc, char **argv) {
     std::cout << "{\"jobs\":" << completed << ",\"partial_or_empty\":" << partial
               << ",\"expanded\":" << expanded << ",\"worker_p50_ms\":" << times[times.size()/2]
               << ",\"worker_p95_ms\":" << times[times.size()*95/100]
-              << ",\"worker_max_ms\":" << times.back() << "}\n";
+              << ",\"worker_max_ms\":" << times.back() << ",\"incomplete_cases\":[";
+    for (size_t i=0;i<incomplete.size();++i) {
+        const auto &c=incomplete[i];
+        if(i) std::cout << ',';
+        std::cout << "{\"case\":" << (c.job_id-1)%count << ",\"job\":" << c.job_id
+                  << ",\"expanded\":" << c.expanded << ",\"has_end\":" << (!c.path.empty()?"true":"false");
+        if(!c.path.empty()) std::cout << ",\"end\":[" << c.path.back()[0] << ',' << c.path.back()[1] << ',' << c.path.back()[2] << ']';
+        std::cout << '}';
+    }
+    std::cout << "]}\n";
 }

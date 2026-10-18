@@ -996,6 +996,29 @@ def _compiled_collision_materials(bsmo, collider, model_id):
     return result
 
 
+def _clip_collision_triangle(triangle, minimum_x, maximum_x, minimum_z, maximum_z):
+    """Clip in 3D so a sloped face contributes only its local cell heights."""
+    polygon=list(triangle)
+    for axis,value,above in ((0,minimum_x,True),(0,maximum_x,False),
+                             (2,minimum_z,True),(2,maximum_z,False)):
+        if not polygon:
+            break
+        clipped=[]
+        previous=polygon[-1]
+        previous_inside=previous[axis]>=value if above else previous[axis]<=value
+        for current in polygon:
+            inside=current[axis]>=value if above else current[axis]<=value
+            if inside != previous_inside:
+                fraction=(value-previous[axis])/(current[axis]-previous[axis])
+                clipped.append(tuple(previous[i]+fraction*(current[i]-previous[i])
+                                     for i in range(3)))
+            if inside:
+                clipped.append(current)
+            previous,previous_inside=current,inside
+        polygon=clipped
+    return polygon
+
+
 def compiled_navigation_obstacles(compiled, vfs, legacy):
     """Build the static route raster directly from placed compiled colliders.
 
@@ -1017,6 +1040,20 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
     colliders = bsmo['models_colliders']
 
     class CompiledObstacles(legacy.ObstacleField):
+        def _raster_triangle(self,triangle):
+            # Raster occupancy is triangle/cell intersection, not the vertical
+            # bounds of the entire model face copied across its whole footprint.
+            size=self.raster_size
+            for cx in range(int(math.floor(min(v[0] for v in triangle)/size)),
+                            int(math.floor(max(v[0] for v in triangle)/size))+1):
+                for cz in range(int(math.floor(min(v[2] for v in triangle)/size)),
+                                int(math.floor(max(v[2] for v in triangle)/size))+1):
+                    local=_clip_collision_triangle(triangle,cx*size,(cx+1)*size,
+                                                   cz*size,(cz+1)*size)
+                    if local:
+                        self._mark_cell(cx,cz,min(v[1] for v in local),
+                                        max(v[1] for v in local))
+
         def __init__(self):
             self.raster_size = 1.0
             self.cells, self.surface_cells = {}, {}
@@ -2896,6 +2933,7 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
         graph['bake']['collision_height_intervals'] = 'overlapping_union_preserves_vertical_gaps-v1'
+        graph['bake']['collision_cell_raster'] = 'triangle_clipped_to_cell-v1'
         graph['bake']['original_destructible_surfaces_excluded'] = True
         graph['bake']['compiled_collision_filter'] = obstacles.collision_stats
         graph['bake']['water_mode'] = ('BWWa-cell-surface-depth' if water_cells else
