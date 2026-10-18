@@ -65,6 +65,22 @@ class NavigationReplanTests(unittest.TestCase):
         self.assertFalse(nav.request_replan(99, (0.0, 0.0, 0.0), 1.0))
         self.assertFalse(nav.bot_states)
 
+    def test_deferred_search_preserves_exact_request_origin_after_motion(self):
+        nav = TerrainNavigator(lambda *unused: 0.0,
+                               lambda *unused: True, cell_size=4.0)
+        goal, request = (0.0, 0.0, 40.0), ('route', 1, 'deferred')
+        nav.begin_frame(0.0)
+        nav.next_target(7, (0.0, 0.0, 0.0), goal, request, 0.0)
+        requested = (0.0, 0.0, -8.0)
+        self.assertTrue(nav.request_replan(7, requested, 2.0))
+        nav.next_target(7, (0.0, 0.0, -8.2), goal, request, 2.1)
+        replacements = [job for key, job in nav.searches.items()
+                        if key[0][:2] == ('recovery', 7)]
+        self.assertEqual(1, len(replacements))
+        replacements[0].step(1)
+        self.assertEqual(requested, replacements[0].progress['start'])
+        nav.end_frame()
+
 
 if __name__ == '__main__':
     unittest.main()

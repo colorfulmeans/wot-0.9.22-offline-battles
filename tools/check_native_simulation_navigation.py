@@ -173,6 +173,34 @@ def main():
         backend.sim_close(handle)
         navigator.close()
 
+    # Unknown support is distinct from a genuine ford, including water
+    # behind the first eroded cell. Both owners retain fatal/physical gates.
+    for water_x in (None, 11, 13):
+        baked = graph()
+        baked['hazards'] = [0] * len(baked['hazards'])
+        baked['heights_mm'][15*31+12] = None
+        if water_x is not None:
+            baked['hazards'][15*31+water_x] = 4
+        nav = source.TerrainNavigator(lambda x,z,hint:0., baked_graph=baked)
+        runtime = types.ModuleType('unknown_water_fixture')
+        runtime.navigator = nav
+        handle = backend.sim_open(91,1)
+        native = facade.NativeNavigationCore.install(runtime, backend, handle)
+        a,b = (-20.,0.,0.),(-4.,0.,0.)
+        for start,end in ((a,b),(b,a)):
+            for mask in (4,3,7):
+                expected = nav.grid.segment_has_baked_hazard(start,end,mask)
+                compare(expected,native.grid.segment_has_baked_hazard(start,end,mask),
+                        'unknown support / actual water parity')
+                if mask == 4:
+                    compare(water_x is not None,expected,'only actual water sets ford hazard')
+            compare(nav.grid.dry_segment_clear(start,end,1.),
+                    native.grid.dry_segment_clear(start,end,1.),
+                    'unknown corridor cannot bypass physical proof')
+        native.detach()
+        nav.close()
+        backend.sim_close(handle)
+
     for scenario in range(5):
         queries = [[], []]
         navigators = []

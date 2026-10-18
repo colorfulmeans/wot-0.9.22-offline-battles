@@ -170,6 +170,8 @@ struct Grid {
     unsigned hazards = 0;
   };
   std::map<Edge, Corridor> corridors;
+  std::map<Edge, bool> shallow_corridors;
+  mutable std::map<Edge, std::vector<Edge>> segment_edges;
   std::deque<Edge> corridor_order;
   std::map<Cell, std::array<double, 2>> local_corridors;
   using Proof = std::function<bool(const Point &, const Point &)>;
