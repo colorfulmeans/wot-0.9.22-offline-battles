@@ -222,11 +222,14 @@ class TerrainGrid(object):
 		return math.sqrt((first[0]-second[0])**2 + (first[1]-second[1])**2)
 
 	def _routing_height(self, point):
+		base = self._baked_cell_height(self.cell_for(point))
+		if base is not None:
+			return base
 		if self._local_meshes is not None:
 			cell = self._local_meshes.cell(point)
 			if cell is not None:
 				return self._baked_cell_height(cell)
-		return self._baked_cell_height(self.cell_for(point))
+		return None
 
 	def cell_for(self, point):
 		origin_x, origin_z = self._baked_origin if self.prebaked else (0.0, 0.0)

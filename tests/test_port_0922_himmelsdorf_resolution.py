@@ -100,6 +100,13 @@ class ResolutionTests(unittest.TestCase):
         for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             grid=TerrainGrid(lambda *args:None,lambda *args:True,baked_graph=graph)
+            for patch in graph['local_meshes']:
+                for i in range(patch['width']*patch['height']):
+                    point=(patch['origin'][0]+i%patch['width']*2.,1.1,
+                           patch['origin'][1]+i//patch['width']*2.)
+                    base=grid._baked_cell_height(grid.cell_for(point))
+                    if base is not None:
+                        self.assertEqual(base,grid._routing_height(point))
             for first, neighbours in grid._local_meshes.edges.items():
                 for last in neighbours:
                     self.assertIn(first,grid._local_meshes.edges[last])
