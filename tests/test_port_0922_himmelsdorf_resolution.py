@@ -120,6 +120,7 @@ class ResolutionTests(unittest.TestCase):
                     last=grid.point_for(other,grid._baked_cell_height(other))
                     if grid._local_meshes.touches(first,last):
                         self.assertTrue(grid._baked_corridor(first,last)[0],(name,cell,other))
+                        self.assertIn(tuple(sorted((cell,other))),grid._edge_keys_for_segment(first,last))
 
     def test_previous_profile_identity_preserves_custom_waypoints(self):
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):

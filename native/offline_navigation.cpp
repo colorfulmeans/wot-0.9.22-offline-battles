@@ -345,6 +345,10 @@ struct Job {
     }
     bool hard_segment(Point a,Point b) const {
         if (hard.empty()) return false;
+        if(map->touches(a,b)) {
+            const auto base=crossed_cells(map->cell_for(a),map->cell_for(b));
+            for(size_t i=1;i<base.size();++i)if(hard.count(edge(base[i-1],base[i])))return true;
+        }
         const auto cells=map->segment_cells(a,b,false);
         for (size_t index=1;index<cells.size();++index)
             if (hard.count(edge(cells[index-1],cells[index]))) return true;
@@ -352,6 +356,10 @@ struct Job {
     }
     bool world_segment(Point a,Point b) const {
         if (world.empty()) return false;
+        if(map->touches(a,b)) {
+            const auto base=crossed_cells(map->cell_for(a),map->cell_for(b));
+            for(size_t i=1;i<base.size();++i)if(penalty_for(world,edge(base[i-1],base[i]))>0.)return true;
+        }
         const auto cells=map->segment_cells(a,b,false);
         for (size_t index=1;index<cells.size();++index)
             if (penalty_for(world,edge(cells[index-1],cells[index]))>0.) return true;

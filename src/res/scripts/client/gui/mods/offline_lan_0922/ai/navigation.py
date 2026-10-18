@@ -422,10 +422,12 @@ class TerrainGrid(object):
 		edges = self._edge_keys_for_segment(start, end)
 		return edges[0] if edges else None
 
-	def _edge_keys_for_segment(self, start, end):
-		if self._local_meshes is not None and self._local_meshes.touches(start, end):
+	def _edge_keys_for_segment(self, start, end, use_local=True):
+		if use_local and self._local_meshes is not None and self._local_meshes.touches(start, end):
 			cells = self._local_meshes.crossed(start, end, False)
-			return tuple(tuple(sorted((a,b))) for a,b in zip(cells,cells[1:]))
+			base = self._edge_keys_for_segment(start, end, False)
+			local = tuple(tuple(sorted((a,b))) for a,b in zip(cells,cells[1:]))
+			return base + tuple(edge for edge in local if edge not in base)
 		start_cell = self.cell_for(start)
 		end_cell = self.cell_for(end)
 		if start_cell == end_cell:
