@@ -24,7 +24,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             query_owner._native_world_query = query
         if query._runtime.bigworld is not BigWorld or query._runtime.math is not Math or query._space != spaceID:
             raise RuntimeError('World query owner does not match its live engine')
-    bounds = module._vehicle_motion_bounds(td)
+    bounds, heights = module._vehicle_motion_geometry(td)
     if bounds is None:
         bounds = (-1.5, 1.5, 3.5, 3.5)
     left, right, back, front = bounds
@@ -35,7 +35,6 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                      airborne=airborne,
                      extents=(max(abs(left), abs(right)), back, front),
                      lateral_bounds=(left, right))
-    heights = module._vehicle_motion_heights(td)
     snapshot = (pos.x, pos.y, pos.z, yaw, vel, dt, pitch, roll,
                 0.0 if motion_yaw is None else motion_yaw) + tuple(bounds) + tuple(heights) + (
                 motion_yaw is not None, airborne, exact_footprint,

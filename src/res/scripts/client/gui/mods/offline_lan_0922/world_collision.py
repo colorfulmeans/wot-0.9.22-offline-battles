@@ -19,6 +19,26 @@ _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
+def _vehicle_motion_geometry(descriptor):
+	"""Read the live hull/chassis once for both horizontal and vertical bounds.
+
+	This shares descriptor preparation, never a collision or support answer.
+	Every call reads the current bbox and mount, including Siege transitions.
+	"""
+	hull = _vehicle_hull_bbox(descriptor)
+	if hull is None:
+		return None, (0.6, 1.6)
+	chassis = _descriptor_value(descriptor, 'chassis')
+	tester = _descriptor_value(chassis, 'hitTester')
+	box = getattr(tester, 'bbox', None)
+	mount = _descriptor_value(chassis, 'hullPosition')
+	if box is None or mount is None:
+		raise RuntimeError('#1513 chassis collision descriptor is unavailable')
+	lower = tuple(min(float(box[0][i]), float(hull[0][i])+float(mount[i]))
+		for i in (0, 1, 2))
+	upper = tuple(max(float(box[1][i]), float(hull[1][i])+float(mount[i]))
+		for i in (0, 1, 2))
+	return (lower[0], upper[0], -lower[2], upper[2]), (lower[1], upper[1])
 
 
 def _trace_collision_filter(collision_filter, trace):

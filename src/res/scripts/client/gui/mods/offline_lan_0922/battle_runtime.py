@@ -22419,6 +22419,9 @@ class BattleRuntime(object):
                 BotRuntime._turret_state_pose(
                     bot_state, contact_end, yaw), descriptor):
             self._bot_motion_kinds[int(bot_id)] = 'detached_turret'
+            bot_state['_world_contact_trace'] = dict(reason='detached_turret',
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=commit_enabled)
             return 'hard'
         pose_pitch = _number(bot_state.get(
             'terrain_pitch', bot_state.get('pitch')))
@@ -22478,7 +22481,8 @@ class BattleRuntime(object):
             world_status = 'hard' if world_status else 'clear'
         self._bot_motion_kinds[int(bot_id)] = '-'
         if world_status == 'hard':
-            bot_state['_world_contact_trace'] = contact_trace
+            bot_state['_world_contact_trace'] = dict(contact_trace,
+                sampled_at=now, source='native_world', commit_enabled=commit_enabled)
             return 'hard'
         if self._destructibles is None:
             return 'clear' if world_status == 'clear' else 'hard'
@@ -22504,6 +22508,10 @@ class BattleRuntime(object):
                 'bot motion resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
         if status == 'hard':
+            bot_state['_world_contact_trace'] = dict(reason='catalog_hard',
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=commit_enabled, catalog={key:detail.get(key)
+                    for key in ('status', 'kinds', 'reason', 'token', 'requires_commit')})
             return 'hard'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))

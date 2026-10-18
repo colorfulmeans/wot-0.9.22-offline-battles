@@ -38,6 +38,86 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertAlmostEqual(.04, observation['age_seconds'])
         self.assertEqual('cache_reused', self.runtime.states[11]['_planning_disposition'])
 
+    def test_ground_primary_contact_survives_damage_consumer_and_escape_probe(self):
+        state = self.runtime.states[11]
+        state.update(airborne=False, yaw=.3,
+            _world_contact_trace=dict(reason='solid_lane', hit=(1.,2.,3.), normal=(0.,0.,1.)))
+        self.assertEqual(0, self.runtime._apply_world_contact_impact(state, 5., 2.))
+        self.assertNotIn('_world_contact_trace', state)
+        receipt = state['_primary_world_contact']
+        self.assertEqual('solid_lane', receipt['trace']['reason'])
+        self.assertEqual(2., receipt['sampled_at'])
+        state['_world_contact_trace'] = dict(reason='later_escape')
+        self.assertEqual('solid_lane', receipt['trace']['reason'])
+        self.runtime.update(.04, 2.04)
+        self.assertNotIn('_primary_world_contact', state)
+
+    def test_missing_contact_evidence_keeps_the_existing_no_damage_guard(self):
+        state = self.runtime.states[11]
+        for value in (None, 'unavailable', [1, 2]):
+            state.update(airborne=True, _world_contact_trace=value)
+            self.assertEqual(0,self.runtime._apply_world_contact_impact(state,20.,2.))
+            self.assertFalse(state['_primary_world_contact']['trace_available'])
+            self.assertEqual({},state['_primary_world_contact']['trace'])
+
+    def test_serialized_stall_contains_contact_probe_and_spg_retry_values(self):
+        self.runtime.update(.04, 1.)
+        state = self.runtime.states[11]
+        command = self.runtime._decision_cache[11][3]
+        state['_motion_stall_log'] = ((state['x'],state['y'],state['z']), -10.)
+        state['_spg_deployment_progress'] = dict(identity='report',best=62.1,since=.5)
+        state['_spg_parking_retries'] = 3
+        state['_spg_deployment_retry_receipt'] = dict(at=.7,outcome='alternate_selected')
+        state['_world_contact_trace'] = dict(reason='ground_profile',hit=(1.,2.,3.))
+        self.runtime._apply_world_contact_impact(state, 3., 1.04)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.runtime._log_motion_stall(state,command,0.,0.,False,
+                dict(clear=False,collision=True,reason='native_review'),1.04)
+            self.runtime._finish_motion_stall(state,False,False,
+                (state['x'],state['y'],state['z']),1.04)
+        parsed = parse_lines(output.getvalue().splitlines(),'worker')
+        self.assertEqual([],parsed['issues'])
+        row = next(r['data'] for r in parsed['records'] if r['label']=='BOT MOTION')
+        self.assertEqual('ground_profile',row['primary_world_contact']['trace']['reason'])
+        self.assertEqual('native_review',row['motion_probe_evidence']['reason'])
+        self.assertEqual(3,row['spg_deployment']['retries'])
+        self.assertEqual(62.1,row['spg_deployment']['progress']['best'])
+        self.assertEqual('alternate_selected',row['spg_deployment']['retry_receipt']['outcome'])
+
+    def test_order_evidence_freezes_input_points_without_changing_the_order(self):
+        from gui.mods.offline_lan_0922.bot_runtime import _order_evidence
+        order=dict(combat_mode='withdraw',move_position=dict(x=1.,y=2.,z=3.),
+                   face_position=[4.,5.,6.],throttle_override=0.)
+        saved=copy.deepcopy(order)
+        receipt=_order_evidence(order)
+        self.assertEqual(saved,order)
+        order['move_position']['x']=10.
+        order['face_position'][0]=20.
+        self.assertEqual(1.,receipt['move_position']['x'])
+        self.assertEqual((4.,5.,6.),receipt['face_position'])
+
+    def test_server_order_transformations_survive_cached_execution(self):
+        from unittest import mock
+        self.runtime._server_orders[11] = dict(combat_mode='withdraw',
+            move_position=(10.,0.,20.), fire_allowed=False)
+        def hold(state, order, targets, now, clear):
+            return dict(order, move_position=(state['x'],state['y'],state['z']),
+                        throttle_override=0., combat_mode='under_fire_withdraw')
+        with mock.patch.object(self.runtime,'_rear_laying_order',side_effect=lambda s,o,t,n:o), \
+                mock.patch.object(self.runtime,'_artillery_position_order',side_effect=lambda s,o,t,n:o), \
+                mock.patch.object(self.runtime,'_gun_angle_order',side_effect=hold):
+            self.runtime.update(.04,1.)
+            first=copy.deepcopy(self.runtime._decision_cache[11][3]['order_evidence'])
+            self.runtime.update(.04,1.04)
+        current=self.runtime._decision_cache[11][3]['order_evidence']
+        self.assertEqual(first,current)
+        self.assertEqual(1.,current['sampled_at'])
+        self.assertEqual(['server_live_target','rear_laying','artillery_position','gun_angle'],
+                         [stage['stage'] for stage in current['stages']])
+        self.assertEqual('withdraw',current['stages'][0]['order']['combat_mode'])
+        self.assertEqual(0.,current['final_order']['throttle_override'])
+
     def test_refresh_creates_new_identity_without_mutating_old_witness(self):
         self.runtime.update(.04, 1.)
         old = self.runtime._decision_cache[11][3]['planning_receipt']
