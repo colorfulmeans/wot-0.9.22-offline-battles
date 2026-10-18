@@ -752,17 +752,22 @@ def slope_pose(probe, position, yaw, half_length, half_width,
     for name, local_x, local_z in (
             ('front', 0.0, length * 0.5), ('rear', 0.0, -length * 0.5),
             ('right', width * 0.5, 0.0), ('left', -width * 0.5, 0.0)):
-        x = position[0] + cosine * local_x + sine * local_z
-        z = position[2] - sine * local_x + cosine * local_z
+        ox, oy, oz = (local_x, 0., local_z)
+        if exact:
+            ox, oy, oz = vehicle_physics.suspension_point_offset(
+                dict(x=local_x, y=0., z=local_z), last_pitch, last_roll)
+        x = position[0] + cosine * ox + sine * oz
+        z = position[2] - sine * ox + cosine * oz
         # The ray starts two metres above its datum. On a long tilted hull,
         # the uphill end can already be higher than centre + two metres.
         # Reuse the accepted plane only as a ray origin, never as a hit.
         hint = position[1]
         if exact and normal[1] > 0.01:
-            hint -= (normal[0] * local_x + normal[2] * local_z) / normal[1]
+            hint += oy
         value = probe(x, z, hint)
         values.append(value)
-        points.append(dict(name=name, x=x, z=z, hint_y=hint, height=value))
+        points.append(dict(name=name, x=x, z=z, hint_y=hint, height=value,
+                           local_x=ox, local_z=oz))
     front, rear, right, left = values
     if receipt is not None:
         receipt.update(front=front, rear=rear, right=right, left=left,
@@ -771,8 +776,17 @@ def slope_pose(probe, position, yaw, half_length, half_width,
     if None in (front, rear, right, left):
         return None if exact else (float(last_pitch), float(last_roll))
     if exact:
-        forward_grade = (float(front) - float(rear)) / length
-        lateral_grade = (float(right) - float(left)) / width
+        fx, fz = points[0]['local_x']-points[1]['local_x'], points[0]['local_z']-points[1]['local_z']
+        sx, sz = points[2]['local_x']-points[3]['local_x'], points[2]['local_z']-points[3]['local_z']
+        determinant = fx*sz-fz*sx
+        if abs(determinant) < 1.e-8:
+            if receipt is not None:
+                receipt['complete'] = False
+                receipt['reason'] = 'degenerate_projected_footprint'
+            return None
+        fd, sd = float(front)-float(rear), float(right)-float(left)
+        forward_grade = (fx*sd-sx*fd)/determinant
+        lateral_grade = (fd*sz-sd*fz)/determinant
         # YPR rotation applies roll before pitch. Independent atan values
         # over-tilt a diagonal grade; fit one plane normal in that order.
         pitch = -math.atan(forward_grade)
@@ -7848,6 +7862,34 @@ class BotRuntime(object):
             refresh['guard'] = 'clear_detached_turret_sweep'
         else:
             refresh['guard'] = 'no_detached_turret_probe'
+        if (exact and state.get('_basic_support_datum') is not None and
+                self._physics_ground_probe is not None and max(
+                abs(pitch-self._terrain_pitch(state)), abs(roll-state.get('roll',0.))) > .001):
+            current_support = self._basic_support_status(state)
+            if all(row['valid'] for row in current_support):
+                proposed = dict(state, terrain_pitch=pitch,
+                                pitch=pitch+suspension_pitch, roll=roll)
+                proposed_support = self._basic_support_status(proposed)
+                refresh['footprint_guard'] = dict(
+                    current=current_support, proposed=proposed_support,
+                    accepted=all(row['valid'] for row in proposed_support))
+                if not refresh['footprint_guard']['accepted']:
+                    # A four-ray plane can move the long hull's footprint
+                    # across a ledge. Keep its supported physical pose instead
+                    # of creating point loss immediately after a handback.
+                    # Real missing current points still enter detailed support.
+                    # Consume this measurement on the ordinary distance/yaw
+                    # cadence; retrying the same rejected fit every tick would
+                    # add repeated casts while the physical footprint is still
+                    # monitored independently by support admission.
+                    state['_slope_pose_target'] = (
+                        self._terrain_pitch(state), state.get('roll',0.))
+                    if new_target is not None:
+                        state['_basic_slope_samples'] = slope_receipt
+                        state['pose_sample'] = (x,z,yaw)
+                        refresh['marker_advanced'] = True
+                    refresh['reason'] = 'proposed_footprint_loses_support'
+                    return False
         state['terrain_pitch'] = pitch
         state['pitch'] = pitch + suspension_pitch
         state['roll'] = roll

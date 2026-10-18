@@ -571,10 +571,23 @@ clearance and short paths, rather than connectivity by a remote detour.
 The retained base nodes, links, routes and spawns are unchanged.
 Local mesh support is shared by Python geometry and the shipping C++ search;
 it does not change C, avoidance, retry/route-switch or local driving distances.
+Hull footprint checks use the same additive support as path queries, while
+native body collision checks remain authoritative. Static patch bounds are
+indexed and repeated segment queries are cached with bounded per-grid storage;
+the sampling interval and query decisions are retained.
 The editor renders the combined graph and uses the shipping planner for route
 and wait-place connections, rejects partial search results, and records the
 complete check in the collected launcher log. Parking-envelope checks remain
 separate. Restore the shipped route profile to remove local waypoint edits.
+The El Halluf light-tank south-valley defaults now include the revised two
+central waypoints in both directions; other classes retain their own routes.
+
+Basic ground attitude samples the rotated chassis footprint used by the
+five-point support decision. After detailed-support handback, a proposed
+attitude must preserve the currently valid footprint before it replaces the
+accepted pose. Its receipt includes both point sets when this check runs.
+Any missing current point still enables detailed support immediately, and all
+five valid points release it; there is no timer or relaxed point threshold.
 
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after
