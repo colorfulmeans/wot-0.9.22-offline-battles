@@ -2920,6 +2920,7 @@ class TerrainNavigator(object):
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
 			'local_retry_replans': state.get('local_retry_progress', {}).get('replans', 0),
 			'reached_path_corner': state.get('reached_path_corner'),
+			'corner_selection_receipt': state.get('corner_selection_receipt'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
@@ -3567,10 +3568,32 @@ class TerrainNavigator(object):
 		self._finish_search(key, search, now)
 		return key, self.paths.get(key)
 
+	def _record_corner_check(self, bot_id, current, path, index, candidate, now, clear, reason):
+		"""Copy the actual short-circuit result; never run another probe."""
+		state = self.bot_states.get(bot_id)
+		if state is None:
+			return
+		receipt = state.get('corner_selection_receipt')
+		if receipt is None or receipt['at'] != float(now):
+			receipt = dict(at=float(now), origin=tuple(current), checks=[], dropped=0)
+			state['corner_selection_receipt'] = receipt
+		row = dict(index=index, candidate=candidate, clear=bool(clear), reason=reason,
+			corner=tuple(path[index]) if index < len(path) else None,
+			target=tuple(path[candidate]) if candidate < len(path) else None,
+			corner_distance=_distance_2d(current, path[index]) if index < len(path) else None,
+			driver_arrival_radius=WAYPOINT_ARRIVAL_RADIUS,
+			native_revision=self.grid._native_proof_revision,
+			proof_deferred=self.grid._proof_deferred)
+		if len(receipt['checks']) < 16:
+			receipt['checks'].append(row)
+		else:
+			receipt['dropped'] += 1
+
 	def _planned_next_segment_clear(self, current, path, index, now,
 			bot_id=None):
 		"""Keep an adjacent A* ford without inventing a shallow shortcut."""
 		if index + 1 >= len(path):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'no_next_vertex')
 			return False
 		target = path[index + 1]
 		# Consuming a reached setup is not a shortcut over an unreached bend.
@@ -3578,23 +3601,31 @@ class TerrainNavigator(object):
 		# further; give it the next checked edge so it can align for the climb.
 		# Keep the tighter driver radius here, not the grid's lookahead radius.
 		reached = _distance_2d(current, path[index]) <= WAYPOINT_ARRIVAL_RADIUS
-		if ((not reached and
-				 not self.grid.live_shortcut_preserves_climb_approach(
-					 current, path, index, index + 1)) or
-			(bot_id is not None and self._bot_edges_penalized(
-				 bot_id, current, target, now)) or
-				self.grid.segment_penalty(current, target, now) > 0.0 or
-				not self.grid.segment_clear(current, target)):
+		if not reached and not self.grid.live_shortcut_preserves_climb_approach(current,path,index,index+1):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'climb_setup_required')
+			return False
+		if bot_id is not None and self._bot_edges_penalized(bot_id,current,target,now):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'private_edge_penalty')
+			return False
+		if self.grid.segment_penalty(current,target,now) > 0.0:
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'segment_penalty')
+			return False
+		if not self.grid.segment_clear(current,target):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'segment_blocked')
 			return False
 		if not self.grid.segment_has_baked_hazard(
 				current, target, BAKED_SHALLOW_WATER):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,True,'next_dry_edge_clear')
 			return True
 		# The offset from the realised hull pose may enter shallow water only
 		# when the adjacent edge selected by A* is itself the planned ford.
 		# Otherwise reaching one dry corner could skip the next dry corner and
 		# turn their diagonal into an unplanned water shortcut.
-		return self.grid.segment_has_baked_hazard(
+		clear = self.grid.segment_has_baked_hazard(
 			path[index], target, BAKED_SHALLOW_WATER)
+		self._record_corner_check(bot_id,current,path,index,index+1,now,clear,
+			'planned_ford' if clear else 'unplanned_water_shortcut')
+		return clear
 
 	def _planned_current_segment_clear(self, current, path, index, now,
 			selected_target=None):
@@ -3641,22 +3672,26 @@ class TerrainNavigator(object):
 				incoming = math.atan2(corner[0]-current[0], corner[2]-current[2])
 				outgoing = math.atan2(path[candidate][0]-corner[0], path[candidate][2]-corner[2])
 				if abs((outgoing-incoming+math.pi) % (2.0*math.pi)-math.pi) > 0.30:
+					self._record_corner_check(bot_id,current,path,index,candidate,now,False,'unreached_sharp_corner')
 					break
 			if (horizon is not None and candidate > index + 1 and
 					_distance_2d(current, path[candidate]) > horizon):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'lookahead_horizon')
 				break
-			if ((not prefer_clearance or
-					 self.grid.shortcut_preserves_baked_clearance(
-						 path, index, candidate)) and
-					self.grid.live_shortcut_preserves_climb_approach(
-						current, path, index, candidate) and
-					not self.grid.path_has_edge_penalty(
-						(current, path[candidate]), edge_penalties) and
-					self.grid.dry_segment_clear(
-						current, path[candidate], now)):
-				lookahead = candidate
-			else:
+			if prefer_clearance and not self.grid.shortcut_preserves_baked_clearance(path,index,candidate):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'baked_clearance')
 				break
+			if not self.grid.live_shortcut_preserves_climb_approach(current,path,index,candidate):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'climb_setup_required')
+				break
+			if self.grid.path_has_edge_penalty((current,path[candidate]),edge_penalties):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'private_edge_penalty')
+				break
+			if not self.grid.dry_segment_clear(current,path[candidate],now):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'dry_segment_blocked')
+				break
+			self._record_corner_check(bot_id,current,path,index,candidate,now,True,'lookahead_clear')
+			lookahead = candidate
 		return lookahead
 
 	def _resume_reached_corner(self, bot_id, state, current, path, key, index, now):
@@ -3719,6 +3754,8 @@ class TerrainNavigator(object):
 			         'blocked_step_tracker': None,
 			         'blocked_step_escalated_until': 0.0}
 			self.bot_states[bot_id] = state
+		state['corner_selection_receipt'] = dict(at=float(now),origin=tuple(current),
+			goal=tuple(goal),checks=[],dropped=0,query_policy='existing_checks_only')
 		if (state.get('blocked_step_replan') and
 				not self._active_bot_edge_penalties(bot_id, now)):
 			state.pop('blocked_step_replan', None)

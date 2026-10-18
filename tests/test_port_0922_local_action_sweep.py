@@ -83,7 +83,7 @@ class LocalActionSweepTests(unittest.TestCase):
             battle,state,descriptor=self.scene()
             def move(*args,**kwargs):
                 self.assertFalse(kwargs['commit_enabled'])
-                self.assertEqual(yaw,kwargs['motion_yaw'])
+                self.assertIsNone(kwargs.get('motion_yaw'))
                 self.assertEqual(sign,state['movement_dir'])
                 self.assertAlmostEqual(.54,abs(args[3])*args[5])
                 state['_world_contact_trace']={'hit':(57.78,1.7,-44.49)}
@@ -91,6 +91,8 @@ class LocalActionSweepTests(unittest.TestCase):
             battle._resolve_bot_motion=mock.Mock(side_effect=move)
             result=battle._probe_bot_local_motion(8,(0.,1.1,0.),0.,yaw,.54,descriptor,.1,305.)
             self.assertFalse(result['clear'])
+            self.assertEqual('signed_drive',result['motion_law'])
+            self.assertEqual(yaw,result['checked_yaw'])
             self.assertEqual(0,state['movement_dir'])
             self.assertEqual(1,state['rotation_dir'])
             self.assertEqual({'realised':'translation'},state['_world_contact_trace'])
@@ -101,6 +103,39 @@ class LocalActionSweepTests(unittest.TestCase):
         value=battle._probe_bot_local_motion(8,(0,0,0),0.,.5,2.,descriptor,.1,1.)
         self.assertIsNone(value['clear'])
         self.assertEqual('local_sweep_not_aligned',value['reason'])
+
+    def test_translation_preview_matches_real_driving_world_arguments_in_both_directions(self):
+        from gui.mods.offline_lan_0922 import battle_runtime as module
+        for body,sign,blocked in ((-.5534,-1,False),(-2.426,-1,False),
+                                  (3.13,1,True),(-3.13,-1,True)):
+            with self.subTest(body=body,sign=sign,blocked=blocked):
+                battle,state,td=self.scene()
+                state.update(yaw=body,pitch=.0474,terrain_pitch=.0474,roll=.0713)
+                battle._avatar=types.SimpleNamespace(spaceID=1)
+                battle._destructibles=None
+                battle._turret_motion_is_clear=mock.Mock(return_value=True)
+                battle._destructible_drive_speed_cap=mock.Mock(return_value=None)
+                battle._bot_destructible_travel_descriptor=mock.Mock(return_value=None)
+                target=body if sign>0 else body+math.pi
+                with mock.patch.object(module.world_collision,'check_horizontal_collision',
+                                       return_value='hard' if blocked else 'clear') as world:
+                    preview=battle._probe_bot_local_motion(8,(1.,2.,3.),body,target,.5,td,.1,1.)
+                    before=world.call_args
+                    state.update(movement_dir=sign,rotation_dir=0)
+                    actual=battle._resolve_bot_motion(8,(1.,2.,3.),body,
+                        preview['checked_speed'],td,preview['checked_dt'],1.)
+                    after=world.call_args
+                self.assertEqual(not blocked,preview['clear'])
+                self.assertEqual(actual,preview['status'])
+                self.assertEqual(before.args[:3],after.args[:3])
+                self.assertEqual(tuple(getattr(before.args[3],axis) for axis in ('x','y','z')),
+                                 tuple(getattr(after.args[3],axis) for axis in ('x','y','z')))
+                self.assertEqual(before.args[4:],after.args[4:])
+                first=dict(before.kwargs);last=dict(after.kwargs)
+                self.assertFalse(first.pop('commit_enabled'))
+                self.assertTrue(last.pop('commit_enabled'))
+                self.assertIsNone(first['motion_yaw'])
+                self.assertEqual(first,last)
 
     def test_pending_destruction_is_deferred_to_real_commit(self):
         battle,state,descriptor=self.scene()

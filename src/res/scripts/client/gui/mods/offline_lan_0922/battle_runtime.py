@@ -22269,8 +22269,17 @@ class BattleRuntime(object):
                 state['movement_dir'], state['rotation_dir'] = int(sign), 0
                 speed = sign*float(params['speedFwd' if sign>0 else 'speedBwd'])
                 dt = max(.001,float(distance)/max(.001,abs(speed)))
+                # An aligned throttle action uses the same signed driving
+                # sweep as BotRuntime's committed motion. Supplying motion_yaw
+                # selects the passive-displacement law, which also recasts the
+                # old opposite half and destination perimeter. A side contact
+                # behind a reversing hull then vetoed every otherwise clear
+                # driving exit (T28 Concept and SU-122A report fixtures).
+                receipt.update(motion_law='signed_drive',
+                    checked_yaw=body_yaw if sign > 0. else body_yaw+math.pi,
+                    checked_speed=speed, checked_dt=dt)
                 status = self._resolve_bot_motion(bot_id, position, body_yaw,
-                    speed, descriptor, dt, now, commit_enabled=False, motion_yaw=travel_yaw)
+                    speed, descriptor, dt, now, commit_enabled=False)
                 clear = status in ('clear','crushed','approach','soft')
                 receipt['trace'] = state.get('_world_contact_trace')
             receipt.update(status=status, clear=(True if clear is None else bool(clear)),
