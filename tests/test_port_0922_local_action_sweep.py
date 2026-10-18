@@ -27,9 +27,56 @@ class LocalActionSweepTests(unittest.TestCase):
         result=battle._probe_bot_local_motion(8,(58.877,1.1,-48.988),-.1804,-1.1184,None,descriptor,.1,241.341)
         self.assertFalse(result['clear'])
         self.assertEqual('local_sweep_blocked',result['reason'])
-        self.assertAlmostEqual(.075,abs(result['checked_yaw']+.1804))
+        self.assertAlmostEqual(-.075,result['checked_yaw']+.1804)
         self.assertEqual({'realised':'rotation'},state['_rotation_contact_trace'])
         self.assertEqual('original',battle._bot_motion_kinds[8])
+
+    def test_signed_left_right_and_wrapped_rotation_slices(self):
+        for start, goal in ((0., .05), (0., -.05), (0., 2.), (0., -2.),
+                            (3.13, -3.13), (-3.13, 3.13)):
+            with self.subTest(start=start, goal=goal):
+                battle,state,descriptor=self.scene()
+                battle._resolve_bot_rotation=mock.Mock(return_value=True)
+                value=battle._probe_bot_local_motion(
+                    8,(0.,1.1,0.),start,goal,None,descriptor,.1,1.)
+                # atan2 is an independent shortest-turn oracle, including
+                # crossing the +/- pi seam in either direction.
+                delta=math.atan2(math.sin(goal-start),math.cos(goal-start))
+                expected=math.copysign(min(abs(delta),.075),delta)
+                actual=value['checked_yaw']-start
+                self.assertAlmostEqual(expected,actual)
+                self.assertGreater(actual*delta,0.)
+                call=battle._resolve_bot_rotation.call_args
+                self.assertAlmostEqual(start,call.args[2])
+                self.assertAlmostEqual(start+expected,call.args[3])
+                self.assertFalse(call.kwargs['commit_enabled'])
+
+    def test_preview_and_real_commit_sweep_the_same_reported_rotation(self):
+        # KV-1 at 22:11:12.749 in report c31c22a3a1fb: the left sweep
+        # strikes a wall, while the mirrored right sweep is clear.
+        start=.7943278541736059
+        for delta in (-.055154066175541, .055154066175541):
+            with self.subTest(delta=delta):
+                battle,state,descriptor=self.scene()
+                battle._destructible_pose_sweep=mock.Mock(return_value={
+                    'status':'clear','requires_commit':False})
+                battle._tree_motion_proposal=mock.Mock(return_value={
+                    'status':'clear','requires_commit':False})
+                battle._complete_bot_tree_contact=mock.Mock(return_value='clear')
+                def native(position, first, last, td, **kwargs):
+                    return last > first
+                battle._native_world_rotation_is_clear=mock.Mock(side_effect=native)
+                position=(189.242936047,1.100000143,-287.227001755)
+                preview=battle._probe_bot_local_motion(8,position,start,
+                    start+delta,None,descriptor,.1580047607421875,161.154)
+                proposed=battle._native_world_rotation_is_clear.call_args
+                realised=battle._resolve_bot_rotation(8,position,start,
+                    start+delta,descriptor,.1580047607421875,161.154,.75)
+                committed=battle._native_world_rotation_is_clear.call_args
+                self.assertEqual(delta > 0.,preview['clear'])
+                self.assertEqual(realised,preview['clear'])
+                self.assertEqual(proposed,committed)
+                self.assertAlmostEqual(start+delta,proposed.args[2])
 
     def test_aligned_front_and_rear_use_full_motion_resolver_and_restore_controls(self):
         for yaw,sign in ((0.,1),(math.pi,-1)):

@@ -22235,7 +22235,9 @@ class BattleRuntime(object):
         requested displacement, with the actual front/rear body envelope.
         """
         state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
-        delta = _angle_delta(travel_yaw, body_yaw)
+        # This module's helper takes (current, target); BotRuntime's
+        # similarly named helper takes the opposite argument order.
+        delta = _angle_delta(body_yaw, travel_yaw)
         if distance is not None and min(abs(delta), abs(abs(delta)-math.pi)) > .02:
             return dict(clear=None, proved=False, reason='local_sweep_not_aligned',
                 at=now, origin=tuple(position), body_yaw=body_yaw,
