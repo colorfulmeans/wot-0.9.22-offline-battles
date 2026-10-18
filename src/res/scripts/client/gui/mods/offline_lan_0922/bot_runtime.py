@@ -160,8 +160,8 @@ def _order_evidence(order):
     """Freeze the bounded tactical inputs, without another decision or probe."""
     result = {}
     for key in ('combat_mode', 'move_position', 'face_position', 'aim_position',
-                'throttle_override', 'fire_allowed', 'target_id', 'route_id',
-                'route_index', 'stop_at_target', 'stable_hull_face'):
+                'throttle_override', 'fire_allowed', 'target_id', 'target_kind', 'route_id',
+                'route_index', 'stop_at_target', 'stable_hull_face', 'tactical_phase'):
         value = order.get(key)
         result[key] = dict(value) if isinstance(value, dict) else (
             tuple(value) if isinstance(value, (list, tuple)) else value)
@@ -1962,6 +1962,7 @@ def _server_order_signature(order):
     # assignment receipt must not flush commands at the same order revision.
     result.pop('route_attempt', None)
     result.pop('route_assignment', None)
+    result.pop('tactical_evidence', None)
     if result.get('target_id') is not None:
         result.pop('aim_position', None)
         if not result.get('stable_hull_face', False):
@@ -7194,7 +7195,9 @@ class BotRuntime(object):
             decision_id=(command.get('planning_receipt') or {}).get('id'),
             disposition=state.get('_planning_disposition'),
             order={key:order.get(key) for key in ('combat_mode', 'route_id',
-                'route_index', 'route_join', 'move_position', 'route_switch_reason')},
+                'route_index', 'route_join', 'move_position', 'route_switch_reason',
+                'target_id', 'target_kind', 'fire_allowed', 'throttle_override', 'tactical_phase')},
+            tactical_order=dict(command.get('order_evidence') or {}),
             assignment=assignment,
             navigation_status=local.get('navigation_status'),
             grid=prebaked_navigation.graph_summary(self.baked_graph),
@@ -7291,6 +7294,7 @@ class BotRuntime(object):
             'alignment_target', 'heading_progress_yaw', 'best_heading_error',
             'translation_progress_at', 'native_translation_stalled')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
+        driver_trace['alignment_observation'] = dict(driver_state.get('alignment_observation') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
@@ -7327,6 +7331,7 @@ class BotRuntime(object):
                 slope_refresh=state.get('_slope_pose_refresh')),
             'control_arbitration': dict(command.get('control_trace') or {}),
             'tactical_order': dict(command.get('order_evidence') or {}),
+            'target_execution': dict(state.get('_target_execution_evidence') or {}),
             'spg_deployment': dict(
                 observed_at=now, initial=state.get('_spg_initial'),
                 progress=state.get('_spg_deployment_progress'),
@@ -12926,20 +12931,35 @@ class BotRuntime(object):
         overlay. Losing this gun target must not prevent a later clear lane
         from being observed, or change the server's authored movement goal.
         """
+        evidence = dict(at=now, target_before=command.get('target_id'),
+            fire_before=bool(command.get('fire_allowed')), lane=None,
+            target_after=command.get('target_id'), fire_after=bool(command.get('fire_allowed')),
+            reason='no_selected_target' if target is None else 'spg_ballistic_owner')
+        source['_target_execution_evidence'] = evidence
         if (target is None or
                 (source.get('profile') or {}).get('class_tag') == 'SPG'):
             return command, target
         cached = self._shot_los_cache.get(self._shot_los_key(source, target))
+        evidence['lane'] = (dict(sampled_at=cached[0], clear=bool(cached[1]),
+            age_seconds=_number(now)-cached[0]) if cached is not None else None)
         if (cached is None or cached[1] or
                 not 0.0 <= _number(now) - cached[0] <=
                 SHOT_LANE_REFRESH_SECONDS + self._control_seconds + 1e-9):
+            evidence['reason'] = ('no_lane_sample' if cached is None else
+                'lane_clear' if cached[1] else 'lane_sample_expired')
             return command, target
         if (probe_budget is not None and
                 _number(now) - cached[0] > SHOT_LANE_SECONDS + 1e-9):
             # A blocked gun must still get its next proof before it can align
             # and fire again. Share the existing final-fire budget, rather than
             # create an unbounded per-frame scan or wait for aim alignment.
-            if self._shot_clear(source, target, now, probe_budget=probe_budget):
+            refreshed_clear = self._shot_clear(source, target, now, probe_budget=probe_budget)
+            refreshed = self._shot_los_cache.get(self._shot_los_key(source, target))
+            evidence['recheck'] = dict(clear=bool(refreshed_clear),
+                sampled_at=refreshed[0] if refreshed is not None else None,
+                cached_clear=bool(refreshed[1]) if refreshed is not None else None)
+            if refreshed_clear:
+                evidence['reason'] = 'fresh_lane_clear'
                 return command, target
         command = dict(command)
         command['target_id'] = None
@@ -12948,6 +12968,8 @@ class BotRuntime(object):
         command.pop('aim_position', None)
         if not command.get('stable_hull_face'):
             command.pop('face_position', None)
+        evidence.update(reason='current_lane_blocked', target_after=None,
+            fire_after=False, stable_hull_face=bool(command.get('stable_hull_face')))
         return command, None
 
     def _refresh_shot_clear(self, source, target, now, observation_time,
@@ -15336,10 +15358,14 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
                         decision_state, reposition_order, sample_clear)
+                    command['order_evidence'] = dict(sampled_at=now,
+                        source='friendly_reposition', final_order=_order_evidence(reposition_order),
+                        server_selection=(server_order or {}).get('tactical_evidence'))
                 elif server_order is not None and callable(decide_with_order):
                     if diagnostic is not None:
                         diagnostic.count('decision_server_order')
                     server_order = dict(server_order)
+                    received_order = _order_evidence(server_order)
                     if (server_order.get('target_kind') == 'human' and
                             server_order.get('target_id') is not None):
                         server_order['target_id'] = self._human_planner_id(
@@ -15364,7 +15390,9 @@ class BotRuntime(object):
                         decision_state, server_order,
                         sample_clear)
                     command['order_evidence'] = dict(sampled_at=now,
-                        stages=order_steps, final_order=_order_evidence(server_order))
+                        stages=order_steps, final_order=_order_evidence(server_order),
+                        source='server_order', received_order=received_order,
+                        server_selection=server_order.get('tactical_evidence'))
                 else:
                     if diagnostic is not None:
                         diagnostic.count('decision_local_planner')
@@ -15372,6 +15400,9 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         self.adapter.decide,
                         decision_state, sample_clear)
+                    command['order_evidence'] = dict(sampled_at=now,
+                        source='local_planner', final_order=_order_evidence(command),
+                        reason='server_order_or_order_adapter_unavailable')
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
