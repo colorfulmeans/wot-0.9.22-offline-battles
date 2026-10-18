@@ -53,6 +53,8 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(10.3,receipt['recheck']['sampled_at'])
         self.assertTrue(receipt['recheck']['clear'])
         self.runtime._apply_blocked_direct_aim(state,command,None,10.4)
+        self.assertEqual('target_record_unavailable',state['_target_execution_evidence']['reason'])
+        self.runtime._apply_blocked_direct_aim(state,dict(command,target_id=None),None,10.4)
         self.assertEqual('no_selected_target',state['_target_execution_evidence']['reason'])
         state['profile']['class_tag']='SPG'
         self.runtime._apply_blocked_direct_aim(state,command,target,10.5)
@@ -356,6 +358,8 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
             p._assign_targets([bot],[candidate],1.)
             receipt=p._target_decisions[11]
             self.assertEqual(reason,receipt['candidates'][0]['reason'])
+            self.assertIn('radio_until',receipt['candidates'][0])
+            self.assertEqual(bot['state']['clip'],receipt['weapon']['clip'])
             self.assertNotEqual('evaluating',receipt['outcome'])
             self.assertIn('lease_after',receipt)
         p._assign_targets([bot],[],2.)
@@ -367,6 +371,7 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         self.assertEqual(order['fire_allowed'],evidence['final']['fire_allowed'])
         self.assertIn('retreat_before',evidence)
         self.assertIn('retreat_after',evidence)
+        self.assertEqual('no_recent_hit',evidence['withdrawal']['reason'])
         p.reset(4)
         self.assertEqual({},p._target_decisions)
 

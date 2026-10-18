@@ -1998,7 +1998,13 @@ class BotPlanner(object):
         for bot in bots:
             observation = dict(at=now, candidates=[], selected=None,
                 previous=dict(self._target_assignments.get(bot['id']) or {}),
-                outcome='evaluating')
+                outcome='evaluating', focus_refusals=[],
+                weapon=dict((key, list(value) if isinstance(value, (list, tuple)) else value)
+                    for key, value in ((key, bot['state'].get(key)) for key in (
+                        'shell_index', 'ammo_remaining', 'ammo_reload_pending',
+                        'clip', 'reload_time', 'burst_active'))),
+                destroyed=list((bot['state'].get('critical') if isinstance(
+                    bot['state'].get('critical'), dict) else {}).get('destroyed') or ()))
             self._target_decisions[bot['id']] = observation
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
@@ -2027,6 +2033,9 @@ class BotPlanner(object):
                 row = dict(target=(contact.get('target_kind'), contact['id']),
                     visible=bool(contact.get('visible')),
                     local_lane=bot['id'] in contact.get('shootable_by_bot_ids', ()),
+                    last_seen=contact.get('last_seen'),
+                    radio_until=(contact.get('radio_bot_until') or {}).get(bot['id']),
+                    position=dict(contact.get('position') or {}),
                     known=id(contact) in known, reason='not_known_to_bot')
                 observation['candidates'].append(row)
                 if not row['known']:
@@ -2179,6 +2188,10 @@ class BotPlanner(object):
             key = (contact.get("target_kind"), contact["id"])
             if self._focus_saturated(
                     reservations, key, contact, previous_candidate[3]):
+                self._target_decisions[bot['id']]['focus_refusals'].append(dict(
+                    target=key, distance=previous_candidate[3], health=contact.get('health'),
+                    limit=self._focus_limit(contact, previous_candidate[3]),
+                    reservation=dict(reservations.get(key) or {}), stage='retained_target'))
                 continue
             self._reserve_focus(reservations, key, bot, contact)
             assigned[bot["id"]] = contact
@@ -2192,6 +2205,10 @@ class BotPlanner(object):
             key = (contact.get("target_kind"), contact["id"])
             if self._focus_saturated(
                     reservations, key, contact, distance):
+                self._target_decisions[bot['id']]['focus_refusals'].append(dict(
+                    target=key, distance=distance, health=contact.get('health'),
+                    limit=self._focus_limit(contact, distance),
+                    reservation=dict(reservations.get(key) or {}), stage='ranked_target'))
                 continue
             self._reserve_focus(reservations, key, bot, contact)
             assigned[bot["id"]] = contact

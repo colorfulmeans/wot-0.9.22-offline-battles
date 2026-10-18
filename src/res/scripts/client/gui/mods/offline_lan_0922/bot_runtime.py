@@ -12934,7 +12934,8 @@ class BotRuntime(object):
         evidence = dict(at=now, target_before=command.get('target_id'),
             fire_before=bool(command.get('fire_allowed')), lane=None,
             target_after=command.get('target_id'), fire_after=bool(command.get('fire_allowed')),
-            reason='no_selected_target' if target is None else 'spg_ballistic_owner')
+            reason=('target_record_unavailable' if command.get('target_id') is not None
+                else 'no_selected_target') if target is None else 'spg_ballistic_owner')
         source['_target_execution_evidence'] = evidence
         if (target is None or
                 (source.get('profile') or {}).get('class_tag') == 'SPG'):
