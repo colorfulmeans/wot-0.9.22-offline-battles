@@ -730,7 +730,7 @@ class TerrainGrid(object):
 			reason = 'timed_failed_edge' if self.path_has_penalty((start, end), now) else 'coarse_static_hull'
 		elif self.segment_has_baked_hazard(start, end, BAKED_SHALLOW_WATER):
 			reason = 'shallow_water'
-		elif not self.segment_clear(start, end):
+		elif not self.segment_clear(start, end, None, evidence):
 			reason = 'terrain_or_native_rejected'
 		if evidence is not None:
 			evidence['egress_reason'] = reason
@@ -788,49 +788,56 @@ class TerrainGrid(object):
 		self._ground_cache[key] = height
 		return height
 
-	def segment_clear(self, start, end, native_capability=None):
+	def segment_clear(self, start, end, native_capability=None, evidence=None):
 		"""Check continuous support and drivable grade, not just both endpoints."""
 		self._validate_planning_policy(native_capability)
+		def finish(result, reason):
+			if evidence is not None:
+				evidence.update(clear=result, reason=reason,
+					proof_deferred=self._proof_deferred,
+					native_revision=self._native_proof_revision)
+			return result
 		local = getattr(self,'local_height_links',None)
 		if local is not None:
 			status, unused = local.inspect(start, end,
 				self._baked_cell_height(self.cell_for(start)) if self.prebaked else None)
 			if status in ('disconnected', 'other_surface', 'water'):
-				return False
+				return finish(False, 'height_'+status)
 		# In a prebaked graph, rounding can map a raw point just beyond the
 		# authored rectangle back onto the last valid edge cell. The cell is safe;
 		# the out-of-bounds world pose is not. A hull already outside may still use
 		# an inward segment, so constrain the destination rather than the start.
 		if not self._inside(float(end[0]), float(end[2])):
-			return False
+			return finish(False, 'outside_bounds')
 		distance = _distance_2d(start, end)
 		if distance < 0.25:
-			return True
+			return finish(True, 'short_segment')
 		if self.prebaked:
 			# Only short joins from an unsupported cell bypass erosion. Test the
 			# actual hull pose and both shoulders every time; never modify the bake.
 			if self._routing_height(start) is None:
-				return self._live_baked_egress_clear(start, end)
+				return finish(self._live_baked_egress_clear(start, end), 'unsupported_start_native_egress')
 			if not self._baked_corridor(start, end)[0]:
 				# A diagonal can exceed the old 0.38 bake grade even when both
 				# orthogonal ways round the same supported square are legal.
 				# Merge only a bounded, dry square corridor with a fresh native
 				# ground/collision proof inside the requested navigation grade limit.
 				if self._supported_slope_corridor(start, end):
-					return self._native_segment_clear(start, end, NAVIGATION_MAX_GRADE)
+					return finish(self._native_segment_clear(start, end, NAVIGATION_MAX_GRADE), 'supported_slope_native')
 				if (self._baked_cell_height(self.cell_for(end)) is None and
 						_distance_2d(start, end) <= 24.0 and
 						tuple(end) in self._live_join_targets):
-					return self._live_baked_egress_clear(start, end)
-				return False
-			return (not self._needs_native_review(start, end) or
-			        self._native_segment_clear(start, end))
+					return finish(self._live_baked_egress_clear(start, end), 'unbaked_target_native_egress')
+				return finish(False, 'baked_corridor')
+			if not self._needs_native_review(start, end):
+				return finish(True, 'baked_corridor_clear')
+			return finish(self._native_segment_clear(start, end), 'native_review')
 		start_key = self._point_key(start)
 		end_key = self._point_key(end)
 		key = (start_key, end_key)
 		cached = self._segment_cache.get(key)
 		if cached is not None:
-			return bool(cached)
+			return finish(bool(cached), 'dynamic_segment_cache')
 		steps = max(1, int(math.ceil(distance / (self.cell_size * 0.42))))
 		start_y = self._ground(float(start[0]), float(start[2]), float(start[1]))
 		if start_y is None:
@@ -862,7 +869,7 @@ class TerrainGrid(object):
 				blocked = self._probe_obstacle(grounded_start, previous, 2.15)
 				if blocked == 'deferred' or revision != self._native_proof_revision:
 					self._proof_deferred = True
-					return False
+					return finish(False, 'dynamic_native_deferred')
 				if blocked:
 					clear = False
 			except Exception:
@@ -871,7 +878,7 @@ class TerrainGrid(object):
 				clear = False
 		self._segment_cache[key] = bool(clear)
 		self._segment_cache[(end_key, start_key)] = bool(clear)
-		return clear
+		return finish(clear, 'dynamic_ground_or_native')
 
 	def review_native_corridor(self, start, end):
 		'''Retire coarse-only clearance around an observed static refusal.
@@ -1557,17 +1564,18 @@ class TerrainGrid(object):
 				# Preserve the predicate order and query count while retaining
 				# the first rejection. These are receipts, never extra probes.
 				reason = None
+				corridor_evidence = {}
 				if self.segment_penalty(current, candidate, now) > 0.0:
 					reason = 'failed_edge'
 				elif self.segment_has_baked_hazard(current, candidate, BAKED_SHALLOW_WATER):
 					reason = 'shallow_or_unknown'
-				elif not self.segment_clear(current, candidate):
+				elif not self.segment_clear(current, candidate, None, corridor_evidence):
 					reason = 'corridor_rejected'
 				if reason is not None:
 					if diagnostic is not None:
 						diagnostic[reason] += 1
 						diagnostic['candidates'].append(dict(point=candidate,
-							rejected=reason, theta=offset))
+							rejected=reason, theta=offset, corridor=corridor_evidence))
 					continue
 				if (edge_penalties and any(
 						edge in edge_penalties
@@ -2887,6 +2895,7 @@ class TerrainNavigator(object):
 		"""Explain a wait without running more ground or collision probes."""
 		state = self.bot_states.get(int(bot_id), {})
 		request = state.get('request_key')
+		native = self._native_navigation
 		searches = []
 		for key, search in self.searches.items():
 			if key != request and self._path_owner(key[0]) != int(bot_id):
@@ -2896,6 +2905,14 @@ class TerrainNavigator(object):
 				'start': getattr(search, 'progress', {}).get('start'),
 				'goal': getattr(search, 'progress', {}).get('goal'),
 				'expanded': int(getattr(search, 'progress', {}).get('revision', 0)),
+				'backend': 'native' if hasattr(search, 'job_id') else 'python',
+				'progress_accounting': 'completion_only' if hasattr(search, 'job_id') else 'per_expansion',
+				'status': getattr(search, 'status', 'done' if search.done else 'pending'),
+				'native_job_id': getattr(search, 'job_id', None),
+				'waiting_queries': list(getattr(native, 'queries', {}).get(
+					getattr(search, 'job_id', None), ()))[:3],
+				'waiting_query_count': len(getattr(native, 'queries', {}).get(
+					getattr(search, 'job_id', None), ())),
 				'native_refusal': getattr(search, 'progress', {}).get('native_refusal'),
 				'age_ms': int(max(0.0, float(now) -
 					self.search_times.get(key, float(now))) * 1000.0),
@@ -2908,6 +2925,11 @@ class TerrainNavigator(object):
 		prefix = state.get('pending_prefix') or ()
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
+			'search_scheduler': dict(frame=self.search_frame_serial,
+				processed_frame=self.search_processed_frame,
+				frame_open=self.search_frame_open, budget=self.search_frame_budget,
+				credit=self.search_credit, at=self.search_frame_time,
+				pending_jobs=len(self.searches), native_stats=getattr(native, 'stats', ())),
 			'path_endpoint_refusal': state.get('path_endpoint_refusal'),
 			'local_target': state.get('local_fallback_target'),
 			'local_selection': dict(state.get('local_selection') or {}),
@@ -3568,7 +3590,7 @@ class TerrainNavigator(object):
 		self._finish_search(key, search, now)
 		return key, self.paths.get(key)
 
-	def _record_corner_check(self, bot_id, current, path, index, candidate, now, clear, reason):
+	def _record_corner_check(self, bot_id, current, path, index, candidate, now, clear, reason, detail=None):
 		"""Copy the actual short-circuit result; never run another probe."""
 		state = self.bot_states.get(bot_id)
 		if state is None:
@@ -3584,6 +3606,8 @@ class TerrainNavigator(object):
 			driver_arrival_radius=WAYPOINT_ARRIVAL_RADIUS,
 			native_revision=self.grid._native_proof_revision,
 			proof_deferred=self.grid._proof_deferred)
+		if detail is not None:
+			row['corridor'] = detail
 		if len(receipt['checks']) < 16:
 			receipt['checks'].append(row)
 		else:
@@ -3610,8 +3634,9 @@ class TerrainNavigator(object):
 		if self.grid.segment_penalty(current,target,now) > 0.0:
 			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'segment_penalty')
 			return False
-		if not self.grid.segment_clear(current,target):
-			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'segment_blocked')
+		corridor = {}
+		if not self.grid.segment_clear(current,target,None,corridor):
+			self._record_corner_check(bot_id,current,path,index,index+1,now,False,'segment_blocked',corridor)
 			return False
 		if not self.grid.segment_has_baked_hazard(
 				current, target, BAKED_SHALLOW_WATER):
@@ -3687,8 +3712,9 @@ class TerrainNavigator(object):
 			if self.grid.path_has_edge_penalty((current,path[candidate]),edge_penalties):
 				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'private_edge_penalty')
 				break
-			if not self.grid.dry_segment_clear(current,path[candidate],now):
-				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'dry_segment_blocked')
+			corridor = {}
+			if not self.grid.dry_segment_clear(current,path[candidate],now,corridor):
+				self._record_corner_check(bot_id,current,path,index,candidate,now,False,'dry_segment_blocked',corridor)
 				break
 			self._record_corner_check(bot_id,current,path,index,candidate,now,True,'lookahead_clear')
 			lookahead = candidate

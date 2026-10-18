@@ -38,7 +38,7 @@ class NavigationObservationTests(unittest.TestCase):
         # collision result. The full traffic fixture covers end-to-end behavior.
         eligible=((-300.7803088521,0.,-192.5842730889),
                   (-299.3396826721,0.,-192.4088839332))
-        grid.segment_clear=lambda start,end:any(math.hypot(end[0]-p[0],end[2]-p[2])<1e-6 for p in eligible)
+        grid.segment_clear=lambda start,end,*evidence:any(math.hypot(end[0]-p[0],end[2]-p[2])<1e-6 for p in eligible)
         receipt={}
         target=grid.safe_local_target((-298.,0.,-194.),
             (-313.0806504495,0.,-134.894427191),.7333333333,diagnostic=receipt)

@@ -4256,6 +4256,9 @@ def ground_filter_batch_1513(provider):
 		combat_count('destructible_ground_filter_batch_disabled')
 		return None
 	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	if isinstance(scope, dict) and 'ground_query' in scope:
+		combat_count('destructible_ground_preparer_reused')
+		return scope['ground_query']
 	cache = scope.setdefault('ground', {}) if isinstance(scope, dict) else {}
 	def query(x, z):
 		combat_count('destructible_ground_filter_queries')
@@ -4278,6 +4281,8 @@ def ground_filter_batch_1513(provider):
 				cache.clear()
 			cache[key] = value
 		return value
+	if isinstance(scope, dict):
+		scope['ground_query'] = query
 	return query
 
 

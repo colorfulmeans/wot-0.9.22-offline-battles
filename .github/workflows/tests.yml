@@ -91,6 +91,9 @@ jobs:
           --pattern 'test_port_0922_server_bot_ai.py'
           --pattern 'test_port_0922_complete_navigation_receipts.py'
           --pattern 'test_port_0922_withdraw_receipts.py'
+          --pattern 'test_port_0922_scoped_failure_progress.py'
+          --pattern 'test_port_0922_near_goal_evidence.py'
+          --pattern 'test_port_0922_worker_query_reuse.py'
 
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
