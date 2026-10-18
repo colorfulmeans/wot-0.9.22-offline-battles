@@ -301,7 +301,9 @@ class TerrainGrid(object):
 				          float(point[2]) + forward[1] * along +
 				          side[1] * across)
 				if self._baked_index(self.cell_for(sample)) is None:
-					return False
+					local = self._local_meshes.cell(sample) if self._local_meshes is not None else None
+					if local is None or self._baked_index(local) is None:
+						return False
 		return True
 
 	def point_for(self, cell, height):

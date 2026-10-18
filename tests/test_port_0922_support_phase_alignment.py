@@ -10,6 +10,36 @@ import test_port_0922_contact_support_navigation as fixtures
 class SupportPhaseAlignmentTests(unittest.TestCase):
     scene=fixtures.ContactSupportTests.scene
 
+    def test_tog_handoff_does_not_refresh_from_a_longer_horizontal_footprint(self):
+        runtime,state=self.scene(lambda x,z:2.705155 if z>=44.965 else 1.1)
+        state.update(x=174.81088,y=1.161663,z=39.54915,yaw=-.115769,
+            half_length=5.4622650146484375,half_width=1.438796043395996,
+            pitch=-.08795634868640563,terrain_pitch=-.08795634868640563,
+            roll=.004249469692594518,airborne=False,speed=0.,vertical_speed=0.,
+            _basic_support_datum=.061663193667542)
+        runtime._turret_motion_probe=mock.Mock(return_value=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            for tick in range(20):
+                runtime._contact_now=1883.3+tick*.15
+                runtime._update_slope_pose(state,force_sample=True)
+                self.assertFalse(runtime._contact_edge_support_needed(state))
+                self.assertEqual(5,sum(r['valid'] for r in runtime._basic_support_status(state)))
+                self.assertFalse(state.get('_edge_support_active',False))
+        self.assertTrue(runtime._turret_motion_probe.called)
+
+        # A target accepted before the handback must obey the same proof on
+        # its cached path; otherwise the next blended refresh recreates loss.
+        state['pose_sample']=(state['x'],state['z'],state['yaw'])
+        state['_slope_pose_target']=(0.,0.)
+        before=(state['terrain_pitch'],state['roll'])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(runtime._update_slope_pose(state))
+        self.assertEqual(before,(state['terrain_pitch'],state['roll']))
+        receipt=state['_slope_pose_refresh']
+        self.assertEqual('proposed_footprint_loses_support',receipt['reason'])
+        self.assertEqual(5,sum(r['valid'] for r in receipt['footprint_guard']['current']))
+        self.assertLess(sum(r['valid'] for r in receipt['footprint_guard']['proposed']),5)
+
     def test_descent_longer_than_old_projection_span_settles_before_admission(self):
         runtime,state=self.scene(lambda x,z:-.4*z)
         state.update(z=3.01,y=0.,half_length=2.97797203064,half_width=1.60041105747,

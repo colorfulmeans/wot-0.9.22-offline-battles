@@ -11,6 +11,20 @@ class LocalMeshes(object):
         self.indices = {}
         self.edges = {}
         self.keys = []
+        # Static map geometry: index patch bounds once, keeping original order.
+        self._bins = {}
+        self._bounds = []
+        self._segments = {}
+        self._crossings = {}
+        self._step = min(p['cell_size'] for p in patches)*.42
+        for number, patch in enumerate(patches):
+            x, z = patch['origin']
+            right = x+(patch['width']-1)*patch['cell_size']
+            top = z+(patch['height']-1)*patch['cell_size']
+            self._bounds.append((x, z, right, top))
+            for bx in range(int(math.floor(x/32.)), int(math.floor(right/32.))+1):
+                for bz in range(int(math.floor(z/32.)), int(math.floor(top/32.))+1):
+                    self._bins.setdefault((bx,bz), []).append(number)
         heights, links, hazards = list(grid._baked_heights), list(grid._baked_links), list(grid._baked_hazards)
         for number, patch in enumerate(patches):
             keys = []
@@ -49,34 +63,48 @@ class LocalMeshes(object):
         grid._baked_hazards = hazards
 
     def cell(self, point):
-        for i, patch in enumerate(self.patches):
-            x = (float(point[0])-patch['origin'][0])/patch['cell_size']
-            z = (float(point[2])-patch['origin'][1])/patch['cell_size']
+        px, pz = float(point[0]), float(point[2])
+        for i in self._bins.get((int(math.floor(px/32.)), int(math.floor(pz/32.))), ()):
+            patch = self.patches[i]
+            x = (px-patch['origin'][0])/patch['cell_size']
+            z = (pz-patch['origin'][1])/patch['cell_size']
             if 0 <= x <= patch['width']-1 and 0 <= z <= patch['height']-1:
                 return self.keys[i][int(math.floor(z+.5))*patch['width']+int(math.floor(x+.5))]
         return None
 
     def touches(self, start, end):
-        # Segment/AABB clipping avoids a map-wide sampling loop.
-        for patch in self.patches:
+        key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]))
+        if key in self._segments:
+            return self._segments[key]
+        ax, az, bx, bz = key
+        left, right = min(ax,bx), max(ax,bx)
+        bottom, top = min(az,bz), max(az,bz)
+        result = False
+        for x, z, last_x, last_z in self._bounds:
+            if right < x or left > last_x or top < z or bottom > last_z:
+                continue
             low, high = 0., 1.
-            for axis, origin, count in ((0, patch['origin'][0], patch['width']),
-                                        (2, patch['origin'][1], patch['height'])):
-                a, delta = float(start[axis]), float(end[axis])-float(start[axis])
-                last = origin+(count-1)*patch['cell_size']
+            for a, delta, origin, last in ((ax,bx-ax,x,last_x), (az,bz-az,z,last_z)):
                 if abs(delta) < 1.e-9:
                     if not origin <= a <= last:
                         high = -1.; break
                 else:
                     first, second = sorted(((origin-a)/delta, (last-a)/delta))
-                    low, high = max(low, first), min(high, second)
+                    low, high = max(low,first), min(high,second)
             if low <= high:
-                return True
-        return False
+                result = True
+                break
+        if len(self._segments) >= 256:
+            self._segments.clear()
+        self._segments[key] = result
+        return result
 
     def crossed(self, start, end, require_height=True):
+        key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]), bool(require_height))
+        if key in self._crossings:
+            return self._crossings[key]
         distance = math.hypot(end[0]-start[0], end[2]-start[2])
-        step = min(p['cell_size'] for p in self.patches)*.42
+        step = self._step
         count = max(1, int(math.ceil(distance/step)))
         result = []
         for i in range(count+1):
@@ -90,9 +118,11 @@ class LocalMeshes(object):
             result[0] = self.grid._nearest_baked_cell(result[0], 2)
             result = [c for i,c in enumerate(result) if i == 0 or c != result[i-1]]
         lookup = self.grid._baked_index if require_height else self.grid._baked_flat_index
-        if any(c is None or lookup(c) is None for c in result):
-            return ()
-        return tuple(result)
+        result = () if any(c is None or lookup(c) is None for c in result) else tuple(result)
+        if len(self._crossings) >= 256:
+            self._crossings.clear()
+        self._crossings[key] = result
+        return result
 
     def nearest(self, cell, radius):
         point = self.points[cell]

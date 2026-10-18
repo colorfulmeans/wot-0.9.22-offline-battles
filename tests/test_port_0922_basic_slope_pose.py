@@ -23,6 +23,30 @@ class BasicSlopePoseTests(unittest.TestCase):
                 self.assert_on_plane(pitch, roll, yaw, gx, gz)
         self.assertEqual(20, probe.call_count)
 
+    def test_tilted_samples_and_fit_share_the_physical_footprint(self):
+        gx,gz=.18,.27
+        for yaw in (0.,.7,1.6,-2.):
+            receipt={}
+            pitch,roll=bot_runtime.slope_pose(lambda x,z,y:12.+gx*x+gz*z,
+                (0.,12.,0.),yaw,5.46,1.8,-.145,.08,exact=True,receipt=receipt)
+            self.assert_on_plane(pitch,roll,yaw,gx,gz)
+            for row,side,forward in zip(receipt['points'],(0.,0.,1.8,-1.8),(5.46,-5.46,0.,0.)):
+                ox,oy,oz=vehicle_physics.suspension_point_offset(
+                    dict(x=side,y=0.,z=forward),-.145,.08)
+                self.assertAlmostEqual(ox*math.cos(yaw)+oz*math.sin(yaw),row['x'])
+                self.assertAlmostEqual(-ox*math.sin(yaw)+oz*math.cos(yaw),row['z'])
+                self.assertAlmostEqual(12.+oy,row['hint_y'])
+
+    def test_long_hull_does_not_sample_an_unreached_ledge_for_its_pose(self):
+        # TOG II: a horizontal 5.46 m front ray reaches z=44.97, while
+        # the actual tilted support point is still before that ledge.
+        receipt={}
+        pose=bot_runtime.slope_pose(lambda x,z,y:2.705155 if z>=44.95 else 1.1,
+            (174.81088,1.161663,39.54915),-.115769,5.46,1.8,-.145887,0.,
+            exact=True,receipt=receipt)
+        self.assertLess(receipt['points'][0]['z'],44.95)
+        self.assertEqual((0.,0.),pose)
+
     def test_yaw_rebase_preserves_ground_normal_without_new_queries(self):
         gx, gz = 0.18, 0.27
         initial = bot_runtime.slope_pose(lambda x,z,y:gx*x+gz*z, (0,0,0), 0, 3, 1.5, exact=True)
