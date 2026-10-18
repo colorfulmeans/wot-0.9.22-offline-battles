@@ -39,6 +39,10 @@ class SupportPhaseAlignmentTests(unittest.TestCase):
         self.assertEqual('proposed_footprint_loses_support',receipt['reason'])
         self.assertEqual(5,sum(r['valid'] for r in receipt['footprint_guard']['current']))
         self.assertLess(sum(r['valid'] for r in receipt['footprint_guard']['proposed']),5)
+        with mock.patch.object(runtime,'_ground_probe_at',side_effect=AssertionError('repeated rejected fit')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(runtime._update_slope_pose(state))
+        self.assertEqual('measurement_reused',state['_slope_pose_refresh']['reason'])
+        self.assertEqual(before,(state['terrain_pitch'],state['roll']))
 
     def test_descent_longer_than_old_projection_span_settles_before_admission(self):
         runtime,state=self.scene(lambda x,z:-.4*z)

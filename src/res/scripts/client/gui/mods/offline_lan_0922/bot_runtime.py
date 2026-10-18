@@ -7878,6 +7878,16 @@ class BotRuntime(object):
                     # across a ledge. Keep its supported physical pose instead
                     # of creating point loss immediately after a handback.
                     # Real missing current points still enter detailed support.
+                    # Consume this measurement on the ordinary distance/yaw
+                    # cadence; retrying the same rejected fit every tick would
+                    # add repeated casts while the physical footprint is still
+                    # monitored independently by support admission.
+                    state['_slope_pose_target'] = (
+                        self._terrain_pitch(state), state.get('roll',0.))
+                    if new_target is not None:
+                        state['_basic_slope_samples'] = slope_receipt
+                        state['pose_sample'] = (x,z,yaw)
+                        refresh['marker_advanced'] = True
                     refresh['reason'] = 'proposed_footprint_loses_support'
                     return False
         state['terrain_pitch'] = pitch
