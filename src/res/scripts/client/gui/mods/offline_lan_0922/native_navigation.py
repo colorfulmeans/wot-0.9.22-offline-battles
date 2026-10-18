@@ -47,12 +47,16 @@ class NativeNavigation(object):
     def __init__(self, grid, backend):
         self.grid = grid
         self.backend = backend
-        self.context = backend.nav_open((
+        base_count = grid._baked_width * grid._baked_height
+        map_input = (
             grid._baked_origin[0], grid._baked_origin[1], grid.cell_size,
             grid._baked_width, grid._baked_height,
-            tuple(grid._baked_heights), tuple(grid._baked_links),
-            tuple(grid._baked_hazards), grid.bounds,
-            grid._baked_max_grade, grid.heuristic_weight))
+            tuple(grid._baked_heights[:base_count]), tuple(grid._baked_links[:base_count]),
+            tuple(grid._baked_hazards[:base_count]), grid.bounds,
+            grid._baked_max_grade, grid.heuristic_weight)
+        if grid._local_meshes is not None:
+            map_input += (grid._local_meshes.wire(),)
+        self.context = backend.nav_open(map_input)
         if self.context is None:
             raise RuntimeError('native navigation map could not be opened')
         self.next_job_id = 0
@@ -142,6 +146,10 @@ class NativeNavigation(object):
             job.done = True
             job.status = status
             job.result = tuple(tuple(point) for point in path) if status == 'done' else ()
+            if self.grid._local_meshes is not None:
+                job.progress['local_mesh_path_points'] = sum(
+                    self.grid._local_meshes.cell(point) is not None for point in job.result)
+                job.progress['base_cell_size'] = self.grid.cell_size
             job.hull_revision = hull_revision
             job.last_frame = float(now)
             job.steps = int(expanded)

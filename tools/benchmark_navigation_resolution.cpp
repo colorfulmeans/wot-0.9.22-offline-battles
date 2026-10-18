@@ -24,6 +24,17 @@ int main(int argc, char **argv) {
         map.heights.push_back(h == -999999 ? std::numeric_limits<double>::quiet_NaN() : h);
         map.links.push_back(link); map.hazards.push_back(hazard);
     }
+    int patches;input >> patches;
+    for(int n=0;n<patches;++n) {
+        offline_navigation::LocalMeshInput p;
+        input >> p.width >> p.height >> p.origin_x >> p.origin_z >> p.cell_size;
+        for(int i=0;i<p.width*p.height;++i) {
+            double h;unsigned l,v;input >> h >> l >> v;
+            p.heights.push_back(h==-999999?std::numeric_limits<double>::quiet_NaN():h);
+            p.links.push_back(l);p.hazards.push_back(v);
+        }
+        map.local_meshes.push_back(std::move(p));
+    }
     int count; input >> count;
     std::vector<offline_navigation::SearchInput> cases(count);
     for (int i=0; i<count; ++i) {

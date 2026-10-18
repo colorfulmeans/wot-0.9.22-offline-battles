@@ -27,6 +27,19 @@ def route_cases(graph):
 
 
 def inspect(graph, cases):
+    if graph.get('local_meshes'):
+        import sys
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src/res/scripts/client'))
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        grid=TerrainGrid(lambda *args:1.1,lambda *args:False,baked_graph=graph)
+        rows=[]
+        for start,end in cases:
+            before=time.perf_counter()
+            path=grid.plan((start[0],1.1,start[1]),(end[0],1.1,end[1]),max_expansions=20000)
+            rows.append(dict(start=start,end=end,connected=bool(path),nodes=len(path or ()),
+                length=sum(math.hypot(b[0]-a[0],b[2]-a[2]) for a,b in zip(path or (), (path or ())[1:])),
+                reference_ms=(time.perf_counter()-before)*1000))
+        return rows
     legacy = baker._legacy_baker()
     rows = []
     for start, end in cases:
@@ -47,6 +60,11 @@ def write_native_input(path, graph, cases):
     rows = [' '.join(map(str, header))]
     for h, links, hazard in zip(graph['heights_mm'], graph['links'], graph['hazards']):
         rows.append('%s %s %s' % (-999999 if h is None else h/1000., links, hazard))
+    rows.append(str(len(graph.get('local_meshes', ()))))
+    for patch in graph.get('local_meshes', ()):
+        rows.append(' '.join(map(str,[patch['width'],patch['height']]+patch['origin']+[patch['cell_size']])))
+        for h,l,v in zip(patch['heights_mm'],patch['links'],patch['hazards']):
+            rows.append('%s %s %s'%(-999999 if h is None else h/1000.,l,v))
     rows.append(str(len(cases)))
     for a, b in cases:
         rows.append(' '.join(map(str, a+b)))
@@ -70,7 +88,7 @@ def main():
             assert old.get(key) == new.get(key), (name, key)
         cases = route_cases(old)
         report['maps'][name] = {}
-        for tag, graph in [('4m', old), ('2m', new)]:
+        for tag, graph in [('4m', old), ('4m-local', new)]:
             rows = inspect(graph, cases)
             assert all(row['connected'] for row in rows), (name, tag)
             native_input = args.output/(name+'-'+tag+'.txt')
@@ -87,6 +105,8 @@ def main():
             if args.native_executable:
                 item['native'] = json.loads(subprocess.check_output([
                     str(args.native_executable.resolve()), str(native_input.resolve())]))
+                if graph.get('local_meshes'):
+                    assert item['native']['partial_or_empty'] == 0, (name,item['native']['incomplete_cases'])
             report['maps'][name][tag] = item
         print(name, 'all', len(cases), 'preserved route cases connected in both grids')
     (args.output/'report.json').write_text(json.dumps(report, indent=2)+'\n')

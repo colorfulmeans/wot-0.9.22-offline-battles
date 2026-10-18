@@ -23,6 +23,8 @@ def graph_summary(graph):
 	bake = graph.get('bake') or {}
 	rebake = bake.get('resolution_rebake') or {}
 	return dict(map=graph.get('map'), cell_size=graph.get('cell_size'),
+		local_meshes=[dict(origin=p['origin'], cell_size=p['cell_size'],
+			width=p['width'], height=p['height']) for p in graph.get('local_meshes', ())],
 		width=graph.get('width'), height=graph.get('height'),
 		origin=graph.get('origin'),
 		source_identity=graph.get('_source_sha256'),
