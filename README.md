@@ -558,14 +558,23 @@ python3 tools/bake_all_navigation_0922.py --client "$WOT_0922_CLIENT" --output-d
 ```
 
 The two Himmelsdorf maps retain the original 4 m graph and driving scale.
-Only the two reviewed passage regions per map have additive 2 m meshes;
-coincident supported vertices join both graphs in each direction. Reproduce
-these resources with `python3 tools/build_local_navigation_meshes.py`, then
+The retained two passage regions have additive 2 m meshes; seven additional
+small regions use 1 m samples to cover all eight circled street openings.
+Coincident supported vertices join both graphs in each direction. Reproduce
+these resources with `python3 tools/build_local_navigation_meshes.py --client "$WOT_0922_CLIENT"`, then
 regenerate the editor registry with `python3 tools/build_bot_editor_maps.py`.
 The local geometry comes from the exact #1513 collision review at 0.25 m
-spacing. The retained base nodes, links, routes and spawns are unchanged.
+spacing, the original 2.15 m body radius, and body-height-clipped collision
+triangles in the new local regions. Seasonal patches publish only links proved
+on both maps. All eight openings are checked in both directions for physical
+clearance and short paths, rather than connectivity by a remote detour.
+The retained base nodes, links, routes and spawns are unchanged.
 Local mesh support is shared by Python geometry and the shipping C++ search;
 it does not change C, avoidance, retry/route-switch or local driving distances.
+The editor renders the combined graph and uses the shipping planner for route
+and wait-place connections, rejects partial search results, and records the
+complete check in the collected launcher log. Parking-envelope checks remain
+separate. Restore the shipped route profile to remove local waypoint edits.
 
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after
