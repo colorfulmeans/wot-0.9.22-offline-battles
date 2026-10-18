@@ -65,13 +65,23 @@ class ReceiptPlanner(object):
         self.completed = self.cancelled = 0
 
     def submit(self, start, goal, now, max_expansions, prefer_clearance,
-               edge_penalties=None, hard_edge_penalties=None, avoid_points=None):
+               edge_penalties=None, hard_edge_penalties=None, avoid_points=None,
+               route_corridor=None):
         self.next_job_id += 1
         job = self.source.NativeSearch(self.next_job_id,
                                       self.grid.static_hull_revision, now)
-        job.fixture_result = (() if self.force_empty else self.grid.plan(
-            start, goal, avoid_points, max_expansions, now, prefer_clearance,
-            edge_penalties, hard_edge_penalties))
+        job.progress.update(start=tuple(start), goal=tuple(goal))
+        job.fixture_result = ()
+        if not self.force_empty:
+            search = self.grid.begin_plan(
+                start, goal, avoid_points, max_expansions, now, prefer_clearance,
+                edge_penalties, hard_edge_penalties, route_corridor=route_corridor)
+            while not search.done:
+                search.step(256)
+                if search.progress.get('deferred'):
+                    break
+            job.fixture_result = (None if search.progress.get('deferred')
+                                  else search.result)
         self.jobs[job.job_id] = job
         return job
 
