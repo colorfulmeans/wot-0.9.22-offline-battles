@@ -2,6 +2,7 @@
 """Load versioned navigation graphs shipped with the offline-battle mod."""
 
 import json
+import hashlib
 import math
 import os
 
@@ -14,6 +15,22 @@ from gui.mods.offline_lan_0922.navigation_graph_schema import (
 # Cell centres are baked on an exact multiple of the cell size, so this only
 # absorbs the float error of the division itself.
 _CELL_EPSILON = 1.0e-6
+
+
+def graph_summary(graph):
+	"""Describe installed geometry without queries or per-frame array scans."""
+	graph = graph or {}
+	bake = graph.get('bake') or {}
+	rebake = bake.get('resolution_rebake') or {}
+	return dict(map=graph.get('map'), cell_size=graph.get('cell_size'),
+		width=graph.get('width'), height=graph.get('height'),
+		origin=graph.get('origin'),
+		source_identity=graph.get('_source_sha256'),
+		collision_height_intervals=bake.get('collision_height_intervals'),
+		collision_cell_raster=bake.get('collision_cell_raster'),
+		sampling_policy=rebake.get('sampling_policy'),
+		collision_edge_sample_metres=rebake.get('collision_edge_sample_metres'),
+		previous_identity=graph.get('navigation_previous_sha256'))
 
 
 def mod_dir():
@@ -50,12 +67,14 @@ def load_graph(map_name, base_dir=None):
 	path = os.path.join(directory, short_name + '.json')
 	if not os.path.isfile(path):
 		return None
-	handle = open(path, 'r')
+	handle = open(path, 'rb')
 	try:
-		graph = json.load(handle)
+		raw = handle.read()
+		graph = json.loads(raw)
 	finally:
 		handle.close()
 	graph = _validate(graph, short_name)
+	graph['_source_sha256'] = hashlib.sha256(raw).hexdigest()
 	if (base_dir is None and short_name in (
 			'63_tundra', '44_north_america') and
 			'objective_base_radii' not in graph):
