@@ -76,6 +76,57 @@ class ScopedFailureTests(unittest.TestCase):
 
 
 class ConnectorProgressTests(unittest.TestCase):
+    def test_moving_near_heading_releases_brake_before_recovery_deadline(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        yaw = 0.
+        commands = []
+        for frame in range(50):
+            target = (3. * math.sin(yaw + .6), 0., 3. * math.cos(yaw + .6))
+            command = driver.drive(11, 0, (0., 0., 0.), yaw, 0., .1,
+                target, [], lambda *args: True, progress_target=target,
+                recovery_goal=(0., 0., 200.), turn_speed_limit=.8,
+                stop_at_target=False)
+            commands.append(command)
+            yaw += command['turn'] * .8 * .1
+        self.assertTrue(any(c['throttle'] > 0. and not c['brake'] for c in commands))
+        self.assertTrue(all(c['recovery_mode'] == 'drive' for c in commands))
+
+    def test_rotating_near_connectors_cannot_reissue_alignment_credit(self):
+        # 033347 T-50/AMX 30: the admitted near point keeps moving around
+        # the hull. There is no world refusal, but aligning must not renew
+        # the same stationary recovery task once per connector.
+        driver = LocalDriver(stuck_seconds=100.)
+        modes = []
+        for frame in range(300):
+            yaw = frame * .08
+            target = (2.08 * math.sin(yaw + .6), 0.,
+                      2.08 * math.cos(yaw + .6))
+            modes.append(driver.drive(11, 0, (0., 0., 0.), yaw, 0., .1,
+                target, [], lambda *args: True, progress_target=target,
+                recovery_goal=(0., 0., 200.), turn_speed_limit=.8,
+                stop_at_target=False)['recovery_mode'])
+        self.assertTrue(any(mode in ('reverse_turn', 'pivot_recovery')
+                            for mode in modes))
+
+    def test_retained_alignment_controls_heading_not_only_brake(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        first = self.drive(driver, (-3., 0., 0.), yaw=0.)
+        second = driver.drive(11, 0, (0., 0., 0.), 0., 0., .5,
+            (-3., 0., 1.5), [], lambda *args: True,
+            progress_target=(-3., 0., 1.5), recovery_goal=(0., 0., 200.),
+            turn_speed_limit=.15)
+        self.assertAlmostEqual(first['target_yaw'], second['target_yaw'])
+        self.assertEqual((-3., 0., 0.), driver.states[11]['alignment_target'])
+
+    def test_reaching_new_local_point_cannot_keep_old_alignment_brake(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        self.drive(driver, (-3., 0., 0.), yaw=0.)
+        command = self.drive(driver, (-1.2, 0., 0.), yaw=0.)
+        self.assertEqual('arrived', command['recovery_mode'])
+        self.assertIsNone(driver.states[11].get('alignment_target'))
+        self.assertEqual('current_point_reached',
+                         driver.states[11]['alignment_observation']['reason'])
+
     def test_nearby_point_change_cannot_compare_two_different_distances(self):
         driver=LocalDriver(stuck_seconds=100.)
         self.drive(driver,(0.,0.,10.))
@@ -202,18 +253,22 @@ class ConnectorProgressTests(unittest.TestCase):
         runtime = module.BotRuntime(1)
         original = dict(id=11, route_id='east', route_index=1,
             move_position=dict(x=0., y=0., z=100.),
-            route_attempt=dict(elapsed=1.), route_assignment=dict(sequence=1))
+            route_attempt=dict(elapsed=1.), route_assignment=dict(sequence=1),
+            tactical_evidence=dict(at=1.,selection=dict(outcome='assigned')))
         self.assertTrue(runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[original])))
         command = object()
         runtime._decision_cache[11] = command
         runtime._control_refresh_accumulator = 0.
         observed = dict(original, route_attempt=dict(elapsed=2.),
-            route_assignment=dict(sequence=2, reason='pressure_rebalance'))
+            route_assignment=dict(sequence=2, reason='pressure_rebalance'),
+            tactical_evidence=dict(at=2.,selection=dict(outcome='assigned')))
         self.assertTrue(runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[observed])))
         self.assertIs(command, runtime._decision_cache[11])
         self.assertEqual(runtime._control_refresh_accumulator, 0.)
         self.assertEqual(runtime._server_orders[11]['route_attempt']['elapsed'], 2.)
         self.assertEqual(runtime._server_orders[11]['route_assignment']['sequence'], 2)
+        self.assertEqual(runtime._server_orders[11]['tactical_evidence']['at'], 2.)
+        self.assertEqual(_order_signature(original),_order_signature(observed))
         changed = dict(observed, route_id='central')
         self.assertTrue(runtime._apply_orders(dict(bot_order_revision=2, bot_orders=[changed])))
         self.assertNotIn(11, runtime._decision_cache)

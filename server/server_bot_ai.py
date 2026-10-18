@@ -180,6 +180,7 @@ def _order_signature(order):
     # Attempt observations are telemetry, not a new strategic instruction.
     signature.pop('route_attempt', None)
     signature.pop('route_assignment', None)
+    signature.pop('tactical_evidence', None)
     if signature.get("target_id") is not None:
         # The worker overlays these coordinates from the live target pose.
         # Movement of that pose is not a new tactical decision, including
@@ -217,6 +218,7 @@ class BotPlanner(object):
         self._cover_failures = {}
         self._cover_reservations = set()
         self._target_assignments = {}
+        self._target_decisions = {}
         self._combat_states = {}
         self._retreat_states = {}
         self._base_defense = {1: {}, 2: {}}
@@ -252,6 +254,7 @@ class BotPlanner(object):
         self._cover_failures = {}
         self._cover_reservations = set()
         self._target_assignments = {}
+        self._target_decisions = {}
         self._combat_states = {}
         self._retreat_states = {}
         self._base_defense = {1: {}, 2: {}}
@@ -742,6 +745,7 @@ class BotPlanner(object):
                                for team in (1, 2))
         team_order_by_bot = self._team_orders_by_bot(team_orders, bots)
         orders = []
+        self._target_decisions = {}
         for team in (1, 2):
             team_bots = sorted((bot for bot in bots if bot["team"] == team),
                                key=lambda value: value["id"])
@@ -779,6 +783,11 @@ class BotPlanner(object):
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point, now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
+                evidence = order['tactical_evidence']
+                evidence['retreat_after'] = dict(self._retreat_states.get(bot['id']) or {})
+                evidence['final'] = dict((key, order.get(key)) for key in (
+                    'combat_mode', 'tactical_phase', 'target_id', 'target_kind',
+                    'fire_allowed', 'throttle_override', 'move_position', 'face_position'))
                 order['route_assignment'] = dict(
                     self._route_assignment_receipts.get(bot['id']) or {})
                 progress = (self._route_states.get(bot['id']) or {}).get('progress_receipt')
@@ -1700,7 +1709,7 @@ class BotPlanner(object):
             isinstance(remaining, (list, tuple)) and
             sum(max(0, _integer(value)) for value in remaining) > 0)
 
-    def _hit_requires_withdrawal(self, bot, hit, threat, team_bots):
+    def _hit_requires_withdrawal(self, bot, hit, threat, team_bots, receipt=None):
         """Escalate damage only when it is material or cannot be answered.
 
         Reading one hit as a reason to break contact is a competence, decided
@@ -1709,27 +1718,33 @@ class BotPlanner(object):
         not judgement, and removing it would only feed the other team.
         """
         if not isinstance(hit, dict):
+            if receipt is not None: receipt.update(reason='no_recent_hit', withdraw=False)
             return False
         if not self._capable(
                 bot, bot_gunnery.CAPABILITY_WITHDRAW,
                 hit.get("attacker"), round(_number(hit.get("reported_at")), 3)):
+            if receipt is not None: receipt.update(reason='withdraw_competence_not_selected', withdraw=False)
             return False
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         max_health = max(1.0, _number(state.get("max_health"), 1.0))
         if (_number(hit.get("damage")) / max_health >=
                 LOW_HEALTH_BASE_FRACTION):
+            if receipt is not None: receipt.update(reason='material_hit', withdraw=True)
             return True
         if isinstance(threat, dict):
             shooters = threat.get("shootable_by_bot_ids") or ()
             if (threat.get("visible") and bot["id"] in shooters and
                     self._weapon_ready(bot)):
+                if receipt is not None: receipt.update(reason='can_return_fire', withdraw=False)
                 return False
             armed_support = [
                 ally for ally in (team_bots or ())
                 if (ally["id"] in shooters and self._weapon_ready(ally))
             ]
-            return self._ally_support_score(
-                bot, armed_support, threat) < 0.70
+            support = self._ally_support_score(bot, armed_support, threat)
+            if receipt is not None: receipt.update(reason='armed_support', support=support, withdraw=support < 0.70)
+            return support < 0.70
+        if receipt is not None: receipt.update(reason='attacker_not_in_contacts', withdraw=True)
         return True
 
     def _recent_threat_contact(self, bot, contacts, now):
@@ -1971,6 +1986,9 @@ class BotPlanner(object):
         a Bot contact however hard the roster is.
         """
         if not bots or not contacts:
+            for bot in bots:
+                self._target_decisions[bot['id']] = dict(
+                    at=now, candidates=[], selected=None, outcome='no_team_contacts')
             return {}
         reservations = {}
         assigned = {}
@@ -1978,6 +1996,16 @@ class BotPlanner(object):
         by_bot = {}
         tactics = {}
         for bot in bots:
+            observation = dict(at=now, candidates=[], selected=None,
+                previous=dict(self._target_assignments.get(bot['id']) or {}),
+                outcome='evaluating', focus_refusals=[],
+                weapon=dict((key, list(value) if isinstance(value, (list, tuple)) else value)
+                    for key, value in ((key, bot['state'].get(key)) for key in (
+                        'shell_index', 'ammo_remaining', 'ammo_reload_pending',
+                        'clip', 'reload_time', 'burst_active'))),
+                destroyed=list((bot['state'].get('critical') if isinstance(
+                    bot['state'].get('critical'), dict) else {}).get('destroyed') or ()))
+            self._target_decisions[bot['id']] = observation
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
             # Choosing an enemy is a ladder of separate competences, not one
@@ -2000,7 +2028,18 @@ class BotPlanner(object):
                 (capability, self._capable(bot, capability, occasion))
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
-            for contact in self._contacts_for_bot(bot, contacts, now):
+            known = set(id(contact) for contact in self._contacts_for_bot(bot, contacts, now))
+            for contact in contacts:
+                row = dict(target=(contact.get('target_kind'), contact['id']),
+                    visible=bool(contact.get('visible')),
+                    local_lane=bot['id'] in contact.get('shootable_by_bot_ids', ()),
+                    last_seen=contact.get('last_seen'),
+                    radio_until=(contact.get('radio_bot_until') or {}).get(bot['id']),
+                    position=dict(contact.get('position') or {}),
+                    known=id(contact) in known, reason='not_known_to_bot')
+                observation['candidates'].append(row)
+                if not row['known']:
+                    continue
                 # A curved artillery lane is tied to the physical muzzle
                 # pose. Requiring that lane before selecting a target creates
                 # a cycle: acquire -> turn hull -> invalidate lane -> lose the
@@ -2011,12 +2050,17 @@ class BotPlanner(object):
                 if (not contact.get("visible") or
                         (not artillery and bot["id"] not in contact.get(
                             "shootable_by_bot_ids", ()))):
+                    row['reason'] = 'not_visible' if not contact.get('visible') else 'no_local_lane'
                     continue
                 distance = math.hypot(
                     contact["position"]["x"] - bx,
                     contact["position"]["z"] - bz)
-                if distance > self._engagement_range(bot, contact):
+                row['distance'] = distance
+                row['range'] = self._engagement_range(bot, contact)
+                if distance > row['range']:
+                    row['reason'] = 'outside_engagement_range'
                     continue
+                row['reason'] = 'eligible'
                 score = 0.0
                 if reads[bot_gunnery.CAPABILITY_TARGET_PRIORITY]:
                     score += (contact["health"] / float(
@@ -2049,6 +2093,7 @@ class BotPlanner(object):
                     (not artillery or bot["id"] in contact.get(
                         "shootable_by_bot_ids", ())))
                 candidates.append(candidate)
+                row.update(score=score, ready=bool(candidate[4]))
                 by_bot.setdefault(bot["id"], []).append(candidate)
 
         # Preserve a valid target through small score changes. Without this,
@@ -2143,6 +2188,10 @@ class BotPlanner(object):
             key = (contact.get("target_kind"), contact["id"])
             if self._focus_saturated(
                     reservations, key, contact, previous_candidate[3]):
+                self._target_decisions[bot['id']]['focus_refusals'].append(dict(
+                    target=key, distance=previous_candidate[3], health=contact.get('health'),
+                    limit=self._focus_limit(contact, previous_candidate[3]),
+                    reservation=dict(reservations.get(key) or {}), stage='retained_target'))
                 continue
             self._reserve_focus(reservations, key, bot, contact)
             assigned[bot["id"]] = contact
@@ -2156,6 +2205,10 @@ class BotPlanner(object):
             key = (contact.get("target_kind"), contact["id"])
             if self._focus_saturated(
                     reservations, key, contact, distance):
+                self._target_decisions[bot['id']]['focus_refusals'].append(dict(
+                    target=key, distance=distance, health=contact.get('health'),
+                    limit=self._focus_limit(contact, distance),
+                    reservation=dict(reservations.get(key) or {}), stage='ranked_target'))
                 continue
             self._reserve_focus(reservations, key, bot, contact)
             assigned[bot["id"]] = contact
@@ -2185,6 +2238,16 @@ class BotPlanner(object):
         for bot in bots:
             if bot["id"] not in assigned:
                 self._target_assignments.pop(bot["id"], None)
+            selected = assigned.get(bot['id'])
+            observation = self._target_decisions[bot['id']]
+            observation['selected'] = ((selected.get('target_kind'), selected['id'])
+                                        if selected is not None else None)
+            observation['outcome'] = ('movement_lease' if selected is not None and
+                selected.get('movement_lease') else 'assigned' if selected is not None
+                else 'no_eligible_lane' if not by_bot.get(bot['id'])
+                else 'weapon_unready' if not self._weapon_ready(bot)
+                else 'focus_capacity')
+            observation['lease_after'] = dict(self._target_assignments.get(bot['id']) or {})
         return assigned
 
     @staticmethod
@@ -3704,8 +3767,9 @@ class BotPlanner(object):
             LOW_HEALTH_BASE_FRACTION + personality["caution"] * 0.18)
         recent_hit = self._recent_hit(bot["id"], now)
         threat_contact = self._recent_threat_contact(bot, contacts, now)
+        withdrawal_evidence = {}
         withdraw_after_hit = self._hit_requires_withdrawal(
-            bot, recent_hit, threat_contact, team_bots)
+            bot, recent_hit, threat_contact, team_bots, withdrawal_evidence)
         order = {
             "id": bot["id"],
             "team": bot["team"],
@@ -3732,6 +3796,18 @@ class BotPlanner(object):
             "profile": profile,
             "shell_index": 0,
         }
+        order['tactical_evidence'] = dict(at=now,
+            clock_basis='server_monotonic_seconds',
+            selection=dict(self._target_decisions.get(bot['id']) or
+                dict(at=now, outcome='direct_order_call', candidates=[], selected=None)),
+            focus=(focus.get('target_kind'), focus['id']) if focus is not None else None,
+            recent_hit=dict(recent_hit or {}), withdraw_after_hit=bool(withdraw_after_hit),
+            withdrawal=withdrawal_evidence,
+            threat=(threat_contact.get('target_kind'), threat_contact['id'])
+                if threat_contact is not None else None,
+            low_health=bool(low_health), health_fraction=health_fraction,
+            weapon_ready=self._weapon_ready(bot),
+            retreat_before=dict(self._retreat_states.get(bot['id']) or {}))
         if travel_override is not None:
             if focus is not None:
                 observers = focus.get("shootable_by_bot_ids")

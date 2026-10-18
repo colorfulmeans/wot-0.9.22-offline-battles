@@ -1158,11 +1158,30 @@ class LocalDriver(object):
 		arrival = WAYPOINT_ARRIVAL_RADIUS if arrival_radius is None else max(0.1, float(arrival_radius))
 		state = self._state(bot_id, team_slot, position)
 		state['collision_body'] = body
+		requested_target = tuple(target)
 		alignment = state.get('alignment_target')
-		if (not movement_intent or float(speed) < -0.05 or
-				turn_speed_limit is None or
-				(alignment is not None and _distance(alignment, target) > 2.0)):
+		previous_alignment = alignment
+		release_reason = ('movement_hold' if not movement_intent else
+			'reverse_motion' if float(speed) < -0.05 else
+			'traverse_unavailable' if turn_speed_limit is None else
+			'current_point_reached' if _distance(position, target) <= arrival else
+			'local_leg_changed' if alignment is not None and
+			_distance(alignment, target) > 2.0 else None)
+		if release_reason is not None:
 			state.pop('alignment_target', None)
+			alignment = None
+		# The retained point must own the heading as well as the brake.
+		# Steering toward each rebased near point while waiting to align with
+		# the old one makes the commanded heading chase the hull indefinitely.
+		# The existing two-metre identity, movement and reverse guards above
+		# still end this lease. The normal pose/world/peer checks below admit
+		# the held heading; an avoidance choice cancels it as before.
+		if alignment is not None:
+			target = alignment
+		state['alignment_observation'] = dict(requested=requested_target,
+			resolved=tuple(target), retained=alignment is not None,
+			previous=previous_alignment, reason=release_reason or
+			('retained_heading' if alignment is not None else 'current_target'))
 		step = max(0.0, float(dt))
 		if not state.pop('traffic_waiting', False):
 			state['traffic_wait_time'] = 0.0
@@ -1414,6 +1433,8 @@ class LocalDriver(object):
 					own_half_length, own_half_width)
 
 		if state['recovery_time'] > 0.0:
+			state.pop('alignment_target', None)
+			state['alignment_observation']['reason'] = 'recovery_owns_heading'
 			# Keep one side for the whole episode. Geometry separates an asymmetric
 			# local jam; team-local slot parity breaks an exact tie without coupling
 			# steering to the timing phase. Never reverse blindly: at a cliff or
@@ -1587,6 +1608,7 @@ class LocalDriver(object):
 		throttle = 1.0
 		if avoiding:
 			state.pop('alignment_target', None)
+			state['alignment_observation']['reason'] = 'checked_avoidance_owns_heading'
 		elif turn_speed_limit is not None and float(turn_speed_limit) > 0.0 and float(speed) >= -0.05:
 			# Use the installed traverse rate rather than driving a circle
 			# around a nearby navigation point. Retain the alignment at zero
@@ -1601,6 +1623,7 @@ class LocalDriver(object):
 					brake = True
 				else:
 					state.pop('alignment_target', None)
+					state['alignment_observation']['reason'] = 'alignment_completed'
 		if (target_distance <= max(8.0, own_half_length * 2.0) and
 				abs(delta) > 0.45):
 			# Both path corners and native-checked avoidance steps can be inside

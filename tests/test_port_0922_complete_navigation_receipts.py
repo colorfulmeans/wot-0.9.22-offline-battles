@@ -24,6 +24,42 @@ class RuntimeReceiptTests(unittest.TestCase):
     def tearDown(self):
         self.fixture.tearDown()
 
+    def test_target_rejection_receipt_covers_early_returns_and_fresh_proof(self):
+        state = self.runtime.states[11]
+        target = dict(kind='bot', network_id=6, position=(0.,0.,180.))
+        command = dict(target_id=6, target_kind='bot', fire_allowed=True,
+                       move_position=(0.,0.,-15.))
+        key = self.runtime._shot_los_key(state,target)
+        for cached, when, reason in ((None,10.,'no_lane_sample'),
+                ((10.,True),10.1,'lane_clear'),
+                ((10.,False),30.,'lane_sample_expired'),
+                ((10.,False),10.1,'current_lane_blocked')):
+            self.runtime._shot_los_cache.clear()
+            if cached is not None: self.runtime._shot_los_cache[key]=cached
+            result, selected = self.runtime._apply_blocked_direct_aim(state,command,target,when)
+            receipt=state['_target_execution_evidence']
+            self.assertEqual(reason,receipt['reason'])
+            self.assertEqual(6,receipt['target_before'])
+            self.assertEqual(result['target_id'],receipt['target_after'])
+            self.assertEqual(result['fire_allowed'],receipt['fire_after'])
+            self.assertEqual(6,command['target_id'])
+        self.runtime.firing_lane_probe=lambda *args:True
+        budget=[1]
+        result, selected=self.runtime._apply_blocked_direct_aim(state,command,target,10.3,budget)
+        self.assertIs(target,selected)
+        self.assertEqual([0],budget)
+        receipt=state['_target_execution_evidence']
+        self.assertEqual('fresh_lane_clear',receipt['reason'])
+        self.assertEqual(10.3,receipt['recheck']['sampled_at'])
+        self.assertTrue(receipt['recheck']['clear'])
+        self.runtime._apply_blocked_direct_aim(state,command,None,10.4)
+        self.assertEqual('target_record_unavailable',state['_target_execution_evidence']['reason'])
+        self.runtime._apply_blocked_direct_aim(state,dict(command,target_id=None),None,10.4)
+        self.assertEqual('no_selected_target',state['_target_execution_evidence']['reason'])
+        state['profile']['class_tag']='SPG'
+        self.runtime._apply_blocked_direct_aim(state,command,target,10.5)
+        self.assertEqual('spg_ballistic_owner',state['_target_execution_evidence']['reason'])
+
     def test_cached_command_keeps_exact_nonempty_probe_and_original_time(self):
         self.runtime.update(.04, 1.)
         first = copy.deepcopy(self.runtime._decision_cache[11][3]['planning_receipt'])
@@ -100,7 +136,8 @@ class RuntimeReceiptTests(unittest.TestCase):
     def test_server_order_transformations_survive_cached_execution(self):
         from unittest import mock
         self.runtime._server_orders[11] = dict(combat_mode='withdraw',
-            move_position=(10.,0.,20.), fire_allowed=False)
+            move_position=(10.,0.,20.), fire_allowed=False,
+            tactical_evidence=dict(at=500.,selection=dict(outcome='no_local_lane')))
         def hold(state, order, targets, now, clear):
             return dict(order, move_position=(state['x'],state['y'],state['z']),
                         throttle_override=0., combat_mode='under_fire_withdraw')
@@ -117,6 +154,9 @@ class RuntimeReceiptTests(unittest.TestCase):
                          [stage['stage'] for stage in current['stages']])
         self.assertEqual('withdraw',current['stages'][0]['order']['combat_mode'])
         self.assertEqual(0.,current['final_order']['throttle_override'])
+        self.assertEqual(500.,current['server_selection']['at'])
+        self.assertEqual('no_local_lane',current['server_selection']['selection']['outcome'])
+        self.assertEqual('withdraw',current['received_order']['combat_mode'])
 
     def test_refresh_creates_new_identity_without_mutating_old_witness(self):
         self.runtime.update(.04, 1.)
@@ -301,6 +341,40 @@ class EscapeTerminalReceiptTests(unittest.TestCase):
 
 
 class LeaseAndEntryReceiptTests(unittest.TestCase):
+    def test_server_selection_receipts_cover_admission_and_absence(self):
+        from test_port_0922_server_bot_ai import ServerBotTacticsTests
+        f=ServerBotTacticsTests(); f.setUp()
+        p=route_fixture.BotPlanner()
+        bot=p._alive_bots(f.manifest,f.states)[0]
+        contact=dict(id=2,target_kind='human',visible=True,
+            position=dict(x=0.,y=0.,z=100.),health=1000,max_health=1000,
+            shootable_by_bot_ids=[11])
+        cases=((dict(contact,radio_bot_until={}), 'not_known_to_bot'),
+               (dict(contact,visible=False), 'not_visible'),
+               (dict(contact,shootable_by_bot_ids=[]), 'no_local_lane'),
+               (dict(contact,position=dict(x=0.,y=0.,z=5000.)), 'outside_engagement_range'),
+               (contact, 'eligible'))
+        for candidate,reason in cases:
+            p._assign_targets([bot],[candidate],1.)
+            receipt=p._target_decisions[11]
+            self.assertEqual(reason,receipt['candidates'][0]['reason'])
+            self.assertIn('radio_until',receipt['candidates'][0])
+            self.assertEqual(bot['state']['clip'],receipt['weapon']['clip'])
+            self.assertNotEqual('evaluating',receipt['outcome'])
+            self.assertIn('lease_after',receipt)
+        p._assign_targets([bot],[],2.)
+        self.assertEqual('no_team_contacts',p._target_decisions[11]['outcome'])
+        order=p.build_orders(f.manifest,f.states,[],3.)['orders'][0]
+        evidence=order['tactical_evidence']
+        self.assertEqual('server_monotonic_seconds',evidence['clock_basis'])
+        self.assertEqual(order['combat_mode'],evidence['final']['combat_mode'])
+        self.assertEqual(order['fire_allowed'],evidence['final']['fire_allowed'])
+        self.assertIn('retreat_before',evidence)
+        self.assertIn('retreat_after',evidence)
+        self.assertEqual('no_recent_hit',evidence['withdrawal']['reason'])
+        p.reset(4)
+        self.assertEqual({},p._target_decisions)
+
     def test_covered_pressure_exit_updates_evidence_without_extending_deadline(self):
         f = lease_fixture.RouteLeaseEvidenceTests(); f.setUp()
         p = f.planner
