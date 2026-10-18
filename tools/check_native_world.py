@@ -6,6 +6,7 @@ Engine calls use analytic fixtures; this is not Windows timing acceptance.
 from __future__ import print_function
 import gc
 import imp
+import json
 import math
 import os
 import sys
@@ -342,6 +343,65 @@ checks += 1
 assert native_math.snapshot()['world_run'] == 2*len(cases)+1
 assert native_math.snapshot()['fallbacks'] == 0
 assert native_math.snapshot()['world_run_native'] == len(cases)
+
+# Recorded side faces distinguish driving from passive displacement. This is
+# controlled geometry, not an assertion that a complete retail map is replayed.
+fixture_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           'tests', 'fixtures', 'local_drive_side_contacts_0922.json')
+with open(fixture_path) as stream:
+    side_contacts = json.load(stream)
+saved_filter, saved_resolve = world.prepare_horizontal_collision_filter, world._destroy_and_recast
+world.prepare_horizontal_collision_filter = lambda *args: None
+world._destroy_and_recast = lambda *args: False
+try:
+    for row in side_contacts:
+        left,right,back,front = row['bounds']
+        td = object_for(hull=object_for(hitTester=object_for(
+            bbox=((left,0.,-back),(right,3.,front)))),
+            chassis=object_for(hullPosition=(0.,0.,0.),hitTester=object_for(
+                bbox=((left,0.,-back),(right,3.,front)))))
+        position,yaw = Vector(*row['position']),row['yaw']
+        for passive,wall,expected in ((False,False,'clear'),(True,False,'hard'),(False,True,'hard')):
+            arms=[]
+            for selected,batch in ((None,False),(backend,False),(backend,True)):
+                queries=[]
+                def collide(space,start,end,*unused):
+                    delta=end-start
+                    faces=[(Vector(*row['hit']),Vector(*row['normal']),True)]
+                    if wall:
+                        faces.append((position+Vector(-math.sin(yaw),0.,-math.cos(yaw)).scale(back+.25),
+                                      Vector(math.sin(yaw),0.,math.cos(yaw)),False))
+                    hits=[]
+                    for p,n,finite in faces:
+                        denom=delta.x*n.x+delta.y*n.y+delta.z*n.z
+                        if abs(denom)<1.e-9:continue
+                        t=((p.x-start.x)*n.x+(p.y-start.y)*n.y+(p.z-start.z)*n.z)/denom
+                        if not 0.<=t<=1.:continue
+                        hit=start+delta.scale(t)
+                        if finite and (hit-p).length>.35:continue
+                        hits.append((t,hit,n))
+                    result=None
+                    if hits:
+                        unused,p,n=min(hits,key=lambda h:h[0]);result=(p,n,0)
+                    queries.append((xyz(start),xyz(end),None if result is None else (xyz(p),xyz(n))))
+                    return result
+                native_math._backend=selected
+                scene=object_for(wg_collideSegment=collide,wg_getMatInfoNearPoint=miss_material)
+                query_owner=(object_for(_avatar=object_for(spaceID=1),
+                    _runtime=object_for(bigworld=scene,math=math_module)) if batch else None)
+                trace={}
+                status=world.check_horizontal_collision(scene,math_module,1,position,yaw,-5.,td,False,.1,
+                    return_status=True,motion_yaw=yaw+math.pi if passive else None,
+                    pitch=row['pitch'],roll=row['roll'],trace=trace,query_owner=query_owner)
+                assert status==expected,(row['vehicle'],passive,wall,status,trace)
+                arms.append((status,queries,trace))
+            equal(arms[1],arms[0]);equal(arms[2],arms[0])
+            checks+=1
+            ray_count+=len(arms[1][1])
+finally:
+    world.prepare_horizontal_collision_filter=saved_filter
+    world._destroy_and_recast=saved_resolve
+    native_math._backend=backend
 print('Native world host checks passed: %d cases; %d ordered engine rays; '
       'same-thread reentry, corner profile, local failure containment and owned refs.' %
       (checks, ray_count))

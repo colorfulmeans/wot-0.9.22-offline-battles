@@ -60,6 +60,8 @@ class RuntimeReceiptTests(unittest.TestCase):
                                           dict(collision=True, slope=99.), 1.04)
             state['_motion_stall_pending'].update(dt=.04,world_speed=10.)
             state['speed']=10.
+            origin=(state['x'],state['y'],state['z'])
+            self.runtime._observe_near_goal_motion(state,origin,origin,1.04)
             self.runtime._finish_motion_stall(state, True, True,
                 (state['x'], state['y'], state['z']), 1.04)
         parsed = parse_lines(output.getvalue().splitlines(), 'worker')
@@ -79,6 +81,8 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(10.,velocity['pre_contact_speed'])
         self.assertEqual([0.,0.],velocity['realized_velocity'])
         self.assertEqual(.04,velocity['dt'])
+        self.assertEqual(1.04,row['near_goal_motion']['entered_arrival_at'])
+        self.assertEqual(0.,row['near_goal_motion']['minimum_segment_distance'])
 
     def test_bounded_query_history_preserves_all_rejection_counts(self):
         receipt = dict(id=[5, 11, 1, 1.], sampled_at=1., query_count=0,

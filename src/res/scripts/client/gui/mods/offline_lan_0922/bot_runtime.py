@@ -7403,6 +7403,39 @@ class BotRuntime(object):
                   getattr(self, '_shot_los_cache', {}).get((state['id'],
                       strategic.get('target_kind'), strategic.get('target_id')))))
 
+    @staticmethod
+    def _observe_near_goal_motion(state, start, target, now):
+        """Measure physical corner arrival between control samples, without steering."""
+        if target is None:
+            state.pop('_near_goal_motion', None)
+            return
+        target = tuple(target)
+        final = _position(state)
+        before = math.hypot(start[0]-target[0],start[2]-target[2])
+        after = math.hypot(final[0]-target[0],final[2]-target[2])
+        old = state.get('_near_goal_motion')
+        if min(before,after) > 8.0:
+            state.pop('_near_goal_motion', None)
+            return
+        if old is None or old['target'] != target:
+            previous = ({key:value for key,value in old.items() if key != 'previous_goal'}
+                        if old is not None else None)
+            old = dict(target=target,first_at=now,minimum_segment_distance=before,
+                minimum_final_distance=before,entered_arrival_at=None,previous_goal=previous)
+            state['_near_goal_motion'] = old
+        dx,dz = final[0]-start[0],final[2]-start[2]
+        length2 = dx*dx+dz*dz
+        t = (max(0.,min(1.,((target[0]-start[0])*dx+(target[2]-start[2])*dz)/length2))
+             if length2 > 1.e-12 else 0.)
+        closest = math.hypot(start[0]+t*dx-target[0],start[2]+t*dz-target[2])
+        old.update(last_at=now,start=tuple(start),final=final,distance_before=before,
+            distance_after=after,minimum_segment_distance=min(old['minimum_segment_distance'],closest),
+            minimum_final_distance=min(old['minimum_final_distance'],after),
+            arrival_radius=ai_driver.WAYPOINT_ARRIVAL_RADIUS,
+            yaw=state.get('yaw'),observed_only=True)
+        if closest <= ai_driver.WAYPOINT_ARRIVAL_RADIUS and old['entered_arrival_at'] is None:
+            old['entered_arrival_at'] = now
+
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
         """Log the actual authority outcome without extra world queries."""
@@ -7441,6 +7474,7 @@ class BotRuntime(object):
                     'ground_ahead','profile','native_surface_candidates',
                     'native_surface_columns','pivot_offset')},
             'support_datum': state.get('_basic_support_datum'),
+            'near_goal_motion': dict(state.get('_near_goal_motion') or {}),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
             'pose_rollback': bool(pose_rollback),
@@ -10000,6 +10034,7 @@ class BotRuntime(object):
             if progress_target is not None:
                 state['navigation_progress_target'] = progress_target
         local_state = getattr(self.navigator, 'bot_states', {}).get(int(bot_id), {})
+        target_receipt['corner_selection'] = dict(local_state.get('corner_selection_receipt') or {})
         direct_state = getattr(self.navigator, 'bot_direct_progress', {}).get(int(bot_id), {})
         choices = []
         for owner, local in (('path', local_state), ('direct', direct_state)):
@@ -16722,6 +16757,7 @@ class BotRuntime(object):
                 clear_contact = getattr(self.navigator, 'clear_blocked_contact', None)
                 if callable(clear_contact):
                     clear_contact(bot_id)
+            self._observe_near_goal_motion(state,tick_poses[bot_id],drive_targets.get(bot_id),now)
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),
                 pose_rollback, settled, now)
