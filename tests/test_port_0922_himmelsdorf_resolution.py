@@ -16,6 +16,45 @@ from gui.mods.offline_lan_0922 import bot_tactics, prebaked_navigation
 
 
 class ResolutionTests(unittest.TestCase):
+    def test_all_eight_circled_passages_are_short_reversible_and_collision_proved(self):
+        import math
+        from check_navigation_resolution import inspect
+        from build_local_navigation_meshes import CIRCLED_PASSAGES
+        maps=[]
+        for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
+            graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
+            maps.append(graph)
+            cases=[(a,b) for first,last in CIRCLED_PASSAGES for a,b in ((first,last),(last,first))]
+            records=inspect(graph,cases)
+            self.assertEqual(16,len(records))
+            for row in records:
+                self.assertTrue(row['connected'],row)
+                a,b=row['start'],row['end']
+                self.assertLess(row['length'],math.hypot(b[0]-a[0],b[1]-a[1])*1.8+12.,row)
+            proof=graph['bake']['local_meshes']['circled_passage_validation']
+            self.assertEqual(16,len(proof))
+            self.assertEqual({.25},{r['collision_sample_metres'] for r in proof})
+            self.assertEqual({2.15},{r['half_width'] for r in proof})
+        for a,b in zip(maps[0]['local_meshes'],maps[1]['local_meshes']):
+            for field in ('origin','cell_size','width','height','links'):
+                self.assertEqual(a[field],b[field],field)
+        a=bot_tactics.default_map('04_himmelsdorf')['default_routes']
+        b=bot_tactics.default_map('86_himmelsdorf_winter')['default_routes']
+        self.assertEqual([r for r in a if r['id']!='rear_guard'],b)
+
+    def test_local_exact_collision_keeps_width_and_does_not_inflate_wall_cells(self):
+        import test_port_0922_navigation_collision_bake as fixture
+        field=baker.compiled_navigation_obstacles(fixture.compiled([]),fixture.VFS([]),
+            baker._legacy_baker(),precise_regions=((-10.,-10.,10.,10.),))
+        wall=((0.,0.,-10.),(0.,10.,-10.),(0.,0.,10.))
+        field._raster_triangle(wall)
+        self.assertTrue(field.blocked(2.1,0.,1.1,margin=2.15))
+        self.assertFalse(field.blocked(2.2,0.,1.1,margin=2.15))
+        roof=((-5.,10.,-5.),(5.,10.,-5.),(0.,10.,5.))
+        self.assertFalse(baker.collision_triangle_blocks_disk(roof,0.,0.,1.75,3.5,2.15))
+        ground=((-5.,0.,-5.),(5.,0.,-5.),(0.,0.,5.))
+        self.assertFalse(baker.collision_triangle_blocks_disk(ground,0.,0.,1.75,3.5,2.15))
+
     def test_sloping_face_keeps_local_height_and_vertical_wall_still_blocks(self):
         import test_port_0922_navigation_collision_bake as fixture
         field=baker.compiled_navigation_obstacles(
@@ -93,7 +132,7 @@ class ResolutionTests(unittest.TestCase):
                     self.assertLess(sum(math.hypot(y[0]-x[0],y[2]-x[2]) for x,y in zip(path,path[1:])),limit)
                     for x,y in zip(path,path[1:]):
                         self.assertTrue(grid.segment_clear(x,y))
-            self.assertLess(sum(p['width']*p['height'] for p in graph['local_meshes']),2200)
+            self.assertLess(sum(p['width']*p['height'] for p in graph['local_meshes']),30625)
 
     def test_local_meshes_do_not_retire_any_original_passage_link(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
@@ -102,8 +141,8 @@ class ResolutionTests(unittest.TestCase):
             grid=TerrainGrid(lambda *args:None,lambda *args:True,baked_graph=graph)
             for patch in graph['local_meshes']:
                 for i in range(patch['width']*patch['height']):
-                    point=(patch['origin'][0]+i%patch['width']*2.,1.1,
-                           patch['origin'][1]+i//patch['width']*2.)
+                    point=(patch['origin'][0]+i%patch['width']*patch['cell_size'],1.1,
+                           patch['origin'][1]+i//patch['width']*patch['cell_size'])
                     base=grid._baked_cell_height(grid.cell_for(point))
                     if base is not None:
                         self.assertEqual(base,grid._routing_height(point))
@@ -153,7 +192,7 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual(4.,backend.value[2])
         self.assertEqual(30625,len(backend.value[5]))
         self.assertEqual(tuple(graph['links']),backend.value[6])
-        self.assertEqual(2,len(backend.value[11]))
+        self.assertEqual(9,len(backend.value[11]))
         from gui.mods.offline_lan_0922.navigation_graph_schema import validate_graph
         damaged=copy.deepcopy(graph);damaged['local_meshes'][0]['links'][0]=255
         with self.assertRaises(ValueError):
@@ -208,7 +247,7 @@ class ResolutionTests(unittest.TestCase):
             row=next(r['data'] for r in rows['records'] if r['label']=='BOT MOTION')
             self.assertEqual(prebaked_navigation.graph_summary(graph),row['navigation']['grid'])
             self.assertEqual(4.,row['navigation']['grid']['cell_size'])
-            self.assertEqual(2,len(row['navigation']['grid']['local_meshes']))
+            self.assertEqual(9,len(row['navigation']['grid']['local_meshes']))
             self.assertEqual('after_contacts_and_support',row['execution_receipt']['phase'])
         finally:
             f.tearDown()

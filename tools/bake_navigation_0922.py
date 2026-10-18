@@ -998,9 +998,13 @@ def _compiled_collision_materials(bsmo, collider, model_id):
 
 def _clip_collision_triangle(triangle, minimum_x, maximum_x, minimum_z, maximum_z):
     """Clip in 3D so a sloped face contributes only its local cell heights."""
+    return _clip_collision_polygon(triangle,((0,minimum_x,True),(0,maximum_x,False),
+                                             (2,minimum_z,True),(2,maximum_z,False)))
+
+
+def _clip_collision_polygon(triangle, planes):
     polygon=list(triangle)
-    for axis,value,above in ((0,minimum_x,True),(0,maximum_x,False),
-                             (2,minimum_z,True),(2,maximum_z,False)):
+    for axis,value,above in planes:
         if not polygon:
             break
         clipped=[]
@@ -1019,7 +1023,23 @@ def _clip_collision_triangle(triangle, minimum_x, maximum_x, minimum_z, maximum_
     return polygon
 
 
-def compiled_navigation_obstacles(compiled, vfs, legacy):
+def collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,radius):
+    """Exact body-height triangle/disk overlap; no cell-sized wall inflation."""
+    polygon=_clip_collision_polygon(triangle,((1,minimum,True),(1,maximum,False)))
+    if not polygon:return False
+    signs=[];area=0.
+    for first,last in zip(polygon,polygon[1:]+polygon[:1]):
+        dx,dz=last[0]-first[0],last[2]-first[2]
+        length=dx*dx+dz*dz
+        t=max(0.,min(1.,((x-first[0])*dx+(z-first[2])*dz)/length)) if length else 0.
+        if math.hypot(x-first[0]-dx*t,z-first[2]-dz*t)<=radius+1.e-9:return True
+        cross=dx*(z-first[2])-dz*(x-first[0])
+        if abs(cross)>1.e-9:signs.append(cross>0.)
+        area+=first[0]*last[2]-last[0]*first[2]
+    return abs(area)>1.e-9 and bool(signs) and all(s==signs[0] for s in signs)
+
+
+def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
     """Build the static route raster directly from placed compiled colliders.
 
     All original destructible surfaces (71..85) are removed BEFORE node,
@@ -1053,11 +1073,15 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
                     if local:
                         self._mark_cell(cx,cz,min(v[1] for v in local),
                                         max(v[1] for v in local))
+                        if any(left-4<=cx*size<=right+4 and bottom-4<=cz*size<=top+4
+                               for left,bottom,right,top in precise_regions):
+                            self.precise_cells.setdefault((cx,cz),[]).append(triangle)
 
         def __init__(self):
             self.raster_size = 1.0
             self.cells, self.surface_cells = {}, {}
             self.height_intervals = {}
+            self.precise_cells = {}
             self.instance_count = self.bridge_instance_count = 0
             self.bridge_surface_triangle_count = self.soft_instance_count = 0
             self.local_instance_count = self.skipped = self.invalid_triangles = 0
@@ -1089,13 +1113,19 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             cz=int(math.floor(float(z)/self.raster_size))
             minimum=float(ground_y)+legacy.VEHICLE_GROUND_CLEARANCE
             maximum=float(ground_y)+legacy.VEHICLE_CLEARANCE_HEIGHT
+            precise=any(left<=x<=right and bottom<=z<=top for left,bottom,right,top in precise_regions)
+            examined=set()
             for ix in range(cx-radius,cx+radius+1):
                 for iz in range(cz-radius,cz+radius+1):
                     if math.hypot((ix+.5)*self.raster_size-x,(iz+.5)*self.raster_size-z) > margin+self.raster_size*math.sqrt(2.)*.5:
                         continue
                     if any(high >= minimum and low <= maximum
                            for low,high in self.height_intervals.get((ix,iz),())):
-                        return True
+                        if not precise:return True
+                        for triangle in self.precise_cells.get((ix,iz),()):
+                            if triangle in examined:continue
+                            examined.add(triangle)
+                            if collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,margin):return True
             return False
     obstacles = CompiledObstacles()
     mesh_cache = {}

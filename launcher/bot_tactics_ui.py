@@ -1331,7 +1331,8 @@ class BotTacticsEditor:
     def check_map(self):
         try:
             doc=contract.canonical(self.document);graph=self.graph_cache.get(self.map_name)
-            result=storage.runtime.authoring_check(doc,self.map_name,graph,details=True)
+            result=navigation_view.check_map(doc,self.map_name,graph,contract,
+                                             receipt=navigation_view.persist_receipt)
             names={v['id']:labels.enum_label('team',str(v['team']),self.language)+' / '+v['label'] for kind in ('routes','positions') for v in self.entry()[kind]}
             names.update(('%s:%s'%(r['team'],contract.default_route_id(r)),labels.enum_label('team',str(r['team']),self.language)+' / '+self.tr('[默认] ','[Default] ')+r.get('label',labels.route_label(r['id'],self.language))+' / '+labels.enum_label('class_tag',r.get('class_tag','all'),self.language))
                          for r in self.entry().get('default_routes',()))

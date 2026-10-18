@@ -23,6 +23,15 @@ def route_cases(graph):
                          for a, b in zip(points, points[1:]))
     for a, b in NARROWS:
         pairs.update(((a, b), (b, a)))
+    from build_local_navigation_meshes import CIRCLED_PASSAGES
+    for a,b in CIRCLED_PASSAGES:
+        pairs.update(((a,b),(b,a)))
+    import sys
+    sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src/res/scripts/client'))
+    from gui.mods.offline_lan_0922 import bot_tactics
+    for route in bot_tactics.default_map(graph['map']).get('default_routes',()):
+        if route.get('disabled'):continue
+        pairs.update((tuple(a[:2]),tuple(b[:2])) for a,b in zip(route['points'],route['points'][1:]))
     return sorted(pairs)
 
 
@@ -31,14 +40,15 @@ def inspect(graph, cases):
         import sys
         sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src/res/scripts/client'))
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'launcher'))
+        from bot_tactics_navigation import connection
         grid=TerrainGrid(lambda *args:1.1,lambda *args:False,baked_graph=graph)
         rows=[]
         for start,end in cases:
             before=time.perf_counter()
-            path=grid.plan((start[0],1.1,start[1]),(end[0],1.1,end[1]),max_expansions=20000)
-            rows.append(dict(start=start,end=end,connected=bool(path),nodes=len(path or ()),
-                length=sum(math.hypot(b[0]-a[0],b[2]-a[2]) for a,b in zip(path or (), (path or ())[1:])),
-                reference_ms=(time.perf_counter()-before)*1000))
+            row=connection(grid,graph,start,end)
+            row['reference_ms']=(time.perf_counter()-before)*1000
+            rows.append(row)
         return rows
     legacy = baker._legacy_baker()
     rows = []

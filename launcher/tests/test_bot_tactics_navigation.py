@@ -7,6 +7,9 @@ import tkinter as tk
 from tkinter import ttk
 from types import SimpleNamespace
 import unittest
+import json
+import math
+from pathlib import Path
 from unittest import mock
 
 import bot_tactics_navigation as nav
@@ -23,6 +26,53 @@ def graph():
 
 
 class NavigationDataTests(unittest.TestCase):
+    def test_local_only_passage_is_visible_and_checked_by_shipping_planner(self):
+        data=storage.graph_data('04_himmelsdorf');bounds=storage.contract.MAPS[data['map']]['bounds']
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        grid=TerrainGrid(lambda *args:None,baked_graph=data)
+        proof=nav.connection(grid,data,(-38,158),(10,152))
+        self.assertTrue(proof['connected']);self.assertLess(proof['length'],65.)
+        point=None
+        for patch in data['local_meshes']:
+            for i,h in enumerate(patch['heights_mm']):
+                if h is None or not patch['links'][i]:continue
+                p=(patch['origin'][0]+i%patch['width']*patch['cell_size'],
+                   patch['origin'][1]+i//patch['width']*patch['cell_size'])
+                if nav.cell_status(data,nav.cell_for(data,p),bounds)=='missing_ground':
+                    point=p;break
+            if point:break
+        self.assertIsNotNone(point)
+        self.assertEqual('available',nav.point_status(data,point,bounds))
+        image=nav.overlay_image(data,bounds)
+        scale=image.width/(data['width']*data['cell_size'])
+        px=round((point[0]-data['origin'][0]+data['cell_size']*.5)*scale)
+        py=round((data['origin'][1]+(data['height']-.5)*data['cell_size']-point[1])*scale)
+        self.assertEqual(nav.COLORS['available'][1],image.getpixel((px,py)))
+
+    def test_partial_path_is_not_reported_as_connected(self):
+        grid=SimpleNamespace(bounds=(0,0,100,100),_baked_heights=[0],
+            plan=lambda *args,**kwargs:((0.,0.,0.),(8.,0.,4.)),
+            cell_for=lambda p:(round(p[0]/4),round(p[2]/4)),
+            _nearest_baked_cell=lambda c,r:c,_baked_cell_height=lambda c:0.,
+            point_for=lambda c,y:(c[0]*4.,y,c[1]*4.))
+        self.assertFalse(nav.connection(grid,{},(0,0),(12,4))['connected'])
+
+    def test_complete_receipts_reach_the_collected_launcher_log(self):
+        data=storage.graph_data('04_himmelsdorf');profile=storage.contract.empty()
+        profile['maps'][data['map']]=dict(routes=[dict(id='local',points=[[-38,158,0],[10,152,0]])],positions=[])
+        before=copy.deepcopy(profile)
+        with tempfile.TemporaryDirectory() as directory:
+            target=Path(directory)/'launcher.log'
+            result=nav.check_map(profile,data['map'],data,storage.contract,
+                receipt=lambda value:nav.persist_receipt(value,target))
+            evidence=json.loads(target.read_text().split('EDITOR NAVIGATION CHECK ',1)[1])
+            self.assertEqual(9,len(evidence['local_meshes']))
+            row=next(r for r in evidence['connections'] if r['route']=='local')
+            self.assertTrue(row['connected']);self.assertGreater(row['path_nodes'],1)
+            self.assertEqual([-38,158],row['start']);self.assertEqual([10,152],row['end'])
+            self.assertEqual('baked_route_connected',next(r[1] for r in result if r[0]=='local'))
+        self.assertEqual(before,profile)
+
     def test_missing_real_start_is_not_hidden_by_nearby_valid_cell(self):
         data=storage.graph_data('31_airfield')
         issues=nav.route_issues(data,[[-333.01,-195.16,0],[-325.287,-53.595,0]],
@@ -169,12 +219,13 @@ class NavigationUITests(unittest.TestCase):
             self.assertEqual(1,render.call_count)
         self.assertEqual(before,editor.document)
 
-    def test_check_map_does_not_run_raw_grid_checks_or_write_profile(self):
+    def test_check_map_uses_shipping_graph_checker_without_writing_profile(self):
         editor=self.editor;before=copy.deepcopy(editor.document)
         editor.map_var.set('阿拉曼机场');editor.map_name='31_airfield';editor._load_map()
-        with mock.patch.object(nav,'check_map',side_effect=AssertionError('raw grid checks disabled')) as raw_check:
+        with mock.patch.object(nav,'check_map',return_value=[]) as shipping_check:
             editor.check_map();self.root.update()
-        raw_check.assert_not_called()
+        shipping_check.assert_called_once_with(storage.contract.canonical(editor.document),
+            editor.map_name,editor.graph_cache[editor.map_name],storage.contract,receipt=nav.persist_receipt)
         texts=[]
         def collect(widget):
             if isinstance(widget,tk.Text):texts.append(widget.get('1.0','end'))
@@ -189,7 +240,7 @@ class NavigationUITests(unittest.TestCase):
         e=self.editor;before=copy.deepcopy(e.document)
         result=[('wait-test','wait_place_unusable',[dict(status='wait_place_unusable',
             nodes=[3],points=[[12.5,-34.5]],wait_slot=2)])]
-        with mock.patch.object(storage.runtime,'authoring_check',return_value=result):
+        with mock.patch.object(nav,'check_map',return_value=result):
             e.check_map();self.root.update()
         texts=[]
         def collect(widget):
