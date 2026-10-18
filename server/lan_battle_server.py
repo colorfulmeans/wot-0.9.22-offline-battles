@@ -15050,6 +15050,24 @@ class BattleState:
             "arena_bounds": arena_bounds,
         }
 
+    def _log_bot_route_assignments(self):
+        """Persist every new assignment, independent of wire order revisions."""
+        if getattr(self, '_route_assignment_log_round', None) != self.round_id:
+            self._route_assignment_log_round = self.round_id
+            self._route_assignment_log_sequences = {}
+        for order in self.bot_orders.get('orders', ()):
+            receipt = order.get('route_assignment') or {}
+            last = self._route_assignment_log_sequences.get(order['id'], 0)
+            for event in receipt.get('history', ()):
+                if event['sequence'] <= last:
+                    continue
+                _server_log('[Offline LAN 0.9.22] BOT ROUTE ASSIGNMENT ' +
+                    json.dumps(dict(event, prior_logged_sequence=last,
+                        history_dropped=receipt.get('history_dropped', 0)),
+                        separators=(',', ':')))
+                last = event['sequence']
+            self._route_assignment_log_sequences[order['id']] = last
+
     def tick_once(self, dt):
         reset_message = None
         had_pending_live = False
@@ -15160,6 +15178,7 @@ class BattleState:
                      if p.connected and p.participating],
                     time.monotonic(), self._bot_defense_context(),
                     team_orders=team_orders)
+                self._log_bot_route_assignments()
                 for order in self.bot_orders.get('orders', ()):
                     attempt = order.get('route_attempt') or {}
                     if attempt.get('action') in ('skip_parking', 'skip_gate',

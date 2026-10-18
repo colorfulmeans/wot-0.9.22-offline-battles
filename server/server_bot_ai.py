@@ -2358,11 +2358,14 @@ class BotPlanner(object):
                 best = route_id
         return best
 
-    def _record_route_assignment(self, bot, now, previous, current, reason):
+    def _record_route_assignment(self, bot, now, previous, current, reason,
+                                 evidence=None):
         """Diagnostic provenance only; never participates in route selection."""
         old = self._route_assignment_receipts.get(bot['id']) or {}
         self._route_assignment_receipts[bot['id']] = dict(
             sequence=old.get('sequence', 0) + 1, at=_number(now),
+            clock_basis='server_monotonic_seconds', round=self._round_id,
+            bot=bot['id'],
             previous_route=str(previous or ''), route=str(current or ''),
             reason=reason, position=_point(bot.get('state') or {}))
         previous_lease = self._route_assignments.get(bot['id']) or {}
@@ -2371,6 +2374,23 @@ class BotPlanner(object):
                 until=_number(previous_lease['until']),
                 check=dict(previous_lease.get('_lease_check') or {}),
                 observation=dict(previous_lease.get('_lease_observation') or {}))
+        receipt = self._route_assignment_receipts[bot['id']]
+        cursor = self._route_states.get(bot['id']) or {}
+        route = previous_lease.get('route') or bot.get('route') or {}
+        points = route.get('waypoints') or []
+        index = _integer(cursor.get('index'), -1)
+        point = dict(points[index]) if 0 <= index < len(points) else None
+        receipt['previous_progress'] = dict(index=index, point=point,
+            distance=(math.hypot(_number(point.get('x')) - receipt['position']['x'],
+                                _number(point.get('z')) - receipt['position']['z'])
+                      if point is not None else None))
+        if evidence is not None:
+            receipt['selection'] = evidence
+        # A lease can expire and be replaced again within the same server
+        # update. Preserve each immutable event, not only the last decision.
+        event = dict(receipt)
+        receipt['history'] = list(old.get('history') or [])[-7:] + [event]
+        receipt['history_dropped'] = max(0, receipt['sequence'] - len(receipt['history']))
 
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
@@ -2409,7 +2429,11 @@ class BotPlanner(object):
                     self._record_route_assignment(bot, now, assigned_id, route_id,
                         'radio_knowledge_lost' if knowledge_lost else
                         ('lease_expired' if assigned_until > 0.0 and
-                         assigned_until <= _number(now) else 'catalog_reset'))
+                         assigned_until <= _number(now) else 'catalog_reset'),
+                        evidence=dict(evaluated_at=_number(now),
+                            assigned_until=assigned_until, knowledge_lost=knowledge_lost,
+                            catalog_contains_route=assigned_id in catalog,
+                            catalog_route_matches=assigned_route == catalog.get(assigned_id)))
                 if route_id in catalog:
                     self._route_assignments[bot["id"]] = {
                         "route": catalog[route_id], "until": 0.0,
@@ -2501,34 +2525,47 @@ class BotPlanner(object):
                 assignment['_lease_observation'].update(
                     outcome='renewed', until=assignment['until'])
         candidates = []
+        candidate_checks = []
         for bot in bots:
+            check = dict(bot=bot['id'], outcome='eligible')
+            candidate_checks.append(check)
             if class_counts.get((target_route, bot.get("profile", {}).get("class_tag")), 0) >= 3:
+                check['outcome'] = 'target_class_full'
                 continue
             received = self._contacts_for_bot(bot, contacts, now)
             if not any(self._nearest_route(contact, catalog) == target_route
                        for contact in received):
+                check['outcome'] = 'no_received_target_contact'
                 continue
             if bot["id"] in protected_ids:
+                check['outcome'] = 'protected'
                 continue
             if self._route_states.get(bot['id'], {}).get('parking_phase') in (
                     'approach', 'waiting', 'queue'):
                 # Rebalancing cannot discard an authored parking timer/lease.
+                check['outcome'] = 'parking_in_progress'
                 continue
             target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route, bot['team'])
             if target_authored is not None and not bot_tactics.matches(target_authored, bot):
+                check['outcome'] = 'authored_class_mismatch'
                 continue
             if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
+                check['outcome'] = 'artillery'
                 continue
             # An immobilized tank may still hold a firing lane, so it remains
             # in counts above. It cannot satisfy a movement reassignment.
             if not self._route_donor_eligible(bot):
+                check['outcome'] = 'immobile_donor'
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             current = assignment.get("route") if isinstance(assignment, dict) else None
             if not isinstance(current, dict):
                 current = bot.get("route") or {}
             current_id = str(current.get("id") or "")
+            check['current_route'] = current_id
             if current_id == target_route or counts.get(current_id, 0) <= 1:
+                check['outcome'] = ('already_on_target' if current_id == target_route
+                                    else 'last_line_contributor')
                 continue
             profile = bot.get("profile", {})
             roles = profile.get("roles") or {}
@@ -2540,6 +2577,7 @@ class BotPlanner(object):
                     class_affinity = _clamp(
                         _number(class_weights.get(class_tag)), 0.0, 1.0)
                     if class_affinity < MIN_ROUTE_CLASS_AFFINITY:
+                        check['outcome'] = 'class_affinity_too_low'
                         continue
             route_roles = target_record.get("role_weights")
             role_affinity = 0.0
@@ -2556,13 +2594,21 @@ class BotPlanner(object):
                      pressure.get(current_id, 0.0) * 0.7 +
                      class_affinity * 1.8 + role_affinity * 1.2)
             candidates.append((score, -bot["id"], bot))
+            check.update(score=score, tie_break=-bot['id'],
+                mobility=mobility, adaptability=personality['adaptability'],
+                brawler=_number(roles.get('brawler')), current_pressure=pressure.get(current_id, 0.0),
+                class_affinity=class_affinity, role_affinity=role_affinity)
         if not candidates:
             return
         donor = max(candidates)[2]
         previous = self._route_assignments.get(donor['id']) or {}
         previous_route = previous.get('route') or donor.get('route') or {}
         self._record_route_assignment(donor, now, previous_route.get('id'),
-                                      target_route, 'pressure_rebalance')
+            target_route, 'pressure_rebalance', evidence=dict(
+                evaluated_at=_number(now), target_route=target_route,
+                pressure=dict(pressure), contributors=dict(counts),
+                target_score=pressure[target_route] - counts[target_route] * 0.45,
+                candidates=candidate_checks, selected_bot=donor['id']))
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
             "until": _number(now) + ROUTE_LEASE_SECONDS,
