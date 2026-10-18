@@ -216,10 +216,10 @@ class TerrainGrid(object):
 			self._local_meshes = LocalMeshes(self, graph['local_meshes'])
 
 	def _cell_distance(self, first, second):
-		if self._local_meshes is not None:
+		if self._local_meshes is not None and (first[0] < 0 or second[0] < 0):
 			a, b = self.point_for(first, 0.), self.point_for(second, 0.)
 			return math.hypot(a[0]-b[0], a[2]-b[2])/self.cell_size
-		return math.hypot(first[0]-second[0], first[1]-second[1])
+		return math.sqrt((first[0]-second[0])**2 + (first[1]-second[1])**2)
 
 	def _routing_height(self, point):
 		if self._local_meshes is not None:

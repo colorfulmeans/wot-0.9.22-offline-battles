@@ -187,6 +187,7 @@ struct Map : MapInput {
                 if(result.empty() || result.back()!=c)result.push_back(c);
             }
             if(require_height && !nearest(result.front(),2,result.front()))return {};
+            result.erase(std::unique(result.begin(),result.end()),result.end());
             for(auto c:result)if(require_height?!valid(c):!flat(c))return {};
             return result;
         }

@@ -95,6 +95,25 @@ class ResolutionTests(unittest.TestCase):
                         self.assertTrue(grid.segment_clear(x,y))
             self.assertLess(sum(p['width']*p['height'] for p in graph['local_meshes']),2200)
 
+    def test_local_meshes_do_not_retire_any_original_passage_link(self):
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
+            graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
+            grid=TerrainGrid(lambda *args:None,lambda *args:True,baked_graph=graph)
+            for first, neighbours in grid._local_meshes.edges.items():
+                for last in neighbours:
+                    self.assertIn(first,grid._local_meshes.edges[last])
+            for index,mask in enumerate(graph['links']):
+                cell=(index%graph['width'],index//graph['width'])
+                for bit,(dx,dz) in enumerate(graph['directions']):
+                    if not mask & (1<<bit):
+                        continue
+                    first=grid.point_for(cell,grid._baked_cell_height(cell))
+                    other=(cell[0]+dx,cell[1]+dz)
+                    last=grid.point_for(other,grid._baked_cell_height(other))
+                    if grid._local_meshes.touches(first,last):
+                        self.assertTrue(grid._baked_corridor(first,last)[0],(name,cell,other))
+
     def test_previous_profile_identity_preserves_custom_waypoints(self):
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
             meta = bot_tactics.MAPS[name]

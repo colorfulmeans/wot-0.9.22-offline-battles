@@ -87,6 +87,7 @@ class LocalMeshes(object):
                 result.append(cell)
         if require_height:
             result[0] = self.grid._nearest_baked_cell(result[0], 2)
+            result = [c for i,c in enumerate(result) if i == 0 or c != result[i-1]]
         lookup = self.grid._baked_index if require_height else self.grid._baked_flat_index
         if any(c is None or lookup(c) is None for c in result):
             return ()
