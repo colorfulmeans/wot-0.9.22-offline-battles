@@ -305,7 +305,7 @@ def _manual_candidates(grid, zone, clearance):
 @observed('parking.assign_manual')
 def assign_manual_positions(profile, name, graph, states, mode='regular',
                             actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
-                            allocation_seed=None, paired_routes=None):
+                            allocation_seed=None, paired_routes=None, excluded_zones=()):
     settings = config.map_settings(profile, name)
     deleted = set(settings.get('deleted_positions', ()))
     zones = [z for z in settings.get('positions', ()) if z['id'] not in deleted] if mode == 'regular' else ()
@@ -344,6 +344,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
         distances = grid.distances((state['x'], state['y'], state['z']))
         candidates = []
         for zone in choices:
+            if zone['id'] in excluded_zones:
+                continue
             key = (zone['id'], clearance)
             if key not in cache:
                 cache[key] = _manual_candidates(grid, zone, clearance)

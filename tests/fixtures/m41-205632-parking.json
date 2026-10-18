@@ -1,0 +1,89 @@
+{
+  "map": "86_himmelsdorf_winter",
+  "positions": [
+    {
+      "heading": 6.508956440502567,
+      "id": "p_32d14175a32d",
+      "label": "\u94c1\u8def\u7ebf",
+      "point": [
+        -270.5849,
+        -276.9804
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 1
+    },
+    {
+      "heading": -173.49104355949743,
+      "id": "p_e5984034f5bc",
+      "label": "\u94c1\u8def\u7ebf",
+      "point": [
+        -124.5166,
+        374.964
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 2
+    },
+    {
+      "heading": 18.958183405106194,
+      "id": "spg_1_rail",
+      "label": "Rail line",
+      "point": [
+        -227.6847,
+        -276.4572
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 1
+    },
+    {
+      "heading": 13.523160650416017,
+      "id": "spg_1_rear_guard",
+      "label": "Rear guard",
+      "point": [
+        -34.1107,
+        -260.762
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 1
+    },
+    {
+      "heading": 180.0,
+      "id": "spg_2_rail",
+      "label": "Rail line",
+      "point": [
+        -160.351,
+        375.9932
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 2
+    },
+    {
+      "heading": -175.1634165542647,
+      "id": "spg_2_rear_guard",
+      "label": "Rear guard",
+      "point": [
+        16.8071,
+        366.7267
+      ],
+      "priority": 5,
+      "radius": 16.0,
+      "team": 2
+    }
+  ],
+  "shape": [
+    1.4301379919052124,
+    2.5663530826568604,
+    -0.0016009999671950936,
+    2.171905040740967
+  ],
+  "position": [
+    19.788192132114663,
+    1.1100003719329834,
+    365.34332509569316
+  ],
+  "zone": "spg_2_rear_guard"
+}

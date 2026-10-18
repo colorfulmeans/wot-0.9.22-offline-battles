@@ -4149,6 +4149,7 @@ class BattleRuntime(object):
                 turret_motion_probe=self._turret_motion_is_clear,
                 wreck_rotation_probe=self._resolve_bot_rotation,
                 rotation_resolver=self._resolve_bot_rotation,
+                local_sweep_probe=self._probe_bot_local_motion,
                 wreck_ground_probe=self._suspension_ground_y,
                 turret_hulls_provider=self._turret_navigation_hulls,
                 world_receipt_probe=self._direction_world_receipt,
@@ -22225,9 +22226,69 @@ class BattleRuntime(object):
                 proposal, start, start_yaw, end, end_yaw,
                 td, speed, now, dt, True, 'clear')
 
+    def _probe_bot_local_motion(self, bot_id, position, body_yaw, travel_yaw,
+                                distance, descriptor, step, now):
+        """Preview a local action through its authoritative, non-committing sweep.
+
+        Rotations prove the next physical slice, not an invented complete turn
+        while the hull is still translating. Straight local exits prove their
+        requested displacement, with the actual front/rear body envelope.
+        """
+        state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
+        delta = _angle_delta(travel_yaw, body_yaw)
+        if distance is not None and min(abs(delta), abs(abs(delta)-math.pi)) > .02:
+            return dict(clear=None, proved=False, reason='local_sweep_not_aligned',
+                at=now, origin=tuple(position), body_yaw=body_yaw,
+                requested_yaw=travel_yaw, distance=distance, commit_enabled=False,
+                source='authoritative_body_sweep')
+        missing = object()
+        fields = ('_rotation_contact_trace', '_world_contact_trace', 'movement_dir', 'rotation_dir')
+        saved = dict((k,state.get(k,missing)) for k in fields)
+        old_kind = self._bot_motion_kinds.get(int(bot_id),missing)
+        receipt = dict(at=now, origin=tuple(position), body_yaw=body_yaw,
+            requested_yaw=travel_yaw, distance=distance, commit_enabled=False,
+            source='authoritative_body_sweep')
+        try:
+            params_reader = getattr(self._bots, '_physics_params_for', None)
+            params = (params_reader(bot_id) if callable(params_reader) else
+                      vehicle_physics.derive_params(descriptor))
+            dt = max(.001, float(step))
+            if distance is None:
+                cap = max(float(params['rotSpd']),
+                    abs(getattr(self._bots,'_turn_speeds',{}).get(bot_id,0.)))
+                checked = max(-cap*dt, min(cap*dt, delta))
+                receipt['checked_yaw'] = body_yaw+checked
+                clear = self._resolve_bot_rotation(bot_id, position, body_yaw,
+                    body_yaw+checked, descriptor, dt, now, cap, commit_enabled=False)
+                receipt['trace'] = state.get('_rotation_contact_trace')
+                status = 'commit_required' if clear is None else 'clear' if clear else 'hard'
+            else:
+                sign = 1. if math.cos(delta) >= 0. else -1.
+                state['movement_dir'], state['rotation_dir'] = int(sign), 0
+                speed = sign*float(params['speedFwd' if sign>0 else 'speedBwd'])
+                dt = max(.001,float(distance)/max(.001,abs(speed)))
+                status = self._resolve_bot_motion(bot_id, position, body_yaw,
+                    speed, descriptor, dt, now, commit_enabled=False, motion_yaw=travel_yaw)
+                clear = status in ('clear','crushed','approach','soft')
+                receipt['trace'] = state.get('_world_contact_trace')
+            receipt.update(status=status, clear=(True if clear is None else bool(clear)),
+                proved=clear is not None,
+                reason=('local_sweep_commit_required' if clear is None else
+                        'local_sweep_clear' if clear else 'local_sweep_blocked'))
+            return receipt
+        finally:
+            # Candidate inspection must not replace the realised action's
+            # collision diagnostics or publish destruction/impact effects.
+            for key,value in saved.items():
+                if value is missing: state.pop(key,None)
+                else: state[key]=value
+            if old_kind is missing: self._bot_motion_kinds.pop(int(bot_id),None)
+            else: self._bot_motion_kinds[int(bot_id)]=old_kind
+
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
-            rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0)):
+            rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0),
+            commit_enabled=True):
         """Keep a Bot's complete pivot outside live and damaged structures."""
         end_position = vehicle_physics.track_pivot_position(
             position, start_yaw, end_yaw, pivot_offset)
@@ -22255,6 +22316,8 @@ class BattleRuntime(object):
             raise RuntimeError(
                 'bot rotation resolver returned an invalid status')
         self._bot_motion_kinds[int(bot_id)] = str(detail.get('kinds', '-'))
+        if not commit_enabled and detail.get('requires_commit', False):
+            return None  # Only the realised action may publish this contact.
         if bool(detail.get('requires_commit', False)):
             proposal_token = self._destructible_contact_token(
                 detail.get('token'))
@@ -22305,7 +22368,7 @@ class BattleRuntime(object):
                 0.0, descriptor, now, dt)
             clear = self._complete_bot_tree_contact(
                 tree, position, start_yaw, end_position, end_yaw,
-                descriptor, 0.0, now, dt, True, 'clear') in ('clear', 'crushed')
+                descriptor, 0.0, now, dt, commit_enabled, 'clear') in ('clear', 'crushed')
         return clear
 
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
@@ -22362,7 +22425,7 @@ class BattleRuntime(object):
             if tree.get('status') in ('pending', 'hard'):
                 self._bot_motion_kinds[int(bot_id)] = 'tree_registry'
                 tree = {'status': 'clear', 'requires_commit': False}
-        if (self._destructibles is not None and not airborne and
+        if (commit_enabled and self._destructibles is not None and not airborne and
                 movement_dir * float(speed) > 0.0 and rotation_dir == 0 and
                 abs(turn_speed) <= 0.01 and callable(corridor_reusable) and
                 corridor_reusable(

@@ -589,6 +589,21 @@ accepted pose. Its receipt includes both point sets when this check runs.
 Any missing current point still enables detailed support immediately, and all
 five valid points release it; there is no timer or relaxed point threshold.
 
+Local recovery exits additionally preview the realised body sweep without
+committing destruction or impact effects. Missing-grid turn admission checks
+the next physical yaw slice; aligned short exits check the full front/rear
+envelope. Previews retain realised contact diagnostics and never authorize
+skipping the final collision check. Per-decision reuse bounds repeated yaw
+queries, and `bot.local_sweep` timings and planning receipts record the result.
+
+Artillery retains one same-region retry after a confirmed blocked firing
+episode. A second completed failure gives other reachable parking regions an
+opportunity. When no untried safe region remains, a new bounded cycle permits
+ordinary retries rather than permanently banning positions. A real shot resets
+the region history; pending probes, missing targets and reload time do not
+exhaust it. `SPG POSITION RETRY` records both selection attempts and any cycle
+restart. Every new parking point still requires native ballistic clearance.
+
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after
 every map passes. These source changes alone do not disable the live repair
