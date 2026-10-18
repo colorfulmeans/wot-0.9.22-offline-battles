@@ -16,6 +16,13 @@ from gui.mods.offline_lan_0922 import bot_tactics, prebaked_navigation
 
 
 class ResolutionTests(unittest.TestCase):
+    def test_first_run_and_reset_profile_uses_current_identities(self):
+        profile=bot_tactics.default_profile()
+        self.assertEqual(profile,bot_tactics.canonical(profile))
+        for name in ('04_himmelsdorf','86_himmelsdorf_winter'):
+            self.assertEqual(bot_tactics.MAPS[name]['resource_sha256'],
+                             profile['maps'][name]['resource_sha256'])
+
     def test_preserved_eroded_rail_goal_uses_existing_bounded_grid_snap(self):
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         graph=json.loads((ROOT/'navgraphs/04_himmelsdorf.json').read_bytes())
