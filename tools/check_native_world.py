@@ -357,7 +357,9 @@ try:
     for row in side_contacts:
         left,right,back,front = row['bounds']
         td = object_for(hull=object_for(hitTester=object_for(
-            bbox=((left,0.,-back),(right,3.,front)))))
+            bbox=((left,0.,-back),(right,3.,front)))),
+            chassis=object_for(hullPosition=(0.,0.,0.),hitTester=object_for(
+                bbox=((left,0.,-back),(right,3.,front)))))
         position,yaw = Vector(*row['position']),row['yaw']
         for passive,wall,expected in ((False,False,'clear'),(True,False,'hard'),(False,True,'hard')):
             arms=[]

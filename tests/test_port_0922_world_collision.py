@@ -105,7 +105,9 @@ class WorldCollisionTests(unittest.TestCase):
         for row in rows:
             left,right,back,front=row['bounds'];yaw=row['yaw'];pos=_Vector(*row['position'])
             td=_Strict1513Component(hull=_Strict1513Component(hitTester=_Strict1513Component(
-                bbox=((left,0.,-back),(right,3.,front)))))
+                bbox=((left,0.,-back),(right,3.,front)))),
+                chassis=_Strict1513Component(hullPosition=(0.,0.,0.),hitTester=_Strict1513Component(
+                    bbox=((left,0.,-back),(right,3.,front)))))
             for passive,wall,expected in ((False,False,'clear'),(True,False,'hard'),(False,True,'hard')):
                 def collide(space,start,end,*unused):
                     # A finite patch of the reported face is a controlled
