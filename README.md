@@ -51,6 +51,15 @@ baked cells, local fallback rejection counts, the next path points and alignment
 timers, without extra native ground or collision queries. Reproduce the problem
 and export the launcher's error report; no debug switch is required.
 
+Temporary pressure deployments now retain their waypoint progress while their
+current lane still needs support, even when another lane becomes the highest
+priority. Artillery which exhausts its checked parking candidates starts another
+bounded exclusion cycle instead of permanently keeping the last failed goal.
+Normal connectivity, occupancy, hull collision and ballistic checks remain in
+force. Error reports distinguish the server battle round from the planner seed,
+include the actual base-defense input and final responders, and record native
+contact geometry and same-step movement phases for unresolved stalls.
+
 The route editor's **Show navigation grid** checkbox sits beside Route symmetry.
 It overlays raw baked height, hazard and link coverage with a colour legend.
 **Check map** retains the original profile/route admission checks and does not

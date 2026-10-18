@@ -151,9 +151,8 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
             self.assertEqual(lease['until'], now + 6.)
             self.assertEqual(self.planner._route_states[self.donor['id']]['index'], 1)
 
-    def test_different_pressure_target_explains_unrenewed_lease_and_expiry(self):
-        # Isolate priority changes from movement-donor eligibility; leave the
-        # existing selection/expiry rules untouched.
+    def test_different_pressure_target_keeps_still_needed_lease_and_cursor(self):
+        # A new priority cannot expire a still-needed deployment to default.
         self.planner._route_line_contributor = lambda *args: False
         contacts = self.contacts + [dict(position=dict(x=-100., y=0., z=z),
             health=1000., max_health=1000.) for z in (200., 300.)]
@@ -161,22 +160,39 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
                                       protected_ids=[self.donor['id']])
         lease = self.planner._route_assignments[self.donor['id']]
         observation = lease['_lease_observation']
-        self.assertEqual(observation['outcome'], 'different_pressure_target')
+        self.assertEqual(observation['outcome'], 'renewed')
         self.assertEqual(observation['target_route'], 'source')
         self.assertEqual(observation['own_pressure'], 1.)
-        self.assertEqual(lease['until'], 7.)
-        self.planner._rebalance_routes(1, self.bots, contacts, 7.,
+        self.assertEqual(lease['until'], 11.)
+        self.assertEqual(1., observation['own_score'])
+        self.assertEqual(1, self.planner._route_states[self.donor['id']]['index'])
+        # A genuinely cleared lane still releases normally at the deadline.
+        self.planner._rebalance_routes(1, self.bots, [], 11.,
                                       protected_ids=[self.donor['id']])
         receipt = self.planner._route_assignment_receipts[self.donor['id']]
         self.assertEqual(receipt['reason'], 'lease_expired')
         self.assertEqual(receipt['previous_lease']['observation'], observation)
-        self.assertEqual(receipt['previous_lease']['until'], 7.)
+        self.assertEqual(receipt['previous_lease']['until'], 11.)
 
     def test_no_pressure_observation_does_not_extend_lease(self):
         self.planner._rebalance_routes(1, self.bots, [], 5.)
         lease = self.planner._route_assignments[self.donor['id']]
         self.assertEqual(lease['_lease_observation']['outcome'], 'no_known_pressure')
         self.assertEqual(lease['until'], 7.)
+
+    def test_covered_own_lane_is_not_renewed_just_because_contact_remains(self):
+        self.planner._route_line_contributor=lambda *args: True
+        # Put two other contributors on the donor's lane: 1 - 3*.45 < 0.
+        target=self.planner._route_catalog(self.bots)['target']
+        for bot in self.bots:
+            self.planner._route_assignments[bot['id']]=dict(route=target,until=7. if bot is self.donor else 0.)
+            bot['profile']['class_tag']='mediumTank'
+        contacts=self.contacts+[dict(position=dict(x=-100.,y=0.,z=z),health=1000.,max_health=1000.)
+                                for z in (200.,300.)]
+        self.planner._rebalance_routes(1,self.bots,contacts,5.,protected_ids=[self.donor['id']])
+        lease=self.planner._route_assignments[self.donor['id']]
+        self.assertLess(lease['_lease_observation']['own_score'],0.)
+        self.assertEqual(7.,lease['until'])
 
 
 if __name__ == '__main__':

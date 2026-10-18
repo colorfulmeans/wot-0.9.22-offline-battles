@@ -58,6 +58,8 @@ class RuntimeReceiptTests(unittest.TestCase):
         with redirect_stdout(output):
             self.runtime._log_motion_stall(state, command, 0., 0., False,
                                           dict(collision=True, slope=99.), 1.04)
+            state['_motion_stall_pending'].update(dt=.04,world_speed=10.)
+            state['speed']=10.
             self.runtime._finish_motion_stall(state, True, True,
                 (state['x'], state['y'], state['z']), 1.04)
         parsed = parse_lines(output.getvalue().splitlines(), 'worker')
@@ -72,6 +74,11 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertTrue(execution['support_rollback'])
         self.assertFalse(execution['path_clear'])
         self.assertEqual(0., execution['horizontal_displacement'])
+        velocity=execution['velocity_receipt']
+        self.assertEqual(10.,velocity['scalar_speed'])
+        self.assertEqual(10.,velocity['pre_contact_speed'])
+        self.assertEqual([0.,0.],velocity['realized_velocity'])
+        self.assertEqual(.04,velocity['dt'])
 
     def test_bounded_query_history_preserves_all_rejection_counts(self):
         receipt = dict(id=[5, 11, 1, 1.], sampled_at=1., query_count=0,

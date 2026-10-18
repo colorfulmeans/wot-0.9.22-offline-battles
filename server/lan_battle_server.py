@@ -15062,11 +15062,33 @@ class BattleState:
                 if event['sequence'] <= last:
                     continue
                 _server_log('[Offline LAN 0.9.22] BOT ROUTE ASSIGNMENT ' +
-                    json.dumps(dict(event, prior_logged_sequence=last,
+                    json.dumps(dict(event, round=self.round_id,
+                        planner_round=event.get('round'), prior_logged_sequence=last,
                         history_dropped=receipt.get('history_dropped', 0)),
                         separators=(',', ':')))
                 last = event['sequence']
             self._route_assignment_log_sequences[order['id']] = last
+
+    def _log_bot_defense(self, context, now):
+        """Observe the exact capture input and final responder choices."""
+        stamp = getattr(self, '_bot_defense_log_stamp', None)
+        if stamp is not None and stamp[0] == self.round_id and now - stamp[1] < 3.0:
+            return
+        self._bot_defense_log_stamp = (self.round_id, now)
+        planner = self.bot_planner
+        bots = planner._alive_bots(self.bot_manifest, list(self.bot_states.values()), planner.tactics)
+        _server_log('[Offline LAN 0.9.22] BOT BASE DEFENSE ' + json.dumps(dict(
+            round=self.round_id, at=now, context=context,
+            candidates=[dict(id=bot['id'], team=bot['team'],
+                eligible=planner._base_defense_eligible(bot),
+                world_pose=bot['state'].get('world_pose', True),
+                critical=bot['state'].get('critical'),
+                position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})
+                for bot in bots],
+            incidents=planner._base_defense,
+            final_orders=[dict(id=order['id'], mode=order.get('combat_mode'),
+                defense_base_id=order.get('defense_base_id'), goal=order.get('move_position'))
+                for order in self.bot_orders.get('orders', ())]), separators=(',', ':')))
 
     def tick_once(self, dt):
         reset_message = None
@@ -15169,6 +15191,8 @@ class BattleState:
             if (self.battle_result is None and
                     self.tick >= self._next_bot_planner_tick):
                 team_orders = self._active_team_commands_locked()
+                planner_now = time.monotonic()
+                defense_context = self._bot_defense_context()
                 self.bot_orders = self.bot_planner.build_orders(
                     self.bot_manifest, list(self.bot_states.values()),
                     [dict(self._public_player(p, include_outfits=False),
@@ -15176,9 +15200,10 @@ class BattleState:
                               p.player_id, {}).get('shape'))
                      for p in self.players.values()
                      if p.connected and p.participating],
-                    time.monotonic(), self._bot_defense_context(),
+                    planner_now, defense_context,
                     team_orders=team_orders)
                 self._log_bot_route_assignments()
+                self._log_bot_defense(defense_context, planner_now)
                 for order in self.bot_orders.get('orders', ()):
                     attempt = order.get('route_attempt') or {}
                     if attempt.get('action') in ('skip_parking', 'skip_gate',

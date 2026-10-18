@@ -54,6 +54,24 @@ def _record_hard_contact(trace, reason, start, end, collision,
         trace.update(reason=reason, ray_start=vector(start), ray_end=vector(end),
                      hit=vector(collision[0]), normal=vector(collision[1]),
                      ground_ahead=ground_ahead, profile=list(heights))
+        if 'position' in trace and 'yaw' in trace:
+            import math
+            from .tank_collision import pose_axes
+            axes = pose_axes(trace['yaw'], trace.get('pitch', 0.), trace.get('roll', 0.))
+            delta = tuple(trace['hit'][i] - trace['position'][i] for i in range(3))
+            local = tuple(sum(axis[i]*delta[i] for i in range(3)) for axis in axes)
+            travel = trace.get('motion_yaw')
+            if travel is None:
+                travel = trace['yaw'] + (math.pi if trace.get('speed', 0.) < 0. else 0.)
+            distance = abs(trace.get('speed', 0.))*trace.get('dt', 0.)
+            outward = distance*(math.sin(travel)*trace['normal'][0] +
+                                math.cos(travel)*trace['normal'][2])
+            trace['contact_geometry'] = dict(local_hit=local,
+                signed_normal_displacement=outward,
+                relation='inward' if outward < -1.e-8 else
+                         'outward' if outward > 1.e-8 else 'tangent',
+                lateral_bounds=trace.get('lateral_bounds'),
+                extents=trace.get('extents'), distance=distance, observed_only=True)
     except Exception:
         trace['reason'] = reason
 

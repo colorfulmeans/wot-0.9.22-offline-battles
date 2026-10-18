@@ -2505,21 +2505,27 @@ class BotPlanner(object):
                                for contact in self._contacts_for_bot(bot, contacts, now))
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
+            own_id = str((route or {}).get('id') or '')
+            knows_own = any(self._nearest_route(contact, catalog) == own_id
+                            for contact in self._contacts_for_bot(bot, contacts, now))
+            own_score = pressure.get(own_id, 0.0) - counts.get(own_id, 0) * 0.45
             if isinstance(assignment, dict) and _number(assignment.get('until')) > 0.0:
-                own_id = str((route or {}).get('id') or '')
                 assignment['_lease_observation'] = dict(
                     evaluated_at=_number(now), target_route=target_route,
                     own_route=own_id, own_pressure=pressure.get(own_id, 0.0),
                     target_pressure=pressure[target_route],
                     own_contributors=counts.get(own_id, 0),
                     target_contributors=counts[target_route],
-                    knows_target=knows_target, until=_number(assignment['until']),
+                    knows_target=knows_target, knows_own=knows_own, own_score=own_score,
+                    until=_number(assignment['until']),
                     outcome=('no_target_contact' if not knows_target else
                              'different_pressure_target'))
-            if not knows_target:
-                continue
+            # Another lane winning this evaluation does not end a still
+            # needed deployment. Preserve its cursor rather than expire to
+            # the default lane and borrow the same hull back six seconds later.
+            # Donor scoring below can still make a real reassignment.
             if (isinstance(route, dict) and
-                    str(route.get("id") or "") == target_route and
+                    knows_own and own_score > 0.0 and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
                 assignment['_lease_observation'].update(
