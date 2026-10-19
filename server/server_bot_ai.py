@@ -1588,10 +1588,10 @@ class BotPlanner(object):
                            if current is not None else None)
             hit = self._recent_hit(bot_id, now) if now is not None else None
             lease = self._target_assignments.get(bot_id) or {}
-            occasion = round(_number(lease.get('until')), 3)
+            reads = self._target_decisions.get(bot_id, {}).get('target_capabilities', {})
             if (hit is not None and current_key == hit.get('attacker') and
                     bot_id in current.get('shootable_by_bot_ids', ()) and
-                    self._capable(bot, bot_gunnery.CAPABILITY_TARGET_RETALIATION, occasion)):
+                    reads.get(bot_gunnery.CAPABILITY_TARGET_RETALIATION, True)):
                 decision = self._target_decisions.setdefault(bot_id, {})
                 decision['base_priority'] = dict(reason='recent_attacker_override',
                     contributors=sorted(contributor_keys), selected=current_key)
@@ -2120,6 +2120,7 @@ class BotPlanner(object):
                 (capability, self._capable(bot, capability, occasion))
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
+            observation['target_capabilities'] = dict(reads)
             known = set(id(contact) for contact in self._contacts_for_bot(bot, contacts, now))
             for contact in contacts:
                 row = dict(target=(contact.get('target_kind'), contact['id']),
