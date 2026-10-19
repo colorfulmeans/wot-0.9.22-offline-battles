@@ -371,7 +371,7 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         self.assertEqual(order['fire_allowed'],evidence['final']['fire_allowed'])
         self.assertIn('retreat_before',evidence)
         self.assertIn('retreat_after',evidence)
-        self.assertEqual('low_health_or_empty_magazine_only',evidence['withdrawal']['reason'])
+        self.assertEqual('empty_magazine_only',evidence['withdrawal']['reason'])
         p.reset(4)
         self.assertEqual({},p._target_decisions)
 

@@ -20025,7 +20025,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
 
-    def test_low_health_support_withdraws_without_losing_limited_traverse_fire(self):
+    def test_low_health_support_keeps_facing_and_firing_without_retreat(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(
                 reload_time=8.0, clip=(1,),
@@ -20074,9 +20074,9 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('low_health_retreat', order['combat_mode'])
-        self.assertIsNone(order['throttle_override'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': -120.0},
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
                          order['move_position'])
         runtime.apply_snapshot({
             'bot_order_revision': payload['revision'],
@@ -20110,7 +20110,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(max(abs(value) for value in yaws), 0.001)
         self.assertTrue(runtime.states[11]['gun_aligned'])
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
-        self.assertLess(runtime.states[11]['z'], -1.0)
+        self.assertAlmostEqual(0.,runtime.states[11]['z'])
 
     def test_non_close_support_target_still_uses_engage_hold(self):
         planner = BotPlanner()

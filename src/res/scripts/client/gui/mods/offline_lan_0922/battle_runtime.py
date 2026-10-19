@@ -22259,8 +22259,9 @@ class BattleRuntime(object):
                                 distance, descriptor, step, now):
         """Preview a local action through its authoritative, non-committing sweep.
 
-        Rotations prove the next physical slice, not an invented complete turn
-        while the hull is still translating. Straight local exits prove their
+        Rotations prove the requested stationary arc, not only its first frame.
+        This is a candidate proof, not a committed moving-body prediction.
+        Straight local exits prove their
         requested displacement, with the actual front/rear body envelope.
         """
         state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
@@ -22287,10 +22288,24 @@ class BattleRuntime(object):
             if distance is None:
                 cap = max(float(params['rotSpd']),
                     abs(getattr(self._bots,'_turn_speeds',{}).get(bot_id,0.)))
-                checked = max(-cap*dt, min(cap*dt, delta))
-                receipt['checked_yaw'] = body_yaw+checked
-                clear = self._resolve_bot_rotation(bot_id, position, body_yaw,
-                    body_yaw+checked, descriptor, dt, now, cap, commit_enabled=False)
+                # The native sweep owns at most sixteen five-degree slices.
+                # Cover even a wrapped half-turn with <= three sixty-degree
+                # chunks instead of truncating or exceeding that native bound.
+                chunks = max(1, int(math.ceil(abs(delta)/(math.pi/3.0))))
+                clear = True
+                receipt.update(proof_scope='requested_rotation_arc',
+                               requested_delta=delta, checked_chunks=0,
+                               planned_chunks=chunks)
+                for index in range(chunks):
+                    first = body_yaw+delta*index/chunks
+                    last = body_yaw+delta*(index+1)/chunks
+                    receipt['checked_yaw'] = last
+                    receipt['checked_chunks'] = index+1
+                    clear = self._resolve_bot_rotation(bot_id, position, first,
+                        last, descriptor, max(dt,abs(last-first)/max(.001,cap)),
+                        now, cap, commit_enabled=False)
+                    if clear is not True:
+                        break
                 receipt['trace'] = state.get('_rotation_contact_trace')
                 status = 'commit_required' if clear is None else 'clear' if clear else 'hard'
             else:

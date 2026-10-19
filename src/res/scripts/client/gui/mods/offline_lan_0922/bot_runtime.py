@@ -7433,6 +7433,7 @@ class BotRuntime(object):
                 rear_hull_aim=state.get('_rear_hull_aim'),
                 rear_aim_episode=state.get('_rear_aim_episode'),
                 rear_motion_lease=state.get('_rear_motion_lease'),
+                rear_motion_observation=state.get('_rear_motion_observation'),
                 rear_approach=state.get('_rear_approach_receipt'),
                 rear_motion_blocked=state.get('_rear_motion_blocked', False),
                 clip=state.get('clip'),
@@ -14405,6 +14406,27 @@ class BotRuntime(object):
             state.pop('_rear_aim_episode', None)
             state.pop('_rear_hull_aim', None)
         lease = state.get('_rear_motion_lease')
+        episode = state.get('_rear_aim_episode')
+        observation = dict(at=now, incoming_mode=order.get('combat_mode'),
+            requested_move=order.get('move_position'),
+            lease_before=dict(lease) if lease is not None else None,
+            reason='no_movement_lease')
+        state['_rear_motion_observation'] = observation
+        # A stationary laying episode can precede a new movement order. Seed
+        # its movement budget before the episode temporarily replaces that
+        # order with engage/current-position; otherwise later creation sees
+        # only the hold and no movement lease is ever installed.
+        position = _position(state)
+        if (lease is None and episode is not None and not blocked_approach and
+                order.get('movement_intent', True) and
+                _distance(position, _point(order.get('move_position'), position)) > 1.5 and
+                not order.get('parking_phase') and order.get('combat_mode') not in
+                ('base_defense', 'support_hold', 'cover_hold', 'hold',
+                 'artillery_deploy', 'artillery_relocate')):
+            lease = dict(start=now, origin=position,
+                         source='existing_laying_received_movement')
+            state['_rear_motion_lease'] = lease
+            observation['reason'] = 'existing_laying_received_movement'
         motion_blocked = False
         if lease is not None:
             position = _position(state)
@@ -14418,10 +14440,15 @@ class BotRuntime(object):
             retry_until = lease.get('retry_until')
             if completed or (retry_until is not None and now >= retry_until):
                 state.pop('_rear_motion_lease', None)
+                observation['reason'] = 'movement_completed_or_hold' if completed else 'retry_elapsed'
             elif retry_until is not None or now - lease['start'] >= 8.0:
                 if retry_until is None:
                     lease['retry_until'] = now + max(8.0, _number(state.get('reload_time')))
                 motion_blocked = True
+                observation['reason'] = 'movement_budget_exhausted'
+            elif observation['reason'] == 'no_movement_lease':
+                observation['reason'] = 'movement_budget_active'
+        observation['lease_after'] = dict(state.get('_rear_motion_lease') or {})
         state['_rear_motion_blocked'] = motion_blocked or blocked_approach
         episode = state.get('_rear_aim_episode')
         if episode is None:
@@ -15308,11 +15335,9 @@ class BotRuntime(object):
         if not callable(probe) or state.get('airborne'):
             return None
         step = self._local_sweep_step
+        # pose_clear asks about the requested arc, not just the next frame.
+        # Distinct recovery fractions must retain distinct native proofs.
         checked_yaw = float(sample_yaw)
-        if distance is None:
-            cap = max(float(self._physics_params_for(state['id'])['rotSpd']),
-                abs(self._turn_speeds.get(state['id'],0.)))*max(.001,float(step))
-            checked_yaw = state['yaw']+max(-cap,min(cap,_angle_delta(sample_yaw,state['yaw'])))
         key = (state['id'],tuple(position),state['yaw'],checked_yaw,distance)
         cache = self._local_sweep_cache
         reused = key in cache
@@ -15640,17 +15665,20 @@ class BotRuntime(object):
                 except Exception:
                     planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
                     return True
+                native_rotation_refused = now < state.get('_native_rotation_refused_until', 0.0)
                 if (callable(self.rotation_resolver) and callable(pose_probe) and
-                        (not current_grid_clear or not candidate_grid_clear)):
+                        (not current_grid_clear or not candidate_grid_clear or native_rotation_refused)):
                     # A coarse missing cell can reject either the current or
-                    # candidate hull. Verify the next actual rotation slice
-                    # through the same non-committing native collision owner.
+                    # candidate hull. A recent realised refusal also disproves
+                    # the coarse-only shortcut. Verify the requested arc with
+                    # the same non-committing native collision owner.
                     proof = self._planning_local_sweep(state, position, sample_yaw, None, now)
                     if proof is not None:
                         self._record_planning_verdict(planning_receipt, dict(
                             kind='local_sweep', action='rotation', yaw=sample_yaw,
                             coarse_current_clear=current_grid_clear,
                             coarse_candidate_clear=candidate_grid_clear,
+                            recent_native_rotation_refusal=native_rotation_refused,
                             native_sweep=proof, clear=proof['clear']))
                         planning_reason[0] = proof['reason']
                         return bool(proof['clear'])

@@ -444,6 +444,9 @@ whose profile changed after it started must be restarted first.
   hull resumes travel when it leaves the existing arrival area. Intermediate
   points, explicit waits, cover, withdrawal and collision checks keep their
   own owners. `tactical_evidence.route_terminal` records the decision and release.
+- Low health does not trigger Bot withdrawal. Combat withdrawal is reserved
+  for a fired, empty reloadable magazine; a loaded magazine keeps fighting,
+  and ammunition recovery releases the withdrawal owner.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's

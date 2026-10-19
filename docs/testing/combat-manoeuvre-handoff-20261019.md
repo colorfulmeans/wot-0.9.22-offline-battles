@@ -626,3 +626,56 @@ delivery -> dead-player presentation without new LOS. CI includes it explicitly.
 These are engine-free contracts and shipped-data replays, not native gameplay
 acceptance. The user's new package test must confirm escape behavior and
 postmortem enemy rendering on the exact Windows client.
+
+
+## 040013 follow-up: empty-magazine withdrawal and rotation proof scope
+
+Baseline: `8fcb8fcf`, report `wot-error-report-20261020-040013-afe60b71198a.zip`.
+The requested policy now removes low-health withdrawal for every vehicle.
+Delete both focused and targetless producers, retire an existing non-magazine
+retreat state, and retain the fired/empty/reloadable magazine predicate, cover,
+reload completion, attacker priority, finite-traverse aiming and base defense.
+Health fraction remains diagnostic data, not a movement trigger.
+
+Emil 10 behind wreck 2 had a rear-laying episode with no movement lease while
+an incoming movement order was rewritten to engage/current-position. Install
+that lease before rewriting an existing episode's new movement order. Target
+changes retain its start, the existing eight-second budget and retry cooldown;
+arrival, real departure, explicit holds and cooldown expiry still release it.
+`rear_motion_observation` records incoming movement, before/after lease, clock
+and seed/active/exhausted/completed/retry-expired outcomes. Removing low-health
+withdrawal also removes this report's retreat-versus-laying contention source.
+Do not remove legitimate finite-traverse rear laying.
+
+VK 18's requested 12.175/24.351/36.526/48.701-degree recovery poses all received
+one 1.872-degree cached native check. Keep each requested arc as its own cache
+key and prove the complete stationary arc through the existing read-only
+rotation resolver. Split longer arcs into at most three sixty-degree chunks,
+below its sixteen five-degree native-slice bound, stopping on the first hard
+or commit-required result. Diagnostics distinguish requested/checked extent,
+chunk counts, full proof and provisional commit requirements. The actual
+moving-body physics commit is unchanged; no teleport or elapsed-time dropping.
+
+Panther 5's baked-pose acceptance contradicted a realised native rotation at
+03:59:15.087. For the existing two-second native-refusal lifetime, recheck
+candidate arcs even when the coarse pose is green. Keep the normal green-grid
+fast path outside this condition and current coarse-missing native review.
+Unknown native proof retains the previous safe commit/coarse-refusal behavior.
+The report does not prove that all of VK's requested arc was physically blocked.
+It does record a later private replan and successful short reverse movements.
+
+Panther 5's 67-to-773-metre strategic turnback came from pressure donor ranking
+without transfer distance, followed one minute later by radio-knowledge loss.
+Do not change that strategy in this fix. M40/M43 did align and then travel about
+96 metres during defense; sparse motion-triggered log rows are not continuous
+immobility. Other intentional firing/artillery holds are not removed.
+
+Coverage replaces retired low-health policy expectations, keeps magazine
+retreat endpoint and completion checks, and adds independent recovery-fraction
+proofs, a clear-first-frame/blocked-later-arc case, signed/wrapped/half-turn
+coverage, bounded chunks, native-refusal fast-path expiry, and an inherited
+rear episode across enemy changes, budget expiry and arrival. These are source
+and adapter contracts; native Windows motion and performance need playtesting.
+No pressure policy, slope ranking, grid, support, collision-damage, crushing or
+test-arrangement change. One invalid point still enables detailed support;
+all five valid points restore basic support.

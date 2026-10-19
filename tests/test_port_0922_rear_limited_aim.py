@@ -119,6 +119,28 @@ class RearLimitedAimTests(unittest.TestCase):
 
 
 class RearTraverseRuntimeTests(unittest.TestCase):
+    def test_existing_hold_acquires_movement_budget_before_replacing_order(self):
+        state=self.state
+        state.update(x=0.,y=0.,z=0.)
+        targets={2:dict(id=2,alive=True,position=(0.,0.,-20.)),
+                 3:dict(id=3,alive=True,position=(0.,0.,-20.))}
+        for now,target_id in ((1.,2),(4.,3),(7.,2),(9.1,3)):
+            state['_rear_aim_episode']=dict(identity=('bot',target_id),
+                target_id=target_id,start=now-.1,fire_seq=state.get('fire_seq',0))
+            order=dict(combat_mode='magazine_reload_retreat',target_id=target_id,
+                       move_position=(0.,0.,20.))
+            result=self.runtime._rear_laying_order(state,order,targets,now)
+            self.assertEqual(1.,state['_rear_motion_lease']['start'])
+            if now<9.:
+                self.assertEqual('engage',result['combat_mode'])
+            else:
+                self.assertIs(order,result)
+                self.assertTrue(state['_rear_motion_blocked'])
+        state['z']=20.
+        self.runtime._rear_laying_order(state,order,targets,9.2)
+        self.assertNotIn('_rear_motion_lease',state)
+        self.assertFalse(state['_rear_motion_blocked'])
+
     def test_switching_rear_enemies_cannot_renew_stationary_movement_budget(self):
         state=self.state
         state['_rear_motion_lease']=dict(start=0.,origin=(0.,0.,0.))

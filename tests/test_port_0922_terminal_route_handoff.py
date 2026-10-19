@@ -102,13 +102,13 @@ class TerminalRouteHandoffTests(unittest.TestCase):
                 self.assertIn(order['combat_mode'],('advance','base_capture','route'))
                 self.assertNotIn(order['tactical_evidence']['route_terminal']['outcome'],('hold','base_capture'))
 
-    def test_low_health_and_empty_magazine_retain_withdrawal_ownership(self):
-        for state in (dict(health=10),dict(clip=0,clip_size=4,fire_seq=1,reload_time=25.)):
-            with self.subTest(state=state):
-                scene=self.scene();scene[2][0].update(state)
-                order=self.order(scene)
-                self.assertIn(order['combat_mode'],('low_health_retreat','low_health_defend',
-                                                   'magazine_reload_retreat','magazine_reload_hold'))
+    def test_only_empty_magazine_retains_withdrawal_ownership(self):
+        scene=self.scene();scene[2][0].update(health=10)
+        order=self.order(scene)
+        self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+        scene=self.scene();scene[2][0].update(clip=0,clip_size=4,fire_seq=1,reload_time=25.)
+        order=self.order(scene)
+        self.assertIn(order['combat_mode'],('magazine_reload_retreat','magazine_reload_hold'))
 
     def test_single_point_automatic_goal_keeps_existing_precise_arrival(self):
         scene=self.scene((8.,-250.))
