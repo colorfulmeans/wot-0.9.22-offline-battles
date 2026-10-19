@@ -7212,7 +7212,7 @@ class BotRuntime(object):
         write_json_record('BOT ROUTE CONNECTION', dict(
             round=self.round_id, bot=state['id'], team=state.get('team'),
             vehicle=state.get('vehicle'), at=now, position=_position(state),
-            gun_orientation=dict(hull_yaw=state['yaw'],
+            gun_orientation=dict(hull_yaw=state.get('yaw'),
                 turret_yaw=state.get('turret_yaw'), gun_pitch=state.get('gun_pitch'),
                 previous_aim=dict(state.get('_diagnostic_aim_intent') or {}),
                 freshness='previous_executed_aim_before_current_control'),
