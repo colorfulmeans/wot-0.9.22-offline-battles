@@ -97,6 +97,7 @@ jobs:
           --pattern 'test_port_0922_near_goal_evidence.py'
           --pattern 'test_port_0922_worker_query_reuse.py'
           --pattern 'test_port_0922_unknown_water.py'
+          --pattern 'test_port_0922_railway_obstacles.py'
           --pattern 'test_port_0922_radio_routes.py'
           --pattern 'test_port_0922_shot_geometry.py'
           --pattern 'test_port_0922_tactical_geometry.py'
@@ -200,6 +201,8 @@ jobs:
               --client-scripts /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_navigation.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client --water-only
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_railway_filter.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_control_projection.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \

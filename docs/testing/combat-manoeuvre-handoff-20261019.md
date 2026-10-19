@@ -381,3 +381,40 @@ retry lifecycle. They do not publish a global wall or change path ranking.
 Mixed/unknown refusals do not authorize this feedback. Record rejection kinds
 and the original rotation contact for unresolved stalls. Preserve support,
 collision, wreck progress, C, avoidance, target priority and retry policies.
+
+## Solid railway stock (report 004112)
+
+The October 16 navigation rollback also removed the October 15 railway raster
+exception. Restore this object classification without restoring later driver
+strategies: exact rw004_Carriage and rw005_locomotive resource families remain
+solid in the compiled raster, the first Python planning ray, the native query
+callback, and the exact kinetic gate. Tracks, signs, fences, houses and trucks
+keep their existing rules. Ordinary original materials remain planning-soft;
+intact or damaged railway identities cannot authorize a crush-through route.
+Native shot/destruction presentation is not a navigation permission.
+
+Fixed baked chunk/item identities are indexed once with the catalog so cold
+planning does not depend on streaming or scan the resource list per ray. The
+C++ oracle delegates original-material classification to its existing owner
+callback instead of returning false based on material number alone. It keeps
+hard-material fast paths and the existing synchronous owner/lifetime guards.
+The crush-gate receipt distinguishes solid_railway_vehicle from energy rejects.
+
+The railway repair tool samples exact compiled railway triangles against the
+existing vehicle clearance law, masking only blocked nodes and crossing links
+in the retained main and local grids. It preserves all route points, unrelated
+geometry and directed ingress links. Validation must check every default route
+segment and both base connectivity, plus all baked/streamed railway identities
+and the real compiled host callback. Ship the rebuilt native bridge with the
+matching Python and graph data; real Ensk traffic remains Windows acceptance.
+
+Validation on the pinned client resources: eleven maps, 990 default route
+segments and base connections pass the existing strict validator. Original
+waypoint arrays remain byte-equivalent as data; two old waypoint cells now
+occupied by railway stock use the existing adjacent-cell projection (4 m),
+without a new runtime fallback. Editor/default-profile identities are rebuilt.
+An optional full native navigation-state comparison still fails at frame 0/0;
+rebuilding the parent filter produces the exact same failure text/state. The
+current CI's water/grid subset (63 checks), actual native railway callback and
+native aim parity pass. This pre-existing full-state mismatch is not claimed
+as passed and is not repaired by changing driver/navigation policy here.

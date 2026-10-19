@@ -721,7 +721,17 @@ class CompiledSpace0922Test(unittest.TestCase):
                             self.assertGreaterEqual(row, 0)
                             self.assertLess(row, data['height'])
                             index = row * data['width'] + column
-                            self.assertIsNotNone(data['heights_mm'][index])
+                            if data['heights_mm'][index] is None:
+                                # A former waypoint cell may now be occupied by
+                                # solid railway stock. Existing projection must
+                                # still find support within the arrival radius.
+                                removed=data['bake']['railway_obstacles']['layers'][0]['removed_node_indices']
+                                self.assertIn(index,removed)
+                                from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+                                grid=TerrainGrid(lambda *a:None,baked_graph=data)
+                                safe=grid._nearest_baked_cell((column,row),3)
+                                self.assertIsNotNone(safe)
+                                self.assertLessEqual(math.hypot(safe[0]-column,safe[1]-row)*data['cell_size'],12.)
                             self.assertEqual(0, data['hazards'][index] & 3)
                         if (route.get('terminal_hold', False) or
                                 route['id'] == 'rear_guard'):

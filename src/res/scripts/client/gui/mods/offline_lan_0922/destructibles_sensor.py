@@ -12,6 +12,8 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
     current as current_combat, count as combat_count)
 
+from gui.mods.offline_lan_0922.scenery_policy import railway_vehicle_resource
+
 import sys as _sys
 from contextlib import contextmanager
 from gui.mods.offline_lan_0922 import native_destructibles as _native_geometry
@@ -1768,6 +1770,8 @@ def set_catalog(catalog):
 		'has_instance_index': catalog_version >= 4,
 		'fixed_native_slots': catalog_version >= 10,
 		'baked_instances': baked_instances,
+		'railway_instances': frozenset(key for key, value in baked_instances.items()
+			if railway_vehicle_resource(value.get('filename'))),
 		'baked_shot_bins': baked_shot_bins,
 		'tree_instances': tree_instances,
 		'tree_resources': tree_resources,
@@ -3866,26 +3870,27 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 		allow_overlaps=allow_overlaps)
 
 
+def _railway_identity_1513(identity):
+	catalog = _destructible_catalog or {}
+	if identity in catalog.get('railway_instances', ()):
+		return True
+	instance = globals().get('g_offh_destr_instances', {}).get(identity) or {}
+	return railway_vehicle_resource(instance.get('filename'))
+
+
 def prepare_navigation_collision_filter(start, end):
-	"""Ignore original destructible materials in the FIRST planning query.
+	"""Skip ordinary original props, retaining exact railway stock identities.
 
-	The pinned #1513 callback supplies (material, flags, item, chunk). Its
-	71--85 materials belong to original destructibles; 86 is an exclusive
-	sentinel and 87--100 are damaged replacements. This contract is sufficient
-	for route planning:
-	no catalog lookup, streamed identity, kinetic test or per-object recast
-	is needed. Native traversal keeps searching the entire segment for real
-	terrain, hard scenery and replacement geometry, even inside a prop.
-
-	Physical hull/suspension/destruction queries retain their existing exact
-	identity and kinetic rules. This callback cannot authorize crushing.
+	Use fixed baked chunk/item identities before streaming, with the existing
+	registered identity when available. No ray-time catalog scan or recast is
+	introduced. Material-only filtering cannot distinguish a train from a fence.
 	"""
 	def keep_surface(*surface):
 		if (len(surface) != 4 or
 				not all(type(value) in _INTEGER_TYPES for value in surface)):
 			return True
 		if _DESTRUCTIBLE_MAT_KIND_MIN_1513 <= surface[0] < _STRUCTURE_MAT_KIND_MAX_1513:
-			return False
+			return _railway_identity_1513((surface[3], surface[2]))
 		return True
 	return keep_surface
 
@@ -3928,6 +3933,8 @@ def _soft_static_original_filter_1513(excluded_keys):
 				not 71 <= surface[0] <= 86):
 			return True
 		identity = (surface[3], surface[2])
+		if _railway_identity_1513(identity):
+			return True
 		return (identity + (surface[0],) not in excluded_keys and
 			identity + (None,) not in excluded_keys)
 	return keep_original
@@ -3966,6 +3973,8 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 			excluded_keys=excluded_keys)
 		if candidate == 'deferred':
 			return 'deferred'
+		if candidate is not None and candidate != 'deferred' and railway_vehicle_resource(candidate[3]):
+			return current_hit
 		if candidate is None:
 			return current_hit
 		mat_info = _synthetic_mat_info(candidate + ((
@@ -4068,6 +4077,8 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			trace['objects'].append({
 				'identity': tuple(candidate[:3]), 'model': candidate[3],
 				'kind': candidate[4], 'scale': candidate[5]})
+		if railway_vehicle_resource(candidate[3]):
+			return finish(False, 'hard', 'solid_railway_vehicle', current_hit)
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
 		# whatever the hide callback still draws.  A broken skin therefore never
@@ -7796,7 +7807,8 @@ def _crush_gate_diagnostic_1513(candidate, speed, cap, td,
 			json.dumps(dict(identity=key, resource=candidate[3],kind=candidate[4],
 				sampled_at=now,descriptor_found=bool(desc),descriptor_type=desc.get('type'),
 				kinetic_correction=correction,
-				gate=('physical_speed' if physical else 'directional_cap' if kinetic else 'energy_rejected'),
+				gate=('solid_railway_vehicle' if railway_vehicle_resource(candidate[3]) else
+					'physical_speed' if physical else 'directional_cap' if kinetic else 'energy_rejected'),
 				health=health, scaled_health=scaled, scale=candidate[5], mass=mass,
 				speed=speed, cap=cap, physical=bool(physical),
 				kinetic=bool(kinetic), hull_contact=bool(contact),
@@ -7812,6 +7824,8 @@ def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 	if decoded is None or td is None:
 		return False
 	unused_hit, unused_normal, chunkID, itemIndex, matKind, fname = decoded
+	if railway_vehicle_resource(fname) or _railway_identity_1513((chunkID, itemIndex)):
+		return False
 	import AreaDestructibles
 	import DestructiblesCache
 	desc = _runtime_material_descriptor_1513(
