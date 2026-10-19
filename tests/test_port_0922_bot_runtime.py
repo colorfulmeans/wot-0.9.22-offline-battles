@@ -21608,13 +21608,13 @@ class BotRuntimeTests(unittest.TestCase):
 
 
     def test_rejected_candidate_pose_uses_native_sweep_when_current_pose_is_valid(self):
-        for native_clear in (False, True):
+        for native_clear in (False, True, None):
             observed = []
             class PoseAdapter(_FixedAdapter):
                 def decide(self, state, clear):
                     observed.append(state['pose_clear'](.5))
                     return dict(self.command)
-            proof = mock.Mock(return_value=dict(clear=native_clear, proved=True,
+            proof = mock.Mock(return_value=None if native_clear is None else dict(clear=native_clear, proved=True,
                 status='clear' if native_clear else 'hard',
                 source='authoritative_body_sweep',reason='local_sweep_clear' if native_clear else 'local_sweep_blocked'))
             runtime = self.module.BotRuntime(1,
@@ -21630,7 +21630,7 @@ class BotRuntimeTests(unittest.TestCase):
             runtime.update(.04,1.)
             self.assertTrue(proof.called)
             self.assertTrue(observed)
-            self.assertTrue(all(value is native_clear for value in observed))
+            self.assertTrue(all(value is bool(native_clear) for value in observed))
 
 
 class ShovedWreckTests(unittest.TestCase):

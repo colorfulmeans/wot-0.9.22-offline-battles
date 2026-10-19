@@ -15602,6 +15602,11 @@ class BotRuntime(object):
                             native_sweep=proof, clear=proof['clear']))
                         planning_reason[0] = proof['reason']
                         return bool(proof['clear'])
+                    if current_grid_clear:
+                        # An unknown native query does not clear a rejected
+                        # candidate. Retain the existing coarse refusal.
+                        planning_reason[0] = 'coarse_candidate_rejected_native_sweep_unavailable'
+                        return False
                     planning_reason[0] = 'coarse_baked_pose_missing_defer_native_commit'
                     return True
                 if not callable(pose_probe):

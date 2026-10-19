@@ -463,7 +463,11 @@ support switching. It does not introduce a slope preference or rerank routes.
   poses failed. Candidate rejection now invokes the existing authoritative,
   noncommitting next-rotation-slice sweep, just as an invalid current pose did.
   Native rejection and the final real collision commit remain authoritative;
-  missing/exceptional coarse probes still defer to real commit. Logs retain
+  missing/exceptional coarse probes still defer to real commit. A valid current
+  coarse pose with a rejected candidate cannot be cleared by an unavailable
+  native precheck: retain the old candidate rejection in that case. The first
+  CI pass exposed this missing-query regression in the fixed recovery-alley
+  fixtures; unchanged tests pass again after completing this branch. Logs retain
   both coarse results, native proof, candidate outcomes, handoff and retirement.
 * Pressure evaluation changes from four seconds to sixty seconds. Assignment
   renewal, radio-loss release, expiry and return are evaluated at the same
