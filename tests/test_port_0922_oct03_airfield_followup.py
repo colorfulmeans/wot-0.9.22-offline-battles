@@ -216,18 +216,19 @@ class FiringHoldTests(unittest.TestCase):
 
     def order(self, now, mode='support_hold'):
         order = dict(combat_mode=mode, throttle_override=0.,
-                     target_id=6, target_kind='bot', fire_allowed=True)
+                     target_id=6, target_kind='bot', fire_allowed=True,
+                     aim_position=dict(x=-90.,y=1.1,z=300.))
         self.planner._release_unproductive_firing_hold(
             order, self.bot, self.goal, self.anchor, now)
         return order
 
-    def test_ready_unfired_hold_resumes_a_route_leg_with_a_finite_lease(self):
+    def test_ready_unfired_hold_keeps_combat_approach_with_a_finite_lease(self):
         self.assertEqual('support_hold', self.order(1.)['combat_mode'])
         moved = self.order(9.)
-        self.assertEqual('route', moved['combat_mode'])
-        self.assertEqual(self.goal, moved['move_position'])
-        self.assertTrue(moved['fire_allowed'])
-        self.assertEqual('route', self.order(10.)['combat_mode'])
+        self.assertEqual('advance_contact', moved['combat_mode'])
+        self.assertEqual(dict(x=-90.,y=1.1,z=300.), moved['move_position'])
+        self.assertFalse(moved['fire_allowed'])
+        self.assertEqual('advance_contact', self.order(10.)['combat_mode'])
         self.assertEqual('support_hold', self.order(13.)['combat_mode'])
 
     def test_reloading_shots_and_deliberate_cover_holds_do_not_trigger(self):
@@ -251,7 +252,7 @@ class FiringHoldTests(unittest.TestCase):
         first = self.planner._order_for(bot, 0, 1, focus, [focus], 1.)
         self.assertEqual('engage', first['combat_mode'])
         moved = self.planner._order_for(bot, 0, 1, focus, [focus], 9.)
-        self.assertEqual('route', moved['combat_mode'])
+        self.assertEqual('advance_contact', moved['combat_mode'])
         self.assertGreater(moved['move_position']['z'], 0.)
         self.planner._order_for(bot, 0, 1, None, [], 10.)
         self.assertNotIn(20, self.planner._firing_holds)
