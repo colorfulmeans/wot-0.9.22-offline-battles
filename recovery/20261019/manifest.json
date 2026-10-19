@@ -1,0 +1,475 @@
+{
+  "date": "2026-10-19",
+  "source_commit": "361d9461c5f825b7b50b5dbe96a586b4df4f6a1c",
+  "source_branch": "fix/navigation-action-and-route-lease-handoffs",
+  "version": "0.10.1",
+  "build": "colorfulmeans-39210645307-1",
+  "windows_package": "Windows400",
+  "source_pr": "https://github.com/colorfulmeans/wot-0.9.22-offline-battles/pull/93",
+  "independent_test_branch": "test/roof-crush-entry",
+  "independent_test_commit": "5672c1622c03cea19cb3099e6471ecc1f22c713d",
+  "report": "wot-error-report-20261019-153057-d9aff0365f39.zip",
+  "scope": "Recovery snapshot only; no gameplay changes. Not intended to merge into main.",
+  "restored_paths": {
+    "bot_tactics": "%LOCALAPPDATA%/WoTOfflineBattles/bot_tactics",
+    "saves": "%APPDATA%/Wargaming.net/WorldOfTanks/offline_lan_0922/saves",
+    "vehicle_profiles.json": "%APPDATA%/Wargaming.net/WorldOfTanks/offline_lan_0922/vehicle_profiles.json"
+  },
+  "excluded_machine_fields": [
+    "game_root",
+    "folders",
+    "join_address",
+    "name"
+  ],
+  "amx49_audit": {
+    "round": 1,
+    "bot": 17,
+    "vehicle": "france:F74_AMX_M4_1949_Liberte",
+    "finding": "Route endpoint chasing retains movement ownership inside the capture circle; hull face-to-enemy intent does not acquire control before driver arrival.",
+    "selected_enemy_during_turning": 8,
+    "route_endpoint": [
+      2.0,
+      0.0,
+      -250.0
+    ],
+    "arrival_radius": 1.5,
+    "proposed_fix": "Explicit terminal route/capture arrival handoff, retaining enemy target and native collision/LOS. Do not globally enlarge local waypoint arrival radii.",
+    "gameplay_fix_applied": false,
+    "samples": [
+      {
+        "time": "2026-10-19 15:28:48.374",
+        "position": [
+          0.6098676416519595,
+          1.1000003814697266,
+          -251.95513698293763
+        ],
+        "yaw": 2.2806737275198086,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "route",
+          "movement_intent": true,
+          "target_yaw": 0.6180806068440877,
+          "brake": true,
+          "move_position": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": 0.6180806068440877,
+          "face_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "face_override": false,
+          "aim_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": null,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.3989640672125017,
+            "rotation_refused": false,
+            "objective_age": 0.0,
+            "translation_age": 2.738006591796875,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 2.3989640672125017,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:28:51.420",
+        "position": [
+          0.6098676416519595,
+          1.1000003814697266,
+          -251.95513698293763
+        ],
+        "yaw": 0.9874809313447293,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "route",
+          "movement_intent": true,
+          "target_yaw": 0.6180806068440877,
+          "brake": true,
+          "move_position": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": 0.6180806068440877,
+          "face_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "face_override": false,
+          "aim_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": null,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.3989640672125017,
+            "rotation_refused": false,
+            "objective_age": 0.0,
+            "translation_age": 5.878997802734375,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 2.3989640672125017,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:28:57.328",
+        "position": [
+          3.895151847505288,
+          1.1000003814697266,
+          -248.40366079137343
+        ],
+        "yaw": -0.5280365478097515,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "advance",
+          "movement_intent": true,
+          "target_yaw": -2.2450902315876746,
+          "brake": true,
+          "move_position": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": -2.2450902315876746,
+          "face_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "face_override": false,
+          "aim_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": 1.0,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.477882037971385,
+            "rotation_refused": false,
+            "objective_age": 0.0,
+            "translation_age": 2.6300048828125,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 2.477882037971385,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:29:06.378",
+        "position": [
+          -2.1714671661130485,
+          1.1000001430511475,
+          -251.27096142203246
+        ],
+        "yaw": 2.4211183958530356,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "advance",
+          "movement_intent": true,
+          "target_yaw": 2.1250533190451244,
+          "brake": true,
+          "move_position": [
+            0.4814455807209015,
+            1.1000006198883057,
+            -252.91305541992188
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": 2.1250533190451244,
+          "face_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "face_override": false,
+          "aim_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            0.4814455807209015,
+            1.1000006198883057,
+            -252.91305541992188
+          ],
+          "stop_at_target": false,
+          "throttle_override": 1.0,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 3.1200030032387,
+            "rotation_refused": false,
+            "objective_age": 2.81500244140625,
+            "translation_age": 2.81500244140625,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 4.360789063260684,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:29:11.416",
+        "position": [
+          -0.5439117505423007,
+          1.1000001430511475,
+          -252.39768147708017
+        ],
+        "yaw": 0.8077995906390331,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "advance",
+          "movement_intent": true,
+          "target_yaw": -0.5457626399771371,
+          "brake": true,
+          "move_position": [
+            -2.0,
+            1.1000006198883057,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": -0.5457626399771371,
+          "face_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "face_override": false,
+          "aim_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            -2.0,
+            1.1000006198883057,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": 1.0,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.8051861713159307,
+            "rotation_refused": false,
+            "objective_age": 7.75799560546875,
+            "translation_age": 2.73699951171875,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 3.4957636447678406,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:29:16.486",
+        "position": [
+          2.9562109012383933,
+          1.1000003814697266,
+          -248.01711941870312
+        ],
+        "yaw": -0.45931665392000237,
+        "decision": {
+          "recovery_mode": "drive",
+          "combat_mode": "advance",
+          "movement_intent": true,
+          "target_yaw": -2.6922592189909675,
+          "brake": true,
+          "move_position": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": -2.6922592189909675,
+          "face_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "face_override": false,
+          "aim_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": 1.0,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.201398348171317,
+            "rotation_refused": false,
+            "objective_age": 0.0,
+            "translation_age": 2.947021484375,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 2.201398348171317,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      },
+      {
+        "time": "2026-10-19 15:29:19.533",
+        "position": [
+          2.9562109012383933,
+          1.1000003814697266,
+          -248.01711941870312
+        ],
+        "yaw": -1.7875939707051307,
+        "decision": {
+          "recovery_mode": "avoid",
+          "combat_mode": "advance",
+          "movement_intent": true,
+          "target_yaw": -2.2722592189909676,
+          "brake": true,
+          "move_position": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "traffic_mode": null
+        },
+        "control": {
+          "driver_target_yaw": -2.2722592189909676,
+          "face_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "face_override": false,
+          "aim_position": [
+            202.09239721122165,
+            1.202048897743225,
+            -95.63260189747022
+          ],
+          "strategic_move_position": [
+            2.0,
+            0.0,
+            -250.0
+          ],
+          "local_target": [
+            2.0,
+            1.0999999046325684,
+            -250.0
+          ],
+          "stop_at_target": false,
+          "throttle_override": 1.0,
+          "driver_throttle": 0.0,
+          "arrival": {
+            "local_distance": 2.201398348171317,
+            "rotation_refused": false,
+            "objective_age": 2.51800537109375,
+            "translation_age": 5.897003173828125,
+            "recovery_time_before": 0.0,
+            "retained_recovery": false,
+            "goal_distance": 2.201398348171317,
+            "arrival_radius": 1.5,
+            "objective_stalled": false
+          }
+        },
+        "path_clear": true,
+        "rotation_blocked": false
+      }
+    ]
+  }
+}
