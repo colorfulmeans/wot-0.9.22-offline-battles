@@ -438,6 +438,12 @@ whose profile changed after it started must be restarted first.
   shared contacts to route, take cover, pick targets and choose ammunition,
   including SPG arcs. Navigation and foliage data ship for all 41 supported
   standard-battle maps.
+- Completing the final macro-route point hands travel over to a stationary
+  engagement or capture hold. The Bot keeps its selected enemy and existing
+  firing-lane permission instead of circling the base coordinate; a displaced
+  hull resumes travel when it leaves the existing arrival area. Intermediate
+  points, explicit waits, cover, withdrawal and collision checks keep their
+  own owners. `tactical_evidence.route_terminal` records the decision and release.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's

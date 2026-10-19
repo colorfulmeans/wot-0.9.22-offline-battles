@@ -785,6 +785,7 @@ class BotPlanner(object):
                     order, bot, team_order_by_bot.get(bot["id"]),
                     players, defense, route_point, turnback_point)
                 self._apply_authored_route_order(order, bot, route_point, now)
+                self._handoff_route_terminal(order, bot, capture_targets[team], now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
                 evidence = order['tactical_evidence']
                 evidence['retreat_after'] = dict(self._retreat_states.get(bot['id']) or {})
@@ -3087,6 +3088,79 @@ class BotPlanner(object):
             point=dict(point), anchor=dict(anchor), route_join=route_join,
             outcome='preserve_passed_screen' if requested_limit < previous_index else 'normal_progress')
         return route_id, index, point, anchor, route_join
+
+    def _handoff_route_terminal(self, order, bot, capture_target, now):
+        """Retire completed macro travel, without consuming local path corners."""
+        route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
+        points = route.get('waypoints') or []
+        route_state = self._route_states.get(bot['id'])
+        evidence = dict(at=now, route_id=order.get('route_id'),
+            route_index=order.get('route_index'), terminal_index=len(points)-1,
+            input_mode=order.get('combat_mode'), outcome='no_route')
+        order['tactical_evidence']['route_terminal'] = evidence
+        if not points or route_state is None:
+            return
+        capture = order.get('combat_mode') == 'base_capture'
+        goal = _point(capture_target['point'] if capture and capture_target else points[-1])
+        pose = bot['state']
+        position = _point(pose)
+        distance = math.hypot(goal['x']-position['x'], goal['z']-position['z'])
+        # Match the existing macro arrival, including the precise automatic
+        # one-point goal. No LocalDriver or intermediate-waypoint radii change.
+        arrival = 1.5 if len(points) <= 1 else ROUTE_ARRIVAL_RADIUS
+        inside_capture = bool(capture_target and math.hypot(
+            capture_target['point']['x']-position['x'],
+            capture_target['point']['z']-position['z']) <= capture_target['radius'])
+        evidence.update(goal=goal, distance=distance, arrival_radius=arrival,
+                        inside_capture=inside_capture)
+        previous = route_state.get('terminal_hold')
+        if previous is not None and (previous['goal'] != goal or distance > arrival):
+            route_state.pop('terminal_hold', None)
+            evidence['released'] = 'goal_changed' if previous['goal'] != goal else 'outside_arrival'
+        if distance > arrival:
+            evidence['outcome'] = 'outside_arrival'
+            return
+        if (order.get('team_command') or order.get('parking_phase') or
+                route_state.get('holding') or
+                order.get('combat_mode') not in ('route', 'advance', 'base_capture')):
+            evidence['outcome'] = 'tactical_owner'
+            return
+        if (not capture and (order.get('route_index') != len(points)-1 or
+                route_state.get('index') != len(points)-1)):
+            evidence['outcome'] = 'intermediate_point'
+            return
+        requested = order.get('move_position') or {}
+        if math.hypot(_number(requested.get('x'))-goal['x'],
+                      _number(requested.get('z'))-goal['z']) > 0.01:
+            # Cover, shot-lane repositioning and explicit goals have separate
+            # arrival owners; being near the old lane end cannot cancel them.
+            evidence['outcome'] = 'different_destination'
+            return
+        if (not pose.get('world_pose') or pose.get('airborne') or
+                pose.get('route_wreck_blocked') or capture and not inside_capture):
+            evidence['outcome'] = 'physical_or_capture_not_arrived'
+            return
+        hold = route_state.get('terminal_hold')
+        if hold is None:
+            hold = dict(goal=goal, position=position, arrived_at=now)
+            route_state['terminal_hold'] = hold
+        order['move_position'] = dict(hold['position'])
+        order['throttle_override'] = 0.0
+        order['route_join'] = False
+        if order.get('target_id') is not None:
+            # Target selection and launch permission were already decided.
+            # Keep both, even while reloading or a native lane is obstructed.
+            order['combat_mode'] = 'engage'
+            self._apply_stationary_angling(order, bot, bot['profile'], order['personality'])
+        else:
+            order['combat_mode'] = 'base_capture' if capture else 'hold'
+            # No enemy requires a hull turn back toward the base coordinate.
+            # The turret may retain its existing route/capture aiming intent.
+            order['face_position'] = position
+        evidence.update(outcome=order['combat_mode'], arrived_at=hold['arrived_at'],
+                        hold_position=dict(order['move_position']),
+                        target_id=order.get('target_id'),
+                        fire_allowed=order['fire_allowed'])
 
     def _wait_place_occupied(self, bot_id, place, radius, height):
         """Physical occupancy includes humans, with distinct identity domains."""
