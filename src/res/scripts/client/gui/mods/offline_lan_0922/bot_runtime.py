@@ -152,6 +152,7 @@ _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'health', 'alive', 'combat_base_revision', 'combat_seq',
     'death_reason', 'display_health', 'world_pose', 'route_wreck_blocked', 'ram_motion',
     'stun_end_server_time_ms', 'local_combat_manoeuvre',
+    'aim_feedback_kind', 'aim_feedback_id', 'aim_feedback_aligned',
 )
 _PUBLICATION_EDGE_MISSING = object()
 
@@ -166,6 +167,23 @@ def _order_evidence(order):
         result[key] = dict(value) if isinstance(value, dict) else (
             tuple(value) if isinstance(value, (list, tuple)) else value)
     return result
+
+
+def _aim_feedback_record(state):
+    """Publish the executed gun solver's target, not the next route order."""
+    intent = state.get('_diagnostic_aim_intent') or {}
+    kind = intent.get('target_kind')
+    target_id = int(intent.get('target_id') or 0)
+    valid = kind in ('human', 'bot') and target_id > 0 and state.get('alive', True)
+    error = max(abs(_angle_delta(intent.get('turret_yaw', 0.0),
+                                 state.get('turret_yaw', 0.0))),
+                abs(_number(intent.get('gun_pitch')) -
+                    _number(state.get('gun_pitch')))) if valid else 0.0
+    return dict(aim_feedback_kind=kind if valid else '',
+                aim_feedback_id=target_id if valid else 0,
+                aim_feedback_error=min(math.pi, error),
+                aim_feedback_aligned=bool(valid and state.get('gun_aligned') and
+                                           not intent.get('planning_pending')))
 # The server never assigns a visible target beyond 560 metres. Keep a
 # conservative 25-metre broad-phase margin for the advisory roster scan; the
 # selected target's independent 0.20-second final-fire check does not use this
@@ -7221,6 +7239,7 @@ class BotRuntime(object):
         Emit at most once per three seconds per hull; movement resets the timer.
         """
         position = _position(state)
+        self._record_execution_window(state, command, throttle, turn, now)
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and
                  (position[0] - previous[0][0]) ** 2 +
@@ -7356,6 +7375,9 @@ class BotRuntime(object):
             'control_arbitration': dict(command.get('control_trace') or {}),
             'tactical_order': dict(command.get('order_evidence') or {}),
             'target_execution': dict(state.get('_target_execution_evidence') or {}),
+            'lane_publication': dict(state.get('_lane_publication_evidence') or {}),
+            'execution_window': dict(state.get('_execution_window') or {}),
+            'previous_execution_window': dict(state.get('_previous_execution_window') or {}),
             'planner_blocked_handoff': dict(state.get('_planner_blocked_handoff') or {}),
             'planner_blocked_last_replan': dict(state.get('_planner_blocked_last_replan') or {}),
             'friendly_reposition': dict(self._friendly_repositions.get(int(state['id'])) or {}),
@@ -7495,6 +7517,41 @@ class BotRuntime(object):
             yaw=state.get('yaw'),observed_only=True)
         if closest <= ai_driver.WAYPOINT_ARRIVAL_RADIUS and old['entered_arrival_at'] is None:
             old['entered_arrival_at'] = now
+
+    @staticmethod
+    def _record_execution_window(state, command, throttle, turn, now):
+        """Bounded, query-free history across every cached/early-return action.
+
+        Sample at the common applied-control boundary. Never renew a driver or
+        route timer: this receipt only correlates repeated commands with motion.
+        """
+        position = _position(state)
+        row = state.get('_execution_window')
+        if row is None or now - row['started_at'] >= 8.0 or now < row['last_at']:
+            if row is not None:
+                state['_previous_execution_window'] = dict(row)
+            row = dict(started_at=now, last_at=now, origin=position,
+                last_position=position, samples=0, travel=0.0, net=0.0,
+                forward=0, reverse=0, turning=0, held=0,
+                command_modes={}, last_control_at=None, first_decision=None,
+                last_decision=None, last_goal=None)
+            state['_execution_window'] = row
+        trace = command.get('control_trace') or {}
+        planning = command.get('planning_receipt') or {}
+        mode = str(command.get('recovery_mode') or command.get('combat_mode') or 'unspecified')
+        row['command_modes'][mode] = row['command_modes'].get(mode, 0) + 1
+        row['travel'] += math.hypot(position[0]-row['last_position'][0],
+                                   position[2]-row['last_position'][2])
+        row.update(last_at=now, last_position=position,
+            net=math.hypot(position[0]-row['origin'][0], position[2]-row['origin'][2]),
+            samples=row['samples']+1, forward=row['forward']+int(throttle > 0.01),
+            reverse=row['reverse']+int(throttle < -0.01),
+            turning=row['turning']+int(abs(turn) > 0.01),
+            held=row['held']+int(abs(throttle) <= 0.01),
+            last_control_at=trace.get('sampled_at'), last_decision=planning.get('id'),
+            last_goal=command.get('move_position'))
+        if row['first_decision'] is None:
+            row['first_decision'] = planning.get('id')
 
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
@@ -13004,17 +13061,15 @@ class BotRuntime(object):
                 continue
             key = (int(source.get('team', 0)),
                    target_kind, int(target_id))
-            if not team_visibility.get(key, False):
+            if not (team_visibility.get(key, False) or (
+                    self._team_spot_time_left(key, now) > 0.0 and
+                    key in self._visible_target_poses)):
                 continue
             entry = aggregate.get(key)
             if entry is not None:
                 entry[1].add(int(source_id))
-                if (self._combat_diagnostics is not None and
-                        self._combat_diagnostics.active):
-                    selected = self._selected_visibility_target(source)
-                    self._combat_diagnostics.receipt_published(
-                        lane_key, sample[0],
-                        selected == (target_kind, int(target_id)))
+                # This is only a merge, not publication. Count delivery after
+                # every observation/radio/mechanical filter has run below.
         return True
 
     @staticmethod
@@ -13157,6 +13212,12 @@ class BotRuntime(object):
         """
         packed = []
         incoming_by_target = {}
+        selected_by_target = {}
+        for source_id, source in self.states.items():
+            selected = self._selected_visibility_target(source)
+            if selected is not None and source.get('alive', True):
+                selected_by_target.setdefault(
+                    (int(source.get('team', 0)),) + selected, set()).add(source_id)
         maximum_age = SHOT_LANE_REFRESH_SECONDS + self._control_seconds
         for lane_key, receipt in tuple(self._incoming_lanes.items()):
             source = self.states.get(lane_key[0])
@@ -13203,7 +13264,7 @@ class BotRuntime(object):
                 observed_target.update(remembered)
             fresh = bool(
                 visible and (visible_by_players or visible_by_bots))
-            if not fresh:
+            if not visible:
                 shootable = ()
             if not visible:
                 visible_by_players = ()
@@ -13232,6 +13293,46 @@ class BotRuntime(object):
                 radio_values = tuple(self._radio_network.contact(
                     actor, key[1:], now)[:2] for actor in radio_keys)
             radio_values = dict(zip(radio_keys, radio_values))
+            published_shooters = []
+            # A radio observation's 0.5-second *direct spotting* freshness is
+            # not a firing-lane lifetime. At low worker FPS it expired between
+            # two valid lane samples and silently removed ready shooters.
+            # Keep the established spotted/radio lease and the independent
+            # native lane and final-fire checks as separate proofs.
+            selected_sources = selected_by_target.get(key, set())
+            for actor in sorted(set(shootable) | selected_sources):
+                actor_key = ('bot', int(actor))
+                radio = radio_values.get(actor_key)
+                if radio is None:
+                    radio = self._radio_network.contact(actor_key, key[1:], now)[:2]
+                source = self.states.get(int(actor), {})
+                lane = self._shot_los_cache.get((int(actor),) + key[1:])
+                rejected = self._gun_angle_rejected(source, key[1:], now)
+                reason = ('not_visible' if not visible else
+                          'source_dead' if not source.get('alive', True) else
+                          'lane_expired' if lane is not None and now-lane[0] > maximum_age else
+                          'native_blocked' if lane is not None and not lane[1] else
+                          'no_local_lane' if actor not in shootable else
+                          'radio_lease_expired' if radio[0] <= 0.0 else
+                          'mechanical_refusal' if rejected else 'published')
+                evidence = dict(at=now, target=key[1:], reason=reason,
+                    visible=visible, direct_fresh=fresh,
+                    radio_time_left=radio[0], radio_direct_fresh=bool(radio[1]),
+                    lane_sampled_at=lane[0] if lane is not None else None,
+                    lane_clear=bool(lane[1]) if lane is not None else None,
+                    lane_age=now-lane[0] if lane is not None else None,
+                    mechanical_refusal=bool(rejected))
+                if actor in selected_sources:
+                    source['_lane_publication_evidence'] = evidence
+                diagnostic = self._combat_diagnostics
+                if diagnostic is not None:
+                    diagnostic.count('lane_publication_' + reason)
+                if reason != 'published':
+                    continue
+                published_shooters.append(actor)
+                if diagnostic is not None and lane is not None:
+                    diagnostic.receipt_published((int(actor),) + key[1:],
+                        lane[0], actor in selected_sources)
             packed.append({
                 'observing_team': key[0], 'target_kind': key[1],
                 'target_id': key[2],
@@ -13252,10 +13353,7 @@ class BotRuntime(object):
                 # Current clients always publish this field. An empty list
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
-                'shootable_by_bot_ids': sorted(
-                    actor for actor in shootable
-                    if not self._gun_angle_rejected(
-                        self.states.get(int(actor), {}), key[1:], now) and radio_values[('bot', int(actor))][1]),
+                'shootable_by_bot_ids': published_shooters,
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
                     incoming_by_target.get(key, ()))) if fresh else [],
@@ -13272,6 +13370,12 @@ class BotRuntime(object):
                     observed_target.get(
                         'armor', profile.get('armor', 0.0)))),
             })
+        for key, actors in selected_by_target.items():
+            if key not in aggregate:
+                for actor in actors:
+                    self.states[actor]['_lane_publication_evidence'] = dict(
+                        at=now, target=key[1:], reason='no_observation_row',
+                        visible=False, lane_clear=None)
         return packed
 
     @classmethod
@@ -17156,6 +17260,7 @@ class BotRuntime(object):
             if burst_state is not None:
                 burst_state.publish(state)
             self._publish_equipment_state(state)
+            state.update(_aim_feedback_record(state))
             try:
                 row = observed_call(
                     'bot.wire_projection', bot_state_codec.encode_row, state)

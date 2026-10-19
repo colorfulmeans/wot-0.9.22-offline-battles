@@ -1411,7 +1411,7 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                         for value in connection.payloads]
             self.assertEqual([relay], payloads)
 
-    def test_memory_contact_rejects_freshness_and_shooter_mismatches(self):
+    def test_memory_contact_keeps_independent_lane_but_rejects_false_freshness(self):
         server, unused_authority_socket, unused_guest_socket = self._server()
         bad_time = self._message(server.round_id)
         bad_time['contacts'][0]['time_left'] = 0.0
@@ -1420,12 +1420,20 @@ class ServerBotObservationRelayTests(unittest.TestCase):
             'fresh': False,
             'visible_by_bot_ids': [],
             'shootable_by_bot_ids': [11],
+            'radio_recipients': [{'kind': 'bot', 'id': 11, 'time_left': 4.0}],
         })
 
         self.assertFalse(server.update_bot_observation(
             SIMULATION_WORKER_AUTHORITY_ID, bad_time))
+        relay = server.update_bot_observation(
+            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter)
+        self.assertIsInstance(relay, dict)
+        self.assertEqual([11], relay['contacts'][0]['shootable_by_bot_ids'])
+        self.assertFalse(relay['contacts'][0]['fresh'])
+        false_freshness = copy.deepcopy(remembered_shooter)
+        false_freshness['contacts'][0]['fresh'] = True
         self.assertFalse(server.update_bot_observation(
-            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter))
+            SIMULATION_WORKER_AUTHORITY_ID, false_freshness))
 
     def test_valid_first_hidden_observation_is_a_noop_not_a_rejection(self):
         server, authority_socket, guest_socket = self._server()
@@ -7176,7 +7184,7 @@ class BotRuntimeTests(unittest.TestCase):
             'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
             'gun_pitch', 'speed', 'push_x', 'push_z', 'movement_dir', 'rotation_dir',
             'reload_time', 'burst_time_left', 'siege_time_left_ms',
-            'combat_fire_elapsed', 'combat_fire_timer'))
+            'combat_fire_elapsed', 'combat_fire_timer', 'aim_feedback_error'))
         represented = set(('critical', 'equipment_states', 'ammo_remaining',
                            'shot_yaw', 'shot_pitch'))
         codec = self.module.bot_state_codec

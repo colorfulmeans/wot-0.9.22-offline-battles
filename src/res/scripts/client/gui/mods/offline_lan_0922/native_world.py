@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Keep live engine effects on the caller while C++ runs the world law."""
+from .worker_diagnostics import observed
 
+@observed('motion.world_bridge')
 def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
         return_status=False, allow_kinetic=False, kinetic_speed=None,
         commit_enabled=True, motion_yaw=None, pitch=0.0, roll=0.0,
@@ -48,6 +50,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
     def xyz(v):
         return (v.x, v.y, v.z)
+    @observed('motion.world_dispatch')
     def dispatch(op, rows):
         if query is not None:
             query._live()

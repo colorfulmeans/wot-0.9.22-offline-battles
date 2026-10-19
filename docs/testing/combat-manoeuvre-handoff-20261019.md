@@ -231,3 +231,60 @@ support reuse/invalidation/roof exclusions. CPython 2.7 compilation, relevant
 regressions and independently inspected launcher payloads are delivery evidence;
 next-report exact-client behavior and frame pacing remain the acceptance boundary.
 Support still opens with one failed point and closes with all five restored.
+
+## Follow-up: report 202110, lane delivery and capture defence
+
+The authority now keeps three separate facts: the team's existing spot-memory
+lease, the recipient's radio lease, and that shooter's native firing-lane
+receipt. A direct observer's 0.5-second freshness no longer silently erases
+an otherwise valid local lane in the worker packer or server admission/relay.
+This does not refresh visibility from a ray or expose unobserved positions.
+Invisible contacts, expired radio/lanes, dead sources and mechanical refusals
+still exclude launch; the independent native final-fire gate is unchanged.
+Positive-publication counters run after all filters, rather than at the earlier
+merge. Selected-pair receipts retain publication time, lane sample/time/age,
+direct and radio freshness, remaining lease, mechanical result and terminal
+inclusion/exclusion reason, including the absence of an observation row.
+
+The gun solver's actual target identity, remaining angular error and alignment
+are published through an optional atomic codec group and admitted on both normal
+and contained state paths. Ordinary score changes do not interrupt a first aim
+while it makes new one-degree improvements. A shot releases that commitment;
+six seconds without new aim progress also releases it. Immediate close-threat
+and existing learned recent-attacker overrides remain unchanged. A visible
+tracking target briefly missing a lane can survive two seconds even if another
+enemy has a lane, always movement-only; persistent blockage still releases it.
+Death, knowledge/range loss and exhausted weapons keep their existing exits.
+
+Capture priority already existed after ordinary selection. This change repairs
+that owner rather than adding another one: it retains a current valid capturer,
+does not zero/recreate its lease every tick, and records the final override in
+the tactical diagnostic. Proved in-range capturers take precedence over ordinary
+targets; the existing recent-attacker response remains an explicit exception.
+A blocked capturer never grants fire. Defender retention recognises a firing
+window outside the circle, and no-approach accounting credits actual new shots,
+decreasing post-shot reload and new aim progress toward a proved capturer.
+Possessing a target/positive ray alone cannot renew it forever. Stopped or
+non-progressing defenders still use the original ten-second replacement rule.
+The base incident receipt retains every combat-credit reason and input.
+
+T28 Concept and Sturer Emil have completed search jobs and positive short-egress
+proofs in this report; that does not prove their repeated local actions actually
+escape. No navigation law is changed. Bounded eight-second execution windows
+record every applied-command observation, accumulated travel versus net travel,
+forward/reverse/turn/hold counts, modes, decision identity and sample time.
+The previous window survives rollover beside the current motion/physics receipt.
+The original driver retry clock and route-switch rules are retained.
+
+The reported worker bottleneck remains world collision, ground sampling and
+vertical integration, not solely the native ray itself. Complete-column reuse
+had negligible hits in this scene. No wider world-answer cache or reduced
+physics interval is introduced. Additional world bridge/engine-dispatch and
+geometry-preparation timing separates callback/marshalling from the existing
+world/ray stages; it measures an unresolved cost rather than asserting an FPS
+gain. Support remains one failed point enables detailed / all five restore
+disables it. Damage, stacking, authored routes, C, avoidance and retry policy
+are unchanged. Focused tests cover positive/negative publication through relay,
+slow/blocked/dead/urgent target lifetimes, codec/server admission, base target
+override, combat progress and eventual idle replacement. Real Windows timing,
+native LOS and gameplay acceptance still require the next user test report.
