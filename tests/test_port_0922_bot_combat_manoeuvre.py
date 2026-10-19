@@ -176,6 +176,12 @@ class LocalActionFeedbackTests(unittest.TestCase):
         self.assertTrue(self.nav.bot_failed_edges[20])
         self.assertEqual({}, self.nav.grid._failed_edges)
         self.assertEqual(1, self.state['_planner_blocked_handoff']['hard_body_refusals'])
+        event = dict(self.state['_planner_blocked_last_replan'])
+        self.runtime._report_blocked_planner(self.position,
+            dict(self.command, recovery_mode='drive'), {}, self.state, 11.25, [])
+        self.assertEqual(event, self.state['_planner_blocked_last_replan'])
+        self.assertEqual(11.25, self.state['_planner_blocked_handoff']['at'])
+        self.assertNotEqual(event['at'], self.state['_planner_blocked_handoff']['at'])
         self.assertTrue(self.nav.bot_segment_penalized(20, self.position, self.goal, 11.3))
         self.nav.request_replan(20, self.position, 11.4)
         self.assertTrue(self.nav.bot_segment_penalized(20, self.position, self.goal, 11.5))

@@ -92,6 +92,11 @@ The existing bounded `BOT MOTION` record now carries:
 - `planner_blocked_handoff`: decision time, target, hard body refusal count,
   global direction review result, private replan result and reason. Nonblocked
   decisions replace the prior reason instead of presenting it as current.
+- `planner_blocked_last_replan`: a separately timestamped terminal event with
+  original/target pose, refusal expiry, replan count and wall witness. It survives
+  subsequent nonblocked decisions so the three-second stall record cannot miss
+  the short transition. The navigation snapshot also carries the live blocked
+  counter, contact episode and point-refusal provenance/expiry.
 - `friendly_reposition`: the active marker, including origin, destination,
   blocker identity and position, shot identity, side, start and deadline.
 - `friendly_reposition_event`: timestamped start, arrival, timeout, retry wait,

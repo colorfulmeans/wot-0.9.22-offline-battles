@@ -7253,7 +7253,9 @@ class BotRuntime(object):
         navigation = {key: nav_state.get(key) for key in (
             'navigation_status', 'index', 'last_target', 'planned_goal',
             'planned_at', 'pending_since', 'macro_progress_at',
-            'macro_progress_replans', 'blocked_step_replans', 'replan_active')}
+            'macro_progress_replans', 'blocked_step_replans', 'replan_active',
+            'blocked_step_tracker', 'hard_contact_episode',
+            'local_target_retired', 'local_target_retired_source')}
         navigation['path_near_target'] = tuple(path[max(0, index - 1):index + 6])
         navigation['path_length'] = len(path)
         navigation['grid'] = prebaked_navigation.graph_summary(self.baked_graph)
@@ -7350,6 +7352,7 @@ class BotRuntime(object):
             'tactical_order': dict(command.get('order_evidence') or {}),
             'target_execution': dict(state.get('_target_execution_evidence') or {}),
             'planner_blocked_handoff': dict(state.get('_planner_blocked_handoff') or {}),
+            'planner_blocked_last_replan': dict(state.get('_planner_blocked_last_replan') or {}),
             'friendly_reposition': dict(self._friendly_repositions.get(int(state['id'])) or {}),
             'friendly_reposition_event': dict(state.get('_friendly_reposition_event') or {}),
             'local_combat_manoeuvre': bool(state.get('local_combat_manoeuvre')),
@@ -7804,11 +7807,23 @@ class BotRuntime(object):
             if callable(feedback):
                 private = bool(feedback(state['id'], position, target, heading, now))
         if state is not None:
+            nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
             state['_planner_blocked_handoff'] = dict(at=now,
                 target=target, hard_body_refusals=len(hard),
                 static_refusal=static_refusal, reviewed=reviewed,
+                tracker=dict(nav_state.get('blocked_step_tracker') or {}),
+                retired=nav_state.get('local_target_retired'),
                 private_replan=private, reason=('hard_body_refusal' if hard else
                     'static_direction_refusal' if static_refusal else 'no_hard_evidence'))
+            if private:
+                trace = hard[0].get('trace') or {}
+                state['_planner_blocked_last_replan'] = dict(at=now,
+                    origin=position, target=target, heading=heading,
+                    retired=nav_state.get('local_target_retired'),
+                    replan_count=nav_state.get('blocked_step_replans'),
+                    source=hard[0].get('source'),
+                    witness={key:trace.get(key) for key in (
+                        'reason', 'hit', 'normal', 'ray_start', 'ray_end')})
         return reviewed or private
 
     @observed('bot.corridor_hazards')
