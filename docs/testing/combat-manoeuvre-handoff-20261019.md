@@ -321,3 +321,39 @@ leaking the preceding drive sample. Preserve the Golden Type 59 pressure switch.
 
 Repair priority is repeating deadlocks, then permanent movement stalls, then
 prolonged stalls that escape, then combat-policy refinements.
+
+
+## Report 221844: combat ownership and mechanical arrival
+
+The reported WZ111-1G FT reached a checked gun-angle relocation. Arrival and
+stall previously shared a terminal path: reject the target for eight seconds,
+remove its published firing lane and resume a route with no selected enemy.
+Arrival now keeps the enemy and returns to an aiming hold. Only failed local
+attempts retain the existing retry cooldown. That cooldown bounds movement
+attempts, never the independent native lane or final ballistic/fire gate.
+Failed movement and blocked/expired lanes retain the selected known enemy and
+use the existing contact-approach/navigation owner instead of ordinary route
+travel. The idle-ready-fire release also approaches its combat target rather
+than a route point. Death, knowledge/range loss, original attacker priority,
+low-health/magazine tactics and base-defense travel remain separate lifetimes.
+
+A stationary engagement preempts retained contact escapes and wreck pushing;
+the existing hold path terminates the driver's pending recovery. Base defense
+and movement without an enemy keep their checked recovery owners. Real world
+collision/contact resolution still applies. Pressure may update the background
+route but does not steal a selected combat objective through these handoffs.
+No authored routes, C, avoidance, retries, slope or support law is changed.
+
+Tiger II's small-pocket movement alternated advance, lane reposition and route
+orders while firing three shots. That does not yet prove one defective driver
+transition. Keep navigation policy unchanged. Complete the existing control
+receipt with the action owner and objective progress, and preserve the previous
+credit reason/frontier/alignment when a changed order resets its clock.
+
+The worker profile still shows world bridging, ground and destructible scans
+as significant costs. Exact unfiltered world-ray reuse had no hits in this
+session. Do not broaden that cache or weaken filtered collision checks. Reuse
+one immutable collision-body preparation across all five synchronous reverse
+sweep samples; every native/vehicle check remains executed. This removes four
+redundant preparations per reverse assessment, not four collision checks.
+Native gameplay and end-to-end worker FPS remain Windows acceptance items.

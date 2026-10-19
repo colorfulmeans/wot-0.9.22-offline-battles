@@ -356,7 +356,8 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.manifest, self.states, players, 1.5)['orders'][0]
 
         self.assertEqual(2, leased['target_id'])
-        self.assertEqual('route', leased['combat_mode'])
+        self.assertEqual('advance_contact', leased['combat_mode'])
+        self.assertEqual(first['aim_position'], leased['move_position'])
         self.assertIsNone(leased['throttle_override'])
         self.assertEqual('stationary_lane_lost',
             leased['tactical_evidence']['blocked_hold_handoff']['reason'])

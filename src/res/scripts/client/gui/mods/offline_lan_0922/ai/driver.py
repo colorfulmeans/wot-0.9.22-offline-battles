@@ -1261,6 +1261,9 @@ class LocalDriver(object):
 					previous_order=progress.get('order_goal') if progress else None,
 					previous_goal=progress.get('goal') if progress else None,
 					previous_credit_age=state['clock']-progress['at'] if progress else None,
+					previous_credit_reason=progress.get('credit_reason') if progress else None,
+					previous_travel_best=progress.get('travel_best') if progress else None,
+					previous_alignment_best=progress.get('alignment_best') if progress else None,
 					new_order=tuple(pocket_goal))
 				progress = {'goal': tuple(progress_target), 'best': distance,
 				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
