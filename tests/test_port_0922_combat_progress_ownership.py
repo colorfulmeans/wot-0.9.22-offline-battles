@@ -71,6 +71,26 @@ class CombatProgressOwnershipTests(unittest.TestCase):
         self.drive(driver, (0., 0., 0.), identity=None, movement=False)
         self.assertNotIn('objective_progress', driver.states[19])
 
+    def test_adapter_current_pose_mechanical_hold_pauses_old_failed_approach(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        adapter = BotAdapter('01_karelia', 7)
+        state = dict(id=19, slot=0, position=(0., 0., 0.), yaw=0., speed=0.,
+                     dt=.1, now=1., neighbours=())
+        travel = dict(target_id=5, target_kind='bot', combat_mode='advance_contact',
+                      move_position=(0., 0., 100.), aim_position=(0., 0., 100.))
+        adapter.decide_with_order(dict(state), travel, lambda *args: True)
+        dr = adapter.driver.states[19]; progress = dr['objective_progress']
+        dr['clock'] = 20.; progress['at'] = 1.; dr['recovery_time'] = 1.3
+        hold = dict(travel, combat_mode='engage', move_position=(0., 0., 0.))
+        result = adapter.decide_with_order(dict(state), hold, lambda *args: True)
+        self.assertEqual('arrived', result['recovery_mode'])
+        self.assertEqual(0., result['throttle'])
+        self.assertFalse(result['movement_intent'])
+        self.assertTrue(result['control_trace']['mechanical_hold'])
+        self.assertIs(progress, dr['objective_progress'])
+        self.assertAlmostEqual(19., dr['clock']-progress['at'])
+        self.assertEqual(1.3, dr['recovery_time'])
+
     def test_recorded_vehicle_inputs_keep_one_episode_for_same_enemy(self):
         import json
         fixture = json.loads((ROOT / 'tests/fixtures/combat_progress_20261020.json').read_text())

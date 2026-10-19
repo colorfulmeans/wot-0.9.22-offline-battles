@@ -681,6 +681,17 @@ class BotAdapter(object):
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
+        # Rear/gun-angle laying expresses a real firing hold with a current
+        # pose goal, sometimes without an explicit pedal override. Pause its
+        # travel episode too; an aged approach must not move this hold away.
+        mechanical_hold = (contact_plan is None and
+            strategic.get('target_id') is not None and
+            strategic.get('combat_mode') == 'engage' and
+            throttle_override is None and
+            math.hypot(move_position[0]-position[0], move_position[2]-position[2]) <=
+            WAYPOINT_ARRIVAL_RADIUS)
+        if mechanical_hold:
+            movement_intent = False
         if strategic.get('combat_mode') not in (
                 'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
@@ -819,6 +830,7 @@ class BotAdapter(object):
             navigation_status=state.get('navigation_status'),
             hull_contact=state.get('_hull_contact_receipt'),
             combat_hold=bool(combat_hold),
+            mechanical_hold=bool(mechanical_hold),
             action_owner=('combat_hold' if combat_hold else
                 'base_defense' if strategic.get('combat_mode') == 'base_defense' else
                 'contact_recovery' if contact_plan is not None else
