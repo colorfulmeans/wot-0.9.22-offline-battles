@@ -750,3 +750,9 @@ Use a launcher built from the integration commit so its native module, client
 and server match. Version 0.10.1 ships this integration. Performance depends on the map, vehicle
 count and hardware; component benchmarks do not establish a universal
 frame-time improvement.
+
+## Pre-reinstall recovery snapshot (2026-10-19)
+
+This backup branch preserves Windows400 source at `361d9461c5f825b7b50b5dbe96a586b4df4f6a1c` and the independent `test/roof-crush-entry` branch remains available. It is a recovery snapshot, not a gameplay fix or a release. See `recovery/20261019/manifest.json` for version identity and the AMX M4 49 capture-turning audit.
+
+Close the launcher and game before restoring. Extract `recovery/20261019/player-data.zip`, then copy the saved `bot_tactics` directory to `%LOCALAPPDATA%/WoTOfflineBattles/bot_tactics`, and `saves` to `%APPDATA%/Wargaming.net/WorldOfTanks/offline_lan_0922/saves`. Restore `vehicle_profiles.json` beside `saves`. The launcher settings snapshot omits machine paths, join address and player name; select the installed game path and these fields after reinstalling. Use the saved slot IDs from the launcher settings snapshot. Do not copy stale room/worker endpoint files. Build the launcher with the existing Windows workflow from the original source commit if the existing Windows400 artifact has expired. The stock Chinese HD #1513 game client is not part of this backup.
