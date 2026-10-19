@@ -24,6 +24,7 @@ class WithdrawalGoalTests(unittest.TestCase):
         x = 160. if reached else 192.
         fixture.states = [_weapon_state(_state(11, 1, x, 128), reload_time=8.,
                                         reload_pending=True)]
+        fixture.states[0]['health'] = 200
         planner = BotPlanner()
         planner._route_assignments[11] = dict(route=fixture.route, until=0.)
         planner._route_states[11] = dict(route_id='lane', index=1, join_index=1,
@@ -35,7 +36,7 @@ class WithdrawalGoalTests(unittest.TestCase):
         for class_tag in ('AT-SPG', 'mediumTank', 'heavyTank'):
             with self.subTest(class_tag=class_tag):
                 order = self.order(class_tag)
-                self.assertEqual(order['combat_mode'], 'withdraw')
+                self.assertEqual(order['combat_mode'], 'low_health_retreat')
                 self.assertEqual(order['move_position'], dict(x=160., y=0., z=128.))
                 self.assertEqual(order['route_anchor'], dict(x=192., y=0., z=128.))
                 self.assertEqual(order['target_id'], 2)
@@ -47,7 +48,8 @@ class WithdrawalGoalTests(unittest.TestCase):
 
     def test_reached_retreat_point_uses_existing_engagement_hold(self):
         order = self.order(reached=True)
-        self.assertEqual(order['combat_mode'], 'engage')
+        self.assertEqual(order['combat_mode'], 'low_health_retreat')
+        self.assertEqual(order['tactical_phase'], 'low_health_defend')
         self.assertEqual(order['throttle_override'], 0.)
         self.assertEqual(order['move_position'], dict(x=160., y=0., z=128.))
         self.assertEqual(order['target_id'], 2)

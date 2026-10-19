@@ -457,7 +457,7 @@ class BotAdapter(object):
         Native motion still independently proves every realised movement.
         """
         if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
             return None
         if strategic.get('throttle_override') is not None:
@@ -640,7 +640,7 @@ class BotAdapter(object):
             throttle_override is not None and
             float(throttle_override) <= 0.0)
         if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
             self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])

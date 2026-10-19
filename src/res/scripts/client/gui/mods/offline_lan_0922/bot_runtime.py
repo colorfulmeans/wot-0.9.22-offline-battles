@@ -12925,11 +12925,11 @@ class BotRuntime(object):
 
     def _apply_blocked_direct_aim(self, source, command, target, now,
                                   probe_budget=None):
-        """A current native wall receipt also excludes direct gun laying.
+        """A current native wall receipt excludes launch, not target tracking.
 
         Keep the selected pair in the refresh queue before applying this local
-        overlay. Losing this gun target must not prevent a later clear lane
-        from being observed, or change the server's authored movement goal.
+        overlay. A blocked launch must neither discard the tracking target
+        nor change the server's authored movement goal.
         """
         evidence = dict(at=now, target_before=command.get('target_id'),
             fire_before=bool(command.get('fire_allowed')), lane=None,
@@ -12963,15 +12963,11 @@ class BotRuntime(object):
                 evidence['reason'] = 'fresh_lane_clear'
                 return command, target
         command = dict(command)
-        command['target_id'] = None
-        command.pop('target_kind', None)
         command['fire_allowed'] = False
-        command.pop('aim_position', None)
-        if not command.get('stable_hull_face'):
-            command.pop('face_position', None)
-        evidence.update(reason='current_lane_blocked', target_after=None,
-            fire_after=False, stable_hull_face=bool(command.get('stable_hull_face')))
-        return command, None
+        evidence.update(reason='current_lane_blocked',
+            tracking_retained=True, fire_after=False,
+            stable_hull_face=bool(command.get('stable_hull_face')))
+        return command, target
 
     def _refresh_shot_clear(self, source, target, now, observation_time,
                             probe_budget=None, lane_key=None,
@@ -16596,7 +16592,7 @@ class BotRuntime(object):
                     callable(self.cover_probe) and
                     (mode in ('take_cover', 'cover_hold', 'cover_peek',
                               'cover_return', 'under_fire_withdraw',
-                              'low_health_retreat', 'crossfire_withdraw') or
+                              'low_health_retreat', 'magazine_reload_retreat', 'crossfire_withdraw') or
                      (command.get('fire_allowed') and mode in (
                          'engage', 'advance_contact', 'jiggle_forward',
                          'jiggle_back')))):
