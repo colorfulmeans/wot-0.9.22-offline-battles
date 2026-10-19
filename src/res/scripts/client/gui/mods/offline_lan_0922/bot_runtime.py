@@ -151,7 +151,7 @@ _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'siege_state', 'siege_transition_total_ms',
     'health', 'alive', 'combat_base_revision', 'combat_seq',
     'death_reason', 'display_health', 'world_pose', 'route_wreck_blocked', 'ram_motion',
-    'stun_end_server_time_ms',
+    'stun_end_server_time_ms', 'local_combat_manoeuvre',
 )
 _PUBLICATION_EDGE_MISSING = object()
 
@@ -216,6 +216,8 @@ TRAFFIC_DIRECTION_SPEED_EPSILON = 0.02
 # Bound it so an unreachable lateral point cannot suppress the server order
 # forever; every metre still has to pass the ordinary native motion gate.
 FRIENDLY_REPOSITION_SECONDS = 4.0
+FRIENDLY_REPOSITION_MAX_SECONDS = 16.0
+FRIENDLY_REPOSITION_RETRY_SECONDS = 8.0
 # A final exact receipt costs nine native rays. Thirteen jobs per render frame
 # drains all 29 Bots within three frames even at the supported 24 FPS floor.
 # The complete dual-height, three-lane generic sweep remains authoritative
@@ -7347,6 +7349,10 @@ class BotRuntime(object):
             'control_arbitration': dict(command.get('control_trace') or {}),
             'tactical_order': dict(command.get('order_evidence') or {}),
             'target_execution': dict(state.get('_target_execution_evidence') or {}),
+            'planner_blocked_handoff': dict(state.get('_planner_blocked_handoff') or {}),
+            'friendly_reposition': dict(self._friendly_repositions.get(int(state['id'])) or {}),
+            'friendly_reposition_event': dict(state.get('_friendly_reposition_event') or {}),
+            'local_combat_manoeuvre': bool(state.get('local_combat_manoeuvre')),
             'spg_deployment': dict(
                 observed_at=now, initial=state.get('_spg_initial'),
                 progress=state.get('_spg_deployment_progress'),
@@ -7759,21 +7765,51 @@ class BotRuntime(object):
             return 1
         return 2
 
-    def _report_blocked_planner(self, position, command, samples):
+    def _report_blocked_planner(self, position, command, samples, state=None, now=None,
+                                verdicts=None):
         """Do not wait for movement when the driver already proved a wall."""
         report = getattr(self.navigator, 'report_blocked_plan', None)
         target = command.get('move_position')
-        if (not callable(report) or target is None or
+        if state is not None:
+            state['_planner_blocked_handoff'] = dict(at=now, target=target,
+                recovery_mode=command.get('recovery_mode'),
+                reason='no_blocked_movement', hard_body_refusals=0,
+                private_replan=False, reviewed=False)
+        if (target is None or
                 command.get('recovery_mode') != 'blocked' or
                 not command.get('movement_intent')):
             return False
-        if not any(isinstance(sample, dict) and
+        static_refusal = any(isinstance(sample, dict) and
                    sample.get('collision') and
                    not sample.get('deferred') and
                    not sample.get('probe_failed')
-                   for sample in samples.values()):
-            return False
-        return bool(report(position, target))
+                   for sample in samples.values())
+        reviewed = bool(static_refusal and callable(report) and report(position, target))
+        # A local driver may refuse every action before physical motion runs.
+        # Those authoritative body-sweep receipts are not direction samples.
+        # Feed them into the existing per-Bot retry/edge lifecycle, without
+        # publishing a rotation obstruction as a global translation wall.
+        heading = math.atan2(target[0]-position[0], target[2]-position[2])
+        proofs = [row.get('native_sweep') for row in
+            (verdicts if verdicts is not None else (state or {}).get('_planning_verdicts', ()))
+            if row.get('kind') == 'local_sweep' and row.get('yaw') is not None and
+            abs(_angle_delta(row['yaw'], heading)) <= 0.1]
+        hard = [proof for proof in proofs if isinstance(proof, dict) and
+            proof.get('clear') is False and proof.get('proved') is True and
+            proof.get('status') == 'hard' and
+            proof.get('source') == 'authoritative_body_sweep']
+        private = False
+        if hard and state is not None and now is not None:
+            feedback = getattr(self.navigator, 'report_blocked_local_action', None)
+            if callable(feedback):
+                private = bool(feedback(state['id'], position, target, heading, now))
+        if state is not None:
+            state['_planner_blocked_handoff'] = dict(at=now,
+                target=target, hard_body_refusals=len(hard),
+                static_refusal=static_refusal, reviewed=reviewed,
+                private_replan=private, reason=('hard_body_refusal' if hard else
+                    'static_direction_refusal' if static_refusal else 'no_hard_evidence'))
+        return reviewed or private
 
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
@@ -13510,6 +13546,9 @@ class BotRuntime(object):
         except (TypeError, ValueError, OverflowError):
             return False
         removed = self._friendly_repositions.pop(bot_id, None)
+        state = self.states.get(bot_id)
+        if state is not None:
+            state['local_combat_manoeuvre'] = False
         if removed is not None:
             self._decision_cache.pop(bot_id, None)
         return removed is not None
@@ -13517,6 +13556,9 @@ class BotRuntime(object):
     def _mark_friendly_reposition(
             self, state, command, target, launch, verdict, now):
         """Move laterally through the existing safe driver after a blocked shot."""
+        if command.get('combat_mode') in (
+                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+            return False
         try:
             bot_id = int(state['id'])
             source_team = int(state['team'])
@@ -13551,13 +13593,40 @@ class BotRuntime(object):
             blocker_radius = source_radius
         clearance = source_radius + blocker_radius + \
             tank_collision.POSITION_SLOP
+        identity = (target_id, blocker_kind, blocker_id, fire_seq)
+        active = self._friendly_repositions.get(bot_id)
+        if active is not None and active.get('identity') == identity and now < active['deadline']:
+            return True
+        retry = state.get('_friendly_reposition_retry')
+        if (retry is not None and retry['identity'] == identity and
+                _distance(_position(state), retry['origin']) < 2.0 and
+                _distance(blocker_position, retry['blocker_position']) < 2.0):
+            if now < retry['until']:
+                state['_friendly_reposition_event'] = dict(at=now,
+                    outcome='retry_wait', identity=identity, until=retry['until'])
+                return False
+        else:
+            retry = None
+            state.pop('_friendly_reposition_retry', None)
         side = 1.0 if ((bot_id + fire_seq) & 1) else -1.0
+        if retry is not None and retry['attempts'] % 2:
+            side = -side
         position = _position(state)
         destination = (
             position[0] + math.cos(shot_yaw) * clearance * side,
             position[1],
             position[2] - math.sin(shot_yaw) * clearance * side,
         )
+        # Fixed-gun vehicles must rotate the hull before translating sideways.
+        # Grant that measured angular travel in addition to the normal budget.
+        duration = FRIENDLY_REPOSITION_SECONDS
+        limits = self._gun_yaw_limits.get(bot_id)
+        if limits is not None and limits[2]:
+            params = self._physics_params_for(bot_id)
+            rate = max(0.1, abs(_number((params or {}).get('rotSpd'), 0.1)))
+            yaw = math.atan2(destination[0]-position[0], destination[2]-position[2])
+            duration = min(FRIENDLY_REPOSITION_MAX_SECONDS,
+                duration + abs(_angle_delta(yaw, state.get('yaw', 0.0))) / rate + 2.0)
         self._friendly_repositions[bot_id] = {
             'target_id': target_id,
             'target_kind': target.get('kind') if isinstance(target, dict)
@@ -13565,8 +13634,14 @@ class BotRuntime(object):
             'destination': destination,
             'shell_index': int(state.get('shell_index', 0)),
             'fire_range': max(0.0, _number(command.get('fire_range'))),
-            'deadline': _number(now) + FRIENDLY_REPOSITION_SECONDS,
+            'deadline': _number(now) + duration,
+            'started_at': now, 'origin': position, 'identity': identity,
+            'blocker_position': blocker_position, 'side': side,
+            'attempts': int(retry['attempts']) if retry is not None else 0,
         }
+        state['local_combat_manoeuvre'] = True
+        state['_friendly_reposition_event'] = dict(at=now, outcome='started',
+            marker=dict(self._friendly_repositions[bot_id]))
         # The next authority frame must run the safe LocalDriver for this new
         # destination; a cached hold command would otherwise remain stationary.
         self._decision_cache.pop(bot_id, None)
@@ -14237,23 +14312,51 @@ class BotRuntime(object):
         bot_id = int(state['id'])
         order = self._server_orders.get(bot_id) or {}
         if order.get('parking_phase') in ('waiting', 'queue'):
+            marker = self._friendly_repositions.get(bot_id)
+            if marker is not None:
+                state['_friendly_reposition_event'] = dict(at=now, outcome='parking_handoff',
+                    marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
             return None, False
         marker = self._friendly_repositions.get(bot_id)
         if marker is None:
             return None, False
+        selected_id = order.get('target_id')
+        if order.get('target_kind') == 'human' and selected_id is not None:
+            selected_id = self._human_planner_id(selected_id)
+        if selected_id is not None and selected_id != marker.get('target_id'):
+            state['_friendly_reposition_event'] = dict(at=now, outcome='target_changed',
+                next_target=selected_id, marker=dict(marker))
+            self._clear_friendly_reposition(bot_id)
+            return None, False
+        if order.get('combat_mode') in (
+                'base_defense', 'low_health_retreat', 'magazine_reload_retreat', 'withdraw'):
+            state['_friendly_reposition_event'] = dict(at=now, outcome='priority_handoff',
+                next_owner=order.get('combat_mode'), marker=dict(marker))
+            self._clear_friendly_reposition(bot_id)
+            return None, False
         if _number(now) >= _number(marker.get('deadline')):
+            if 'identity' in marker:
+                state['_friendly_reposition_retry'] = dict(identity=marker['identity'],
+                    origin=_position(state), blocker_position=marker['blocker_position'],
+                    attempts=marker['attempts'] + 1,
+                    until=now + FRIENDLY_REPOSITION_RETRY_SECONDS)
+            state['_friendly_reposition_event'] = dict(at=now, outcome='timeout',
+                remaining=_distance(_position(state), marker['destination']), marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
             return None, True
         target = (targets or {}).get(marker['target_id'])
         if (not isinstance(target, dict) or
                 not bool(target.get('alive', True)) or
                 ('health' in target and _number(target.get('health')) <= 0.0)):
+            state['_friendly_reposition_event'] = dict(at=now, outcome='target_gone', marker=dict(marker))
             self._clear_friendly_reposition(bot_id)
             return None, False
         destination = marker['destination']
         if _distance(_position(state), destination) <= \
                 ai_driver.WAYPOINT_ARRIVAL_RADIUS:
+            state['_friendly_reposition_event'] = dict(at=now, outcome='arrived', marker=dict(marker))
+            state.pop('_friendly_reposition_retry', None)
             self._clear_friendly_reposition(bot_id)
             return None, False
         target_position = _point(
@@ -15505,7 +15608,7 @@ class BotRuntime(object):
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
-                    position, command, planner_probe_samples)
+                    position, command, planner_probe_samples, state, now, planning_verdicts)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
@@ -15618,6 +15721,9 @@ class BotRuntime(object):
                     0 if command.get('fire_allowed') else 1)
             command, target = self._apply_blocked_direct_aim(
                 state, command, target, now, final_shot_lane_budget)
+            state['local_combat_manoeuvre'] = bool(
+                state['id'] in self._friendly_repositions or
+                command.get('combat_mode') == 'gun_angle_adjust')
             command = _overlay_live_target_pose(command, target, position)
             state['target_kind'] = (
                 target.get('kind') if target is not None else None)
@@ -16660,6 +16766,7 @@ class BotRuntime(object):
                 launch = launch_receipt if is_spg else launch_preview
                 if launch is not None and lane_clear:
                     self._clear_friendly_reposition(state['id'])
+                    state.pop('_friendly_reposition_retry', None)
                     fired = self._fire(
                         state, gun_state, reload_factor, descriptor,
                         launch_receipt=launch_receipt,
@@ -16964,6 +17071,8 @@ class BotRuntime(object):
         for state in self._ordered_states():
             if diagnostic is not None:
                 diagnostic.actor(state['id'])
+            if not state.get('alive', True):
+                state['local_combat_manoeuvre'] = False
             burst_state = self._burst_states.get(int(state['id']))
             if burst_state is not None:
                 burst_state.publish(state)

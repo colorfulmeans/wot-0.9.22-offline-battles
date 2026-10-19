@@ -50,6 +50,7 @@ class BotAdapter(object):
         self._wreck_attempts = {}
         self._wreck_history = {}
         self._withdrawal_attempts = {}
+        self._flank_arrivals = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -63,6 +64,7 @@ class BotAdapter(object):
         self._wreck_attempts.pop(int(bot_id), None)
         self._wreck_history.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
+        self._flank_arrivals.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -636,6 +638,21 @@ class BotAdapter(object):
         if contact_plan is not None:
             throttle_override = None
             stop_at_target = False
+        flank_key = (tuple(move_position), strategic.get('target_id'))
+        flank_arrival = self._flank_arrivals.get(bot_id)
+        if (strategic.get('combat_mode') != 'flank' or contact_plan is not None or
+                (flank_arrival is not None and (
+                    flank_arrival['key'] != flank_key or
+                    math.hypot(position[0]-flank_arrival['position'][0],
+                               position[2]-flank_arrival['position'][2]) >
+                    max(WAYPOINT_ARRIVAL_RADIUS, float(state.get('half_length', 3.5)))))):
+            self._flank_arrivals.pop(bot_id, None)
+            flank_arrival = None
+        if flank_arrival is not None:
+            # A completed flank point becomes a firing hold. Track-pivot
+            # movement while facing the enemy cannot restart the finished leg.
+            # A changed order, real displacement or contact releases ownership.
+            throttle_override = 0.0
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
@@ -704,6 +721,12 @@ class BotAdapter(object):
         # their stable 12-30 degree hull angle while the turret keeps tracking
         # ``aim_position``.  Local recovery directions still outrank it.
         recovery_mode = local.get('recovery_mode', 'drive')
+        if (strategic.get('combat_mode') == 'flank' and
+                contact_plan is None and recovery_mode == 'arrived' and
+                math.hypot(position[0]-move_position[0], position[2]-move_position[2]) <=
+                WAYPOINT_ARRIVAL_RADIUS and flank_arrival is None):
+            flank_arrival = dict(key=flank_key, position=position)
+            self._flank_arrivals[bot_id] = flank_arrival
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))
         # A realised native-world rotation refusal is also physical blockage,
@@ -767,7 +790,8 @@ class BotAdapter(object):
             navigation_status=state.get('navigation_status'),
             hull_contact=state.get('_hull_contact_receipt'),
             arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
-            hull_angle_degrees=strategic.get('hull_angle_degrees'))
+            hull_angle_degrees=strategic.get('hull_angle_degrees'),
+            flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('hull_angle_degrees') is not None:
@@ -792,7 +816,7 @@ class BotAdapter(object):
             difference += 2.0 * math.pi
         if (throttle_override is not None and
                 not result['brake'] and
-                recovery_mode in ('drive', 'arrived') and
+                recovery_mode == 'drive' and
                 abs(difference) < 0.65):
             # Strategic travel requests cannot override local turn alignment,
             # arrival or safety braking. The driver owns pedal arbitration.

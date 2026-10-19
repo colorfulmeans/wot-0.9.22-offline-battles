@@ -7184,7 +7184,7 @@ class BotRuntimeTests(unittest.TestCase):
                       if not name.startswith('_'))
         carried |= set(('alive', 'world_pose', 'ammo_reload_pending',
                         'burst_active', 'movement_dir', 'rotation_dir',
-                        'route_wreck_blocked', 'push_x', 'push_z'))
+                        'route_wreck_blocked', 'local_combat_manoeuvre', 'push_x', 'push_z'))
         carried |= represented
         for unused_bit, names in codec.OPTIONAL_GROUPS:
             carried |= set(names)
@@ -7222,6 +7222,12 @@ class BotRuntimeTests(unittest.TestCase):
             'ram_seq': 1,
         }], 50)
         self.assertGreater(rammed[1], reverted[1])
+        state['local_combat_manoeuvre'] = True
+        moving = self.runtime._mark_publication_edge(states, [], [], 60)
+        state['local_combat_manoeuvre'] = False
+        finished = self.runtime._mark_publication_edge(states, [], [], 70)
+        self.assertGreater(moving[1], rammed[1])
+        self.assertGreater(finished[1], moving[1])
 
     def test_worker_stall_refreshes_control_once_and_consumes_all_elapsed(self):
         adapter = _Adapter()
