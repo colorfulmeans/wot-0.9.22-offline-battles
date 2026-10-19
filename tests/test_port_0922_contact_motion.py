@@ -167,6 +167,83 @@ class WorkerSolidMotionTests(unittest.TestCase):
         runtime._clear = lambda *args: True
         return runtime
 
+    def test_report_m6_sweep_stops_pose_then_settles_unresolved_motor_speed(self):
+        runtime = self.prepare()
+        state, wreck = runtime.states[11], runtime.states.pop(12)
+        start = (379.5482012371701, 47.468183517456055, 160.79939132369856)
+        state.update(x=379.5942860325684, y=start[1], z=160.31827135435708,
+            yaw=3.0460975053899455, pitch=-.1554608798640009,
+            roll=-.017808690418177474, speed=4.603254737954595,
+            collision_shape=(1.5277800559997559, 3.8606300354003906,
+                             .000526999996509403, 2.325107991695404))
+        wreck.update(id=3, x=381.8279776111098, y=48.43974304199219,
+            z=153.34922211244572, yaw=.07817849374512444,
+            pitch=.0776558515182402, roll=.034423294059596966, alive=False,
+            collision_shape=(1.6419099569320679, 3.5526909828186035,
+                             .0045090001076459885, 1.9368480443954468))
+        runtime.states[3] = wreck
+        # Keep the captured height layer; the fixture's y=0 floor is not
+        # the recorded Himmelsdorf hillside under this settled wreck.
+        runtime._ground_probe = lambda x, z, hint: hint
+        runtime._physics_ground_probe = lambda x, z, hint: hint
+        dt = .1049957275390625
+        runtime._guard_tank_translations([], {11:start,
+            3:(wreck['x'], wreck['y'], wreck['z'])}, 241742996, dt)
+        self.assertEqual(start[::2], (state['x'], state['z']))
+        self.assertEqual(4.603254737954595, state['speed'])  # incoming impulse evidence
+        with mock.patch('sys.stdout'):
+            runtime._resolve_tank_contacts([], 241.742996, dt)
+        self.assertEqual(4.603254737954595, state['speed'])
+        runtime._settle_unresolved_drive_sweep(state)
+        self.assertEqual(0., state['speed'])
+        receipt = state['_translation_motion_receipt']
+        self.assertEqual([(3, 0.)], receipt['contacts'])
+        self.assertEqual('unresolved_motor_sweep_settled', receipt['outcome'])
+        runtime._settle_unresolved_drive_sweep(state)
+        self.assertEqual(0., state['speed'])  # one finalization only
+
+    def test_sweep_settlement_preserves_solver_impulse_and_external_momentum(self):
+        runtime = self.prepare()
+        state = runtime.states[11]
+        for speed, forced, expected, outcome in (
+                (2., 0., 2., 'velocity_owned_by_contact_solver'),
+                (10., 3., 3., 'unresolved_motor_sweep_settled'),
+                (-10., -3., -3., 'unresolved_motor_sweep_settled')):
+            with self.subTest(speed=speed, forced=forced):
+                sign = 1. if speed >= 0. else -1.
+                state.update(x=0., z=0., yaw=0., speed=speed,
+                             _contact_forward_speed=forced)
+                state['_translation_motion_receipt'] = dict(
+                    outcome='pending_contact_solver', fraction=0., step=.1,
+                    speed_before=sign*10., requested=(0., sign), start=(0., 0., 0.))
+                runtime._settle_unresolved_drive_sweep(state)
+                self.assertEqual(expected, state['speed'])
+                self.assertEqual(forced, state['_contact_forward_speed'])
+                self.assertEqual(outcome, state['_translation_motion_receipt']['outcome'])
+
+    def test_final_motion_log_carries_current_sweep_and_mechanical_handoff(self):
+        import io
+        runtime = self.prepare()
+        state = runtime.states[11]
+        position = (state['x'], state['y'], state['z'])
+        state['_motion_stall_pending'] = dict(start=position,
+            controls={'motion': (0., 0.)})
+        state['_translation_motion_receipt'] = dict(
+            sampled_at_us=1234567, outcome='unresolved_motor_sweep_settled',
+            contacts=[(12, 0.)], speed_before=4.6, speed_final=0.)
+        state['_gun_angle_handoff'] = dict(sampled_at=1.2,
+            reason='existing_approach_in_progress', anchor_distance=6.27)
+        output = io.StringIO()
+        with mock.patch('sys.stdout', output):
+            runtime._finish_motion_stall(state, False, False, position, 1.3)
+        rows = bot_tests._motion_rows(output.getvalue())
+        self.assertEqual(1234567, rows[0]['translation_sweep']['sampled_at_us'])
+        self.assertEqual([[12, 0.]], rows[0]['translation_sweep']['contacts'])
+        self.assertEqual('unresolved_motor_sweep_settled',
+                         rows[0]['translation_sweep']['outcome'])
+        self.assertEqual(6.27, rows[0]['gun_angle_handoff']['anchor_distance'])
+        self.assertEqual(1.2, rows[0]['gun_angle_handoff']['sampled_at'])
+
     def test_drive_sweep_reuse_is_limited_to_each_movement_and_roster(self):
         runtime = self.prepare()
         state, peer = runtime.states[11], runtime.states[12]

@@ -32,6 +32,44 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.assertEqual(2, clear['target_id'])
         self.assertTrue(clear['fire_allowed'])
 
+    def test_retained_target_lane_loss_uses_existing_eight_second_hold_deadline(self):
+        self.fx.states[0] = _weapon_state(self.fx.states[0], fire_seq=2, clip=1)
+        first = self.order(1.)
+        self.assertEqual('engage', first['combat_mode'])
+        blocked = _contact(2, 0, 150, [])
+        hold = self.order(4., blocked)
+        self.assertEqual('ready_without_shot',
+                         hold['tactical_evidence']['firing_hold']['reason'])
+        released = self.order(9., blocked)
+        self.assertEqual('route', released['combat_mode'])
+        self.assertEqual(2, released['target_id'])
+        self.assertFalse(released['fire_allowed'])
+        self.assertEqual('route_release_active',
+                         released['tactical_evidence']['firing_hold']['reason'])
+        continued = self.order(10., blocked)
+        self.assertEqual(released['move_position'], continued['move_position'])
+        self.assertEqual('route', continued['combat_mode'])
+        finished = self.order(13., blocked)
+        self.assertEqual('route_release_complete',
+                         finished['tactical_evidence']['firing_hold']['reason'])
+        self.assertEqual('engage', finished['combat_mode'])
+        self.assertNotIn(11, self.planner._firing_holds)
+        renewed = self.order(14., blocked)
+        self.assertEqual('ready_without_shot',
+                         renewed['tactical_evidence']['firing_hold']['reason'])
+
+    def test_retained_target_reload_and_new_shot_reset_hold_clock(self):
+        self.fx.states[0] = _weapon_state(self.fx.states[0], fire_seq=2, clip=1)
+        self.order(1.)
+        blocked = _contact(2, 0, 150, [])
+        self.fx.states[0]['reload_time'] = 10.
+        self.order(10., blocked)
+        self.assertNotIn(11, self.planner._firing_holds)
+        self.fx.states[0].update(reload_time=0., fire_seq=3)
+        resumed = self.order(11., blocked)
+        self.assertEqual('engage', resumed['combat_mode'])
+        self.assertEqual(0., resumed['tactical_evidence']['firing_hold']['ready_elapsed'])
+
     def test_dead_hidden_expired_and_out_of_range_contacts_release_tracking(self):
         for reason in ('dead', 'hidden', 'expired', 'range'):
             with self.subTest(reason=reason):
