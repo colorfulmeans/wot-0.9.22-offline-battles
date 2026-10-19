@@ -10534,6 +10534,13 @@ class BotRuntime(object):
         receipt['outcome'] = 'unrestricted'
         if receipt['fraction'] >= 1.0:
             return
+        # Human contact impulses are owned by the visible client and can still
+        # be in flight. An absent local impulse is intentional for that pair,
+        # not evidence that its incoming drive velocity was left unresolved.
+        if any(peer >= HUMAN_TARGET_ID_BASE for peer, at in receipt.get('contacts', ())
+               if at <= receipt['fraction'] + 1.0e-9):
+            receipt['outcome'] = 'velocity_owned_by_remote_player'
+            return
         if abs(speed - receipt['speed_before']) > 1.0e-9:
             receipt['outcome'] = 'velocity_owned_by_contact_solver'
             return

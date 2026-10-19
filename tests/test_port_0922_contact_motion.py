@@ -221,6 +221,19 @@ class WorkerSolidMotionTests(unittest.TestCase):
                 self.assertEqual(forced, state['_contact_forward_speed'])
                 self.assertEqual(outcome, state['_translation_motion_receipt']['outcome'])
 
+    def test_remote_player_impulse_transport_keeps_its_incoming_velocity(self):
+        runtime = self.prepare()
+        state = runtime.states[11]
+        state.update(speed=10., x=0., z=0., yaw=0.)
+        state['_translation_motion_receipt'] = dict(
+            outcome='pending_contact_solver', fraction=0., step=.1,
+            speed_before=10., requested=(0., 1.), start=(0., 0., 0.),
+            contacts=[(self.module.HUMAN_TARGET_ID_BASE+1, 0.)])
+        runtime._settle_unresolved_drive_sweep(state)
+        self.assertEqual(10., state['speed'])
+        self.assertEqual('velocity_owned_by_remote_player',
+                         state['_translation_motion_receipt']['outcome'])
+
     def test_final_motion_log_carries_current_sweep_and_mechanical_handoff(self):
         import io
         runtime = self.prepare()
