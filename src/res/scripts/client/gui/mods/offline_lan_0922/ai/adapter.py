@@ -819,7 +819,6 @@ class BotAdapter(object):
                 'base_defense' if strategic.get('combat_mode') == 'base_defense' else
                 'contact_recovery' if contact_plan is not None else
                 strategic.get('combat_mode', 'route')),
-            objective_progress=dict(self.driver.states.get(bot_id, {}).get('objective_progress') or {}),
             arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
             pedal=dict(self.driver.states.get(bot_id, {}).get('pedal_observation') or
                 dict(reason='non_drive_terminal', mode=local['recovery_mode'],

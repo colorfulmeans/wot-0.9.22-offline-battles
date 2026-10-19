@@ -347,7 +347,8 @@ No authored routes, C, avoidance, retries, slope or support law is changed.
 Tiger II's small-pocket movement alternated advance, lane reposition and route
 orders while firing three shots. That does not yet prove one defective driver
 transition. Keep navigation policy unchanged. Complete the existing control
-receipt with the action owner and objective progress, and preserve the previous
+receipt with the action owner; reuse its existing objective-progress snapshot
+instead of copying that nested history on every command. Preserve the previous
 credit reason/frontier/alignment when a changed order resets its clock.
 
 The worker profile still shows world bridging, ground and destructible scans
