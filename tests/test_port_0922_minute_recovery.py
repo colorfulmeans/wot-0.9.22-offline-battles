@@ -111,3 +111,22 @@ class RailwayBirthDataTests(unittest.TestCase):
                                     graph['spawn_formations']['1'][7])
         self.assertEqual(330,checked)
         self.assertEqual(151,changed)
+
+
+class NavigationResolutionEvidenceTests(unittest.TestCase):
+    def test_spawn_validator_accepts_only_recorded_changes(self):
+        import sys
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
+        import check_navigation_resolution as checker
+        root=Path(__file__).resolve().parents[1]
+        name='04_himmelsdorf'
+        old=json.loads(subprocess.check_output(['git','show',
+            'ca22f909:navgraphs/'+name+'.json'],cwd=root))
+        new=json.loads((root/'navgraphs'/(name+'.json')).read_bytes())
+        checker.verify_retained_gameplay(old,new,name)
+        altered=copy.deepcopy(new)
+        altered['spawn_formations']['1'][0][0]+=.1
+        with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
+        altered=copy.deepcopy(new)
+        altered['routes']={}
+        with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
