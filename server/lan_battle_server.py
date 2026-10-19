@@ -13125,6 +13125,11 @@ class BattleState:
             burning = bool(
                 isinstance(player.critical, dict) and
                 player.critical.get("fire", False))
+            if burning and not player.alive:
+                terminal = dict(player.critical, fire=False, events=[])
+                self._commit_player_critical_progress(player, terminal)
+                burning = False
+                changed += 1
             if (not player.connected or not player.participating or
                     not player.alive or not burning):
                 self.last_shell_fire_sources.pop(victim, None)

@@ -114,13 +114,18 @@ class ResolutionTests(unittest.TestCase):
             None,None,(0.,1.1,0.),(0.,1.1,2.),legacy,original))
 
     def test_local_meshes_keep_original_base_and_short_bidirectional_passages(self):
-        import subprocess, math
+        import subprocess, math, copy
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             baseline=json.loads(subprocess.check_output(['git','show','ca22f909:navgraphs/'+name+'.json'],cwd=ROOT))
-            for key in ('cell_size','width','height','origin','hazards','routes','spawn_formations'):
+            for key in ('cell_size','width','height','origin','hazards','routes'):
                 self.assertEqual(baseline[key],graph[key],key)
+            expected=copy.deepcopy(baseline['spawn_formations'])
+            for change in graph['validation']['spawn_railway_revalidation']['changes']:
+                self.assertEqual(expected[change['team']][change['slot']],change['before'])
+                expected[change['team']][change['slot']]=change['after']
+            self.assertEqual(expected,graph['spawn_formations'])
             removed=set(graph['bake']['railway_obstacles']['layers'][0]['removed_node_indices'])
             for index,(old,new) in enumerate(zip(baseline['heights_mm'],graph['heights_mm'])):
                 self.assertEqual(None if index in removed else old,new)

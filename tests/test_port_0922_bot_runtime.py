@@ -21607,6 +21607,32 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual((), runtime.load_report()['busiest'])
 
 
+    def test_rejected_candidate_pose_uses_native_sweep_when_current_pose_is_valid(self):
+        for native_clear in (False, True, None):
+            observed = []
+            class PoseAdapter(_FixedAdapter):
+                def decide(self, state, clear):
+                    observed.append(state['pose_clear'](.5))
+                    return dict(self.command)
+            proof = mock.Mock(return_value=None if native_clear is None else dict(clear=native_clear, proved=True,
+                status='clear' if native_clear else 'hard',
+                source='authoritative_body_sweep',reason='local_sweep_clear' if native_clear else 'local_sweep_blocked'))
+            runtime = self.module.BotRuntime(1,
+                descriptor_resolver=lambda unused: _combat_descriptor(),
+                adapter_factory=lambda *unused: PoseAdapter(self._stationary_command()),
+                direction_probe=lambda *unused: {'clear':True,'slope':0.},
+                ground_probe=lambda *unused:0., physics_ground_probe=lambda *unused:0.,
+                spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+                rotation_resolver=mock.Mock(return_value=True), local_sweep_probe=proof)
+            runtime.battle_start(self.start)
+            runtime.navigator.grid.hull_pose_clear = lambda position,yaw,*unused: abs(yaw)<.01
+            runtime.states[11].update(x=0.,y=0.,z=0.,yaw=0.,speed=0.,grounded_once=True)
+            runtime.update(.04,1.)
+            self.assertTrue(proof.called)
+            self.assertTrue(observed)
+            self.assertTrue(all(value is bool(native_clear) for value in observed))
+
+
 class ShovedWreckTests(unittest.TestCase):
     """A destroyed hull is a body on tracks, not a piece of world geometry."""
 

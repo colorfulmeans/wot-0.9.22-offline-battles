@@ -443,3 +443,61 @@ The CI water/grid-only subset passes but does not establish full-state parity.
 Keep the inactive owner disabled; do not erase differing fields or alter live
 navigation to make this optional comparison pass. Any future activation must
 first port the complete current lifecycle and pass strict full comparisons.
+
+
+## Minute pressure dispatch and blocked-action handoff (October 20)
+
+Reports `011649-2394e88f32a1` and `013754-d56ca0a33b56` establish these
+separate failures. This change retains the production Python navigation owner,
+real collision/occlusion, C/avoidance, retry/reroute, and one-invalid/five-valid
+support switching. It does not introduce a slope preference or rerank routes.
+
+* Grille and T28 Prototype exhausted a mixture of native hard pivot rejections
+  and remembered pivot failures, but the handoff required heading-aligned or
+  homogeneous evidence. Complete the existing private local-target failure
+  lifecycle for this exhausted case. Unknown/available candidates and traffic
+  without native/remembered hard evidence cannot authorize it. No global wall
+  is published. Replaying their recorded receipts now calls the private replan
+  owner; the old receipt for Jagdtiger alone remains insufficient evidence.
+* Jagdtiger had a valid current coarse hull pose but all candidate coarse
+  poses failed. Candidate rejection now invokes the existing authoritative,
+  noncommitting next-rotation-slice sweep, just as an invalid current pose did.
+  Native rejection and the final real collision commit remain authoritative;
+  missing/exceptional coarse probes still defer to real commit. A valid current
+  coarse pose with a rejected candidate cannot be cleared by an unavailable
+  native precheck: retain the old candidate rejection in that case. The first
+  CI pass exposed this missing-query regression in the fixed recovery-alley
+  fixtures; unchanged tests pass again after completing this branch. Logs retain
+  both coarse results, native proof, candidate outcomes, handoff and retirement.
+* Pressure evaluation changes from four seconds to sixty seconds. Assignment
+  renewal, radio-loss release, expiry and return are evaluated at the same
+  minute boundary. A 61-second lease crosses the next evaluation instead of
+  expiring between it. Combat radio knowledge still expires normally. The
+  independent 20-second ineffective-wreck reroute and ordinary local retries
+  are unchanged; this is not a one-minute freeze of movement or combat.
+* The Ensk M40/M43 retained slot overlaps a carriage with the mounted hull,
+  although the old chassis-only envelope missed it. The offline spawn repair
+  reads all 1,068 chassis and mounted-hull bounds, with real hullPosition mounts
+  and no undonated hulls. The conservative maximum body rectangle is 4.836 m
+  wide by 12.818 m long. On eleven railway maps, all 330 slots are checked
+  against compiled geometry, soft props, pairwise spacing and directed home
+  connection. 151 invalid slots move at most 32 m; 179 remain unchanged.
+  Each changed slot retains its yaw and records before/after coordinates. This
+  count includes other existing clearance failures found by the complete body
+  recheck, not just the one reported M40/M43. Grid nodes/links, local meshes,
+  hazards and waypoint arrays stay equal to parent e87b0108. All 990 default
+  route segments/base connections still pass the strict validator.
+* Lethal fire now publishes its extinguished state in the same canonical
+  damage result. A dead participant also clears residual durable fire and
+  attribution on the next active tick. Client critical state/effects reject
+  late fire on an already dead hull, including native HUD presentation.
+
+Tests cover mixed exhausted evidence, traffic/unknown exclusions, native clear
+and hard candidate sweeps, pressure transfer/renewal/release over several minute
+boundaries, actual lethal-fire mechanics, late dead snapshots and canonical
+cleanup. Spawn tests bind all recorded relocations to the retained parent data;
+mounted-body fixtures verify country-resource mapping and hull offsets. Updated
+old assertions preserve their original safety purpose under the new interval
+and body envelope. The inactive full-native-state parity limitation above is
+unchanged and must not be represented as passing. Windows gameplay acceptance
+of these changes remains the user's next test, not an engine-free test claim.

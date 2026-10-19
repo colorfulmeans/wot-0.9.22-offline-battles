@@ -2131,11 +2131,11 @@ SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE = 0.5
 
 
 def representative_vehicle_chassis_envelope(client_root):
-    """Measure a conservative chassis OBB from the pinned #1513 resources.
+    """Measure a conservative mounted-body OBB from the pinned #1513 resources.
 
     BattleRuntime admits every non-secret vehicle in the current battle tier
     band.  A map bake therefore cannot assume the selected player vehicle or a
-    hand-picked medium tank.  The collision-client chassis bounds are the same
+    hand-picked medium tank.  The collision-client chassis and mounted hull bounds are the same
     authored bodies loaded by ``ModelHitTester``; combining the widest and the
     longest stock bodies gives one conservative rectangle for every possible
     line-up without teaching the runtime to move a slot.
@@ -2149,14 +2149,48 @@ def representative_vehicle_chassis_envelope(client_root):
         raise UnsafeBakeInputError(
             'pinned client has no standard vehicle resource packages')
     seen = set()
+    # Full mounted hulls can be wider/longer than the chassis (M40/M43).
+    # Use every donated chassis mount for the corresponding vehicle resource.
+    mounts = {}
+    with zipfile.ZipFile(os.path.join(packages, 'scripts.pkg')) as scripts:
+        for name in scripts.namelist():
+            if not (name.startswith('scripts/item_defs/vehicles/') and
+                    name.endswith('.xml') and len(name.split('/')) == 5):
+                continue
+            root = read_packed_xml(scripts.read(name))
+            chassis = _children(root, 'chassis')
+            if not chassis or chassis[0].value_type != TYPE_ELEMENT:
+                continue
+            values = []
+            for unused, item in chassis[0].value.children:
+                if item.value_type != TYPE_ELEMENT:
+                    continue
+                positions = _children(item.value, 'hullPosition')
+                if positions:
+                    values.append(_vector3(positions[0]))
+            if values:
+                mounts['vehicles/' + '/'.join(name.split('/')[3:])[:-4]] = values
+                pending = [value for unused, value in root.children]
+                while pending:
+                    value = pending.pop()
+                    if value.value_type == TYPE_ELEMENT:
+                        pending.extend(item for unused, item in value.value.children)
+                    elif value.value_type == TYPE_STRING:
+                        path = value.value.decode('utf8').strip().replace('\\', '/')
+                        if path.startswith('vehicles/') and len(path.split('/')) >= 4:
+                            key = '/'.join(path.split('/')[:3])
+                            mounts.setdefault(key, []).extend(
+                                offset for offset in values if offset not in mounts.get(key, ()))
     maximum_width = None
     maximum_length = None
+    undonated_hulls = []
     for package_name in package_names:
         package_path = os.path.join(packages, package_name)
         with zipfile.ZipFile(package_path, 'r') as package:
             for resource_name in package.namelist():
-                if (not resource_name.endswith(
-                        '/collision_client/Chassis.visual_processed') or
+                hull = resource_name.endswith('/collision_client/Hull.visual_processed')
+                if (not (resource_name.endswith(
+                        '/collision_client/Chassis.visual_processed') or hull) or
                         resource_name in seen):
                     continue
                 seen.add(resource_name)
@@ -2168,8 +2202,18 @@ def representative_vehicle_chassis_envelope(client_root):
                         resource_name)
                 minimum = _vector3(_child(bounds.value, 'min'))
                 maximum = _vector3(_child(bounds.value, 'max'))
-                half_width = max(abs(minimum[0]), abs(maximum[0]))
-                half_length = max(abs(minimum[2]), abs(maximum[2]))
+                key = resource_name.split('/collision_client/')[0].split('/')
+                key[1] = {'american':'usa', 'british':'uk', 'chinese':'china',
+                    'french':'france', 'german':'germany', 'japanese':'japan',
+                    'russian':'ussr', 'swedish':'sweden', 'polish':'poland',
+                    'italian':'italy'}.get(key[1], key[1])
+                offsets = (mounts.get('/'.join(key)) or mounts.get(
+                    resource_name.split('/collision_client/')[0])) if hull else [(0.,0.,0.)]
+                if not offsets:
+                    undonated_hulls.append(resource_name)
+                    continue
+                half_width = max(abs(value + offset[0]) for value in (minimum[0], maximum[0]) for offset in offsets)
+                half_length = max(abs(value + offset[2]) for value in (minimum[2], maximum[2]) for offset in offsets)
                 if (not math.isfinite(half_width) or
                         not math.isfinite(half_length) or
                         half_width <= 0.0 or half_length <= 0.0):
@@ -2191,7 +2235,8 @@ def representative_vehicle_chassis_envelope(client_root):
         'width_source': maximum_width[1],
         'length_source': maximum_length[1],
         'resources_scanned': len(seen),
-        'source': '#1513 collision_client chassis visual boundingBox',
+        'undonated_hull_resources': sorted(undonated_hulls),
+        'source': '#1513 collision_client chassis and mounted hull boundingBox',
     }
 
 

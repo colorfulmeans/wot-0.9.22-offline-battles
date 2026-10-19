@@ -1,5 +1,6 @@
 """Compare selected grids using preserved routes and the shipping C++ search."""
 import argparse
+import copy
 import json
 import math
 from pathlib import Path
@@ -81,6 +82,24 @@ def write_native_input(path, graph, cases):
     path.write_text('\n'.join(rows)+'\n', encoding='ascii')
 
 
+def verify_retained_gameplay(old, new, name):
+    from rebake_navigation_resolution import GAMEPLAY_FIELDS
+    for key in GAMEPLAY_FIELDS:
+        if key != 'spawn_formations':
+            assert old.get(key) == new.get(key), (name, key)
+    expected=copy.deepcopy(old.get('spawn_formations'))
+    if expected != new.get('spawn_formations'):
+        receipt=new['validation']['spawn_railway_revalidation']
+        assert receipt['hard_and_soft_clearance'] and receipt['pairwise_clearance']
+        assert receipt['directed_home_connection'] and receipt['slots_checked']==30
+        for row in receipt['changes']:
+            assert expected[row['team']][row['slot']]==row['before']
+            assert row['before'][3]==row['after'][3]
+            assert math.hypot(row['before'][0]-row['after'][0],row['before'][2]-row['after'][2])<=32.
+            expected[row['team']][row['slot']]=row['after']
+    assert expected==new.get('spawn_formations'), (name,'unrecorded_spawn_change')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-ref', required=True)
@@ -93,9 +112,7 @@ def main():
         raw = subprocess.check_output(['git', 'show', args.baseline_ref+':navgraphs/'+name+'.json'])
         old = json.loads(raw)
         new = json.loads(Path('navgraphs', name+'.json').read_bytes())
-        from rebake_navigation_resolution import GAMEPLAY_FIELDS
-        for key in GAMEPLAY_FIELDS:
-            assert old.get(key) == new.get(key), (name, key)
+        verify_retained_gameplay(old,new,name)
         cases = route_cases(old)
         report['maps'][name] = {}
         for tag, graph in [('4m', old), ('4m-local', new)]:

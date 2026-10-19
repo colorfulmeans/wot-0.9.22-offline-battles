@@ -307,6 +307,16 @@ def advance_fire(player, dt, now):
     target._fire_started = float(now) - (elapsed + step)
     damage, payload = critical_damage.tick_fire(target, step, now=float(now))
     burning = bool(target.is_on_fire and damage < int(player.health))
+    if damage >= int(player.health) and target.is_on_fire:
+        # Publish the terminal fire edge in the same canonical HP commit.
+        # A later snapshot must not resurrect the live fire on a wreck.
+        before = critical_damage._state(target)
+        critical_damage._offh_extinguish(target, False, 'fire')
+        payload = dict(payload or critical_damage._payload(
+            before, critical_damage._state(target), descriptor, 'fire', force=True))
+        payload['fire'] = False
+        payload['events'] = list(payload.get('events') or ()) + [
+            {'kind': 'fire', 'state': False, 'cause': 'fire'}]
     return {
         'damage': max(0, int(damage)),
         'critical': payload,
