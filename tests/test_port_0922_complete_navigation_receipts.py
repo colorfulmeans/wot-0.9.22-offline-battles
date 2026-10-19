@@ -379,6 +379,10 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         f = lease_fixture.RouteLeaseEvidenceTests(); f.setUp()
         p = f.planner
         p._route_line_contributor = lambda *args: True
+        # Another mobile defender remains after the temporary donor leaves.
+        target=p._route_catalog(f.bots)['target']
+        f.bots.extend(p._alive_bots([lease_fixture._bot(44,1,3,target,'mediumTank')],
+                                   [lease_fixture._state(44,1,100.,0.)]))
         contacts = [dict(position=dict(x=100., y=0., z=250.), health=1., max_health=1000.)]
         p._rebalance_routes(1, f.bots, contacts, 5.)
         lease = p._route_assignments[f.donor['id']]

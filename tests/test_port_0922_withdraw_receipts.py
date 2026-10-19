@@ -182,13 +182,35 @@ class RouteLeaseEvidenceTests(unittest.TestCase):
         self.assertEqual(lease['_lease_observation']['outcome'], 'no_known_pressure')
         self.assertEqual(lease['until'], 7.)
 
+    def test_globally_covered_lane_renews_if_this_donor_is_needed_for_coverage(self):
+        self.planner._route_line_contributor = lambda *args: True
+        target = self.planner._route_catalog(self.bots)['target']
+        for bot in self.bots:
+            self.planner._route_assignments[bot['id']] = dict(
+                route=target, until=7. if bot is self.donor else 0.)
+            bot['profile']['class_tag'] = 'mediumTank'
+        self.planner._rebalance_routes(1,self.bots,self.contacts,5.,
+                                      protected_ids=[self.donor['id']])
+        lease = self.planner._route_assignments[self.donor['id']]
+        observation = lease['_lease_observation']
+        self.assertLess(observation['own_score'],0.)
+        self.assertGreater(observation['departure_score'],0.)
+        self.assertEqual('renewed',observation['outcome'])
+        self.assertEqual(11.,lease['until'])
+        self.assertEqual(1,self.planner._route_states[self.donor['id']]['index'])
+        self.planner._rebalance_routes(1,self.bots,[],11.)
+        self.assertEqual('lease_expired',
+            self.planner._route_assignment_receipts[self.donor['id']]['reason'])
+
     def test_covered_own_lane_is_not_renewed_just_because_contact_remains(self):
         self.planner._route_line_contributor=lambda *args: True
-        # Put two other contributors on the donor's lane: 1 - 3*.45 < 0.
+        # Three OTHER contributors cover this lane after the donor leaves.
         target=self.planner._route_catalog(self.bots)['target']
         for bot in self.bots:
             self.planner._route_assignments[bot['id']]=dict(route=target,until=7. if bot is self.donor else 0.)
             bot['profile']['class_tag']='mediumTank'
+        other = _bot(44,1,3,target,'mediumTank')
+        self.bots.extend(self.planner._alive_bots([other],[_state(44,1,100.,0.)]))
         contacts=self.contacts+[dict(position=dict(x=-100.,y=0.,z=z),health=1000.,max_health=1000.)
                                 for z in (200.,300.)]
         self.planner._rebalance_routes(1,self.bots,contacts,5.,protected_ids=[self.donor['id']])

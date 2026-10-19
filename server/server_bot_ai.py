@@ -210,6 +210,7 @@ class BotPlanner(object):
         self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._route_assignment_receipts = {}
+        self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
         self._firing_holds = {}
@@ -246,6 +247,7 @@ class BotPlanner(object):
         self._wreck_route_avoid = {}
         self._route_assignments = {}
         self._route_assignment_receipts = {}
+        self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._engage_anchors = {}
         self._firing_holds = {}
@@ -800,6 +802,11 @@ class BotPlanner(object):
                         route_id=order.get('route_id'), route_index=order.get('route_index'),
                         move_position=order.get('move_position')))
                 order['route_assignment']['progress'] = progress
+                balance = dict(self._route_balance_receipts.get(bot['team']) or {})
+                checks = balance.pop('candidates', ())
+                balance.update(observed_at=now, candidate=next((dict(row) for row in checks
+                    if row['bot'] == bot['id']), None))
+                order['route_assignment']['balance'] = balance
                 lease = self._route_assignments.get(bot['id']) or {}
                 if _number(lease.get('until')) > 0.0:
                     order['route_assignment']['lease'] = dict(
@@ -2474,12 +2481,17 @@ class BotPlanner(object):
                     self._route_assignments.pop(bot["id"], None)
                 self._route_states.pop(bot["id"], None)
         if len(catalog) < 2:
+            self._route_balance_receipts[team] = dict(sampled_at=_number(now),
+                outcome='catalog_has_no_alternative', candidates=[])
             self._observe_route_leases(bots, now, 'catalog_has_no_alternative')
             return
         if _number(now) < _number(self._next_route_rebalance.get(team)):
             self._observe_route_leases(bots, now, 'rebalance_not_due', evaluation=False)
             return
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
+        balance = dict(sampled_at=_number(now), outcome='no_known_pressure',
+                       selected_bot=None, candidates=[])
+        self._route_balance_receipts[team] = balance
         pressure = dict((route_id, 0.0) for route_id in catalog)
         for contact in contacts:
             if not any(self._contact_known_to(contact, bot["id"], now)
@@ -2520,14 +2532,14 @@ class BotPlanner(object):
                     counts[route_id] += 1
         target_route = max(sorted(catalog), key=lambda route_id:
                            pressure[route_id] - counts[route_id] * 0.45)
-        if pressure[target_route] - counts[target_route] * 0.45 <= 0.0:
-            self._observe_route_leases(bots, now, 'pressure_already_covered',
-                target_route=target_route, target_pressure=pressure[target_route],
-                target_contributors=counts[target_route],
-                target_score=pressure[target_route] - counts[target_route] * 0.45)
-            return
-        self._observe_route_leases(bots, now, 'pressure_evaluated',
-            target_route=target_route)
+        target_score = pressure[target_route] - counts[target_route] * 0.45
+        balance.update(outcome='no_improving_donor', target_route=target_route,
+                       pressure=dict(pressure), contributors=dict(counts),
+                       target_score=target_score)
+        self._observe_route_leases(bots, now,
+            'pressure_already_covered' if target_score <= 0.0 else 'pressure_evaluated',
+            target_route=target_route, target_pressure=pressure[target_route],
+            target_contributors=counts[target_route], target_score=target_score)
         target_record = catalog[target_route]
         # Re-evaluation happens before a temporary assignment expires. Renew
         # the same pressured route in place so its waypoint index survives;
@@ -2541,6 +2553,13 @@ class BotPlanner(object):
             knows_own = any(self._nearest_route(contact, catalog) == own_id
                             for contact in self._contacts_for_bot(bot, contacts, now))
             own_score = pressure.get(own_id, 0.0) - counts.get(own_id, 0) * 0.45
+            # Test whether this deployment is still needed AFTER it leaves.
+            # Counting the donor as its own replacement made covered lanes
+            # expire to default and immediately borrow the same vehicle back.
+            own_contribution = int(self._route_line_contributor(bot,
+                self._contacts_for_bot(bot, contacts, now)) and
+                str(bot.get('profile', {}).get('class_tag') or '') != 'SPG')
+            departure_score = own_score + own_contribution * 0.45
             if isinstance(assignment, dict) and _number(assignment.get('until')) > 0.0:
                 assignment['_lease_observation'] = dict(
                     evaluated_at=_number(now), target_route=target_route,
@@ -2549,21 +2568,26 @@ class BotPlanner(object):
                     own_contributors=counts.get(own_id, 0),
                     target_contributors=counts[target_route],
                     knows_target=knows_target, knows_own=knows_own, own_score=own_score,
+                    own_contribution=own_contribution, departure_score=departure_score,
                     until=_number(assignment['until']),
-                    outcome=('no_target_contact' if not knows_target else
+                    outcome=('pressure_already_covered' if target_score <= 0.0 else
+                             'no_target_contact' if not knows_target else
                              'different_pressure_target'))
             # Another lane winning this evaluation does not end a still
             # needed deployment. Preserve its cursor rather than expire to
             # the default lane and borrow the same hull back six seconds later.
             # Donor scoring below can still make a real reassignment.
             if (isinstance(route, dict) and
-                    knows_own and own_score > 0.0 and
+                    knows_own and departure_score > 0.0 and
                     _number(assignment.get("until")) > 0.0):
                 assignment["until"] = _number(now) + ROUTE_LEASE_SECONDS
                 assignment['_lease_observation'].update(
                     outcome='renewed', until=assignment['until'])
+        if target_score <= 0.0:
+            balance['outcome'] = 'pressure_already_covered'
+            return
         candidates = []
-        candidate_checks = []
+        candidate_checks = balance['candidates']
         for bot in bots:
             check = dict(bot=bot['id'], outcome='eligible')
             candidate_checks.append(check)
@@ -2605,6 +2629,19 @@ class BotPlanner(object):
                 check['outcome'] = ('already_on_target' if current_id == target_route
                                     else 'last_line_contributor')
                 continue
+            # Use the existing pressure-minus-contributors metric on BOTH
+            # sides of this transfer. A donor must not create a larger deficit
+            # on departure than the one it resolves, then be selected back four
+            # seconds later under unchanged contacts. Real pressure changes can
+            # still reverse a transfer through the same score and tie-breaks.
+            own_score = pressure.get(current_id, 0.0) - counts.get(current_id, 0) * 0.45
+            before = max(0.0, own_score, target_score)
+            after = max(0.0, own_score + 0.45, target_score - 0.45)
+            check.update(current_pressure_score=own_score, target_pressure_score=target_score,
+                         before_transfer=before, after_transfer=after)
+            if after + 1.e-9 >= before:
+                check['outcome'] = 'no_pressure_improvement'
+                continue
             profile = bot.get("profile", {})
             roles = profile.get("roles") or {}
             class_weights = target_record.get("class_weights")
@@ -2639,6 +2676,7 @@ class BotPlanner(object):
         if not candidates:
             return
         donor = max(candidates)[2]
+        balance.update(outcome='assigned', selected_bot=donor['id'])
         previous = self._route_assignments.get(donor['id']) or {}
         previous_route = previous.get('route') or donor.get('route') or {}
         self._record_route_assignment(donor, now, previous_route.get('id'),
