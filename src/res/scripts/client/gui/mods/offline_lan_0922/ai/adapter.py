@@ -49,6 +49,7 @@ class BotAdapter(object):
         self._contact_escapes = {}
         self._wreck_attempts = {}
         self._wreck_history = {}
+        self._wreck_last_terminal = {}
         self._withdrawal_attempts = {}
         self._flank_arrivals = {}
 
@@ -63,6 +64,7 @@ class BotAdapter(object):
         self._contact_escapes.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
         self._wreck_history.pop(int(bot_id), None)
+        self._wreck_last_terminal.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
         self._flank_arrivals.pop(int(bot_id), None)
 
@@ -347,6 +349,8 @@ class BotAdapter(object):
         own_progress = ((position[0]-attempt['own_origin'][0])*math.sin(attempt['own_heading']) +
                         (position[2]-attempt['own_origin'][2])*math.cos(attempt['own_heading']))
         evidence.update(own_progress=own_progress, own_best_progress=attempt['own_best_progress'])
+        if attempt.get('terminal') is not None:
+            evidence['terminal'] = dict(attempt['terminal'])
         state['_wreck_push_evidence'] = evidence
         # Ordinary recovery movement must not resurrect a spent motor attempt.
         if attempt['exhausted']:
@@ -369,7 +373,13 @@ class BotAdapter(object):
             # Never turn an exhausted motor attempt into a permanent hold.
             attempt.update(exhausted=True, exhausted_position=position)
             attempt['elapsed'] = max(14.0, attempt['elapsed'])
+            attempt['terminal'] = dict(reason='own_stalled' if attempt['own_elapsed'] >= 14.0
+                else 'push_stalled', at=state.get('now'), position=position,
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'],
+                own_progress=own_progress, best_progress=attempt['own_best_progress'])
+            evidence['terminal'] = dict(attempt['terminal'])
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
@@ -393,7 +403,13 @@ class BotAdapter(object):
             # Release this failed episode to normal checked recovery immediately.
             attempt['elapsed'] = 14.0
             attempt.update(exhausted=True, exhausted_position=position)
+            attempt['terminal'] = dict(reason='world_turn_refused',
+                at=state.get('now'), position=position, yaw=yaw,
+                requested_yaw=yaw + math.copysign(min(0.45, abs(turn)), turn),
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'])
+            evidence['terminal'] = dict(attempt['terminal'])
             evidence.update(phase='world_turn_refused', elapsed=14.0)
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
@@ -805,6 +821,8 @@ class BotAdapter(object):
             result['contact_escape'] = dict(state['_contact_escape_evidence'])
         if state.get('_wreck_push_evidence') is not None:
             result['wreck_push'] = dict(state['_wreck_push_evidence'])
+        if bot_id in self._wreck_last_terminal:
+            result['wreck_push_last_terminal'] = dict(self._wreck_last_terminal[bot_id])
         if state.get('_withdrawal_evidence') is not None:
             result['withdrawal'] = dict(state['_withdrawal_evidence'])
         if state.get('navigation_progress_target') is not None:

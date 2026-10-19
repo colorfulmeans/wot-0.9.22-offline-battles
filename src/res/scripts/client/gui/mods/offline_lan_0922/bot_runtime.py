@@ -7370,6 +7370,7 @@ class BotRuntime(object):
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
+            'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
             'withdrawal': command.get('withdrawal'),
             'driver_progress_target': command.get('driver_progress_target'),
             'decision': {key: command.get(key) for key in (

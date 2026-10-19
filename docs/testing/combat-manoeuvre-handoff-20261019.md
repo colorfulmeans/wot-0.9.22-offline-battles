@@ -148,3 +148,39 @@ For the next report, reconstruct the command's cached decision timestamp before
 comparing it to a physical commit. A native `hard` result must be distinguished
 from missing terrain, a deferred budget, friendly traffic, stationary defensive
 combat and a successful capture hold. Do not infer all stationary tanks are stuck.
+
+## Follow-up: report 183514, effective wreck pushing and route evidence
+
+The Object 257 (Bot 3) continued to advance and move Tiger II wreck 16, but
+the macro gate timer skipped progress checks whenever `route_wreck_blocked`
+was true. At 18:31:39 it skipped gate 7; at 18:31:59 it switched from rail
+to hill despite continuing local motor progress. The macro timer now renews
+after a new half metre of realised progress toward the same gate objective.
+Its best-distance mark survives reversing, contact flicker and local target
+changes. A stopped push still expires after the original twenty seconds and
+uses the unchanged skip/retry/route-switch path. Ordinary non-contact progress
+thresholds remain unchanged. Moving a wreck without moving the Bot does not
+renew this clock. This is a progress-accounting fix, not a collision bypass.
+
+Pressure transfers for WZ-120G, T49, AMX 13 90 and E75 changed under changing
+contact weights and contributor counts. No new route lock, slope preference,
+lease duration or donor policy is introduced without a demonstrated invariant
+failure. Actual assignment receipts now retain contact identities/health/radio
+leases and contributor identity/position inputs. These inputs are not duplicated
+into every Bot's balance summary. Route entry receipts retain the initial
+nearest point, realised speed/yaw, every close/rear-point skip and final entry;
+their original sample time survives subsequent progress observations. This
+exposes why an expiry return selected a distant endpoint instead of merely
+recording that an expiry happened.
+
+Local wreck motor receipts preserve the first terminal reason, time and pose
+after subsequent `exhausted` observations, separating motor timeouts from native
+turn refusals. Successful macro renewals are emitted in the server attempt log,
+and the report reader now parses that plain-server record as well as skips and
+switches. Regression coverage includes continuing slow pushes, stops, reversal
+orbits, contact flicker, changed local goals, unchanged ordinary thresholds,
+pressure input provenance, entry evidence and terminal-reason lifetime.
+
+Native Windows gameplay remains the next acceptance boundary. Support opening
+at one missing point and closing with all five restored, target selection,
+native body/LOS checks, authored routes and original retry switching are intact.
