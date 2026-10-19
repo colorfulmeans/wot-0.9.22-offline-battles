@@ -6,6 +6,7 @@ import sys
 import time
 
 from gui.mods.offline_lan_0922 import native_math
+from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 from gui.mods.offline_lan_0922.worker_diagnostics import count as combat_count
 
 
@@ -73,6 +74,7 @@ class NativeNavigation(object):
         self.total_worker_seconds = 0.0
         self.total_main_seconds = 0.0
         self.max_completion_age = 0.0
+        self.observed_now = 0.0
         sys.stdout.write('[Offline LAN 0.9.22] native asynchronous navigation active\n')
 
     @classmethod
@@ -115,9 +117,25 @@ class NativeNavigation(object):
         if not accepted:
             raise RuntimeError('native navigation job was not accepted')
         self.jobs[job.job_id] = job
+        self.observed_now = float(now)
+        self._job_event(job, 'submitted', now)
         self.total_submitted += 1
         combat_count('nav_async_submitted')
         return job
+
+    def _job_event(self, job, phase, now):
+        write_json_record('BOT SEARCH JOB', dict(
+            phase=phase, context=self.context, job_id=job.job_id, at=now,
+            submitted_at=job.submitted_at, age=max(0.,now-job.submitted_at),
+            clock_basis='simulation_seconds_last_native_service',
+            start=job.progress.get('start'), goal=job.progress.get('goal'),
+            status=job.status, progress_known=bool(job.done),
+            expanded=job.steps if job.done and job.status != 'cancelled' else None,
+            query_received=job.progress.get('query_received',0),
+            query_answered=job.progress.get('query_answered',0),
+            query_deferred=job.progress.get('query_deferred',0),
+            last_query_at=job.progress.get('last_query_at'),
+            last_answer_at=job.progress.get('last_answer_at')))
 
     def cancel(self, jobs):
         identifiers = []
@@ -130,12 +148,14 @@ class NativeNavigation(object):
                 job.done = True
                 job.result = ()
                 job.status = 'cancelled'
+                self._job_event(job, 'cancelled', self.observed_now)
         if identifiers and not self.closed:
             self.backend.nav_cancel(self.context, tuple(identifiers))
             self.total_cancelled += len(identifiers)
             combat_count('nav_async_cancelled', len(identifiers))
 
     def _poll(self, now):
+        self.observed_now = float(now)
         completed, queries, self.stats = self.backend.nav_poll(self.context)
         for row in completed:
             job_id, status, path, hull_revision, expanded, worker_seconds = row
@@ -153,6 +173,7 @@ class NativeNavigation(object):
             job.hull_revision = hull_revision
             job.last_frame = float(now)
             job.steps = int(expanded)
+            self._job_event(job, 'completed', float(now))
             self.total_completed += 1
             self.total_expansions += int(expanded)
             self.total_worker_seconds += float(worker_seconds)
@@ -168,6 +189,9 @@ class NativeNavigation(object):
                 queue = self.queries[job_id] = deque()
                 self.query_order.append(job_id)
             queue.append((query_id, start, end))
+            progress = self.jobs[job_id].progress
+            progress['query_received'] = progress.get('query_received',0)+1
+            progress['last_query_at'] = float(now)
 
     def advance(self, now, query_budget):
         """Drain results and service a fair bounded engine-query frontier."""
@@ -203,9 +227,14 @@ class NativeNavigation(object):
                     # owned by this job and retry next callback, never again
                     # in this callback's round-robin service loop.
                     deferred.append((job_id, query_id, start, end))
+                    progress = self.jobs[job_id].progress
+                    progress['query_deferred'] = progress.get('query_deferred',0)+1
                     combat_count('nav_async_query_unknown')
                 elif job_id in self.jobs:
                     answers.append((query_id, bool(clear)))
+                    progress = self.jobs[job_id].progress
+                    progress['query_answered'] = progress.get('query_answered',0)+1
+                    progress['last_answer_at'] = float(now)
                 budget -= 1
                 if queue:
                     self.query_order.append(job_id)
@@ -236,6 +265,7 @@ class NativeNavigation(object):
             job.done = True
             job.result = ()
             job.status = 'cancelled'
+            self._job_event(job, 'closed', self.observed_now)
         self.jobs.clear()
         self.queries.clear()
         self.query_order.clear()

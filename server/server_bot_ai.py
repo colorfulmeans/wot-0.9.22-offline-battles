@@ -1815,6 +1815,14 @@ class BotPlanner(object):
         if (previous.get("combat_mode") == "route" and
                 not (self._firing_holds.get(bot["id"]) or {}).get("destination")):
             return False
+        if (previous.get('combat_mode') in ('engage', 'support_hold') and
+                previous.get('throttle_override') == 0.0):
+            # Keep the enemy as a tracking target, not a stationary order
+            # whose firing lane is no longer valid. The caller resumes the
+            # existing authored leg and independently keeps launch disabled.
+            order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
+                reason='stationary_lane_lost', previous_mode=previous['combat_mode'])
+            return False
         if previous.get('combat_mode') == 'flank':
             state = bot['state']
             point = _point(previous.get('move_position'))
@@ -4296,7 +4304,7 @@ class BotPlanner(object):
         evidence.update(destination=dict(destination), move_until=record['move_until'])
         if _number(now) >= record['move_until']:
             evidence['reason'] = 'route_release_complete'
-            if releasing:
+            if releasing and order.get('fire_allowed'):
                 order.update(combat_mode='engage', throttle_override=0.0,
                              move_position=dict(position))
             self._firing_holds.pop(bot_id, None)

@@ -101,6 +101,29 @@ class NavigationOwnershipTests(unittest.TestCase):
     def submit(self):
         return self.owner.submit((0., 0., 0.), (16., 0., 8.), 1., 128, False)
 
+    def test_job_events_cover_submission_query_service_completion_and_cancel(self):
+        with mock.patch.object(native_navigation, 'write_json_record') as write:
+            job = self.submit()
+            self.backend.queries = [(1,job.job_id,(0.,0.,0.),(4.,0.,0.))]
+            self.owner.advance(1.2,384)
+            self.assertEqual(1,job.progress['query_received'])
+            self.assertEqual(1,job.progress['query_answered'])
+            self.backend.completed = [(job.job_id,'done',((0.,0.,0.),),0,23,.01)]
+            self.owner.advance(1.4,384)
+            event = write.call_args.args[1]
+            self.assertEqual('completed',event['phase'])
+            self.assertEqual(23,event['expanded'])
+            self.assertEqual(1,event['query_answered'])
+            cancelled = self.submit()
+            self.owner.cancel([cancelled])
+            event = write.call_args.args[1]
+            self.assertEqual('cancelled',event['phase'])
+            self.assertIsNone(event['expanded'])
+            last = self.submit()
+            self.owner.close()
+            self.assertEqual('closed',write.call_args.args[1]['phase'])
+            self.assertEqual(last.job_id,write.call_args.args[1]['job_id'])
+
     def test_corridor_oracle_known_results_share_cache_and_preserve_guards(self):
         start, end = (0., 0., 0.), (4., 0., 0.)
         for status in (0, 1):
