@@ -418,3 +418,28 @@ rebuilding the parent filter produces the exact same failure text/state. The
 current CI's water/grid subset (63 checks), actual native railway callback and
 native aim parity pass. This pre-existing full-state mismatch is not claimed
 as passed and is not repaired by changing driver/navigation policy here.
+
+### Full native-state audit boundary
+
+The full comparison explicitly installs `NativeNavigationCore`, an older C++
+TerrainNavigator state machine. Production `NativeSimulation` deliberately
+leaves its navigation and motion owners unset, retaining the Python navigation
+laws with independent native search/geometry primitives. Do not confuse the
+inactive full-state owner with the active native railway collision callback.
+
+Recording differences without stopping at the first assertion completed 30,795
+comparisons across five scenarios/900 frames. This diagnostic run is NOT a
+passing parity test: 528 next-target calls differ, beginning at scenario 0,
+frame 2, Bot 7: Python returns (8, 0, 4), native returns (32, 0, 4).
+Later cached paths and progress clocks differ too. Initial missing receipt
+fields alone therefore do not explain the failure. Python tracks temporary
+fallback visits, stalled episodes and pending-prefix progress; the old native
+state/serialization and observe_macro implementation do not mirror these laws.
+
+Rebuilding the pre-railway parent native filter and rerunning the expanded
+diagnostic produces identical comparison counts and every recorded difference.
+This is existing inactive implementation drift, not a railway-fix regression.
+The CI water/grid-only subset passes but does not establish full-state parity.
+Keep the inactive owner disabled; do not erase differing fields or alter live
+navigation to make this optional comparison pass. Any future activation must
+first port the complete current lifecycle and pass strict full comparisons.
