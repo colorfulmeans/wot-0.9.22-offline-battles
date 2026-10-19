@@ -94,7 +94,7 @@ class RouteEvidenceTests(unittest.TestCase):
 
     def test_moving_rejoin_records_each_rear_point_skip(self):
         p = BotPlanner()
-        route = _route('road', [(0, 0, False), (0, 50, False), (0, 100, False)])
+        route = _route('road', [(0, 0, False), (0, 100, False), (0, 200, False)])
         bot = p._alive_bots([_bot(17, 1, 0, route, 'heavyTank')],
                            [_state(17, 1, 0, 40)])[0]
         bot['state'].update(speed=2., yaw=3.141592653589793)
@@ -102,7 +102,10 @@ class RouteEvidenceTests(unittest.TestCase):
         receipt = p._route_states[17]['progress_receipt']['entry']
         self.assertEqual(10., receipt['sampled_at'])
         self.assertEqual(2, receipt['selected_index'])
-        self.assertTrue(receipt['skipped'])
+        self.assertEqual(['spawn_flag', 'behind_moving_hull'],
+                         [row['reason'] for row in receipt['skipped']])
+        self.assertEqual(1, receipt['skipped'][1]['index'])
+        self.assertAlmostEqual(-3.141592653589793, receipt['skipped'][1]['delta'])
 
 
 class PushTerminalEvidenceTests(unittest.TestCase):
