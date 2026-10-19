@@ -28,7 +28,7 @@ from gui.mods.offline_lan_0922.battle_feedback import (
 from gui.mods.offline_lan_0922 import battle_missions
 from gui.mods.offline_lan_0922.bot_runtime import (
     BOT_WATER_AVOID_DEPTH, BotRuntime, PROBE_KINDS,
-    WORKER_CONTROL_SECONDS, ground_pose_for_yaw, _shot_ballistics)
+    WORKER_CONTROL_SECONDS, ground_pose_for_yaw)
 from gui.mods.offline_lan_0922.entities.avatar_server import AvatarServerBridge
 from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
@@ -61,9 +61,8 @@ from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     WorkerCombatDiagnostics, timed, call as timed_call, observed_ray,
     observed_call, observed)
-from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 from gui.mods.offline_lan_0922 import (
-    aim_search, ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
+    ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
     destructibles_compat, device_damage, effective_params,
     equipment_mechanics, gun_mechanics, hull_aiming,
     lan_client as lan_protocol,
@@ -27046,12 +27045,10 @@ class BattleRuntime(object):
         if (entry is None or entry['record'] is not target_record or
                 entry['descriptor'] is not descriptor or
                 entry['geometry_ready'] != geometry_ready):
-            samples = shot_geometry.ordered_vehicle_aim_samples(descriptor)
             entry = {'record': target_record, 'descriptor': descriptor,
-                     'samples': samples,
+                     'samples': shot_geometry.ordered_vehicle_aim_samples(descriptor),
                      'geometry_ready': geometry_ready,
-                     'selected': None,
-                     'search': aim_search.OrderedSearch(len(samples))}
+                     'cursor': 0, 'selected': None}
             candidates[target_key] = entry
         return source_record, source_descriptor, entry
 
@@ -27075,34 +27072,6 @@ class BattleRuntime(object):
         except Exception:
             return None
 
-    def _bot_aim_reachable(self, source, target, descriptor, origin, point):
-        """Advisory reachability through the existing low-arc gun solver.
-
-        All-unreachable exposure still uses the original mechanical-relocation
-        path; this does not replace the final ballistic/friendly-fire proof.
-        """
-        if self._bots is None:
-            return None
-        try:
-            physical = _shot_ballistics(descriptor, source.get('shell_index', 0))
-            if physical is None:
-                return None
-            speed, gravity, maximum = physical
-            native = getattr(self._bots, '_native_simulation', None)
-            solve = (native.weapons.ballistic_intercept if native is not None
-                     else ballistics.ballistic_intercept)
-            solution = solve(origin, point, BotRuntime._target_velocity(target),
-                speed, gravity, -math.pi * 0.5, math.pi * 0.5)
-            if solution is None:
-                return False
-            aim, pitch, flight = solution
-            yaw = math.atan2(aim[0]-origin[0], aim[2]-origin[2])
-            return bool(flight <= ballistics.PROJECTILE_MAX_FLIGHT_SECONDS and
-                speed * flight <= maximum + 1e-6 and
-                BotRuntime._world_solution_reachable(source, descriptor, yaw, pitch))
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return None
-
     def _bot_aim_damage_score(self, descriptor, entry, source, target,
                               origin, point):
         """Rank a tested sample with the existing #1513 armour resolver.
@@ -27110,13 +27079,11 @@ class BattleRuntime(object):
         The midpoint penetration/damage rolls make this an advisory nominal
         estimate. It neither samples nor commits the real projectile's RNG.
         """
-        entry['armour_reason'] = 'armour_tested'
         try:
             target_descriptor = entry['descriptor']
             for name in ('chassis', 'hull', 'turret', 'gun'):
                 tester = _field(_field(target_descriptor, name), 'hitTester')
                 if not callable(getattr(tester, 'localHitTest', None)):
-                    entry['armour_reason'] = 'missing_%s_hit_test' % name
                     return None
             yaw = target.get('yaw', 0.0)
             matrix = self._runtime.math.Matrix()
@@ -27135,14 +27102,12 @@ class BattleRuntime(object):
                 proxy, matrix, self._vector(origin), self._vector(point),
                 self._runtime.math)
             if not collisions:
-                entry['armour_reason'] = 'no_armour_collision'
                 return None
             shot = self._descriptor_shot(descriptor, source.get('shell_index', 0))
             distance = math.sqrt(sum((point[i] - origin[i]) ** 2 for i in range(3)))
             contact = combat_rules.resolve_armor_contact(
                 shot, distance, collisions, penetration_factor=1.0)
             if contact is None:
-                entry['armour_reason'] = 'no_terminal_armour_contact'
                 return None
             if contact['layer'] != 'structural' and not combat_rules.is_he(shot):
                 return 0.0
@@ -27152,8 +27117,7 @@ class BattleRuntime(object):
             return float(combat_rules.damage(
                 shot, contact['result'], nominal,
                 rolled_damage=rolled_damage))
-        except Exception as error:
-            entry['armour_reason'] = 'armour_error:%s:%s' % (type(error).__name__, str(error))
+        except Exception:
             return None
 
     def _bot_firing_lane(self, source, target):
@@ -27192,56 +27156,69 @@ class BattleRuntime(object):
                     return False
                 record['bot_lane_origin'] = (pose_key, origin)
             selected = entry['selected']
-            selected_index = samples.index(selected) if selected in samples else None
+            attempts = [selected] if selected is not None else []
+            # Keep a still-clear part stable. On blockage, rotate through the
+            # remaining bbox samples across the existing bounded lane jobs.
+            visited = 0
+            while len(attempts) < 2 and visited < len(samples):
+                index = entry['cursor'] % len(samples)
+                entry['cursor'] = (index + 1) % len(samples)
+                visited += 1
+                if samples[index] not in attempts:
+                    attempts.append(samples[index])
+            entry['selected'] = None
+            # A gunner who has not worked out where this tank is soft still
+            # aims at something exposed. It ranks the tested parts only when
+            # its own competence roll succeeds for the current aiming epoch,
+            # so the same Bot finds the weak spot in one engagement and not
+            # in the next. A failed roll keeps whichever exposed part the
+            # rotating cursor offered, which is uncorrelated with armour -
+            # not knowing where to aim is that, and not the inverted armour
+            # solve it would take to deliberately pick the worst plate.
+            # No reachable Bot runtime means no rating to read, so the part
+            # ranking stays on. A Bot must never lose a competence because
+            # the plumbing that scores it went missing.
+            ranks = (self._bots is None or
+                     self._bots.bot_aim_selection_allowed(source, target))
+            # Neither end of this lane is its own blocker. Both are alive,
+            # so neither is in the wreck view either; keep the exclusion
+            # structural so a later predicate cannot strand every gunner.
             wreck_rows = self._bot_lane_wreck_rows()
             lane_ends = (record, entry['record'])
-            points = [(sample[0], shot_geometry.vehicle_aim_point(sample, target))
-                      for sample in samples]
-
-            def probe(index, point):
+            best = None
+            best_score = None
+            exposed = None
+            for sample in attempts:
+                point = shot_geometry.vehicle_aim_point(sample, target)
                 hit = self._runtime.bigworld.wg_collideSegment(
                     self._avatar.spaceID, self._vector(origin),
                     self._vector(point), 128)
-                if hit is not None or self._wreck_blocks_bot_path(
+                if hit is not None:
+                    continue
+                if self._wreck_blocks_bot_path(
                         wreck_rows, (origin, point), lane_ends):
-                    return dict(clear=False, score=None, reason='obstructed')
-                reachable = self._bot_aim_reachable(source, target, descriptor, origin, point)
-                if reachable is False:
-                    return dict(clear=True, score=0.0, reason='mechanically_unreachable')
+                    continue
                 score = self._bot_aim_damage_score(
                     descriptor, entry, source, target, origin, point)
-                return dict(clear=True, score=score, reachable=reachable,
-                            reason=entry.get('armour_reason', 'armour_tested'))
-
-            now = self._clock()
-            index, receipt = entry['search'].step(origin, points, target,
-                int(source.get('shell_index', 0)), now, selected_index, probe)
-            entry['selected'] = samples[index] if index is not None else None
-            receipt.update(source_id=source.get('id'), target_id=target.get('id'),
-                target_kind=target.get('kind'), selected=index, at=now,
-                shell_index=int(source.get('shell_index', 0)),
-                thresholds=dict(min_metres=0.1, max_metres=0.5,
-                    distance_fraction=0.005, pose_degrees=3.0,
-                    age_seconds=receipt['evidence_age_limit']))
-            entry['aim_search_receipt'] = receipt
-            log_key = (index, receipt['outcome'])
-            if (log_key != entry.get('aim_log_key') or
-                    now - entry.get('aim_log_at', -1e9) >= 1.0):
-                entry['aim_log_key'], entry['aim_log_at'] = log_key, now
-                write_json_record('BOT AIM SEARCH', receipt)
-            if entry['selected'] is not None:
-                return True
-            return None if receipt['outcome'] == 'searching' else False
-        except Exception as error:
+                if exposed is None:
+                    exposed = sample
+                # A part the armour resolver proved cannot be hurt is never a
+                # deliberate choice at any competence, only a last resort
+                # when nothing else in this job was clear.
+                if score == 0.0:
+                    continue
+                if best is None or (ranks and score is not None and
+                        best_score is not None and score > best_score):
+                    best, best_score = sample, score
+                # Missing material evidence cannot authorize a weak-spot
+                # claim. Preserve the exposed-part behaviour in that case.
+                if score is None or not ranks:
+                    break
+            entry['selected'] = best if best is not None else exposed
+            return entry['selected'] is not None
+        except Exception:
             if entry is not None:
                 entry['selected'] = None
-                now = self._clock()
-                if now - entry.get('aim_error_log_at', -1e9) >= 1.0:
-                    entry['aim_error_log_at'] = now
-                    write_json_record('BOT AIM SEARCH', dict(
-                        outcome='probe_error', source_id=source.get('id'),
-                        target_id=target.get('id'), at=now,
-                        error='%s:%s' % (type(error).__name__, str(error))))
             return False
         return False
 

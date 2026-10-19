@@ -152,12 +152,6 @@ class FriendlyManoeuvreTests(unittest.TestCase):
 
 
 class LocalActionFeedbackTests(unittest.TestCase):
-    def test_pending_aim_search_never_publishes_a_false_wall(self):
-        runtime = _load().BotRuntime(1, firing_lane_probe=lambda *args: None)
-        source = dict(id=1, x=0., y=0., z=0.)
-        target = dict(id=2, kind='bot', position=(0., 0., 10.))
-        self.assertIsNone(runtime._shot_clear(source, target, 10.))
-        self.assertFalse(runtime._shot_los_cache)
 
     def setUp(self):
         self.runtime = _load().BotRuntime(1)

@@ -97,7 +97,6 @@ jobs:
           --pattern 'test_port_0922_near_goal_evidence.py'
           --pattern 'test_port_0922_worker_query_reuse.py'
           --pattern 'test_port_0922_unknown_water.py'
-          --pattern 'test_port_0922_ordered_aim.py'
           --pattern 'test_port_0922_radio_routes.py'
           --pattern 'test_port_0922_shot_geometry.py'
           --pattern 'test_port_0922_tactical_geometry.py'

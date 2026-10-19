@@ -13145,16 +13145,9 @@ class BotRuntime(object):
         self._probe_totals[1] += 1
         probe_started = self._probe_started()
         try:
-            value = self.firing_lane_probe(source, target)
+            value = bool(self.firing_lane_probe(source, target))
         finally:
             self._probe_finished(1, probe_started)
-        if value is None:
-            # An unfinished bounded part search is not a wall. Keep the
-            # existing queue/cache lifetime; final aim requires a selected part.
-            if self._combat_diagnostics is not None:
-                self._combat_diagnostics.count('lane_part_search_pending')
-            return None
-        value = bool(value)
         self._shot_los_cache[key] = (_number(now), value)
         if self._combat_diagnostics is not None:
             self._combat_diagnostics.receipt_stored(key, _number(now), value)
