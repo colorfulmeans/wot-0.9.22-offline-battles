@@ -1297,10 +1297,11 @@ class LocalDriver(object):
 			# into fresh travel or a fresh left/right turn every planning tick.
 			origin = progress.setdefault('travel_origin', tuple(position))
 			travel = _distance(position, origin)
+			local_progress_admitted = _distance(progress_target, pocket_goal) > 2.0
 			# This frontier is local, not a global straight-line route metric.
 			# Leaving the same vehicle-sized pocket starts fresh travel/turn
 			# measurement, so a legitimate curved route may approach it again.
-			departed = travel >= 2.0 * own_half_length + arrival
+			departed = local_progress_admitted and travel >= 2.0 * own_half_length + arrival
 			progress['pocket_departed'] = departed
 			if departed:
 				progress['previous_travel_origin'] = origin
@@ -1312,9 +1313,10 @@ class LocalDriver(object):
 			order_distance = _distance(position, pocket_goal)
 			travel_best = progress.setdefault('travel_best', travel)
 			order_best = progress.setdefault('order_best', order_distance)
-			new_travel = travel >= travel_best + 0.08
+			new_travel = local_progress_admitted and travel >= travel_best + 0.08
 			new_order_distance = order_distance + 0.08 <= order_best
 			progress.update(travel_distance=travel, order_distance=order_distance,
+				local_progress_admitted=local_progress_admitted,
 				translation_credit=bool(new_travel or new_order_distance or departed),
 				alignment_credit=False)
 			if new_travel or new_order_distance or departed:

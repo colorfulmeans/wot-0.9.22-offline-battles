@@ -19966,7 +19966,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
 
-    def test_close_support_withdraws_without_losing_limited_traverse_fire(self):
+    def test_low_health_support_withdraws_without_losing_limited_traverse_fire(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(
                 reload_time=8.0, clip=(1,),
@@ -19989,6 +19989,7 @@ class BotRuntimeTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0,
                      aim_yaw=0.0, speed=0.0)
+        state['health'] = max(1, int(state.get('max_health', 1000) * .2))
         manifest[0]['route'] = {
             'id': 'support_lane', 'waypoints': [
                 {'x': 0.0, 'y': 0.0, 'z': -120.0},
@@ -20014,7 +20015,7 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('withdraw', order['combat_mode'])
+        self.assertEqual('low_health_retreat', order['combat_mode'])
         self.assertIsNone(order['throttle_override'])
         self.assertEqual({'x': 0.0, 'y': 0.0, 'z': -120.0},
                          order['move_position'])
