@@ -7206,7 +7206,7 @@ class BotRuntime(object):
             path_points=tuple(path[max(0, index - 1):index + 24]),
             path_points_truncated=max(0, len(path) - index - 24),
             target={key:target.get(key) for key in ('at', 'source', 'requested_goal',
-                'planning_goal', 'selected_target', 'final_target')},
+                'planning_goal', 'selected_target', 'final_target', 'runtime_leg_handoff')},
             query_policy='existing_receipts_only'))
 
     def _log_motion_stall(self, state, command, throttle, turn,
@@ -10078,8 +10078,24 @@ class BotRuntime(object):
                 target = candidate if candidate is not None else tuple(position)
                 state['navigation_stop_at_target'] = False
         remember = getattr(self.navigator, 'remember_runtime_target', None)
-        if movement_intent and tuple(target) != selected_target and callable(remember):
+        # Height resolution may change Y or round native XZ to float32. Neither
+        # changes who owns this steering endpoint. Promoting that ordinary A*
+        # vertex (or a pending hold at the hull) to a local escape prevents the
+        # navigator from advancing its own proved lookahead on the next tick.
+        # Use the same native-coordinate tolerance as local leg identity.
+        horizontal_change = any(abs(float(target[i])-float(selected_target[i])) > 1.e-4
+                                for i in (0, 2))
+        unconsumed = _distance(position, target) > ai_driver.WAYPOINT_ARRIVAL_RADIUS
+        handoff = dict(sampled_at=now, selected=selected_target, resolved=tuple(target),
+                       horizontal_change=horizontal_change, unconsumed=unconsumed,
+                       reason='movement_hold' if not movement_intent else
+                       'same_horizontal_endpoint' if not horizontal_change else
+                       'already_in_arrival_radius' if not unconsumed else
+                       'remember_owner_unavailable')
+        if movement_intent and horizontal_change and unconsumed and callable(remember):
             remember(bot_id, position, goal, target, now)
+            handoff['reason'] = 'horizontal_bypass_issued'
+        target_receipt['runtime_leg_handoff'] = handoff
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         progress_receipt = getattr(self.navigator, 'driver_progress_target', None)
