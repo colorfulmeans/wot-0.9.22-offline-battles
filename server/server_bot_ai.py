@@ -1189,6 +1189,8 @@ class BotPlanner(object):
         states = defense.get("states")
         states = states if isinstance(states, dict) else {}
         bases = defense.get("bases")
+        capturing = dict((team, self._defense_contributor_keys(defense, 3 - team))
+                         for team in (1, 2))
         live_by_team = dict((team, [
             bot for bot in bots
             if bot["team"] == team and self._base_defense_eligible(bot)
@@ -1198,12 +1200,25 @@ class BotPlanner(object):
             incident = self._base_defense.setdefault(team, {})
             responders = incident.setdefault("responders", {})
             blocked_until = incident.setdefault("blocked_until", {})
+            protected = sorted(bot["id"] for bot in bots if bot["team"] == team
+                               and ("bot", bot["id"]) in capturing[team])
+            previous_protected = (incident.get("capture_protection") or {}).get("protected", [])
+            released = sorted(set(protected).intersection(responders))
+            history = incident.setdefault("capture_protection_history", [])
+            if protected != previous_protected or released:
+                history.append(dict(at=_number(now), entered=sorted(set(protected)-set(previous_protected)),
+                    exited=sorted(set(previous_protected)-set(protected)), released_responders=released))
+                del history[:-16]
+            incident["capture_protection"] = dict(
+                at=_number(now), base_team=3 - team, protected=protected,
+                released_responders=released,
+                source="canonical_capture_contributors")
             for bot_id, deadline in list(blocked_until.items()):
                 if _number(now) >= deadline:
                     del blocked_until[bot_id]
             live = dict((bot["id"], bot) for bot in live_by_team[team])
             for bot_id in list(responders):
-                if bot_id not in live:
+                if bot_id not in live or ("bot", bot_id) in capturing[team]:
                     del responders[bot_id]
             raw_state = states.get(str(team), states.get(team, {}))
             raw_state = raw_state if isinstance(raw_state, dict) else {}
@@ -1262,7 +1277,8 @@ class BotPlanner(object):
                         record['last_progress_at'] = _number(now)
                     backups = [value for value in live
                                if value not in responders and
-                               value not in blocked_until]
+                               value not in blocked_until and
+                               ("bot", value) not in capturing[team]]
                     if (distance > ROUTE_ARRIVAL_RADIUS and backups and
                             _number(now) - record["last_progress_at"] >= 10.0):
                         blocked_until[bot_id] = _number(now) + 15.0
@@ -1331,7 +1347,8 @@ class BotPlanner(object):
                     candidates = []
                     for bot in live.values():
                         if (bot["id"] in responders or
-                                bot["id"] in blocked_until):
+                                bot["id"] in blocked_until or
+                                ("bot", bot["id"]) in capturing[team]):
                             continue
                         selected = min(points, key=lambda value: (
                             math.hypot(

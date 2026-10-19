@@ -15095,6 +15095,7 @@ class BattleState:
             round=self.round_id, at=now, context=context,
             candidates=[dict(id=bot['id'], team=bot['team'],
                 eligible=planner._base_defense_eligible(bot),
+                capture_protected=("bot", bot['id']) in planner._defense_contributor_keys(context, 3-bot['team']),
                 world_pose=bot['state'].get('world_pose', True),
                 critical=bot['state'].get('critical'),
                 position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})

@@ -7433,6 +7433,7 @@ class BotRuntime(object):
                 rear_hull_aim=state.get('_rear_hull_aim'),
                 rear_aim_episode=state.get('_rear_aim_episode'),
                 rear_motion_lease=state.get('_rear_motion_lease'),
+                rear_approach=state.get('_rear_approach_receipt'),
                 rear_motion_blocked=state.get('_rear_motion_blocked', False),
                 clip=state.get('clip'),
                 ammo_reload_pending=state.get('ammo_reload_pending'),
@@ -14349,9 +14350,39 @@ class BotRuntime(object):
                 result.update(combat_mode='advance_contact', move_position=point)
         return result
 
+    def _rear_approach_blocked(self, state, order, targets, now):
+        """A fresh blocked lane leaves authored approach in control of travel.
+
+        Unknown/expired evidence cannot veto normal limited-traverse laying.
+        This reads the existing pair/pose cache and performs no extra scan.
+        """
+        target = targets.get(order.get('target_id'))
+        eligible = (order.get('combat_mode') == 'advance_contact' and
+                    not order.get('parking_phase') and target is not None and
+                    target.get('alive', True))
+        sample = (self._shot_los_cache.get(self._shot_los_key(state, target))
+                  if eligible else None)
+        age = _number(now) - sample[0] if sample is not None else None
+        blocked = bool(sample is not None and not sample[1] and
+            0.0 <= age <= SHOT_LANE_REFRESH_SECONDS + self._control_seconds + 1e-9)
+        state['_rear_approach_receipt'] = dict(at=now,
+            target_id=order.get('target_id'), mode=order.get('combat_mode'),
+            sampled_at=sample[0] if sample is not None else None,
+            age_seconds=age, blocked=blocked, reason=(
+                'blocked_lane_approach_owns_motion' if blocked else
+                'lane_unknown' if eligible and sample is None else
+                'lane_clear' if sample is not None and sample[1] else
+                'lane_expired' if sample is not None else 'not_approach'))
+        state['_rear_approach_blocked'] = blocked
+        return blocked
+
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
         # A new enemy cannot renew the same stationary movement attempt.
+        blocked_approach = self._rear_approach_blocked(state, order, targets, now)
+        if blocked_approach:
+            state.pop('_rear_aim_episode', None)
+            state.pop('_rear_hull_aim', None)
         lease = state.get('_rear_motion_lease')
         motion_blocked = False
         if lease is not None:
@@ -14370,7 +14401,7 @@ class BotRuntime(object):
                 if retry_until is None:
                     lease['retry_until'] = now + max(8.0, _number(state.get('reload_time')))
                 motion_blocked = True
-        state['_rear_motion_blocked'] = motion_blocked
+        state['_rear_motion_blocked'] = motion_blocked or blocked_approach
         episode = state.get('_rear_aim_episode')
         if episode is None:
             return order

@@ -1145,7 +1145,8 @@ class LocalDriver(object):
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
 			progress_target=None, turn_speed_limit=None, arrival_radius=None,
-			rotation_refused=False, recovery_goal=None, body=None):
+			rotation_refused=False, recovery_goal=None, body=None,
+			progress_identity=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1189,6 +1190,13 @@ class LocalDriver(object):
 			state['traffic_wait_time'] = 0.0
 		state['last_step'] = step
 		state['clock'] += step
+		# A moving enemy and a mechanical sub-action are not new journeys.
+		# Only a different tactical owner may discard this progress episode.
+		if state.get('progress_identity') != progress_identity:
+			state.pop('objective_progress', None)
+			state.pop('recovery_pocket', None)
+			state.pop('recovery_replan_episode', None)
+		state['progress_identity'] = progress_identity
 		self._prune_failures(state)
 		state['steering_age'] += step
 		state['plan_age'] += step
@@ -1197,20 +1205,33 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			preserve_progress = progress_identity is not None and state.get('objective_progress') is not None
 			state.pop('arrival_trace', None)
 			state['native_translation_stalled'] = False
 			state.pop('short_translation_escape', None)
 			state.pop('translation_escape', None)
-			state['translation_progress_at'] = state['clock']
-			state.pop('objective_progress', None)
-			state.pop('recovery_replan_episode', None)
-			state.pop('recovery_pocket', None)
-			state.pop('short_escape_probes', None)
+			if preserve_progress:
+				# Pause an intentional firing hold, rather than either granting
+				# new travel or counting the hold itself as a failed movement.
+				state['objective_progress']['at'] += step
+				state['objective_progress']['hold_paused_seconds'] = state['objective_progress'].get('hold_paused_seconds', 0.0) + step
+				state['objective_progress'].update(hold_paused=True,
+					translation_credit=False, alignment_credit=False,
+					credit_age_seconds=state['clock'] - state['objective_progress']['at'])
+				state['translation_progress_at'] = state.get('translation_progress_at', state['clock'] - step) + step
+			else:
+				state['translation_progress_at'] = state['clock']
+				state.pop('objective_progress', None)
+			if not preserve_progress:
+				state.pop('recovery_replan_episode', None)
+				state.pop('recovery_pocket', None)
+				state.pop('short_escape_probes', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
-			state['stuck_time'] = 0.0
-			state['recovery_time'] = 0.0
-			state['recovery_side'] = 0.0
+			if not preserve_progress:
+				state['stuck_time'] = 0.0
+				state['recovery_time'] = 0.0
+				state['recovery_side'] = 0.0
 			state['steering_yaw'] = None
 			state['heading_progress_yaw'] = None
 			state['braking_target'] = None
@@ -1228,7 +1249,7 @@ class LocalDriver(object):
 		pocket = state.get('recovery_pocket')
 		if pocket is not None and (
 				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
-				_distance(pocket['goal'], pocket_goal) > 2.0):
+				(progress_identity is None and _distance(pocket['goal'], pocket_goal) > 2.0)):
 			state.pop('recovery_pocket', None)
 			state.pop('short_escape_probes', None)
 			pocket = None
@@ -1254,9 +1275,9 @@ class LocalDriver(object):
 		if progress_target is not None:
 			progress = state.get('objective_progress')
 			distance = _distance(position, progress_target)
-			goal_changed = bool(progress is not None and
+			goal_changed = bool(progress_identity is None and progress is not None and
 				_distance(progress.get('order_goal', progress['goal']), pocket_goal) > 2.0)
-			if progress is None or goal_changed or _distance(position, pocket_goal) <= arrival:
+			if progress is None or goal_changed or (progress_identity is None and _distance(position, pocket_goal) <= arrival):
 				reset_receipt = dict(at=state['clock'], position=tuple(position),
 					previous_order=progress.get('order_goal') if progress else None,
 					previous_goal=progress.get('goal') if progress else None,
@@ -1266,6 +1287,7 @@ class LocalDriver(object):
 					previous_alignment_best=progress.get('alignment_best') if progress else None,
 					new_order=tuple(pocket_goal))
 				progress = {'goal': tuple(progress_target), 'best': distance,
+				            'identity': progress_identity,
 				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
 				            'travel_origin': tuple(position), 'travel_best': 0.0,
 				            'order_best': _distance(position, pocket_goal),
@@ -1302,7 +1324,7 @@ class LocalDriver(object):
 			# into fresh travel or a fresh left/right turn every planning tick.
 			origin = progress.setdefault('travel_origin', tuple(position))
 			travel = _distance(position, origin)
-			local_progress_admitted = _distance(progress_target, pocket_goal) > 2.0
+			local_progress_admitted = progress_identity is not None or _distance(progress_target, pocket_goal) > 2.0
 			# This frontier is local, not a global straight-line route metric.
 			# Leaving the same vehicle-sized pocket starts fresh travel/turn
 			# measurement, so a legitimate curved route may approach it again.
@@ -1315,12 +1337,16 @@ class LocalDriver(object):
 				progress.pop('alignment_yaw', None)
 				progress.pop('alignment_best', None)
 				travel = 0.0
-			order_distance = _distance(position, pocket_goal)
+			# Measure the same destination from both poses. Enemy translation
+			# must never earn distance credit for a stationary chassis.
+			order_anchor = progress.get('order_goal', pocket_goal)
+			order_distance = _distance(position, order_anchor)
 			travel_best = progress.setdefault('travel_best', travel)
 			order_best = progress.setdefault('order_best', order_distance)
 			new_travel = local_progress_admitted and travel >= travel_best + 0.08
 			new_order_distance = order_distance + 0.08 <= order_best
 			progress.update(travel_distance=travel, order_distance=order_distance,
+				hold_paused=False, requested_order_goal=tuple(pocket_goal),
 				local_progress_admitted=local_progress_admitted,
 				translation_credit=bool(new_travel or new_order_distance or departed),
 				alignment_credit=False)

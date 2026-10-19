@@ -8,7 +8,7 @@ on `fix/terminal-route-capture-handoff` (PR #95). The new branch is
 do not substitute the release tag or another 0.10.1 launcher revision.
 
 Runtime evidence: `wot-error-report-20261019-172753-0e3742a48adc.zip`, one
-round on `86_himmelsdorf_winter`, 17:20:47â€“17:27:37, team 1 capture victory.
+round on `86_himmelsdorf_winter`, 17:20:47Ã¢â‚¬â€œ17:27:37, team 1 capture victory.
 The report's build identity is `colorfulmeans-39226708047-1`.
 
 ## Diagnosed failures and implemented ownership
@@ -501,3 +501,48 @@ old assertions preserve their original safety purpose under the new interval
 and body envelope. The inactive full-native-state parity limitation above is
 unchanged and must not be represented as passing. Windows gameplay acceptance
 of these changes remains the user's next test, not an engine-free test claim.
+
+
+## Combat progress ownership and active-capturer exclusion (October 20)
+
+Baseline: `6f370f47`. Reports `022452-476a3cfef008` and
+`023149-1f826bf4b0e2` expose separate ownership defects, not a new path policy.
+
+* M4190, AMX 13 57 and T-54 change mechanical/approach/withdraw sub-actions
+  within one enemy task. Previously moving enemy coordinates or a firing hold
+  erased the objective clock, and a hold cancelled an unfinished recovery.
+  Keep the physical progress frontier, alignment anchor and retry episode for
+  the same selected actor. Intentional holds pause rather than erase travel
+  failure time. New enemies/noncombat tasks release that scope. Actual travel
+  out of the hull-sized pocket still starts a fresh frontier; target movement
+  alone earns no translation. Existing collision admission, recovery actions,
+  failure counts and reroute policy remain authoritative.
+* T28 Concept and SU-100M1 can replace a known blocked-lane approach with rear
+  mechanical parking. Read the existing exact pair/pose lane cache before rear
+  ownership and fence both episode continuation and later creation in the same
+  update. Only fresh blocked approach evidence prevents that parking. Unknown,
+  expired and clear evidence, normal rear withdrawal and limited-traverse
+  aiming retain their original laws. No additional collision/shot query is
+  introduced. The existing eight-second rear timeout already works and is kept.
+* Base defense changes only eligibility for actual active capturers of the
+  opposing base, using canonical `(kind, id)` contributor records. Exclude them
+  from new/backup choices and release any existing responder which enters
+  capture. Leaving capture restores eligibility. Quotas, ETA ranking, deadlines,
+  release timing and pressure dispatch do not change. Capture entry/exit and
+  responder releases retain bounded history alongside the existing full input
+  and final-order log. A 96-case comparison against baseline gives identical
+  non-capture responder results; quota regression tests include a capturer plus
+  two available defenders, so exclusion cannot silently shrink the old quota.
+
+The new ownership suite covers moving targets without self movement, sub-action
+changes, paused/completed recovery, true new tasks, real curved translation,
+recorded decision inputs for all three loop cases, native-cache freshness and
+full runtime continuation/creation of rear episodes. It is included explicitly
+in CI. Existing support one-invalid/five-valid, physical/occlusion and retry
+checks remain. No navigation grids, routes, slope rules, shot candidates,
+crushing damage or independent test layouts are changed.
+
+Recorded input replay proves the progress owner, not unseen native motion.
+Windows gameplay acceptance is still required. The pre-existing Airfield 24-FPS
+fixture failure (Bots 18/27 at 5.877/11.344 m) and inactive full-native navigation
+state drift above must remain visible; neither is suppressed to publish a pass.
