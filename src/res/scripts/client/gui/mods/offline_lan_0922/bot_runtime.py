@@ -14493,6 +14493,7 @@ class BotRuntime(object):
                  'artillery_deploy', 'artillery_relocate')):
             lease = dict(start=now, origin=position, goal=tuple(order['move_position']),
                          fire_seq=int(state.get('fire_seq', 0)),
+                         target_id=order.get('target_id'),
                          source='existing_laying_received_movement')
             state['_rear_motion_lease'] = lease
             observation['reason'] = 'existing_laying_received_movement'
@@ -14503,8 +14504,9 @@ class BotRuntime(object):
             # A temporary engage/current-pose order is not arrival at the
             # movement objective which admitted this lease. Keep its goal and
             # clock through the same-target stop/approach handoff.
-            if 'goal' not in lease and _distance(position, requested) > 1.5:
+            if ('goal' not in lease or lease.get('target_id') != order.get('target_id')) and _distance(position, requested) > 1.5:
                 lease['goal'] = requested
+                lease['target_id'] = order.get('target_id')
             goal = _point(lease.get('goal'), lease['origin'])
             fired = int(state.get('fire_seq', 0)) != lease.get('fire_seq',
                 int(state.get('fire_seq', 0)))
@@ -14534,8 +14536,11 @@ class BotRuntime(object):
         if motion_blocked and order.get('combat_mode') == 'engage' and lease.get('goal'):
             # Only the previously admitted combat approach resumes. Keep the
             # enemy and fire permission; final gun/lane checks still own shots.
-            order = dict(order, combat_mode='advance_contact',
-                         move_position=lease['goal'])
+            target = targets.get(order.get('target_id'))
+            resume_goal = (_point(target.get('position'), _position(target))
+                if target is not None and lease.get('target_id') != order.get('target_id')
+                else lease['goal'])
+            order = dict(order, combat_mode='advance_contact', move_position=resume_goal)
             order.pop('throttle_override', None)
             observation['effective_mode'] = order['combat_mode']
             observation['effective_move'] = order['move_position']
@@ -16314,6 +16319,7 @@ class BotRuntime(object):
                         command.get('combat_mode') != 'engage'):
                     state['_rear_motion_lease'] = dict(start=now, origin=tuple(position),
                         goal=_point((server_order or {}).get('move_position'), position),
+                        target_id=command.get('target_id'),
                         fire_seq=int(state.get('fire_seq', 0)))
                 if state.get('_rear_aim_episode') is None:
                     state['_rear_aim_episode'] = dict(

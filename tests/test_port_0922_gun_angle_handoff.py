@@ -31,7 +31,7 @@ class MechanicalHandoffTests(unittest.TestCase):
 
     def lease(self):
         value = dict(start=246.696, origin=self.position(),
-                     goal=self.target['position'], fire_seq=5)
+                     goal=self.target['position'], fire_seq=5, target_id=11)
         self.state['_rear_motion_lease'] = value
         return value
 
@@ -74,6 +74,15 @@ class MechanicalHandoffTests(unittest.TestCase):
                 if cause=='base_defense':order['combat_mode']='base_defense'
                 self.laying(order,250.)
                 self.assertNotIn('_rear_motion_lease',self.state)
+
+    def test_new_attacker_keeps_budget_but_cannot_resume_previous_enemys_destination(self):
+        lease=self.lease()
+        new=dict(self.target,id=12,position=(-50.,0.,30.))
+        order=dict(self.hold,target_id=12)
+        result=self.runtime._rear_laying_order(self.state,order,{12:new},255.)
+        self.assertEqual(12,result['target_id'])
+        self.assertEqual(new['position'],result['move_position'])
+        self.assertEqual(246.696,lease['start'])
 
     def test_mechanical_relocation_backs_out_of_enemy_contact(self):
         self.state.update(x=0.,y=0.,z=0.,yaw=0.,_gun_angle_refusal=('bot',11))
