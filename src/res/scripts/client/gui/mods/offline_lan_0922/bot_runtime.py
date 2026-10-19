@@ -12582,6 +12582,10 @@ class BotRuntime(object):
             local_angles = (
                 _angle_delta(desired_yaw, state['yaw']), world_pitch)
         raw_relative, raw_pitch = local_angles
+        if target is None and not isinstance(ballistic_solution, dict):
+            # A rolled/pitched chassis can couple world-horizontal yaw into
+            # local yaw. Rest centres the turret on the chassis itself.
+            raw_relative = 0.0
         state['_diagnostic_aim_intent'] = {
             'owner': ('enemy' if target is not None else
                       'ballistic' if isinstance(ballistic_solution, dict) else

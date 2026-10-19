@@ -9746,6 +9746,19 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertEqual('hull_forward_rest',
                              state['_diagnostic_aim_intent']['owner'])
             self.assertFalse(state['gun_aligned'])
+        # Chassis pitch/roll may couple a horizontal world ray into nonzero
+        # local yaw. Idle rest must still centre on the actual chassis.
+        original = runtime._local_gun_angles_for_world
+        runtime._local_gun_angles_for_world = lambda *unused: (.30, -.10)
+        try:
+            state.update(turret_yaw=.65, pitch=.20, roll=.15)
+            for unused in range(50):
+                runtime._update_gun_aim(state, command, None, .20)
+            self.assertAlmostEqual(0., state['turret_yaw'], places=6)
+            self.assertAlmostEqual(-.10,
+                                   state['_diagnostic_aim_intent']['gun_pitch'])
+        finally:
+            runtime._local_gun_angles_for_world = original
 
     def test_point_blank_target_tracks_its_live_world_bearing(self):
         runtime = self.module.BotRuntime(
