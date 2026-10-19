@@ -1800,7 +1800,10 @@ class BotPlanner(object):
         if not isinstance(previous, dict) or previous.get(
                 "combat_mode") not in (
                 "advance", "advance_contact", "support_hold", "engage", "flank",
-                "take_cover", "cover_hold", "cover_peek", "cover_return"):
+                "route", "take_cover", "cover_hold", "cover_peek", "cover_return"):
+            return False
+        if (previous.get("combat_mode") == "route" and
+                not (self._firing_holds.get(bot["id"]) or {}).get("destination")):
             return False
         for name in (
                 "combat_mode", "move_position", "face_position",
@@ -3938,7 +3941,8 @@ class BotPlanner(object):
                     return order
                 if self._apply_leased_movement_order(
                         order, bot, focus):
-                    self._firing_holds.pop(bot["id"], None)
+                    self._release_unproductive_firing_hold(
+                        order, bot, move, route_anchor, now)
                     return order
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
@@ -4058,8 +4062,14 @@ class BotPlanner(object):
         """A ready gun without a shot cannot lease an ordinary hold forever."""
         state = bot['state']
         bot_id = bot['id']
-        if (order.get('combat_mode') not in ('engage', 'support_hold') or
-                order.get('throttle_override') != 0.0 or
+        active = self._firing_holds.get(bot_id)
+        releasing = (order.get('combat_mode') == 'route' and
+                     active is not None and active.get('destination') is not None)
+        evidence = dict(sampled_at=now, mode=order.get('combat_mode'),
+                        fire_seq=state.get('fire_seq'), reason='ineligible')
+        order.setdefault('tactical_evidence', {})['firing_hold'] = evidence
+        if ((not releasing and (order.get('combat_mode') not in ('engage', 'support_hold') or
+                order.get('throttle_override') != 0.0)) or
                 'fire_seq' not in state or not self._weapon_ready(bot)):
             self._firing_holds.pop(bot_id, None)
             return
@@ -4069,11 +4079,15 @@ class BotPlanner(object):
         sequence = _integer(state.get('fire_seq'))
         if (record is None or record['target'] != key or
                 record['fire_seq'] != sequence or
-                math.hypot(position['x'] - record['position']['x'],
-                           position['z'] - record['position']['z']) >= 2.0):
+                (not releasing and math.hypot(
+                    position['x'] - record['position']['x'],
+                    position['z'] - record['position']['z']) >= 2.0)):
             record = dict(target=key, fire_seq=sequence, position=position,
                           ready_since=_number(now))
             self._firing_holds[bot_id] = record
+        evidence.update(ready_since=record['ready_since'],
+                        ready_elapsed=_number(now)-record['ready_since'],
+                        reason='ready_without_shot')
         if _number(now) - record['ready_since'] < 8.0:
             return
         destination = record.get('destination')
@@ -4082,12 +4096,19 @@ class BotPlanner(object):
                 if math.hypot(point['x'] - position['x'],
                               point['z'] - position['z']) > ROUTE_ARRIVAL_RADIUS), None)
             if destination is None:
+                evidence['reason'] = 'no_authored_route_destination'
                 return
             record['destination'] = destination
             record['move_until'] = _number(now) + 4.0
+        evidence.update(destination=dict(destination), move_until=record['move_until'])
         if _number(now) >= record['move_until']:
+            evidence['reason'] = 'route_release_complete'
+            if releasing:
+                order.update(combat_mode='engage', throttle_override=0.0,
+                             move_position=dict(position))
             self._firing_holds.pop(bot_id, None)
             return
+        evidence['reason'] = 'route_release_active'
         # Continue a map-authored route leg while the turret retains its target.
         # Reloading, cover manoeuvres and explicit low-health holds never enter
         # this branch; no new unproved wall-side destination is fabricated.

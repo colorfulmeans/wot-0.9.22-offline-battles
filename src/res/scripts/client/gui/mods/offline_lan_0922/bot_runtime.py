@@ -7292,7 +7292,9 @@ class BotRuntime(object):
         driver_trace = {key: driver_state.get(key) for key in (
             'clock', 'stuck_time', 'recovery_time', 'recovery_count',
             'alignment_target', 'heading_progress_yaw', 'best_heading_error',
-            'translation_progress_at', 'native_translation_stalled')}
+            'translation_progress_at', 'native_translation_stalled',
+            'recovery_side', 'recovery_timing_phase', 'last_clear_yaw',
+            'steering_yaw', 'steering_reason', 'steering_age', 'plan_age')}
         driver_trace['objective_progress'] = dict(driver_state.get('objective_progress') or {})
         driver_trace['alignment_observation'] = dict(driver_state.get('alignment_observation') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
@@ -7305,6 +7307,19 @@ class BotRuntime(object):
                 control_sampled_simulation_at=(command.get('control_trace') or {}).get('sampled_at'),
                 command_mode=command.get('recovery_mode'))
         driver_trace['failure_receipts'] = list(driver_state.get('failure_receipts') or ())
+        driver_trace['arrival_trace'] = dict(driver_state.get('arrival_trace') or {})
+        driver_trace['failed_yaw_deadlines'] = sorted(
+            (driver_state.get('failed_yaws') or {}).items())
+        driver_trace['action_observation'] = dict(
+            observed_at=now, control_sampled_at=(command.get('control_trace') or {}).get('sampled_at'),
+            recovery_mode=command.get('recovery_mode'),
+            requested=(command.get('throttle'), command.get('turn')),
+            applied=(throttle, turn), previous=state.get('_last_stall_action'))
+        state['_last_stall_action'] = dict(observed_at=now,
+            recovery_mode=command.get('recovery_mode'),
+            recovery_count=driver_state.get('recovery_count'),
+            recovery_time=driver_state.get('recovery_time'),
+            target_yaw=command.get('target_yaw'))
         driver_trace['navigation_wait'] = dict(
             driver_state.get('navigation_wait') or {})
         # Finish this rare diagnostic after every authority gate has run.
@@ -7492,6 +7507,8 @@ class BotRuntime(object):
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
+            'gun_angle_handoff': dict(state.get('_gun_angle_handoff') or {}),
+            'translation_sweep': dict(state.get('_translation_motion_receipt') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
                 for key, deadline in sorted((state.get('_gun_angle_rejected') or {}).items())],
@@ -10419,7 +10436,7 @@ class BotRuntime(object):
             bodies.append(body)
         return bodies
 
-    def _guard_tank_translations(self, players, tick_poses, sample_time_us=None):
+    def _guard_tank_translations(self, players, tick_poses, sample_time_us=None, step=None):
         # Sweep against the same pre-drive roster so an earlier actor cannot
         # tunnel past another before that actor gets its turn. Final contact
         # constraints then use the accepted endpoints and incoming velocities.
@@ -10435,6 +10452,7 @@ class BotRuntime(object):
         for state in self._ordered_states():
             if not state.get('alive', True):
                 state['ram_motion'] = []
+                state.pop('_translation_motion_receipt', None)
                 continue
             start = tick_poses.get(state['id'])
             if start is None:
@@ -10442,7 +10460,7 @@ class BotRuntime(object):
             move = (state['x']-start[0], state['z']-start[2])
             contacts = []
             fraction = tank_collision.translation_fraction(
-                by_id[state['id']], move, bodies, contacts=contacts, contact_ids=players_by_id)
+                by_id[state['id']], move, bodies, contacts=contacts)
             # Keep only an actual enemy player contact. No world query or
             # predicted motor velocity belongs to this incoming HP evidence.
             previous = dict((row[0], row) for row in state.get('ram_motion', ()))
@@ -10498,6 +10516,57 @@ class BotRuntime(object):
             accepted = tank_collision.slide_translation(
                 by_id[state['id']], move, bodies, first_fraction=fraction)
             state['x'], state['z'] = start[0]+accepted[0], start[2]+accepted[1]
+            state['_translation_motion_receipt'] = dict(
+                sampled_at_us=sample_time_us, start=start, requested=move,
+                accepted=accepted, fraction=fraction, contacts=list(contacts),
+                speed_before=state.get('speed', 0.0), step=step,
+                outcome='pending_contact_solver')
+
+    def _settle_unresolved_drive_sweep(self, state):
+        # A rejected sweep need not receive a normal impulse from the solver.
+        # Preserve its incoming speed for collision impulses, then settle only
+        # motor motion for which the solver supplied no velocity response.
+        receipt = state.get('_translation_motion_receipt')
+        if not receipt or receipt.get('outcome') != 'pending_contact_solver':
+            return
+        speed = state.get('speed', 0.0)
+        receipt['speed_after_solver'] = speed
+        receipt['outcome'] = 'unrestricted'
+        if receipt['fraction'] >= 1.0:
+            return
+        # Human contact impulses are owned by the visible client and can still
+        # be in flight. An absent local impulse is intentional for that pair,
+        # not evidence that its incoming drive velocity was left unresolved.
+        if any(peer >= HUMAN_TARGET_ID_BASE for peer, at in receipt.get('contacts', ())
+               if at <= receipt['fraction'] + 1.0e-9):
+            receipt['outcome'] = 'velocity_owned_by_remote_player'
+            return
+        if abs(speed - receipt['speed_before']) > 1.0e-9:
+            receipt['outcome'] = 'velocity_owned_by_contact_solver'
+            return
+        step = receipt.get('step')
+        if step is None or step <= 0.0:
+            receipt['outcome'] = 'missing_physics_step'
+            return
+        yaw = state['yaw']
+        requested = sum(receipt['requested'][i] * axis for i, axis in
+                        enumerate((math.sin(yaw), math.cos(yaw))))
+        if requested * speed <= 0.0:
+            receipt['outcome'] = 'not_forward_motor_displacement'
+            return
+        start = receipt['start']
+        realized = ((state['x']-start[0])*math.sin(yaw) +
+                    (state['z']-start[2])*math.cos(yaw)) / step
+        forced = self._retained_contact_speed(
+            speed, state.get('_contact_forward_speed', 0.0))
+        motor = speed - forced
+        # Never reverse a motor or erase externally owned momentum here.
+        allowed = max(0.0, min(abs(motor),
+            (realized-forced) * (1.0 if motor >= 0.0 else -1.0)))
+        state['speed'] = forced + math.copysign(allowed, motor)
+        receipt.update(outcome='unresolved_motor_sweep_settled',
+                       realized_forward_speed=realized, retained_external_speed=forced,
+                       speed_final=state['speed'])
 
     @staticmethod
     def _retained_contact_speed(speed, forced):
@@ -14069,6 +14138,11 @@ class BotRuntime(object):
                     not order.get('parking_phase') and
                     order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold'))
         position = _position(state)
+        receipt = dict(sampled_at=now, eligible=eligible, speed=state.get('speed'),
+                       target_id=order.get('target_id'), mode=order.get('combat_mode'),
+                       throttle_override=order.get('throttle_override'),
+                       refusal=state.get('_gun_angle_refusal'), reason='ineligible')
+        state['_gun_angle_handoff'] = receipt
         if not eligible:
             state.pop('_gun_angle_adjustment', None)
             if order.get('parking_phase'):
@@ -14077,16 +14151,23 @@ class BotRuntime(object):
         target = targets.get(order.get('target_id'))
         identity = self._artillery_target_identity(target)
         if identity is not None and self._gun_angle_rejected(state, identity, now):
+            receipt['reason'] = 'bounded_attempt_rejected'
             return self._gun_angle_route_order(state, order)
         refusal = state.get('_gun_angle_refusal')
         if identity is None or refusal != identity:
+            receipt['reason'] = 'no_matching_mechanical_refusal'
             state.pop('_gun_angle_adjustment', None)
             return order
         # Do not interrupt an existing approach, retreat or cover move.
         goal = _point(order.get('move_position'), position)
         marker = state.get('_gun_angle_adjustment')
+        stationary_hold = order.get('throttle_override') == 0.0
+        receipt.update(anchor_distance=_distance(position, goal),
+                       stationary_hold=stationary_hold)
         if marker is None and (abs(_number(state.get('speed'))) > 1.0 or
-                               _distance(position, goal) > ai_driver.WAYPOINT_ARRIVAL_RADIUS):
+                (not stationary_hold and
+                 _distance(position, goal) > ai_driver.WAYPOINT_ARRIVAL_RADIUS)):
+            receipt['reason'] = 'existing_approach_in_progress'
             return order
         if marker is None:
             marker = {'start': now, 'destination': None,
@@ -14098,6 +14179,7 @@ class BotRuntime(object):
                       face_position=_point(target.get('position'), _position(target)),
                       fire_allowed=False, arrival_radius=1.0)
         result.pop('throttle_override', None)
+        receipt.update(reason='hull_facing', elapsed=elapsed)
         if elapsed < 2.0:
             return result
         if elapsed < 6.0 and not marker['selected']:
@@ -14116,13 +14198,17 @@ class BotRuntime(object):
                         marker['reverse'] = candidate_yaw != yaw
                         break
         destination = marker['destination']
+        receipt.update(destination=destination, selected=marker['selected'])
         if elapsed < 6.0 and destination is not None:
+            receipt['reason'] = 'checked_mechanical_relocation'
             result.update(move_position=destination,
                           combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
                           throttle_override=1.0)
             return result
         if elapsed < 6.0 and not marker['selected']:
+            receipt['reason'] = 'candidate_budget_deferred'
             return result
+        receipt['reason'] = 'bounded_attempt_complete'
         rejected = state.setdefault('_gun_angle_rejected', {})
         if len(rejected) >= 8:
             rejected.pop(min(rejected, key=rejected.get), None)
@@ -16738,7 +16824,7 @@ class BotRuntime(object):
         # complete roster only after every live body reaches that boundary.
         pending_ram_count = len(self._pending_ram_reports)
         if not self.native_motion:
-            self._guard_tank_translations(players, tick_poses, step_end_time_us)
+            self._guard_tank_translations(players, tick_poses, step_end_time_us, frame_step)
             self._contact_players = players
             self._contact_now = now
             for bot_id, forced_speed in passive_forwards.items():
@@ -16824,6 +16910,7 @@ class BotRuntime(object):
                 clear_contact = getattr(self.navigator, 'clear_blocked_contact', None)
                 if callable(clear_contact):
                     clear_contact(bot_id)
+            self._settle_unresolved_drive_sweep(state)
             self._observe_near_goal_motion(state,tick_poses[bot_id],drive_targets.get(bot_id),now)
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),

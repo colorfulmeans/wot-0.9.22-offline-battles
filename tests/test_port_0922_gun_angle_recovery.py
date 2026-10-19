@@ -50,6 +50,29 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 7.))
         self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 14.))
 
+    def test_explicit_stationary_hold_admits_adjustment_with_stale_anchor(self):
+        self.refuse()
+        self.order.update(move_position=(6.27, 0., 0.), throttle_override=0.)
+        self.order_at(10.)
+        self.assertEqual(10., self.state['_gun_angle_adjustment']['start'])
+        moved = self.order_at(12.)
+        self.assertEqual('gun_angle_adjust', moved['combat_mode'])
+        self.assertEqual(1., moved['throttle_override'])
+        self.assertEqual('checked_mechanical_relocation',
+                         self.state['_gun_angle_handoff']['reason'])
+        self.assertEqual(6.27, self.state['_gun_angle_handoff']['anchor_distance'])
+        self.assertEqual('route', self.order_at(16.)['combat_mode'])
+
+    def test_actual_approach_keeps_ownership_and_logs_early_return(self):
+        self.refuse()
+        for throttle, speed in ((1., 0.), (0., 2.)):
+            self.order.update(move_position=(6.27, 0., 0.), throttle_override=throttle)
+            self.state['speed'] = speed
+            self.assertEqual(self.order, self.order_at(10.))
+            self.assertNotIn('_gun_angle_adjustment', self.state)
+            self.assertEqual('existing_approach_in_progress',
+                             self.state['_gun_angle_handoff']['reason'])
+
     def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
         self.runtime._friendly_repositions[11] = dict(
             target_id=28, destination=(0., 0., 10.), deadline=5.,
@@ -153,6 +176,10 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertEqual([11, 12], record['visible_by_bot_ids'])
         self.assertEqual([12], record['shootable_by_bot_ids'])
         self.assertEqual([11, 12], runtime._pack_observations(aggregate, 9.)[0]['shootable_by_bot_ids'])
+
+    def test_production_update_releases_explicit_hold_with_stale_anchor(self):
+        self.order.update(move_position=(6.27, 0., 0.), throttle_override=0.)
+        self.test_production_update_moves_off_unreachable_combat_hold()
 
     def test_production_update_moves_off_unreachable_combat_hold(self):
         descriptor = harness._combat_descriptor()
