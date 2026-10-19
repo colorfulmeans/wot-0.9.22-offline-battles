@@ -1,5 +1,57 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 20 report 050321: mechanical aim / movement handoff
+
+The report identifies `75c77651`, not an older installation. WZ-111G FT 25
+alternates approach steering and stationary limited-traverse laying against
+the same target. The previous change installed the movement lease before an
+existing laying episode could replace the order. Its completion condition
+still mistook a temporary engage/current-position order for physical arrival.
+Retain the admitted movement goal, origin and absolute clock through those
+temporary holds. A completed shot, actual travel/arrival, explicit parking or
+priority hold releases the lease. Exhaustion returns the already-admitted
+combat approach, including when the incoming order is a temporary engage;
+target identity, final launch checks and the existing retry window remain.
+This does not replace route selection or the driver's progress/recovery laws.
+
+T-62A 23 and AMX 30 B 7 retain ammunition and each other as targets, but record
+mechanical elevation refusal. The logged fallback aim inputs exceed their
+5/8-degree depression limits; these are not exact selected lower-hull-point
+angles. Candidate selection now checks elevation with the existing ballistic
+solver, current launch origin, target velocity and installed mechanical limits.
+A reachable retained candidate remains stable. An unreachable one cannot beat
+a reachable candidate; the existing cursor and two-ray budget remain. If every
+tested exposed candidate is unreachable, keep an exposed fallback so bounded
+mechanical relocation still runs rather than erasing the enemy or starving the
+gun. Unknown ballistic evidence preserves the previous selection behavior.
+Final traverse, alignment, range, obstruction and firing proofs still apply.
+
+Mechanical relocation previously tried the ground-clear forward direction
+before reverse without considering the opponent's occupied hull. Both tanks
+therefore repeatedly selected movements stopped by their mutual contact.
+For this relocation only, sweep the existing descriptor-derived source and
+target hulls with the contact solver's translation fraction. A blocked forward
+candidate can yield to the already-existing reverse candidate. Do not change
+ordinary ramming, world clearance, navigation, peer contact or physical commit.
+Missing target hull evidence is reported as unknown, not an invented blocker.
+
+Object 704 27 still produces nine enable/disable pairs near a footprint boundary.
+The captured closing solver has step zero and a changed accepted horizontal
+position. This is evidence of repeated boundary crossing, not sufficient proof
+that a delay or altered point threshold would repair physics. Keep one invalid
+point enable / all five valid disable exactly. Extend every transition receipt
+with the current vertical step, input/rollback/reference poses, active owner,
+speed, and measured passive-slide delta. No extra rays, hysteresis, frozen
+support, dropped time, or navigation change is introduced for this unresolved
+cause. Native Windows replay acceptance is still required for these contacts.
+
+Regression contracts cover the captured lease inputs, alternating holds and
+approaches through exhaustion, genuine release conditions, contact-blocked
+forward versus reverse relocation, moving-pose candidate revalidation, later
+reachable candidates, all-unreachable relocation, real wall rejection, and
+zero-time versus timed support receipts. These checks do not establish native
+gameplay acceptance or claim that all repeated alignment is eliminated.
+
 ## September 24 exchange confirmation and elite-notification audit
 
 Report `20260924-003508-5e4675963357` runs the v0.9.4 original-Bot077

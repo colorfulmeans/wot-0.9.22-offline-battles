@@ -27144,9 +27144,14 @@ class BattleRuntime(object):
 
     def _bot_firing_lane(self, source, target):
         """Select a real exposed part with at most two static rays per job."""
+        receipt = dict(at=self._last_frame_time, target_kind=target.get('kind'),
+            target_id=target.get('network_id', target.get('id')),
+            checks=[], selected=None, reason='context_unavailable')
+        source['_aim_candidate_receipt'] = receipt
         profile = source.get('profile')
         profile = profile if isinstance(profile, dict) else {}
         if str(profile.get('class_tag') or '') == 'SPG':
+            receipt['reason'] = 'artillery_owner'
             if self._artillery is None or self._bots is None:
                 return False
             descriptor = self._bots._descriptors.get(int(source.get('id')))
@@ -27162,6 +27167,7 @@ class BattleRuntime(object):
             record, descriptor, entry = context
             samples = entry['samples']
             if not samples:
+                receipt['reason'] = 'no_samples'
                 return False
             pose_key = (id(descriptor), self._last_frame_time,
                         source.get('fire_seq', 0)) + tuple(source.get(name, 0.0)
@@ -27175,6 +27181,7 @@ class BattleRuntime(object):
                     int(source.get('fire_seq', 0)) + 1, 0.0, 0.0, 0.0)
                 if origin is None:
                     entry['selected'] = None
+                    receipt['reason'] = 'launch_origin_unavailable'
                     return False
                 record['bot_lane_origin'] = (pose_key, origin)
             selected = entry['selected']
@@ -27210,8 +27217,13 @@ class BattleRuntime(object):
             best = None
             best_score = None
             exposed = None
+            mechanical = receipt['checks']
+            mechanical_fallback = None
+            reach_probe = getattr(self._bots, 'bot_aim_point_reachable', None)
             for sample in attempts:
                 point = shot_geometry.vehicle_aim_point(sample, target)
+                check = dict(sample=sample, point=point, reachable=None, reason='world_blocked')
+                mechanical.append(check)
                 hit = self._runtime.bigworld.wg_collideSegment(
                     self._avatar.spaceID, self._vector(origin),
                     self._vector(point), 128)
@@ -27219,6 +27231,20 @@ class BattleRuntime(object):
                     continue
                 if self._wreck_blocks_bot_path(
                         wreck_rows, (origin, point), lane_ends):
+                    check['reason'] = 'wreck_blocked'
+                    continue
+                reachable = (reach_probe(
+                    source, target, descriptor, origin, point)
+                    if callable(reach_probe) else None)
+                check.update(reachable=reachable, reason=(
+                    'mechanically_unreachable' if reachable is False else 'exposed'))
+                if callable(reach_probe):
+                    check['mechanical'] = source.get('_aim_reachability_receipt')
+                if reachable is False:
+                    # Keep an exposed fallback for bounded gun-angle recovery,
+                    # but it cannot displace a reachable existing candidate.
+                    if mechanical_fallback is None:
+                        mechanical_fallback = sample
                     continue
                 score = self._bot_aim_damage_score(
                     descriptor, entry, source, target, origin, point)
@@ -27236,9 +27262,14 @@ class BattleRuntime(object):
                 # claim. Preserve the exposed-part behaviour in that case.
                 if score is None or not ranks:
                     break
-            entry['selected'] = best if best is not None else exposed
+            entry['selected'] = (best if best is not None else
+                exposed if exposed is not None else mechanical_fallback)
+            receipt.update(selected=entry['selected'], cursor=entry['cursor'],
+                reason='selected' if best is not None or exposed is not None else
+                       'mechanical_relocation_required' if mechanical_fallback is not None else 'blocked')
             return entry['selected'] is not None
-        except Exception:
+        except Exception as error:
+            receipt.update(reason='query_failed', error=type(error).__name__)
             if entry is not None:
                 entry['selected'] = None
             return False

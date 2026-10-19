@@ -171,6 +171,9 @@ class RearTraverseRuntimeTests(unittest.TestCase):
             if action=='travel':state['z']=20.
             if action=='cooldown':state['_rear_motion_lease']['retry_until']=8.
             goal=(state['x'],state['y'],state['z']) if action=='arrival' else (0.,0.,50.)
+            # Arrival needs the admitted movement goal, not a temporary
+            # engage/current-position order substituted during the attempt.
+            state['_rear_motion_lease']['goal']=goal
             order=dict(combat_mode='withdraw',target_id=2,move_position=goal)
             self.runtime._rear_laying_order(state,order,{2:dict(alive=True)},9.)
             self.assertNotIn('_rear_motion_lease',state)

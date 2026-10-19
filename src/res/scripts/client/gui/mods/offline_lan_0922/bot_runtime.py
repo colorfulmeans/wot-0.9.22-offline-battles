@@ -3174,6 +3174,7 @@ class BotRuntime(object):
             episode=episode, sample=state.get('_support_mode_receipt'),
             opening=opening if phase == 'disable' else None,
             point_changes=comparison,
+            motion=state.get('_support_motion_receipt'),
             solver=state.get('_support_mode_solver_receipt') if phase == 'disable' else None,
             transition_age_ms=(max(0.,now-previous[1])*1000. if previous else None),
             reason=('point_support_lost' if phase == 'enable' else
@@ -7436,6 +7437,7 @@ class BotRuntime(object):
                 rear_motion_observation=state.get('_rear_motion_observation'),
                 rear_approach=state.get('_rear_approach_receipt'),
                 rear_motion_blocked=state.get('_rear_motion_blocked', False),
+                aim_candidates=state.get('_aim_candidate_receipt'),
                 clip=state.get('clip'),
                 ammo_reload_pending=state.get('ammo_reload_pending'),
                 reload=state.get('reload_time'), fire_seq=state.get('fire_seq')),
@@ -8884,6 +8886,15 @@ class BotRuntime(object):
     @timed('bot.vertical')
     def _update_vertical_motion(self, state, step, tick_pose=None,
                                 attempted_yaw=None, suspension_motion_pose=None):
+        # Transition logs must distinguish a timed solve, zero-time contact
+        # projection, passive slide and a genuine new horizontal pose. Reuse
+        # these inputs; diagnostics must not issue another ground query.
+        state['_support_motion_receipt'] = dict(
+            at=getattr(self, '_contact_now', None), step=step,
+            before=_position(state), tick_pose=tick_pose,
+            support_motion_pose=suspension_motion_pose,
+            detailed_before=bool(state.get('_edge_support_active')),
+            speed=state.get('speed'), slide_speed=state.get('slide_speed'))
         callback = getattr(self,'support_context',None)
         previous = callback(state) if callable(callback) else None
         owner = getattr(callback,'__self__',getattr(callback,'im_self',None))
@@ -9036,6 +9047,11 @@ class BotRuntime(object):
             before_slide = _position(state)
             try:
                 self._apply_suspension_slope_slide(state, step)
+                receipt = state.get('_support_motion_receipt')
+                if receipt is not None:
+                    receipt['after_slide'] = _position(state)
+                    receipt['slide_delta'] = (state['x']-before_slide[0],
+                                              state['z']-before_slide[2])
                 blocked = self._update_suspension_vertical_motion(
                     state, step, params, tick_pose, attempted_yaw,
                     suspension_motion_pose if suspension_motion_pose is not None
@@ -12126,6 +12142,58 @@ class BotRuntime(object):
             '_aim_token': aim_token,
         }
 
+    def bot_aim_point_reachable(self, state, target, descriptor, origin, point):
+        """Check candidate elevation with the existing solver, without rays.
+
+        This is selection advice, never a launch proof. The final current-pose
+        ballistic solve, traverse, alignment and obstruction checks still run.
+        Unknown descriptor/ballistic evidence cannot reject a candidate.
+        """
+        receipt = dict(origin=origin, point=point, reason='ballistics_unavailable')
+        state['_aim_reachability_receipt'] = receipt
+        physical = _shot_ballistics(descriptor, int(state.get('shell_index', 0) or 0))
+        if physical is None:
+            return None
+        speed, gravity, maximum = physical
+        solve = (self._native_simulation.weapons.ballistic_intercept
+                 if self._native_simulation is not None else ballistics.ballistic_intercept)
+        solution = solve(origin, point, self._target_velocity(target), speed,
+                         gravity, -math.pi * .5, math.pi * .5)
+        if solution is None:
+            receipt['reason'] = 'no_intercept'
+            return False
+        aim, pitch, flight = solution
+        if flight > ballistics.PROJECTILE_MAX_FLIGHT_SECONDS or speed * flight > maximum + 1.e-6:
+            receipt['reason'] = 'out_of_range'
+            return False
+        yaw = math.atan2(aim[0]-origin[0], aim[2]-origin[2])
+        reachable = self._world_solution_reachable(state, descriptor, yaw, pitch)
+        receipt.update(required_world_yaw=yaw, required_world_pitch=pitch,
+            hull_pose=(state.get('yaw'),state.get('pitch'),state.get('roll')),
+            reason='reachable' if reachable else 'elevation_refused')
+        return reachable
+
+    def _gun_angle_target_fraction(self, state, target, yaw, distance):
+        """Use the current contact hulls for mechanical relocation only.
+
+        A ground-clear forward corridor may still run through the opponent
+        whose lower aim point caused the pitch refusal. Ordinary ramming,
+        navigation and the final contact solver retain their existing owners.
+        """
+        kind, actor = self._artillery_target_identity(target)
+        peer = self.states.get(actor) if kind == 'bot' else None
+        if kind == 'human':
+            raw = next((p for p in getattr(self, '_contact_players', ())
+                        if int(p.get('id', -1)) == actor and p.get('world_pose') is not False), None)
+            if raw is not None:
+                peer = dict(raw, collision_shape=self._player_collision_profile(raw)['shape'])
+        if peer is None or not peer.get('collision_shape') or not state.get('collision_shape'):
+            return None
+        bodies = [self._contact_motion_body(state), self._contact_motion_body(
+            peer, HUMAN_TARGET_ID_BASE+actor if kind == 'human' else None)]
+        return tank_collision.translation_fraction(bodies[0],
+            (math.sin(yaw)*distance, math.cos(yaw)*distance), bodies[1:])
+
     def _direct_aim_matches(self, state, target, solution):
         """A lane refresh may select a new part after this tick's gun slew."""
         if not callable(self.direct_aim_point_probe):
@@ -14423,20 +14491,33 @@ class BotRuntime(object):
                 not order.get('parking_phase') and order.get('combat_mode') not in
                 ('base_defense', 'support_hold', 'cover_hold', 'hold',
                  'artillery_deploy', 'artillery_relocate')):
-            lease = dict(start=now, origin=position,
+            lease = dict(start=now, origin=position, goal=tuple(order['move_position']),
+                         fire_seq=int(state.get('fire_seq', 0)),
                          source='existing_laying_received_movement')
             state['_rear_motion_lease'] = lease
             observation['reason'] = 'existing_laying_received_movement'
         motion_blocked = False
         if lease is not None:
             position = _position(state)
-            goal = _point(order.get('move_position'), position)
-            completed = (_distance(position, lease['origin']) >=
-                2.0 * float(state.get('half_length', 3.5)) + 1.5 or
-                _distance(position, goal) <= 1.5 or
-                order.get('parking_phase') or order.get('combat_mode') in
+            requested = _point(order.get('move_position'), position)
+            # A temporary engage/current-pose order is not arrival at the
+            # movement objective which admitted this lease. Keep its goal and
+            # clock through the same-target stop/approach handoff.
+            if 'goal' not in lease and _distance(position, requested) > 1.5:
+                lease['goal'] = requested
+            goal = _point(lease.get('goal'), lease['origin'])
+            fired = int(state.get('fire_seq', 0)) != lease.get('fire_seq',
+                int(state.get('fire_seq', 0)))
+            travel = _distance(position, lease['origin'])
+            goal_distance = _distance(position, goal) if 'goal' in lease else None
+            priority_hold = bool(order.get('parking_phase') or order.get('combat_mode') in
                 ('base_defense', 'support_hold', 'cover_hold', 'hold',
                  'artillery_deploy', 'artillery_relocate'))
+            completed = (travel >= 2.0 * float(state.get('half_length', 3.5)) + 1.5 or
+                (goal_distance is not None and goal_distance <= 1.5) or fired or priority_hold)
+            observation.update(travel=travel, goal_distance=goal_distance,
+                admitted_goal=lease.get('goal'), fired=fired, priority_hold=priority_hold,
+                elapsed=now-lease['start'])
             retry_until = lease.get('retry_until')
             if completed or (retry_until is not None and now >= retry_until):
                 state.pop('_rear_motion_lease', None)
@@ -14450,6 +14531,14 @@ class BotRuntime(object):
                 observation['reason'] = 'movement_budget_active'
         observation['lease_after'] = dict(state.get('_rear_motion_lease') or {})
         state['_rear_motion_blocked'] = motion_blocked or blocked_approach
+        if motion_blocked and order.get('combat_mode') == 'engage' and lease.get('goal'):
+            # Only the previously admitted combat approach resumes. Keep the
+            # enemy and fire permission; final gun/lane checks still own shots.
+            order = dict(order, combat_mode='advance_contact',
+                         move_position=lease['goal'])
+            order.pop('throttle_override', None)
+            observation['effective_mode'] = order['combat_mode']
+            observation['effective_move'] = order['move_position']
         episode = state.get('_rear_aim_episode')
         if episode is None:
             return order
@@ -14536,6 +14625,7 @@ class BotRuntime(object):
             marker = {'start': now, 'destination': None,
                       'selected': False}
             state['_gun_angle_adjustment'] = marker
+        receipt['candidate_checks'] = marker.get('candidate_checks')
         elapsed = now - marker['start']
         result = dict(order)
         result.update(move_position=position,
@@ -14553,8 +14643,14 @@ class BotRuntime(object):
                 self._gun_angle_candidate_tick = now
                 marker['selected'] = True
                 yaw = _number(state.get('yaw'))
+                receipt['candidate_checks'] = []
+                marker['candidate_checks'] = receipt['candidate_checks']
                 for candidate_yaw in (yaw, yaw + math.pi):
-                    if direction_clear(candidate_yaw, 8.0):
+                    fraction = self._gun_angle_target_fraction(state, target, candidate_yaw, 8.0)
+                    clear = direction_clear(candidate_yaw, 8.0)
+                    receipt['candidate_checks'].append(dict(yaw=candidate_yaw,
+                        world_clear=bool(clear), target_fraction=fraction))
+                    if clear and (fraction is None or fraction >= 1.0-1.e-6):
                         marker['destination'] = (
                             position[0] + math.sin(candidate_yaw) * 8.0,
                             position[1], position[2] + math.cos(candidate_yaw) * 8.0)
@@ -16216,7 +16312,9 @@ class BotRuntime(object):
                 if (state.get('_rear_motion_lease') is None and
                         command.get('movement_intent', True) and
                         command.get('combat_mode') != 'engage'):
-                    state['_rear_motion_lease'] = dict(start=now, origin=tuple(position))
+                    state['_rear_motion_lease'] = dict(start=now, origin=tuple(position),
+                        goal=_point((server_order or {}).get('move_position'), position),
+                        fire_seq=int(state.get('fire_seq', 0)))
                 if state.get('_rear_aim_episode') is None:
                     state['_rear_aim_episode'] = dict(
                         identity=aim_target_key, target_id=command.get('target_id'),
