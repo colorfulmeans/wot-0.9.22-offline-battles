@@ -358,3 +358,26 @@ one immutable collision-body preparation across all five synchronous reverse
 sweep samples; every native/vehicle check remains executed. This removes four
 redundant preparations per reverse assessment, not four collision checks.
 Native gameplay and end-to-end worker FPS remain Windows acceptance items.
+
+## Ordered aim and blocked-action follow-up (report 232728)
+
+The ordered-search state machine from the first test package is withdrawn after
+report 001415 reproduced a moving-source starvation regression. Restore the
+original rotating two-candidate lane probe, armour ranking/competence, exposed
+fallback, selected-part lifecycle and boolean lane publication. Remove the added
+mechanical precheck, evidence ages, motion thresholds and pending return path.
+The only attack-aim production change from the pre-search implementation is the
+candidate list: lower hull, hull centre/left/right/up, turret up/left/right/centre.
+The original eight geometry samples already include turret up; this explicit
+nine-point list adds lower hull only. Do not invent an extra tenth point.
+Exposure/cover/incoming samples and the final projectile safety gates retain
+their original owners. No additional search completion or refresh law is added.
+
+Retain unexpired radio-scoped route assignments in the pressure catalog even
+after the last original donor dies. Radio loss and lease expiry still release
+them. Assignment receipts enumerate all simultaneous invalidation causes.
+Repeated live remembered-rotation refusals now feed the existing private Bot
+retry lifecycle. They do not publish a global wall or change path ranking.
+Mixed/unknown refusals do not authorize this feedback. Record rejection kinds
+and the original rotation contact for unresolved stalls. Preserve support,
+collision, wreck progress, C, avoidance, target priority and retry policies.

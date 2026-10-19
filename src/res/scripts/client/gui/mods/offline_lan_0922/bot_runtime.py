@@ -7872,26 +7872,49 @@ class BotRuntime(object):
             proof.get('status') == 'hard' and
             proof.get('source') == 'authoritative_body_sweep']
         private = False
-        if hard and state is not None and now is not None:
+        rotation_rows = [row for row in (verdicts or ())
+                         if row.get('kind') == 'rotation']
+        # These refusals are already fenced by live position/yaw/expiry in
+        # sample_pose_clear_impl. They prove a failed local action, not that
+        # the destination's translation edge is a global wall.
+        remembered_rotation = bool(rotation_rows and all(
+            row.get('clear') is False and
+            row.get('reason') == 'realized_rotation_rejection'
+            for row in rotation_rows))
+        if (hard or remembered_rotation) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):
                 private = bool(feedback(state['id'], position, target, heading, now))
         if state is not None:
             nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
+            refusal_counts = {}
+            for row in verdicts or ():
+                if row.get('clear') is not True:
+                    key = '%s:%s' % (row.get('kind'), row.get('reason'))
+                    refusal_counts[key] = refusal_counts.get(key, 0) + 1
             state['_planner_blocked_handoff'] = dict(at=now,
                 target=target, hard_body_refusals=len(hard),
+                remembered_rotation_refusals=(len(rotation_rows)
+                    if remembered_rotation else 0),
+                refusal_counts=refusal_counts,
+                realized_rotation_contact={key: value for key, value in
+                    (state.get('_rotation_contact_trace') or {}).items() if key in (
+                        'reason', 'status', 'sampled_at', 'position', 'start_yaw',
+                        'end_yaw', 'hit', 'normal', 'ray_start', 'ray_end')},
                 static_refusal=static_refusal, reviewed=reviewed,
                 tracker=dict(nav_state.get('blocked_step_tracker') or {}),
                 retired=nav_state.get('local_target_retired'),
                 private_replan=private, reason=('hard_body_refusal' if hard else
+                    'realized_rotation_refusal' if remembered_rotation else
                     'static_direction_refusal' if static_refusal else 'no_hard_evidence'))
             if private:
-                trace = hard[0].get('trace') or {}
+                trace = (hard[0].get('trace') or {}) if hard else {}
                 state['_planner_blocked_last_replan'] = dict(at=now,
                     origin=position, target=target, heading=heading,
                     retired=nav_state.get('local_target_retired'),
                     replan_count=nav_state.get('blocked_step_replans'),
-                    source=hard[0].get('source'),
+                    source=(hard[0].get('source') if hard else
+                            'realized_rotation_rejection'),
                     witness={key:trace.get(key) for key in (
                         'reason', 'hit', 'normal', 'ray_start', 'ray_end')})
         return reviewed or private

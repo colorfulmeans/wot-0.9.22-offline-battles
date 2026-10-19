@@ -223,6 +223,24 @@ def vehicle_aim_samples(descriptor):
     return tuple(centres + edges)
 
 
+
+def ordered_vehicle_aim_samples(descriptor):
+    """Attack-only priority; advisory exposure retains its original samples."""
+    samples = vehicle_aim_samples(descriptor)
+    hull = [value for value in samples if value[0] == 'hull']
+    turret = [value for value in samples if value[0] == 'turret']
+    ordered = []
+    if hull:
+        name, mount, centre, static_yaw = hull[0]
+        up = hull[3][2]
+        down = (centre[0], 2.0 * centre[1] - up[1], centre[2])
+        ordered.append((name, mount, down, static_yaw))
+        ordered.extend(hull)
+    if turret:
+        ordered.extend((turret[3], turret[1], turret[2], turret[0]))
+    return tuple(ordered)
+
+
 def vehicle_aim_point(sample, pose):
     """Resolve a retained part sample against the current observed pose."""
     name, mount, point, static_yaw = sample

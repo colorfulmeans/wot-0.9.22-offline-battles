@@ -236,6 +236,19 @@ class ShotGeometryTest(unittest.TestCase):
             _Vector(0.0, 0.0, 0.0), _Vector(float('nan'), 1.0, 2.0))
         self.assertEqual((), shot_geometry.vehicle_aim_samples(descriptor))
 
+    def test_attack_order_is_lower_hull_then_hull_then_turret(self):
+        descriptor = _mode_descriptor(SIEGE_VEHICLES[0])
+        descriptor.turret.hitTester = _Tester((0., 0., 0.), (2., 2., 4.))
+        old = shot_geometry.vehicle_aim_samples(descriptor)
+        new = shot_geometry.ordered_vehicle_aim_samples(descriptor)
+        self.assertEqual(9, len(new))
+        self.assertEqual(('hull',)*5+('turret',)*4, tuple(s[0] for s in new))
+        self.assertEqual(old[0], new[1])
+        self.assertEqual(old[1], new[8])
+        self.assertEqual(tuple(old[2:5]), tuple(new[2:5]))
+        self.assertEqual((old[7], old[5], old[6]), tuple(new[5:8]))
+        self.assertLess(new[0][2][1], new[1][2][1])
+
 
 if __name__ == '__main__':
     unittest.main()

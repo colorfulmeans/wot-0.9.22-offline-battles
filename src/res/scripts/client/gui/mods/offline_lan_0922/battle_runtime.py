@@ -27046,7 +27046,7 @@ class BattleRuntime(object):
                 entry['descriptor'] is not descriptor or
                 entry['geometry_ready'] != geometry_ready):
             entry = {'record': target_record, 'descriptor': descriptor,
-                     'samples': shot_geometry.vehicle_aim_samples(descriptor),
+                     'samples': shot_geometry.ordered_vehicle_aim_samples(descriptor),
                      'geometry_ready': geometry_ready,
                      'cursor': 0, 'selected': None}
             candidates[target_key] = entry

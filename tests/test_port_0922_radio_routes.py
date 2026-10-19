@@ -72,6 +72,36 @@ class RadioRouteTests(unittest.TestCase):
             self.assertEqual('left', orders[11]['route_id'])
             self.assertEqual(0.0, planner._route_assignments[11]['until'])
 
+    def test_active_assignment_survives_last_original_route_owner_death(self):
+        planner, manifest, states, players, contacts = self._fixture((11,))
+        self.assertEqual('right', self._orders(
+            planner, manifest, states, players, 1.)[11]['route_id'])
+        states[-1]['alive'] = False
+        states[-1]['health'] = 0
+        orders = self._orders(planner, manifest, states, players, 1.1)
+        self.assertEqual('right', orders[11]['route_id'])
+        self.assertGreater(planner._route_assignments[11]['until'], 1.1)
+        for contact in contacts: contact['radio_recipients'] = []
+        planner.report_contacts(contacts, planner.known_targets(states, players), 1.2)
+        self.assertEqual('left', self._orders(
+            planner, manifest, states, players, 1.2)[11]['route_id'])
+        receipt = planner._route_assignment_receipts[11]
+        self.assertEqual(['radio_knowledge_lost'],
+                         receipt['selection']['invalidation_causes'])
+
+    def test_invalidation_knowledge_is_a_frozen_snapshot(self):
+        planner, manifest, states, players, contacts = self._fixture((11,))
+        self._orders(planner, manifest, states, players, 1.)
+        planner._route_assignments[11]['until'] = 1.05
+        self._orders(planner, manifest, states, players, 1.1)
+        evidence = planner._route_assignment_receipts[11]['selection']['knowledge_contacts']
+        self.assertTrue(evidence)
+        frozen = copy.deepcopy(evidence)
+        for contact in planner._contacts[1].values():
+            contact['position']['x'] = 9999.
+            contact['radio_bot_until'].clear()
+        self.assertEqual(frozen, evidence)
+
     def test_expired_radio_lease_does_not_retain_route_movement(self):
         planner, manifest, states, players, unused = self._fixture((11,), lease=0.5)
         self.assertEqual('right', self._orders(

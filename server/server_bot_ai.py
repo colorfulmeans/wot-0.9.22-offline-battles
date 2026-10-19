@@ -7,6 +7,7 @@ contract. Enemy data is accepted only through ``report_contacts``; players and
 bot state are used to validate identities, never to invent a target position.
 """
 
+import copy
 import math
 import os
 import sys
@@ -2590,6 +2591,19 @@ class BotPlanner(object):
             if authored is not None and authored['policy'] == 'fixed':
                 protected_ids.add(bot['id'])
         catalog = self._route_catalog(bots)
+        # An unexpired pressure assignment is itself a live route owner.
+        # Losing the last original donor must not erase its recipient's road.
+        retained_routes = []
+        for bot in bots:
+            assignment = self._route_assignments.get(bot['id']) or {}
+            route = assignment.get('route')
+            if (assignment.get('radio_scoped') and
+                    _number(assignment.get('until')) > _number(now) and
+                    isinstance(route, dict) and route.get('waypoints')):
+                route_id = str(route.get('id') or '')
+                if route_id and route_id not in catalog:
+                    catalog[route_id] = route
+                    retained_routes.append(route_id)
         # A physical detour survives a donor's death and pressure rebalance.
         for bot in bots:
             assigned = self._route_assignments.get(bot['id'], {})
@@ -2621,8 +2635,19 @@ class BotPlanner(object):
                          assigned_until <= _number(now) else 'catalog_reset'),
                         evidence=dict(evaluated_at=_number(now),
                             assigned_until=assigned_until, knowledge_lost=knowledge_lost,
+                            knowledge_contacts=[dict(contact=copy.deepcopy(contact),
+                                nearest_route=self._nearest_route(contact, catalog))
+                                for contact in self._contacts_for_bot(bot, contacts, now)],
                             catalog_contains_route=assigned_id in catalog,
-                            catalog_route_matches=assigned_route == catalog.get(assigned_id)))
+                            catalog_route_matches=assigned_route == catalog.get(assigned_id),
+                            retained_assignment_routes=list(retained_routes),
+                            invalidation_causes=[cause for cause, applies in (
+                                ('radio_knowledge_lost', knowledge_lost),
+                                ('catalog_missing', assigned_id not in catalog),
+                                ('catalog_changed', assigned_id in catalog and
+                                 assigned_route != catalog.get(assigned_id)),
+                                ('lease_expired', assigned_until > 0.0 and
+                                 assigned_until <= _number(now))) if applies]))
                 if route_id in catalog:
                     self._route_assignments[bot["id"]] = {
                         "route": catalog[route_id], "until": 0.0,
