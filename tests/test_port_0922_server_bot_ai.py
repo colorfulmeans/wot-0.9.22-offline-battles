@@ -341,7 +341,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual(retreat['move_position'], holding['move_position'])
         self.assertTrue(holding['stable_hull_face'])
 
-    def test_pending_shooter_refresh_preserves_movement_but_not_fire(self):
+    def test_pending_shooter_refresh_releases_stationary_hold_but_keeps_target(self):
         planner = BotPlanner()
         contact = _contact(2, 0, 150, [11])
         players = self._report(planner, [contact])
@@ -356,8 +356,10 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.manifest, self.states, players, 1.5)['orders'][0]
 
         self.assertEqual(2, leased['target_id'])
-        self.assertEqual(first['combat_mode'], leased['combat_mode'])
-        self.assertEqual(first['move_position'], leased['move_position'])
+        self.assertEqual('route', leased['combat_mode'])
+        self.assertIsNone(leased['throttle_override'])
+        self.assertEqual('stationary_lane_lost',
+            leased['tactical_evidence']['blocked_hold_handoff']['reason'])
         self.assertFalse(leased['fire_allowed'])
 
         self.assertEqual(1, planner.report_contacts(

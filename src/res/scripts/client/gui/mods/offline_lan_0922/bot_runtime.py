@@ -7269,6 +7269,9 @@ class BotRuntime(object):
         search_receipt = getattr(nav, 'bot_search_diagnostics', None)
         if callable(search_receipt):
             navigation['search_receipt'] = search_receipt(state['id'], position, now)
+            receipt = navigation['search_receipt']
+            navigation.update(actual_job_count=receipt['actual_job_count'],
+                actual_oldest_job_age_ms=receipt['actual_oldest_job_age_ms'])
         grid = getattr(nav, 'grid', None)
         if grid is not None:
             navigation['current_cell'] = grid.cell_for(position)
@@ -7277,6 +7280,8 @@ class BotRuntime(object):
             navigation['native_review_cells'] = len(grid._native_review_cells)
         navigation['pending_ms'] = int(max(0.0, now - _number(
             nav_state.get('pending_since'), now)) * 1000.0)
+        navigation['request_wait_ms'] = navigation['pending_ms']
+        navigation['pending_ms_basis'] = 'request_wait_not_task_age'
         search_times = getattr(nav, 'search_times', {})
         navigation['oldest_job_age'] = max(0.0, now - min(search_times.values())) if search_times else 0.0
         grid = getattr(nav, 'grid', None)
@@ -7520,6 +7525,7 @@ class BotRuntime(object):
             'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
             'gun_angle_handoff': dict(state.get('_gun_angle_handoff') or {}),
+            'gun_angle_last_terminal': dict(state.get('_gun_angle_last_terminal') or {}),
             'translation_sweep': dict(state.get('_translation_motion_receipt') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
@@ -14242,8 +14248,9 @@ class BotRuntime(object):
     def _gun_angle_order(self, state, order, targets, now, direction_clear):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
-        Two seconds of real hull facing, then at most four seconds at one
-        checked eight-metre destination. Failed pairs become locally
+        Two seconds of hull facing, then one checked eight-metre destination.
+        A new best translation/alignment renews its six-second stall clock;
+        merely issuing an order or changing targets does not. Failed pairs become locally
         unshootable for eight seconds, without hiding their spotting evidence.
         Actual gun solving and native motion remain authoritative throughout.
         """
@@ -14257,6 +14264,8 @@ class BotRuntime(object):
                        refusal=state.get('_gun_angle_refusal'), reason='ineligible')
         state['_gun_angle_handoff'] = receipt
         if not eligible:
+            if state.get('_gun_angle_adjustment') is not None:
+                state['_gun_angle_last_terminal'] = dict(receipt, reason='priority_handoff')
             state.pop('_gun_angle_adjustment', None)
             if order.get('parking_phase'):
                 state.pop('_gun_angle_rejected', None)
@@ -14269,6 +14278,9 @@ class BotRuntime(object):
         refusal = state.get('_gun_angle_refusal')
         if identity is None or refusal != identity:
             receipt['reason'] = 'no_matching_mechanical_refusal'
+            if state.get('_gun_angle_adjustment') is not None:
+                state['_gun_angle_last_terminal'] = dict(receipt,
+                    reason='target_missing' if target is None else 'mechanical_refusal_cleared')
             state.pop('_gun_angle_adjustment', None)
             return order
         # Do not interrupt an existing approach, retreat or cover move.
@@ -14309,10 +14321,53 @@ class BotRuntime(object):
                             position[0] + math.sin(candidate_yaw) * 8.0,
                             position[1], position[2] + math.cos(candidate_yaw) * 8.0)
                         marker['reverse'] = candidate_yaw != yaw
+                        marker.update(selected_at=now, progress_at=now,
+                                      best_distance=8.0, best_heading=math.pi)
                         break
         destination = marker['destination']
         receipt.update(destination=destination, selected=marker['selected'])
-        if elapsed < 6.0 and destination is not None:
+        if destination is not None:
+            distance = _distance(position, destination)
+            travel_yaw = math.atan2(destination[0]-position[0],
+                                    destination[2]-position[2])
+            if marker.get('reverse'):
+                travel_yaw += math.pi
+            cached = self._decision_cache.get(state['id'])
+            executed = cached[3] if cached is not None else {}
+            if (marker.get('alignment_goal') is None and now > marker['selected_at'] and
+                    executed.get('combat_mode') in ('withdraw', 'gun_angle_adjust') and
+                    executed.get('target_yaw') is not None):
+                # The checked destination can require a local driver turn.
+                # Freeze that first real steering goal once; changing local
+                # points cannot repeatedly grant a fresh alignment clock.
+                marker['alignment_goal'] = executed['target_yaw']
+                marker['best_heading'] = math.pi
+            travel_yaw = marker.get('alignment_goal', travel_yaw)
+            heading = abs(_angle_delta(travel_yaw, _number(state.get('yaw'))))
+            progress = None
+            if distance <= marker['best_distance'] - 0.25:
+                marker['best_distance'] = distance
+                progress = 'new_best_translation'
+            if heading <= marker['best_heading'] - math.radians(5.0):
+                marker['best_heading'] = heading
+                progress = progress or 'new_best_alignment'
+            if progress:
+                marker['progress_at'] = now
+            stalled = now - marker['progress_at'] >= 6.0
+            receipt.update(distance=distance, heading=heading,
+                progress_reason=progress, progress_age=now-marker['progress_at'],
+                selected_at=marker['selected_at'], best_distance=marker['best_distance'],
+                best_heading=marker['best_heading'],
+                alignment_goal=marker.get('alignment_goal'))
+            if distance <= ai_driver.WAYPOINT_ARRIVAL_RADIUS or stalled:
+                receipt['reason'] = 'relocation_arrived' if not stalled else 'relocation_stalled'
+                state['_gun_angle_last_terminal'] = dict(receipt)
+                rejected = state.setdefault('_gun_angle_rejected', {})
+                if len(rejected) >= 8:
+                    rejected.pop(min(rejected, key=rejected.get), None)
+                rejected[identity] = now + 8.0
+                state.pop('_gun_angle_adjustment', None)
+                return self._gun_angle_route_order(state, order)
             receipt['reason'] = 'checked_mechanical_relocation'
             result.update(move_position=destination,
                           combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
@@ -14322,6 +14377,7 @@ class BotRuntime(object):
             receipt['reason'] = 'candidate_budget_deferred'
             return result
         receipt['reason'] = 'bounded_attempt_complete'
+        state['_gun_angle_last_terminal'] = dict(receipt)
         rejected = state.setdefault('_gun_angle_rejected', {})
         if len(rejected) >= 8:
             rejected.pop(min(rejected, key=rejected.get), None)

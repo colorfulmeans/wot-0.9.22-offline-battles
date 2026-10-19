@@ -6420,6 +6420,28 @@ class BattleRuntime(object):
     def _suspension_ground_y(
             self, x, z, minimum_y, maximum_y, flat_maximum_y=None,
             prepared_filter=None):
+        context = getattr(self, '_stack_context', None)
+        batch = context.get('queries') if context else None
+        revision = getattr(self._destructibles, '_spatial_revision_1513', None)
+        if batch is None or context.get('candidates') or not callable(revision):
+            return self._suspension_ground_y_impl(
+                x, z, minimum_y, maximum_y, flat_maximum_y, prepared_filter)
+        # Exact inputs within one synchronous solve only. Geometry changes,
+        # a new actor/solve or any changed column/band require fresh native rays.
+        batch.references.append(prepared_filter)
+        key = (x, z, minimum_y, maximum_y, flat_maximum_y,
+               id(prepared_filter), revision())
+        def sample():
+            height = self._suspension_ground_y_impl(
+                x, z, minimum_y, maximum_y, flat_maximum_y, prepared_filter)
+            return height, self._suspension_ground_probe_layers
+        height, layers = batch.get('suspension_column', key, sample)
+        self._suspension_ground_probe_layers = layers
+        return height
+
+    def _suspension_ground_y_impl(
+            self, x, z, minimum_y, maximum_y, flat_maximum_y=None,
+            prepared_filter=None):
         """Return ground inside one suspension contact's legal travel.
 
         Unlike the navigation column, this probe must never acquire a roof or
@@ -24331,6 +24353,19 @@ class BattleRuntime(object):
         return False
 
     def _bot_support_column(self, x, z, hint_y, maximum_y):
+        context = getattr(self, '_stack_context', None)
+        batch = context.get('queries') if context else None
+        revision = getattr(self._destructibles, '_spatial_revision_1513', None)
+        # Roof probes also publish carrier/contact side effects and depend on
+        # moving actors. Keep their original solve; only static-only columns
+        # admit this additional complete-column reuse.
+        if batch is not None and not context.get('candidates') and callable(revision):
+            return dict(batch.get('support_column',
+                (x, z, hint_y, maximum_y, revision()),
+                self._bot_support_column_impl, x, z, hint_y, maximum_y))
+        return self._bot_support_column_impl(x, z, hint_y, maximum_y)
+
+    def _bot_support_column_impl(self, x, z, hint_y, maximum_y):
         trace = []
         height = self._support_column(x,z,hint_y,maximum_y,trace)
         return dict(height=height, x=x, z=z, hint_y=hint_y, maximum_y=maximum_y, layers=trace)

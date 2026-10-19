@@ -98,6 +98,52 @@ class SupportReuseTests(unittest.TestCase):
         self.assertEqual(2,battle._collide_static_down.call_count)
         battle._finish_stack_support_context(previous)
 
+    def test_complete_columns_reuse_only_exact_inputs_and_live_geometry(self):
+        battle=engine.BattleRuntime(engine._runtime())
+        revision=[1]
+        battle._destructibles=types.SimpleNamespace(_spatial_revision_1513=lambda:revision[0])
+        battle._stack_context={'queries':SupportQueries(lambda:1.)}
+        battle._support_column=mock.Mock(return_value=2.)
+        for unused in range(20):
+            self.assertEqual(2.,battle._bot_support_column(1.,3.,4.,5.)['height'])
+        self.assertEqual(1,battle._support_column.call_count)
+        self.assertEqual(19,battle._stack_context['queries'].calls['support_column_cache_hit'])
+        battle._bot_support_column(1.000000001,3.,4.,5.)
+        battle._bot_support_column(1.,3.,4.,6.)
+        revision[0]+=1
+        battle._bot_support_column(1.,3.,4.,5.)
+        self.assertEqual(4,battle._support_column.call_count)
+        battle._stack_context={'queries':SupportQueries(lambda:1.)}
+        battle._bot_support_column(1.,3.,4.,5.)
+        self.assertEqual(5,battle._support_column.call_count)
+
+    def test_complete_column_cache_never_skips_moving_roof_observation(self):
+        battle=engine.BattleRuntime(engine._runtime())
+        battle._destructibles=types.SimpleNamespace(_spatial_revision_1513=lambda:1)
+        battle._stack_context={'queries':SupportQueries(lambda:1.), 'candidates':[object()]}
+        battle._support_column=mock.Mock(return_value=2.)
+        for unused in range(2):battle._bot_support_column(1.,3.,4.,5.)
+        self.assertEqual(2,battle._support_column.call_count)
+        battle._suspension_ground_y_impl=mock.Mock(return_value=2.)
+        for unused in range(2):battle._suspension_ground_y(1.,3.,0.,5.)
+        self.assertEqual(2,battle._suspension_ground_y_impl.call_count)
+
+    def test_suspension_reuse_restores_layers_and_invalidates_on_change(self):
+        battle=engine.BattleRuntime(engine._runtime())
+        battle._destructibles=types.SimpleNamespace(_spatial_revision_1513=lambda:1)
+        battle._stack_context={'queries':SupportQueries(lambda:1.)}
+        def sample(*args):
+            battle._suspension_ground_probe_layers=((2.,1.,'support'),)
+            return 2.
+        battle._suspension_ground_y_impl=mock.Mock(side_effect=sample)
+        for unused in range(10):
+            battle._suspension_ground_probe_layers=()
+            self.assertEqual(2.,battle._suspension_ground_y(1.,3.,0.,5.))
+            self.assertEqual(((2.,1.,'support'),),battle._suspension_ground_probe_layers)
+        self.assertEqual(1,battle._suspension_ground_y_impl.call_count)
+        battle._suspension_ground_y(1.,3.,0.,5.,4.)
+        self.assertEqual(2,battle._suspension_ground_y_impl.call_count)
+
     def test_roof_hits_reuse_prepared_pose_and_exact_ray_without_losing_carrier(self):
         battle=engine.BattleRuntime(engine._runtime())
         state=dict(id=12,x=0.,y=0.,z=0.,yaw=0.,collision_shape=(1.5,3.,0.,2.))

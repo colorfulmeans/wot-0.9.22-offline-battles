@@ -184,3 +184,46 @@ pressure input provenance, entry evidence and terminal-reason lifetime.
 Native Windows gameplay remains the next acceptance boundary. Support opening
 at one missing point and closing with all five restored, target selection,
 native body/LOS checks, authored routes and original retry switching are intact.
+
+
+## Follow-up: report 191856, blocked firing holds and angle execution
+
+A lost local firing lane no longer renews an ordinary stationary engage/support
+lease. Tracking and target priority survive; movement resumes the existing
+map-authored leg with launch disabled. A timed four-second route release cannot
+re-establish a stationary engage hold while launch permission is absent. Moving
+flanks, cover and low-health owners keep their existing laws.
+
+Mechanical-angle recovery retains its native eight-metre candidate check,
+initial two-second facing phase and finite failed-pair retry. Once selected,
+its destination survives the old absolute six-second expiry. A new best 0.25 m
+translation or five-degree alignment improvement renews a six-second no-progress
+clock. The first executed local driver steering goal is frozen once, so a local
+turn does not consume all translation time, and changing local points cannot
+keep resetting alignment credit. Arrival, no progress, unavailable candidates,
+priority handoff and cleared mechanical refusal have timestamped terminal
+receipts. The native gun solver and every actual body sweep remain authoritative.
+
+Static-only support solves reuse exact complete column results, including layer
+witnesses, inside their synchronous query scope. Changed column/band, destructible
+revision or solve invalidates reuse. Potential vehicle-roof contacts do not take
+this additional shortcut: their live carrier/contact side effects still run.
+Reuse counters and elapsed time join the existing support profile. This proves
+query equivalence and reduced duplicate calls, not a measured Windows FPS gain.
+
+Navigation diagnostics distinguish request wait from actual per-Bot job age and
+the global oldest job age. A pending asynchronous job's expansion count is unknown,
+not zero: that counter is delivered only on completion. Named worker state is
+explicitly the global last poll. Native job submission, completion, cancellation
+and close records retain endpoints, job identity, simulation-clock basis and
+query received/answered/deferred counters. Per-job query service remains visible
+in sampled motion receipts. No T-54 path-scoring or retry-policy change is made
+without proof of a routing defect. The report's zero counter did not prove an
+unserviced background search.
+
+Focused tests cover lost-lane reload and reacquisition, multi-second driver
+turns, real movement, no-progress exit, native job/query lifecycle and exact
+support reuse/invalidation/roof exclusions. CPython 2.7 compilation, relevant
+regressions and independently inspected launcher payloads are delivery evidence;
+next-report exact-client behavior and frame pacing remain the acceptance boundary.
+Support still opens with one failed point and closes with all five restored.

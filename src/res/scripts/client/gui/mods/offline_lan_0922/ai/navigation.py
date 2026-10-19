@@ -2947,11 +2947,17 @@ class TerrainNavigator(object):
 		for key, search in self.searches.items():
 			if key != request and self._path_owner(key[0]) != int(bot_id):
 				continue
+			native_pending = hasattr(search, 'job_id') and not search.done
 			searches.append({
 				'key': key,
 				'start': getattr(search, 'progress', {}).get('start'),
 				'goal': getattr(search, 'progress', {}).get('goal'),
-				'expanded': int(getattr(search, 'progress', {}).get('revision', 0)),
+				'expanded': None if native_pending else int(getattr(search, 'progress', {}).get('revision', 0)),
+				'progress_known': not native_pending,
+				'last_step_basis': 'completion_receipt' if hasattr(search, 'job_id') else 'python_step',
+				'query_service': dict((name, getattr(search,'progress',{}).get(name))
+					for name in ('query_received','query_answered','query_deferred','last_query_at','last_answer_at')),
+				'submitted_at': getattr(search, 'submitted_at', self.search_times.get(key)),
 				'backend': 'native' if hasattr(search, 'job_id') else 'python',
 				'progress_accounting': 'completion_only' if hasattr(search, 'job_id') else 'per_expansion',
 				'status': getattr(search, 'status', 'done' if search.done else 'pending'),
@@ -2963,7 +2969,7 @@ class TerrainNavigator(object):
 				'native_refusal': getattr(search, 'progress', {}).get('native_refusal'),
 				'age_ms': int(max(0.0, float(now) -
 					self.search_times.get(key, float(now))) * 1000.0),
-				'steps': int(getattr(search, 'steps', 0)),
+				'steps': None if native_pending else int(getattr(search, 'steps', 0)),
 				'last_step_age_ms': (int(max(0.0, float(now) -
 					search.last_frame) * 1000.0)
 					if search.last_frame is not None else None),
@@ -2972,6 +2978,14 @@ class TerrainNavigator(object):
 		prefix = state.get('pending_prefix') or ()
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
+			'sampled_at': float(now),
+			'pending_ms_basis': 'request_wait_not_task_age',
+			'actual_job_count': len(searches),
+			'actual_oldest_job_age_ms': max([row['age_ms'] for row in searches] or [0]),
+			'native_worker_state': dict(zip(
+				('pending', 'running', 'waiting', 'ready_queries', 'completed_undrained', 'threads'),
+				getattr(native, 'stats', ()))),
+			'native_worker_state_basis': 'all_jobs_last_poll',
 			'search_scheduler': dict(frame=self.search_frame_serial,
 				processed_frame=self.search_processed_frame,
 				frame_open=self.search_frame_open, budget=self.search_frame_budget,

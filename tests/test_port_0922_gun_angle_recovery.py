@@ -43,12 +43,12 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.state['z'] = 3.
         self.assertEqual(move['move_position'], self.order_at(4.)['move_position'])
         self.assertEqual(1, len(calls))
-        resumed = self.order_at(6.)
+        resumed = self.order_at(10.)
         self.assertEqual('route', resumed['combat_mode'])
         self.assertEqual((0., 0., 90.), resumed['move_position'])
         self.assertIsNone(resumed['target_id'])
-        self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 7.))
-        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 14.))
+        self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 11.))
+        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 18.))
 
     def test_explicit_stationary_hold_admits_adjustment_with_stale_anchor(self):
         self.refuse()
@@ -61,7 +61,8 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertEqual('checked_mechanical_relocation',
                          self.state['_gun_angle_handoff']['reason'])
         self.assertEqual(6.27, self.state['_gun_angle_handoff']['anchor_distance'])
-        self.assertEqual('route', self.order_at(16.)['combat_mode'])
+        self.assertEqual('gun_angle_adjust', self.order_at(16.)['combat_mode'])
+        self.assertEqual('route', self.order_at(22.)['combat_mode'])
 
     def test_actual_approach_keeps_ownership_and_logs_early_return(self):
         self.refuse()
@@ -72,6 +73,36 @@ class GunAngleRecoveryTests(unittest.TestCase):
             self.assertNotIn('_gun_angle_adjustment', self.state)
             self.assertEqual('existing_approach_in_progress',
                              self.state['_gun_angle_handoff']['reason'])
+
+    def test_report_style_long_turn_does_not_spend_the_translation_budget(self):
+        self.refuse()
+        self.order_at(0.)
+        self.state['yaw'] = 0.
+        self.order_at(2., lambda yaw, distance: yaw > 1.)
+        # The native driver first turns towards a checked local waypoint.
+        marker = self.state['_gun_angle_adjustment']
+        marker['reverse'] = False
+        self.runtime._decision_cache[11] = (None, None, 2.,
+            dict(combat_mode='gun_angle_adjust', target_yaw=math.pi))
+        for now, yaw in ((4., .3), (6., .6), (8., 1.), (10., 1.5)):
+            self.state['yaw'] = yaw
+            self.assertEqual('gun_angle_adjust', self.order_at(now)['combat_mode'])
+        self.state.update(x=0., z=-3., yaw=3.14)
+        self.assertEqual('gun_angle_adjust', self.order_at(12.)['combat_mode'])
+        self.state['z'] = -7.
+        self.assertEqual('route', self.order_at(14.)['combat_mode'])
+        self.assertEqual('relocation_arrived', self.state['_gun_angle_last_terminal']['reason'])
+
+    def test_no_progress_times_out_without_order_poll_or_oscillation_renewal(self):
+        self.refuse()
+        self.order_at(0.)
+        self.order_at(2.)
+        self.order_at(3.)
+        for now in (4., 5., 6., 7., 8.):
+            self.order_at(now)
+        self.assertEqual('route', self.order_at(9.)['combat_mode'])
+        self.assertEqual('relocation_stalled', self.state['_gun_angle_last_terminal']['reason'])
+        self.assertNotIn('_gun_angle_adjustment', self.state)
 
     def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
         self.runtime._friendly_repositions[11] = dict(
