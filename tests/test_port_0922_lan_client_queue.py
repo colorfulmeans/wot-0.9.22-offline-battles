@@ -1075,6 +1075,7 @@ class LanClientQueueTests(unittest.TestCase):
                 'reload_time': 0.25, 'reload_duration': 0.5,
                 'clip': 2, 'clip_size': 3,
                 'health': 700, 'alive': True,
+                'local_combat_manoeuvre': bool(index % 2),
                 'critical': {
                     'devices': [], 'destroyed': [], 'crew_ko': [],
                     'fire': False, 'ammo_rack_death': False, 'events': []},
@@ -1128,11 +1129,13 @@ class LanClientQueueTests(unittest.TestCase):
             'health', 'alive', 'critical', 'combat_base_revision',
             'combat_seq', 'combat_fire_elapsed', 'combat_fire_timer',
             'death_reason', 'display_health', 'shot_yaw', 'shot_pitch',
-            'route_wreck_blocked',
+            'route_wreck_blocked', 'local_combat_manoeuvre',
         }
         self.assertEqual(29, len(queued_bots))
         for state in queued_bots:
             self.assertEqual(expected, set(state))
+        self.assertEqual([state['local_combat_manoeuvre'] for state in states],
+                         [state['local_combat_manoeuvre'] for state in queued_bots])
         # The positional row carries the same contract in a fraction of the
         # bytes the mapping form needed.
         self.assertLess(queued[2], full_size // 8)
