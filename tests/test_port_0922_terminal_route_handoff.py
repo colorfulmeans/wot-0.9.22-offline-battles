@@ -50,8 +50,9 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         order=self.order(scene,2.,lane=False)
         self.assertEqual(8,order['target_id'])
         self.assertFalse(order['fire_allowed'])
-        self.assertEqual(0.,order['throttle_override'])
-        self.assertEqual('engage',order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual('advance_contact',order['combat_mode'])
+        self.assertEqual(order['aim_position'],order['move_position'])
 
     def test_contact_free_capture_finishes_with_a_stable_hold(self):
         scene=self.scene()
