@@ -9694,7 +9694,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertEqual(rear, runtime.states[11]['hull_aiming'])
                 self.assertEqual(0, state['fire_seq'])
 
-    def test_no_target_gun_keeps_safe_bearing_and_rests_horizontally(self):
+    def test_no_target_gun_follows_hull_and_rests_horizontally(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
             ground_probe=lambda *unused: 0.0,
@@ -9719,11 +9719,33 @@ class BotRuntimeTests(unittest.TestCase):
         finally:
             runtime._exact_shot_origin = original_origin
 
-        self.assertAlmostEqual(0.65, desired_yaw, places=9)
+        self.assertAlmostEqual(0.0, desired_yaw, places=9)
         self.assertEqual(0.0, horizontal)
         self.assertAlmostEqual(0.0, state['desired_gun_pitch'], places=9)
         self.assertGreater(state['gun_pitch'], -.30)
         self.assertFalse(state['gun_aligned'])
+
+    def test_no_target_rest_follows_hull_turns_and_pi_seam(self):
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        command = {'aim_position': (0.0, -100.0, 1.0),
+                   '_ballistic_solution': None}
+        for yaw in (math.pi / 2, -math.pi / 2, math.pi - .01, -math.pi + .01):
+            state.update(yaw=yaw, turret_yaw=.65, aim_yaw=0.)
+            for unused in range(50):
+                desired, horizontal = runtime._update_gun_aim(
+                    state, command, None, .20)
+            self.assertAlmostEqual(yaw, desired)
+            self.assertAlmostEqual(0., state['turret_yaw'], places=6)
+            self.assertEqual(0., horizontal)
+            self.assertEqual('hull_forward_rest',
+                             state['_diagnostic_aim_intent']['owner'])
+            self.assertFalse(state['gun_aligned'])
 
     def test_point_blank_target_tracks_its_live_world_bearing(self):
         runtime = self.module.BotRuntime(

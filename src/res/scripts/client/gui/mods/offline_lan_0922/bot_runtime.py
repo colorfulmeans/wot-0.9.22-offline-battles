@@ -7212,6 +7212,10 @@ class BotRuntime(object):
         write_json_record('BOT ROUTE CONNECTION', dict(
             round=self.round_id, bot=state['id'], team=state.get('team'),
             vehicle=state.get('vehicle'), at=now, position=_position(state),
+            gun_orientation=dict(hull_yaw=state['yaw'],
+                turret_yaw=state.get('turret_yaw'), gun_pitch=state.get('gun_pitch'),
+                previous_aim=dict(state.get('_diagnostic_aim_intent') or {}),
+                freshness='previous_executed_aim_before_current_control'),
             decision_id=(command.get('planning_receipt') or {}).get('id'),
             disposition=state.get('_planning_disposition'),
             order={key:order.get(key) for key in ('combat_mode', 'route_id',
@@ -12534,9 +12538,11 @@ class BotRuntime(object):
             # Strategic route points lie on the terrain. They steer the hull,
             # but are not gun targets: aiming a tall tank at a nearby ground
             # waypoint produces the reported 20-degree nose-down barrel.
-            # Preserve the last safe world bearing and return to a neutral
-            # horizontal rest without paying for an unused shot-origin solve.
-            desired_yaw = state.get('aim_yaw', state.get('yaw', 0.0))
+            # Rest along the CURRENT hull bearing. Retaining a world bearing
+            # counter-rotates the turret whenever an unengaged hull turns.
+            # Keep horizontal pitch rather than aiming into a ground waypoint,
+            # and retain the installed traverse rate and yaw/pitch limits.
+            desired_yaw = state.get('yaw', 0.0)
             world_pitch = 0.0
             horizontal = 0.0
         else:
@@ -12577,6 +12583,9 @@ class BotRuntime(object):
                 _angle_delta(desired_yaw, state['yaw']), world_pitch)
         raw_relative, raw_pitch = local_angles
         state['_diagnostic_aim_intent'] = {
+            'owner': ('enemy' if target is not None else
+                      'ballistic' if isinstance(ballistic_solution, dict) else
+                      'hull_forward_rest'),
             'turret_yaw': raw_relative, 'gun_pitch': raw_pitch,
             'planning_pending': bool(planning_pending),
             'time_us': self._sample_time_us,

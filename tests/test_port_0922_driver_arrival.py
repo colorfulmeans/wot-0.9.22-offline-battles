@@ -22,6 +22,24 @@ class DriverArrivalTests(unittest.TestCase):
             dict(combat_mode='route',move_position=(0.,0.,200.)),lambda *args:True)
         self.assertEqual('nav_wait',command['recovery_mode'])
         self.assertEqual({},command['control_trace']['arrival'])
+        self.assertEqual('non_drive_terminal', command['control_trace']['pedal']['reason'])
+        self.assertEqual('nav_wait', command['control_trace']['pedal']['mode'])
+
+    def test_alignment_gate_receipt_releases_after_real_alignment(self):
+        driver = LocalDriver()
+        point = (3., 0., 0.)
+        initial = driver.drive(17, 1, (0., 0., 0.), 0., 0., .15,
+            point, (), lambda *args: True, turn_speed_limit=.6)
+        receipt = driver.states[17]['pedal_observation']
+        self.assertEqual(0., initial['throttle'])
+        self.assertIn('retained_near_point_alignment', receipt['gates'])
+        aligned = driver.drive(17, 1, (0., 0., 0.), math.pi/2, 0., .15,
+            point, (), lambda *args: True, turn_speed_limit=.6)
+        self.assertEqual(1., aligned['throttle'])
+        self.assertEqual([], driver.states[17]['pedal_observation']['gates'])
+        driver.drive(17, 1, point, math.pi/2, 0., .15,
+            point, (), lambda *args: True, turn_speed_limit=.6)
+        self.assertNotIn('pedal_observation', driver.states[17])
 
     def test_near_connector_does_not_cancel_started_recovery(self):
         position = (-9.335251321555758, -14.392024747126916, 17.37296667813116)

@@ -585,6 +585,7 @@ class BotAdapter(object):
         # Navigation waits, withdrawal and contact plans do not execute drive.
         # Their receipts must not reuse the previous drive call's distances.
         self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
+        self.driver.states.get(bot_id, {}).pop('pedal_observation', None)
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
         state.pop('_withdrawal_evidence', None)
@@ -806,6 +807,10 @@ class BotAdapter(object):
             navigation_status=state.get('navigation_status'),
             hull_contact=state.get('_hull_contact_receipt'),
             arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
+            pedal=dict(self.driver.states.get(bot_id, {}).get('pedal_observation') or
+                dict(reason='non_drive_terminal', mode=local['recovery_mode'],
+                     throttle=local['throttle'], turn=local['turn'],
+                     brake=bool(local.get('brake', False)))),
             hull_angle_degrees=strategic.get('hull_angle_degrees'),
             flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
