@@ -38,7 +38,8 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         blocked = _contact(2, 0, 150, [])
         for now in (2., 4., 9., 13., 20.):
             order = self.order(now, blocked)
-            self.assertEqual('route', order['combat_mode'])
+            self.assertEqual('advance_contact', order['combat_mode'])
+            self.assertEqual(order['aim_position'], order['move_position'])
             self.assertEqual(2, order['target_id'])
             self.assertIsNone(order['throttle_override'])
             self.assertFalse(order['fire_allowed'])
@@ -52,7 +53,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         self.order(1.)
         self.fx.states[0]['reload_time'] = 10.
         order = self.order(2., _contact(2, 0, 150, []))
-        self.assertEqual('route', order['combat_mode'])
+        self.assertEqual('advance_contact', order['combat_mode'])
         self.assertEqual(2, order['target_id'])
         self.assertFalse(order['fire_allowed'])
         self.assertNotIn(11, self.planner._firing_holds)

@@ -533,12 +533,13 @@ class BotAdapter(object):
         clear = True
         blocker = None
         pose_clear = state.get('pose_clear')
+        body = self.driver.collision_body(state)
         for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
             sample_yaw = yaw + error * fraction
             clear = clear and self.driver._clear(
                 direction_clear, sample_yaw + math.pi, reach)
             blocker = blocker or self.driver._reverse_blocked_by_vehicle(
-                position, sample_yaw, state.get('neighbours', ()), length, width, body=self.driver.collision_body(state))
+                position, sample_yaw, state.get('neighbours', ()), length, width, body=body)
             try:
                 if pose_clear is not None:
                     clear = clear and bool(pose_clear(sample_yaw))
@@ -621,9 +622,16 @@ class BotAdapter(object):
             escape = self._contact_escapes.pop(bot_id, None)
             if escape is not None:
                 self._contact_escape_evidence(state, escape, 'parking_cancelled')
-        contact_plan = (None if parked else self._retained_contact_escape(
+        combat_hold = (strategic.get('target_id') is not None and
+            strategic.get('combat_mode') in ('engage', 'support_hold', 'cover_hold') and
+            strategic.get('throttle_override') == 0.0)
+        if combat_hold:
+            escape = self._contact_escapes.pop(bot_id, None)
+            if escape is not None:
+                self._contact_escape_evidence(state, escape, 'combat_handoff')
+        contact_plan = (None if parked or combat_hold else self._retained_contact_escape(
             state, position, direction_clear))
-        if not parked and contact_plan is None:
+        if not parked and not combat_hold and contact_plan is None:
             contact_plan = self._wreck_push_plan(
                 bot_id, state, position, strategic, direction_clear, contact)
         side_contact = bool(contact is not None and abs(
@@ -641,7 +649,7 @@ class BotAdapter(object):
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
-        if (not parked and not exhausted_wreck and contact_plan is None and contact is not None and
+        if (not parked and not combat_hold and not exhausted_wreck and contact_plan is None and contact is not None and
                 (side_contact or (strategic.get('throttle_override') is not None and
                  (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
             contact_plan = self._contact_escape_plan(
@@ -806,6 +814,11 @@ class BotAdapter(object):
             navigation_wait=navigation_wait,
             navigation_status=state.get('navigation_status'),
             hull_contact=state.get('_hull_contact_receipt'),
+            combat_hold=bool(combat_hold),
+            action_owner=('combat_hold' if combat_hold else
+                'base_defense' if strategic.get('combat_mode') == 'base_defense' else
+                'contact_recovery' if contact_plan is not None else
+                strategic.get('combat_mode', 'route')),
             arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
             pedal=dict(self.driver.states.get(bot_id, {}).get('pedal_observation') or
                 dict(reason='non_drive_terminal', mode=local['recovery_mode'],

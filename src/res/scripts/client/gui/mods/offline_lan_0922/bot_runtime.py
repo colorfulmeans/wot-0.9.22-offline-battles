@@ -13321,20 +13321,22 @@ class BotRuntime(object):
                 source = self.states.get(int(actor), {})
                 lane = self._shot_los_cache.get((int(actor),) + key[1:])
                 rejected = self._gun_angle_rejected(source, key[1:], now)
+                # Retry cooldown bounds local movement, not geometric lane validity.
                 reason = ('not_visible' if not visible else
                           'source_dead' if not source.get('alive', True) else
                           'lane_expired' if lane is not None and now-lane[0] > maximum_age else
                           'native_blocked' if lane is not None and not lane[1] else
                           'no_local_lane' if actor not in shootable else
                           'radio_lease_expired' if radio[0] <= 0.0 else
-                          'mechanical_refusal' if rejected else 'published')
+                          'published')
                 evidence = dict(at=now, target=key[1:], reason=reason,
                     visible=visible, direct_fresh=fresh,
                     radio_time_left=radio[0], radio_direct_fresh=bool(radio[1]),
                     lane_sampled_at=lane[0] if lane is not None else None,
                     lane_clear=bool(lane[1]) if lane is not None else None,
                     lane_age=now-lane[0] if lane is not None else None,
-                    mechanical_refusal=bool(rejected))
+                    mechanical_refusal=source.get('_gun_angle_refusal') == key[1:],
+                    mechanical_retry_suppressed=bool(rejected))
                 if actor in selected_sources:
                     source['_lane_publication_evidence'] = evidence
                 diagnostic = self._combat_diagnostics
@@ -14291,23 +14293,17 @@ class BotRuntime(object):
                 rejected.pop(key, None)
         return identity in rejected
 
-    def _gun_angle_route_order(self, state, order):
-        """Continue the current forward node, never a stale combat anchor."""
-        route = state.get('route') or {}
-        if route.get('id') != order.get('route_id'):
-            catalog = (getattr(self.adapter.director, 'map_data', None) or {}).get('routes', {})
-            route = next((row for row in catalog.get(state.get('team'), ())
-                          if row.get('id') == order.get('route_id')), {})
-        points = route.get('waypoints') or ()
-        index = int(order.get('route_index', 0))
-        if not 0 <= index < len(points):
-            return order
-        point = self._route_waypoint_xz(points[index])
+    def _gun_angle_combat_order(self, state, order, arrived=False):
+        """End a mechanical action without surrendering the selected enemy."""
         result = dict(order)
-        result.update(target_id=None, aim_position=None, face_position=None,
-                      move_position=(point[0], state.get('y', 0.0), point[1]),
-                      combat_mode='route', fire_allowed=False)
-        result.pop('throttle_override', None)
+        result.update(fire_allowed=False, throttle_override=None)
+        if arrived:
+            result.update(combat_mode='engage', move_position=_position(state),
+                          throttle_override=0.0)
+        else:
+            point = order.get('aim_position') or order.get('face_position')
+            if point is not None:
+                result.update(combat_mode='advance_contact', move_position=point)
         return result
 
     def _rear_laying_order(self, state, order, targets, now):
@@ -14366,9 +14362,12 @@ class BotRuntime(object):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
         Two seconds of hull facing, then one checked eight-metre destination.
+        Arrival retries aim; failed attempts yield to checked combat approach,
+        never ordinary route travel or target/launch-proof deletion.
         A new best translation/alignment renews its six-second stall clock;
-        merely issuing an order or changing targets does not. Failed pairs become locally
-        unshootable for eight seconds, without hiding their spotting evidence.
+        merely issuing an order or changing targets does not. Failed local
+        attempts keep an eight-second retry cooldown without hiding the enemy
+        or suppressing an independently proved native firing lane.
         Actual gun solving and native motion remain authoritative throughout.
         """
         eligible = ((state.get('profile') or {}).get('class_tag') != 'SPG' and
@@ -14391,7 +14390,7 @@ class BotRuntime(object):
         identity = self._artillery_target_identity(target)
         if identity is not None and self._gun_angle_rejected(state, identity, now):
             receipt['reason'] = 'bounded_attempt_rejected'
-            return self._gun_angle_route_order(state, order)
+            return self._gun_angle_combat_order(state, order)
         refusal = state.get('_gun_angle_refusal')
         if identity is None or refusal != identity:
             receipt['reason'] = 'no_matching_mechanical_refusal'
@@ -14482,9 +14481,13 @@ class BotRuntime(object):
                 rejected = state.setdefault('_gun_angle_rejected', {})
                 if len(rejected) >= 8:
                     rejected.pop(min(rejected, key=rejected.get), None)
-                rejected[identity] = now + 8.0
+                if stalled:
+                    rejected[identity] = now + 8.0
+                else:
+                    rejected.pop(identity, None)
+                    state.pop('_gun_angle_refusal', None)
                 state.pop('_gun_angle_adjustment', None)
-                return self._gun_angle_route_order(state, order)
+                return self._gun_angle_combat_order(state, order, arrived=not stalled)
             receipt['reason'] = 'checked_mechanical_relocation'
             result.update(move_position=destination,
                           combat_mode='withdraw' if marker['reverse'] else 'gun_angle_adjust',
@@ -14500,7 +14503,7 @@ class BotRuntime(object):
             rejected.pop(min(rejected, key=rejected.get), None)
         rejected[identity] = now + 8.0
         state.pop('_gun_angle_adjustment', None)
-        return self._gun_angle_route_order(state, order)
+        return self._gun_angle_combat_order(state, order)
 
     def _friendly_reposition_order(self, state, targets, now):
         """Return an ordinary lane escape plus whether its lease expired."""

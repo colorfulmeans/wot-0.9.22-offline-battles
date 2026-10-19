@@ -1880,6 +1880,14 @@ class BotPlanner(object):
                 return order
         return None
 
+    @staticmethod
+    def _combat_approach(order, position, reason):
+        """A lost firing lane changes combat movement, not objective ownership."""
+        order.update(combat_mode='advance_contact', move_position=dict(position),
+                     throttle_override=None, fire_allowed=False)
+        order.setdefault('tactical_evidence', {})['combat_handoff'] = dict(
+            owner='combat', reason=reason, destination=dict(position))
+
     def _apply_leased_movement_order(self, order, bot, focus):
         """Debounce movement while the current lane generation catches up."""
         previous = self._previous_target_order(bot["id"], focus)
@@ -1893,9 +1901,8 @@ class BotPlanner(object):
             return False
         if (previous.get('combat_mode') in ('engage', 'support_hold') and
                 previous.get('throttle_override') == 0.0):
-            # Keep the enemy as a tracking target, not a stationary order
-            # whose firing lane is no longer valid. The caller resumes the
-            # existing authored leg and independently keeps launch disabled.
+            # Release only the stationary hold. The caller keeps the combat
+            # objective and lets the existing navigator seek an approach.
             order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
                 reason='stationary_lane_lost', previous_mode=previous['combat_mode'])
             return False
@@ -4264,15 +4271,10 @@ class BotPlanner(object):
             self._combat_states.pop(bot["id"], None)
             self._retreat_states.pop(bot["id"], None)
             self._cover_states.pop(bot["id"], None)
-            # This branch only handles a leased order whose later observation
-            # lost its local lane. Resume the route instead of turning shared
-            # team visibility into an unbounded convergence order.
-            # Preserve this live received enemy as a tracking target. Route
-            # translation and permission to launch are independent owners.
-            order["fire_allowed"] = False
-            order["combat_mode"] = "route"
-            order["move_position"] = dict(move)
-            order["throttle_override"] = None
+            # The selected, known enemy remains the objective. A blocked or
+            # expired lane disables launch; it does not authorize route travel.
+            # Native navigation, collision and final-fire checks still apply.
+            self._combat_approach(order, focus['position'], 'local_lane_lost')
             self._firing_holds.pop(bot["id"], None)
             return order
 
@@ -4379,7 +4381,7 @@ class BotPlanner(object):
         state = bot['state']
         bot_id = bot['id']
         active = self._firing_holds.get(bot_id)
-        releasing = (order.get('combat_mode') == 'route' and
+        releasing = (order.get('combat_mode') == 'advance_contact' and
                      active is not None and active.get('destination') is not None)
         evidence = dict(sampled_at=now, mode=order.get('combat_mode'),
                         fire_seq=state.get('fire_seq'), reason='ineligible')
@@ -4423,29 +4425,25 @@ class BotPlanner(object):
             return
         destination = record.get('destination')
         if destination is None:
-            destination = next((dict(point) for point in (move, anchor)
-                if math.hypot(point['x'] - position['x'],
-                              point['z'] - position['z']) > ROUTE_ARRIVAL_RADIUS), None)
+            point = order.get('aim_position')
+            destination = dict(point) if isinstance(point, dict) and math.hypot(
+                point['x'] - position['x'], point['z'] - position['z']) > 1.5 else None
             if destination is None:
-                evidence['reason'] = 'no_authored_route_destination'
+                evidence['reason'] = 'no_combat_approach_destination'
                 return
             record['destination'] = destination
             record['move_until'] = _number(now) + 4.0
         evidence.update(destination=dict(destination), move_until=record['move_until'])
         if _number(now) >= record['move_until']:
-            evidence['reason'] = 'route_release_complete'
+            evidence['reason'] = 'combat_approach_complete'
             if releasing and order.get('fire_allowed'):
                 order.update(combat_mode='engage', throttle_override=0.0,
                              move_position=dict(position))
             self._firing_holds.pop(bot_id, None)
             return
-        evidence['reason'] = 'route_release_active'
-        # Continue a map-authored route leg while the turret retains its target.
-        # Reloading, cover manoeuvres and explicit low-health holds never enter
-        # this branch; no new unproved wall-side destination is fabricated.
-        order['combat_mode'] = 'route'
-        order['move_position'] = dict(destination)
-        order['throttle_override'] = None
+        evidence['reason'] = 'combat_approach_active'
+        # Reuse the existing contact-approach owner, never the ordinary route.
+        self._combat_approach(order, destination, 'ready_without_shot')
         self._engage_anchors.pop(bot_id, None)
 
     @staticmethod

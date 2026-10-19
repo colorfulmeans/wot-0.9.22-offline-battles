@@ -232,7 +232,7 @@ class LanePublicationTests(unittest.TestCase):
         self.assertEqual('published', self.runtime.states[11]['_lane_publication_evidence']['reason'])
 
     def test_all_negative_gates_have_terminal_publication_reasons(self):
-        for cause in ('radio', 'native', 'expired', 'unspotted', 'mechanical'):
+        for cause in ('radio', 'native', 'expired', 'unspotted'):
             with self.subTest(cause=cause):
                 self.setUp()
                 now = 1.2
@@ -240,10 +240,16 @@ class LanePublicationTests(unittest.TestCase):
                 if cause == 'native': self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.1, False)
                 if cause == 'expired': now = 4.
                 if cause == 'unspotted': now = 30.
-                if cause == 'mechanical': self.runtime._gun_angle_rejected = lambda *args: True
                 row = self.pack(now)
                 self.assertEqual([], row['shootable_by_bot_ids'])
                 self.assertNotEqual('published', self.runtime.states[11]['_lane_publication_evidence']['reason'])
+
+    def test_mechanical_retry_cooldown_is_not_a_negative_native_lane(self):
+        self.runtime._gun_angle_rejected = lambda *args: True
+        row = self.pack()
+        self.assertEqual([11], row['shootable_by_bot_ids'])
+        self.assertEqual('published',self.runtime.states[11]['_lane_publication_evidence']['reason'])
+        self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_retry_suppressed'])
 
     def test_final_native_fire_veto_remains_authoritative(self):
         self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.2, False)

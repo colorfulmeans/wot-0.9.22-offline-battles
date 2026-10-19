@@ -262,7 +262,7 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
         bot['state'].update(fire_seq=7, local_combat_manoeuvre=True)
         def order():
             return dict(combat_mode='engage', throttle_override=0.,
-                target_id=20, target_kind='bot')
+                target_id=20, target_kind='bot', aim_position=dict(x=50.,y=0.,z=80.))
         for now in (0., 8., 20.):
             command = order()
             planner._release_unproductive_firing_hold(command, bot,
@@ -278,7 +278,70 @@ class ServerManoeuvreOwnershipTests(unittest.TestCase):
         command = order()
         planner._release_unproductive_firing_hold(command, bot,
             dict(x=0.,y=0.,z=100.), dict(x=0.,y=0.,z=80.), 30.)
-        self.assertEqual('route', command['combat_mode'])
+        self.assertEqual('advance_contact', command['combat_mode'])
+        self.assertEqual(dict(x=50.,y=0.,z=80.),command['move_position'])
+
+
+class CombatRecoveryHandoffTests(unittest.TestCase):
+    def setUp(self):
+        self.adapter = BotAdapter('himmelsdorf', 11,
+            navigation_target=lambda bot,pos,goal,*unused: goal)
+        self.state = dict(id=14, team=1, slot=13, position=(0.,0.,0.),
+            yaw=0., speed=0., dt=.1, half_length=3., half_width=1.5,
+            navigation_status='safe')
+        self.order = dict(combat_mode='engage', target_id=20,
+            aim_position=(0.,0.,100.), face_position=(0.,0.,100.),
+            move_position=(0.,0.,0.), throttle_override=0., fire_allowed=True)
+
+    def test_engagement_preempts_contact_escape_and_wreck_push(self):
+        with mock.patch.object(self.adapter, '_retained_contact_escape') as retained, \
+                mock.patch.object(self.adapter, '_wreck_push_plan') as wreck:
+            command = self.adapter.decide_with_order(self.state,self.order,lambda *args: True)
+        retained.assert_not_called()
+        wreck.assert_not_called()
+        self.assertEqual('engage',command['combat_mode'])
+        self.assertEqual(20,command['target_id'])
+        self.assertEqual(0.,command['throttle'])
+        self.assertEqual('combat_hold',command['control_trace']['action_owner'])
+
+    def test_stationary_engagement_ends_inflight_driver_recovery(self):
+        route = dict(self.order,combat_mode='route',target_id=None,
+            move_position=(0.,0.,80.),throttle_override=None)
+        self.adapter.decide_with_order(self.state,route,lambda *args: True)
+        state = self.adapter.driver.states[14]
+        state.update(recovery_time=2.,recovery_side=1.,stuck_time=4.)
+        command = self.adapter.decide_with_order(self.state,self.order,lambda *args: True)
+        self.assertEqual(0.,state['recovery_time'])
+        self.assertEqual(0.,state['stuck_time'])
+        self.assertEqual('arrived',command['recovery_mode'])
+        self.assertEqual(20,command['target_id'])
+
+    def test_reverse_sweep_prepares_one_body_but_keeps_all_five_checks(self):
+        order = dict(self.order,combat_mode='withdraw',throttle_override=None)
+        with mock.patch.object(self.adapter.driver,'collision_body',wraps=self.adapter.driver.collision_body) as body:
+            checks=[]
+            command=self.adapter._reverse_withdrawal(self.state,order,(0.,0.,0.),
+                (0.,0.,-10.),(0.,0.,-10.),lambda *args: checks.append(args) or True)
+        self.assertIsNotNone(command)
+        self.assertEqual(1,body.call_count)
+        self.assertEqual(5,len(checks))
+
+    def test_base_defence_keeps_checked_travel_owner(self):
+        order = dict(self.order,combat_mode='base_defense',
+            move_position=(0.,0.,80.),throttle_override=1.)
+        with mock.patch.object(self.adapter,'_retained_contact_escape',return_value=None) as retained:
+            command = self.adapter.decide_with_order(self.state,order,lambda *args: True)
+        retained.assert_called_once()
+        self.assertTrue(command['movement_intent'])
+        self.assertFalse(command['control_trace']['combat_hold'])
+        self.assertEqual('base_defense',command['control_trace']['action_owner'])
+
+    def test_route_recovery_is_not_disabled_without_enemy(self):
+        order = dict(self.order,combat_mode='route',target_id=None,
+            move_position=(0.,0.,80.),throttle_override=None)
+        with mock.patch.object(self.adapter,'_retained_contact_escape',return_value=None) as retained:
+            self.adapter.decide_with_order(self.state,order,lambda *args: True)
+        retained.assert_called_once()
 
 
 if __name__ == '__main__':

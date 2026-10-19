@@ -33,7 +33,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
     def order_at(self, now, clear=lambda *unused: True):
         return self.runtime._gun_angle_order(self.state, self.order, self.targets, now, clear)
 
-    def test_real_pitch_refusal_adjusts_once_then_resumes_forward_node(self):
+    def test_real_pitch_refusal_times_out_to_combat_approach(self):
         self.refuse()
         self.assertEqual((0., 0., 0.), self.order_at(0.)['move_position'])
         calls = []
@@ -44,9 +44,9 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertEqual(move['move_position'], self.order_at(4.)['move_position'])
         self.assertEqual(1, len(calls))
         resumed = self.order_at(10.)
-        self.assertEqual('route', resumed['combat_mode'])
-        self.assertEqual((0., 0., 90.), resumed['move_position'])
-        self.assertIsNone(resumed['target_id'])
+        self.assertEqual('advance_contact', resumed['combat_mode'])
+        self.assertEqual(self.target['position'], resumed['move_position'])
+        self.assertEqual(28, resumed['target_id'])
         self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 11.))
         self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 18.))
 
@@ -62,7 +62,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
                          self.state['_gun_angle_handoff']['reason'])
         self.assertEqual(6.27, self.state['_gun_angle_handoff']['anchor_distance'])
         self.assertEqual('gun_angle_adjust', self.order_at(16.)['combat_mode'])
-        self.assertEqual('route', self.order_at(22.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(22.)['combat_mode'])
 
     def test_actual_approach_keeps_ownership_and_logs_early_return(self):
         self.refuse()
@@ -90,7 +90,11 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.state.update(x=0., z=-3., yaw=3.14)
         self.assertEqual('gun_angle_adjust', self.order_at(12.)['combat_mode'])
         self.state['z'] = -7.
-        self.assertEqual('route', self.order_at(14.)['combat_mode'])
+        arrived = self.order_at(14.)
+        self.assertEqual('engage', arrived['combat_mode'])
+        self.assertEqual(28, arrived['target_id'])
+        self.assertEqual(0., arrived['throttle_override'])
+        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot',28),14.))
         self.assertEqual('relocation_arrived', self.state['_gun_angle_last_terminal']['reason'])
 
     def test_no_progress_times_out_without_order_poll_or_oscillation_renewal(self):
@@ -100,7 +104,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.order_at(3.)
         for now in (4., 5., 6., 7., 8.):
             self.order_at(now)
-        self.assertEqual('route', self.order_at(9.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(9.)['combat_mode'])
         self.assertEqual('relocation_stalled', self.state['_gun_angle_last_terminal']['reason'])
         self.assertNotIn('_gun_angle_adjustment', self.state)
 
@@ -170,13 +174,13 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.targets[29] = other
         self.order['target_id'] = 29
         self.runtime._local_ballistic_solution(self.state, other, harness._combat_descriptor(), 0)
-        self.assertEqual('route', self.order_at(6.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(6.)['combat_mode'])
 
     def test_blocked_candidates_do_not_loop_and_reverse_keeps_enemy_facing(self):
         self.refuse()
         self.order_at(0.)
         probes = []
-        self.assertEqual('route', self.order_at(2., lambda *args: probes.append(args) or False)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(2., lambda *args: probes.append(args) or False)['combat_mode'])
         self.assertEqual(2, len(probes))
         self.state.pop('_gun_angle_rejected')
         self.order_at(10.)
@@ -191,7 +195,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.order_at(0.)
         self.runtime._gun_angle_candidate_tick = 2.
         self.order_at(2., lambda *unused: self.fail('budget already used'))
-        self.assertEqual('route', self.order_at(6.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(6.)['combat_mode'])
 
     def test_reload_or_unfinished_slew_without_angle_refusal_do_not_adjust(self):
         self.state.update(pitch=0., gun_aligned=False, reload=20.)
@@ -214,7 +218,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         record = runtime._pack_observations(aggregate, 1.)[0]
         self.assertTrue(record['visible'])
         self.assertEqual([11, 12], record['visible_by_bot_ids'])
-        self.assertEqual([12], record['shootable_by_bot_ids'])
+        self.assertEqual([11, 12], record['shootable_by_bot_ids'])
         self.assertEqual([11, 12], runtime._pack_observations(aggregate, 9.)[0]['shootable_by_bot_ids'])
 
     def test_production_update_releases_explicit_hold_with_stale_anchor(self):

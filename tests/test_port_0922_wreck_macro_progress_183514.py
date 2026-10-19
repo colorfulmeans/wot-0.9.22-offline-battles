@@ -114,6 +114,7 @@ class PushTerminalEvidenceTests(unittest.TestCase):
         fixture.setUp()
         self.state = fixture.state
         self.decide = fixture.decide
+        fixture.order['target_id'] = None
         self.state['push_pose_clear'] = lambda yaw: False
         self.state['now'] = 10.
         first = self.decide()
