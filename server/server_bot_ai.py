@@ -1813,6 +1813,16 @@ class BotPlanner(object):
         if (previous.get("combat_mode") == "route" and
                 not (self._firing_holds.get(bot["id"]) or {}).get("destination")):
             return False
+        if previous.get('combat_mode') == 'flank':
+            state = bot['state']
+            point = _point(previous.get('move_position'))
+            if math.hypot(point['x'] - _number(state.get('x')),
+                          point['z'] - _number(state.get('z'))) <= 1.5:
+                # The lane lease may preserve unfinished travel, not a completed
+                # flank with no shot. Yield to the caller's existing route path.
+                order.setdefault('tactical_evidence', {})['flank_handoff'] = dict(
+                    reason='completed_flank_without_lane', point=point)
+                return False
         for name in (
                 "combat_mode", "move_position", "face_position",
                 "throttle_override", "cover_id", "hull_angle_degrees",
@@ -4180,6 +4190,13 @@ class BotPlanner(object):
         evidence = dict(sampled_at=now, mode=order.get('combat_mode'),
                         fire_seq=state.get('fire_seq'), reason='ineligible')
         order.setdefault('tactical_evidence', {})['firing_hold'] = evidence
+        if state.get('local_combat_manoeuvre', False):
+            # The worker owns the complete bounded lane/angle manoeuvre.
+            # Time spent turning/moving for that action is not idle aiming.
+            # Its terminal publication clears the bit and starts a fresh hold.
+            self._firing_holds.pop(bot_id, None)
+            evidence['reason'] = 'local_combat_manoeuvre_active'
+            return
         if ((not releasing and (order.get('combat_mode') not in ('engage', 'support_hold') or
                 order.get('throttle_override') != 0.0)) or
                 'fire_seq' not in state or not self._weapon_ready(bot)):

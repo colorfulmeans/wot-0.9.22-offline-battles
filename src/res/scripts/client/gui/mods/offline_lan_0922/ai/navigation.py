@@ -1483,7 +1483,8 @@ class TerrainGrid(object):
 
 	def safe_local_target(self, current, goal, now, avoid_points=None,
 			side_preference=1.0, edge_penalties=None,
-			minimum_offset=0.0, diagnostic=None, excluded_target_cells=None):
+			minimum_offset=0.0, diagnostic=None, excluded_target_cells=None,
+			excluded_target_points=()):
 		"""Choose one short, fully probed detour when the global search fails.
 
 		This is deliberately not a direct-to-goal fallback. Every candidate must
@@ -1499,6 +1500,12 @@ class TerrainGrid(object):
 				policy='legacy_distance_turn_avoidance')
 			if excluded_target_cells:
 				diagnostic['visited_rejected'] = 0
+		def refused(point):
+			blocked = any(_distance_2d(point, old) <= WAYPOINT_ARRIVAL_RADIUS
+				for old in excluded_target_points)
+			if blocked and diagnostic is not None:
+				diagnostic['proved_point_rejected'] = diagnostic.get('proved_point_rejected', 0) + 1
+			return blocked
 		dx = float(goal[0]) - float(current[0])
 		dz = float(goal[2]) - float(current[2])
 		if abs(dx) + abs(dz) < 0.1:
@@ -1517,6 +1524,8 @@ class TerrainGrid(object):
 					y = self._baked_cell_height(key)
 					if y is not None:
 						point = self.point_for(key, y)
+						if refused(point):
+							continue
 						if _distance_2d(current, point) > WAYPOINT_ARRIVAL_RADIUS:
 							candidates.append((_distance_2d(current, point), point))
 			# At most one nearby candidate receives a full native query per decision.
@@ -1547,6 +1556,8 @@ class TerrainGrid(object):
 				yaw = desired_yaw + offset
 				x = float(current[0]) + math.sin(yaw) * distance
 				z = float(current[2]) + math.cos(yaw) * distance
+				if refused((x, current[1], z)):
+					continue
 				if self.cell_for((x, current[1], z)) in (excluded_target_cells or ()):
 					if diagnostic is not None:
 						diagnostic['visited_rejected'] += 1
@@ -2147,6 +2158,7 @@ class TerrainNavigator(object):
 					return tuple(target)
 				state['local_target_end_reason'] = 'timeout'
 				state['local_target_retired'] = (tuple(target), float(now) + MACRO_STALL_SECONDS)
+				state.pop('local_target_retired_source', None)
 			self._observe_macro_progress(bot_id, state, current, goal, now)
 		if target is not None and state.get('last_target') == target:
 			# Pending-path bridging must not resurrect a consumed local point.
@@ -2279,7 +2291,8 @@ class TerrainNavigator(object):
 			1.0 if (int(bot_id) % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
 			0.0, diagnostic=state.setdefault('local_fallback', {}),
-			excluded_target_cells=exclusions)
+			excluded_target_cells=exclusions,
+			excluded_target_points=self._active_local_target_refusals(bot_id, now))
 		selection=state.setdefault('local_selection',{})
 		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
 			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
@@ -2762,7 +2775,8 @@ class TerrainNavigator(object):
 			current, goal, now, None,
 			1.0 if (bot_id % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
+			excluded_target_points=self._active_local_target_refusals(bot_id, now))
 		state['target'] = tuple(goal)
 		state['position'] = tuple(current)
 		state['progress_at'] = float(now)
@@ -2780,7 +2794,8 @@ class TerrainNavigator(object):
 			current, target, now, None,
 			1.0 if (int(bot_id) % 2) else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
+			excluded_target_points=self._active_local_target_refusals(bot_id, now))
 		key = self.grid._edge_cells_for_segment(current, target)
 		if key is None and escape is None:
 			return False
@@ -3044,7 +3059,8 @@ class TerrainNavigator(object):
 			current, goal, now, avoid_points,
 			1.0 if (int(bot_id) + attempt) % 2 else -1.0,
 			self._active_planning_edge_penalties(bot_id, now),
-			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}))
+			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
+			excluded_target_points=self._active_local_target_refusals(bot_id, now))
 		if target is not None:
 			state['ingress_escape'] = {'target': tuple(target), 'until': float(now) + 8.0}
 			return tuple(target)
@@ -3111,6 +3127,12 @@ class TerrainNavigator(object):
 	def bot_segment_penalized(self, bot_id, start, end, now):
 		"""Expose one Bot's live hard-contact edge veto to target admission."""
 		return self._bot_edges_penalized(bot_id, start, end, now)
+
+	def _active_local_target_refusals(self, bot_id, now):
+		state = self.bot_states.get(int(bot_id), {})
+		retired = state.get('local_target_retired')
+		return ((retired[0],) if state.get('local_target_retired_source') == 'hard_body'
+			and retired is not None and float(now) < retired[1] else ())
 
 	def report_blocked_step(self, bot_id, current, target, now):
 		"""Escalate a repeated contact or planner veto into a bot-local replan."""
@@ -3340,6 +3362,21 @@ class TerrainNavigator(object):
 		return self.report_hard_contact(
 			bot_id, current, target, realised_yaw, now)
 
+	def report_blocked_local_action(self, bot_id, current, target, heading, now):
+		"""Retire a proved unreachable short point through the existing retry gate.
+
+		A three-metre connector may remain inside one coarse cell. Its synthetic
+		recovery edge alone cannot exclude that point on the next fallback read.
+		Retain the existing point-level refusal for the same finite edge lifetime;
+		never turn a rotation refusal into a global map obstacle.
+		"""
+		if not self.report_blocked_corridor(bot_id, current, target, heading, now):
+			return False
+		self.bot_states[int(bot_id)]['local_target_retired'] = (
+			tuple(target), float(now) + BLOCKED_STEP_EDGE_TTL)
+		self.bot_states[int(bot_id)]['local_target_retired_source'] = 'hard_body'
+		return True
+
 	def request_replan(self, bot_id, current, now):
 		"""Retire only this Bot's followers after one checked wait recovery."""
 		bot_id = int(bot_id)
@@ -3358,7 +3395,11 @@ class TerrainNavigator(object):
 		self._clear_temporary_progress(state)
 		state.pop('local_completed_target', None)
 		state.pop('reached_path_corner', None)
-		state.pop('local_target_retired', None)
+		retired = state.get('local_target_retired')
+		if (state.get('local_target_retired_source') != 'hard_body' or
+				retired is None or float(now) >= retired[1]):
+			state.pop('local_target_retired', None)
+			state.pop('local_target_retired_source', None)
 		for name in ('last_target', 'local_fallback_target', 'controlled_shallow_target',
 				'macro_escape_target', 'macro_escape_until', 'pending_since'):
 			state.pop(name, None)
@@ -3856,7 +3897,11 @@ class TerrainNavigator(object):
 		if request_changed:
 			state.pop('path_endpoint_refusal', None)
 			state.pop('local_fallback_target', None)
-			state.pop('local_target_retired', None)
+			retired = state.get('local_target_retired')
+			if (state.get('local_target_retired_source') != 'hard_body' or
+					retired is None or float(now) >= retired[1]):
+				state.pop('local_target_retired', None)
+				state.pop('local_target_retired_source', None)
 			state.pop('local_completed_target', None)
 			state.pop('reached_path_corner', None)
 			combat_count('nav_request_changed' if had_request else

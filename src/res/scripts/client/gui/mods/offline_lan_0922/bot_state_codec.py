@@ -54,6 +54,7 @@ DEVICE_HP_SCALE = 1000        # round(v, 3)
 
 # Flag bits.
 F_HAS_RAM_MOTION = 1 << 21
+F_LOCAL_COMBAT_MANOEUVRE = 1 << 22
 F_SERVICE_BRAKE = 1 << 19
 F_ROUTE_WRECK_BLOCKED = 1 << 20
 F_ALIVE = 1 << 0
@@ -317,6 +318,8 @@ def encode_row(state):
         flags |= F_SERVICE_BRAKE
     if state.get('route_wreck_blocked', False):
         flags |= F_ROUTE_WRECK_BLOCKED
+    if state.get('local_combat_manoeuvre', False):
+        flags |= F_LOCAL_COMBAT_MANOEUVRE
     if state.get('airborne', False):
         flags |= F_AIRBORNE
     if state.get('ammo_reload_pending', False):
@@ -498,6 +501,7 @@ def decode_row(row, static):
     result['airborne'] = bool(flags & F_AIRBORNE)
     result['service_brake'] = bool(flags & F_SERVICE_BRAKE)
     result['route_wreck_blocked'] = bool(flags & F_ROUTE_WRECK_BLOCKED)
+    result['local_combat_manoeuvre'] = bool(flags & F_LOCAL_COMBAT_MANOEUVRE)
     result['ammo_reload_pending'] = bool(flags & F_AMMO_RELOAD_PENDING)
     result['burst_active'] = bool(flags & F_BURST_ACTIVE)
     result['movement_dir'] = (

@@ -6414,6 +6414,7 @@ class BattleState:
             "airborne": bool(raw.get("airborne", False)),
             "service_brake": bool(raw.get("service_brake", False)),
             "route_wreck_blocked": bool(raw.get("route_wreck_blocked", False)),
+            "local_combat_manoeuvre": bool(raw.get("local_combat_manoeuvre", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6813,6 +6814,7 @@ class BattleState:
         """
         result = dict(previous) if previous else {}
         result['route_wreck_blocked'] = bool(raw.get('route_wreck_blocked', False))
+        result['local_combat_manoeuvre'] = bool(raw.get('local_combat_manoeuvre', False))
         # The ledgers this holds must not alias the retired state; every other
         # path here produces fresh containers.
         for name in ("critical", "equipment_states", "ammo_remaining"):
