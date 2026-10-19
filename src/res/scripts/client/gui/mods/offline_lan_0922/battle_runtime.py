@@ -24360,9 +24360,14 @@ class BattleRuntime(object):
         # moving actors. Keep their original solve; only static-only columns
         # admit this additional complete-column reuse.
         if batch is not None and not context.get('candidates') and callable(revision):
-            return dict(batch.get('support_column',
-                (x, z, hint_y, maximum_y, revision()),
-                self._bot_support_column_impl, x, z, hint_y, maximum_y))
+            key = (x, z, hint_y, maximum_y, revision())
+            result = batch.get('support_column', key,
+                self._bot_support_column_impl, x, z, hint_y, maximum_y)
+            # The layered helper contains native exceptions as an unavailable
+            # column. Do not memoize that result as a known empty surface.
+            if result['height'] is None:
+                batch.cache['support_column'].pop(key, None)
+            return dict(result)
         return self._bot_support_column_impl(x, z, hint_y, maximum_y)
 
     def _bot_support_column_impl(self, x, z, hint_y, maximum_y):

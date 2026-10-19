@@ -117,6 +117,14 @@ class SupportReuseTests(unittest.TestCase):
         battle._bot_support_column(1.,3.,4.,5.)
         self.assertEqual(5,battle._support_column.call_count)
 
+    def test_unavailable_support_column_is_retried_inside_the_solve(self):
+        battle=engine.BattleRuntime(engine._runtime())
+        battle._destructibles=types.SimpleNamespace(_spatial_revision_1513=lambda:1)
+        battle._stack_context={'queries':SupportQueries(lambda:1.)}
+        battle._support_column=mock.Mock(return_value=None)
+        for unused in range(2):self.assertIsNone(battle._bot_support_column(1.,3.,4.,5.)['height'])
+        self.assertEqual(2,battle._support_column.call_count)
+
     def test_complete_column_cache_never_skips_moving_roof_observation(self):
         battle=engine.BattleRuntime(engine._runtime())
         battle._destructibles=types.SimpleNamespace(_spatial_revision_1513=lambda:1)
