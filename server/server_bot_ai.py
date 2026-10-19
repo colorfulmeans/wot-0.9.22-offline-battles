@@ -7,6 +7,7 @@ contract. Enemy data is accepted only through ``report_contacts``; players and
 bot state are used to validate identities, never to invent a target position.
 """
 
+import copy
 import math
 import os
 import sys
@@ -2634,7 +2635,7 @@ class BotPlanner(object):
                          assigned_until <= _number(now) else 'catalog_reset'),
                         evidence=dict(evaluated_at=_number(now),
                             assigned_until=assigned_until, knowledge_lost=knowledge_lost,
-                            knowledge_contacts=[dict(contact=contact,
+                            knowledge_contacts=[dict(contact=copy.deepcopy(contact),
                                 nearest_route=self._nearest_route(contact, catalog))
                                 for contact in self._contacts_for_bot(bot, contacts, now)],
                             catalog_contains_route=assigned_id in catalog,
