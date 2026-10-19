@@ -1411,7 +1411,7 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                         for value in connection.payloads]
             self.assertEqual([relay], payloads)
 
-    def test_memory_contact_rejects_freshness_and_shooter_mismatches(self):
+    def test_memory_contact_keeps_independent_lane_but_rejects_false_freshness(self):
         server, unused_authority_socket, unused_guest_socket = self._server()
         bad_time = self._message(server.round_id)
         bad_time['contacts'][0]['time_left'] = 0.0
@@ -1420,12 +1420,20 @@ class ServerBotObservationRelayTests(unittest.TestCase):
             'fresh': False,
             'visible_by_bot_ids': [],
             'shootable_by_bot_ids': [11],
+            'radio_recipients': [{'kind': 'bot', 'id': 11, 'time_left': 4.0}],
         })
 
         self.assertFalse(server.update_bot_observation(
             SIMULATION_WORKER_AUTHORITY_ID, bad_time))
+        relay = server.update_bot_observation(
+            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter)
+        self.assertIsInstance(relay, dict)
+        self.assertEqual([11], relay['contacts'][0]['shootable_by_bot_ids'])
+        self.assertFalse(relay['contacts'][0]['fresh'])
+        false_freshness = copy.deepcopy(remembered_shooter)
+        false_freshness['contacts'][0]['fresh'] = True
         self.assertFalse(server.update_bot_observation(
-            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter))
+            SIMULATION_WORKER_AUTHORITY_ID, false_freshness))
 
     def test_valid_first_hidden_observation_is_a_noop_not_a_rejection(self):
         server, authority_socket, guest_socket = self._server()
@@ -1568,6 +1576,8 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                     initial = self._message(server.round_id)
                     initial['contacts'][0]['shootable_by_bot_ids'] = [12]
                     initial['contacts'][0]['threatened_bot_ids'] = [12]
+                    initial['contacts'][0]['radio_recipients'] = [
+                        {'kind': 'bot', 'id': 12, 'time_left': 4.0}]
                     renewed = copy.deepcopy(initial)
                     renewed['contacts'][0]['visible_by_bot_ids'] = [12]
                     observer_id, team, target = 11, 2, ('player', 2)
@@ -1586,7 +1596,8 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                 self.assertEqual(10.0, contact['time_left'])
                 self.assertEqual([], contact['visible_by_bot_ids'])
                 self.assertEqual([], contact['visible_by_player_ids'])
-                self.assertEqual([], contact['shootable_by_bot_ids'])
+                self.assertEqual([12] if observer_kind == 'bot' else [],
+                                 contact['shootable_by_bot_ids'])
                 self.assertEqual([], contact.get('threatened_bot_ids', []))
                 self.assertEqual({target}, set(server.team_lit_targets[team]))
                 self.assertIsInstance(server.update_bot_observation(
@@ -1596,6 +1607,13 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                     observer_kind, observer_id)['spotted'])
                 self.assertEqual(0, server._statistics_row(
                     observer_kind, next_id)['spotted'])
+                if observer_kind == 'bot':
+                    # Losing a direct observer does not erase another live
+                    # shooter's independent receipt. Losing the shooter does.
+                    server.bot_states[12]['alive'] = False
+                    dead_shooter = server.update_bot_observation(
+                        SIMULATION_WORKER_AUTHORITY_ID, initial)
+                    self.assertEqual([], dead_shooter['contacts'][0]['shootable_by_bot_ids'])
 
     def test_a_malformed_retired_observer_batch_preserves_spot_state(self):
         server, _, _ = self._server()
@@ -7176,7 +7194,7 @@ class BotRuntimeTests(unittest.TestCase):
             'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
             'gun_pitch', 'speed', 'push_x', 'push_z', 'movement_dir', 'rotation_dir',
             'reload_time', 'burst_time_left', 'siege_time_left_ms',
-            'combat_fire_elapsed', 'combat_fire_timer'))
+            'combat_fire_elapsed', 'combat_fire_timer', 'aim_feedback_error'))
         represented = set(('critical', 'equipment_states', 'ammo_remaining',
                            'shot_yaw', 'shot_pitch'))
         codec = self.module.bot_state_codec

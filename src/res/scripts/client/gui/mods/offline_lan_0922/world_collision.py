@@ -19,6 +19,7 @@ _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
+@observed('motion.geometry_prepare')
 def _vehicle_motion_geometry(descriptor):
 	"""Read the live hull/chassis once for both horizontal and vertical bounds.
 

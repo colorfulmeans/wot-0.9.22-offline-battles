@@ -39,6 +39,7 @@ COVER_PROGRESS_EPSILON = 1.5
 COVER_CANDIDATE_RETRY_SECONDS = 12.0
 TARGET_LEASE_SECONDS = 2.0
 TARGET_SWITCH_MARGIN = 3.0
+TARGET_AIM_NO_PROGRESS_SECONDS = 6.0
 COMBAT_MODE_DWELL_SECONDS = 2.0
 COMBAT_RANGE_HYSTERESIS_FRACTION = 0.06
 COMBAT_RANGE_HYSTERESIS_MIN = 8.0
@@ -761,7 +762,7 @@ class BotPlanner(object):
             assignments = self._assign_targets(team_bots, contacts[team], now)
             assignments = self._prioritize_base_invaders(
                 team, team_bots, contacts[team], assignments,
-                defenders.get(team, {}), defense)
+                defenders.get(team, {}), defense, now)
             for bot in team_bots:
                 commanded_focus = self._team_order_focus(
                     team_order_by_bot.get(bot["id"]), bot,
@@ -1160,14 +1161,16 @@ class BotPlanner(object):
             point["x"] - _number(state.get("x")),
             point["z"] - _number(state.get("z")))
         can_engage = False
-        if (distance <= ROUTE_ARRIVAL_RADIUS and
-                BotPlanner._weapon_ready(bot)):
+        if BotPlanner._weapon_can_recover(bot):
             for contact in contacts or ():
                 key = (str(contact.get("target_kind") or ""),
                        _integer(contact.get("id")))
                 if (key in contributor_keys and contact.get("visible") and
                         bot["id"] in contact.get(
-                            "shootable_by_bot_ids", ())):
+                            "shootable_by_bot_ids", ()) and math.hypot(
+                                contact['position']['x'] - _number(state.get('x')),
+                                contact['position']['z'] - _number(state.get('z'))) <=
+                            BotPlanner._engagement_range(bot, contact)):
                     can_engage = True
                     break
         speed = _number(bot.get("profile", {}).get("speed"))
@@ -1249,6 +1252,12 @@ class BotPlanner(object):
                             distance + 1.0 <= record["best_distance"]):
                         record["best_distance"] = distance
                         record["last_progress_at"] = _number(now)
+                    combat_progress = self._defense_combat_progress(
+                        live[bot_id], record, self._contacts_for_bot(
+                            live[bot_id], contacts.get(team, ()), now),
+                        contributor_keys, now)
+                    if combat_progress:
+                        record['last_progress_at'] = _number(now)
                     backups = [value for value in live
                                if value not in responders and
                                value not in blocked_until]
@@ -1341,6 +1350,51 @@ class BotPlanner(object):
                         }
             result[team] = dict(responders)
         return result
+
+    def _defense_combat_progress(self, bot, record, contacts, contributor_keys, now):
+        """Count executed fire/reload/aim work against a reachable invasion.
+
+        Merely possessing a target or a positive lane is not progress: a wedged
+        responder must still expire when neither its body nor gun is working.
+        """
+        state = bot['state']
+        reachable = [contact for contact in contacts if
+            (contact.get('target_kind'), contact['id']) in contributor_keys and
+            contact.get('visible') and math.hypot(
+                contact['position']['x'] - _number(state.get('x')),
+                contact['position']['z'] - _number(state.get('z'))) <=
+            self._engagement_range(bot, contact)]
+        sequence = _integer(state.get('fire_seq'))
+        previous_sequence = record.get('observed_fire_seq', sequence)
+        record['observed_fire_seq'] = sequence
+        reason = 'no_reachable_capturer'
+        progressed = False
+        if reachable:
+            reason = 'no_executed_combat_progress'
+            if sequence > previous_sequence:
+                record['defense_shot_seq'] = sequence
+                record['reload_best'] = _number(state.get('reload_time'))
+                reason, progressed = 'shot_advanced', True
+            elif (record.get('defense_shot_seq') == sequence and
+                  0.0 < _number(state.get('reload_time')) <
+                  record.get('reload_best', 0.0)):
+                record['reload_best'] = _number(state.get('reload_time'))
+                reason, progressed = 'reload_advanced', True
+            key = (state.get('aim_feedback_kind'), state.get('aim_feedback_id'))
+            if any((contact.get('target_kind'), contact['id']) == key and
+                   bot['id'] in contact.get('shootable_by_bot_ids', ()) for contact in reachable):
+                error = _number(state.get('aim_feedback_error'))
+                old = record.get('defense_aim')
+                if old is None or old[0] != key or error + math.radians(1.0) <= old[1]:
+                    record['defense_aim'] = (key, error)
+                    reason, progressed = 'capturer_aim_advanced', True
+        record['combat_progress'] = dict(at=now, reason=reason,
+            progressed=progressed, reachable=[(c.get('target_kind'), c['id']) for c in reachable],
+            fire_seq=sequence, previous_fire_seq=previous_sequence,
+            reload_time=state.get('reload_time'), aim_target=(
+                state.get('aim_feedback_kind'), state.get('aim_feedback_id')),
+            aim_error=state.get('aim_feedback_error'))
+        return progressed
 
     def _apply_base_defense_order(self, order, bot, base):
         self._engage_anchors.pop(bot["id"], None)
@@ -1513,7 +1567,7 @@ class BotPlanner(object):
                 CAPTURE_STAGING_RADIUS)
 
     def _prioritize_base_invaders(self, team, bots, contacts, assignments,
-                                  defenders, defense):
+                                  defenders, defense, now=None):
         if not defenders or not isinstance(defense, dict):
             return assignments
         contributor_keys = self._defense_contributor_keys(defense, team)
@@ -1529,7 +1583,20 @@ class BotPlanner(object):
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
             choices = []
-            for contact in self._contacts_for_bot(bot, contacts):
+            current = result.get(bot_id)
+            current_key = ((current.get('target_kind'), current['id'])
+                           if current is not None else None)
+            hit = self._recent_hit(bot_id, now) if now is not None else None
+            lease = self._target_assignments.get(bot_id) or {}
+            reads = self._target_decisions.get(bot_id, {}).get('target_capabilities', {})
+            if (hit is not None and current_key == hit.get('attacker') and
+                    bot_id in current.get('shootable_by_bot_ids', ()) and
+                    reads.get(bot_gunnery.CAPABILITY_TARGET_RETALIATION, True)):
+                decision = self._target_decisions.setdefault(bot_id, {})
+                decision['base_priority'] = dict(reason='recent_attacker_override',
+                    contributors=sorted(contributor_keys), selected=current_key)
+                continue
+            for contact in self._contacts_for_bot(bot, contacts, now):
                 key = (str(contact.get("target_kind") or ""),
                        _integer(contact.get("id")))
                 if (key not in contributor_keys or
@@ -1540,13 +1607,19 @@ class BotPlanner(object):
                 distance = math.hypot(
                     contact["position"]["x"] - bx,
                     contact["position"]["z"] - bz)
+                if distance > self._engagement_range(bot, contact):
+                    continue
                 health_fraction = (
                     _number(contact.get("health"), 1.0) /
                     max(1.0, _number(contact.get("max_health"), 1.0)))
                 choices.append((
-                    reservations.get(key, 0), health_fraction, distance,
+                    reservations.get(key, 0),
+                    0 if key == current_key else 1, health_fraction, distance,
                     key[0], key[1], contact))
             if not choices:
+                self._target_decisions.setdefault(bot_id, {})['base_priority'] = dict(
+                    reason='no_proved_capturer_lane', contributors=sorted(contributor_keys),
+                    selected=current_key)
                 continue
             selected = min(choices)
             contact = selected[-1]
@@ -1554,10 +1627,13 @@ class BotPlanner(object):
                    _integer(contact.get("id")))
             reservations[key] = reservations.get(key, 0) + 1
             result[bot_id] = contact
-            self._target_assignments[bot_id] = {
-                "target": key,
-                "until": 0.0,
-            }
+            if lease.get('target') != key:
+                self._target_assignments[bot_id] = self._new_target_lease(bot, key, now)
+            decision = self._target_decisions.setdefault(bot_id, {})
+            decision.update(selected=key, outcome='base_capturer',
+                lease_after=dict(self._target_assignments[bot_id]),
+                base_priority=dict(reason='proved_capturer_lane',
+                    contributors=sorted(contributor_keys), selected=key))
         return result
 
     @staticmethod
@@ -1966,6 +2042,28 @@ class BotPlanner(object):
             order['face_position'] = dict(retreat['face'])
         return order
 
+    @staticmethod
+    def _new_target_lease(bot, key, now):
+        return dict(target=key, until=_number(now) + TARGET_LEASE_SECONDS,
+                    aim_start_seq=_integer(bot['state'].get('fire_seq')),
+                    aim_progress_at=_number(now), aim_best_error=None)
+
+    @staticmethod
+    def _target_aim_in_progress(bot, lease, now):
+        """Protect one executed aim until a shot or bounded lack of progress."""
+        state = bot['state']
+        key = (state.get('aim_feedback_kind'), state.get('aim_feedback_id'))
+        if key != lease.get('target') or _integer(state.get('fire_seq')) > lease.get(
+                'aim_start_seq', _integer(state.get('fire_seq'))):
+            return False
+        error = _number(state.get('aim_feedback_error'))
+        best = lease.get('aim_best_error')
+        if best is None or error + math.radians(1.0) <= best:
+            lease['aim_best_error'] = error
+            lease['aim_progress_at'] = _number(now)
+        lease['aim_aligned'] = bool(state.get('aim_feedback_aligned'))
+        return _number(now) - _number(lease.get('aim_progress_at')) < TARGET_AIM_NO_PROGRESS_SECONDS
+
     def _assign_targets(self, bots, contacts, now):
         """Assign only locally shootable contacts, with a shared focus budget.
 
@@ -2022,6 +2120,7 @@ class BotPlanner(object):
                 (capability, self._capable(bot, capability, occasion))
                 for capability in bot_gunnery.TARGET_CAPABILITIES)
             tactics[bot["id"]] = reads
+            observation['target_capabilities'] = dict(reads)
             known = set(id(contact) for contact in self._contacts_for_bot(bot, contacts, now))
             for contact in contacts:
                 row = dict(target=(contact.get('target_kind'), contact['id']),
@@ -2148,8 +2247,33 @@ class BotPlanner(object):
                     previous_candidate = candidate
                     break
             if previous_candidate is None:
+                # A missing lane never authorizes fire. Brief publication or
+                # mechanical transitions should not discard a live aim merely
+                # because another enemy is eligible in the same update.
+                previous.setdefault('lane_missing_since', _number(now))
+                old = next((contact for contact in self._contacts_for_bot(bot, contacts, now)
+                    if (contact.get('target_kind'), contact['id']) == previous.get('target')
+                    and contact.get('visible') and math.hypot(
+                        contact['position']['x'] - _number(bot['state'].get('x')),
+                        contact['position']['z'] - _number(bot['state'].get('z'))) <=
+                        self._engagement_range(bot, contact)), None)
+                best = bot_candidates[0]
+                hit = self._recent_hit(bot['id'], now)
+                urgent = bool(hit is not None and (best[2].get('target_kind'), best[2]['id']) ==
+                    hit.get('attacker') and tactics[bot['id']].get(
+                        bot_gunnery.CAPABILITY_TARGET_RETALIATION, True))
+                if old is not None:
+                    old_distance = math.hypot(old['position']['x'] - _number(bot['state'].get('x')),
+                                              old['position']['z'] - _number(bot['state'].get('z')))
+                    urgent = urgent or (best[3] <= CLOSE_THREAT_DISTANCE < old_distance)
+                if (old is not None and not urgent and self._weapon_can_recover(bot) and
+                        _number(now) - previous['lane_missing_since'] < TARGET_LEASE_SECONDS):
+                    assigned[bot['id']] = dict(old, movement_lease=True)
+                    observation['tracking_reason'] = 'bounded_lane_transition'
+                    continue
                 self._target_assignments.pop(bot["id"], None)
                 continue
+            previous.pop('lane_missing_since', None)
             if not previous_candidate[4]:
                 if self._weapon_can_recover(bot):
                     contact = dict(previous_candidate[2])
@@ -2177,7 +2301,11 @@ class BotPlanner(object):
                     bot_gunnery.CAPABILITY_TARGET_RETALIATION, True))
             if close_override or attacker_override:
                 continue
-            if (lease_expired and
+            aiming = self._target_aim_in_progress(bot, previous, now)
+            observation['aim_retention'] = dict(active=aiming,
+                aligned=previous.get('aim_aligned'), best_error=previous.get('aim_best_error'),
+                progress_at=previous.get('aim_progress_at'), start_seq=previous.get('aim_start_seq'))
+            if (lease_expired and not aiming and
                     previous_candidate[0][0] >
                     best_score + TARGET_SWITCH_MARGIN):
                 continue
@@ -2209,10 +2337,7 @@ class BotPlanner(object):
                 continue
             self._reserve_focus(reservations, key, bot, contact)
             assigned[bot["id"]] = contact
-            self._target_assignments[bot["id"]] = {
-                "target": key,
-                "until": _number(now) + TARGET_LEASE_SECONDS,
-            }
+            self._target_assignments[bot["id"]] = self._new_target_lease(bot, key, now)
         # Reloading and repairable vehicles still need one tactical contact
         # for spacing, withdrawal and cover.  Add that movement-only lease
         # after every current shooter has competed for the focus cap, so it
@@ -2228,10 +2353,7 @@ class BotPlanner(object):
             contact["movement_lease"] = True
             key = (contact.get("target_kind"), contact["id"])
             assigned[bot["id"]] = contact
-            self._target_assignments[bot["id"]] = {
-                "target": key,
-                "until": _number(now) + TARGET_LEASE_SECONDS,
-            }
+            self._target_assignments[bot["id"]] = self._new_target_lease(bot, key, now)
         for bot in bots:
             if bot["id"] not in assigned:
                 self._target_assignments.pop(bot["id"], None)
@@ -4275,6 +4397,14 @@ class BotPlanner(object):
             self._firing_holds.pop(bot_id, None)
             return
         key = (order.get('target_kind'), order.get('target_id'))
+        lease = self._target_assignments.get(bot_id)
+        if (not releasing and isinstance(lease, dict) and lease.get('target') == key and
+                not state.get('aim_feedback_aligned', False) and
+                self._target_aim_in_progress(bot, lease, now)):
+            self._firing_holds.pop(bot_id, None)
+            evidence.update(reason='executed_aim_in_progress',
+                            aim_progress_at=lease.get('aim_progress_at'))
+            return
         position = _point(state)
         record = self._firing_holds.get(bot_id)
         sequence = _integer(state.get('fire_seq'))

@@ -55,6 +55,8 @@ DEVICE_HP_SCALE = 1000        # round(v, 3)
 # Flag bits.
 F_HAS_RAM_MOTION = 1 << 21
 F_LOCAL_COMBAT_MANOEUVRE = 1 << 22
+F_HAS_AIM_FEEDBACK = 1 << 23
+F_AIM_FEEDBACK_ALIGNED = 1 << 24
 F_SERVICE_BRAKE = 1 << 19
 F_ROUTE_WRECK_BLOCKED = 1 << 20
 F_ALIVE = 1 << 0
@@ -81,6 +83,8 @@ F_AIRBORNE = 1 << 18
 # "keep the state the server already admitted". A positional row always has the
 # columns, so a presence bit carries that distinction instead.
 OPTIONAL_GROUPS = (
+    (F_HAS_AIM_FEEDBACK, ('aim_feedback_kind', 'aim_feedback_id',
+                          'aim_feedback_error', 'aim_feedback_aligned')),
     (F_HAS_RAM_MOTION, ('ram_motion',)),
     (F_HAS_AMMO, ('ammo_remaining', 'next_shell_index',
                   'ammo_reload_pending')),
@@ -320,6 +324,13 @@ def encode_row(state):
         flags |= F_ROUTE_WRECK_BLOCKED
     if state.get('local_combat_manoeuvre', False):
         flags |= F_LOCAL_COMBAT_MANOEUVRE
+    if 'aim_feedback_kind' in state:
+        if not all(name in state for name in ('aim_feedback_id',
+                'aim_feedback_error', 'aim_feedback_aligned')):
+            raise BotStateCodecError('aim feedback group is incomplete')
+        flags |= F_HAS_AIM_FEEDBACK
+        if state.get('aim_feedback_aligned', False):
+            flags |= F_AIM_FEEDBACK_ALIGNED
     if state.get('airborne', False):
         flags |= F_AIRBORNE
     if state.get('ammo_reload_pending', False):
@@ -455,6 +466,17 @@ def encode_row(state):
         for motion in motions:
             row.extend(motion[:3])
             row.extend(_fixed(v, scale) for v, scale in zip(motion[3:], ram_motion.SCALES))
+    if flags & F_HAS_AIM_FEEDBACK:
+        kind = state['aim_feedback_kind']
+        target_id = _exact(state.get('aim_feedback_id', 0))
+        if kind not in ('', 'human', 'bot') or target_id < 0 or (
+                bool(kind) != bool(target_id)):
+            raise BotStateCodecError('invalid aim feedback identity')
+        error = float(state['aim_feedback_error'])
+        if not 0.0 <= error <= math.pi:
+            raise BotStateCodecError('invalid aim feedback error')
+        row.extend((('', 'human', 'bot').index(kind), target_id,
+                    _fixed(error, ANGLE_SCALE)))
     return row
 
 
@@ -622,5 +644,16 @@ def decode_row(row, static):
             result['ram_motion'] = ram_motion.normalize(motions)
         except (ValueError, TypeError, OverflowError):
             raise BotStateCodecError('invalid ram motion')
+    if flags & F_HAS_AIM_FEEDBACK:
+        kind, target_id, error = cursor.take(), cursor.take(), cursor.take()
+        if kind not in (0, 1, 2) or target_id < 0 or (
+                bool(kind) != bool(target_id)) or not 0 <= error <= int(math.pi * ANGLE_SCALE) + 1:
+            raise BotStateCodecError('invalid aim feedback')
+        result.update(aim_feedback_kind=('', 'human', 'bot')[kind],
+                      aim_feedback_id=target_id,
+                      aim_feedback_error=_real(error, ANGLE_SCALE),
+                      aim_feedback_aligned=bool(flags & F_AIM_FEEDBACK_ALIGNED))
+    elif flags & F_AIM_FEEDBACK_ALIGNED:
+        raise BotStateCodecError('aim alignment without feedback identity')
     cursor.finish()
     return result

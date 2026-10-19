@@ -5401,7 +5401,7 @@ class BattleState:
                 if (contact["fresh"] != reported_fresh or
                         contact["visible"] != (time_left > 0.0) or
                         (reported_fresh and not contact["visible"]) or
-                        (not reported_fresh and
+                        (not contact['visible'] and
                          contact["shootable_by_bot_ids"])):
                     return False
                 if "radio_recipients" in contact:
@@ -5496,12 +5496,12 @@ class BattleState:
                     contact["threatened_bot_ids"] = sorted(
                         threatened_ids if contact["visible"] else ())
                 fresh = bool(bot_observer_ids or observer_ids)
-                # An observer may die before its in-flight report arrives.
-                # Retire its direct sight and firing evidence, but keep the
-                # valid lease that still lights this target for the team.
+                # Direct spotting freshness and the independently proved
+                # shooter lane have separate owners. Dead shooters and radio
+                # recipients were already pruned above. Losing the direct
+                # observer must not erase a live recipient's native lane.
                 contact["fresh"] = fresh
                 if not fresh:
-                    contact["shootable_by_bot_ids"] = []
                     if "threatened_bot_ids" in contact:
                         contact["threatened_bot_ids"] = []
                 contact["time_left"] = time_left
@@ -6415,6 +6415,10 @@ class BattleState:
             "service_brake": bool(raw.get("service_brake", False)),
             "route_wreck_blocked": bool(raw.get("route_wreck_blocked", False)),
             "local_combat_manoeuvre": bool(raw.get("local_combat_manoeuvre", False)),
+            "aim_feedback_kind": str(raw.get("aim_feedback_kind") or ""),
+            "aim_feedback_id": max(0, int(_finite_float(raw.get("aim_feedback_id")))),
+            "aim_feedback_error": _clamp(_finite_float(raw.get("aim_feedback_error")), 0.0, math.pi),
+            "aim_feedback_aligned": bool(raw.get("aim_feedback_aligned", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6815,6 +6819,9 @@ class BattleState:
         result = dict(previous) if previous else {}
         result['route_wreck_blocked'] = bool(raw.get('route_wreck_blocked', False))
         result['local_combat_manoeuvre'] = bool(raw.get('local_combat_manoeuvre', False))
+        for name in ('aim_feedback_kind', 'aim_feedback_id',
+                     'aim_feedback_error', 'aim_feedback_aligned'):
+            result[name] = raw.get(name, '' if name == 'aim_feedback_kind' else 0)
         # The ledgers this holds must not alias the retired state; every other
         # path here produces fresh containers.
         for name in ("critical", "equipment_states", "ammo_remaining"):
