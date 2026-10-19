@@ -2979,6 +2979,7 @@ class TerrainNavigator(object):
 		prefix_index = int(state.get('pending_prefix_index', 0))
 		return {
 			'sampled_at': float(now),
+			'native_context': getattr(native, 'context', None),
 			'pending_ms_basis': 'request_wait_not_task_age',
 			'actual_job_count': len(searches),
 			'actual_oldest_job_age_ms': max([row['age_ms'] for row in searches] or [0]),

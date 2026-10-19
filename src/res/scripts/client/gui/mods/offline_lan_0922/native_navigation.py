@@ -123,10 +123,9 @@ class NativeNavigation(object):
         combat_count('nav_async_submitted')
         return job
 
-    @staticmethod
-    def _job_event(job, phase, now):
+    def _job_event(self, job, phase, now):
         write_json_record('BOT SEARCH JOB', dict(
-            phase=phase, job_id=job.job_id, at=now,
+            phase=phase, context=self.context, job_id=job.job_id, at=now,
             submitted_at=job.submitted_at, age=max(0.,now-job.submitted_at),
             clock_basis='simulation_seconds_last_native_service',
             start=job.progress.get('start'), goal=job.progress.get('goal'),
