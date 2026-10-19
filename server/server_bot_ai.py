@@ -2634,6 +2634,9 @@ class BotPlanner(object):
                          assigned_until <= _number(now) else 'catalog_reset'),
                         evidence=dict(evaluated_at=_number(now),
                             assigned_until=assigned_until, knowledge_lost=knowledge_lost,
+                            knowledge_contacts=[dict(contact=contact,
+                                nearest_route=self._nearest_route(contact, catalog))
+                                for contact in self._contacts_for_bot(bot, contacts, now)],
                             catalog_contains_route=assigned_id in catalog,
                             catalog_route_matches=assigned_route == catalog.get(assigned_id),
                             retained_assignment_routes=list(retained_routes),

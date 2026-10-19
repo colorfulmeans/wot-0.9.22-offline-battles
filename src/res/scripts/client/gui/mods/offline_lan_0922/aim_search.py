@@ -46,6 +46,9 @@ class OrderedSearch(object):
         Stale higher-priority negatives cannot authorize a lower-priority pick.
         """
         count = len(points)
+        pose = dict(pose)
+        pose['turret_yaw'] = pose.get('turret_yaw',
+            pose.get('aim_yaw', pose.get('yaw', 0.0)) - pose.get('yaw', 0.0))
         if self.last_at is not None and now > self.last_at:
             # A slow worker must be able to finish a nine-point sweep before
             # age alone expires its first negative. Pose invalidation remains

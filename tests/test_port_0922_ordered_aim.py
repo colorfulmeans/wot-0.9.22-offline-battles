@@ -80,6 +80,12 @@ class OrderedAimTests(unittest.TestCase):
         self.assertEqual(0, other.cursor)
         self.assertEqual(2, self.search.cursor)
 
+    def test_world_aim_yaw_is_normalized_when_local_turret_yaw_is_absent(self):
+        self.pose = dict(yaw=.2, aim_yaw=.6)
+        self.good = {8}
+        for n in range(5): self.step(n*.01)
+        self.assertAlmostEqual(.4, self.search.rows[8]['pose']['turret_yaw'])
+
     def test_moving_target_reopens_earlier_failed_point(self):
         self.good = {8}
         for n in range(4): self.step(n * .01)
