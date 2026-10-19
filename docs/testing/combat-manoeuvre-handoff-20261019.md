@@ -358,3 +358,36 @@ one immutable collision-body preparation across all five synchronous reverse
 sweep samples; every native/vehicle check remains executed. This removes four
 redundant preparations per reverse assessment, not four collision checks.
 Native gameplay and end-to-end worker FPS remain Windows acceptance items.
+
+## Ordered aim and blocked-action follow-up (report 232728)
+
+Keep a freshly rechecked penetrable aim point. Otherwise search lower hull,
+hull centre/left/right/up, turret up/left/right/centre, with no more than two
+candidate scene rays per lane job. This attack-only order leaves the original
+exposure, cover and incoming-fire samples unchanged. Evaluate nominal armour
+with the existing projectile resolver; do not add dispersion ranking or consume
+projectile RNG. Mechanical reachability uses the existing low-arc/limit law;
+all-unreachable or unknown exposure retains the old fallback and final gates.
+
+Progress belongs to one shooter/target record. Reserve an unseen candidate
+slot while rechecking changed earlier evidence. Invalidate source/point shifts
+above 0.5% of range (0.1--0.5 m), relevant pose changes above 3 degrees, shell
+changes and expired evidence. Compare against the actual sampled pose, not the
+previous frame. Age starts at 0.5 s and expands with observed job cadence to
+allow a complete sweep, capped at 3 s; pose invalidation is never delayed.
+Every adopted or retained positive gets an actual query in that job. A cached
+neighbour cannot bypass a newly introduced wreck. BOT AIM SEARCH records
+indices, pending cursor, results, reasons, poses, sample times and thresholds.
+
+Retain unexpired radio-scoped route assignments in the pressure catalog even
+after the last original donor dies. Radio loss and lease expiry still release
+them. Assignment receipts enumerate all simultaneous invalidation causes.
+Repeated live remembered-rotation refusals now feed the existing private Bot
+retry lifecycle. They do not publish a global wall or change path ranking.
+Mixed/unknown refusals do not authorize this feedback. Record rejection kinds
+and the original rotation contact for unresolved stalls. Preserve support,
+collision, wreck progress, C, avoidance, target priority and retry policies.
+
+An unfinished part search returns pending, not a negative firing-lane receipt.
+The existing lane scheduler retains its lifetime and final aim still requires
+a selected, currently tested part; no temporary search result authorizes fire.

@@ -152,6 +152,13 @@ class FriendlyManoeuvreTests(unittest.TestCase):
 
 
 class LocalActionFeedbackTests(unittest.TestCase):
+    def test_pending_aim_search_never_publishes_a_false_wall(self):
+        runtime = _load().BotRuntime(1, firing_lane_probe=lambda *args: None)
+        source = dict(id=1, x=0., y=0., z=0.)
+        target = dict(id=2, kind='bot', position=(0., 0., 10.))
+        self.assertIsNone(runtime._shot_clear(source, target, 10.))
+        self.assertFalse(runtime._shot_los_cache)
+
     def setUp(self):
         self.runtime = _load().BotRuntime(1)
         graph = json.loads((Path(__file__).resolve().parents[1] /
@@ -190,6 +197,30 @@ class LocalActionFeedbackTests(unittest.TestCase):
         self.assertTrue(self.nav.bot_segment_penalized(20, self.position, self.goal, 11.5))
         self.assertFalse(self.nav.bot_segment_penalized(21, self.position, self.goal, 11.3))
         self.assertFalse(self.nav.bot_segment_penalized(20, self.position, self.goal, 30.))
+
+    def test_repeated_live_rotation_refusals_reach_private_retry_only(self):
+        self.state['_rotation_contact_trace'] = dict(
+            reason='solid_lane', sampled_at=9.9, hit=(1., 2., 3.))
+        rows = [dict(kind='rotation', clear=False,
+                     reason='realized_rotation_rejection') for unused in range(10)]
+        for now in (10., 10.3, 10.6, 10.9, 11.2):
+            self.runtime._report_blocked_planner(self.position, self.command,
+                {}, self.state, now, rows)
+        self.assertEqual(1, self.nav.bot_states[20]['blocked_step_replans'])
+        self.assertEqual({}, self.nav.grid._failed_edges)
+        self.assertEqual('realized_rotation_refusal',
+                         self.state['_planner_blocked_handoff']['reason'])
+        self.assertEqual((1., 2., 3.), self.state[
+            '_planner_blocked_handoff']['realized_rotation_contact']['hit'])
+
+    def test_mixed_unknown_rotation_is_not_a_proved_failure(self):
+        rows = [dict(kind='rotation', clear=False,
+                     reason='realized_rotation_rejection'),
+                dict(kind='rotation', clear=None, reason='deferred')]
+        for now in (10., 10.3, 10.6, 10.9, 11.2):
+            self.runtime._report_blocked_planner(self.position, self.command,
+                {}, self.state, now, rows)
+        self.assertFalse(self.nav.bot_failed_edges)
 
     def test_unknown_or_old_receipt_cannot_penalise_an_edge(self):
         self.state['_planning_verdicts'] = [self.proof]

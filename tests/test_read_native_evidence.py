@@ -28,7 +28,7 @@ class EvidenceReaderTests(unittest.TestCase):
         return output.getvalue().splitlines()
 
     def test_support_and_native_module_diagnostics_roundtrip(self):
-        for label in ('MODULE PRESENT','BOT SUPPORT MODE','BOT LANDING IMPACT','PLAYER LANDING IMPACT'):
+        for label in ('BOT AIM SEARCH','MODULE PRESENT','BOT SUPPORT MODE','BOT LANDING IMPACT','PLAYER LANDING IMPACT'):
             with self.subTest(label=label):
                 output=io.StringIO()
                 payload=dict(phase='sample',points=[dict(valid=True)]*5)

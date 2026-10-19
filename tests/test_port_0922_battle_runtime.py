@@ -14160,6 +14160,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             target_key: {'engine_id': 20, 'ready': True},
         }
         battle._bot_direct_launch_origin = lambda *unused: (0.0, 2.5, 0.0)
+        battle._bot_aim_damage_score = lambda *unused: 100.0
         source = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0, 'yaw': 0.0}
         target = {'id': 12, 'network_id': 2 if target_kind == 'human' else 12,
                   'kind': target_kind, 'position': (0.0, 0.0, 100.0),
@@ -14176,19 +14177,21 @@ class BattleRuntimeContractTests(unittest.TestCase):
             return (_Vector(0.0, height, 90.0),) if height < 1.8 else None
 
         runtime.bigworld.wg_collideSegment = wall
-        self.assertTrue(battle._bot_firing_lane(source, target))
+        self.assertFalse(battle._bot_firing_lane(source, target))
         self.assertEqual(2, len(rays))
-        self.assertAlmostEqual(1.2, rays[0][1].y)
-        self.assertAlmostEqual(2.2, rays[1][1].y)
+        self.assertAlmostEqual(0.8, rays[0][1].y)
+        self.assertAlmostEqual(1.2, rays[1][1].y)
+        for unused in range(4):
+            if battle._bot_firing_lane(source, target): break
         selected = battle._bot_aim_point(source, target)
-        self.assertAlmostEqual(2.2, selected['aim_position'][1])
+        self.assertAlmostEqual(2.5, selected['aim_position'][1])
 
         bots = bot_runtime.BotRuntime(
             1, direct_launch_origin_probe=battle._bot_direct_launch_origin,
             direct_aim_point_probe=battle._bot_aim_point)
         solution = bots._local_ballistic_solution(source, target, descriptor, 0)
         self.assertIsNotNone(solution)
-        self.assertAlmostEqual(2.2, solution['aim_position'][1])
+        self.assertAlmostEqual(2.5, solution['aim_position'][1])
         speed = descriptor.gun.shots[0].speed
         gravity = descriptor.gun.shots[0].gravity
         time_at_wall = 90.0 / (speed * math.cos(solution['pitch']))
@@ -14196,36 +14199,30 @@ class BattleRuntimeContractTests(unittest.TestCase):
                   gravity * time_at_wall ** 2 * 0.5)
         self.assertGreater(height, 1.8)
 
-    def test_a_weak_gunner_keeps_the_part_the_cursor_offered(self):
-        """Not knowing where to aim is an unranked choice, not a bad one."""
+    def test_ordered_preference_keeps_current_penetrable_part(self):
         runtime, battle, source, target, unused = self._bot_lane_scene()
-        scored = []
-
-        runtime.bigworld.wg_collideSegment = lambda *unused_args: None
-        battle._bot_aim_damage_score = (
-            lambda unused_descriptor, unused_entry, unused_source,
-            unused_target, unused_origin, point: scored.append(point) or
-            (900.0 if point[1] > 2.0 else 100.0))
-
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            False)
+        runtime.bigworld.wg_collideSegment = lambda *unused: None
+        battle._bot_aim_damage_score = lambda *args: 100.0
         self.assertTrue(battle._bot_firing_lane(source, target))
-        weak = battle._bot_aim_point(source, target)
-        # One tested part, taken as offered: no second ray, no comparison.
-        self.assertEqual(1, len(scored))
-
-        scored[:] = []
-        battle._records['bot:11'].pop('bot_aim_targets', None)
-        battle._bots = types.SimpleNamespace(
-            bot_aim_selection_allowed=lambda unused_source, unused_target:
-            True)
+        selected = battle._bot_aim_point(source, target)
+        battle._bot_aim_damage_score = lambda *args: 900.0
         self.assertTrue(battle._bot_firing_lane(source, target))
-        strong = battle._bot_aim_point(source, target)
+        self.assertEqual(selected, battle._bot_aim_point(source, target))
 
-        self.assertEqual(2, len(scored))
-        self.assertGreater(strong['aim_position'][1], 2.0)
-        self.assertLess(weak['aim_position'][1], strong['aim_position'][1])
+    def test_lower_point_outside_gun_limits_yields_to_reachable_centre(self):
+        runtime, battle, source, target, unused = self._bot_lane_scene()
+        runtime.bigworld.wg_collideSegment = lambda *unused: None
+        battle._bot_aim_reachable = lambda s,t,d,o,p: p[1] >= 1.0
+        self.assertTrue(battle._bot_firing_lane(source, target))
+        self.assertAlmostEqual(1.2, battle._bot_aim_point(source, target)['aim_position'][1])
+
+    def test_all_unreachable_points_preserve_exposure_for_mechanical_handoff(self):
+        runtime, battle, source, target, unused = self._bot_lane_scene()
+        runtime.bigworld.wg_collideSegment = lambda *unused: None
+        battle._bot_aim_reachable = lambda *unused: False
+        for unused in range(5): result = battle._bot_firing_lane(source, target)
+        self.assertTrue(result)
+        self.assertIsNotNone(battle._bot_aim_point(source, target))
 
     def test_no_gunner_deliberately_aims_at_a_part_it_cannot_hurt(self):
         """Not knowing which plate is thinnest is ordinary; this is not."""
@@ -14241,10 +14238,12 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bot_aim_selection_allowed=lambda unused_source, unused_target:
             False)
 
-        self.assertTrue(battle._bot_firing_lane(source, target))
+        for unused in range(5):
+            if battle._bot_firing_lane(source, target): break
+        self.assertIsNotNone(battle._bot_aim_point(source, target))
         selected = battle._bot_aim_point(source, target)
 
-        self.assertEqual(2, len(tested))
+        self.assertEqual(6, len(tested))
         self.assertGreater(selected['aim_position'][1], 2.0)
 
     def test_a_useless_part_is_still_fired_at_when_it_is_all_there_is(self):
@@ -14258,7 +14257,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bot_aim_selection_allowed=lambda unused_source, unused_target:
             True)
 
-        self.assertTrue(battle._bot_firing_lane(source, target))
+        for unused in range(5):
+            if battle._bot_firing_lane(source, target): break
+        self.assertIsNotNone(battle._bot_aim_point(source, target))
         self.assertIsNotNone(battle._bot_aim_point(source, target))
 
     def test_bot_firing_lane_rotates_real_samples_with_two_ray_budget(self):
@@ -14328,7 +14329,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             target['position'] = (10.0, 3.0, 80.0)
             moved = battle._bot_aim_point(source, target)
             self.assertEqual(first['aim_token'], moved['aim_token'])
-            self.assertAlmostEqual(4.2, moved['aim_position'][1])
+            self.assertAlmostEqual(3.8, moved['aim_position'][1])
             key = 'player:2' if kind == 'human' else 'bot:12'
             battle._records[key] = dict(battle._records[key])
             self.assertIsNone(battle._bot_aim_point(source, target))
