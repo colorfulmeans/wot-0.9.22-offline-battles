@@ -288,3 +288,36 @@ are unchanged. Focused tests cover positive/negative publication through relay,
 slow/blocked/dead/urgent target lifetimes, codec/server admission, base target
 override, combat progress and eventual idle replacement. Real Windows timing,
 native LOS and gameplay acceptance still require the next user test report.
+
+## Windows414 follow-up: idle gun and exact query reuse
+
+Report `wot-error-report-20261019-211637-977f532af0b7.zip` confirms a no-contact
+gun-rest defect: the gun retained a world bearing when its hull turned. Rest
+yaw now follows the current hull, using the existing traverse rate and limits;
+neutral pitch and all enemy/retained-target/ballistic aim laws remain intact.
+Replace the old test which explicitly required the incorrect world bearing.
+Route-connection records include previous executed aim identity/time alongside
+the current hull and turret pose, without acquiring an additional native probe.
+
+Reduce only exact unfiltered engine-ray repeats inside one synchronous native
+world operation. Keys retain exact endpoints, ground mode and the destruction
+revision. End/exception unwinds the scope; destructive recasts invalidate all
+nested scopes. Filtered rays always execute their native callback: the shared
+callable has a different thread-local candidate/exclusion context for each ray,
+so its identity is not sufficient evidence for raw-result reuse. Errors are
+never cached as misses. No collision receipt lifetime or planning deadline is
+extended and no physics interval is discarded. New counters expose hits,
+misses and effect invalidations; Windows performance improvement is unproved.
+
+IS-2 Shielded (Bot 2) and FV215b (183) (Bot 24) eventually left their small
+adjustment areas in this report. Receipts show intentional zero-throttle
+alignment, not a collision/support veto. Their changing local connectors and
+strategic goals do not yet establish one reproducible defective transition.
+Keep their driving/retry/navigation laws unchanged. Publish each applicable
+pedal gate, chosen versus requested heading, installed traverse limit, resolved
+alignment point and final driver pedals. Clear that evidence on every call and
+publish explicit non-drive terminal modes for waits/recovery/holds, rather than
+leaking the preceding drive sample. Preserve the Golden Type 59 pressure switch.
+
+Repair priority is repeating deadlocks, then permanent movement stalls, then
+prolonged stalls that escape, then combat-policy refinements.

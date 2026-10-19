@@ -78,6 +78,8 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             return None
         if op == 5:
             a, b, handle = rows[0]
+            if query is not None:
+                query.invalidate_ray_scope()
             result = module._destroy_and_recast(
                 spaceID, V(*a), V(*b), handle if query is not None else hits[handle], yaw, vel, td,
                 crush, allow_kinetic, kinetic_speed, commit_enabled, state[0])
@@ -123,8 +125,13 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                 result.append((xyz(hit[0]), normal, handle, xyz(start), xyz(end)))
         return tuple(result)
     # An exception propagates. Replaying the law could repeat destruction.
-    status = native_math.world_run(snapshot, dispatch, query,
-        (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
+    scope = query.begin_ray_scope() if query is not None else None
+    try:
+        status = native_math.world_run(snapshot, dispatch, query,
+            (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
+    finally:
+        if scope is not None:
+            query.end_ray_scope(scope)
     if status is None:
         return None
     if return_status:

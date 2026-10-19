@@ -1159,6 +1159,8 @@ class LocalDriver(object):
 		state = self._state(bot_id, team_slot, position)
 		state['collision_body'] = body
 		requested_target = tuple(target)
+		# Cleared for every call, including arrival/hold/recovery early returns.
+		state.pop('pedal_observation', None)
 		alignment = state.get('alignment_target')
 		previous_alignment = alignment
 		release_reason = ('movement_hold' if not movement_intent else
@@ -1633,6 +1635,7 @@ class LocalDriver(object):
 		# while braking a recovery or sliding downhill; steering remains forward.
 		avoiding = state['steering_reason'] != 'route'
 		throttle = 1.0
+		pedal_gates = []
 		if avoiding:
 			state.pop('alignment_target', None)
 			state['alignment_observation']['reason'] = 'checked_avoidance_owns_heading'
@@ -1648,6 +1651,7 @@ class LocalDriver(object):
 				if abs(delta) > 0.12:
 					throttle = 0.0
 					brake = True
+					pedal_gates.append('retained_near_point_alignment')
 				else:
 					state.pop('alignment_target', None)
 					state['alignment_observation']['reason'] = 'alignment_completed'
@@ -1657,6 +1661,7 @@ class LocalDriver(object):
 			# the moving hull's turning circle. Align before driving either one.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('near_corner_alignment')
 		climb_grade = ((float(target[1]) - float(position[1])) /
 		               max(0.1, target_distance))
 		if abs(climb_grade) > SLOPE_ALIGNMENT_GRADE and abs(delta) > SLOPE_ALIGNMENT_TURN:
@@ -1665,6 +1670,7 @@ class LocalDriver(object):
 			# climb and repeatedly invalidates the next terrain sample.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('slope_entry_alignment')
 		elif (abs(delta) > math.pi * 0.5 or
 				(not avoiding and heading_error > math.pi * 0.5)):
 			# A selected escape behind the hull needs a pivot too: forward drive
@@ -1674,6 +1680,7 @@ class LocalDriver(object):
 			# diagonal corners still retain forward progress while steering.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('rear_heading_alignment')
 		if stop_at_target and not avoiding and stopping_distance is not None:
 			try:
 				brake_distance = max(0.0, float(stopping_distance))
@@ -1699,8 +1706,16 @@ class LocalDriver(object):
 				else:
 					throttle = 0.0
 					brake = True
+					pedal_gates.append('destination_stopping_distance')
 		elif not stop_at_target:
 			state['braking_target'] = None
+		state['pedal_observation'] = dict(clock=state['clock'],
+			requested_target=requested_target, resolved_target=tuple(target),
+			distance=target_distance, hull_yaw=float(yaw), desired_yaw=desired_yaw,
+			chosen_yaw=chosen_yaw, delta=delta, speed=float(speed),
+			turn_speed_limit=turn_speed_limit, avoiding=avoiding,
+			alignment_target=state.get('alignment_target'), gates=pedal_gates,
+			throttle=throttle, turn=turn, brake=brake, reason='drive_pedal_arbitration')
 		return {
 			'throttle': throttle,
 			'brake': brake,

@@ -82,6 +82,19 @@ class HeightOwnershipTests(unittest.TestCase):
                  if call.args[0]=='BOT ROUTE CONNECTION')
         self.assertEqual('same_horizontal_endpoint',row['target']['runtime_leg_handoff']['reason'])
         self.assertEqual(1.,row['target']['runtime_leg_handoff']['sampled_at'])
+        self.assertIsNone(row['gun_orientation']['hull_yaw'])
+        self.assertIsNone(row['gun_orientation']['turret_yaw'])
+        state.update(yaw=.7, turret_yaw=.2, gun_pitch=-.1,
+                     _diagnostic_aim_intent=dict(owner='hull_forward_rest', time_us=1200000))
+        with mock.patch('gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record') as log:
+            self.runtime._log_route_connection(state,{},4.3)
+        row=next(call.args[1] for call in log.call_args_list
+                 if call.args[0]=='BOT ROUTE CONNECTION')
+        self.assertEqual(.7,row['gun_orientation']['hull_yaw'])
+        self.assertEqual(.2,row['gun_orientation']['turret_yaw'])
+        self.assertEqual(1200000,row['gun_orientation']['previous_aim']['time_us'])
+        self.assertEqual('previous_executed_aim_before_current_control',
+                         row['gun_orientation']['freshness'])
 
     def test_real_horizontal_bypass_still_owns_steering_until_consumed(self):
         self.position = (-40.,1.1,325.)

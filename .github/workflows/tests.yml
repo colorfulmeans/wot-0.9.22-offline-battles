@@ -116,6 +116,7 @@ jobs:
           --pattern test_port_0922_ground_filter_batch.py
           --pattern test_port_0922_destructibles.py
           --pattern test_port_0922_world_collision.py
+          --pattern test_port_0922_world_ray_reuse.py
       - name: Compile all client code under Python 2.7
         if: ${{ !cancelled() }}
         run: |
