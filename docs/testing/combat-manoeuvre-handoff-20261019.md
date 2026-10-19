@@ -99,9 +99,13 @@ The existing bounded `BOT MOTION` record now carries:
   counter, contact episode and point-refusal provenance/expiry.
 - `friendly_reposition`: the active marker, including origin, destination,
   blocker identity and position, shot identity, side, start and deadline.
-- `friendly_reposition_event`: timestamped start, arrival, timeout, retry wait,
+- `friendly_reposition_event`: timestamped start, arrival, timeout,
   target disappearance/change or priority handoff. The timestamp separates the
   most recent terminal event from the currently active marker.
+- `friendly_reposition_last_terminal` and `friendly_reposition_retry`: terminal
+  cause and retry state are retained separately. A quiet retry-window observation
+  cannot overwrite the timeout that caused it, nor can a new action erase the
+  previous terminal witness before the bounded motion record samples it.
 - `local_combat_manoeuvre` and adapter `control_arbitration.flank_arrival`.
 
 No additional collision/ground probes are spent to write these receipts.

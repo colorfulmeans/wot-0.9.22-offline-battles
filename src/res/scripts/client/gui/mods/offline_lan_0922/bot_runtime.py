@@ -7355,6 +7355,8 @@ class BotRuntime(object):
             'planner_blocked_last_replan': dict(state.get('_planner_blocked_last_replan') or {}),
             'friendly_reposition': dict(self._friendly_repositions.get(int(state['id'])) or {}),
             'friendly_reposition_event': dict(state.get('_friendly_reposition_event') or {}),
+            'friendly_reposition_last_terminal': dict(state.get('_friendly_reposition_last_terminal') or {}),
+            'friendly_reposition_retry': dict(state.get('_friendly_reposition_retry') or {}),
             'local_combat_manoeuvre': bool(state.get('local_combat_manoeuvre')),
             'spg_deployment': dict(
                 observed_at=now, initial=state.get('_spg_initial'),
@@ -13564,6 +13566,9 @@ class BotRuntime(object):
         state = self.states.get(bot_id)
         if state is not None:
             state['local_combat_manoeuvre'] = False
+            if removed is not None:
+                state['_friendly_reposition_last_terminal'] = dict(
+                    state.get('_friendly_reposition_event') or {})
         if removed is not None:
             self._decision_cache.pop(bot_id, None)
         return removed is not None
@@ -13617,8 +13622,9 @@ class BotRuntime(object):
                 _distance(_position(state), retry['origin']) < 2.0 and
                 _distance(blocker_position, retry['blocker_position']) < 2.0):
             if now < retry['until']:
-                state['_friendly_reposition_event'] = dict(at=now,
-                    outcome='retry_wait', identity=identity, until=retry['until'])
+                # Preserve the terminal reason across the quiet retry window;
+                # otherwise a three-second observer sees only "waiting".
+                retry['observed_at'] = now
                 return False
         else:
             retry = None

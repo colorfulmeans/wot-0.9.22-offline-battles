@@ -123,6 +123,9 @@ class FriendlyManoeuvreTests(unittest.TestCase):
             self.state, {18: self.target}, end))
         self.assertFalse(self.state['local_combat_manoeuvre'])
         self.assertFalse(self.mark(end + .2))
+        self.assertEqual('timeout', self.state['_friendly_reposition_last_terminal']['outcome'])
+        self.assertEqual(end, self.state['_friendly_reposition_last_terminal']['at'])
+        self.assertEqual(end + .2, self.state['_friendly_reposition_retry']['observed_at'])
         self.assertTrue(self.mark(end + 8.1))
         self.assertEqual(-marker['side'], self.runtime._friendly_repositions[8]['side'])
 
