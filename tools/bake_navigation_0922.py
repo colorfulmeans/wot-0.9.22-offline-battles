@@ -28,6 +28,8 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               'src', 'res', 'scripts', 'client'))
 
+from gui.mods.offline_lan_0922.scenery_policy import railway_vehicle_resource
+
 from packed_xml import (TYPE_ELEMENT, TYPE_STRING, TYPE_VECTOR, read_packed_xml)
 from space_bin_0922 import (CompiledSpace, CompiledSpaceError,
                             UnsafeBakeInputError, describe_space)
@@ -963,7 +965,7 @@ def _bsp_triangle_record(section, offset):
     return (values[0:3], values[3:6], values[6:9]), material_id
 
 
-NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-no-original-destructibles-v1'
+NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-solid-railway-stock-v3'
 NAVIGATION_VEHICLE_SKIP_FLAGS = 0x10 | 0x40
 NAVIGATION_ORIGINAL_MATERIAL_MIN = 71
 NAVIGATION_ORIGINAL_MATERIAL_END = 86
@@ -1128,6 +1130,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
                             if collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,margin):return True
             return False
     obstacles = CompiledObstacles()
+    obstacles.railway_obstacles = CompiledObstacles()
     mesh_cache = {}
     material_cache = {}
     for instance_id, (model_id, transform, mask) in enumerate(zip(model_ids, transforms, masks)):
@@ -1151,6 +1154,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
         if not isinstance(name, str) or not name.lower().endswith('.primitives'):
             raise UnsafeBakeInputError('BSMO model %d has an invalid BSP resource: %r' % (model_id, name))
         name = name[:-len('.primitives')] + '.primitives_processed'
+        railway_vehicle = railway_vehicle_resource(name)
         if model_id not in material_cache:
             material_cache[model_id] = _compiled_collision_materials(bsmo, collider, model_id)
         materials = material_cache[model_id]
@@ -1201,7 +1205,8 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
             if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
                 obstacles.collision_stats['nonvehicle_surfaces_excluded'] += 1
                 continue
-            if (NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
+            if (not railway_vehicle and
+                    NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
                     NAVIGATION_ORIGINAL_MATERIAL_END):
                 soft_count += 1
                 obstacles.collision_stats['original_surfaces_excluded'] += 1
@@ -1227,6 +1232,9 @@ def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
             # Do not skip a whole short model: an elevated/rotated short shape
             # can still be a hard obstacle, and mixed models need face granularity.
             _raster_compiled_collision_instance(obstacles, name, hard, legacy)
+            if railway_vehicle:
+                _raster_compiled_collision_instance(
+                    obstacles.railway_obstacles, name, hard, legacy)
     obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
     return obstacles
 

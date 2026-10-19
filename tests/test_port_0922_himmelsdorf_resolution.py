@@ -79,8 +79,9 @@ class ResolutionTests(unittest.TestCase):
         raw=grid.cell_for((-218.,1.1,-158.))
         safe=grid._nearest_baked_cell(raw,3)
         self.assertIsNotNone(safe)
-        self.assertIsNotNone(grid._baked_cell_height(raw))
-        self.assertEqual(raw,safe)
+        self.assertIsNone(grid._baked_cell_height(raw))
+        self.assertIn(raw[1]*graph['width']+raw[0],graph['bake']['railway_obstacles']['layers'][0]['removed_node_indices'])
+        self.assertNotEqual(raw,safe)
         self.assertIsNotNone(grid._baked_cell_height(safe))
         path=grid.plan((-226.,1.1,-170.),(-218.,1.1,-158.),max_expansions=4096)
         self.assertTrue(path)
@@ -118,8 +119,12 @@ class ResolutionTests(unittest.TestCase):
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             baseline=json.loads(subprocess.check_output(['git','show','ca22f909:navgraphs/'+name+'.json'],cwd=ROOT))
-            for key in ('cell_size','width','height','origin','heights_mm','links','hazards','routes','spawn_formations'):
+            for key in ('cell_size','width','height','origin','hazards','routes','spawn_formations'):
                 self.assertEqual(baseline[key],graph[key],key)
+            removed=set(graph['bake']['railway_obstacles']['layers'][0]['removed_node_indices'])
+            for index,(old,new) in enumerate(zip(baseline['heights_mm'],graph['heights_mm'])):
+                self.assertEqual(None if index in removed else old,new)
+            self.assertTrue(all((old&new)==new for old,new in zip(baseline['links'],graph['links'])))
             grid=TerrainGrid(lambda *args:1.1,lambda *args:False,baked_graph=graph)
             self.assertEqual(4.,grid.cell_size)
             self.assertEqual([3.12,2.08],[grid.cell_size*.78,grid.cell_size*.52])

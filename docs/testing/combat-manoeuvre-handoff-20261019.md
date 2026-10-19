@@ -381,3 +381,65 @@ retry lifecycle. They do not publish a global wall or change path ranking.
 Mixed/unknown refusals do not authorize this feedback. Record rejection kinds
 and the original rotation contact for unresolved stalls. Preserve support,
 collision, wreck progress, C, avoidance, target priority and retry policies.
+
+## Solid railway stock (report 004112)
+
+The October 16 navigation rollback also removed the October 15 railway raster
+exception. Restore this object classification without restoring later driver
+strategies: exact rw004_Carriage and rw005_locomotive resource families remain
+solid in the compiled raster, the first Python planning ray, the native query
+callback, and the exact kinetic gate. Tracks, signs, fences, houses and trucks
+keep their existing rules. Ordinary original materials remain planning-soft;
+intact or damaged railway identities cannot authorize a crush-through route.
+Native shot/destruction presentation is not a navigation permission.
+
+Fixed baked chunk/item identities are indexed once with the catalog so cold
+planning does not depend on streaming or scan the resource list per ray. The
+C++ oracle delegates original-material classification to its existing owner
+callback instead of returning false based on material number alone. It keeps
+hard-material fast paths and the existing synchronous owner/lifetime guards.
+The crush-gate receipt distinguishes solid_railway_vehicle from energy rejects.
+
+The railway repair tool samples exact compiled railway triangles against the
+existing vehicle clearance law, masking only blocked nodes and crossing links
+in the retained main and local grids. It preserves all route points, unrelated
+geometry and directed ingress links. Validation must check every default route
+segment and both base connectivity, plus all baked/streamed railway identities
+and the real compiled host callback. Ship the rebuilt native bridge with the
+matching Python and graph data; real Ensk traffic remains Windows acceptance.
+
+Validation on the pinned client resources: eleven maps, 990 default route
+segments and base connections pass the existing strict validator. Original
+waypoint arrays remain byte-equivalent as data; two old waypoint cells now
+occupied by railway stock use the existing adjacent-cell projection (4 m),
+without a new runtime fallback. Editor/default-profile identities are rebuilt.
+An optional full native navigation-state comparison still fails at frame 0/0;
+rebuilding the parent filter produces the exact same failure text/state. The
+current CI's water/grid subset (63 checks), actual native railway callback and
+native aim parity pass. This pre-existing full-state mismatch is not claimed
+as passed and is not repaired by changing driver/navigation policy here.
+
+### Full native-state audit boundary
+
+The full comparison explicitly installs `NativeNavigationCore`, an older C++
+TerrainNavigator state machine. Production `NativeSimulation` deliberately
+leaves its navigation and motion owners unset, retaining the Python navigation
+laws with independent native search/geometry primitives. Do not confuse the
+inactive full-state owner with the active native railway collision callback.
+
+Recording differences without stopping at the first assertion completed 30,795
+comparisons across five scenarios/900 frames. This diagnostic run is NOT a
+passing parity test: 528 next-target calls differ, beginning at scenario 0,
+frame 2, Bot 7: Python returns (8, 0, 4), native returns (32, 0, 4).
+Later cached paths and progress clocks differ too. Initial missing receipt
+fields alone therefore do not explain the failure. Python tracks temporary
+fallback visits, stalled episodes and pending-prefix progress; the old native
+state/serialization and observe_macro implementation do not mirror these laws.
+
+Rebuilding the pre-railway parent native filter and rerunning the expanded
+diagnostic produces identical comparison counts and every recorded difference.
+This is existing inactive implementation drift, not a railway-fix regression.
+The CI water/grid-only subset passes but does not establish full-state parity.
+Keep the inactive owner disabled; do not erase differing fields or alter live
+navigation to make this optional comparison pass. Any future activation must
+first port the complete current lifecycle and pass strict full comparisons.

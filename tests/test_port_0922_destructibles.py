@@ -10442,8 +10442,8 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             'rw004_Carriage1.model' in line
             for line in writes))
 
-    def test_exact_placement_avoids_pending_names_before_crush(self):
-        """An exact wagon receipt releases its old box; native geometry owns the wreck."""
+    def test_exact_wagon_placement_stays_hard_for_the_authoritative_worker(self):
+        """An identified wagon is never a crush-through route for the worker."""
         environment = self._prohorovka_wagon_environment(
             descriptor_available=True)
         authority = types.SimpleNamespace(
@@ -10459,12 +10459,12 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
             if details[-1]['accepted_now']:
                 break
 
-        self.assertEqual('crushed', details[0]['status'])
+        self.assertEqual('hard', details[0]['status'])
         self.assertNotIn('unidentified', details[0]['kinds'])
-        self.assertEqual('crushed', details[-1]['status'])
+        self.assertEqual('hard', details[-1]['status'])
         self.assertNotIn('unidentified', details[-1]['kinds'])
-        self.assertEqual(((32637, 56, None),), details[-1]['token'])
-        authority.destroy_fragile.assert_called_once()
+        self.assertIsNone(details[-1]['token'])
+        authority.destroy_fragile.assert_not_called()
         self.assertIn(
             (32637, 56), destructibles_sensor.g_offh_destr_instances)
 
@@ -10486,7 +10486,7 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
 
         self.assertEqual('hard', detail['status'])
         self.assertNotIn('unidentified', detail['kinds'])
-        self.assertEqual(((32637, 56, None),), detail['token'])
+        self.assertIsNone(detail['token'])
 
     def test_unstreamed_chunk_never_invents_a_wall(self):
         environment = self._prohorovka_wagon_environment()
