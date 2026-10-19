@@ -129,11 +129,11 @@ class RouteTransferTests(unittest.TestCase):
 
     def test_stable_nearly_balanced_pressure_cannot_generate_four_second_ping_pong(self):
         p,bots,contacts=self.scene()
-        for now in range(1,42,4):
+        for now in range(1,182,60):
             p._rebalance_routes(1,bots,contacts,float(now))
         self.assertEqual({},p._route_assignment_receipts)
         receipt=p._route_balance_receipts[1]
-        self.assertEqual(41.,receipt['sampled_at'])
+        self.assertEqual(181.,receipt['sampled_at'])
         self.assertEqual('no_improving_donor',receipt['outcome'])
         self.assertTrue(any(row['outcome']=='no_pressure_improvement'
                             for row in receipt['candidates']))
@@ -202,7 +202,7 @@ class RouteTransferTests(unittest.TestCase):
         self.assertEqual('pressure_rebalance',receipts[41]['reason'])
         shifted=[dict(position=dict(x=-100.,y=0.,z=z),health=1.,max_health=1.)
                  for z in (150.,200.,250.,300.)]
-        p._rebalance_routes(1,bots,shifted,5.)
+        p._rebalance_routes(1,bots,shifted,61.)
         self.assertEqual('left',p._route_assignments[41]['route']['id'])
         self.assertEqual(2,receipts[41]['sequence'])
 

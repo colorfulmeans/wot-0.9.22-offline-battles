@@ -53,8 +53,9 @@ ROUTE_ARRIVAL_RADIUS = 13.0
 CLOSE_THREAT_DISTANCE = 50.0
 CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
-ROUTE_REBALANCE_SECONDS = 4.0
-ROUTE_LEASE_SECONDS = 6.0
+ROUTE_REBALANCE_SECONDS = 60.0
+# Cover the next scheduled evaluation, including one server-tick boundary.
+ROUTE_LEASE_SECONDS = ROUTE_REBALANCE_SECONDS + 1.0
 WRECK_ROUTE_WAIT_SECONDS = 20.0
 WRECK_ROUTE_AVOID_SECONDS = 120.0
 MAX_BASE_DEFENDERS = 3
@@ -2584,7 +2585,11 @@ class BotPlanner(object):
 
     def _rebalance_routes(self, team, bots, contacts, now,
                           protected_ids=()):
-        """Move at most one adaptable tank toward a pressured route every 4s."""
+        """Evaluate pressure assignments and their releases once per minute."""
+        if _number(now) < _number(self._next_route_rebalance.get(team)):
+            self._observe_route_leases(bots, now, 'rebalance_not_due', evaluation=False)
+            return
+        self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
         protected_ids = set(protected_ids)
         for bot in bots:
             authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'), bot['team'])
@@ -2623,8 +2628,6 @@ class BotPlanner(object):
                 isinstance(assigned, dict) and assigned.get("radio_scoped") and
                 not any(self._nearest_route(contact, catalog) == assigned_id
                         for contact in self._contacts_for_bot(bot, contacts, now)))
-            if knowledge_lost:
-                self._next_route_rebalance[team] = 0.0
             if (knowledge_lost or assigned_id not in catalog or
                     assigned_route != catalog.get(assigned_id) or
                     (assigned_until > 0.0 and assigned_until <= _number(now))):
@@ -2660,10 +2663,6 @@ class BotPlanner(object):
                 outcome='catalog_has_no_alternative', candidates=[])
             self._observe_route_leases(bots, now, 'catalog_has_no_alternative')
             return
-        if _number(now) < _number(self._next_route_rebalance.get(team)):
-            self._observe_route_leases(bots, now, 'rebalance_not_due', evaluation=False)
-            return
-        self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
         balance = dict(sampled_at=_number(now), outcome='no_known_pressure',
                        selected_bot=None, candidates=[])
         self._route_balance_receipts[team] = balance
@@ -2713,7 +2712,7 @@ class BotPlanner(object):
                        target_score=target_score)
         # Preserve the inputs behind pressure changes, not only the winning
         # total. Radio expiry, deaths and route transfers can change a total
-        # between two four-second evaluations without a new visible enemy.
+        # between two pressure evaluations without a new visible enemy.
         balance['contact_inputs'] = [dict(
             target_kind=contact.get('target_kind'), target_id=contact.get('id'),
             position=_point(contact.get('position') or {}),
@@ -2770,7 +2769,7 @@ class BotPlanner(object):
                              'different_pressure_target'))
             # Another lane winning this evaluation does not end a still
             # needed deployment. Preserve its cursor rather than expire to
-            # the default lane and borrow the same hull back six seconds later.
+            # the default lane and borrow the same hull back at the next evaluation.
             # Donor scoring below can still make a real reassignment.
             if (isinstance(route, dict) and
                     knows_own and departure_score > 0.0 and

@@ -1646,7 +1646,9 @@ def apply_payload(vehicle, payload):
     vehicle._critical_devices = critical
     vehicle._crew_ko = set(
         str(name) for name in payload.get('crew_ko') or ())
-    is_on_fire = bool(payload.get('fire', False))
+    terminal = (getattr(vehicle, 'health', 1) <= 0 or
+                not bool(getattr(vehicle, 'isCrewActive', True)))
+    is_on_fire = bool(payload.get('fire', False)) and not terminal
     if is_on_fire and not was_on_fire:
         _offh_ignite(vehicle, False, 'network')
     elif was_on_fire and not is_on_fire:
@@ -1658,7 +1660,9 @@ def apply_payload(vehicle, payload):
     _recompute_crew_impaired(vehicle)
     _refresh_mobility_flags(vehicle)
     _sync_crashed_track(vehicle, before, _state(vehicle))
-    events = tuple(payload.get('events') or ())
+    events = tuple(event for event in (payload.get('events') or ())
+                   if not (terminal and event.get('kind') == 'fire' and
+                           bool(event.get('state'))))
     if events:
         return events
     derived = _payload(

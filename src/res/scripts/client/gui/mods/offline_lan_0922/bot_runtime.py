@@ -7881,7 +7881,24 @@ class BotRuntime(object):
             row.get('clear') is False and
             row.get('reason') == 'realized_rotation_rejection'
             for row in rotation_rows))
-        if (hard or remembered_rotation) and state is not None and now is not None:
+        # Exhausted local actions are not a straight translation wall. Retire
+        # this Bot's short target through its existing bounded retry lifecycle
+        # even when its required pivot fails at another heading. Unknown or
+        # deferred candidates never prove exhaustion; traffic alone does not.
+        all_hard = [row.get('native_sweep') for row in (verdicts or ())
+            if row.get('kind') == 'local_sweep' and
+            isinstance(row.get('native_sweep'), dict) and
+            row['native_sweep'].get('clear') is False and
+            row['native_sweep'].get('proved') is True and
+            row['native_sweep'].get('status') == 'hard' and
+            row['native_sweep'].get('source') == 'authoritative_body_sweep']
+        exhausted = bool(rotation_rows and all(row.get('clear') is False and
+            row.get('reason') in ('realized_rotation_rejection',
+                'local_sweep_blocked', 'friendly_or_wreck_rotation')
+            for row in rotation_rows) and (all_hard or any(
+                row.get('reason') == 'realized_rotation_rejection'
+                for row in rotation_rows)))
+        if (hard or remembered_rotation or exhausted) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):
                 private = bool(feedback(state['id'], position, target, heading, now))
@@ -7896,6 +7913,8 @@ class BotRuntime(object):
                 target=target, hard_body_refusals=len(hard),
                 remembered_rotation_refusals=(len(rotation_rows)
                     if remembered_rotation else 0),
+                local_actions_exhausted=exhausted,
+                all_hard_body_refusals=len(all_hard),
                 refusal_counts=refusal_counts,
                 realized_rotation_contact={key: value for key, value in
                     (state.get('_rotation_contact_trace') or {}).items() if key in (
@@ -7906,6 +7925,7 @@ class BotRuntime(object):
                 retired=nav_state.get('local_target_retired'),
                 private_replan=private, reason=('hard_body_refusal' if hard else
                     'realized_rotation_refusal' if remembered_rotation else
+                    'local_actions_exhausted' if exhausted else
                     'static_direction_refusal' if static_refusal else 'no_hard_evidence'))
             if private:
                 trace = (hard[0].get('trace') or {}) if hard else {}
@@ -15558,35 +15578,37 @@ class BotRuntime(object):
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
+                try:
+                    current_grid_clear = (bool(pose_probe(position, state['yaw'],
+                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
+                        if callable(pose_probe) else None)
+                    candidate_grid_clear = (bool(pose_probe(position, sample_yaw,
+                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
+                        if callable(pose_probe) else None)
+                except Exception:
+                    planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
+                    return True
                 if (callable(self.rotation_resolver) and callable(pose_probe) and
-                        not pose_probe(position, state['yaw'],
-                            state.get('half_length', 3.5),
-                            state.get('half_width', 1.7))):
-                    # A realised spawn can occupy a hole in the coarse bake.
-                    # Only that inconsistent current pose delegates the turn
-                    # to native commit. Valid corridors retain their complete
-                    # rectangle guard before the driver selects a recovery arc.
+                        (not current_grid_clear or not candidate_grid_clear)):
+                    # A coarse missing cell can reject either the current or
+                    # candidate hull. Verify the next actual rotation slice
+                    # through the same non-committing native collision owner.
                     proof = self._planning_local_sweep(state, position, sample_yaw, None, now)
                     if proof is not None:
                         self._record_planning_verdict(planning_receipt, dict(
                             kind='local_sweep', action='rotation', yaw=sample_yaw,
+                            coarse_current_clear=current_grid_clear,
+                            coarse_candidate_clear=candidate_grid_clear,
                             native_sweep=proof, clear=proof['clear']))
                         planning_reason[0] = proof['reason']
                         return bool(proof['clear'])
-                    planning_reason[0] = 'current_baked_pose_missing_defer_native_commit'
+                    planning_reason[0] = 'coarse_baked_pose_missing_defer_native_commit'
                     return True
                 if not callable(pose_probe):
                     planning_reason[0] = 'baked_pose_probe_unavailable_defer_native_commit'
                     return True
-                try:
-                    planning_reason[0] = 'baked_hull_pose'
-                    return bool(pose_probe(
-                        position, sample_yaw,
-                        state.get('half_length', 3.5),
-                        state.get('half_width', 1.7)))
-                except Exception:
-                    planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
-                    return True
+                planning_reason[0] = 'baked_hull_pose'
+                return candidate_grid_clear
 
             def sample_pose_clear(sample_yaw, allow_wreck_push=False):
                 planning_reason[0] = None

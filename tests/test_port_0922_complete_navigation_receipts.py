@@ -384,14 +384,14 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         f.bots.extend(p._alive_bots([lease_fixture._bot(44,1,3,target,'mediumTank')],
                                    [lease_fixture._state(44,1,100.,0.)]))
         contacts = [dict(position=dict(x=100., y=0., z=250.), health=1., max_health=1000.)]
-        p._rebalance_routes(1, f.bots, contacts, 5.)
+        p._rebalance_routes(1, f.bots, contacts, 61.)
         lease = p._route_assignments[f.donor['id']]
-        self.assertEqual(7., lease['until'])
+        self.assertEqual(62., lease['until'])
         self.assertEqual('pressure_already_covered', lease['_lease_observation']['outcome'])
-        p._rebalance_routes(1, f.bots, contacts, 5.5)
+        p._rebalance_routes(1, f.bots, contacts, 61.5)
         self.assertEqual('rebalance_not_due', lease['_lease_check']['outcome'])
-        self.assertEqual(5., lease['_lease_observation']['evaluated_at'])
-        p._rebalance_routes(1, f.bots, contacts, 7.)
+        self.assertEqual(61., lease['_lease_observation']['evaluated_at'])
+        p._rebalance_routes(1, f.bots, contacts, 121.)
         previous = p._route_assignment_receipts[f.donor['id']]['previous_lease']
         self.assertEqual('pressure_already_covered', previous['observation']['outcome'])
         self.assertEqual('rebalance_not_due', previous['check']['outcome'])

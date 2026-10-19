@@ -13036,6 +13036,10 @@ class BattleRuntime(object):
         canonical = self._critical_state(payload)
         if canonical is None:
             return False
+        if int((record.get('state') or {}).get('health', 1)) <= 0:
+            canonical['fire'] = False
+            canonical['events'] = [event for event in canonical.get('events', ())
+                if not (event.get('kind') == 'fire' and event.get('state'))]
         if authority is not None:
             should_apply = self._reconcile_critical_authority(
                 record, authority, canonical)
@@ -13168,7 +13172,8 @@ class BattleRuntime(object):
             return False
         if burning is None:
             burning = getattr(entity, 'is_on_fire', False)
-        burning = bool(burning)
+        burning = bool(burning) and getattr(entity, 'health', 1) > 0 and bool(
+            getattr(entity, 'isCrewActive', True))
         if burning == bool(extra.isRunningFor(entity)):
             return False
         if not burning:
@@ -13255,6 +13260,8 @@ class BattleRuntime(object):
                 else:
                     code = 'TANKMAN_HIT_AT_SHOT'
             elif kind == 'fire':
+                if getattr(entity, 'health', 1) <= 0:
+                    continue
                 if bool(state):
                     code = ('DEVICE_STARTED_FIRE_AT_RAMMING'
                             if cause == 'ramming' else

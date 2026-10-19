@@ -270,6 +270,8 @@ class CompiledSpace0922Test(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             packages = Path(temporary) / 'res' / 'packages'
             packages.mkdir(parents=True)
+            with zipfile.ZipFile(packages / 'scripts.pkg', 'w'):
+                pass
             with zipfile.ZipFile(packages / 'vehicles_level_06.pkg', 'w') as archive:
                 archive.writestr(
                     'vehicles/british/Long/collision_client/'
@@ -296,6 +298,26 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertIn('/Wide/', envelope['width_source'])
         self.assertIn('/Long/', envelope['length_source'])
         self.assertEqual(2, envelope['resources_scanned'])
+
+    def test_full_hull_bounds_include_donated_chassis_mount(self):
+        element=lambda children: packed.PackedValue(packed.TYPE_ELEMENT,packed.PackedElement(children=children))
+        mount=packed.PackedValue(packed.TYPE_VECTOR,struct.pack('<3f',0.,1.,2.))
+        definition=packed.write_packed_xml(packed.PackedElement(children=[
+            (b'chassis',element([(b'one',element([(b'hullPosition',mount)]))]))]))
+        with tempfile.TemporaryDirectory() as temporary:
+            packages=Path(temporary)/'res/packages';packages.mkdir(parents=True)
+            with zipfile.ZipFile(packages/'scripts.pkg','w') as archive:
+                archive.writestr('scripts/item_defs/vehicles/usa/Test.xml',definition)
+            with zipfile.ZipFile(packages/'vehicles_level_06.pkg','w') as archive:
+                for part,bounds in [('Chassis',((-1.,0.,-2.),(1.,2.,2.))),
+                                    ('Hull',((-2.,0.,-3.),(2.,2.,4.)))]:
+                    archive.writestr('vehicles/american/Test/collision_client/'+part+'.visual_processed',
+                                     self._vehicle_chassis_visual(*bounds))
+            result=baker.representative_vehicle_chassis_envelope(temporary)
+        self.assertEqual(2.,result['half_width'])
+        self.assertEqual(6.,result['half_length'])
+        self.assertEqual([],result['undonated_hull_resources'])
+        self.assertTrue(result['length_source'].endswith('Hull.visual_processed'))
 
     def test_spawn_clearance_uses_yaw_oriented_maximum_chassis_obb(self):
         obstacles = types.SimpleNamespace(
@@ -553,22 +575,28 @@ class CompiledSpace0922Test(unittest.TestCase):
                     True, validation['spawn_compiled_bsp_obb_clearance'])
                 self.assertIs(
                     True, validation['spawn_pairwise_obb_clearance'])
+                mounted = validation.get('spawn_railway_revalidation')
                 self.assertAlmostEqual(
-                    2.239622,
+                    2.418090105 if mounted else 2.239622,
                     validation['spawn_vehicle_half_width_metres'], places=6)
                 self.assertAlmostEqual(
-                    5.462265,
+                    6.408896923 if mounted else 5.462265,
                     validation['spawn_vehicle_half_length_metres'], places=6)
-                self.assertEqual(
-                    534, validation['spawn_vehicle_resources_scanned'])
-                self.assertEqual(
-                    'vehicles/japan/J24_Mi_To_130_tons/collision_client/'
-                    'Chassis.visual_processed',
-                    validation['spawn_vehicle_width_source'])
-                self.assertEqual(
-                    'vehicles/british/GB63_TOG_II/collision_client/'
-                    'Chassis.visual_processed',
-                    validation['spawn_vehicle_length_source'])
+                self.assertEqual(1068 if mounted else 534,
+                    validation['spawn_vehicle_resources_scanned'])
+                if mounted:
+                    self.assertEqual(30, mounted['slots_checked'])
+                    self.assertEqual([], mounted['vehicle_envelope']['undonated_hull_resources'])
+                    self.assertTrue(mounted['hard_and_soft_clearance'])
+                    self.assertTrue(mounted['directed_home_connection'])
+                    self.assertTrue(mounted['pairwise_clearance'])
+                else:
+                    self.assertEqual(
+                        'vehicles/japan/J24_Mi_To_130_tons/collision_client/'
+                        'Chassis.visual_processed',validation['spawn_vehicle_width_source'])
+                    self.assertEqual(
+                        'vehicles/british/GB63_TOG_II/collision_client/'
+                        'Chassis.visual_processed',validation['spawn_vehicle_length_source'])
                 self.assertNotIn(
                     'fallback', data['spawn_formation_source'].lower())
 
