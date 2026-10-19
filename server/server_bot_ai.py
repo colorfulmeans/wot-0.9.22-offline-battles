@@ -617,6 +617,7 @@ class BotPlanner(object):
         # survival action or an urgent base response.
         protected_modes = (
             "base_defense", "low_health_retreat", "low_health_defend",
+            "magazine_reload_retreat", "magazine_reload_hold",
             "under_fire_withdraw", "under_fire_hold",
             "crossfire_withdraw", "crossfire_hold",
         )
@@ -1709,44 +1710,6 @@ class BotPlanner(object):
             isinstance(remaining, (list, tuple)) and
             sum(max(0, _integer(value)) for value in remaining) > 0)
 
-    def _hit_requires_withdrawal(self, bot, hit, threat, team_bots, receipt=None):
-        """Escalate damage only when it is material or cannot be answered.
-
-        Reading one hit as a reason to break contact is a competence, decided
-        once per hit. Without it the Bot keeps fighting where it stands. The
-        low-health retreat is deliberately not gated here: that is survival,
-        not judgement, and removing it would only feed the other team.
-        """
-        if not isinstance(hit, dict):
-            if receipt is not None: receipt.update(reason='no_recent_hit', withdraw=False)
-            return False
-        if not self._capable(
-                bot, bot_gunnery.CAPABILITY_WITHDRAW,
-                hit.get("attacker"), round(_number(hit.get("reported_at")), 3)):
-            if receipt is not None: receipt.update(reason='withdraw_competence_not_selected', withdraw=False)
-            return False
-        state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
-        max_health = max(1.0, _number(state.get("max_health"), 1.0))
-        if (_number(hit.get("damage")) / max_health >=
-                LOW_HEALTH_BASE_FRACTION):
-            if receipt is not None: receipt.update(reason='material_hit', withdraw=True)
-            return True
-        if isinstance(threat, dict):
-            shooters = threat.get("shootable_by_bot_ids") or ()
-            if (threat.get("visible") and bot["id"] in shooters and
-                    self._weapon_ready(bot)):
-                if receipt is not None: receipt.update(reason='can_return_fire', withdraw=False)
-                return False
-            armed_support = [
-                ally for ally in (team_bots or ())
-                if (ally["id"] in shooters and self._weapon_ready(ally))
-            ]
-            support = self._ally_support_score(bot, armed_support, threat)
-            if receipt is not None: receipt.update(reason='armed_support', support=support, withdraw=support < 0.70)
-            return support < 0.70
-        if receipt is not None: receipt.update(reason='attacker_not_in_contacts', withdraw=True)
-        return True
-
     def _recent_threat_contact(self, bot, contacts, now):
         hit = self._recent_hit(bot["id"], now)
         if hit is None:
@@ -2002,7 +1965,7 @@ class BotPlanner(object):
                 weapon=dict((key, list(value) if isinstance(value, (list, tuple)) else value)
                     for key, value in ((key, bot['state'].get(key)) for key in (
                         'shell_index', 'ammo_remaining', 'ammo_reload_pending',
-                        'clip', 'reload_time', 'burst_active'))),
+                        'clip', 'clip_size', 'reload_time', 'burst_active'))),
                 destroyed=list((bot['state'].get('critical') if isinstance(
                     bot['state'].get('critical'), dict) else {}).get('destroyed') or ()))
             self._target_decisions[bot['id']] = observation
@@ -2107,15 +2070,17 @@ class BotPlanner(object):
                 # A tactical firing-lane refresh is spread across render
                 # frames.  During that incomplete generation the current
                 # contact remains visible but its shooter list can briefly be
-                # empty.  Keep the unexpired movement lease, while the order's
+                # empty. Keep the current visible tracking target, while the order's
                 # fire flag still follows the current (negative) lane sample.
                 leased_contact = None
                 cover_state = self._cover_states.get(bot["id"])
                 cover_target = (cover_state.get("target")
                                 if isinstance(cover_state, dict) else None)
-                if (isinstance(previous, dict) and
-                        (_number(now) < _number(previous.get("until")) or
-                         cover_target == previous.get("target"))):
+                # A current visible contact remains an aiming target even
+                # when its firing lane is temporarily blocked. The contact
+                # lifetime/range/death checks, not the firing lease deadline,
+                # own tracking expiry. This does not reserve a firing slot.
+                if isinstance(previous, dict):
                     bx = _number(bot["state"].get("x"))
                     bz = _number(bot["state"].get("z"))
                     for contact in self._contacts_for_bot(bot, contacts, now):
@@ -2138,6 +2103,7 @@ class BotPlanner(object):
                         previous["until"] = (
                             _number(now) + TARGET_LEASE_SECONDS)
                     assigned[bot["id"]] = leased_contact
+                    observation['tracking_reason'] = 'current_visible_contact_blocked'
                     continue
                 self._target_assignments.pop(bot["id"], None)
                 continue
@@ -3767,9 +3733,29 @@ class BotPlanner(object):
             LOW_HEALTH_BASE_FRACTION + personality["caution"] * 0.18)
         recent_hit = self._recent_hit(bot["id"], now)
         threat_contact = self._recent_threat_contact(bot, contacts, now)
-        withdrawal_evidence = {}
-        withdraw_after_hit = self._hit_requires_withdrawal(
-            bot, recent_hit, threat_contact, team_bots, withdrawal_evidence)
+        magazine_followup = self._magazine_has_followup(bot)
+        magazine_reload = bool(
+            _integer(state.get('clip_size'), 1) > 1 and
+            _integer(state.get('clip')) <= 0 and
+            _integer(state.get('fire_seq')) > 0 and
+            self._weapon_can_recover(bot))
+        low_health_trigger = low_health
+        # Finish the physically loaded magazine before a combat withdrawal.
+        # A missing target must not manufacture an endless empty-the-clip hold.
+        low_health = bool(low_health and not (focus is not None and magazine_followup))
+        retreat = self._retreat_states.get(bot['id'])
+        retreat_before = dict(retreat or {})
+        retreat_release = None
+        if retreat is not None and (
+                retreat.get('moving_mode') not in ('low_health_retreat', 'magazine_reload_retreat') or
+                (retreat.get('moving_mode') == 'magazine_reload_retreat' and not magazine_reload) or
+                (retreat.get('moving_mode') == 'low_health_retreat' and not low_health)):
+            retreat_release = ('magazine_ready_or_exhausted'
+                if retreat.get('moving_mode') == 'magazine_reload_retreat' else
+                'low_health_deferred_or_recovered'
+                if retreat.get('moving_mode') == 'low_health_retreat' else
+                'retreat_trigger_removed')
+            self._retreat_states.pop(bot['id'], None)
         order = {
             "id": bot["id"],
             "team": bot["team"],
@@ -3801,13 +3787,19 @@ class BotPlanner(object):
             selection=dict(self._target_decisions.get(bot['id']) or
                 dict(at=now, outcome='direct_order_call', candidates=[], selected=None)),
             focus=(focus.get('target_kind'), focus['id']) if focus is not None else None,
-            recent_hit=dict(recent_hit or {}), withdraw_after_hit=bool(withdraw_after_hit),
-            withdrawal=withdrawal_evidence,
+            recent_hit=dict(recent_hit or {}), withdraw_after_hit=False,
+            withdrawal=dict(reason='low_health_or_empty_magazine_only',
+                low_health_trigger=low_health_trigger,
+                magazine_followup=magazine_followup, magazine_reload=magazine_reload,
+                deferred_for_magazine=bool(low_health_trigger and not low_health),
+                released=retreat_release,
+                clip=state.get('clip'), clip_size=state.get('clip_size'),
+                reload_time=state.get('reload_time'), fire_seq=state.get('fire_seq')),
             threat=(threat_contact.get('target_kind'), threat_contact['id'])
                 if threat_contact is not None else None,
             low_health=bool(low_health), health_fraction=health_fraction,
             weapon_ready=self._weapon_ready(bot),
-            retreat_before=dict(self._retreat_states.get(bot['id']) or {}))
+            retreat_before=retreat_before)
         if travel_override is not None:
             if focus is not None:
                 observers = focus.get("shootable_by_bot_ids")
@@ -3842,6 +3834,28 @@ class BotPlanner(object):
             self._firing_holds.pop(bot["id"], None)
             return order
 
+        if magazine_reload and (focus is not None or
+                (self._retreat_states.get(bot['id']) or {}).get('moving_mode') ==
+                'magazine_reload_retreat'):
+            if focus is not None:
+                self._set_target(order, bot, focus, profile, personality, False)
+                # Return to an already proved cover position before using
+                # the route retreat endpoint. Do not discard the cover owner.
+                if (bot['id'] in self._cover_states and self._apply_cover_order(
+                        order, bot, focus, personality, now, urgent=True)):
+                    self._retreat_states.pop(bot['id'], None)
+                    self._firing_holds.pop(bot['id'], None)
+                    return order
+            self._engage_anchors.pop(bot['id'], None)
+            self._combat_states.pop(bot['id'], None)
+            self._cover_states.pop(bot['id'], None)
+            self._apply_retreat_order(order, bot, retreat_point,
+                focus['position'] if focus is not None else
+                self._retreat_states[bot['id']]['face'], now,
+                'magazine_reload_retreat', 'magazine_reload_hold')
+            self._firing_holds.pop(bot['id'], None)
+            return order
+
         if focus is None:
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
@@ -3860,27 +3874,11 @@ class BotPlanner(object):
                 order["throttle_override"] = 0.0
                 self._firing_holds.pop(bot["id"], None)
                 return order
-            if threat_contact is not None:
-                observers = threat_contact.get("shootable_by_bot_ids")
-                self._set_target(
-                    order, bot, threat_contact, profile, personality,
-                    bool(threat_contact.get("visible") and
-                         bot["id"] in (observers or ())))
-                if self._apply_cover_order(
-                        order, bot, threat_contact, personality, now,
-                        urgent=True, hold_only=low_health):
-                    self._retreat_states.pop(bot["id"], None)
-                    self._firing_holds.pop(bot["id"], None)
-                    return order
             self._cover_states.pop(bot["id"], None)
             if low_health:
                 self._apply_retreat_order(
                     order, bot, retreat_point, move, now,
                     "low_health_retreat", "low_health_defend")
-            elif withdraw_after_hit:
-                self._apply_retreat_order(
-                    order, bot, retreat_point, move, now,
-                    "under_fire_withdraw", "under_fire_hold")
             else:
                 self._retreat_states.pop(bot["id"], None)
             self._firing_holds.pop(bot["id"], None)
@@ -3909,7 +3907,6 @@ class BotPlanner(object):
         close_limit = desired_range * (0.48 + personality["aggression"] * 0.10)
         support_score = self._ally_support_score(
             bot, team_bots or (), focus)
-        crossfire_risk = self._crossfire_risk(bot, contacts)
 
         if low_health:
             self._engage_anchors.pop(bot["id"], None)
@@ -3925,50 +3922,6 @@ class BotPlanner(object):
             self._apply_retreat_order(
                 order, bot, retreat_point, focus["position"], now,
                 "low_health_retreat", "low_health_defend")
-            self._apply_stationary_angling(
-                order, bot, profile, personality)
-            self._firing_holds.pop(bot["id"], None)
-            return order
-
-        if withdraw_after_hit:
-            cover_focus = threat_contact or focus
-            cover_observers = cover_focus.get("shootable_by_bot_ids")
-            self._set_target(
-                order, bot, cover_focus, profile, personality,
-                bool(cover_focus.get("visible") and
-                     bot["id"] in (cover_observers or ())))
-            self._engage_anchors.pop(bot["id"], None)
-            self._combat_states.pop(bot["id"], None)
-            if self._apply_cover_order(
-                    order, bot, cover_focus, personality, now, urgent=True):
-                self._retreat_states.pop(bot["id"], None)
-                self._firing_holds.pop(bot["id"], None)
-                return order
-            self._cover_states.pop(bot["id"], None)
-            self._apply_retreat_order(
-                order, bot, retreat_point, cover_focus["position"], now,
-                "under_fire_withdraw", "under_fire_hold")
-            self._apply_stationary_angling(
-                order, bot, profile, personality)
-            self._firing_holds.pop(bot["id"], None)
-            return order
-
-        if (crossfire_risk is not None and crossfire_risk >= 0.35 and
-                support_score < 0.70 and
-                self._capable(bot, bot_gunnery.CAPABILITY_CROSSFIRE,
-                              focus.get("target_kind"), focus.get("id"))):
-            self._engage_anchors.pop(bot["id"], None)
-            self._combat_states.pop(bot["id"], None)
-            if (distance <= fire_range * 1.15 and
-                    self._apply_cover_order(
-                        order, bot, focus, personality, now, urgent=True)):
-                self._retreat_states.pop(bot["id"], None)
-                self._firing_holds.pop(bot["id"], None)
-                return order
-            self._cover_states.pop(bot["id"], None)
-            self._apply_retreat_order(
-                order, bot, retreat_point, focus["position"], now,
-                "crossfire_withdraw", "crossfire_hold")
             self._apply_stationary_angling(
                 order, bot, profile, personality)
             self._firing_holds.pop(bot["id"], None)
@@ -3994,10 +3947,8 @@ class BotPlanner(object):
             # This branch only handles a leased order whose later observation
             # lost its local lane. Resume the route instead of turning shared
             # team visibility into an unbounded convergence order.
-            order["target_id"] = None
-            order.pop("target_kind", None)
-            order["aim_position"] = dict(move)
-            order["face_position"] = dict(move)
+            # Preserve this live received enemy as a tracking target. Route
+            # translation and permission to launch are independent owners.
             order["fire_allowed"] = False
             order["combat_mode"] = "route"
             order["move_position"] = dict(move)
@@ -4065,22 +4016,6 @@ class BotPlanner(object):
               self._apply_cover_order(order, bot, focus, personality, now)):
             self._engage_anchors.pop(bot["id"], None)
             self._combat_states.pop(bot["id"], None)
-        elif (distance < close_limit and dominant != "brawler" and
-              math.hypot(retreat_point['x'] - _number(state.get('x')),
-                         retreat_point['z'] - _number(state.get('z'))) >
-              RETREAT_ARRIVAL_RADIUS):
-            # This must precede the general firing-envelope hold below because
-            # close_limit is always inside that envelope. Keep firing while a
-            # ranged vehicle opens space along its already validated route.
-            self._engage_anchors.pop(bot["id"], None)
-            self._combat_states.pop(bot["id"], None)
-            self._cover_states.pop(bot["id"], None)
-            order["combat_mode"] = "withdraw"
-            # A newly created join anchor may be the current position. Use
-            # the same proved retreat point as the other withdrawal owners.
-            # If it is already reached, retain the existing firing hold below.
-            order["move_position"] = dict(retreat_point)
-            order["throttle_override"] = None
         elif distance <= min(fire_range, max(150.0, desired_range * 1.35)):
             # A visible enemy inside an effective firing envelope interrupts
             # route travel immediately when no client-probed cover manoeuvre is

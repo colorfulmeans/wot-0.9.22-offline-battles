@@ -124,15 +124,18 @@ class AirfieldFollowupTests(unittest.TestCase):
             runtime._shot_los_cache[key] = (10., False)
             blocked, gun_target = runtime._apply_blocked_direct_aim(
                 source, command, target, 10.1)
-            self.assertIsNone(gun_target)
-            self.assertIsNone(blocked['target_id'])
-            self.assertNotIn('aim_position', blocked)
+            self.assertIs(target, gun_target)
+            self.assertEqual(6, blocked['target_id'])
+            self.assertEqual(target['position'], blocked['aim_position'])
+            self.assertFalse(blocked['fire_allowed'])
             self.assertEqual(command['move_position'], blocked['move_position'])
             self.assertEqual(6, command['target_id'])
             proofs = []
             runtime.firing_lane_probe = lambda *unused: proofs.append(1) or True
-            self.assertIsNone(runtime._apply_blocked_direct_aim(
-                source, command, target, 10.3, [0])[1])
+            denied, tracked = runtime._apply_blocked_direct_aim(
+                source, command, target, 10.3, [0])
+            self.assertIs(target, tracked)
+            self.assertFalse(denied['fire_allowed'])
             self.assertEqual([], proofs)
             budget = [1]
             self.assertIs(target, runtime._apply_blocked_direct_aim(

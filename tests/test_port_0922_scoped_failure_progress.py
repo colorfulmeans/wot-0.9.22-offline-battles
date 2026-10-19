@@ -148,7 +148,81 @@ class ConnectorProgressTests(unittest.TestCase):
             recovery_goal=(0.,0.,200.),turn_speed_limit=.15)
         self.assertEqual(.7,progress['alignment_yaw'])
         self.assertEqual(.1,progress['alignment_best'])
-        self.assertEqual('new_best_distance',progress['credit_reason'])
+        self.assertEqual('new_order_distance',progress['credit_reason'])
+
+    def test_report_124508_sherman_local_orbit_cannot_renew_progress(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        modes = []
+        # 124508 round 1 bot 22: supported, no world refusal, alternating
+        # near points around (-166, 92). Each orbit used to mint a new
+        # connector and a new heading/distance progress allowance.
+        for frame in range(600):
+            angle = frame * .05
+            position = (-166. + .8 * math.sin(angle), 0., 92.8 + .5 * math.cos(angle))
+            target = (position[0] + 2.1 * math.sin(angle + 1.), 0.,
+                      position[2] + 2.1 * math.cos(angle + 1.))
+            command = driver.drive(22, 6, position, angle, 1., .1,
+                target, [], lambda *args: True, progress_target=target,
+                recovery_goal=(-180., 0., 300.), turn_speed_limit=.4,
+                stop_at_target=False)
+            modes.append(command['recovery_mode'])
+        self.assertGreater(driver.states[22]['recovery_count'], 1)
+        self.assertTrue(any(mode in ('reverse_turn', 'pivot_recovery') for mode in modes))
+        progress = driver.states[22]['objective_progress']
+        self.assertLess(progress['travel_best'], 2.)
+        self.assertGreater(progress['local_rebases'], 10)
+
+    def test_rebased_turn_does_not_get_a_new_alignment_anchor(self):
+        driver = LocalDriver(stuck_seconds=100.)
+        self.drive(driver, (0., 0., 3.), yaw=2.)
+        progress = driver.states[11]['objective_progress']
+        progress.update(alignment_yaw=.7, alignment_best=.1)
+        anchor = progress['alignment_yaw']
+        best = progress['alignment_best']
+        self.drive(driver, (3., 0., 0.), yaw=2.)
+        self.assertEqual(anchor, progress.get('alignment_yaw'))
+        self.assertEqual(best, progress.get('alignment_best'))
+
+    def test_sherman_report_snapshots_complete_a_recovery(self):
+        # Exact rounded 124508 round 1 bot 22 snapshots. This replays the
+        # progress owner, not unseen physics between diagnostic samples.
+        goals = [(-214.,0.,-314.),(-210.674,0.,-2.353),(-216.619,0.,-81.873)]
+        rows = [
+            (0.,-165.8419,92.1781,.3859,-166.,94.,0),
+            (3.021,-166.1094,92.2427,-1.3247,-167.8912,92.5342,1),
+            (8.718,-166.881,93.1136,1.321,-164.8661,92.5972,1),
+            (13.341,-165.4168,92.8029,-2.1739,-167.4176,92.2344,1),
+            (17.708,-166.7427,93.1857,-.3539,-166.,94.,1),
+            (20.917,-166.7738,93.2645,1.3019,-164.9985,92.1808,2),
+            (26.287,-166.0208,92.9955,-2.3002,-167.9155,92.1188,2),
+            (30.602,-166.966,92.8997,-.201,-166.,94.,2),
+            (33.671,-166.966,92.8997,1.3696,-164.8959,92.697,2),
+            (37.768,-165.8542,92.8697,-.601,-167.913,93.8021,2),
+            (42.306,-166.694,93.3102,-3.0302,-164.7674,92.5263,0),
+            (47.868,-165.4617,92.5481,.0009,-166.,94.,0),
+            (50.885,-165.6012,93.0249,-1.3819,-167.5847,92.4716,0),
+            (55.5,-166.3684,92.8617,2.2368,-164.366,92.0929,0),
+            (59.778,-165.3844,92.405,.0067,-166.,94.,0)]
+        driver = LocalDriver(stuck_seconds=100.)
+        last = -.1
+        for now,x,z,yaw,tx,tz,g in rows:
+            driver.drive(22,6,(x,0.,z),yaw,0.,now-last,(tx,0.,tz),[],
+                lambda *args:True, progress_target=(tx,0.,tz),
+                recovery_goal=goals[g],turn_speed_limit=.4,stop_at_target=False)
+            last=now
+        self.assertGreater(driver.states[22]['recovery_count'],0)
+
+    def test_real_curved_travel_can_return_toward_an_old_pocket(self):
+        driver=LocalDriver(stuck_seconds=100.)
+        for frame in range(630):
+            angle=frame*.01
+            position=(20.*math.cos(angle),0.,20.*math.sin(angle))
+            yaw=-angle
+            target=(position[0]+3.*math.sin(yaw),0.,position[2]+3.*math.cos(yaw))
+            driver.drive(22,6,position,yaw,2.,.1,target,[],lambda *args:True,
+                progress_target=target,recovery_goal=(0.,0.,400.),
+                turn_speed_limit=.4,stop_at_target=False)
+            self.assertEqual(0,driver.states[22]['recovery_count'])
 
     def test_elc_revisiting_connectors_cannot_reissue_distance_and_alignment_credit(self):
         driver = LocalDriver(stuck_seconds=100.)
