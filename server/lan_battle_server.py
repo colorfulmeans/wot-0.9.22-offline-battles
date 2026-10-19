@@ -15209,7 +15209,8 @@ class BattleState:
                 for order in self.bot_orders.get('orders', ()):
                     attempt = order.get('route_attempt') or {}
                     if attempt.get('action') in ('skip_parking', 'skip_gate',
-                                                 'switch_route', 'no_alternative'):
+                                                 'switch_route', 'no_alternative',
+                                                 'physical_progress_renewed'):
                         _server_log('BOT ROUTE ATTEMPT ' + json.dumps(dict(
                             attempt, bot=order['id'], round=self.round_id),
                             sort_keys=True, separators=(',', ':')))

@@ -804,6 +804,8 @@ class BotPlanner(object):
                         move_position=order.get('move_position')))
                 order['route_assignment']['progress'] = progress
                 balance = dict(self._route_balance_receipts.get(bot['team']) or {})
+                balance.pop('contact_inputs', None)
+                balance.pop('contributor_inputs', None)
                 checks = balance.pop('candidates', ())
                 balance.update(observed_at=now, candidate=next((dict(row) for row in checks
                     if row['bot'] == bot['id']), None))
@@ -2547,6 +2549,26 @@ class BotPlanner(object):
         balance.update(outcome='no_improving_donor', target_route=target_route,
                        pressure=dict(pressure), contributors=dict(counts),
                        target_score=target_score)
+        # Preserve the inputs behind pressure changes, not only the winning
+        # total. Radio expiry, deaths and route transfers can change a total
+        # between two four-second evaluations without a new visible enemy.
+        balance['contact_inputs'] = [dict(
+            target_kind=contact.get('target_kind'), target_id=contact.get('id'),
+            position=_point(contact.get('position') or {}),
+            route=self._nearest_route(contact, catalog),
+            health=contact.get('health'), max_health=contact.get('max_health'),
+            visible=contact.get('visible'),
+            radio_bot_until=dict(contact.get('radio_bot_until') or {}),
+            known_by=[bot['id'] for bot in bots
+                      if self._contact_known_to(contact, bot['id'], now)])
+            for contact in contacts]
+        balance['contributor_inputs'] = [dict(bot=bot['id'],
+            route=str(((self._route_assignments.get(bot['id']) or {}).get('route')
+                       or bot.get('route') or {}).get('id') or ''),
+            contributes=self._route_line_contributor(
+                bot, self._contacts_for_bot(bot, contacts, now)),
+            position=_point(bot['state'])) for bot in bots
+            if str(bot.get('profile', {}).get('class_tag') or '') != 'SPG']
         self._observe_route_leases(bots, now,
             'pressure_already_covered' if target_score <= 0.0 else 'pressure_evaluated',
             target_route=target_route, target_pressure=pressure[target_route],
@@ -2695,6 +2717,8 @@ class BotPlanner(object):
                 evaluated_at=_number(now), target_route=target_route,
                 pressure=dict(pressure), contributors=dict(counts),
                 target_score=pressure[target_route] - counts[target_route] * 0.45,
+                contact_inputs=balance['contact_inputs'],
+                contributor_inputs=balance['contributor_inputs'],
                 candidates=candidate_checks, selected_bot=donor['id']))
         self._route_assignments[donor["id"]] = {
             "route": catalog[target_route],
@@ -2777,6 +2801,7 @@ class BotPlanner(object):
         if progress is None:
             self._wreck_route_progress[bot_id] = {
                 'key': key, 'goal': goal, 'since': _number(now),
+                'best_distance': distance,
                 'origin': dict(point), 'physical_block': physical_block}
             trace.update(attempt_started_at=_number(now), reset_reason='new_gate')
             return
@@ -2792,12 +2817,35 @@ class BotPlanner(object):
             trace['resumed_after_pause'] = max(0., _number(now) - paused_at)
         trace.update(attempt_started_at=progress['since'],
             attempt_origin=dict(progress.get('origin', point)))
+        # A movable corpse may remain in the corridor throughout a successful
+        # push. Keep the same half-metre progress quantum as the local motor;
+        # do not classify continuing contact as twenty seconds of no progress.
+        # The high-water mark belongs to the gate, so reversing and returning
+        # to the same place cannot buy another attempt.
+        best_distance = progress.setdefault('best_distance', math.hypot(
+            goal['x'] - progress['origin']['x'],
+            goal['z'] - progress['origin']['z']))
+        progress_goal = progress['goal']
+        progress_distance = math.hypot(progress_goal['x'] - point['x'],
+                                       progress_goal['z'] - point['z'])
+        improvement = best_distance - progress_distance
+        trace.update(best_distance=round(best_distance, 3),
+                     improvement=round(improvement, 3),
+                     progress_goal=dict(progress_goal),
+                     progress_distance=round(progress_distance, 3))
+        if physical_block and improvement >= 0.5:
+            progress.update(since=_number(now), origin=dict(point),
+                            best_distance=progress_distance)
+            trace.update(action='physical_progress_renewed', elapsed=0.,
+                         attempt_started_at=_number(now), attempt_origin=dict(point))
+            return
         if not physical_block:
             origin = progress.get('origin', point)
             net = math.hypot(point['x'] - origin['x'], point['z'] - origin['z'])
             toward = math.hypot(goal['x'] - origin['x'], goal['z'] - origin['z']) - distance
             if net >= 6.0 and toward >= 4.0:
-                progress.update(since=_number(now), origin=dict(point), goal=goal)
+                progress.update(since=_number(now), origin=dict(point), goal=goal,
+                                best_distance=min(best_distance, distance))
                 return
         # A moving recovery orbit still has a finite attempt budget. Only
         # consuming the gate or clearing the physical blocker ends this attempt.
@@ -2986,6 +3034,10 @@ class BotPlanner(object):
             saved = history.get(route_id)
             if saved is not None:
                 state = dict(index=saved['index'],route_id=route_id,
+                    entry_receipt=dict(sampled_at=now, source='restored_scripted_index',
+                        position=_point(bot['state']), selected_index=saved['index'],
+                        speed=_number(bot['state'].get('speed')),
+                        yaw=_number(bot['state'].get('yaw')), skipped=[]),
                     parking_completed=set(saved.get('parking_completed', ())),
                     parking_skipped=set(saved.get('parking_skipped', ())),
                     blocked_skip_to=saved.get('blocked_skip_to'),
@@ -2998,15 +3050,21 @@ class BotPlanner(object):
                           (_number(waypoints[value].get("x")) - bx) ** 2 +
                           (_number(waypoints[value].get("z")) - bz) ** 2)
             index = nearest
+            entry = dict(sampled_at=now, source='nearest_route_point',
+                         position=_point(bot['state']), nearest=nearest,
+                         speed=_number(bot['state'].get('speed')),
+                         yaw=_number(bot['state'].get('yaw')), skipped=[])
             # Route point zero is the team's own flag. The actual line-up starts
             # in front of it, so do not order every deployed tank to turn around
             # and visit its own base before it may advance toward the enemy flag.
             if nearest == 0 and len(waypoints) > 1:
                 index = 1
+                entry['skipped'].append(dict(index=0, reason='spawn_flag'))
             index = min(index, route_limit)
             while (index < route_limit and
                    math.hypot(_number(waypoints[index].get("x")) - bx,
                               _number(waypoints[index].get("z")) - bz) < 30.0):
+                entry['skipped'].append(dict(index=index, reason='within_30m'))
                 index += 1
             # Bot snapshots carry hull yaw in the same shared frame as uploaded
             # routes. Skip only a truly rear-facing connector; a side road remains a
@@ -3033,11 +3091,16 @@ class BotPlanner(object):
                              (math.pi * 2.0) - math.pi)
                     if abs(delta) <= 1.75:
                         break
+                    entry['skipped'].append(dict(index=index,
+                        reason='behind_moving_hull', bearing=bearing, delta=delta))
                     index += 1
             # User point zero is an instruction, not a baked base connector.
             if not history and scripted:
                 index = 0
+                entry['source'] = 'first_scripted_instruction'
+            entry.update(selected_index=index, selected_point=_point(waypoints[index]))
             state = {"index": index, "route_id": route_id,
+                     "entry_receipt": entry,
                      "join_index": index,
                      "join_anchor": {"x": bx,
                                      "y": _number(bot["state"].get("y")),
@@ -3092,6 +3155,7 @@ class BotPlanner(object):
         else:
             anchor = _point(waypoints[max(0, index - 1)])
         state['progress_receipt'] = dict(at=now, route_id=route_id,
+            entry=state.get('entry_receipt'),
             stop_before_objective=bool(stop_before_objective),
             requested_limit=requested_limit, effective_limit=route_limit,
             previous_index=previous_index, selected_index=index,
