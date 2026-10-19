@@ -13572,7 +13572,7 @@ class BotRuntime(object):
         removed = self._friendly_repositions.pop(bot_id, None)
         state = self.states.get(bot_id)
         if state is not None:
-            state['local_combat_manoeuvre'] = False
+            state['local_combat_manoeuvre'] = bool(state.get('_gun_angle_adjustment'))
             if removed is not None:
                 state['_friendly_reposition_last_terminal'] = dict(
                     state.get('_friendly_reposition_event') or {})
@@ -15801,6 +15801,7 @@ class BotRuntime(object):
                 state, command, target, now, final_shot_lane_budget)
             state['local_combat_manoeuvre'] = bool(
                 state['id'] in self._friendly_repositions or
+                state.get('_gun_angle_adjustment') or
                 command.get('combat_mode') == 'gun_angle_adjust')
             command = _overlay_live_target_pose(command, target, position)
             state['target_kind'] = (

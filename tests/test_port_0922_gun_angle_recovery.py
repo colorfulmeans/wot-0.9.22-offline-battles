@@ -104,6 +104,15 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertEqual('relocation_stalled', self.state['_gun_angle_last_terminal']['reason'])
         self.assertNotIn('_gun_angle_adjustment', self.state)
 
+    def test_friendly_cleanup_cannot_erase_an_active_mechanical_owner(self):
+        self.runtime.states[11] = self.state
+        self.state['_gun_angle_adjustment'] = {'start':0.}
+        self.runtime._clear_friendly_reposition(11)
+        self.assertTrue(self.state['local_combat_manoeuvre'])
+        self.state.pop('_gun_angle_adjustment')
+        self.runtime._clear_friendly_reposition(11)
+        self.assertFalse(self.state['local_combat_manoeuvre'])
+
     def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
         self.runtime._friendly_repositions[11] = dict(
             target_id=28, destination=(0., 0., 10.), deadline=5.,
@@ -232,12 +241,14 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertGreater(math.hypot(state['x'], state['z']), 1.)
         self.assertEqual(0, state['fire_seq'])
         self.assertIsNotNone(state.get('_gun_angle_adjustment'))
+        self.assertTrue(state['local_combat_manoeuvre'])
         player['y'] = 0.
         with contextlib.redirect_stdout(io.StringIO()):
             for frame in range(101, 161):
                 runtime.update(.05, frame * .05, players=[player])
         self.assertGreater(state['fire_seq'], 0)
         self.assertNotIn('_gun_angle_adjustment', state)
+        self.assertFalse(state['local_combat_manoeuvre'])
 
 
 if __name__ == '__main__':

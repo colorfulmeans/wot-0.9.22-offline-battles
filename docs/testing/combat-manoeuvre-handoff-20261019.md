@@ -8,7 +8,7 @@ on `fix/terminal-route-capture-handoff` (PR #95). The new branch is
 do not substitute the release tag or another 0.10.1 launcher revision.
 
 Runtime evidence: `wot-error-report-20261019-172753-0e3742a48adc.zip`, one
-round on `86_himmelsdorf_winter`, 17:20:47–17:27:37, team 1 capture victory.
+round on `86_himmelsdorf_winter`, 17:20:47â€“17:27:37, team 1 capture victory.
 The report's build identity is `colorfulmeans-39226708047-1`.
 
 ## Diagnosed failures and implemented ownership
@@ -202,7 +202,11 @@ clock. The first executed local driver steering goal is frozen once, so a local
 turn does not consume all translation time, and changing local points cannot
 keep resetting alignment credit. Arrival, no progress, unavailable candidates,
 priority handoff and cleared mechanical refusal have timestamped terminal
-receipts. The native gun solver and every actual body sweep remain authoritative.
+receipts. Both forward and reverse mechanical actions publish the existing local
+manoeuvre flag through their terminal, preventing the server idle-fire timer
+from interrupting a still-active relocation. Friendly-action cleanup cannot
+erase a concurrent mechanical owner. The native gun solver and every actual
+body sweep remain authoritative.
 
 Static-only support solves reuse exact complete column results, including layer
 witnesses, inside their synchronous query scope. Changed column/band, destructible
