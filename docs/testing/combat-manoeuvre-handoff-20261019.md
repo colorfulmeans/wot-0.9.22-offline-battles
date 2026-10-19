@@ -546,3 +546,83 @@ Recorded input replay proves the progress owner, not unseen native motion.
 Windows gameplay acceptance is still required. The pre-existing Airfield 24-FPS
 fixture failure (Bots 18/27 at 5.877/11.344 m) and inactive full-native navigation
 state drift above must remain visible; neither is suppressed to publish a pass.
+
+## Highway bounded escapes and spectator observation contract (October 20)
+
+Baseline: `164f3cbc`. Report `032152-e7cf305674fe` contains 1,193 worker
+motion samples across Live Oaks and Highway. The second round ends with a
+worker disconnect coincident with the game closing; the report has no dump
+which proves a native crash. Exception files contain session headers only.
+
+### Confirmed repairs
+
+* Highway Bot 25 is **AMX CDA 105**, not Foch 105. Its final retained reverse
+  proof covers 0.318034 m from (-158.518135, -13.082677, -243.540265), with
+  heading 3.491454 radians. The execution layer expanded this to at least
+  0.5 m. The shipped graph with runtime shore hazards accepts the intended
+  interval but rejects the expanded interval entering cell (85,63), bits 10
+  (erosion plus shore). A cached command could also reuse its old distance
+  from a newer origin. Preserve the selected origin, direction and total
+  distance through LocalDriver -> BotAdapter -> execution. Each physics slice
+  uses the remaining projection to that same fixed endpoint, without the
+  half-metre floor. Completion retires the cached action; the existing driver
+  continues normal retry/reroute ownership. A genuinely rejected, already
+  aligned short escape retires its cache for a fresh local check. Turning
+  toward a candidate still keeps its catch-up command. Real hazard, collision,
+  shallow-water admission and native sweeps remain active. No failed edge is
+  permanently banned and no route strategy/timer is replaced.
+* The worker and server allow independent current shooting lanes during valid
+  spotting memory (`fresh=False`, `visible=True`, positive `time_left`). The
+  old LANClient predicate rejected such contacts and dropped the **whole**
+  observation batch. At least 303 and 401 batches were dropped in rounds 1
+  and 2, including a 58.331 s accepted-observation gap after the player died.
+  There are 180 recorded current-lane/nonfresh publications. Align the visible
+  consumer with the producer/server contract. Do not invent direct observers,
+  extend memory, bypass radio recipients while alive or force enemy models
+  visible. Identity/team/range/duplicate/freshness/threat validation remains.
+  Existing dead-player presentation and stock AOI remain unchanged.
+* BOT MOTION now captures short-escape origin, selected heading/length,
+  cached distance, current remaining distance, completion, and final hazard
+  verdict **after contacts and support**, rather than before integration.
+  Final guard receipts include simulation time, actual origin/post-turn yaw,
+  shallow/wet permissions, requested throttle/turn, action mode, target yaw
+  and whether the refused straight action cache was retired. Non-short and
+  nonintegrated paths have explicit terminal reasons. Existing sampled
+  selection/execution receipts retain their timestamps and history status.
+  This closes the missing horizon/commit evidence for remaining uncertain
+  cases without changing their steering or adding world queries.
+
+### Other stationary vehicles audited
+
+Small-pocket durations are sampled observations, not a claim that every frame
+was motionless. IDs below are round-local Bot IDs, distinct from player IDs.
+
+| Round / Bot | Observed outcome and cause boundary |
+| --- | --- |
+| 2 / 1 Caernarvon | 52 s small pocket; retained reverse proof only 0.263584 m but old commit probes at least 0.5 m into a shore cell. Same confirmed horizon mismatch; shared fix applies. |
+| 2 / 7 Edelweiss | 100 s pocket, nine shots, later killed at 03:20:22. At 03:19:04 and 03:19:27 the intended 0.094175/0.114046 m reverse intervals are clear, but the old half-metre commit reaches shore hazards. Shared correction applies. The final low-health hold already requests zero throttle and is preserved. |
+| 2 / 6 T-44 | 64 s pocket, three shots, then travels about 295 m. Existing recovery completes; not terminally stuck. No independent policy change justified. |
+| 2 / 21 T-44-100 | 51 s pocket, then travels about 658 m. Existing recovery completes; no independent policy change justified. |
+| 1 / 8 AMX AC mle.48 | 27 s late pocket; final short reverse really moves. Blocked firing lane and successive local attempts are recorded, but no final execution hazard/native hard-contact veto establishes a separate root cause. Add commit evidence; do not invent a path fix. |
+| 1 / 9 KV-4 KTTS | 31 s close-range adjustment. Recorded required pitch 7.47-10.08 degrees exceeds the native 5-degree limit; several target yaws also exceed its -15 to +45-degree traverse. Zero extra shots does not establish a legal shot being refused. Preserve mechanics and log execution. |
+| 1 / 4 Panther II; 11 T-44-85M; 19 WZ-111; 22 M46 KR; 25 Jagdtiger 8.8 | Stationary intervals include continued fire; some later move. No evidence that parking is a terminal navigation loop. |
+| 1 / 13-15, 28-30 artillery | Long firing-position holds include two to five shots. Their role's hold is not a failure merely because they stay put. |
+| 1 / 27 BC 12 t; 2 / 13 ELC EVEN 90 | Magazine-retreat holds include later firing and about 500/148 m subsequent travel. Preserve magazine behavior. |
+| 2 / 4 Chieftain/T95; 10 KV-4 KTTS; 12 Kanonenjagdpanzer; 22-23 Panthers | Continued firing during engage/support holds; not established permanent movement failures. |
+| 2 / 9 T-103; 11 ISU-152; 24 WZ-111G FT | Authored hold/advance, subsequent travel about 247/179/67 m. Do not remove the hold policy. |
+
+The first round has zero Bot detailed-support transitions; the second has one
+enable and one disable (`point_support_lost` / `all_points_restored`). Keep
+one-invalid/five-valid. Worker averages are about 13.2 and 10.8 FPS respectively;
+different maps/load do not establish a build regression. No collision/native
+performance rewrite, grids, slopes, targeting, defense, support, crushing
+physics or independent test arrangement changes are part of this patch.
+
+The new `test_port_0922_escape_observation_contract.py` suite covers selected
+and retained fixed endpoints, forward/reverse/rotated projections, the exact
+CDA/Highway graph witness, actual runtime commit/completion/refusal, server
+relay -> visible client, mixed batches, malformed negatives, and visible-client
+delivery -> dead-player presentation without new LOS. CI includes it explicitly.
+These are engine-free contracts and shipped-data replays, not native gameplay
+acceptance. The user's new package test must confirm escape behavior and
+postmortem enemy rendering on the exact Windows client.

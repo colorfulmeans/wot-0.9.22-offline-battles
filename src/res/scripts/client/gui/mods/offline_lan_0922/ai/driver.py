@@ -38,6 +38,19 @@ def recovery_probe_distance(half_length):
 	return max(0.5, float(half_length)) * 1.6
 
 
+def short_escape_remaining(command, position):
+	"""Keep a cached straight escape bounded by its original checked endpoint."""
+	if command.get('recovery_mode') not in ('short_forward_escape', 'short_reverse_escape'):
+		return None
+	origin = command.get('recovery_probe_origin')
+	if origin is None:
+		return None
+	heading = float(command['recovery_probe_yaw'])
+	travelled = ((position[0] - origin[0]) * math.sin(heading) +
+		(position[2] - origin[2]) * math.cos(heading))
+	return max(0.0, float(command['recovery_probe_length']) - travelled)
+
+
 def _angle_delta(target, current):
 	value = float(target) - float(current)
 	while value > math.pi:
@@ -1045,6 +1058,8 @@ class LocalDriver(object):
 						until=state['clock'] + 4.0)
 					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
+						recovery_probe_origin=tuple(position), recovery_probe_yaw=heading,
+						recovery_probe_length=distance,
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 		return None
 
@@ -1095,6 +1110,8 @@ class LocalDriver(object):
 		validation['result'] = 'retained'
 		return dict(throttle=sign * 1.0, turn=0.0, target_yaw=escape['yaw'],
 			recovery_probe_distance=remaining,
+			recovery_probe_origin=escape['start'], recovery_probe_yaw=heading,
+			recovery_probe_length=escape['distance'],
 			recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 
 	@staticmethod

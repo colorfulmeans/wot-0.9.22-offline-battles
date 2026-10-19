@@ -5605,7 +5605,10 @@ class LANClient(object):
                         for value in contact['threatened_bot_ids']) and
                     len(set(contact['threatened_bot_ids'])) == len(contact['threatened_bot_ids']) and
                     (bool(contact.get('fresh')) or not contact['threatened_bot_ids']))) and
-                (bool(contact.get('fresh')) or
+                # Direct spotting freshness and a separately proved shooting
+                # lane have different lifetimes. The worker/server may retain
+                # a current lane while this team contact uses spotting memory.
+                (bool(contact.get('visible')) or
                  not contact.get('shootable_by_bot_ids'))
                 for contact in (contacts or ()))
             if self.phase != 'battle' or not valid_contacts:

@@ -95,6 +95,7 @@ jobs:
           --pattern 'test_port_0922_withdraw_receipts.py'
           --pattern 'test_port_0922_scoped_failure_progress.py'
           --pattern 'test_port_0922_combat_progress_ownership.py'
+            --pattern 'test_port_0922_escape_observation_contract.py'
           --pattern 'test_port_0922_near_goal_evidence.py'
           --pattern 'test_port_0922_worker_query_reuse.py'
           --pattern 'test_port_0922_unknown_water.py'

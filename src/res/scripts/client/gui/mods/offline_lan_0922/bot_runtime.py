@@ -7583,6 +7583,8 @@ class BotRuntime(object):
             })
         trace.update({
             'primary_world_contact': dict(state.get('_primary_world_contact') or {}),
+            'short_escape_commit': dict(state.get('_short_escape_commit') or {}),
+            'committed_corridor': dict(state.get('_committed_corridor') or {}),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'mobility_critical': _canonical_critical(state.get('critical')),
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
@@ -7939,6 +7941,25 @@ class BotRuntime(object):
                     witness={key:trace.get(key) for key in (
                         'reason', 'hit', 'normal', 'ray_start', 'ray_end')})
         return reviewed or private
+
+    def _short_escape_commit_distance(self, state, command, position, now):
+        remaining = ai_driver.short_escape_remaining(command, position)
+        receipt = dict(at=now, origin=tuple(position),
+            selected_origin=command.get('recovery_probe_origin'),
+            selected_yaw=command.get('recovery_probe_yaw'),
+            selected_length=command.get('recovery_probe_length'),
+            cached_distance=command.get('recovery_probe_distance'),
+            remaining=remaining)
+        if remaining is None:
+            # Only locally produced short escapes carry an endpoint. Retain
+            # the existing horizon for callers which do not own such a lease.
+            remaining = max(0.5, _number(command.get('recovery_probe_distance'), 2.0))
+            receipt['reason'] = 'no_fixed_endpoint'
+        else:
+            receipt['reason'] = 'completed' if remaining <= 0.05 else 'bounded_endpoint'
+        receipt['probe_distance'] = remaining
+        state['_short_escape_commit'] = receipt
+        return remaining
 
     @observed('bot.corridor_hazards')
     def _planner_corridor_clear(self, position, yaw, speed,
@@ -16092,6 +16113,8 @@ class BotRuntime(object):
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
+            state['_short_escape_commit'] = dict(reason='not_short_escape')
+            state['_committed_corridor'] = dict(reason='integration_not_run')
             throttle = max(-1.0, min(1.0, command['throttle']))
             turn = max(-1.0, min(1.0, command.get('turn', 0.0)))
             aim_fallback = (target.get('position') if target is not None
@@ -16270,8 +16293,14 @@ class BotRuntime(object):
                     ai_driver.WAYPOINT_ARRIVAL_RADIUS)
                 maximum_probe_distance = min(remaining, reactive_horizon)
             elif command.get('recovery_mode') in ('short_forward_escape', 'short_reverse_escape'):
-                maximum_probe_distance = max(0.5, _number(
-                    command.get('recovery_probe_distance'), 2.0))
+                maximum_probe_distance = self._short_escape_commit_distance(
+                    state, command, position, now)
+                if maximum_probe_distance <= 0.05:
+                    # Retire only this completed cached action. The driver
+                    # selects its next action normally at the next decision.
+                    throttle = 0.0
+                    turn = 0.0
+                    self._decision_cache.pop(state['id'], None)
             elif command.get('recovery_mode') in (
                     'contact_escape', 'forward_escape', 'wreck_push'):
                 maximum_probe_distance = max(0.5, _number(
@@ -16700,6 +16729,16 @@ class BotRuntime(object):
                     wet_escape=committed_wet_escape,
                     allow_shallow=committed_shallow_admitted,
                     hazard_only=True, maximum_distance=maximum_probe_distance)
+                state['_committed_corridor'] = dict(
+                    reason=('hazard_rejected' if committed_corridor is False else
+                            'clear' if committed_corridor is True else 'native_deferred'),
+                    at=now, origin=tuple(position), yaw=committed_travel_yaw,
+                    maximum_distance=maximum_probe_distance,
+                    wet_escape=committed_wet_escape,
+                    allow_shallow=committed_shallow_admitted,
+                    throttle_before=throttle, turn=turn,
+                    recovery_mode=command.get('recovery_mode'),
+                    command_target_yaw=command.get('target_yaw'))
                 if committed_corridor is False:
                     state['_motion_control_gates'].append('committed_baked_corridor')
                     # Copied physics integrates the post-turn hull yaw, while
@@ -16714,6 +16753,16 @@ class BotRuntime(object):
                     path_clear = False
                     throttle = 0.0
                     state['movement_dir'] = 0
+                    if (command.get('recovery_mode') in
+                            ('short_forward_escape', 'short_reverse_escape') and
+                            abs(_angle_delta(candidate_hull_yaw,
+                                command.get('target_yaw', candidate_hull_yaw))) < 0.03):
+                        # A straight escape is already aligned, so there is no
+                        # catch-up turn to preserve. Recheck its remaining
+                        # interval at the next decision; do not keep replaying
+                        # a cached lease which the execution guard refused.
+                        self._decision_cache.pop(state['id'], None)
+                        state['_committed_corridor']['cache_retired'] = True
                 # The corridor grade ranks future navigation, but a trench
                 # below that probe need not support the tracks now. Reuse the
                 # accepted suspension plane for drive gravity, projected onto

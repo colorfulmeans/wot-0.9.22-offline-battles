@@ -848,6 +848,7 @@ class BotAdapter(object):
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
+                     'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
                      'navigation_recovery', 'navigation_replan'):
             if name in local:
                 result[name] = local[name]
