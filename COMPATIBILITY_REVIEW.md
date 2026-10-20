@@ -9275,3 +9275,49 @@ The one-invalid-point enable / all-five-valid disable support rule, crush and
 wreck physics, module damage, HUD dispatch and independent test layouts are
 unchanged. Windows client gameplay acceptance remains required for the new
 planning ray construction.
+
+
+## Report 163803: capture reload, wreck corridors and deferred firing (2026-10-20)
+
+The report uses `008d5964`. T57 remains excluded from base-defense selection
+while it is an enemy-base capture contributor, but empty-magazine withdrawal
+first takes it outside the circle; defense then legitimately selects it. Guard
+only that withdrawal with canonical capture membership, including zero-point
+entrants and hit-reset contributors. Reload at the current pose with the same
+target, resume combat after reload, and release the guard on actual capture exit.
+Do not change responder ranking or the rest of the withdrawal policy.
+
+Maus has a padded yaw-only local rejection beside the Strv wreck even though
+its complete physical translation is clear. Refine aligned forward/reverse
+prechecks with the existing physical translation solver, retaining full body
+shapes, intervening-body sweeps, terrain checks and conservative missing-pose
+behavior. A candidate pivot still requires the existing rotation proof; this
+admission is not permission to pass through a wreck.
+
+Tortoise repeatedly tries a blocked rear-target pivot. Contact response consumes
+its traffic flag before the tactical owner can react, and ordinary hull aiming
+can recreate a just-expired rear episode despite its retry cooldown. Preserve a
+pose/target-bound contact refusal for the next handoff, fence the final shared
+native/reference aiming adapter during that cooldown, and use the existing
+bounded mechanical relocation. Its pivot refusal must survive unrelated pitch
+solution refreshes until arrival, failure, target change or priority handoff.
+Forward-arc aiming, reachable wide-turret targets and normal limited-traverse
+rear laying remain with their existing owners.
+
+M53/M55 remains at zero shots while its exact launch queue repeatedly shows
+chord zero. Its stationary source Y alternates by 4.76837158203125e-7 metres.
+That changes the freshly sampled physical pivot, hence the strict launch key,
+and discards pending work. Freeze the complete source pose for each admitted
+pending shot. Keep real-motion/orientation invalidation, strict trajectory keys,
+bounded chord budgets, world/friendly obstruction checks and the proved launch
+origin on final fire. SPG gate receipts now include frozen/current source poses,
+intent creation time and next fire sequence. No trajectory-key rounding or
+unchecked firing is introduced.
+
+Report-derived and lifecycle tests cover capture reload/exit, physical corridor
+admission/rejection, runtime pivot denial through relocation, all relocation
+terminal paths, and jittered bounded launch completion through ammunition/fire
+commit. Engine-free oracles and package inspection do not establish native map
+acceptance or measured worker performance. Support still enables on one invalid
+point and disables on all five valid points. No navigation strategy, map
+catalog, real collision shape, crushing law or independent test layout changes.

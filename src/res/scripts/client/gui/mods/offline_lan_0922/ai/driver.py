@@ -225,6 +225,15 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         turn, throttle, recovery_mode, has_target=True,
         combat_mode=None, movement_intent=False, withdrawal_aim=False,
         rear_turn=0.0, allow_rear_start=True):
+    relative = _angle_delta(target_yaw, hull_yaw)
+    margin = min(0.04, max(0.0, maximum_yaw-minimum_yaw)*0.25)
+    if (not allow_rear_start and not rear_turn and
+            not (minimum_yaw <= -math.pi + 0.1 and maximum_yaw >= math.pi - 0.1) and
+            abs(relative) > math.pi * 0.5 and
+            not minimum_yaw+margin <= relative <= maximum_yaw-margin):
+        # The cooldown owns final steering, including native ordinary-aim
+        # fallthrough. Front-arc aiming and active episodes remain unchanged.
+        return float(turn), float(throttle), False
     if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
         return float(turn), float(throttle), False
     held = recovery_mode in ('avoid', 'blocked', 'reverse_turn',
@@ -665,8 +674,13 @@ class LocalDriver(object):
 			for peer in neighbours or ():
 				other = self.collision_body(peer)
 				proof = {}
-				if other is not None and tank_collision.swept_body_separated(body, other, movement, proof):
-					separated.append(dict(peer=peer.get('id'), proof=proof))
+				if other is not None and (
+					tank_collision.swept_body_separated(body, other, movement, proof) or
+					(body.get('id') is not None and other.get('id') is not None and
+					 body['id'] != other['id'] and
+					 tank_collision.translation_fraction(body, (movement[0], movement[2]), [other]) >= 1.0)):
+					separated.append(dict(peer=peer.get('id'), proof=proof,
+						rule='physical_translation_clear'))
 				else:
 					retained.append(peer)
 			neighbours = retained
@@ -695,7 +709,7 @@ class LocalDriver(object):
 		position = state.get('position')
 		if shape is None or position is None or any(state.get(k) is None for k in ('yaw', 'pitch', 'roll')):
 			return None
-		return dict(x=position[0], y=position[1], z=position[2], shape=shape,
+		return dict(id=state.get('id'), x=position[0], y=position[1], z=position[2], shape=shape,
 			yaw=state['yaw'], pitch=state['pitch'], roll=state['roll'])
 
 	def _native_geometry(self, op, position, yaw, neighbours, half_length, half_width, amount):
@@ -779,7 +793,12 @@ class LocalDriver(object):
 		return None
 
 	def _static_hull_ahead(self, position, candidate_yaw, neighbours,
-			half_length, half_width):
+			half_length, half_width, body=None):
+		if body is not None and abs(math.sin(candidate_yaw-body['yaw'])) < 1.e-9:
+			stationary = [peer for peer in neighbours or () if not peer.get('alive', True) or
+				(peer.get('velocity') is not None and math.hypot(peer['velocity'][0], peer['velocity'][2]) <= .65)]
+			return self._reverse_blocked_by_vehicle(position, candidate_yaw+math.pi,
+				stationary, half_length, half_width, body=body) is not None
 		result = self._native_geometry(1, position, candidate_yaw, neighbours,
 			half_length, half_width, half_length * 1.6)
 		if result is not None:
@@ -1009,7 +1028,7 @@ class LocalDriver(object):
 					self._clear(direction_clear, candidate) and
 					not (position is not None and self._static_hull_ahead(
 						position, candidate, neighbours,
-						half_length, half_width))):
+						half_length, half_width, body=state.get('collision_body')))):
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
@@ -1647,7 +1666,7 @@ class LocalDriver(object):
 				self._clear(direction_clear, old_yaw) and
 				not self._static_hull_ahead(
 					position, old_yaw, neighbours,
-					own_half_length, own_half_width)):
+					own_half_length, own_half_width, body=state.get('collision_body'))):
 			chosen_yaw = old_yaw
 		if chosen_yaw is None:
 			chosen_yaw = self._choose_yaw(

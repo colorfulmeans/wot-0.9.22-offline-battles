@@ -12369,7 +12369,7 @@ class BotRuntime(object):
         reproof['hold_solution'] = dict(solution)
         intent = {
             'source': {'id': bot_id},
-            'source_pose': reproof['source_pose'],
+            'source_pose': self._artillery_source_pose(state),
             'target_identity': target_identity,
             'shell_index': int(shell_index),
             'fire_seq': fire_seq,
@@ -13684,6 +13684,12 @@ class BotRuntime(object):
         shot_pitch = intent['shot_pitch']
         flight_time = intent['solution']['flight_time']
         probe_source = _copy_runtime_state(state)
+        # One pending shot owns one physical pivot. Sub-micrometre support
+        # jitter must not replace its exact launch key each queued frame.
+        # _active_artillery_intent still cancels genuine pose/weapon changes.
+        for name, value in zip(('x', 'y', 'z', 'yaw', 'pitch', 'roll',
+                                'turret_yaw', 'gun_pitch'), intent['source_pose']):
+            probe_source[name] = value
         probe_source['_artillery_arc'] = intent['solution'].get('arc')
         probe_source['_artillery_planned_target'] = intent['target_position']
         state.pop('_spg_launch_failure', None)
@@ -14413,6 +14419,10 @@ class BotRuntime(object):
             'planning': planning, 'launch': status.get('launch'),
             'launch_failure': state.get('_spg_launch_failure'),
             'intent': state['id'] in self._artillery_intents,
+            'pending_source_pose': (self._artillery_intents.get(state['id']) or {}).get('source_pose'),
+            'current_source_pose': self._artillery_source_pose(state),
+            'pending_created': (self._artillery_intents.get(state['id']) or {}).get('created'),
+            'pending_fire_seq': (self._artillery_intents.get(state['id']) or {}).get('fire_seq'),
             'reproof': state['id'] in self._artillery_reproofs,
             'position_event': state.get('_spg_position_event'),
             'deployment_retry': state.get('_spg_deployment_retry_receipt'),
@@ -14548,6 +14558,7 @@ class BotRuntime(object):
             observation['effective_move'] = order['move_position']
         episode = state.get('_rear_aim_episode')
         if episode is None:
+            state.pop('_rear_contact_refusal', None)
             return order
         target = targets.get(episode['target_id'])
         changed = (order.get('target_id') != episode['target_id'] or
@@ -14557,11 +14568,22 @@ class BotRuntime(object):
                    ('base_defense', 'artillery_deploy', 'artillery_relocate'))
         fired = int(state.get('fire_seq', 0)) != episode['fire_seq']
         expired = motion_blocked or now - episode['start'] >= 8.0
-        blocked = any(now < failed[3] and
+        contact_refusal = state.pop('_rear_contact_refusal', None)
+        contact_blocked = bool(contact_refusal is not None and
+            contact_refusal['identity'] == episode['identity'] and
+            _distance(_position(state), contact_refusal['position']) <= 0.08 and
+            abs(_angle_delta(state.get('yaw', 0.0), contact_refusal['yaw'])) <= 0.02)
+        blocked = contact_blocked or any(now < failed[3] and
                       _distance(_position(state), failed[0]) <= 0.08 and
                       abs(_angle_delta(state.get('yaw', 0.0), failed[1])) <= 0.02
                       for failed in state.get('_blocked_rotations', {}).values())
         if changed or fired or expired or blocked:
+            observation.update(contact_refusal=contact_refusal, laying_terminal=('priority_changed' if changed else
+                'fired' if fired else 'contact_blocked' if blocked else 'expired'))
+            if not changed and not fired and (expired or blocked):
+                # A physically denied pivot needs the existing bounded firing
+                # position recovery, including stationary cover holds.
+                state['_gun_angle_pivot_refusal'] = episode['identity']
             state.pop('_rear_aim_episode', None)
             state.pop('_rear_hull_aim', None)
             if fired or expired or blocked:
@@ -14601,15 +14623,31 @@ class BotRuntime(object):
             if state.get('_gun_angle_adjustment') is not None:
                 state['_gun_angle_last_terminal'] = dict(receipt, reason='priority_handoff')
             state.pop('_gun_angle_adjustment', None)
+            state.pop('_gun_angle_pivot_refusal', None)
             if order.get('parking_phase'):
                 state.pop('_gun_angle_rejected', None)
             return order
         target = targets.get(order.get('target_id'))
         identity = self._artillery_target_identity(target)
+        pivot_refusal = state.get('_gun_angle_pivot_refusal')
+        limits = self._gun_yaw_limits.get(state['id'])
+        reachable = False
+        if identity is not None and limits is not None:
+            target_point = _point(target.get('position'), _position(target))
+            bearing = math.atan2(target_point[0]-position[0], target_point[2]-position[2])
+            relative = _angle_delta(bearing, _number(state.get('yaw')))
+            reachable = limits[0] <= relative <= limits[1]
+        if pivot_refusal != identity or reachable:
+            state.pop('_gun_angle_pivot_refusal', None)
+            pivot_refusal = None
+        receipt['pivot_refusal'] = pivot_refusal
         if identity is not None and self._gun_angle_rejected(state, identity, now):
+            state.pop('_gun_angle_pivot_refusal', None)
             receipt['reason'] = 'bounded_attempt_rejected'
             return self._gun_angle_combat_order(state, order)
-        refusal = state.get('_gun_angle_refusal')
+        # A denied chassis pivot is independent of the next pitch solution.
+        # Keep that handoff through this existing bounded relocation owner.
+        refusal = pivot_refusal or state.get('_gun_angle_refusal')
         if identity is None or refusal != identity:
             receipt['reason'] = 'no_matching_mechanical_refusal'
             if state.get('_gun_angle_adjustment') is not None:
@@ -14626,6 +14664,7 @@ class BotRuntime(object):
         if marker is None and (abs(_number(state.get('speed'))) > 1.0 or
                 (not stationary_hold and
                  _distance(position, goal) > ai_driver.WAYPOINT_ARRIVAL_RADIUS)):
+            state.pop('_gun_angle_pivot_refusal', None)
             receipt['reason'] = 'existing_approach_in_progress'
             return order
         if marker is None:
@@ -14712,6 +14751,7 @@ class BotRuntime(object):
                     rejected.pop(identity, None)
                     state.pop('_gun_angle_refusal', None)
                 state.pop('_gun_angle_adjustment', None)
+                state.pop('_gun_angle_pivot_refusal', None)
                 return self._gun_angle_combat_order(state, order, arrived=not stalled)
             receipt['reason'] = 'checked_mechanical_relocation'
             result.update(move_position=destination,
@@ -14728,6 +14768,7 @@ class BotRuntime(object):
             rejected.pop(min(rejected, key=rejected.get), None)
         rejected[identity] = now + 8.0
         state.pop('_gun_angle_adjustment', None)
+        state.pop('_gun_angle_pivot_refusal', None)
         return self._gun_angle_combat_order(state, order)
 
     def _friendly_reposition_order(self, state, targets, now):
@@ -16315,6 +16356,7 @@ class BotRuntime(object):
                 rear_turn=rear_turn, allow_rear_start=allow_rear_start)
             rear_relative = _angle_delta(hull_aim_yaw, state['yaw'])
             if (hull_aiming and unused_limited and
+                    (allow_rear_start or rear_turn) and
                     (rear_turn or abs(rear_relative) > math.pi * 0.5)):
                 state['_rear_hull_aim'] = (aim_target_key, turn)
                 if (state.get('_rear_motion_lease') is None and
@@ -16793,6 +16835,14 @@ class BotRuntime(object):
                         # Preserve the motor command. The contact solver must
                         # spend this track torque even when actual yaw is held.
                         state['_rotation_contact_blocked'] = True
+                        # Contact response consumes its traffic flag later in
+                        # this frame. Preserve the denied laying receipt for
+                        # the next tactical handoff, bound to pose and target.
+                        if state.get('_rear_aim_episode') is not None:
+                            state['_rear_contact_refusal'] = dict(
+                                at=now, position=tuple(position), yaw=old_hull_yaw,
+                                identity=state['_rear_aim_episode']['identity'],
+                                fraction=allowed)
                         state['_contact_motor_turn'] = steer_dir
                         state['rotation_dir'] = 0
                 rotation_blocked = (not self._baked_pose_progress_clear(

@@ -780,7 +780,9 @@ class BotPlanner(object):
                     defenders.get(team, {}).get(bot["id"]), team_axis,
                     team_bots, capture_targets[team],
                     not self._contacts_for_bot(bot, contacts[team], now) and
-                    bot["id"] in capture_ids)
+                    bot["id"] in capture_ids,
+                    active_capture=('bot', bot['id']) in
+                        self._defense_contributor_keys(defense, 3-team))
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
                 self._apply_team_order(
@@ -4080,7 +4082,7 @@ class BotPlanner(object):
 
     def _order_for(self, bot, index, count, focus, contacts, now,
                    travel_override=None, team_axis=None, team_bots=None,
-                   capture_target=None, no_known_enemies=False):
+                   capture_target=None, no_known_enemies=False, active_capture=False):
         capture_screen = bool(
             capture_target is not None and not contacts and
             not no_known_enemies and
@@ -4108,8 +4110,9 @@ class BotPlanner(object):
         retreat_release = None
         if retreat is not None and (
                 retreat.get('moving_mode') != 'magazine_reload_retreat' or
-                not magazine_reload):
-            retreat_release = ('magazine_ready_or_exhausted'
+                not magazine_reload or active_capture):
+            retreat_release = ('active_capture_reload' if active_capture else
+                'magazine_ready_or_exhausted'
                 if retreat.get('moving_mode') == 'magazine_reload_retreat' else
                 'retreat_trigger_removed')
             self._retreat_states.pop(bot['id'], None)
@@ -4147,6 +4150,7 @@ class BotPlanner(object):
             recent_hit=dict(recent_hit or {}), withdraw_after_hit=False,
             withdrawal=dict(reason='empty_magazine_only',
                 magazine_followup=magazine_followup, magazine_reload=magazine_reload,
+                active_capture=bool(active_capture),
                 released=retreat_release,
                 clip=state.get('clip'), clip_size=state.get('clip_size'),
                 reload_time=state.get('reload_time'), fire_seq=state.get('fire_seq')),
@@ -4187,6 +4191,16 @@ class BotPlanner(object):
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
             self._firing_holds.pop(bot["id"], None)
+            return order
+
+        if active_capture and magazine_reload:
+            # Canonical capture membership includes newly entered and hit-reset
+            # contributors with zero points. Reload in place, retaining aim.
+            if focus is not None:
+                self._set_target(order, bot, focus, profile, personality, False)
+            order.update(combat_mode='magazine_reload_hold',
+                         move_position=_point(state), throttle_override=0.0)
+            self._firing_holds.pop(bot['id'], None)
             return order
 
         if magazine_reload and (focus is not None or

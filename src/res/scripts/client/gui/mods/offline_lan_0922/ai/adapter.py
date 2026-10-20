@@ -306,7 +306,8 @@ class BotAdapter(object):
                                    _position(peer.get('position', peer))[2]-position[2]) <=
                         2.0*length + 2.0*width) or
                        self.driver._static_hull_ahead(
-                          position, desired, [peer], length, width))), None)
+                          position, desired, [peer], length, width,
+                          body=self.driver.collision_body(state)))), None)
         if wreck is None:
             if active is not None:
                 state['_wreck_push_evidence'] = dict(
