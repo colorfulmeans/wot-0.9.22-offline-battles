@@ -11,6 +11,7 @@ import math
 import json
 import random
 import sys
+import weakref
 
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.traffic import TrafficCoordinator
@@ -16183,7 +16184,7 @@ class BotRuntime(object):
                 try:
                     result = sample_clear_impl(sample_yaw, maximum_distance, drive_direction)
                 except Exception as error:
-                    sample_clear.last_receipt = self._record_planning_verdict(planning_receipt, dict(
+                    sample_clear_ref().last_receipt = self._record_planning_verdict(planning_receipt, dict(
                         kind='direction', yaw=sample_yaw, distance=maximum_distance,
                         clear=False, reason='direction_callback_exception',
                         exception_type=type(error).__name__, origin=position))
@@ -16194,7 +16195,7 @@ class BotRuntime(object):
                     distance = decision_state.get('navigation_probe_distance')
                 key = (round(normalised,4), None if distance is None else round(float(distance),2))
                 local_grid = prebaked_navigation.local_cell_at(self.baked_graph, position)
-                sample_clear.last_receipt = self._record_planning_verdict(planning_receipt, dict(kind='direction', yaw=sample_yaw,
+                sample_clear_ref().last_receipt = self._record_planning_verdict(planning_receipt, dict(kind='direction', yaw=sample_yaw,
                     distance=distance, clear=result, reason=planning_reason[0],
                     origin=position, sampled_at=now, drive_direction=drive_direction,
                     body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
@@ -16254,6 +16255,9 @@ class BotRuntime(object):
                 planning_reason[0] = (sample.get('reason') or
                     ('native_probe_clear' if clear else 'native_probe_rejected')) if isinstance(sample, dict) else 'native_direction'
                 return clear
+
+            # Keep diagnostic receipts without a function -> closure -> function cycle.
+            sample_clear_ref = weakref.ref(sample_clear)
 
             if decision_cache_valid and not decision_due:
                 state['_planning_disposition'] = 'cache_reused'

@@ -37,6 +37,13 @@ class IsolatedRunnerTests(unittest.TestCase):
         self.assertIn('FAIL test_bad.py',output)
         self.assertIn('visible failure',logs['test_bad.log'])
 
+    def test_repository_root_is_available_to_isolated_test_imports(self):
+        failed,output,logs=self.run_files({
+            '../fixture_support.py': 'VALUE=42\n',
+            'test_root_import.py': "import unittest,fixture_support\nclass Checks(unittest.TestCase):\n def test_value(self):self.assertEqual(42,fixture_support.VALUE)\n"})
+        self.assertFalse(failed)
+        self.assertIn('1 passed, 0 failed', output)
+
     def test_import_errors_are_not_converted_to_success(self):
         failed,output,logs=self.run_files({'test_bad.py':"raise RuntimeError('fixture import failed')\n"})
         self.assertTrue(failed)

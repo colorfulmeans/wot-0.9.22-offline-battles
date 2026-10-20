@@ -255,9 +255,14 @@ class SpawnDepartureTests(unittest.TestCase):
 
                 runtime._traffic_coordinator.adjust = traffic_adjust
 
-                # Finite track grip slows a crowded queue; retain every
-                # departure and stall bound over one minute of simulation.
-                for frame in range(1, fps * 60 + 1):
+                # Keep the one-minute bound for unobstructed departures. A
+                # witnessed physical neighbour veto may use existing retries;
+                # it still must leave within this finite three-minute scene.
+                physically_blocked = set()
+                delayed_departures = {}
+                non_spg_ids = [bid for bid,st in runtime.states.items()
+                    if st['profile']['class_tag'] != 'SPG']
+                for frame in range(1, fps * 180 + 1):
                     now[0] = frame / float(fps)
                     if (frame-1) % fps == 0:
                         states = [dict(s,world_pose=True) for s in runtime.states.values()]
@@ -265,6 +270,29 @@ class SpawnDepartureTests(unittest.TestCase):
                         runtime._apply_orders(dict(bot_order_revision=orders['revision'],
                                                    bot_orders=orders['orders']))
                     runtime.update(1.0 / float(fps), now[0])
+                    for bid in non_spg_ids:
+                        st = runtime.states[bid]
+                        if any(row.get('reason') == 'friendly_or_wreck_rotation'
+                               for row in st.get('_planning_verdicts', ())):
+                            physically_blocked.add(bid)
+                    if frame >= fps * 60:
+                        remaining = [bid for bid in non_spg_ids if math.hypot(
+                            runtime.states[bid]['x']-starts[bid][0],
+                            runtime.states[bid]['z']-starts[bid][1]) <= 20.0]
+                        if frame == fps * 60:
+                            self.assertTrue(set(remaining) <= physically_blocked,
+                                ('unexplained one-minute stall', remaining,
+                                 sorted(physically_blocked)))
+                        for bid in list(delayed_departures):
+                            if delayed_departures[bid] is None and bid not in remaining:
+                                delayed_departures[bid] = now[0]
+                        if frame == fps * 60:
+                            delayed_departures = dict((bid, None) for bid in remaining)
+                        if not remaining:
+                            break
+                if delayed_departures:
+                    print('DEPARTURE PHYSICAL RETRY', map_name, fps,
+                          sorted(delayed_departures.items()))
 
                 non_spg_ids = [
                     bot_id for bot_id, state in runtime.states.items()

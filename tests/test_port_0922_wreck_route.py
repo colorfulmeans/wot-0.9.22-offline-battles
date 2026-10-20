@@ -1,7 +1,7 @@
 """Route bots around a destroyed hull instead of grinding against it.
 
-A wreck is exact new static geometry: it never moves and no amount of waiting
-clears it.  The corridor below is authored once and used by both the baked
+A wreck publishes new occupied geometry and can move under real contact force.
+Waiting alone does not clear it.  The corridor below is authored once and used by both the baked
 navigation graph and the terrain probe, so the planner and the local driver
 agree about the walls and only the wreck is new information.
 """
@@ -188,6 +188,9 @@ class WreckRouteTests(unittest.TestCase):
         arrived = None
         furthest_east = START[0]
         self.pushing_frames = 0
+        self.push_receipts = []
+        self.push_terminals = []
+        self.wreck_displacement = 0.0
         for frame in range(1, int(seconds * 30) + 1):
             runtime.update(1.0 / 30.0, frame / 30.0)
             # The server owns terminal health; keep the wreck destroyed while
@@ -195,6 +198,16 @@ class WreckRouteTests(unittest.TestCase):
             wreck['health'] = 0
             wreck['alive'] = False
             state = runtime.states[1]
+            self.wreck_displacement = max(self.wreck_displacement, math.hypot(
+                wreck['x']-wreck_at[0], wreck['z']-wreck_at[2]))
+            cached = runtime._decision_cache.get(1)
+            command = cached[3] if cached is not None else {}
+            attempt = runtime.adapter._wreck_attempts.get(1)
+            if command.get('recovery_mode') == 'wreck_push' and attempt is not None:
+                self.push_receipts.append(dict(attempt))
+            terminal = runtime.adapter._wreck_last_terminal.get(1)
+            if terminal is not None and terminal not in self.push_terminals:
+                self.push_terminals.append(dict(terminal))
             furthest_east = max(furthest_east, state['x'])
             if (int(state.get('movement_dir', 0)) > 0 and
                     abs(state['x'] - wreck['x']) < 3.4 and
@@ -223,16 +236,23 @@ class WreckRouteTests(unittest.TestCase):
         # bypass is the only route past it, so the hull must have driven it.
         self.assertGreater(furthest_east, 12.0)
 
-    def test_a_sealed_lane_holds_instead_of_grinding_against_the_wreck(self):
+    def test_a_sealed_lane_bounds_unproductive_pushing_and_returns_to_recovery(self):
         self._seal_the_bypass()
 
-        arrived, unused_modes, unused_east, unused_runtime = (
-            self._drive_to_goal(WRECK))
+        arrived, modes, unused_east, runtime = self._drive_to_goal(WRECK)
 
-        # There is no way past, which is an honest hold. Driving into the
-        # corpse for the rest of the round is not.
+        # This scene has movable contact bodies. Zero attempted pushes was an
+        # obsolete policy assumption, not proof of a sealed physical path.
         self.assertIsNone(arrived)
-        self.assertEqual(0, self.pushing_frames)
+        self.assertGreater(self.wreck_displacement, 0.5)
+        self.assertTrue(self.push_receipts)
+        self.assertTrue(self.push_terminals)
+        self.assertTrue(all(row['own_elapsed'] <= 14.25
+                            for row in self.push_receipts))
+        self.assertTrue(any(row['reason'] in ('own_stalled', 'push_stalled')
+                            for row in self.push_terminals))
+        self.assertGreater(modes['reverse_turn'] + modes['avoid'], 0)
+        self.assertLess(runtime.states[1]['z'], runtime.states[2]['z'])
 
     def test_the_navigator_marks_the_wreck_cells(self):
         unused_arrived, unused_modes, unused_east, runtime = (
