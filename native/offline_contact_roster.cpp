@@ -76,6 +76,73 @@ Hit contact(const Body &a,const Body &b,const Projection &p) {
     }
     return best;
 }
+// Exact counterpart of tank_collision.planar_body_contact. Ram candidates
+// below deliberately keep the frozen legacy first-impact geometry.
+Hit physical_contact(const Body &a,const Body &b,const Projection &p) {
+    if (!a.has(HasY) || !b.has(HasY) ||
+        (a.y==b.y && a.pitch==0. && a.roll==0. && b.pitch==0. && b.roll==0.))
+        return contact(a,b,p);
+    using V=std::array<double,3>;
+    auto dot=[](const V &x,const V &y) {double v=0.;for(size_t i=0;i<3;++i)v+=x[i]*y[i];return v;};
+    auto basis=[](const Body &body) {
+        const double sy=std::sin(body.yaw),cy=std::cos(body.yaw);
+        const double sp=std::sin(body.pitch),cp=std::cos(body.pitch);
+        const double sr=std::sin(body.roll),cr=std::cos(body.roll);
+        auto rotate=[&](double x,double y,double z) {
+            const double yy=cp*y-sp*z,zz=sp*y+cp*z;
+            return V{{cy*x+sy*zz,yy,-sy*x+cy*zz}};
+        };
+        return std::array<V,3>{{rotate(cr,sr,0.),rotate(-sr,cr,0.),rotate(0.,0.,1.)}};
+    };
+    const auto aa=basis(a),ab=basis(b);
+    const double ay=(a.shape[2]+a.shape[3])*.5,by=(b.shape[2]+b.shape[3])*.5;
+    const V ca{{a.x+aa[1][0]*ay,a.y+aa[1][1]*ay,a.z+aa[1][2]*ay}};
+    const V cb{{b.x+ab[1][0]*by,b.y+ab[1][1]*by,b.z+ab[1][2]*by}};
+    const V delta{{ca[0]-cb[0],ca[1]-cb[1],ca[2]-cb[2]}};
+    const V ea{{a.shape[0],(a.shape[3]-a.shape[2])*.5,a.shape[1]}};
+    const V eb{{b.shape[0],(b.shape[3]-b.shape[2])*.5,b.shape[1]}};
+    std::array<V,15> candidates;size_t count=0;
+    for(const V &v:aa)candidates[count++]=v;
+    for(const V &v:ab)candidates[count++]=v;
+    for(const V &x:aa)for(const V &y:ab) {
+        V cross{{x[1]*y[2]-x[2]*y[1],x[2]*y[0]-x[0]*y[2],x[0]*y[1]-x[1]*y[0]}};
+        const double length=std::sqrt(dot(cross,cross));
+        if(length>1.e-8) {for(double &v:cross)v/=length;candidates[count++]=cross;}
+    }
+    double minimum=0.,horizontal_minimum=0.;V normal{},horizontal_normal{};
+    bool first=true,first_horizontal=true;
+    for(size_t j=0;j<count;++j) {
+        const V &axis=candidates[j];double ra=0.,rb=0.;
+        for(size_t i=0;i<3;++i)ra+=ea[i]*std::abs(dot(axis,aa[i]));
+        for(size_t i=0;i<3;++i)rb+=eb[i]*std::abs(dot(axis,ab[i]));
+        const double depth=(ra+rb)-std::abs(dot(delta,axis));
+        if(depth<=0.)return Hit{0.,0.,0.,false};
+        if(first || depth<minimum) {minimum=depth;normal=axis;first=false;}
+        if(axis[1]*axis[1]<axis[0]*axis[0]+axis[2]*axis[2] &&
+           (first_horizontal || depth<horizontal_minimum)) {
+            horizontal_minimum=depth;horizontal_normal=axis;first_horizontal=false;
+        }
+    }
+    // Match the Python same-layer slab test; do not delegate a deeply
+    // intersecting side pair to a suspension owner which cannot separate it.
+    const bool same_layer=std::abs(dot(delta,aa[1]))<ea[1] &&
+                          std::abs(dot(delta,ab[1]))<eb[1];
+    if(same_layer && !first_horizontal &&
+       normal[1]*normal[1]>=normal[0]*normal[0]+normal[2]*normal[2]) {
+        minimum=horizontal_minimum;normal=horizontal_normal;
+    }
+    if(dot(delta,normal)<0.)for(double &v:normal)v=-v;
+    if(normal[1]*normal[1]>=normal[0]*normal[0]+normal[2]*normal[2])
+        return Hit{0.,0.,0.,false};
+    const double length=std::hypot(normal[0],normal[2]);
+    Hit out{normal[0]/length,normal[2]/length,minimum/length,true};
+    const double orient=(a.x-b.x)*out.x+(a.z-b.z)*out.z;
+    if(std::abs(orient)<=1.e-9) {
+        if(out.x<-1.e-9 || (std::abs(out.x)<=1.e-9 && out.z<0.)) {out.x=-out.x;out.z=-out.z;}
+        if(a.id>b.id) {out.x=-out.x;out.z=-out.z;}
+    }
+    return out;
+}
 std::array<double,2> grounded(const Hit &hit,const Body &a,const Body &b,
                               double ia,double ib,double dt) {
     if(dt<=0. || ia==0. || ib==0.) return {{ia,ib}};
@@ -263,7 +330,7 @@ std::vector<Result> solve(std::vector<Body> bodies,double dt) {
     for(unsigned pass=0;pass<4;++pass) {
         for(const Pair &p:pairs) {
             Body &a=bodies[p.a], &b=bodies[p.b];
-            const Hit hit=contact(a,b,p.projection);
+            const Hit hit=physical_contact(a,b,p.projection);
             if(!hit.valid) continue;
             const double ia=a.has(Immovable)?0.:1./std::max(a.mass,1.),ib=b.has(Immovable)?0.:1./std::max(b.mass,1.);
             const auto mobility=grounded(hit,a,b,ia,ib,dt);
@@ -344,6 +411,7 @@ void traverse(const std::vector<Body> &original,double dt,std::vector<Result> &p
             if (ai==bi || !a.has(Impulse) || !b.has(Impulse) || budget<=0.) continue;
             const double reach=radii[ai]+radii[bi]+SLOP;
             if (square(a.x-b.x)+square(a.z-b.z)>reach*reach || !vertical_overlap(a,b)) continue;
+            if (!physical_contact(a,b,projection(a,b)).valid) continue;
             const Hit hit=signed_overlap(a,b);
             if (hit.depth<-SLOP) continue;
             Vec point;

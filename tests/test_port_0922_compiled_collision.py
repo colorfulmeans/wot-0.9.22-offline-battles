@@ -437,82 +437,8 @@ class NativeFenceFollowupTests(unittest.TestCase):
             self.broken.update(identity + (b['material'],)
                                for b in owner['boxes'] if b['broken'])
 
-    def test_murovanka_remapped_chunk_original_faces_use_spatial_owner(self):
-        rows = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())
-        self.assertEqual(5, len(rows))
-        for row in rows:
-            with self.subTest(hit=row['hit']):
-                self.install_report(row, '11_murovanka')
-                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
-                # Leave room for a distinct backing face inside the same ray.
-                direction = b - a
-                direction.normalise()
-                b = b + direction.scale(.01)
-                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
-                keep = sensor.horizontal_collision_filter(a, b)
-                def cast(surfaces):
-                    native = CompiledCollisionTests.native(surfaces)
-                    def query(*args):
-                        result = native(*args)
-                        return None if result is None else (result[0], V(row['normal']))
-                    return sensor.collide_motion_segment(1, a, b, keep, query)
-                # The log proves a completed live-layout repair for 32635.
-                self.assertIs(point, cast([(point, key)])[0])
-
-                sensor._destructible_catalog['layout_generations'][32635] = 1
-                if not any(box['contains_hit'] for owner in
-                        row['native_contact_evidence']['nearby_owners']
-                        for box in owner['boxes']):
-                    # One recorded end face has no proved owner volume. Keep
-                    # that unresolved face solid; the report cannot prove a
-                    # safe exclusion outside the authored bounds.
-                    self.assertIs(point, cast([(point, key)])[0])
-                    continue
-                self.assertIsNone(cast([(point, key)]))
-                direction = b - a
-                direction.normalise()
-                wall = point + direction.scale(.001)
-                for material in (88, 111):
-                    self.assertIs(wall, cast([(point, key),
-                        (wall, (material, 0, key[2], key[3]))])[0])
-                self.broken.clear()
-                self.assertIs(point, cast([(point, key)])[0])
 
 
-    def test_spotting_recasts_remapped_broken_original_without_changing_mask(self):
-        row = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())[0]
-        self.install_report(row, '11_murovanka')
-        sensor._destructible_catalog['layout_generations'][32635] = 1
-        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
-        key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
-        self.assertEqual(0, key[1])
-        direction = b - a
-        direction.normalise()
-        b = b + direction.scale(.1)
-        keep = sensor.sight_collision_filter()
-        surfaces = [(point, key)]
-        masks = []
-
-        def native(space, start, end, flags, callback=None):
-            masks.append(flags)
-            result = CompiledCollisionTests.native([
-                value for value in surfaces if not value[1][1] & flags])(
-                    space, start, end, flags, callback)
-            return None if result is None else (result[0], V(row['normal']))
-
-        # The old one-pass callback still sees the original BSP's stale slot.
-        self.assertIs(point, native(1, a, b, 128, keep)[0])
-        self.assertIsNone(sensor.collide_sight_segment(1, a, b, keep, native))
-        wall = point + direction.scale(.01)
-        for material in (88, 111):
-            surfaces.append((wall, (material, 0, 50000, 32635)))
-            self.assertIs(wall, sensor.collide_sight_segment(
-                1, a, b, keep, native)[0])
-            surfaces.pop()
-        self.broken.clear()
-        self.assertIs(point, sensor.collide_sight_segment(
-            1, a, b, keep, native)[0])
-        self.assertEqual({128}, set(masks))
 
     def test_sight_mask_keeps_vehicle_only_faces_out_of_spotting(self):
         a, b, point = V(0, 1, 0), V(5, 1, 0), V(2, 1, 0)
@@ -564,52 +490,11 @@ class NativeFenceFollowupTests(unittest.TestCase):
             sensor.report_sight_contact(1, a, b, (point, V(1, 0, 0)))
             self.assertEqual(2, len(messages))
         self.assertEqual(broken_before, self.broken)
-    def test_westfield_remapped_stone_fence_bevels_clear_only_in_broken_bounds(self):
-        rows = json.loads((ROOT / 'tests/fixtures/westfield_114133_contacts.json').read_text())
-        self.assertEqual(11, len(rows))
-        resolved = 0
-        for row in rows:
-            with self.subTest(time=row['log_time']):
-                self.install_report(row, '23_westfeld')
-                a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
-                direction = b - a
-                direction.normalise()
-                b = b + direction.scale(.01)
-                key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
-                keep = sensor.horizontal_collision_filter(a, b)
-                def cast(surfaces):
-                    native = CompiledCollisionTests.native(surfaces)
-                    def query(*args):
-                        hit = native(*args)
-                        return None if hit is None else (hit[0], V(row['normal']))
-                    return sensor.collide_motion_segment(1, a, b, keep, query)
-                self.assertIs(point, cast([(point, key)])[0])
-                # The coherent visible log completes this chunk's live
-                # remapping at 11:40:37, before all eleven contacts.
-                sensor._destructible_catalog['layout_generations'][32639] = 1
-                if not any(box['contains_hit'] for owner in
-                        row['native_contact_evidence']['nearby_owners']
-                        for box in owner['boxes']):
-                    self.assertIs(point, cast([(point, key)])[0])
-                    continue
-                self.assertIsNone(cast([(point, key)]))
-                resolved += 1
-                wall = point + direction.scale(.001)
-                for material in (88, 111):
-                    self.assertIs(wall, cast([(point, key),
-                        (wall, (material, 0, key[2], key[3]))])[0])
-                # A mismatched chunk is never spatially reattributed.
-                self.assertIs(point, cast([(point,
-                    (key[0], key[1], key[2], key[3] + 1))])[0])
-                self.broken.clear()
-                self.assertIs(point, cast([(point, key)])[0])
-        self.assertEqual(10, resolved)
 
     def test_unresolved_original_surface_diagnostic_records_live_slot_read_only(self):
         row = json.loads((ROOT / 'tests/fixtures/westfield_114133_contacts.json').read_text())[2]
         self.install_report(row, '23_westfeld')
         catalog = sensor._destructible_catalog
-        catalog['layout_generations'][32639] = 1
         manager = types.SimpleNamespace(getSpaceID=lambda: 1,
             _DestructiblesManager__loadedChunkIDs={32639: 112})
         matrix_query = mock.Mock(return_value=_ItemMatrix(V(3, 4, 5)))
@@ -624,8 +509,9 @@ class NativeFenceFollowupTests(unittest.TestCase):
                 'Math': types.SimpleNamespace(Vector3=V, Matrix=lambda value: value)}), \
                 mock.patch.object(sensor, '_isolate_destructible_1513', isolate):
             result = sensor._native_contact_slot_evidence_1513(1, (73, 0, 8, 32639))
-            self.assertTrue(result['excluded'])
-            self.assertEqual(1, result['layout_generation'])
+            # Fixed baked identities no longer inherit runtime remap quarantine.
+            self.assertFalse(result['excluded'])
+            self.assertNotIn('layout_generation', result)
             self.assertEqual(-1, result['native_category'])
             self.assertEqual((103000, 4000, 205000), result['native_signature'][:3])
             matrix_query.reset_mock()
@@ -680,19 +566,6 @@ class NativeFenceFollowupTests(unittest.TestCase):
             CompiledCollisionTests.native([(point, key), (wall, key)]))
         self.assertIs(wall, result[0])
 
-    def test_remapped_key_cannot_erase_its_own_intact_owner(self):
-        row = json.loads((ROOT / 'tests/fixtures/murovanka_143656_contacts.json').read_text())[0]
-        self.install_report(row, '11_murovanka')
-        sensor._destructible_catalog['layout_generations'][32635] = 1
-        a, b, point = [V(row[k]) for k in ('ray_start', 'ray_end', 'hit')]
-        key = tuple(row['native_contact_evidence']['surface_witnesses'][0]['key'])
-        identity = (key[3], key[2])
-        instance = dict(sensor.g_offh_destr_instances[(32635, 31)])
-        sensor.g_offh_destr_instances[identity] = instance
-        sensor._index_catalog_instance_1513(sensor.g_offh_destr_contact_bins,
-                                           identity, instance)
-        self.assertIsNone(sensor._compiled_motion_skin_1513(
-            point, a, b, {key}, V(row['normal'])))
 
     @staticmethod
     def transient_native(surfaces):

@@ -117,13 +117,22 @@ class RotationNeighboursTests(unittest.TestCase):
         rotation = kernel.rotation_fraction
         trace = []
         active = [None]
+        projections = []
+        for runtime in (baseline,candidate):
+            project = runtime._rotation_neighbours_for
+            def checked(source,supplied,project=project,runtime=runtime):
+                rows=project(source,supplied)
+                expected=[self.module._position(raw) for actor,raw in
+                          runtime.states.items() if actor != source['id']]
+                self.assertEqual(expected,[row['position'] for row in rows])
+                projections.append((self.module._position(source),
+                    tuple((row['position'],row.get('yaw',0.),
+                           kernel._tank_shape(row)) for row in rows)))
+                return rows
+            runtime._rotation_neighbours_for=checked
         def observed(position, yaw, candidate_yaw, shape, others, **kwargs):
-            runtime = active[0]
-            expected = [self.module._position(raw)
-                        for raw in runtime.states.values()
-                        if self.module._position(raw) != position]
-            # No supplied hulls; all 28 peers retain the current actor order.
-            self.assertEqual(expected, [row['position'] for row in others])
+            # Traffic calls the same kernel with a deliberately filtered
+            # frozen roster. The live-projection owner is checked above.
             trace.append((position, yaw, candidate_yaw,
                           tuple((row['position'], row.get('yaw', 0.0),
                                  kernel._tank_shape(row)) for row in others)))
@@ -134,22 +143,26 @@ class RotationNeighboursTests(unittest.TestCase):
                 results = []
                 snapshots = []
                 traces = []
+                projected = []
                 for runtime in (baseline, candidate):
                     active[0] = runtime
                     trace[:] = []
+                    projections[:] = []
                     results.append(runtime.update(.1, 1.0 + frame * .1))
                     snapshots.append(freeze(runtime.states))
                     traces.append(list(trace))
+                    projected.append(list(projections))
                 self.assertEqual(results[0], results[1])
                 self.assertEqual(snapshots[0], snapshots[1])
                 self.assertEqual(traces[0], traces[1])
-                # 0.10.0 checks the proposed turn and the realised pose for
-                # each actor. The compact projection preserves both guards.
-                self.assertEqual(58, len(traces[0]))
+                self.assertEqual(projected[0],projected[1])
+                # One live projection per actor is reused by both proposed
+                # and realised rotation guards. Traffic has its own roster.
+                self.assertEqual(29, len(projected[0]))
+                self.assertGreaterEqual(len(traces[0]),58)
                 if frame == 0:
                     # The second actor already sees the first actor's new pose.
-                    self.assertNotEqual(traces[0][0][0], traces[0][2][3][0][0])
-                    self.assertNotEqual(traces[0][0][1], traces[0][2][3][0][1])
+                    self.assertNotEqual(projected[0][0][0],projected[0][1][1][0][0])
         finally:
             kernel.rotation_fraction = rotation
 

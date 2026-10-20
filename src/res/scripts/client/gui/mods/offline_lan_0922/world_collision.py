@@ -19,6 +19,31 @@ _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
+@observed('motion.geometry_prepare')
+def _vehicle_motion_geometry(descriptor):
+	"""Read the live hull/chassis once for both horizontal and vertical bounds.
+
+	This shares descriptor preparation, never a collision or support answer.
+	Every call reads the current bbox and mount, including Siege transitions.
+	"""
+	hull = _vehicle_hull_bbox(descriptor)
+	if hull is None:
+		return None, (0.6, 1.6)
+	chassis = _descriptor_value(descriptor, 'chassis')
+	tester = _descriptor_value(chassis, 'hitTester')
+	box = getattr(tester, 'bbox', None)
+	mount = _descriptor_value(chassis, 'hullPosition')
+	if box is None or mount is None:
+		raise RuntimeError('#1513 chassis collision descriptor is unavailable')
+	# Share each live mount conversion across the lower/upper calculation.
+	# No descriptor or collision result survives this call (Siege can mutate
+	# these values in place). Avoid two generator traversals on every sweep.
+	lower, upper = [], []
+	for i in (0, 1, 2):
+		offset = float(mount[i])
+		lower.append(min(float(box[0][i]), float(hull[0][i]) + offset))
+		upper.append(max(float(box[1][i]), float(hull[1][i]) + offset))
+	return (lower[0], upper[0], -lower[2], upper[2]), (lower[1], upper[1])
 
 
 def _trace_collision_filter(collision_filter, trace):
@@ -54,6 +79,24 @@ def _record_hard_contact(trace, reason, start, end, collision,
         trace.update(reason=reason, ray_start=vector(start), ray_end=vector(end),
                      hit=vector(collision[0]), normal=vector(collision[1]),
                      ground_ahead=ground_ahead, profile=list(heights))
+        if 'position' in trace and 'yaw' in trace:
+            import math
+            from .tank_collision import pose_axes
+            axes = pose_axes(trace['yaw'], trace.get('pitch', 0.), trace.get('roll', 0.))
+            delta = tuple(trace['hit'][i] - trace['position'][i] for i in range(3))
+            local = tuple(sum(axis[i]*delta[i] for i in range(3)) for axis in axes)
+            travel = trace.get('motion_yaw')
+            if travel is None:
+                travel = trace['yaw'] + (math.pi if trace.get('speed', 0.) < 0. else 0.)
+            distance = abs(trace.get('speed', 0.))*trace.get('dt', 0.)
+            outward = distance*(math.sin(travel)*trace['normal'][0] +
+                                math.cos(travel)*trace['normal'][2])
+            trace['contact_geometry'] = dict(local_hit=local,
+                signed_normal_displacement=outward,
+                relation='inward' if outward < -1.e-8 else
+                         'outward' if outward > 1.e-8 else 'tangent',
+                lateral_bounds=trace.get('lateral_bounds'),
+                extents=trace.get('extents'), distance=distance, observed_only=True)
     except Exception:
         trace['reason'] = reason
 
@@ -373,15 +416,17 @@ def _hull_pose_endpoint(local_start, local_end, half_width,
 	start_forward = float(local_start[1])
 	delta_right = float(local_end[0]) - start_right
 	delta_forward = float(local_end[1]) - start_forward
+	# World-to-local roundoff on a parallel hull edge must not collapse
+	# the chord to its start and leave its X/Z endpoint at the far edge.
 	fraction = 1.0
 	left, right = lateral_bounds or (-float(half_width), float(half_width))
 	for start, delta, lower, upper in (
 			(start_right, delta_right, left, right),
 			(start_forward, delta_forward, -float(half_length_back),
 				float(half_length_front))):
-		if delta > 0.0:
+		if delta > 1.0e-9:
 			fraction = min(fraction, (upper - start) / delta)
-		elif delta < 0.0:
+		elif delta < -1.0e-9:
 			fraction = min(fraction, (lower - start) / delta)
 	fraction = max(0.0, min(1.0, fraction))
 	return (
@@ -695,9 +740,14 @@ def _destroy_and_recast(spaceID, segment_start, segment_end, collision,
 		# second destroy attempt, while every unrelated solid still fails closed.
 		cleared = _catalog_soft_static_path(
 			spaceID, segment_start, segment_end, collision, vel, td,
-			[_WORLD_SOFT_RECAST_BUDGET])
+			[_WORLD_SOFT_RECAST_BUDGET],
+			allow_kinetic_first=allow_kinetic, kinetic_speed=kinetic_speed)
 		_diagnostic_static_recast_1513(cleared)
-		return cleared is True
+		# Another lane may meet a different live house module. Keep that
+		# exact kinetic candidate for the hull/catalog commit seam instead of
+		# turning it into a hard wall after the first lane succeeded. Unknown
+		# solids still fail closed; this read-only branch never destroys them.
+		return 'kinetic' if cleared == 'kinetic' else cleared is True
 	# Revisit an already accepted hide skin before probing material again. This
 	# keeps the 0.2 s native callback window out of the hot path and still
 	# requires the exact accepted identity and a filtered query of the whole ray.
@@ -1273,6 +1323,14 @@ def _check_horizontal_collision(spaceID, pos, yaw, vel, td=None,
 							_ray_end, _ray_hit))
 				_upper_hits.sort(key=lambda value: value[0])
 				for _unused_distance, _ray_start, _ray_end, _ray_hit in _upper_hits:
+					# A lower-lane miss does not turn an outward terrain top into
+					# an upper wall. Apply the same exact-top and remainder proof
+					# used by the lower lane; a beam, wall, unknown top or later
+					# obstruction still fails this proof and remains solid.
+					if _ground_exit_is_clear(
+							spaceID, Math, profile_pos, _ray_start, _ray_end,
+							_ray_hit, profile_look, lane_ground_plane, _sweep_filter):
+						continue
 					_resolve_args = (
 						spaceID, _ray_start, _ray_end, _ray_hit,
 						yaw, vel, td, _crush_state, allow_kinetic,

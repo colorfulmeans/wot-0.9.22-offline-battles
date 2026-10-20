@@ -90,6 +90,19 @@ class CollisionBakeTest(unittest.TestCase):
                     self.assertEqual(2, field.collision_stats['original_surfaces_excluded'])
                     self.assertEqual(1, len(field.soft_spawn_obbs))
 
+    def test_railway_vehicle_original_surfaces_are_solid_without_hardening_signs(self):
+        for family in ('rw004_Carriage', 'rw005_locomotive', 'rw008_Semafor'):
+            with self.subTest(family=family):
+                data=compiled([[(7,73 << 8)]])
+                resource='content/Railway/'+family+'/normal/lod0/stock.primitives'
+                data.sections['BWST'][1]=resource
+                vfs=VFS([])
+                vfs.files[resource[:-len('.primitives')]+'.primitives_processed']=primitives(bsp([(t,7) for t in WALL]))
+                field=self.obstacles(data=data,vfs=vfs)
+                expected=family!='rw008_Semafor'
+                self.assertEqual(expected,field.blocked(0.,0.,0.,margin=2.15))
+                self.assertEqual(expected,bool(field.railway_obstacles.cells))
+
     def test_hard_and_replacement_materials_stay_in_raster(self):
         for kind in (0, 70, 86, 87, 100, 108):
             with self.subTest(kind=kind):

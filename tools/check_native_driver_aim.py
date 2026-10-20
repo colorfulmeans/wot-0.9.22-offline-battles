@@ -23,7 +23,14 @@ def check(name, args):
     expected = getattr(driver, '_reference_' + name)(*args)
     before = native_math.snapshot()['driver_aim']
     actual = getattr(driver, name)(*args)
-    assert native_math.snapshot()['driver_aim'] == before + 1, ('fallback', name, args)
+    deferred = (name == 'combat_hull_aim' and driver._rear_laying_deferred(
+        args[0], args[1], args[2], args[3], args[11], args[12]))
+    # A rejected tactical episode must not enter either aiming law. Every
+    # admitted primitive still has to use native, never a silent fallback.
+    expected_calls = 0 if deferred else 1
+    assert native_math.snapshot()['driver_aim'] == before + expected_calls, ('admission', name, args)
+    if deferred:
+        assert actual == (float(args[4]), float(args[5]), False), ('cooldown takeover', args, actual)
     assert actual == expected, (name, args, actual, expected)
     assert type(actual) is type(expected), (name, type(actual), type(expected))
     if isinstance(actual, tuple):
@@ -71,6 +78,6 @@ assert backend.driver_aim(3, (Trap(), 0.), ()) is None
 native_math._backend = None
 args = (0., math.pi, -1.57, 1.57, .5, -.5, None)
 assert driver.combat_hull_aim(*args) == driver._reference_combat_hull_aim(*args)
-print('Driver aim exact parity:', checks, 'comparisons; all supported calls used native')
+print('Driver aim exact parity:', checks, 'comparisons; admitted calls used native and cooldown refusals preserved controls')
 from check_native_gun_pitch_limits import run as check_pitch_limits
 check_pitch_limits(backend)

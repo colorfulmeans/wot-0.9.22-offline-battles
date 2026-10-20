@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 import zipfile
 
-LABELS = ('DAMAGE FEEDBACK', 'ENV CRITICAL FEEDBACK', 'NATIVE INPUT FALLBACK', 'NATIVE INPUT SUMMARY',
-          'RICOCHET SURFACE EVIDENCE', 'PROJECTILE INTERFACE', 'PROJECTILE SETTLEMENT',
+LABELS = ('SPG PROOF', 'BOT LOCAL HANDOFF', 'BOT GUN SOLUTION', 'BOT RECOVERY COMMIT', 'BOT SEARCH JOB', 'BOT ROUTE ATTEMPT', 'BOT BASE DEFENSE', 'BOT ROUTE ASSIGNMENT', 'SPG POSITION RETRY', 'BOT HEIGHT LINKS', 'VEHICLE STACK', 'LANDING CONTACT DECISION', 'BOT NAV CHOICE', 'MODULE PRESENT', 'BOT SUPPORT MODE', 'BOT LANDING IMPACT', 'PLAYER LANDING IMPACT', 'DAMAGE FEEDBACK', 'ENV CRITICAL FEEDBACK', 'NATIVE INPUT FALLBACK', 'NATIVE INPUT SUMMARY',
+          'BOT NAV GRID', 'BOT ROUTE CONNECTION', 'RICOCHET SURFACE EVIDENCE', 'PROJECTILE INTERFACE', 'PROJECTILE SETTLEMENT',
           'TREE DESCRIPTOR', 'ENV MODULE CONTACT', 'ENV MODULE DAMAGE', 'RAM TRACK CONTACT', 'RAM CONTACT GEOMETRY', 'BOT VERTICAL SUPPORT', 'BOT SLOPE POSE', 'BOT MOTION PRESENT', 'BOT MOTION')
 
 
@@ -13,7 +13,7 @@ def parse_lines(lines, source='log'):
     records, issues, pending = [], [], {}
     for number, line in enumerate(lines, 1):
         for label in LABELS:
-            marker = ('' if label == 'PROJECTILE SETTLEMENT' else '[Offline LAN 0.9.22] ') + label + ' '
+            marker = ('' if label in ('PROJECTILE SETTLEMENT', 'BOT ROUTE ATTEMPT') else '[Offline LAN 0.9.22] ') + label + ' '
             if marker not in line:
                 if label == 'BOT MOTION' and '[BOT MOTION] ' in line:
                     marker = '[BOT MOTION] '

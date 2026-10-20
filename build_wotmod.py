@@ -30,7 +30,7 @@ import navigation_graph_schema as _navigation_schema
 
 
 MOD_ID = 'org.colorfulmeans.offline_lan_0922'
-MOD_VERSION = '0.10.1'
+MOD_VERSION = '0.10.2'
 BUILD_IDENTITY_ENV = 'WOT_OFFLINE_BUILD_IDENTITY'
 BUILD_IDENTITY_FILENAME = 'build_identity.json'
 BUILD_IDENTITY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$')
@@ -44,10 +44,10 @@ PREFERENCES_CONFIGS = (
 )
 PYTHON_MAGIC = '\x03\xf3\r\n'
 FOLIAGE_FORMAT = 'offline-lan-0922-foliage'
-FOLIAGE_VERSION = 4
+FOLIAGE_VERSION = 5
 FOLIAGE_MANIFEST_FORMAT = FOLIAGE_FORMAT + '-manifest'
 DESTRUCTIBLE_FORMAT = 'offline-lan-0922-destructible-catalog'
-DESTRUCTIBLE_VERSION = 9
+DESTRUCTIBLE_VERSION = 10
 DESTRUCTIBLE_MANIFEST_FORMAT = DESTRUCTIBLE_FORMAT + '-manifest'
 PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
 LEGAL_FILES = (
@@ -217,6 +217,7 @@ def _write_client_overlay(dist_root, package_path, checksum_path, digest,
         os.path.dirname(__file__), 'dist', 'server', SERVER_FILENAME)
     native_payloads = (
         ('native instance guard bridge', native_bridge_source),
+        ('native geometry module', native_math_source),
         ('simulation worker starter', worker_starter_source),
         ('Windows LAN server', server_executable_source),
     )
@@ -723,6 +724,9 @@ def _stage_depot_style_ui(staging_root):
 def build():
     _validate_python()
     repo_root = os.path.abspath(os.path.dirname(__file__))
+    sys.path.insert(0, os.path.join(repo_root, 'tools'))
+    from verify_native_payload import verify_file
+    verify_file(repo_root, os.path.join(repo_root, 'native', NATIVE_MATH_FILENAME))
     source_root = os.path.join(repo_root, 'src')
     dist_root = os.path.join(repo_root, 'dist')
     if not os.path.isdir(dist_root):

@@ -143,7 +143,6 @@ def _safe_missing_descriptor_log(area_module, space_id, chunk_id, item_index):
         interface='ClientDestructiblesCache.getDestructibleDesc',
         native_count=loaded.get(key[1]) if isinstance(loaded, dict) else None,
         catalog_filename=tree.get('descriptor_filename'),
-        layout_pending=destructibles_sensor._layout_repair_pending_1513(key[1]),
         isolated=destructibles_sensor.is_isolated_1513(key[1], key[2]),
         initial_matrix=isinstance(initial, dict) and (key[1], key[2]) in initial,
         descriptor_available=desc is not None)

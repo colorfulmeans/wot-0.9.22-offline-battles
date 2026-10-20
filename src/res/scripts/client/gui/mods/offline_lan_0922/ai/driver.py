@@ -31,11 +31,25 @@ BOT_TEAM_SLOT_COUNT = 15
 RECOVERY_TIMING_STRIDE = 7
 RECOVERY_YAW_OFFSET = 0.85
 RECOVERY_SWEEP_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
+RECOVERY_COMMIT_MINIMUM = 0.5
 
 
 def recovery_probe_distance(half_length):
 	"""Terrain reach of one bounded longitudinal escape."""
 	return max(0.5, float(half_length)) * 1.6
+
+
+def short_escape_remaining(command, position):
+	"""Keep a cached straight escape bounded by its original checked endpoint."""
+	if command.get('recovery_mode') not in ('short_forward_escape', 'short_reverse_escape'):
+		return None
+	origin = command.get('recovery_probe_origin')
+	if origin is None:
+		return None
+	heading = float(command['recovery_probe_yaw'])
+	travelled = ((position[0] - origin[0]) * math.sin(heading) +
+		(position[2] - origin[2]) * math.cos(heading))
+	return max(0.0, float(command['recovery_probe_length']) - travelled)
 
 
 def _angle_delta(target, current):
@@ -106,11 +120,25 @@ def gun_yaw_limits(descriptor):
 	return minimum, maximum, limited
 
 
+def _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+                         rear_turn, allow_rear_start):
+    """The tactical cooldown gates both native and reference aim admission."""
+    relative = _angle_delta(target_yaw, hull_yaw)
+    margin = min(0.04, max(0.0, maximum_yaw-minimum_yaw)*0.25)
+    return (not allow_rear_start and not rear_turn and
+            not (minimum_yaw <= -math.pi + 0.1 and maximum_yaw >= math.pi - 0.1) and
+            abs(relative) > math.pi * 0.5 and
+            not minimum_yaw+margin <= relative <= maximum_yaw-margin)
+
+
 def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
 		combat_mode=None, movement_intent=False, withdrawal_aim=False,
 		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
+	if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+			rear_turn, allow_rear_start):
+		return float(turn), float(throttle), False
 	if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
 		# Deployment keeps the current travel steering even for a rear threat.
 		# A stationary firing area may lay the hull after physical arrival.
@@ -212,6 +240,9 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         turn, throttle, recovery_mode, has_target=True,
         combat_mode=None, movement_intent=False, withdrawal_aim=False,
         rear_turn=0.0, allow_rear_start=True):
+    if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+                            rear_turn, allow_rear_start):
+        return float(turn), float(throttle), False
     if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
         return float(turn), float(throttle), False
     held = recovery_mode in ('avoid', 'blocked', 'reverse_turn',
@@ -326,7 +357,7 @@ class LocalDriver(object):
 
 	def wait_for_navigation(self, bot_id, team_slot, position, yaw, speed, dt,
 			neighbours, direction_clear, half_length=3.5, half_width=1.7,
-			recovery_allowed=False):
+			recovery_allowed=False, body=None):
 		"""Hold a pending path, or back out once after proved local blockage.
 
 		The caller owns evidence that the current support/last physical movement
@@ -335,6 +366,7 @@ class LocalDriver(object):
 		Its deadline and distance never renew while the same path wait continues.
 		"""
 		state = self._state(bot_id, team_slot, position)
+		state['collision_body'] = body
 		step = max(0.0, float(dt))
 		state['last_step'] = step
 		state['clock'] += step
@@ -397,7 +429,7 @@ class LocalDriver(object):
 				not self._clear(direction_clear, reverse_yaw, remaining,
 					drive_direction=-1.0) or
 				self._reverse_blocked_by_vehicle(position, yaw, neighbours,
-					length, width, remaining) is not None)
+					length, width, remaining, body=state.get('collision_body')) is not None)
 		if finished:
 			wait['completed'] = True
 			diagnostic['reason'] = 'recovery_finished_or_rear_denied'
@@ -475,7 +507,13 @@ class LocalDriver(object):
 			from_anchor * FAILED_YAW_BUCKET_COUNT / turn + 0.5))
 		return bucket % FAILED_YAW_BUCKET_COUNT
 
-	def remember_failure(self, bot_id, yaw, ttl=None):
+	@staticmethod
+	def _failure_origin_matches(first, second):
+		# Refusals belong to a local physical pose, including its surface layer.
+		return sum((float(first[i]) - float(second[i])) ** 2
+			for i in range(3)) <= 0.25 ** 2
+
+	def remember_failure(self, bot_id, yaw, ttl=None, evidence=None):
 		"""Temporarily penalize a direction after a caller-observed bad path.
 
 		Use this when a terrain probe was clear but later movement establishes that
@@ -489,6 +527,29 @@ class LocalDriver(object):
 		ttl = max(0.1, float(ttl))
 		state['failed_yaws'][self._yaw_key(yaw)] = state['clock'] + ttl
 		state.setdefault('real_failed_yaws', {})[self._yaw_key(yaw)] = state['clock'] + ttl
+		key = self._yaw_key(yaw)
+		records = state.setdefault('real_failure_evidence', {})
+		previous = records.get(key)
+		record = dict(evidence or {})
+		record.update(yaw=float(yaw), created_at=state['clock'],
+			expires_at=state['clock'] + ttl,
+			renewed=bool(previous and previous['expires_at'] > state['clock']))
+		# Preserve a live, local realised-contact witness when a later long
+		# forecast reports the same bucket. The forecast still gets a receipt.
+		keep_contact = bool(previous and previous['expires_at'] > state['clock'] and
+			previous.get('source') != 'motion_forecast' and
+			record.get('source') == 'motion_forecast' and
+			previous.get('origin') is not None and record.get('origin') is not None and
+			self._failure_origin_matches(previous['origin'], record['origin']))
+		if not keep_contact:
+			records[key] = record
+		else:
+			state['real_failed_yaws'][key] = previous['expires_at']
+		record['preserved_contact'] = keep_contact
+		history = state.setdefault('failure_receipts', [])
+		history.append(dict(record))
+		del history[:-16]
+
 		desired = state.get('last_desired_yaw')
 		offset = _angle_delta(yaw, desired) if desired is not None else 0.0
 		if abs(offset) >= 0.10:
@@ -503,6 +564,21 @@ class LocalDriver(object):
 			state['clock'] + min(2.0, max(0.8, ttl)))
 		state['steering_yaw'] = None
 		state['plan_age'] = 999.0
+
+
+	def _short_failure_applies(self, state, position, yaw, distance):
+		key = self._yaw_key(yaw)
+		if state.get('real_failed_yaws', {}).get(key, 0.0) <= state['clock']:
+			return False
+		evidence = state.get('real_failure_evidence', {}).get(key) or {}
+		origin = evidence.get('origin')
+		# Legacy callers retain their actual-contact veto. Scoped forecasts
+		# cannot suppress a fresh shorter proof or follow a tank elsewhere.
+		if origin is not None and not self._failure_origin_matches(position, origin):
+			return False
+		if evidence.get('source') == 'motion_forecast':
+			return float(evidence.get('distance', 0.0)) <= float(distance)
+		return True
 
 	def _failure_penalty(self, state, yaw):
 		key = self._yaw_key(yaw)
@@ -544,12 +620,21 @@ class LocalDriver(object):
 			variadic = bool(code.co_flags & 0x04)
 		try:
 			if count >= 3:
-				return bool(direction_clear(yaw, maximum_distance, drive_direction))
-			if (maximum_distance is not None and (count >= 2 or variadic)):
-				return bool(direction_clear(yaw, maximum_distance))
-			return bool(direction_clear(yaw))
-		except Exception:
+				result = bool(direction_clear(yaw, maximum_distance, drive_direction))
+			elif (maximum_distance is not None and (count >= 2 or variadic)):
+				result = bool(direction_clear(yaw, maximum_distance))
+			else:
+				result = bool(direction_clear(yaw))
+		except Exception as error:
+			self._last_direction_receipt = dict(reason='direction_callback_exception',
+				exception_type=type(error).__name__, yaw=yaw, distance=maximum_distance)
 			return False
+		try:
+			self._last_direction_receipt = dict(getattr(direction_clear, 'last_receipt', {}) or {})
+		except Exception as error:
+			self._last_direction_receipt = dict(reason='callback_receipt_unavailable',
+				exception_type=type(error).__name__, clear=result)
+		return result
 
 	@staticmethod
 	def _pose_fits(pose_clear, yaw):
@@ -585,17 +670,56 @@ class LocalDriver(object):
 
 	@observed('driver.reverse_contacts')
 	def _reverse_blocked_by_vehicle(self, position, yaw, neighbours,
-			half_length, half_width, maximum_distance=None):
+			half_length, half_width, maximum_distance=None, body=None):
 		distance = (max(0.0, float(half_length)) * 1.6 if maximum_distance is None
 			else max(0.0, float(maximum_distance)))
+		separated = []
+		# A candidate pivot has not yet committed its new attitude. Only
+		# refine translation along the actual frozen body's forward/back axis.
+		pose_refinement = body is not None and abs(math.sin(yaw-body['yaw'])) < 1.e-9
+		if pose_refinement:
+			retained = []
+			movement = (-math.sin(yaw)*distance, 0.0, -math.cos(yaw)*distance)
+			for peer in neighbours or ():
+				other = self.collision_body(peer)
+				proof = {}
+				if other is not None and (
+					tank_collision.swept_body_separated(body, other, movement, proof) or
+					(body.get('id') is not None and other.get('id') is not None and
+					 body['id'] != other['id'] and
+					 tank_collision.translation_fraction(body, (movement[0], movement[2]), [other]) >= 1.0)):
+					separated.append(dict(peer=peer.get('id'), proof=proof,
+						rule='physical_translation_clear'))
+				else:
+					retained.append(peer)
+			neighbours = retained
 		result = self._native_geometry(0, position, yaw, neighbours, half_length, half_width, distance)
 		if result is not None:
-			if result < 0:
-				return None
-			peer = neighbours[result]
-			return peer['id'] if isinstance(peer, dict) and peer.get('id') is not None else True
-		return self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
-			half_length, half_width, maximum_distance)
+			peer = neighbours[result] if result >= 0 else None
+			blocker = (peer['id'] if isinstance(peer, dict) and peer.get('id') is not None
+				else True) if result >= 0 else None
+		else:
+			blocker = self._reference_reverse_blocked_by_vehicle(position, yaw, neighbours,
+				half_length, half_width, maximum_distance)
+		self._last_reverse_receipt = dict(origin=tuple(position), yaw=float(yaw),
+			body=body, separated=separated, pose_refinement=bool(pose_refinement),
+			distance=distance, half_length=half_length, half_width=half_width,
+			backend='native' if result is not None else 'reference', blocker=blocker,
+			rule='full_sweep_except_initial_non_deepening_contact',
+			result='vehicle_occupied' if blocker is not None else 'clear')
+		return blocker
+
+	@staticmethod
+	def collision_body(state):
+		"""Only use authoritative pose/shape; absent data keeps broad phase."""
+		if not isinstance(state, dict):
+			return None
+		shape = state.get('collision_shape', state.get('shape'))
+		position = state.get('position')
+		if shape is None or position is None or any(state.get(k) is None for k in ('yaw', 'pitch', 'roll')):
+			return None
+		return dict(id=state.get('id'), x=position[0], y=position[1], z=position[2], shape=shape,
+			yaw=state['yaw'], pitch=state['pitch'], roll=state['roll'])
 
 	def _native_geometry(self, op, position, yaw, neighbours, half_length, half_width, amount):
 		if not isinstance(neighbours, (tuple, list)):
@@ -655,14 +779,13 @@ class LocalDriver(object):
 				if contact[2] >= -1.0e-9:
 					back_x, back_z = -math.sin(yaw), -math.cos(yaw)
 					outward = back_x*contact[0] + back_z*contact[1]
-					away = back_x*(position[0]-other[0]) + back_z*(position[2]-other[2])
-					if outward >= -1.0e-9 and away >= -1.0e-9:
+					if outward >= -1.0e-9:
 						# The sweep includes the current hull. Its front/side
 						# contact is not a new rear obstacle when every point
 						# moves out or tangentially along that face. Centre
 						# distance may stay constant in an exactly parallel
 						# side hug; neither direction may be denied for that.
-						# At an offset prefer the nearer end of the overlap.
+						# Centre approach cannot veto a non-deepening face.
 						# Other peers still veto the complete swept corridor.
 						continue
 				if self._obb_overlap(
@@ -679,7 +802,12 @@ class LocalDriver(object):
 		return None
 
 	def _static_hull_ahead(self, position, candidate_yaw, neighbours,
-			half_length, half_width):
+			half_length, half_width, body=None):
+		if body is not None and abs(math.sin(candidate_yaw-body['yaw'])) < 1.e-9:
+			stationary = [peer for peer in neighbours or () if not peer.get('alive', True) or
+				(peer.get('velocity') is not None and math.hypot(peer['velocity'][0], peer['velocity'][2]) <= .65)]
+			return self._reverse_blocked_by_vehicle(position, candidate_yaw+math.pi,
+				stationary, half_length, half_width, body=body) is not None
 		result = self._native_geometry(1, position, candidate_yaw, neighbours,
 			half_length, half_width, half_length * 1.6)
 		if result is not None:
@@ -909,7 +1037,7 @@ class LocalDriver(object):
 					self._clear(direction_clear, candidate) and
 					not (position is not None and self._static_hull_ahead(
 						position, candidate, neighbours,
-						half_length, half_width))):
+						half_length, half_width, body=state.get('collision_body')))):
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
@@ -926,24 +1054,57 @@ class LocalDriver(object):
 			abs(float(speed)) * max(step, float(horizon)))
 		probes = []
 		state['short_escape_probes'] = probes
+		sequence = state.get('short_escape_sample_sequence', 0) + 1
+		state['short_escape_sample_sequence'] = sequence
+		state['short_escape_sample'] = dict(sequence=sequence,
+			sampled_at=state['clock'], origin=tuple(position), yaw=float(yaw),
+			clock_basis='driver_elapsed_seconds', phase='candidate_selection')
+		state.pop('short_escape_validation', None)
 		for distance in (max(2.0, minimum), max(1.0, minimum), minimum):
 			for sign in (-1.0, 1.0):
 				heading = float(yaw) + (math.pi if sign < 0 else 0.0)
 				# Long-ray/candidate failures cannot veto a fresh shorter proof.
-				real_failure = state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock']
+				real_failure = self._short_failure_applies(state, position, heading, distance)
 				clear = not real_failure and self._clear(direction_clear, heading, distance)
+				proof = dict(self._last_direction_receipt) if not real_failure else {}
 				blocker = self._reverse_blocked_by_vehicle(
 					position, float(yaw) if sign < 0 else float(yaw) + math.pi,
-					neighbours, half_length, half_width, maximum_distance=distance) if clear else None
-				probes.append(dict(sign=sign, distance=distance, clear=clear, blocker=blocker, real_failure=real_failure))
+					neighbours, half_length, half_width, maximum_distance=distance, body=state.get('collision_body')) if clear else None
+				probes.append(dict(sign=sign, distance=distance, clear=clear,
+					reason=('realized_failure' if real_failure else
+						'vehicle_occupied' if blocker is not None else
+						proof.get('reason') or ('clear' if clear else 'direction_callback_rejected')),
+					probe_receipt=proof, vehicle_receipt=(dict(getattr(self,
+						'_last_reverse_receipt', {})) if clear else None),
+					sampled_at=state['clock'], sample_sequence=sequence,
+					blocker=blocker, real_failure=real_failure,
+					failure_evidence=dict(state.get('real_failure_evidence', {}).get(
+						self._yaw_key(heading)) or {})))
 				if clear and blocker is None:
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
 						until=state['clock'] + 4.0)
 					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
+						recovery_probe_origin=tuple(position), recovery_probe_yaw=heading,
+						recovery_probe_length=distance,
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 		return None
+
+	@staticmethod
+	def _finish_translation_escape(state, escape, position, reason, remaining):
+		state['escape_terminal'] = dict(at=state['clock'],
+			clock_basis='driver_elapsed_seconds', origin=escape['start'],
+			position=tuple(position), reason=reason, remaining=remaining,
+			sign=escape.get('sign', 1.0), distance=escape['distance'],
+			recovery_time_before=state.get('recovery_time', 0.0))
+		if reason == 'distance_completed':
+			if state.get('recovery_time', 0.0) > 0.0:
+				state['recovery_count'] = state.get('recovery_count', 0) + 1
+			state['recovery_time'] = 0.0
+			state['recovery_side'] = 0.0
+			state['stuck_time'] = 0.0
+			state['heading_progress_yaw'] = None
 
 	def _retained_short_escape(self, state, position, yaw, neighbours,
 			direction_clear, half_length, half_width):
@@ -955,18 +1116,69 @@ class LocalDriver(object):
 		travelled = ((position[0]-escape['start'][0])*math.sin(heading) +
 			(position[2]-escape['start'][2])*math.cos(heading))
 		remaining = max(0.0, escape['distance'] - travelled)
-		if (state.get('real_failed_yaws', {}).get(self._yaw_key(heading), 0.) > state['clock'] or
-				remaining <= 0.05 or state['clock'] >= escape['until'] or
-				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
-				not self._clear(direction_clear, heading, remaining) or
-				self._reverse_blocked_by_vehicle(position,
+		validation = dict(sampled_at=state['clock'], origin=tuple(position),
+			clock_basis='driver_elapsed_seconds', phase='retained_execution_check',
+			remaining=remaining, yaw=heading,
+			selection_sequence=state.get('short_escape_sample_sequence'),
+			result='released')
+		state['short_escape_validation'] = validation
+		# Preserve the existing short-circuit order and query count. Record the
+		# first owner that releases the manoeuvre, including non-query exits.
+		reason = None
+		if self._short_failure_applies(state, position, heading, remaining):
+			reason = 'realized_failure'
+		elif remaining <= 0.05:
+			reason = 'distance_completed'
+		elif state['clock'] >= escape['until']:
+			reason = 'lease_expired'
+		elif abs(_angle_delta(yaw, escape['yaw'])) > 0.30:
+			reason = 'heading_changed'
+		else:
+			clear = self._clear(direction_clear, heading, remaining)
+			validation['probe_receipt'] = dict(self._last_direction_receipt)
+			if not clear:
+				reason = validation['probe_receipt'].get('reason') or 'direction_callback_rejected'
+			else:
+				blocker = self._reverse_blocked_by_vehicle(position,
 					yaw if sign < 0 else yaw + math.pi, neighbours,
-					half_length, half_width, remaining) is not None):
+					half_length, half_width, remaining, body=state.get('collision_body'))
+				validation['vehicle_receipt'] = dict(getattr(self, '_last_reverse_receipt', {}))
+				validation['blocker'] = blocker
+				if blocker is not None:
+					reason = 'vehicle_occupied'
+		validation['reason'] = reason or 'clear'
+		if reason is not None:
+			self._finish_translation_escape(state, escape, position, reason, remaining)
 			state.pop('short_translation_escape', None)
 			return None
+		validation['result'] = 'retained'
 		return dict(throttle=sign * 1.0, turn=0.0, target_yaw=escape['yaw'],
 			recovery_probe_distance=remaining,
+			recovery_probe_origin=escape['start'], recovery_probe_yaw=heading,
+			recovery_probe_length=escape['distance'],
 			recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
+
+	@staticmethod
+	def short_escape_diagnostics(state):
+		"""Describe observation age without recasting or changing a decision."""
+		clock = state.get('clock')
+		escape = state.get('short_translation_escape')
+		result = dict(retained_escape_present=bool(escape),
+			lease_unexpired=bool(escape and clock is not None and clock < escape['until']),
+			observed_at=clock, clock_basis='driver_elapsed_seconds',
+			freshness_basis='driver_step')
+		for field, key in (('selection', 'short_escape_sample'),
+				('execution_check', 'short_escape_validation')):
+			sample = state.get(key)
+			if sample is None or (field == 'selection' and
+					'short_escape_probes' not in state):
+				continue
+			sample = dict(sample)
+			age = max(0.0, clock - sample['sampled_at']) if clock is not None else None
+			sample.update(age_seconds=age,
+				historical=age > 1.0e-6 if age is not None else None)
+			result[field] = sample
+		return result
 
 	def _retained_translation_escape(self, state, position, yaw, neighbours,
 			direction_clear, half_length, half_width):
@@ -976,12 +1188,35 @@ class LocalDriver(object):
 			return None
 		distance = _distance(position, escape['start'])
 		remaining = max(0.0, escape['distance'] - distance)
-		if (remaining <= 0.05 or state['clock'] >= escape['until'] or
-				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
-				self._failure_penalty(state, yaw) > 0.0 or
-				not self._clear(direction_clear, yaw, remaining) or
-				self._reverse_blocked_by_vehicle(position, yaw + math.pi,
-					neighbours, half_length, half_width, remaining) is not None):
+		# The execution owner checks at least this reach for forward_escape.
+		# A 9 cm remainder must not repeatedly admit a command whose 50 cm
+		# commitment reaches a wet edge. Fixed-endpoint short escapes retain
+		# their separate endpoint law.
+		probe_distance = max(RECOVERY_COMMIT_MINIMUM, remaining)
+		reason = None
+		proof = None
+		blocker = None
+		if remaining <= 0.05:
+			reason = 'distance_completed'
+		elif state['clock'] >= escape['until']:
+			reason = 'lease_expired'
+		elif abs(_angle_delta(yaw, escape['yaw'])) > 0.30:
+			reason = 'heading_changed'
+		elif self._failure_penalty(state, yaw) > 0.0:
+			reason = 'remembered_failure'
+		else:
+			clear = self._clear(direction_clear, yaw, probe_distance)
+			proof = dict(self._last_direction_receipt)
+			if not clear:
+				reason = proof.get('reason') or 'direction_callback_rejected'
+			else:
+				blocker = self._reverse_blocked_by_vehicle(position, yaw + math.pi,
+					neighbours, half_length, half_width, remaining, body=state.get('collision_body'))
+				if blocker is not None:
+					reason = 'vehicle_occupied'
+		if reason is not None:
+			self._finish_translation_escape(state, escape, position, reason, remaining)
+			state['escape_terminal'].update(probe_receipt=proof, blocker=blocker)
 			state.pop('translation_escape', None)
 			return None
 		return dict(throttle=1.0, turn=0.0, target_yaw=escape['yaw'],
@@ -994,7 +1229,8 @@ class LocalDriver(object):
 			movement_intent=True, stopping_distance=None,
 			stop_at_target=True, decision_horizon=0.0, pose_clear=None,
 			progress_target=None, turn_speed_limit=None, arrival_radius=None,
-			rotation_refused=False, recovery_goal=None):
+			rotation_refused=False, recovery_goal=None, body=None,
+			progress_identity=None):
 		"""Return ``throttle``, ``turn``, ``target_yaw`` and ``recovery_mode``.
 
 		``team_slot`` is the explicit stable 0..14 formation slot. It must not be
@@ -1006,16 +1242,45 @@ class LocalDriver(object):
 		"""
 		arrival = WAYPOINT_ARRIVAL_RADIUS if arrival_radius is None else max(0.1, float(arrival_radius))
 		state = self._state(bot_id, team_slot, position)
+		state['collision_body'] = body
+		requested_target = tuple(target)
+		# Cleared for every call, including arrival/hold/recovery early returns.
+		state.pop('pedal_observation', None)
 		alignment = state.get('alignment_target')
-		if (not movement_intent or float(speed) < -0.05 or
-				turn_speed_limit is None or
-				(alignment is not None and _distance(alignment, target) > 2.0)):
+		previous_alignment = alignment
+		release_reason = ('movement_hold' if not movement_intent else
+			'reverse_motion' if float(speed) < -0.05 else
+			'traverse_unavailable' if turn_speed_limit is None else
+			'current_point_reached' if _distance(position, target) <= arrival else
+			'local_leg_changed' if alignment is not None and
+			_distance(alignment, target) > 2.0 else None)
+		if release_reason is not None:
 			state.pop('alignment_target', None)
+			alignment = None
+		# The retained point must own the heading as well as the brake.
+		# Steering toward each rebased near point while waiting to align with
+		# the old one makes the commanded heading chase the hull indefinitely.
+		# The existing two-metre identity, movement and reverse guards above
+		# still end this lease. The normal pose/world/peer checks below admit
+		# the held heading; an avoidance choice cancels it as before.
+		if alignment is not None:
+			target = alignment
+		state['alignment_observation'] = dict(requested=requested_target,
+			resolved=tuple(target), retained=alignment is not None,
+			previous=previous_alignment, reason=release_reason or
+			('retained_heading' if alignment is not None else 'current_target'))
 		step = max(0.0, float(dt))
 		if not state.pop('traffic_waiting', False):
 			state['traffic_wait_time'] = 0.0
 		state['last_step'] = step
 		state['clock'] += step
+		# A moving enemy and a mechanical sub-action are not new journeys.
+		# Only a different tactical owner may discard this progress episode.
+		if state.get('progress_identity') != progress_identity:
+			state.pop('objective_progress', None)
+			state.pop('recovery_pocket', None)
+			state.pop('recovery_replan_episode', None)
+		state['progress_identity'] = progress_identity
 		self._prune_failures(state)
 		state['steering_age'] += step
 		state['plan_age'] += step
@@ -1024,19 +1289,33 @@ class LocalDriver(object):
 		state['last_desired_yaw'] = desired_yaw
 		target_distance = _distance(position, target)
 		if not movement_intent:
+			preserve_progress = progress_identity is not None and state.get('objective_progress') is not None
+			state.pop('arrival_trace', None)
 			state['native_translation_stalled'] = False
 			state.pop('short_translation_escape', None)
 			state.pop('translation_escape', None)
-			state['translation_progress_at'] = state['clock']
-			state.pop('objective_progress', None)
-			state.pop('recovery_replan_episode', None)
-			state.pop('recovery_pocket', None)
-			state.pop('short_escape_probes', None)
+			if preserve_progress:
+				# Pause an intentional firing hold, rather than either granting
+				# new travel or counting the hold itself as a failed movement.
+				state['objective_progress']['at'] += step
+				state['objective_progress']['hold_paused_seconds'] = state['objective_progress'].get('hold_paused_seconds', 0.0) + step
+				state['objective_progress'].update(hold_paused=True,
+					translation_credit=False, alignment_credit=False,
+					credit_age_seconds=state['clock'] - state['objective_progress']['at'])
+				state['translation_progress_at'] = state.get('translation_progress_at', state['clock'] - step) + step
+			else:
+				state['translation_progress_at'] = state['clock']
+				state.pop('objective_progress', None)
+			if not preserve_progress:
+				state.pop('recovery_replan_episode', None)
+				state.pop('recovery_pocket', None)
+				state.pop('short_escape_probes', None)
 			# Cover/engagement orders intentionally stop within a tolerance. Do not
 			# reinterpret that commanded hold as a stuck tank 1.8 seconds later.
-			state['stuck_time'] = 0.0
-			state['recovery_time'] = 0.0
-			state['recovery_side'] = 0.0
+			if not preserve_progress:
+				state['stuck_time'] = 0.0
+				state['recovery_time'] = 0.0
+				state['recovery_side'] = 0.0
 			state['steering_yaw'] = None
 			state['heading_progress_yaw'] = None
 			state['braking_target'] = None
@@ -1054,7 +1333,7 @@ class LocalDriver(object):
 		pocket = state.get('recovery_pocket')
 		if pocket is not None and (
 				_distance(position, pocket['origin']) >= 2.0 * own_half_length + arrival or
-				_distance(pocket['goal'], pocket_goal) > 2.0):
+				(progress_identity is None and _distance(pocket['goal'], pocket_goal) > 2.0)):
 			state.pop('recovery_pocket', None)
 			state.pop('short_escape_probes', None)
 			pocket = None
@@ -1080,17 +1359,130 @@ class LocalDriver(object):
 		if progress_target is not None:
 			progress = state.get('objective_progress')
 			distance = _distance(position, progress_target)
-			if (progress is None or _distance(progress['goal'], progress_target) > 2.0 or
-					distance <= arrival):
+			goal_changed = bool(progress_identity is None and progress is not None and
+				_distance(progress.get('order_goal', progress['goal']), pocket_goal) > 2.0)
+			if progress is None or goal_changed or (progress_identity is None and _distance(position, pocket_goal) <= arrival):
+				reset_receipt = dict(at=state['clock'], position=tuple(position),
+					previous_order=progress.get('order_goal') if progress else None,
+					previous_goal=progress.get('goal') if progress else None,
+					previous_credit_age=state['clock']-progress['at'] if progress else None,
+					previous_credit_reason=progress.get('credit_reason') if progress else None,
+					previous_travel_best=progress.get('travel_best') if progress else None,
+					previous_alignment_best=progress.get('alignment_best') if progress else None,
+					new_order=tuple(pocket_goal))
 				progress = {'goal': tuple(progress_target), 'best': distance,
-				            'at': state['clock']}
+				            'identity': progress_identity,
+				            'order_goal': tuple(pocket_goal), 'at': state['clock'],
+				            'travel_origin': tuple(position), 'travel_best': 0.0,
+				            'order_best': _distance(position, pocket_goal),
+				            'connectors': [],
+				            'reset_receipt': reset_receipt,
+				            'credit_reason': 'new_order_or_destination',
+				            'reset_reason': 'order_changed' if goal_changed else 'initial_or_arrived'}
 				state['objective_progress'] = progress
-			elif distance + 0.08 <= progress['best']:
-				objective_advanced = True
-				progress['best'] = distance
-				progress['at'] = state['clock']
+			elif _distance(progress['goal'], progress_target) > 2.0:
+				# A different local connector is not physical progress. Rebase
+				# its incomparable distance without renewing this order's clock
+				# or granting the same hull alignment a second time.
+				# Preserve each connector's best distance and fixed alignment
+				# anchor across revisits. An ELC-sized orbit between two proved
+				# near points is not a fresh journey on every rebase.
+				connectors = progress.setdefault('connectors', [])
+				previous = dict((key, progress[key]) for key in
+					('goal', 'best') if key in progress)
+				revisited = None
+				for index, connector in enumerate(connectors):
+					if _distance(connector['goal'], progress_target) <= 2.0:
+						revisited = connectors.pop(index)
+						break
+				connectors.append(previous)
+				del connectors[:-16]
+				progress.update(revisited or dict(goal=tuple(progress_target), best=distance))
+				progress['local_rebases'] = progress.get('local_rebases', 0) + 1
+				progress['reset_reason'] = ('revisited_connector_without_credit' if revisited
+					else 'local_rebase_without_credit')
+				if revisited is not None:
+					progress['revisited_connectors'] = progress.get('revisited_connectors', 0) + 1
+			# One order owns one physical progress frontier and alignment anchor.
+			# New/revisited connectors cannot turn the same two-metre oscillation
+			# into fresh travel or a fresh left/right turn every planning tick.
+			origin = progress.setdefault('travel_origin', tuple(position))
+			travel = _distance(position, origin)
+			local_progress_admitted = progress_identity is not None or _distance(progress_target, pocket_goal) > 2.0
+			# This frontier is local, not a global straight-line route metric.
+			# Leaving the same vehicle-sized pocket starts fresh travel/turn
+			# measurement, so a legitimate curved route may approach it again.
+			departed = local_progress_admitted and travel >= 2.0 * own_half_length + arrival
+			progress['pocket_departed'] = departed
+			if departed:
+				progress['previous_travel_origin'] = origin
+				progress['travel_origin'] = tuple(position)
+				progress['travel_best'] = 0.0
 				progress.pop('alignment_yaw', None)
 				progress.pop('alignment_best', None)
+				travel = 0.0
+			# Measure the same destination from both poses. Enemy translation
+			# must never earn distance credit for a stationary chassis.
+			order_anchor = progress.get('order_goal', pocket_goal)
+			order_distance = _distance(position, order_anchor)
+			travel_best = progress.setdefault('travel_best', travel)
+			order_best = progress.setdefault('order_best', order_distance)
+			new_travel = local_progress_admitted and travel >= travel_best + 0.08
+			new_order_distance = order_distance + 0.08 <= order_best
+			progress.update(travel_distance=travel, order_distance=order_distance,
+				hold_paused=False, requested_order_goal=tuple(pocket_goal),
+				local_progress_admitted=local_progress_admitted,
+				translation_credit=bool(new_travel or new_order_distance or departed),
+				alignment_credit=False)
+			if new_travel or new_order_distance or departed:
+				progress['travel_best'] = max(travel_best, travel)
+				progress['order_best'] = min(order_best, order_distance)
+				progress['at'] = state['clock']
+				progress['credit_reason'] = ('left_local_pocket' if departed else
+					'new_order_distance' if new_order_distance
+					else 'new_travel_frontier')
+				objective_advanced = True
+			# The executed near endpoint can differ from the macro progress
+			# point. Keep fixed per-point minima across revisits, so completing
+			# a real dogleg is not undone by the older tactical-distance clock.
+			# Selection/rebasing alone earns no credit, nor does moving a target.
+			if local_progress_admitted:
+				actions = progress.setdefault('action_points', [])
+				action = next((item for item in actions
+					if _distance(item['goal'], target) <= 2.0), None)
+				if action is None:
+					action = dict(goal=tuple(target), best=target_distance)
+					actions.append(action)
+					del actions[:-16]
+				else:
+					action_distance = _distance(position, action['goal'])
+					if (displacement >= 0.08 and abs(float(speed)) > 0.05 and
+							action_distance + 0.08 <= action['best']):
+						action['best'] = action_distance
+						progress['at'] = state['clock']
+						progress['translation_credit'] = True
+						progress['credit_reason'] = 'new_best_action_translation'
+						objective_advanced = True
+			# A connector's best distance and its current distance must use
+			# the SAME fixed point. Native rebasing/steering may supply another
+			# point within the existing 2 m identity tolerance without travel.
+			distance = _distance(position, progress['goal'])
+			progress['measured_distance'] = distance
+			progress['steering_distance'] = _distance(position, progress_target)
+			if distance + 0.08 <= progress['best']:
+				objective_advanced = True
+				progress['best'] = distance
+				if (local_progress_admitted and displacement >= 0.08 and
+						abs(float(speed)) > 0.05 and not (new_travel or new_order_distance or departed)):
+					# A checked dogleg/mechanical action may approach its fixed
+					# endpoint while moving away from the older tactical anchor.
+					# Revisited connectors keep their old best; merely changing
+					# the point or turning does not renew this translation clock.
+					progress['at'] = state['clock']
+					progress['translation_credit'] = True
+					progress['credit_reason'] = 'new_best_local_translation'
+				# Real translation earns distance credit, but must not grant
+				# the same already-earned turn a fresh alignment anchor.
 			elif distance + 0.002 < progress['best']:
 				# Slow uphill travel can take longer than the local stuck timeout
 				# to accumulate 8 cm. Credit its direction while the independent
@@ -1110,9 +1502,25 @@ class LocalDriver(object):
 					if error + 0.002 < progress['alignment_best']:
 						progress['alignment_best'] = error
 						progress['at'] = state['clock']
+						progress['credit_reason'] = 'new_best_alignment'
+						progress['alignment_credit'] = True
 			objective_stalled = state['clock'] - progress['at'] >= 8.0
+			progress['credit_age_seconds'] = state['clock'] - progress['at']
+		# Starting recovery renews its retry clock, not arrival at the remote
+		# objective. A close connector must not cancel the next recovery frame.
+		retained_recovery = bool(state['recovery_time'] > 0.0 and
+			_distance(position, pocket_goal) > arrival)
+		state['arrival_trace'] = dict(local_distance=target_distance,
+			goal_distance=_distance(position, pocket_goal), arrival_radius=arrival,
+			objective_stalled=objective_stalled,
+			objective_age=(state['clock']-state['objective_progress']['at']
+				if progress_target is not None else None),
+			translation_age=state['clock']-state['translation_progress_at'],
+			rotation_refused=bool(rotation_refused),
+			recovery_time_before=state['recovery_time'],
+			retained_recovery=retained_recovery)
 		if (target_distance <= arrival and not objective_stalled and
-				not native_translation_stalled):
+				not native_translation_stalled and not retained_recovery):
 			state.pop('short_translation_escape', None)
 			# Reaching a waypoint is a stop, not a request to drive north: atan2(0, 0)
 			# is zero and previously produced full throttle until the next order tick.
@@ -1180,8 +1588,21 @@ class LocalDriver(object):
 				state['heading_progress_yaw'] = None
 		else:
 			if state['stuck_time'] >= threshold:
+				state['recovery_trigger'] = dict(at=state['clock'],
+					clock_basis='driver_elapsed_seconds', origin=tuple(position),
+					target=tuple(target), goal=tuple(pocket_goal),
+					reason=('objective_timeout' if objective_stalled else
+						'native_translation_timeout' if native_translation_stalled else 'local_stuck'),
+					translation_age=state['clock']-state['translation_progress_at'],
+					displacement=displacement, objective={key:value for key,value in
+						(state.get('objective_progress') or {}).items() if key in (
+						'goal', 'best', 'at', 'order_goal', 'order_best', 'order_distance',
+						'travel_origin', 'travel_best', 'travel_distance', 'credit_reason',
+						'credit_age_seconds', 'translation_credit', 'alignment_credit')})
 				if progress_target is not None:
 					state['objective_progress']['at'] = state['clock']
+					state['objective_progress']['credit_reason'] = 'recovery_retry'
+					state['objective_progress']['credit_age_seconds'] = 0.0
 				if rotation_refused and state.get('recovery_pocket') is None:
 					state['recovery_pocket'] = dict(origin=tuple(position),
 						at=state['clock'], goal=tuple(pocket_goal))
@@ -1195,6 +1616,8 @@ class LocalDriver(object):
 					own_half_length, own_half_width)
 
 		if state['recovery_time'] > 0.0:
+			state.pop('alignment_target', None)
+			state['alignment_observation']['reason'] = 'recovery_owns_heading'
 			# Keep one side for the whole episode. Geometry separates an asymmetric
 			# local jam; team-local slot parity breaks an exact tie without coupling
 			# steering to the timing phase. Never reverse blindly: at a cliff or
@@ -1219,7 +1642,7 @@ class LocalDriver(object):
 			if reverse_clear:
 				reverse_blocker = self._reverse_blocked_by_vehicle(
 					position, yaw, neighbours,
-					own_half_length, own_half_width)
+					own_half_length, own_half_width, body=state.get('collision_body'))
 			if not reverse_clear or reverse_blocker is not None:
 				if objective_stalled or translation_stalled or pocket_stalled:
 					# A slope may permit a short straight exit while rejecting
@@ -1245,7 +1668,7 @@ class LocalDriver(object):
 					else:
 						forward_blocker = self._reverse_blocked_by_vehicle(
 							position, float(yaw) + math.pi, neighbours,
-							own_half_length, own_half_width)
+							own_half_length, own_half_width, body=state.get('collision_body'))
 						if (forward_blocker is None and
 								self._failure_penalty(state, float(yaw)) <= 0.0 and self._clear(
 								direction_clear, float(yaw), escape_distance)):
@@ -1332,7 +1755,7 @@ class LocalDriver(object):
 				self._clear(direction_clear, old_yaw) and
 				not self._static_hull_ahead(
 					position, old_yaw, neighbours,
-					own_half_length, own_half_width)):
+					own_half_length, own_half_width, body=state.get('collision_body'))):
 			chosen_yaw = old_yaw
 		if chosen_yaw is None:
 			chosen_yaw = self._choose_yaw(
@@ -1366,8 +1789,10 @@ class LocalDriver(object):
 		# while braking a recovery or sliding downhill; steering remains forward.
 		avoiding = state['steering_reason'] != 'route'
 		throttle = 1.0
+		pedal_gates = []
 		if avoiding:
 			state.pop('alignment_target', None)
+			state['alignment_observation']['reason'] = 'checked_avoidance_owns_heading'
 		elif turn_speed_limit is not None and float(turn_speed_limit) > 0.0 and float(speed) >= -0.05:
 			# Use the installed traverse rate rather than driving a circle
 			# around a nearby navigation point. Retain the alignment at zero
@@ -1380,14 +1805,17 @@ class LocalDriver(object):
 				if abs(delta) > 0.12:
 					throttle = 0.0
 					brake = True
+					pedal_gates.append('retained_near_point_alignment')
 				else:
 					state.pop('alignment_target', None)
+					state['alignment_observation']['reason'] = 'alignment_completed'
 		if (target_distance <= max(8.0, own_half_length * 2.0) and
 				abs(delta) > 0.45):
 			# Both path corners and native-checked avoidance steps can be inside
 			# the moving hull's turning circle. Align before driving either one.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('near_corner_alignment')
 		climb_grade = ((float(target[1]) - float(position[1])) /
 		               max(0.1, target_distance))
 		if abs(climb_grade) > SLOPE_ALIGNMENT_GRADE and abs(delta) > SLOPE_ALIGNMENT_TURN:
@@ -1396,6 +1824,7 @@ class LocalDriver(object):
 			# climb and repeatedly invalidates the next terrain sample.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('slope_entry_alignment')
 		elif (abs(delta) > math.pi * 0.5 or
 				(not avoiding and heading_error > math.pi * 0.5)):
 			# A selected escape behind the hull needs a pivot too: forward drive
@@ -1405,6 +1834,7 @@ class LocalDriver(object):
 			# diagonal corners still retain forward progress while steering.
 			throttle = 0.0
 			brake = True
+			pedal_gates.append('rear_heading_alignment')
 		if stop_at_target and not avoiding and stopping_distance is not None:
 			try:
 				brake_distance = max(0.0, float(stopping_distance))
@@ -1430,8 +1860,16 @@ class LocalDriver(object):
 				else:
 					throttle = 0.0
 					brake = True
+					pedal_gates.append('destination_stopping_distance')
 		elif not stop_at_target:
 			state['braking_target'] = None
+		state['pedal_observation'] = dict(clock=state['clock'],
+			requested_target=requested_target, resolved_target=tuple(target),
+			distance=target_distance, hull_yaw=float(yaw), desired_yaw=desired_yaw,
+			chosen_yaw=chosen_yaw, delta=delta, speed=float(speed),
+			turn_speed_limit=turn_speed_limit, avoiding=avoiding,
+			alignment_target=state.get('alignment_target'), gates=pedal_gates,
+			throttle=throttle, turn=turn, brake=brake, reason='drive_pedal_arbitration')
 		return {
 			'throttle': throttle,
 			'brake': brake,

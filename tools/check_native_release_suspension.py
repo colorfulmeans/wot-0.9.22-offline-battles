@@ -77,6 +77,20 @@ for case in range(3000):
     if case == 1:
         saved = p, state, heights, dt, pseudo, support
 
+# Patch hits must reach both numeric solvers at their actual application
+# points. Keeping only the height would fabricate a stable outboard lever.
+p = parameters()
+ground = tuple(physics.FootprintSupport(0., .1, -.1) if i < 5 else 0.
+               for i in range(10))
+state = dict(height=.1, vertical_velocity=0., pitch=0., pitch_velocity=0.,
+             roll=0., roll_velocity=0.)
+pseudo = (None,)*4
+adjusted = physics.suspension_contact_params(p, ground)
+expected = physics._reference_damper_suspension_step(
+    adjusted, state, ground, .05, pseudo)
+near(physics.damper_suspension_step(p, state, ground, .05, pseudo), expected)
+assert p['springs'][0]['x'] == -1.2
+
 # Multi-step state transitions include exact contact/airborne flags, not just
 # individual forces. Runtime tuning is read fresh on every bridge call.
 for case in range(20):

@@ -156,7 +156,9 @@ class LocalSiegeBrakingTests(unittest.TestCase):
         battle, entity = local_battle('sweden:S22_Strv_S1', 0, 8.0)
         battle.change_vehicle_setting(setting, True)
         entity.health = 0
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
+        battle._advance_local_wreck.assert_called_once_with(entity, 0.1)
         self.assertIsNone(battle._local_siege_braking)
         self.assertEqual([], mode_inputs(battle))
 

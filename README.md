@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.1** — [Release notes](docs/releases/v0.10.1.md).
+Current release: **v0.10.2** — [Release notes](docs/releases/v0.10.2.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.10.1-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.2-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -50,6 +50,21 @@ eight-metre pocket at most once per fifteen seconds. The receipts include nearby
 baked cells, local fallback rejection counts, the next path points and alignment
 timers, without extra native ground or collision queries. Reproduce the problem
 and export the launcher's error report; no debug switch is required.
+
+Temporary pressure deployments now retain their waypoint progress while their
+current lane still needs support, even when another lane becomes the highest
+priority. Artillery which exhausts its checked parking candidates starts another
+bounded exclusion cycle instead of permanently keeping the last failed goal.
+Normal connectivity, occupancy, hull collision and ballistic checks remain in
+force. Error reports distinguish the server battle round from the planner seed,
+include the actual base-defense input and final responders, and record native
+contact geometry and same-step movement phases for unresolved stalls.
+
+Aligned local forward/reverse previews use the same signed driving collision
+law as actual throttle motion. Passive displacement remains reserved for its
+existing physical callers. Reports include bounded corner-skip refusal reasons
+and closest physical approach between control updates to diagnose near-point
+turning without changing route, avoidance or retry policy.
 
 The route editor's **Show navigation grid** checkbox sits beside Route symmetry.
 It overlays raw baked height, hazard and link coverage with a colour legend.
@@ -423,6 +438,15 @@ whose profile changed after it started must be restarted first.
   shared contacts to route, take cover, pick targets and choose ammunition,
   including SPG arcs. Navigation and foliage data ship for all 41 supported
   standard-battle maps.
+- Completing the final macro-route point hands travel over to a stationary
+  engagement or capture hold. The Bot keeps its selected enemy and existing
+  firing-lane permission instead of circling the base coordinate; a displaced
+  hull resumes travel when it leaves the existing arrival area. Intermediate
+  points, explicit waits, cover, withdrawal and collision checks keep their
+  own owners. `tactical_evidence.route_terminal` records the decision and release.
+- Low health does not trigger Bot withdrawal. Combat withdrawal is reserved
+  for a fired, empty reloadable magazine; a loaded magazine keeps fighting,
+  and ammunition recovery releases the withdrawal owner.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's
@@ -557,6 +581,63 @@ python3 tools/bake_navigation_0922.py --client "$WOT_0922_CLIENT" --map 31_airfi
 python3 tools/bake_all_navigation_0922.py --client "$WOT_0922_CLIENT" --output-dir /tmp/navgraphs-clean --jobs 1
 ```
 
+The two Himmelsdorf maps retain the original 4 m graph and driving scale.
+The retained two passage regions have additive 2 m meshes; seven additional
+small regions use 1 m samples to cover all eight circled street openings.
+Coincident supported vertices join both graphs in each direction. Reproduce
+these resources with `python3 tools/build_local_navigation_meshes.py --client "$WOT_0922_CLIENT"`, then
+regenerate the editor registry with `python3 tools/build_bot_editor_maps.py`.
+The local geometry comes from the exact #1513 collision review at 0.25 m
+spacing, the original 2.15 m body radius, and body-height-clipped collision
+triangles in the new local regions. Seasonal patches publish only links proved
+on both maps. All eight openings are checked in both directions for physical
+clearance and short paths, rather than connectivity by a remote detour.
+The retained base nodes, links, routes and spawns are unchanged.
+Local mesh support is shared by Python geometry and the shipping C++ search;
+it does not change C, avoidance, retry/route-switch or local driving distances.
+Hull footprint checks use the same additive support as path queries, while
+native body collision checks remain authoritative. Static patch bounds are
+indexed and repeated segment queries are cached with bounded per-grid storage;
+the sampling interval and query decisions are retained.
+The editor renders the combined graph and uses the shipping planner for route
+and wait-place connections, rejects partial search results, and records the
+complete check in the collected launcher log. Parking-envelope checks remain
+separate. Restore the shipped route profile to remove local waypoint edits.
+The El Halluf light-tank south-valley defaults now include the revised two
+central waypoints in both directions; other classes retain their own routes.
+
+Basic ground attitude samples the rotated chassis footprint used by the
+five-point support decision. After detailed-support handback, a proposed
+attitude must preserve the currently valid footprint before it replaces the
+accepted pose. Its receipt includes both point sets when this check runs.
+Any missing current point still enables detailed support immediately, and all
+five valid points release it; there is no timer or relaxed point threshold.
+
+Local recovery exits additionally preview the realised body sweep without
+committing destruction or impact effects. Missing-grid turn admission checks
+the next physical yaw slice; aligned short exits check the full front/rear
+envelope. Previews retain realised contact diagnostics and never authorize
+skipping the final collision check. Per-decision reuse bounds repeated yaw
+queries, and `bot.local_sweep` timings and planning receipts record the result.
+Rotation receipts use the same signed shortest yaw delta as the committed
+sweep, including both crossings of the -pi/pi boundary.
+
+Route-assignment evidence includes pressure scores, every donor candidate's
+outcome, the previous waypoint/distance, and the last eight assignment events.
+This preserves expiry followed by reassignment within one server update;
+`history_dropped` explicitly counts older omitted events. The server also logs
+each new `BOT ROUTE ASSIGNMENT` once, without waiting for an order revision;
+round changes reset the diagnostic sequence tracking. These diagnostics do
+not change route selection, lease renewal/expiry, avoidance or retry policy.
+
+Artillery retains one same-region retry after a confirmed blocked firing
+episode. A second completed failure gives other reachable parking regions an
+opportunity. When no untried safe region remains, a new bounded cycle permits
+ordinary retries rather than permanently banning positions. A real shot resets
+the region history; pending probes, missing targets and reload time do not
+exhaust it. `SPG POSITION RETRY` records both selection attempts and any cycle
+restart. Every new parking point still requires native ballistic clearance.
+
 Review the generated artifact differences and retain the existing terrain,
 water, bridge, route and spawn validations. The batch publishes only after
 every map passes. These source changes alone do not disable the live repair
@@ -569,6 +650,55 @@ Tests:
 python3 tools/run_test_suite.py --jobs 4 --logs build/client-test-results
 python3 tools/run_test_suite.py --directory launcher/tests --jobs 2 --logs build/launcher-test-results
 ```
+
+The runner isolates module fakes by test file, fails empty discovery, and writes
+`summary.json` with failing assertion/subtest identities and skips alongside the
+complete logs. Compare the actual published release source with the candidate;
+equal failure counts between neighboring test builds are not regression proof.
+Recovery checks include continuous traffic departure, terminal arrival, real
+contact separation, returned connectors, deferred proofs, and physical departure
+from a recovery pocket. A control command alone does not demonstrate escape.
+Engine-free fixtures and CPython 2.7 native parity do not replace acceptance on
+the pinned Windows client.
+
+Bot navigation, driving and recovery have been restored to the **initial**
+`v0.10.1` tag (`e7d95d56`), not the subsequently replaced release assets.
+Retain only the separate support/contact-point corrections in the Bot runtime.
+Do not restore cross-order recovery memory, first-refusal route retirement,
+new local bypass ownership or arrival handbraking as incidental fixes.
+Audit the original failure and its existing retry/route progression first.
+Focused corrections on that baseline preserve local alignment/safety braking
+when strategy requests forward travel, avoid contact escape for a merely
+tangent parallel hull, and include ordinary forward `advance` in the existing
+20-second authored-gate retry budget. Actual overlap and movement into a peer
+retain the original checked escape; holds and explicit team commands remain
+outside the route-stall timer. No global recovery state or replacement route
+law is introduced.
+The retained physical boundary also applies the existing ground-exit proof to
+upper hull rays, so leaving a slope is not rejected as an upper wall; real
+walls and beams still require a clear remainder and continue to block.
+Known test-build map identities remain readable so saved user route points
+are preserved when returning to the original navigation resources.
+
+Temporary Bot suspension uses the basic centre/front/rear/right/left footprint:
+any missing valid support point enables the detailed solver without a vehicle
+contact prerequisite. After accepted landing effects, all five restored points
+and a grounded pose return ownership to basic support without moving the hull
+or zeroing its velocities. Support samples are reused at an identical pose in
+the same tick. BOT SUPPORT MODE logs transitions and bounded per-point evidence.
+Player and Bot landing admission retains a damaging solver contact even if the
+final pose rebounds airborne; observed ground with no selected witness still
+reaches the existing Bot module-contact resolver. Landing and module-query logs
+distinguish physical admission, empty geometry results and actual HP changes.
+Uphill tops clipped by the basic height window require the existing continuous
+ground proof before counting as support; disconnected roofs remain invalid.
+Handback retires the old basic slope target. Local module icons reconcile through
+the stock DEVICES controller without replaying damage messages or voice, with
+bounded recovery refreshes after repair and controller replacement. Live egress
+receipts distinguish missing support, excessive grade, shoulder failure, collision
+and deferred native proof without changing admission or retry rules.
+The impact module coefficient remains 25. Native-client gameplay and query cost
+still require a matching launcher playtest.
 
 Project code is distributed under [`GPL-3.0`](LICENSE). World of Tanks and its
 assets are not included; this project is not affiliated with or endorsed by

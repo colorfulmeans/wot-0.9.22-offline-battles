@@ -33,7 +33,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
     def order_at(self, now, clear=lambda *unused: True):
         return self.runtime._gun_angle_order(self.state, self.order, self.targets, now, clear)
 
-    def test_real_pitch_refusal_adjusts_once_then_resumes_forward_node(self):
+    def test_real_pitch_refusal_times_out_to_combat_approach(self):
         self.refuse()
         self.assertEqual((0., 0., 0.), self.order_at(0.)['move_position'])
         calls = []
@@ -43,16 +43,83 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.state['z'] = 3.
         self.assertEqual(move['move_position'], self.order_at(4.)['move_position'])
         self.assertEqual(1, len(calls))
-        resumed = self.order_at(6.)
-        self.assertEqual('route', resumed['combat_mode'])
-        self.assertEqual((0., 0., 90.), resumed['move_position'])
-        self.assertIsNone(resumed['target_id'])
-        self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 7.))
-        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 14.))
+        resumed = self.order_at(10.)
+        self.assertEqual('advance_contact', resumed['combat_mode'])
+        self.assertEqual(self.target['position'], resumed['move_position'])
+        self.assertEqual(28, resumed['target_id'])
+        self.assertTrue(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 11.))
+        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot', 28), 18.))
+
+    def test_explicit_stationary_hold_admits_adjustment_with_stale_anchor(self):
+        self.refuse()
+        self.order.update(move_position=(6.27, 0., 0.), throttle_override=0.)
+        self.order_at(10.)
+        self.assertEqual(10., self.state['_gun_angle_adjustment']['start'])
+        moved = self.order_at(12.)
+        self.assertEqual('gun_angle_adjust', moved['combat_mode'])
+        self.assertEqual(1., moved['throttle_override'])
+        self.assertEqual('checked_mechanical_relocation',
+                         self.state['_gun_angle_handoff']['reason'])
+        self.assertEqual(6.27, self.state['_gun_angle_handoff']['anchor_distance'])
+        self.assertEqual('gun_angle_adjust', self.order_at(16.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(22.)['combat_mode'])
+
+    def test_actual_approach_keeps_ownership_and_logs_early_return(self):
+        self.refuse()
+        for throttle, speed in ((1., 0.), (0., 2.)):
+            self.order.update(move_position=(6.27, 0., 0.), throttle_override=throttle)
+            self.state['speed'] = speed
+            self.assertEqual(self.order, self.order_at(10.))
+            self.assertNotIn('_gun_angle_adjustment', self.state)
+            self.assertEqual('existing_approach_in_progress',
+                             self.state['_gun_angle_handoff']['reason'])
+
+    def test_report_style_long_turn_does_not_spend_the_translation_budget(self):
+        self.refuse()
+        self.order_at(0.)
+        self.state['yaw'] = 0.
+        self.order_at(2., lambda yaw, distance: yaw > 1.)
+        # The native driver first turns towards a checked local waypoint.
+        marker = self.state['_gun_angle_adjustment']
+        marker['reverse'] = False
+        self.runtime._decision_cache[11] = (None, None, 2.,
+            dict(combat_mode='gun_angle_adjust', target_yaw=math.pi))
+        for now, yaw in ((4., .3), (6., .6), (8., 1.), (10., 1.5)):
+            self.state['yaw'] = yaw
+            self.assertEqual('gun_angle_adjust', self.order_at(now)['combat_mode'])
+        self.state.update(x=0., z=-3., yaw=3.14)
+        self.assertEqual('gun_angle_adjust', self.order_at(12.)['combat_mode'])
+        self.state['z'] = -7.
+        arrived = self.order_at(14.)
+        self.assertEqual('engage', arrived['combat_mode'])
+        self.assertEqual(28, arrived['target_id'])
+        self.assertEqual(0., arrived['throttle_override'])
+        self.assertFalse(self.runtime._gun_angle_rejected(self.state, ('bot',28),14.))
+        self.assertEqual('relocation_arrived', self.state['_gun_angle_last_terminal']['reason'])
+
+    def test_no_progress_times_out_without_order_poll_or_oscillation_renewal(self):
+        self.refuse()
+        self.order_at(0.)
+        self.order_at(2.)
+        self.order_at(3.)
+        for now in (4., 5., 6., 7., 8.):
+            self.order_at(now)
+        self.assertEqual('advance_contact', self.order_at(9.)['combat_mode'])
+        self.assertEqual('relocation_stalled', self.state['_gun_angle_last_terminal']['reason'])
+        self.assertNotIn('_gun_angle_adjustment', self.state)
+
+    def test_friendly_cleanup_cannot_erase_an_active_mechanical_owner(self):
+        self.runtime.states[11] = self.state
+        self.state['_gun_angle_adjustment'] = {'start':0.}
+        self.runtime._clear_friendly_reposition(11)
+        self.assertTrue(self.state['local_combat_manoeuvre'])
+        self.state.pop('_gun_angle_adjustment')
+        self.runtime._clear_friendly_reposition(11)
+        self.assertFalse(self.state['local_combat_manoeuvre'])
 
     def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
         self.runtime._friendly_repositions[11] = dict(
-            target_id=28, destination=(0., 0., 10.), deadline=5.,
+            target_id=28, target_kind='bot', destination=(0., 0., 10.), deadline=5.,
             fire_range=400., shell_index=0)
         order, expired = self.runtime._friendly_reposition_order(self.state, self.targets, 2.)
         self.assertFalse(expired)
@@ -107,13 +174,13 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.targets[29] = other
         self.order['target_id'] = 29
         self.runtime._local_ballistic_solution(self.state, other, harness._combat_descriptor(), 0)
-        self.assertEqual('route', self.order_at(6.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(6.)['combat_mode'])
 
     def test_blocked_candidates_do_not_loop_and_reverse_keeps_enemy_facing(self):
         self.refuse()
         self.order_at(0.)
         probes = []
-        self.assertEqual('route', self.order_at(2., lambda *args: probes.append(args) or False)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(2., lambda *args: probes.append(args) or False)['combat_mode'])
         self.assertEqual(2, len(probes))
         self.state.pop('_gun_angle_rejected')
         self.order_at(10.)
@@ -128,7 +195,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.order_at(0.)
         self.runtime._gun_angle_candidate_tick = 2.
         self.order_at(2., lambda *unused: self.fail('budget already used'))
-        self.assertEqual('route', self.order_at(6.)['combat_mode'])
+        self.assertEqual('advance_contact', self.order_at(6.)['combat_mode'])
 
     def test_reload_or_unfinished_slew_without_angle_refusal_do_not_adjust(self):
         self.state.update(pitch=0., gun_aligned=False, reload=20.)
@@ -151,8 +218,12 @@ class GunAngleRecoveryTests(unittest.TestCase):
         record = runtime._pack_observations(aggregate, 1.)[0]
         self.assertTrue(record['visible'])
         self.assertEqual([11, 12], record['visible_by_bot_ids'])
-        self.assertEqual([12], record['shootable_by_bot_ids'])
+        self.assertEqual([11, 12], record['shootable_by_bot_ids'])
         self.assertEqual([11, 12], runtime._pack_observations(aggregate, 9.)[0]['shootable_by_bot_ids'])
+
+    def test_production_update_releases_explicit_hold_with_stale_anchor(self):
+        self.order.update(move_position=(6.27, 0., 0.), throttle_override=0.)
+        self.test_production_update_moves_off_unreachable_combat_hold()
 
     def test_production_update_moves_off_unreachable_combat_hold(self):
         descriptor = harness._combat_descriptor()
@@ -174,12 +245,14 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.assertGreater(math.hypot(state['x'], state['z']), 1.)
         self.assertEqual(0, state['fire_seq'])
         self.assertIsNotNone(state.get('_gun_angle_adjustment'))
+        self.assertTrue(state['local_combat_manoeuvre'])
         player['y'] = 0.
         with contextlib.redirect_stdout(io.StringIO()):
             for frame in range(101, 161):
                 runtime.update(.05, frame * .05, players=[player])
         self.assertGreater(state['fire_seq'], 0)
         self.assertNotIn('_gun_angle_adjustment', state)
+        self.assertFalse(state['local_combat_manoeuvre'])
 
 
 if __name__ == '__main__':

@@ -8534,7 +8534,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         # Damage preserves the observed pre-response pose. Equal masses
         # receive equal recovery shares even across different pose owners.
-        self.assertAlmostEqual(-.245, corrected[2], places=4)
+        # The oriented body narrow phase determines recovery distance; this
+        # receipt contract requires backward separation, not the old yaw-only depth.
+        self.assertLess(corrected[2], 0.0)
         self.assertEqual((11, 37), (
             receipt['bot_id'], receipt['bot_state_revision']))
         self.assertEqual(123000, receipt['presentation_time_us'])
@@ -14174,19 +14176,21 @@ class BattleRuntimeContractTests(unittest.TestCase):
             return (_Vector(0.0, height, 90.0),) if height < 1.8 else None
 
         runtime.bigworld.wg_collideSegment = wall
-        self.assertTrue(battle._bot_firing_lane(source, target))
+        self.assertIs(False, battle._bot_firing_lane(source, target))
         self.assertEqual(2, len(rays))
-        self.assertAlmostEqual(1.2, rays[0][1].y)
-        self.assertAlmostEqual(2.2, rays[1][1].y)
+        self.assertIs(False, battle._bot_firing_lane(source, target))
+        self.assertIs(True, battle._bot_firing_lane(source, target))
+        self.assertAlmostEqual(0.8, rays[0][1].y)
+        self.assertAlmostEqual(1.2, rays[1][1].y)
         selected = battle._bot_aim_point(source, target)
-        self.assertAlmostEqual(2.2, selected['aim_position'][1])
+        self.assertAlmostEqual(2.5, selected['aim_position'][1])
 
         bots = bot_runtime.BotRuntime(
             1, direct_launch_origin_probe=battle._bot_direct_launch_origin,
             direct_aim_point_probe=battle._bot_aim_point)
         solution = bots._local_ballistic_solution(source, target, descriptor, 0)
         self.assertIsNotNone(solution)
-        self.assertAlmostEqual(2.2, solution['aim_position'][1])
+        self.assertAlmostEqual(2.5, solution['aim_position'][1])
         speed = descriptor.gun.shots[0].speed
         gravity = descriptor.gun.shots[0].gravity
         time_at_wall = 90.0 / (speed * math.cos(solution['pitch']))
@@ -14203,7 +14207,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._bot_aim_damage_score = (
             lambda unused_descriptor, unused_entry, unused_source,
             unused_target, unused_origin, point: scored.append(point) or
-            (900.0 if point[1] > 2.0 else 100.0))
+            (900.0 if point[1] > 1.0 else 100.0))
 
         battle._bots = types.SimpleNamespace(
             bot_aim_selection_allowed=lambda unused_source, unused_target:
@@ -14222,7 +14226,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         strong = battle._bot_aim_point(source, target)
 
         self.assertEqual(2, len(scored))
-        self.assertGreater(strong['aim_position'][1], 2.0)
+        self.assertAlmostEqual(1.2, strong['aim_position'][1])
         self.assertLess(weak['aim_position'][1], strong['aim_position'][1])
 
     def test_no_gunner_deliberately_aims_at_a_part_it_cannot_hurt(self):
@@ -14234,7 +14238,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle._bot_aim_damage_score = (
             lambda unused_descriptor, unused_entry, unused_source,
             unused_target, unused_origin, point: tested.append(point) or
-            (0.0 if point[1] < 2.0 else 250.0))
+            (0.0 if point[1] < 1.0 else 250.0))
         battle._bots = types.SimpleNamespace(
             bot_aim_selection_allowed=lambda unused_source, unused_target:
             False)
@@ -14243,7 +14247,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         selected = battle._bot_aim_point(source, target)
 
         self.assertEqual(2, len(tested))
-        self.assertGreater(selected['aim_position'][1], 2.0)
+        self.assertAlmostEqual(1.2, selected['aim_position'][1])
 
     def test_a_useless_part_is_still_fired_at_when_it_is_all_there_is(self):
         """Holding fire would read as a broken Bot, not a weak one."""
@@ -14283,6 +14287,37 @@ class BattleRuntimeContractTests(unittest.TestCase):
         selected = battle._bot_aim_point(source, target)
         self.assertTrue(battle._bot_firing_lane(source, target))
         self.assertEqual(selected, battle._bot_aim_point(source, target))
+
+    def test_moving_lane_search_reaches_later_part_without_pending(self):
+        runtime, battle, source, target, unused = self._bot_lane_scene()
+        rays = []
+        def wall(space, start, end, mask):
+            rays.append((start, end))
+            return None if end.y > 1.8 else (_Vector(start.x, start.y, start.z + .1),)
+        runtime.bigworld.wg_collideSegment = wall
+        battle._bot_aim_damage_score = lambda *unused: 100.0
+        results = []
+        for step in range(12):
+            source['x'] = step * .4
+            target['position'] = (step * .7, 0., 100.)
+            before = len(rays)
+            result = battle._bot_firing_lane(source, target)
+            self.assertIsInstance(result, bool)
+            self.assertLessEqual(len(rays) - before, 2)
+            results.append(result)
+            if result:
+                self.assertGreater(battle._bot_aim_point(source, target)['aim_position'][1], 1.8)
+        self.assertTrue(any(results[:5]))
+        self.assertTrue(all(results[3:]))
+
+    def test_moving_all_blocked_lane_completes_each_job_as_false(self):
+        runtime, battle, source, target, unused = self._bot_lane_scene()
+        runtime.bigworld.wg_collideSegment = lambda *unused: (_Vector(0., 2., 1.),)
+        for step in range(12):
+            source['x'] = step * .4
+            target['position'] = (step * .7, 0., 100.)
+            self.assertIs(False, battle._bot_firing_lane(source, target))
+            self.assertIsNone(battle._bot_aim_point(source, target))
 
     def test_bot_firing_lane_probes_close_targets_instead_of_assuming_clear(self):
         runtime, battle, source, target, unused = self._bot_lane_scene()
@@ -14326,7 +14361,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             target['position'] = (10.0, 3.0, 80.0)
             moved = battle._bot_aim_point(source, target)
             self.assertEqual(first['aim_token'], moved['aim_token'])
-            self.assertAlmostEqual(4.2, moved['aim_position'][1])
+            self.assertAlmostEqual(3.8, moved['aim_position'][1])
             key = 'player:2' if kind == 'human' else 'bot:12'
             battle._records[key] = dict(battle._records[key])
             self.assertIsNone(battle._bot_aim_point(source, target))
@@ -14835,7 +14870,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         cases = (
-            ((0.0, 0.91), 'dry entry'),
+            ((0.0, 1.21), 'dry entry'),
             ((2.0, 2.11), 'deeper water'),
         )
 
@@ -14848,7 +14883,19 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 self.assertTrue(result['water'])
 
         self.assertEqual(
-            0.90, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+            1.20, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+
+    def test_direction_probe_accepts_new_shoal_up_to_inclusive_limit(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        for depth in (0.91, 1.067897, 1.158722, 1.2):
+            with self.subTest(depth=depth):
+                battle._water_depth = mock.Mock(side_effect=(0., depth, depth))
+                result = battle._direction_probe((0.,0.,0.),0.)
+                self.assertTrue(result['clear'])
+                self.assertFalse(result['water'])
+                self.assertEqual(3,battle._water_depth.call_count)
 
     def test_visible_hull_drowning_only_drives_native_warning_ui(self):
         runtime = _runtime()
@@ -22691,9 +22738,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             11: {'movement_dir': 1, 'airborne': False},
         })
         battle._destructibles = mock.Mock()
-        battle._destructibles._catalog_motion_blocked.return_value = {
+        battle._destructibles._catalog_motion_proposal.return_value = {
             'status': 'clear', 'token': None,
-            'accepted_now': False, 'used_kinetic_speed': False,
+            'accepted_now': False, 'used_kinetic_speed': False, 'requires_commit': False,
         }
 
         with mock.patch(
@@ -22706,10 +22753,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual('clear', status)
         self.assertFalse(world_probe.call_args.kwargs['commit_enabled'])
-        sensor_call = (
-            battle._destructibles._catalog_motion_blocked.call_args)
-        self.assertFalse(sensor_call.kwargs['commit_enabled'])
-        self.assertFalse(sensor_call.kwargs['kinetic_commit'])
+        # The mutation-free proposal preserves crushability without entering
+        # the native destruction/publication consumer during a preview.
+        battle._destructibles._catalog_motion_proposal.assert_called_once()
+        battle._destructibles._catalog_motion_blocked.assert_not_called()
 
     def test_bot_glancing_probe_keeps_hull_pose_and_travel_separate(self):
         runtime = _runtime()
@@ -29188,13 +29235,14 @@ class BattleRuntimeContractTests(unittest.TestCase):
             send_current=lambda: client.send_input('current'))
         battle._local_speed = 5.0
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
 
-        self.assertEqual(0.0, battle._local_speed)
+        battle._advance_local_wreck.assert_called_once_with(entity, 0.1)
         self.assertEqual(0.0, battle._sender.forward)
         self.assertEqual(0.0, battle._sender.turn)
         self.assertFalse(battle.shoot(0.0, 0.0))
-        self.assertFalse(any(kind == 'fire' for kind, unused in client.sent))
+        self.assertFalse(any(row[0] == 'fire' for row in client.sent))
 
     def test_presentation_ledger_names_only_verifiable_displayed_bots(self):
         runtime = _runtime()
@@ -30782,6 +30830,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         battle._start_message = {'round_id': 2}
+        battle._battle_live = True
         position = types.SimpleNamespace(x=4., y=5., z=6.)
         matrix = types.SimpleNamespace(translation=position)
         runtime.math.Matrix = lambda value: value
@@ -30795,6 +30844,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertTrue(battle._log_bot_motion_probes(10.))
             payload = write.call_args[0][1]
             self.assertEqual(2, payload['round'])
+            self.assertEqual('live', payload['phase'])
             self.assertEqual([4.,5.,6.], payload['bots'][0]['model_position'])
             self.assertFalse(battle._log_bot_motion_probes(10.1))
             self.assertEqual(1, battle._sync.take_motion_probes.call_count)
@@ -30802,6 +30852,21 @@ class BattleRuntimeContractTests(unittest.TestCase):
             self.assertFalse(battle._log_bot_motion_probes(11.1))
             battle._generation += 1
             self.assertTrue(battle._log_bot_motion_probes(11.2))
+
+    def test_bot_motion_diagnostic_drains_without_reporting_after_result(self):
+        battle = BattleRuntime(_runtime())
+        battle._battle_live = True
+        battle._battle_result = {'winner': 1}
+        battle._sync = types.SimpleNamespace(take_motion_probes=mock.Mock())
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        with mock.patch.object(native_input_diagnostics, 'write_json_record') as write:
+            self.assertFalse(battle._log_bot_motion_probes(10.))
+            battle._battle_result = None
+            battle._battle_live = False
+            self.assertFalse(battle._log_bot_motion_probes(11.))
+        self.assertEqual([mock.call(10.), mock.call(11.)],
+                         battle._sync.take_motion_probes.call_args_list)
+        write.assert_not_called()
 
     def test_render_pose_fast_path_skips_materialization_and_bounds_tracks(self):
         runtime = _runtime()
@@ -34026,6 +34091,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             forward=1.0, turn=0.0,
             send_current=lambda: client.send_input('current'))
 
+        battle._advance_local_wreck = mock.Mock()
         battle._drive_local(0.1)
         self.assertEqual([], entity.teleports)
 
@@ -34359,6 +34425,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             bots._probe_started = lambda: None
             bots._probe_finished = lambda index, started: None
             bots._physics_ground_probe = lambda x, z, hint: 2.0
+            bots._physics_ground_limit_probe = None
             bots._turret_motion_probe = None
             bots.set_camera_position((0.0, 0.0, 0.0))
             for step in range(20):

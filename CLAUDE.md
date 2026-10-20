@@ -214,6 +214,10 @@ temporary output and diff it before replacing tracked catalogs.
 
 ### Bot motion and navigation
 
+- Prioritize verified repeating deadlocks, then movement that never escapes,
+  then prolonged stalls which eventually escape, and only then combat-policy
+  refinements. Preserve pressure rebalancing unless a concrete defect is proved.
+
 - Planning cadence and motion cadence are separate. When no new decision
   arrives, continue the last valid movement command. Stop only for an explicit
   tactical hold, terminal state, proved physical blocker, or safety condition.

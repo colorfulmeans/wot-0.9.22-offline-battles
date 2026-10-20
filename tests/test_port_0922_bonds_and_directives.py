@@ -9,7 +9,8 @@ import unittest
 from unittest import mock
 
 from test_port_0922_garage import SNAPSHOT, _modules, _load, _request_modules
-from test_port_0922_postbattle import _receipt, _packed_vehicle, _Socket
+from test_port_0922_postbattle import (
+    _receipt, _packed_vehicle, _Socket, _Packers, _Replay, _ReplayConnector)
 from test_port_0922_battle_runtime import (
     _runtime, _Client, _Descriptor, _effective_params_snapshot)
 from effective_params_fixture import effective_params
@@ -23,6 +24,103 @@ import lan_battle_server as server
 
 
 class BondsAndDirectivesTests(unittest.TestCase):
+    def test_2017_official_calculator_threshold_rounding_and_no_premium_input(self):
+        for xp, expected in ((0, 0), (399, 0), (400, 4), (401, 4),
+                (500, 5), (600, 6), (800, 8), (922, 9), (923, 10),
+                (1000, 11), (1200, 15), (1500, 25), (2000, 57), (3000, 296)):
+            with self.subTest(xp=xp):
+                self.assertEqual(expected, battle_bonds.battle_reward(xp, True))
+                self.assertEqual(0, battle_bonds.battle_reward(xp, False))
+        self.assertEqual(2 ** 31 - 1, battle_bonds.battle_reward(1000000, True))
+
+    def _tier_x_round(self):
+        state = server.BattleState(map_name='01_karelia')
+        state.client_build = server.CLIENT_BUILD_0922
+        state.phase, state.round_id = 'battle', 7
+        state.bot_roster = []
+        for identity in (1, 2):
+            player = server.Player(identity, _Socket(), ('127.0.0.1', identity),
+                name='Player%s' % identity, vehicle='ussr:R11_MS-1', team=identity,
+                account_key=str(identity) * 32)
+            state.players[identity] = player
+            state.vehicle_catalogs[identity] = [{'name': player.vehicle, 'level': 10}]
+        state._freeze_round_participants(list(state.players.values()))
+        return state
+
+    def test_all_tier_x_eligibility_keeps_dead_bots_and_disconnected_players(self):
+        state = self._tier_x_round()
+        participants = list(state.round_participants.values())
+        state.players[2].connected = False
+        state.players[2].alive = False
+        state.vehicle_catalogs.clear()
+        self.assertTrue(state._battle_bond_eligible(participants))
+        state.bot_roster = [{'id': 3}]
+        self.assertFalse(state._battle_bond_eligible(participants))
+        state.bot_manifest = [{'id': 3, 'team': 2, 'vehicle_tier': 9, 'alive': False}]
+        self.assertFalse(state._battle_bond_eligible(participants))
+        state.bot_manifest[0]['vehicle_tier'] = 10
+        self.assertTrue(state._battle_bond_eligible(participants))
+        del state.bot_manifest[0]['vehicle_tier']
+        self.assertFalse(state._battle_bond_eligible(participants))
+        state.bot_roster = state.bot_manifest = []
+        participants[0]['vehicle_tier'] = 9
+        self.assertFalse(state._battle_bond_eligible(participants))
+
+    def test_finished_round_adds_base_and_medal_bonds_once_training_pays_neither(self):
+        for mode in ('regular', 'training'):
+            with self.subTest(mode=mode):
+                state = self._tier_x_round()
+                state.battle_mode = mode
+                state.vehicle_catalogs.clear()
+                with mock.patch.object(server, 'compute_offline_rewards',
+                        side_effect=lambda *a, **k: dict(credits=1000, xp=600, free_xp=30)), \
+                        mock.patch.object(server, 'award_battle_achievements',
+                            return_value={('player', 1): ['warrior', 'mainGun']}):
+                    self.assertTrue(state._finish_battle(1, 'elimination'))
+                    self.assertFalse(state._finish_battle(1, 'elimination'))
+                receipt = next(r for r in state.result_receipts.values() if r['player_id'] == 1)
+                parsed = postbattle_store._receipt(receipt)
+                self.assertEqual(mode == 'regular', parsed['eligible_for_crystal_rewards'])
+                self.assertEqual(11 if mode == 'regular' else 0, parsed['rewards']['crystal'])
+                if mode == 'regular':
+                    with mock.patch.object(postbattle_store, '_achievement_records', return_value=[]):
+                        vehicle = _packed_vehicle(parsed)
+                    self.assertEqual(6, vehicle['originalCrystal'])
+                    self.assertEqual([('mainGun', 2), ('warrior', 3)], vehicle['eventCrystalList'])
+
+    def test_native_avatar_exposes_bond_section_and_legacy_medal_receipts(self):
+        for eligible, reward in ((False, 0), (True, 0), (True, 6), (False, 5)):
+            receipt = _receipt()
+            receipt['eligible_for_crystal_rewards'] = eligible
+            receipt['rewards']['crystal'] = reward
+            packers = _Packers()
+            with mock.patch.object(postbattle_store, '_vehicle_type_compact_descr', return_value=50001), \
+                    mock.patch.object(postbattle_store, '_arena_type_id', return_value=70001):
+                postbattle_store.pack_battle_result(receipt, packers=packers,
+                    replay_types=(_Replay, _ReplayConnector))
+            avatar = dict(packers.calls)['AVATAR_FULL_RESULTS']
+            self.assertEqual(bool(eligible or reward), avatar['eligibleForCrystalRewards'])
+        receipt['eligible_for_crystal_rewards'] = 'true'
+        with self.assertRaises(ValueError):
+            postbattle_store._receipt(receipt)
+
+    def test_base_bonds_eligibility_and_bank_survive_retry_and_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'postbattle.json')
+            store = postbattle_store.PostBattleStore(path)
+            receipt = _receipt(store.account_key)
+            receipt['eligible_for_crystal_rewards'] = True
+            receipt['rewards']['crystal'] = 11
+            receipt['crystal_rewards'] = {'warrior': 3, 'mainGun': 2}
+            store.set_progress_applier(lambda value: {'awarded':
+                economy.scale_rewards(value['rewards'], 300, 300, 100)})
+            self.assertTrue(store.accept(receipt))
+            restarted = postbattle_store.PostBattleStore(path)
+            self.assertFalse(restarted.accept(receipt))
+            self.assertEqual(11, restarted.progress()['crystal'])
+            saved = next(iter(restarted._pending.values()))
+            self.assertTrue(saved['eligible_for_crystal_rewards'])
+
     def test_price_baker_preserves_crystal_through_parse_render_and_load(self):
         with mock.patch.object(sys, 'path', [str(Path(__file__).resolve().parents[1] / 'tools')] + sys.path):
             import bake_prices_0922

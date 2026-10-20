@@ -336,7 +336,7 @@ MODERN_INPUT_FIELDS = frozenset((
     "fire_seq", "shell_index", "next_shell_index",
     "shell_change_pending", "gun_checkpoint", "ram_contacts", "tank_pushes", "turret_pushes",
     "ram_contact", "destructible_contacts", "siege_enabled",
-    "up_cosine",
+    "up_cosine", "wreck_pose",
 ))
 MODERN_INPUT_REQUIRED_FIELDS = frozenset(("round_id",))
 HUMAN_RAM_CONTACT_FIELDS = frozenset((
@@ -2474,6 +2474,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self._stack_totals = {}
         self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
@@ -2860,6 +2861,7 @@ class BattleState:
             self.environment_pushes = {}
             self.environment_push_sequences = {}
             self.environment_fall_totals = {}
+            self._stack_totals = {}
             self.environment_critical_totals = {}
             self.player_mission_view_ranges = {}
             self.player_mission_view_ranges_tick = -1
@@ -3685,6 +3687,7 @@ class BattleState:
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
+        self._stack_totals = {}
         self.environment_critical_totals = {}
         self.player_overturn_state = {}
         self.rules_state = {"bases": {
@@ -4980,6 +4983,17 @@ class BattleState:
                 # publication carries only the values that change, and
                 # ``_decode_bot_row`` rejoins these.
                 entry.update(round_constants)
+                if 'stack_mass' in raw:
+                    try:
+                        entry['stack_mass'] = _bounded_float(raw['stack_mass'],1.0,1000000.0)
+                    except (TypeError,ValueError,OverflowError):
+                        return False
+                previous = next((item for item in self.bot_manifest
+                    if item['id'] == bot_id and
+                    item['vehicle'] == entry['vehicle']), None)
+                entry['vehicle_tier'] = (previous['vehicle_tier']
+                    if previous is not None and 'vehicle_tier' in previous else
+                    self._result_vehicle_tier(entry['vehicle']))
                 if 'skill' in raw:
                     if raw['skill'] not in bot_gunnery.SKILL_TIERS:
                         return False
@@ -5387,7 +5401,7 @@ class BattleState:
                 if (contact["fresh"] != reported_fresh or
                         contact["visible"] != (time_left > 0.0) or
                         (reported_fresh and not contact["visible"]) or
-                        (not reported_fresh and
+                        (not contact['visible'] and
                          contact["shootable_by_bot_ids"])):
                     return False
                 if "radio_recipients" in contact:
@@ -5482,12 +5496,12 @@ class BattleState:
                     contact["threatened_bot_ids"] = sorted(
                         threatened_ids if contact["visible"] else ())
                 fresh = bool(bot_observer_ids or observer_ids)
-                # An observer may die before its in-flight report arrives.
-                # Retire its direct sight and firing evidence, but keep the
-                # valid lease that still lights this target for the team.
+                # Direct spotting freshness and the independently proved
+                # shooter lane have separate owners. Dead shooters and radio
+                # recipients were already pruned above. Losing the direct
+                # observer must not erase a live recipient's native lane.
                 contact["fresh"] = fresh
                 if not fresh:
-                    contact["shootable_by_bot_ids"] = []
                     if "threatened_bot_ids" in contact:
                         contact["threatened_bot_ids"] = []
                 contact["time_left"] = time_left
@@ -6400,6 +6414,11 @@ class BattleState:
             "airborne": bool(raw.get("airborne", False)),
             "service_brake": bool(raw.get("service_brake", False)),
             "route_wreck_blocked": bool(raw.get("route_wreck_blocked", False)),
+            "local_combat_manoeuvre": bool(raw.get("local_combat_manoeuvre", False)),
+            "aim_feedback_kind": str(raw.get("aim_feedback_kind") or ""),
+            "aim_feedback_id": max(0, int(_finite_float(raw.get("aim_feedback_id")))),
+            "aim_feedback_error": _clamp(_finite_float(raw.get("aim_feedback_error")), 0.0, math.pi),
+            "aim_feedback_aligned": bool(raw.get("aim_feedback_aligned", False)),
             "contact_push_acks": list(tank_contact_ledger.normalize(
                 raw.get("contact_push_acks", [])).values()),
             "movement_dir": (1 if movement > 0.01 else
@@ -6799,6 +6818,10 @@ class BattleState:
         """
         result = dict(previous) if previous else {}
         result['route_wreck_blocked'] = bool(raw.get('route_wreck_blocked', False))
+        result['local_combat_manoeuvre'] = bool(raw.get('local_combat_manoeuvre', False))
+        for name in ('aim_feedback_kind', 'aim_feedback_id',
+                     'aim_feedback_error', 'aim_feedback_aligned'):
+            result[name] = raw.get(name, '' if name == 'aim_feedback_kind' else 0)
         # The ledgers this holds must not alias the retired state; every other
         # path here produces fresh containers.
         for name in ("critical", "equipment_states", "ammo_remaining"):
@@ -7438,17 +7461,37 @@ class BattleState:
                     if owner is not None:
                         fire_owners[victim[1]] = owner
             self.bot_states = next_states
+            stack_impacts = self._consume_stack_contacts(progress)
             environment_fires = self._consume_environment_criticals(progress, fire_owners)
             for victim, previous, current, lost, reason in environment_records:
-                event = dict(kind='bot_health', target_bot=victim[1], damage=lost,
-                    health=current['health'], dead=not current['alive'],
-                    display_health=current.get('display_health', current['health']),
-                    attack_reason=reason, death_reason=reason if not current['alive'] else 0,
-                    source='environment', critical=current.get('critical'))
-                self._attribute_environment_event(event, victim, previous.get('critical'),
-                    record_criticals='critical_totals' not in progress)
-                if event.get('push_attributed'):
-                    self.pending_events.append(event)
+                # Bot landing HP is already in current. Classify that loss
+                # once, using frozen impact witnesses even if this impact
+                # destroyed either participant before publication arrived.
+                remaining = lost
+                parts = []
+                for attacker, amount in stack_impacts.get(victim, ()):
+                    amount = min(remaining, amount)
+                    if amount>0:
+                        parts.append((attacker,amount,2))
+                        remaining -= amount
+                if remaining:
+                    parts.append((None,remaining,reason))
+                cursor = int(current['health'])+lost
+                for attacker, amount, part_reason in parts:
+                    cursor -= amount
+                    dead = cursor<=0 and not current['alive']
+                    if dead:
+                        current['death_reason'] = part_reason
+                    event = dict(kind='bot_health', target_bot=victim[1], damage=amount,
+                        health=cursor, dead=dead, display_health=cursor,
+                        attack_reason=part_reason, death_reason=part_reason if dead else 0,
+                        source='ram' if attacker is not None else 'environment',
+                        critical=current.get('critical'))
+                    self._attribute_environment_event(event,victim,previous.get('critical'),
+                        attacker=attacker,resolve_push=attacker is None,
+                        record_criticals='critical_totals' not in progress)
+                    if event.get('push_attributed'):
+                        self.pending_events.append(event)
                 if victim[1] not in hazards and reason == 3:
                     self.environment_pushes.pop(victim, None)
             for attacker, victim, damage, before, after in fire_damage_records:
@@ -7760,8 +7803,8 @@ class BattleState:
             count -= amount
 
     def _attribute_environment_event(self, event, victim, critical_before, attacker=None,
-                                     record_criticals=True):
-        if attacker is None:
+                                     record_criticals=True, resolve_push=True):
+        if attacker is None and resolve_push:
             attacker = self._environment_pusher(victim)
         if attacker is not None:
             event['attacker_bot' if attacker[0] == 'bot' else 'attacker'] = attacker[1]
@@ -7899,8 +7942,108 @@ class BattleState:
                 break
         return deaths
 
+    def _stack_actor(self, identity):
+        return (self.bot_states.get(identity[1]) if identity[0] == 'bot'
+                else self.players.get(identity[1]))
+
+    def _stack_actor_mass(self, identity):
+        if identity[0] == 'bot':
+            return next((float(row['stack_mass']) for row in self.bot_manifest
+                         if row['id']==identity[1] and 'stack_mass' in row),0.0)
+        return float(self.human_collision_profiles.get(identity[1], {}).get('mass', 0.0))
+
+    def _commit_stack_damage(self, attacker, victim, damage, phase):
+        reason = 2 if attacker is not None else 3
+        target = self._stack_actor(victim)
+        if target is None:
+            return 0
+        alive = target.get('alive') if victim[0] == 'bot' else target.alive
+        health = int(target.get('health',0) if victim[0] == 'bot' else target.health)
+        damage = min(health,max(0,int(damage)))
+        if not alive or damage <= 0:
+            return 0
+        health -= damage
+        if victim[0] == 'bot':
+            before = self._bot_combat_signature(target)
+            critical_before = before[2]
+            target.update(health=health,display_health=health,alive=health>0,
+                          death_reason=reason if health<=0 else 0)
+            critical = self._apply_bot_terminal_critical(target) if health<=0 else None
+            self._commit_external_bot_combat(target,before)
+        else:
+            critical_before = target.critical
+            target.health = target.display_health = health
+            target.alive = health > 0
+            target.death_reason = reason if health<=0 else 0
+            if health<=0:
+                target.forward=target.turn=target.speed=0.0
+            critical = None
+        event = dict(kind='health',
+            damage=damage,health=health,display_health=health,dead=health<=0,
+            attack_reason=reason,death_reason=reason if health<=0 else 0,
+            source='ram' if attacker is not None else 'environment',stack_phase=phase)
+        event['target_bot' if victim[0]=='bot' else 'target'] = victim[1]
+        if critical is not None:
+            event.update(critical=critical,combat_revision=target['combat_revision'],
+                combat_base_revision=target['combat_base_revision'],
+                combat_ack_seq=target['combat_ack_seq'])
+        self._drop_capture_for_vehicle(*victim,attacker=attacker)
+        self._attribute_environment_event(event,victim,critical_before,
+            attacker=attacker,record_criticals=False,resolve_push=False)
+        self.pending_events.append(event)
+        if health<=0:
+            self._record_vehicle_end(*victim)
+        _server_log('VEHICLE STACK ' + json.dumps(dict(phase=phase,
+            upper_or_attacker=attacker,victim=victim,damage=damage,health=health,
+            source=event['source'],attack_reason=reason,
+            round=self.round_id,trial_rates=True),sort_keys=True))
+        return damage
+
+    def _consume_stack_contacts(self, progress):
+        from gui.mods.offline_lan_0922 import vehicle_stack
+        rows = progress.get('stacks',())
+        if not isinstance(rows,(list,tuple)) or len(rows)>1024:
+            return {}
+        impact_credits = {}
+        totals = getattr(self,'_stack_totals',None)
+        if totals is None:
+            totals=self._stack_totals={}
+        for row in rows:
+            try:
+                upper=vehicle_stack.carrier(row['upper'])
+                lower=vehicle_stack.carrier(row['lower'])
+                up=_exact_int(row['upper_total'],0,2147483647)
+                low=_exact_int(row['lower_total'],0,2147483647)
+                environment=_exact_int(row.get('lower_environment_total',0),0,low)
+                impact=_exact_int(row.get('upper_impact_total',0),0,2147483647)
+            except (KeyError,ValueError,TypeError,OverflowError):
+                continue
+            if upper==lower or self._stack_actor(upper) is None or self._stack_actor(lower) is None:
+                continue
+            key=upper+lower
+            previous=totals.get(key,(0,0,0,0))
+            if (up<previous[0] or low<previous[1] or environment<previous[2] or
+                    impact<previous[3] or low-environment<previous[1]-previous[2]):
+                continue
+            # The authority's cumulative native-contact receipt is consumed
+            # once. An unchanged/replayed publication cannot spend HP again.
+            totals[key]=(up,low,environment,impact)
+            if impact>previous[3] and upper[0]=='bot':
+                impact_credits.setdefault(upper,[]).append((lower,impact-previous[3]))
+            lower_actor=self._stack_actor(lower)
+            lower_alive=(lower_actor.get('alive') if lower[0]=='bot' else lower_actor.alive)
+            if not lower_alive:
+                continue
+            # Freeze both sides' eligibility before either can die in this
+            # tick. A top wreck keeps its load; a bottom wreck stops pressure.
+            self._commit_stack_damage(upper,lower,
+                (low-environment)-(previous[1]-previous[2]),'pressure_or_impact')
+            self._commit_stack_damage(None,lower,environment-previous[2],'wreck_pressure')
+            self._commit_stack_damage(lower,upper,up-previous[0],'pressure')
+        return impact_credits
+
     def _commit_player_environment_damage(
-            self, player, damage, reason, display_health=None, critical=None):
+            self, player, damage, reason, display_health=None, critical=None, attacker=None):
         """Apply one server-decided fall or overturn HP delta atomically."""
         if player is None or not player.alive or player.health <= 0:
             return False
@@ -7936,12 +8079,16 @@ class BattleState:
                 int(player.display_health) if dead else int(player.health)),
             "attack_reason": reason,
             "death_reason": reason if dead else 0,
-            "source": "environment",
+            "source": "ram" if attacker is not None else "environment",
         })
         if critical is not None:
             self.pending_events[-1]['critical'] = critical
             self.pending_events[-1].update(critical_commit or {})
-        if reason == 3:
+        if attacker is not None:
+            self._attribute_environment_event(self.pending_events[-1],
+                ('player',player.player_id),critical_before,attacker=attacker,
+                resolve_push=False)
+        elif reason == 3:
             self._attribute_environment_event(self.pending_events[-1], ('player', player.player_id), critical_before)
             observation = self.player_environment.get(player.player_id) or {}
             if observation.get('level') == 2:
@@ -8032,7 +8179,7 @@ class BattleState:
                     PLAYER_ENVIRONMENT_CAPABILITY not in
                     player.capabilities or
                     not isinstance(message, dict) or
-                    set(message) - {'module_contacts'} != {
+                    set(message) - {'module_contacts', 'vehicle_contact'} != {
                         "type", "round_id", "authority_epoch",
                         "observation_seq", "input_seq", "impact_speed"} or
                     message.get("type") != "landing_observation" or
@@ -8067,6 +8214,16 @@ class BattleState:
                 "impact_speed": impact_speed,
                 "module_contacts": module_contacts,
             }
+            from gui.mods.offline_lan_0922 import vehicle_stack
+            carrier = None
+            if message.get('vehicle_contact') is not None:
+                try:
+                    carrier = vehicle_stack.carrier(message['vehicle_contact'])
+                    if carrier == ('player',player_id) or self._stack_actor(carrier) is None:
+                        return False
+                except (TypeError,ValueError,OverflowError):
+                    return False
+                normalized['vehicle_contact']=list(carrier)
             fingerprint = _message_fingerprint(normalized)
             previous = player.landing_observation_fingerprints.get(
                 observation_seq)
@@ -8122,11 +8279,28 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
+            # Freeze the contact's identities before either side can die in
+            # the same impact. Later wreck pressure has a separate counter.
+            upper_alive = bool(player.alive)
+            lower = self._stack_actor(carrier) if carrier is not None else None
+            lower_alive = bool(lower.get('alive') if carrier and carrier[0]=='bot'
+                               else lower.alive if lower is not None else False)
             terminal, module_payload = player_critical_mechanics.advance_impact(
                 player, impact_speed, module_contacts, float(self.tick)/TICK_HZ)
             self._commit_player_environment_damage(
-                player, max(damage, terminal), 3, display_health=0,
+                player, max(damage, terminal), 2 if lower_alive else 3, display_health=0,
+                attacker=carrier if lower_alive else None,
                 critical=_critical_payload(module_payload) if module_payload else None)
+            if carrier is not None:
+                upper_mass=self._stack_actor_mass(('player',player_id))
+                lower_mass=self._stack_actor_mass(carrier)
+                target=self._stack_actor(carrier)
+                maximum=int(target.get('max_health',target.get('health',0))
+                    if carrier[0]=='bot' else target.max_health)
+                if upper_mass>0.0 and lower_mass>0.0:
+                    crush=vehicle_stack.impact_damage(maximum,impact_speed,upper_mass,lower_mass)
+                    self._commit_stack_damage(('player',player_id) if upper_alive else None,
+                        carrier,crush,'fall_impact')
             player.landing_observation_seq = observation_seq
             player.landing_observation_input_seq = input_seq
             player.landing_observation_fingerprints[
@@ -10132,6 +10306,8 @@ class BattleState:
             if previous_fingerprint is not None:
                 # Exact retransmission is an idempotent success. Reusing one
                 # operation identity for different damage is a conflict.
+                _server_log('RAM AUDIT duplicate round=%s key=%s identical=%s hp_applied=False' % (
+                    self.round_id, key, previous_fingerprint == fingerprint))
                 return previous_fingerprint == fingerprint
             bot = self.bot_states.get(bot_id)
             target = (self.bot_states.get(target_id) if target_kind == "bot"
@@ -10251,6 +10427,12 @@ class BattleState:
                     damage_to_target, contact_seq, bot.get('health'),
                     (target.get('health') if target_kind == 'bot' else
                      target.health)))
+            _server_log('RAM AUDIT commit round=%s key=%s motion_seq=%s '
+                'bot=%s target=%s:%s damage_bot=%s damage_target=%s '
+                'track_contacts_bot=%s track_contacts_target=%s track_speed=%s' % (
+                    self.round_id, key, (ram_contact or {}).get('bot_ram_motion_seq'),
+                    bot_id, target_kind, target_id, damage_to_bot, damage_to_target,
+                    track_bot, track_target, impact_speed))
             reason = 2
 
             bot_combat_before = self._bot_combat_signature(bot)
@@ -10862,6 +11044,17 @@ class BattleState:
             })
         return rows
 
+    def _battle_bond_eligible(self, participants):
+        """Use every frozen participant, including dead/disconnected actors."""
+        if self.battle_mode != 'regular':
+            return False
+        if set(row['id'] for row in self.bot_roster) != set(
+                row['id'] for row in self.bot_manifest):
+            return False
+        roster = list(participants) + list(self.bot_manifest)
+        return (set(row['team'] for row in roster) == set((1, 2)) and
+                all(row.get('vehicle_tier', 1) == 10 for row in roster))
+
     def _finish_battle(self, winner, reason, base_team=0,
                        record_receipts=True):
         """Durably store and announce a terminal result exactly once."""
@@ -10898,6 +11091,7 @@ class BattleState:
                     "team_killer": bool(player.team_killer),
                 } for player in self.players.values()]
             public_results = self._public_result_roster(winner, participants)
+            eligible_for_crystal = self._battle_bond_eligible(participants)
             awards = award_battle_achievements({
                 "actors": self._achievement_actor_rows(
                     winner, public_results),
@@ -10949,7 +11143,8 @@ class BattleState:
                         "player", player_id))
                 crystal_rewards = battle_bonds.medal_rewards(
                     public_row["achievements"], participant.get("vehicle_tier", 1))
-                rewards["crystal"] = sum(crystal_rewards.values())
+                rewards["crystal"] = (sum(crystal_rewards.values()) +
+                    battle_bonds.battle_reward(rewards['xp'], eligible_for_crystal))
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
                 if self.battle_mode == "training":
@@ -10984,6 +11179,7 @@ class BattleState:
                     "stats": dict(public_row["stats"]),
                     "rewards": rewards,
                     "crystal_rewards": crystal_rewards,
+                    "eligible_for_crystal_rewards": eligible_for_crystal,
                     "friendly_fire": friendly,
                     "battle_booster": int(participant.get("battle_booster", 0)),
                     "public_results": public_results,
@@ -11026,6 +11222,17 @@ class BattleState:
                 _server_log("BATTLE RESULT persistence failed: %s" % error)
                 return False
             self.result_receipts = next_receipts
+            for participant in participants:
+                receipt = next_receipts['%s:%d:%d' % (
+                    self.receipt_namespace, self.round_id, participant['player_id'])]
+                medal_bonds = sum(receipt['crystal_rewards'].values())
+                _server_log('BOND REWARD round=%d player=%d eligible=%s '
+                    'base_xp=%d battle=%d medals=%d total=%d' % (
+                        self.round_id, participant['player_id'],
+                        receipt['eligible_for_crystal_rewards'],
+                        receipt['rewards']['xp'],
+                        receipt['rewards']['crystal'] - medal_bonds,
+                        medal_bonds, receipt['rewards']['crystal']))
         self.battle_result = result
         self.result_reset_tick = self.tick + max(
             1, int(round(RESULT_RESET_SECONDS * TICK_HZ)))
@@ -11646,6 +11853,8 @@ class BattleState:
         extra = fields - MODERN_INPUT_FIELDS
         if extra:
             return ("field_whitelist", sorted(extra)[0]), parsed
+        if 'wreck_pose' in message and not isinstance(message['wreck_pose'], bool):
+            return ('wreck_pose_shape', 'wreck_pose'), parsed
         has_next_shell = "next_shell_index" in message
         has_shell_pending = "shell_change_pending" in message
         if has_next_shell != has_shell_pending:
@@ -11839,10 +12048,21 @@ class BattleState:
             gun_checkpoint = parsed["gun_checkpoint"]
             reported_up_cosine = parsed["up_cosine"]
             if inactive_modern:
+                if (message.get('wreck_pose') is True and not player.alive and
+                        self.phase == 'battle' and self.battle_result is None and
+                        player.participating):
+                    # A dead owner publishes passive position only. Driver,
+                    # weapons and damage inputs remain terminal no-ops.
+                    for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'):
+                        if name in message:
+                            setattr(player, name, _finite_float(message[name]))
+                    player.forward = player.turn = player.speed = 0.0
+                    player.client_position = True
+                    self._record_player_pose_sample(player, message)
                 # A complete input frame may already be queued when death,
                 # leave, or the round result overtakes it. Its whole
-                # non-mutating envelope is validated above; fold it as a
-                # terminal no-op that advances only the processed frontier so
+                # envelope is validated above. Apart from an explicit passive
+                # wreck pose, fold it as a no-op advancing the processed frontier so
                 # the frames queued behind it never wait on a sequence gap.
                 if ledger:
                     self._record_player_input_decision(
@@ -12905,6 +13125,11 @@ class BattleState:
             burning = bool(
                 isinstance(player.critical, dict) and
                 player.critical.get("fire", False))
+            if burning and not player.alive:
+                terminal = dict(player.critical, fire=False, events=[])
+                self._commit_player_critical_progress(player, terminal)
+                burning = False
+                changed += 1
             if (not player.connected or not player.participating or
                     not player.alive or not burning):
                 self.last_shell_fire_sources.pop(victim, None)
@@ -14839,6 +15064,47 @@ class BattleState:
             "arena_bounds": arena_bounds,
         }
 
+    def _log_bot_route_assignments(self):
+        """Persist every new assignment, independent of wire order revisions."""
+        if getattr(self, '_route_assignment_log_round', None) != self.round_id:
+            self._route_assignment_log_round = self.round_id
+            self._route_assignment_log_sequences = {}
+        for order in self.bot_orders.get('orders', ()):
+            receipt = order.get('route_assignment') or {}
+            last = self._route_assignment_log_sequences.get(order['id'], 0)
+            for event in receipt.get('history', ()):
+                if event['sequence'] <= last:
+                    continue
+                _server_log('[Offline LAN 0.9.22] BOT ROUTE ASSIGNMENT ' +
+                    json.dumps(dict(event, round=self.round_id,
+                        planner_round=event.get('round'), prior_logged_sequence=last,
+                        history_dropped=receipt.get('history_dropped', 0)),
+                        separators=(',', ':')))
+                last = event['sequence']
+            self._route_assignment_log_sequences[order['id']] = last
+
+    def _log_bot_defense(self, context, now):
+        """Observe the exact capture input and final responder choices."""
+        stamp = getattr(self, '_bot_defense_log_stamp', None)
+        if stamp is not None and stamp[0] == self.round_id and now - stamp[1] < 3.0:
+            return
+        self._bot_defense_log_stamp = (self.round_id, now)
+        planner = self.bot_planner
+        bots = planner._alive_bots(self.bot_manifest, list(self.bot_states.values()), planner.tactics)
+        _server_log('[Offline LAN 0.9.22] BOT BASE DEFENSE ' + json.dumps(dict(
+            round=self.round_id, at=now, context=context,
+            candidates=[dict(id=bot['id'], team=bot['team'],
+                eligible=planner._base_defense_eligible(bot),
+                capture_protected=("bot", bot['id']) in planner._defense_contributor_keys(context, 3-bot['team']),
+                world_pose=bot['state'].get('world_pose', True),
+                critical=bot['state'].get('critical'),
+                position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})
+                for bot in bots],
+            incidents=planner._base_defense,
+            final_orders=[dict(id=order['id'], mode=order.get('combat_mode'),
+                defense_base_id=order.get('defense_base_id'), goal=order.get('move_position'))
+                for order in self.bot_orders.get('orders', ())]), separators=(',', ':')))
+
     def tick_once(self, dt):
         reset_message = None
         had_pending_live = False
@@ -14940,6 +15206,8 @@ class BattleState:
             if (self.battle_result is None and
                     self.tick >= self._next_bot_planner_tick):
                 team_orders = self._active_team_commands_locked()
+                planner_now = time.monotonic()
+                defense_context = self._bot_defense_context()
                 self.bot_orders = self.bot_planner.build_orders(
                     self.bot_manifest, list(self.bot_states.values()),
                     [dict(self._public_player(p, include_outfits=False),
@@ -14947,8 +15215,18 @@ class BattleState:
                               p.player_id, {}).get('shape'))
                      for p in self.players.values()
                      if p.connected and p.participating],
-                    time.monotonic(), self._bot_defense_context(),
+                    planner_now, defense_context,
                     team_orders=team_orders)
+                self._log_bot_route_assignments()
+                self._log_bot_defense(defense_context, planner_now)
+                for order in self.bot_orders.get('orders', ()):
+                    attempt = order.get('route_attempt') or {}
+                    if attempt.get('action') in ('skip_parking', 'skip_gate',
+                                                 'switch_route', 'no_alternative',
+                                                 'physical_progress_renewed'):
+                        _server_log('BOT ROUTE ATTEMPT ' + json.dumps(dict(
+                            attempt, bot=order['id'], round=self.round_id),
+                            sort_keys=True, separators=(',', ':')))
                 self._next_bot_planner_tick = (
                     self.tick + BOT_PLANNER_INTERVAL_TICKS)
             # Freeze the one current clock sample shared by this tick's durable

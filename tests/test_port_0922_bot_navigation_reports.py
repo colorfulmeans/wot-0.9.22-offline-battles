@@ -356,6 +356,27 @@ class FrameOwnedNavigationTests(unittest.TestCase):
         self.assertEqual(1, serviced['searches'][0]['steps'])
         self.assertEqual(250, serviced['searches'][0]['last_step_age_ms'])
 
+    def test_native_pending_progress_is_unknown_not_zero_and_wait_is_separate(self):
+        from gui.mods.offline_lan_0922.native_navigation import NativeSearch
+        nav = self.runtime().navigator
+        start, goal = (-56.,0.,-56.), (56.,0.,56.)
+        key = nav._cache_key(('local',7,'route'),goal)
+        nav.searches[key] = NativeSearch(99,0,8.)
+        nav.search_times[key] = 8.
+        nav.bot_states[7] = dict(request_key=key,pending_since=1.)
+        receipt = nav.bot_search_diagnostics(7,start,10.)
+        self.assertEqual(9000,receipt['pending_ms'])
+        self.assertEqual(2000,receipt['actual_oldest_job_age_ms'])
+        self.assertEqual(1,receipt['actual_job_count'])
+        self.assertIsNone(receipt['searches'][0]['steps'])
+        self.assertIsNone(receipt['searches'][0]['expanded'])
+        self.assertFalse(receipt['searches'][0]['progress_known'])
+        nav.searches.clear()
+        receipt = nav.bot_search_diagnostics(7,start,11.)
+        self.assertEqual(10000,receipt['pending_ms'])
+        self.assertEqual(0,receipt['actual_job_count'])
+        self.assertEqual(0,receipt['actual_oldest_job_age_ms'])
+
 
 class AdvancedCaptureTests(unittest.TestCase):
     def test_contact_loss_after_staging_hands_over_to_actual_circle(self):

@@ -12,6 +12,8 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, observed_ray,
     current as current_combat, count as combat_count)
 
+from gui.mods.offline_lan_0922.scenery_policy import railway_vehicle_resource
+
 import sys as _sys
 from contextlib import contextmanager
 from gui.mods.offline_lan_0922 import native_destructibles as _native_geometry
@@ -327,6 +329,9 @@ def _isolate_destructible_1513(
 		failure_type, chunk_id, item_index=None, detail=None):
 	"""Quarantine one unsafe slot/chunk and emit one bounded English line."""
 	chunk_id = int(chunk_id)
+	identity = (chunk_id, None if item_index is None else int(item_index))
+	globals().setdefault('g_offh_destr_isolation_reasons', {}).setdefault(
+		identity, dict(reason=str(failure_type), detail=str(detail)[:1200]))
 	if item_index is None:
 		globals().setdefault(
 			'g_offh_destr_isolated_chunks', set()).add(chunk_id)
@@ -483,167 +488,15 @@ def _align_native_item_names_1513(
 	return mapping, 'exact', (), ()
 
 
-def _probe_authored_placement_detail_1513(bigworld, area, space_id, chunk_id,
-		item_index, native_type, names, native_count):
-	"""Return one exact authored match or an explicit ambiguity state."""
-	catalog = _destructible_catalog or {}
-	index = catalog.get('authored_placement_index')
-	# Discover placement shifts during the first bounded name scan. Waiting
-	# for a later matrix mismatch lets name alignment quarantine the affected
-	# type first, so that later trigger can never be reached.
-	if not index or not catalog.get('layout_repair_supported'):
-		return None, 'none'
-	kind = ('tree' if native_type == getattr(area, 'DESTR_TYPE_TREE', None)
-		else _catalog_kind_for_type_1513(area, native_type))
-	unregistered = native_type == _NATIVE_EFFECT_CATEGORY_UNREGISTERED_1513
-	if kind is None and not unregistered:
-		return None, 'none'
-	try:
-		import Math
-		from gui.mods.offline_lan_0922.destructible_layout import matching_placements
-		chunk = bigworld.wg_getChunkMatrix(space_id, chunk_id)
-		matrix = Math.Matrix(bigworld.wg_getDestructibleMatrix(
-			space_id, chunk_id, item_index))
-		signature = _locator_signature(matrix, chunk.translation, Math,
-			catalog['quantization'])
-		matches = list(matching_placements(
-			index, int(chunk_id), signature, kind))
-		if signature in catalog.get('ambiguous_instances', ()):
-			return None, 'ambiguous'
-		valid = []
-		for match in matches:
-			if unregistered:
-				# -1 proves a resolved native slot, not its type. Anonymous model
-				# groups use it even when their exact authored placement is valid.
-				# Recover only non-tree models through a unique full transform AND
-				# the authored resource's real descriptor; never infer from -1 alone.
-				record = match[1]
-				if record['kind'] not in ('fragile', 'falling', 'structure'):
-					continue
-				desc = area.g_cache.getDescByFilename(
-					record['descriptor_filename'])
-				if (not isinstance(desc, dict) or
-						_catalog_kind_for_type_1513(area, desc.get('type')) !=
-						record['kind']):
-					continue
-			if (len(names) == native_count and names[item_index] and
-					_normalized_filename(names[item_index]) !=
-					match[1]['filename']):
-				continue
-			valid.append(match)
-		if len(valid) == 1:
-			return valid[0], 'exact'
-		if len(valid) > 1:
-			return None, 'ambiguous'
-		return None, 'none'
-	except Exception:
-		# Missing native geometry is not evidence for changing any identity.
-		return None, 'none'
 
 
-def _probe_authored_placement_1513(bigworld, area, space_id, chunk_id,
-		item_index, native_type, names, native_count):
-	"""Return only a uniquely proved authored placement."""
-	match, unused_status = _probe_authored_placement_detail_1513(
-		bigworld, area, space_id, chunk_id, item_index, native_type, names,
-		native_count)
-	return match
 
 
-def _commit_proved_chunk_layout_1513(entry, chunk_id):
-	"""Atomically reindex a chunk only after native placement proves a shift.
-
-	Some #1513 loads retain WGDE empty slots where the baked catalog compacted
-	them. Never propagate one inferred offset to neighbours: every admitted
-	item needs its own unique transform and native category match.
-	"""
-	catalog = _destructible_catalog
-	if catalog is None:
-		return None
-	chunk_id = int(chunk_id)
-	pending = _layout_repair_pending_1513(chunk_id)
-	matches = dict(entry.get('placement_matches') or {})
-	conflicts = set(entry.get('placement_conflicts') or ())
-	owners = {}
-	for item, (wire, unused_record) in matches.items():
-		owners.setdefault(wire, []).append(item)
-	for items in owners.values():
-		if len(items) > 1:
-			conflicts.update(items)
-	changed = any(item not in conflicts and (
-		wire != (chunk_id, item) or record != (
-			catalog['baked_instances'].get((chunk_id, item)) or
-			catalog['tree_instances'].get((chunk_id, item))))
-			for item, (wire, record) in matches.items())
-	if not pending and not changed:
-		return None
-	for item in sorted(conflicts):
-		entry.setdefault('ignored_items', set()).add(item)
-		_isolate_destructible_1513(
-			'layout_placement_conflict', chunk_id, item,
-			detail='ambiguous_or_duplicate_authored_transform')
-		matches.pop(item, None)
-	changed = any(wire != (chunk_id, item) or record != (
-			catalog['baked_instances'].get((chunk_id, item)) or
-			catalog['tree_instances'].get((chunk_id, item)))
-			for item, (wire, record) in matches.items())
-	if not changed:
-		catalog.setdefault('layout_repairs', set()).discard(chunk_id)
-		return None
-	if not pending:
-		_advance_layout_generation_1513(chunk_id)
-	_invalidate_chunk_layout_1513(chunk_id)
-	for field in ('baked_instances', 'tree_instances'):
-		for wire in list(catalog[field]):
-			if wire[0] == chunk_id:
-				catalog[field].pop(wire, None)
-	# Replace broad-phase identities as well as descriptor/placement lookup.
-	remap = dict((authored, (chunk_id, item))
-		for item, (authored, record) in matches.items())
-	for bin_key, authored_wires in catalog['authored_baked_shot_bins'].items():
-		if any(wire[0] == chunk_id for wire in authored_wires):
-			wires = catalog['baked_shot_bins'].get(bin_key, ())
-			catalog['baked_shot_bins'][bin_key] = set(
-				wire for wire in wires if wire[0] != chunk_id)
-			catalog['baked_shot_bins'][bin_key].update(
-				remap[wire] for wire in authored_wires if wire in remap)
-	catalog['excluded_instances'] = set(wire for wire in
-		catalog['excluded_instances'] if wire[0] != chunk_id)
-	count = int(entry['fingerprint'][0])
-	for item in range(count):
-		if item not in matches:
-			catalog['excluded_instances'].add((chunk_id, item))
-	mapping = {}
-	for item, (authored_wire, record) in matches.items():
-		wire = (chunk_id, item)
-		field = 'tree_instances' if record['kind'] == 'tree' else 'baked_instances'
-		catalog[field][wire] = record
-		mapping[item] = record['descriptor_filename']
-		if field == 'baked_instances':
-			catalog['instances'][record['signature']]['wire'] = wire
-	entry['ignored_items'] = set(range(count)) - set(matches)
-	key = entry.get('layout_key')
-	if key is not None:
-		globals().setdefault('g_offh_destr_proved_layouts', {})[key] = (
-			count, dict(mapping))
-	catalog.setdefault('layout_repairs', set()).discard(chunk_id)
-	try:
-		import sys
-		sys.stdout.write('[Offline LAN 0.9.22] DESTR live layout chunk=%d '
-			'proved=%d native=%d remapped=%d\n' % (chunk_id, len(matches), count,
-			sum(wire != (chunk_id, item) for item, (wire, record) in matches.items())))
-	except Exception:
-		pass
-	_native_geometry.refresh_baked(_native_sensor)
-	return mapping
 
 
 def _finish_native_item_name_alignment_1513(
 		entry, positional_names, chunk_id):
 	"""Recover authored names and preserve independent native type groups."""
-	layout = _commit_proved_chunk_layout_1513(entry, chunk_id)
-	if layout is not None:
-		return layout, 'exact', ()
 	mapping, status, anomalous, item_failures = (
 		_align_native_item_names_1513(
 			entry['names_by_type'], entry['items_by_type'], positional_names,
@@ -777,6 +630,10 @@ def retire_chunk_identity_1513(chunk_id):
 	"""
 	chunk_id = int(chunk_id)
 	globals().get('g_offh_destr_isolated_chunks', set()).discard(chunk_id)
+	reasons = globals().get('g_offh_destr_isolation_reasons', {})
+	for identity in list(reasons):
+		if identity[0] == chunk_id:
+			reasons.pop(identity, None)
 	for name in ('g_offh_destr_isolated_slots',
 			'g_offh_destr_name_unresolved_slots'):
 		values = globals().get(name, set())
@@ -791,11 +648,7 @@ def _invalidate_chunk_native_names_1513(chunk_id):
 	for identity in list(globals().get('g_offh_destr_native_fragile_replacements', ())):
 		if identity[1] == chunk_id:
 			globals()['g_offh_destr_native_fragile_replacements'].discard(identity)
-	if _destructible_catalog is not None:
-		_destructible_catalog.setdefault(
-			'layout_repairs', set()).discard(chunk_id)
 	for cache_name in ('g_offh_destr_item_names',
-			'g_offh_destr_proved_layouts',
 			'g_offh_destr_catalog_model_names',
 			'g_offh_destr_native_name_lists',
 			'g_offh_destr_isolated_name_types'):
@@ -816,58 +669,6 @@ def _invalidate_chunk_native_names_1513(chunk_id):
 		if identity[0] == chunk_id:
 			unresolved.pop(identity, None)
 	_release_item_name_query_focus_1513_for_chunk(chunk_id)
-
-
-def _invalidate_chunk_layout_1513(chunk_id):
-	"""Retry one remapped chunk without discarding its first name snapshot.
-
-	A late live-placement repair changes catalog ownership, not the native
-	streaming lifetime.  Keep the load's pre-mutation filename tuple and all
-	canonical destruction/publication ledgers, while removing every derived
-	identity and spatial entry for this exact chunk.
-	"""
-	chunk_id = int(chunk_id)
-	_native_geometry.drop(chunk_id)
-	for cache_name in ('g_offh_destr_item_names',
-			'g_offh_destr_proved_layouts', 'g_offh_destr_catalog_model_names'):
-		cache = globals().get(cache_name, {})
-		for key in list(cache):
-			if key[1] == chunk_id:
-				cache.pop(key, None)
-	tree_names = globals().get('g_offh_destr_catalog_tree_names', {})
-	for key in list(tree_names):
-		if key[1] == chunk_id:
-			tree_names.pop(key, None)
-	from gui.mods.offline_lan_0922 import destructibles_compat
-	destructibles_compat.invalidate_safe_descriptor_chunk(chunk_id)
-	unresolved = globals().get('g_offh_destr_unresolved_obstacles', {})
-	for identity in list(unresolved):
-		if identity[0] == chunk_id:
-			unresolved.pop(identity, None)
-	globals().get('g_offh_destr_broken_cache', {}).pop(chunk_id, None)
-	_release_item_name_query_focus_1513_for_chunk(chunk_id)
-	state = globals().get('g_offh_tree_state')
-	if isinstance(state, dict):
-		state.get('chunks', {}).pop(chunk_id, None)
-	instances = globals().get('g_offh_destr_instances', {})
-	contact_bins = globals().get('g_offh_destr_contact_bins', {})
-	affected_bin_keys = set()
-	for identity in [key for key in list(instances) if key[0] == chunk_id]:
-		instance = instances.pop(identity)
-		bin_keys = (instance.get('bin_keys')
-			if isinstance(instance, dict) else None)
-		if bin_keys is None:
-			bin_keys = [key for key, members in contact_bins.items()
-				if identity in members]
-		affected_bin_keys.update(bin_keys)
-		for bin_key in bin_keys:
-			members = contact_bins.get(bin_key)
-			if members is None:
-				continue
-			members.discard(identity)
-			if not members:
-				contact_bins.pop(bin_key, None)
-	_bump_spatial_revision_1513(affected_bin_keys, (chunk_id,))
 
 
 def _touch_item_name_cache_entry_1513(entry):
@@ -939,9 +740,6 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 	# #1513 compacts this list after destruction while native item indices do not
 	# change, so rebuilding from the post-mutation list loses the remaining names.
 	fingerprint = (int(native_count), tuple(names))
-	proved = globals().get('g_offh_destr_proved_layouts', {}).get(key)
-	if proved is not None and proved[0] == int(native_count):
-		return dict(proved[1]), 'exact', ()
 	entry = cache.get(key)
 	if entry is not None and entry['fingerprint'] != fingerprint:
 		cache.pop(key, None)
@@ -970,10 +768,9 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			ignored_items = set(item_index for chunk, item_index in
 				globals().get('g_offh_destr_isolated_slots', ())
 				if int(chunk) == int(chunk_id))
-			if not _layout_repair_pending_1513(chunk_id):
-				ignored_items.update(item_index for chunk, item_index in
-					(_destructible_catalog or {}).get('excluded_instances', ())
-					if int(chunk) == int(chunk_id))
+			ignored_items.update(item_index for chunk, item_index in
+				(_destructible_catalog or {}).get('excluded_instances', ())
+				if int(chunk) == int(chunk_id))
 		names_by_type, status, item_failures = _native_name_groups_1513(
 			area_destructibles, names, ignored_items, full_width)
 		for item_index, failure_type, detail in item_failures:
@@ -988,9 +785,6 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 		else:
 			entry = {
 				'fingerprint': fingerprint,
-				'layout_key': key,
-				'placement_matches': {},
-				'placement_conflicts': set(),
 				'names_by_type': names_by_type,
 				'kinds_by_type': dict((getattr(area_destructibles, name), kind)
 					for name, kind in (
@@ -1027,14 +821,9 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 	end_item = entry['next_item'] + query_count
 	for item_index in range(entry['next_item'], end_item):
 		identity = (int(chunk_id), int(item_index))
-		if (is_excluded_1513(*identity) and
-				not _layout_repair_pending_1513(chunk_id)):
-			# Supporting live layout repair does not make an authored absent
-			# slot a failed native item. As with full-width lists, skip it unless
-			# this chunk has an actual pending remap. Otherwise every compacted
-			# v9 list containing such a slot ends as isolated_item, and all the
-			# valid trees/models behind it lose registration. Never query a
-			# mode-excluded scene object merely to finish name enumeration.
+		if (is_excluded_1513(*identity)):
+			# Empty WGDE rows and mode-excluded resources reserve their slots,
+			# but own no active native model to query.
 			entry['ignored_items'].add(item_index)
 			continue
 		if _destructible_isolated_1513(*identity):
@@ -1088,13 +877,6 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			entry['result'] = (None, 'category_abi', ())
 			_release_item_name_query_focus_1513(space_id, chunk_id)
 			return entry['result']
-		match, placement_status = _probe_authored_placement_detail_1513(
-			bigworld, area_destructibles, space_id, chunk_id, item_index,
-			native_type, names, int(native_count))
-		if match is not None:
-			entry['placement_matches'][item_index] = match
-		elif placement_status == 'ambiguous':
-			entry['placement_conflicts'].add(item_index)
 		# A later matrix/catalog failure may quarantine this slot. Preserve every
 		# already-proved native group, including ``-1`` (the resolved group with no
 		# filename handler), so rebuilding a compacted name list never escalates one
@@ -1103,7 +885,7 @@ def _chunk_item_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 			(int(space_id), int(chunk_id)), {})[item_index] = int(native_type)
 		if native_type == -1:
 			# This native group contributes no name to the compacted list, but
-			# its independently proved placement must survive a layout repair.
+			# its fixed catalog slot remains unchanged.
 			continue
 		entry['items_by_type'].setdefault(
 			int(native_type), []).append(item_index)
@@ -1192,12 +974,6 @@ def _chunk_native_names_1513(bigworld, area_destructibles, space_id, chunk_id,
 		bigworld, area_destructibles, space_id, chunk_id, native_count, names)
 	if status == 'pending_alignment':
 		return None, status
-	# Every completed alignment is a terminal repair outcome.  A proved remap
-	# clears this marker in the commit path; a contained evidence failure or a
-	# no-op repair must release it here rather than freezing the chunk forever.
-	if _destructible_catalog is not None:
-		_destructible_catalog.setdefault(
-			'layout_repairs', set()).discard(int(chunk_id))
 	if mapping is not None and status == 'partial' and anomalous:
 		# Types are independent in a compacted list once every item and name
 		# has been typed.  An unresolved tree group cannot invalidate the
@@ -1267,8 +1043,7 @@ def resolve_native_item_name_1513(space_id, chunk_id, item_index):
 		return 'invalid', None
 	names, status = _chunk_native_name_list_1513(
 		BigWorld, space_id, chunk_id, native_count)
-	if (not _layout_repair_pending_1513(chunk_id) and
-			status in ('ready', 'pending') and
+	if (status in ('ready', 'pending') and
 			(chunk_id, item_index) in (_destructible_catalog or {}).get(
 				'tree_instances', {})):
 		return _resolve_catalog_tree_name_1513(
@@ -1297,42 +1072,47 @@ def resolve_native_item_name_1513(space_id, chunk_id, item_index):
 
 def _resolve_catalog_model_name_1513(bigworld, area, space_id, chunk_id,
 		item_index, native_count, names):
-	"""Prove a contacted model without waiting for unrelated chunk items.
-
-	Ruinberg contacts can remain in the solid unidentified path while whole
-	chunk alignment competes with all Bot scans. The v9 authored index permits
-	the same independent proof used for trees: unique complete transform, exact
-	unchanged wire, live effect category and installed resource descriptor.
-	Never infer an offset, consume a compacted list by position, or probe the
-	unsafe scalar filename API. A remap or ambiguity retains full alignment.
-	"""
+	"""Resolve the descriptor at its baked native slot; never change identity."""
 	catalog = _destructible_catalog or {}
 	wire = (int(chunk_id), int(item_index))
 	baked = catalog.get('baked_instances', {}).get(wire)
-	if (not catalog.get('layout_repair_supported') or baked is None or
-			_layout_repair_pending_1513(chunk_id) or _destructible_isolated_1513(*wire)):
+	if not catalog.get('fixed_native_slots') or baked is None or _destructible_isolated_1513(*wire):
 		return None
 	key = (int(space_id), int(chunk_id), int(item_index))
 	cache = globals().setdefault('g_offh_destr_catalog_model_names', {})
 	if cache.get(key) == int(native_count):
 		return baked['descriptor_filename']
+	# A descriptor still loading cannot register this fixed slot. Do not
+	# repeat native placement queries before it becomes available.
+	try:
+		desc = area.g_cache.getDescByFilename(baked['descriptor_filename'])
+	except Exception:
+		return None
+	if not isinstance(desc,dict) or _catalog_kind_for_type_1513(area,desc.get('type')) != baked['kind']:
+		return None
 	if _item_name_query_allowance_1513(bigworld, key[:2], 1, contact=True) < 1:
 		return None
 	try:
-		native_type = bigworld.wg_getDestructibleEffectCategory(
-			space_id, chunk_id, item_index, -1)
-		if isinstance(native_type, bool) or not isinstance(native_type, _INTEGER_TYPES):
+		import Math
+		native_type = bigworld.wg_getDestructibleEffectCategory(space_id, chunk_id, item_index, -1)
+		if type(native_type) not in _INTEGER_TYPES:
 			return None
-		match = _probe_authored_placement_1513(
-			bigworld, area, space_id, chunk_id, item_index, native_type,
-			names, native_count)
+		if (native_type != _NATIVE_EFFECT_CATEGORY_UNREGISTERED_1513 and
+				_catalog_kind_for_type_1513(area, native_type) != baked['kind']):
+			return None
+		chunk = bigworld.wg_getChunkMatrix(space_id, chunk_id)
+		matrix = Math.Matrix(bigworld.wg_getDestructibleMatrix(space_id, chunk_id, item_index))
+		signature, located = _catalog_instance_for_matrix_1513(matrix, chunk.translation, Math, wire)
+		if located is None or located.get('wire') != wire or any(
+				abs(a-b)>1 for a,b in zip(signature,baked['signature'])):
+			return None
+		if (len(names)==native_count and names[item_index] and
+				_normalized_filename(names[item_index]) != baked['filename']):
+			return None
 	except Exception:
 		return None
-	if match is None or match[0] != wire or match[1] != baked:
-		return None
 	cache[key] = int(native_count)
-	globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(
-		key[:2], {})[int(item_index)] = int(native_type)
+	globals().setdefault('g_offh_destr_isolated_name_types', {}).setdefault(key[:2], {})[item_index] = native_type
 	return baked['descriptor_filename']
 
 
@@ -1376,8 +1156,6 @@ def _resolve_catalog_tree_name_1513(bigworld, area, space_id, chunk_id,
 				bigworld.wg_getDestructibleMatrix, space_id, chunk_id, item_index))
 		signature, unused_located = _catalog_instance_for_matrix_1513(
 			matrix, chunk.translation, Math, (chunk_id, item_index))
-		if _layout_repair_pending_1513(chunk_id):
-			return 'pending', None
 		if name_conflict:
 			raise ValueError('native tree filename disagrees with authored slot')
 		if signature != record['signature']:
@@ -1617,7 +1395,6 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_unresolved_logs',
 			'g_offh_destr_broken_cache',
 			'g_offh_destr_item_names',
-			'g_offh_destr_proved_layouts',
 			'g_offh_destr_catalog_tree_names',
 			'g_offh_destr_catalog_model_names',
 			'g_offh_destr_isolated_name_types',
@@ -1628,11 +1405,13 @@ def _clear_runtime_registry(preserve_spatial_batch=False):
 			'g_offh_destr_item_name_cache_serial',
 			'g_offh_destr_isolated_chunks',
 			'g_offh_destr_isolated_slots',
+			'g_offh_destr_isolation_reasons',
 			'g_offh_destr_name_unresolved_slots',
 			'g_offh_destr_isolation_logs',
 			'g_offh_destr_isolation_log_capped',
 			'g_offh_destr_diagnostics', 'g_offh_destr_diag_last_static',
 			'g_offh_destr_contact_diagnostic_times',
+			'g_offh_destr_crush_gate_times',
 			'g_offh_destr_spatial_revision',
 			'g_offh_destr_spatial_published_revision',
 			'g_offh_destr_spatial_global_generation',
@@ -1989,21 +1768,15 @@ def set_catalog(catalog):
 		'ambiguous_instances': ambiguous_signatures,
 		'equivalent_instances': equivalent_instances,
 		'has_instance_index': catalog_version >= 4,
-		'layout_repair_supported': catalog_version >= 9,
-		'layout_repairs': set(),
-		'layout_generations': {},
+		'fixed_native_slots': catalog_version >= 10,
 		'baked_instances': baked_instances,
+		'railway_instances': frozenset(key for key, value in baked_instances.items()
+			if railway_vehicle_resource(value.get('filename'))),
 		'baked_shot_bins': baked_shot_bins,
-		'authored_baked_shot_bins': dict((key, frozenset(wires))
-			for key, wires in baked_shot_bins.items()),
 		'tree_instances': tree_instances,
 		'tree_resources': tree_resources,
 		'excluded_instances': excluded_instances,
 	}
-	from gui.mods.offline_lan_0922.destructible_layout import placement_index
-	_destructible_catalog['authored_placement_index'] = placement_index(
-		baked_instances, tree_instances)
-	globals()['g_offh_destr_proved_layouts'] = {}
 	_clear_runtime_registry()
 
 
@@ -2147,15 +1920,20 @@ def _spatial_cell_signature_1513(rectangles):
 	"""Return local generations for the union of exact 8 m rectangles."""
 	cell_generations = globals().get(
 		'g_offh_destr_spatial_cell_generations', {})
-	keys = set()
-	for rectangle in rectangles:
-		for bin_x in xrange(int(rectangle[0]), int(rectangle[1]) + 1):
-			for bin_z in xrange(int(rectangle[2]), int(rectangle[3]) + 1):
-				keys.add((bin_x, bin_z))
+	keys = _native_geometry.spatial_cells(rectangles)
+	if keys is None:
+		keys = set()
+		for rectangle in rectangles:
+			for bin_x in xrange(int(rectangle[0]), int(rectangle[1]) + 1):
+				for bin_z in xrange(int(rectangle[2]), int(rectangle[3]) + 1):
+					keys.add((bin_x, bin_z))
+		keys = sorted(keys)
+	else:
+		combat_count('destructible_spatial_cells_native')
 	return (int(globals().get(
 		'g_offh_destr_spatial_global_generation', 0)), tuple(
 			(key, int(cell_generations.get(key, 0)))
-			for key in sorted(keys)))
+			for key in keys))
 
 
 def _collision_region_revision_1513(lower, upper):
@@ -2164,8 +1942,25 @@ def _collision_region_revision_1513(lower, upper):
 	if globals().get('g_offh_destr_spatial_published_revision') != revision:
 		# A replaced writer with unknown locality retains global invalidation.
 		return ('global_revision', revision)
-	return _spatial_cell_signature_1513((
+	# A native world sweep asks for the same region for many ray lanes and
+	# ground columns. Rebuilding/sorting its Python cell set on every cache
+	# lookup costs work even when filter preparation itself is already shared.
+	# Reuse only inside the existing synchronous update, at an exact published
+	# revision. Dirty staged mutations are still rejected by the filter owners.
+	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	cache = scope.setdefault('regions', {}) if isinstance(scope, dict) else None
+	key = (globals().get('g_offh_destr_runtime_space'), revision, lower, upper)
+	if cache is not None and key in cache:
+		combat_count('destructible_region_signature_hits')
+		return cache[key]
+	combat_count('destructible_region_signature_misses')
+	value = _spatial_cell_signature_1513((
 		(lower[0], upper[0], lower[1], upper[1]),))
+	if cache is not None:
+		if len(cache) >= 128:
+			cache.clear()
+		cache[key] = value
+	return value
 
 
 def _spatial_chunk_signature_1513(chunk_ids):
@@ -2418,45 +2213,12 @@ def _catalog_kind_for_type_1513(area_destructibles, destr_type):
 	return None
 
 
-def _layout_repair_pending_1513(chunk_id):
-	return int(chunk_id) in (_destructible_catalog or {}).get('layout_repairs', ())
 
 
-def _layout_generation_1513(chunk_id):
-	return int((_destructible_catalog or {}).get(
-		'layout_generations', {}).get(int(chunk_id), 0))
 
 
-def _advance_layout_generation_1513(chunk_id):
-	catalog = _destructible_catalog or {}
-	chunk_id = int(chunk_id)
-	generations = catalog.setdefault('layout_generations', {})
-	generations[chunk_id] = int(generations.get(chunk_id, 0)) + 1
-	return generations[chunk_id]
 
 
-def _request_layout_repair_1513(identity, signature):
-	catalog = _destructible_catalog or {}
-	if not catalog.get('layout_repair_supported'):
-		return False
-	chunk_id = int(identity[0])
-	if _layout_repair_pending_1513(chunk_id):
-		return True
-	# A previously remapped slot is already the proved owner of this placement.
-	current = (catalog.get('baked_instances', {}).get(identity) or
-		catalog.get('tree_instances', {}).get(identity))
-	if current is not None and all(abs(a - b) <= 1 for a, b in
-			zip(current['signature'], signature)):
-		return False
-	from gui.mods.offline_lan_0922.destructible_layout import match_placement
-	match = match_placement(catalog.get('authored_placement_index', {}),
-		chunk_id, signature, None)
-	if match is None:
-		return False
-	catalog.setdefault('layout_repairs', set()).add(chunk_id)
-	_advance_layout_generation_1513(chunk_id)
-	_invalidate_chunk_layout_1513(chunk_id)
-	return True
 
 
 def _catalog_instance_for_matrix_1513(matrix, chunk_translation,
@@ -2467,8 +2229,6 @@ def _catalog_instance_for_matrix_1513(matrix, chunk_translation,
 	signature = _locator_signature(
 		matrix, chunk_translation, math_module,
 		_destructible_catalog['quantization'])
-	if identity is not None and _request_layout_repair_1513(identity, signature):
-		return signature, None
 	equivalent = _destructible_catalog.get(
 		'equivalent_instances', {}).get(signature)
 	if equivalent is not None and identity is not None:
@@ -2794,8 +2554,6 @@ def _stream_baked_shot_instance_1513(spaceID, identity):
 			('falling_matrix_signature' if baked['kind'] == 'falling' else
 			 'native_matrix_signature'),
 			chunk_id, item_index, detail=error)
-		return None
-	if _layout_repair_pending_1513(chunk_id):
 		return None
 	if located is None:
 		failure_type = ('catalog_signature_ambiguous'
@@ -3145,13 +2903,7 @@ def _confirmed_unresolved_obstacle_1513(spaceID, identity, vehicle_box=None):
 		cache.pop(identity, None)
 		report_skip('native_count_%r' % native_count)
 		return ()
-	generation = _layout_generation_1513(chunk_id)
-	if _layout_repair_pending_1513(chunk_id):
-		# The old wire-to-placement relation has been invalidated.  The next
-		# completed alignment either commits a new map or releases the repair;
-		# never turn this transient state into a reusable negative proof.
-		cache.pop(identity, None)
-		return ()
+	generation = 0
 	entry = _unresolved_obstacle_entry_1513(cache.get(identity))
 	if (entry is not None and entry[0] == native_count and
 			entry[1] == generation):
@@ -3176,11 +2928,6 @@ def _confirmed_unresolved_obstacle_1513(spaceID, identity, vehicle_box=None):
 	except Exception:
 		# A placement query that cannot answer is not evidence of a wall.
 		report_skip('native_placement_query_failed')
-		return ()
-	if _layout_repair_pending_1513(chunk_id):
-		# ``_catalog_instance_for_matrix_1513`` can discover a late shift and
-		# invalidate this cache synchronously.  Do not reinsert an empty result
-		# from the superseded layout after that invalidation.
 		return ()
 	boxes = baked['boxes'] if signature == baked['signature'] else ()
 	cache[identity] = (native_count, generation, boxes)
@@ -4123,26 +3870,27 @@ def _planning_catalog_candidate_1513(spaceID, hit_point, segment_start,
 		allow_overlaps=allow_overlaps)
 
 
+def _railway_identity_1513(identity):
+	catalog = _destructible_catalog or {}
+	if identity in catalog.get('railway_instances', ()):
+		return True
+	instance = globals().get('g_offh_destr_instances', {}).get(identity) or {}
+	return railway_vehicle_resource(instance.get('filename'))
+
+
 def prepare_navigation_collision_filter(start, end):
-	"""Ignore original destructible materials in the FIRST planning query.
+	"""Skip ordinary original props, retaining exact railway stock identities.
 
-	The pinned #1513 callback supplies (material, flags, item, chunk). Its
-	71--85 materials belong to original destructibles; 86 is an exclusive
-	sentinel and 87--100 are damaged replacements. This contract is sufficient
-	for route planning:
-	no catalog lookup, streamed identity, kinetic test or per-object recast
-	is needed. Native traversal keeps searching the entire segment for real
-	terrain, hard scenery and replacement geometry, even inside a prop.
-
-	Physical hull/suspension/destruction queries retain their existing exact
-	identity and kinetic rules. This callback cannot authorize crushing.
+	Use fixed baked chunk/item identities before streaming, with the existing
+	registered identity when available. No ray-time catalog scan or recast is
+	introduced. Material-only filtering cannot distinguish a train from a fence.
 	"""
 	def keep_surface(*surface):
 		if (len(surface) != 4 or
 				not all(type(value) in _INTEGER_TYPES for value in surface)):
 			return True
 		if _DESTRUCTIBLE_MAT_KIND_MIN_1513 <= surface[0] < _STRUCTURE_MAT_KIND_MAX_1513:
-			return False
+			return _railway_identity_1513((surface[3], surface[2]))
 		return True
 	return keep_surface
 
@@ -4185,6 +3933,8 @@ def _soft_static_original_filter_1513(excluded_keys):
 				not 71 <= surface[0] <= 86):
 			return True
 		identity = (surface[3], surface[2])
+		if _railway_identity_1513(identity):
+			return True
 		return (identity + (surface[0],) not in excluded_keys and
 			identity + (None,) not in excluded_keys)
 	return keep_original
@@ -4223,6 +3973,8 @@ def planning_support_below_soft_roof(spaceID, segment_start, segment_end,
 			excluded_keys=excluded_keys)
 		if candidate == 'deferred':
 			return 'deferred'
+		if candidate is not None and candidate != 'deferred' and railway_vehicle_resource(candidate[3]):
+			return current_hit
 		if candidate is None:
 			return current_hit
 		mat_info = _synthetic_mat_info(candidate + ((
@@ -4325,6 +4077,8 @@ def _catalog_soft_static_path(spaceID, segment_start, segment_end,
 			trace['objects'].append({
 				'identity': tuple(candidate[:3]), 'model': candidate[3],
 				'kind': candidate[4], 'scale': candidate[5]})
+		if railway_vehicle_resource(candidate[3]):
+			return finish(False, 'hard', 'solid_railway_vehicle', current_hit)
 		# #1513 ``Vehicle._isDestructibleMayBeBroken`` returns True as soon as the
 		# chunk controller reports the item broken, whatever the vehicle speed and
 		# whatever the hide callback still draws.  A broken skin therefore never
@@ -4513,6 +4267,9 @@ def ground_filter_batch_1513(provider):
 		combat_count('destructible_ground_filter_batch_disabled')
 		return None
 	scope = globals().get('g_offh_destr_collision_preparation_scope')
+	if isinstance(scope, dict) and 'ground_query' in scope:
+		combat_count('destructible_ground_preparer_reused')
+		return scope['ground_query']
 	cache = scope.setdefault('ground', {}) if isinstance(scope, dict) else {}
 	def query(x, z):
 		combat_count('destructible_ground_filter_queries')
@@ -4535,6 +4292,8 @@ def ground_filter_batch_1513(provider):
 				cache.clear()
 			cache[key] = value
 		return value
+	if isinstance(scope, dict):
+		scope['ground_query'] = query
 	return query
 
 
@@ -4855,7 +4614,7 @@ def _owned_component_skin_1513(point, start, end, surfaces):
 		instance = instances.get(identity)
 		if (instance is None or instance['kind'] != 'structure' or
 				_destructible_isolated_1513(*identity) or
-				_layout_repair_pending_1513(identity[0])):
+				False):
 			continue
 		boxes = instance['boxes']
 		if surface[0] not in set(box[2] for box in boxes):
@@ -4907,17 +4666,7 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 	instances = globals().get('g_offh_destr_instances', {})
 	aliases = set(surface for surface in surfaces
 		if _anonymous_original_surface_1513(surface) is not None)
-	# A repaired live WGDE layout and its static BSP can use different item
-	# slots (Murovanka #1513 report, 2026-09-20). These original-material
-	# callbacks have flags=0, so they are not anonymous compiled aliases.
-	# Admit an exact key only after spatial proof below; never infer an offset
-	# or apply the anonymous material/flags wildcard to a real chunk slot.
-	remapped = set(surface for surface in surfaces if len(surface) == 4 and
-		all(type(value) in _INTEGER_TYPES for value in surface) and
-		71 <= surface[0] <= 86 and surface[1] == 0 and
-		_layout_generation_1513(surface[3]) > 0 and
-		not _layout_repair_pending_1513(surface[3]))
-	if not aliases and not remapped:
+	if not aliases:
 		return None
 	members = globals().get('g_offh_destr_contact_bins', {}).get(
 		_destructible_bin_key(point.x, point.z), ())
@@ -4938,33 +4687,6 @@ def _compiled_motion_skin_1513(point, start, end, surfaces, normal=None):
 		if interval is not None:
 			witness.prime(instance['boxes'])
 			owners.append((identity, instance, interval))
-	for surface in remapped:
-		wire = (surface[3], surface[2])
-		# A key that actually owns the witness keeps its ordinary live-ledger
-		# semantics. Only a different, proved placement in the same repaired
-		# chunk can identify a leftover original face.
-		if any(identity == wire for identity, unused, interval in owners):
-			continue
-		catalog = _destructible_catalog or {}
-		if wire in catalog.get('tree_instances', {}):
-			continue
-		registered = instances.get(wire) or catalog.get('baked_instances', {}).get(wire)
-		if registered is not None:
-			envelope = _instance_motion_envelope_1513(registered)
-			if envelope is not None:
-				witness.prime((envelope,))
-			if envelope is not None and witness.inside(envelope):
-				continue
-		if any(identity[0] == wire[0] and
-				witness.inside(box)
-				for identity, instance, unused_interval in owners
-				for box in instance['boxes']):
-			# The exact 3-D box already bounds this original face. Westfield's
-			# broken stone fence keeps bevel/top faces with nonzero local-up
-			# normals as well as vertical sides after a live layout repair.
-			# Parallel-side proof is only needed for projection beyond a box,
-			# never for a witness contained by the real component volume.
-			aliases.add(surface)
 	if not aliases:
 		return None
 	projected = False
@@ -5271,11 +4993,11 @@ def _catalog_hull_contact(pos, yaw, vel, td, dt=0.04,
 	instances = globals().get('g_offh_destr_instances', {})
 	unresolved = []
 	for identity, raw_entry in cache.items():
-		if identity in instances or _layout_repair_pending_1513(identity[0]):
+		if identity in instances or False:
 			continue
 		entry = _unresolved_obstacle_entry_1513(raw_entry)
 		if (entry is None or
-				entry[1] != _layout_generation_1513(identity[0])):
+				entry[1] != 0):
 			continue
 		unresolved.append((identity, entry[2]))
 	return _unidentified_hull_contact_1513(
@@ -5449,6 +5171,8 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				kind in ('fragile', 'structure', 'falling') and
 				_stock_crushable_1513(
 					mat_info, kinetic_speed, td, candidate[5]))
+			_crush_gate_diagnostic_1513(candidate, vel, kinetic_speed, td,
+				physical_crushable, cap_crushable, contact_candidate, now)
 			if (kinetic_speed is not None and not contact_candidate and
 					not physical_crushable):
 				# A real frame sweep at sufficient physical speed keeps the old
@@ -5522,6 +5246,9 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 			blocked = True
 			continue
 		if not accepted:
+			_diagnostic_contact_1513('swept_native_reject',chunk_id,item_index,
+				fields=(('kind',kind),('mat',mat_kind),('resource',candidate[3]),
+					('speed','%.3f' % float(gate_speed))),now=now)
 			raise RuntimeError(
 				'native catalog contact destroy was not accepted: '
 				'chunk=%s item=%s' % (chunk_id, item_index))
@@ -5563,6 +5290,12 @@ def _catalog_motion_blocked(spaceID, pos, yaw, vel, td, now,
 				'space': spaceID, 'vehicle_sweep': vehicle_box,
 				'owners': owners, 'owners_omitted': max(0, len(grouped) - 8),
 				'unidentified': bool(unidentified), 'status': status,
+				'sampled_at':now,'speed':vel,'kinetic_speed':kinetic_speed,
+				'commit_enabled':bool(commit_enabled),'kinetic_commit':bool(kinetic_commit),
+				'proposal_only':bool(proposal_only),
+				'unresolved_instances':[dict(identity=identity,boxes=boxes)
+					for identity,boxes in unresolved[:8]],
+				'unresolved_omitted':max(0,len(unresolved)-8),
 				'geometry': 'compiled collision bounds; not triangle surfaces'})
 		except Exception:
 			pass
@@ -7120,26 +6853,23 @@ def _fell_trees_near(
 			globals().setdefault('g_offh_destr_falling_active', {})
 		_st = _tree_runtime_state_1513(spaceID)
 		cos_y = math.cos(yaw); sin_y = math.sin(yaw)
-		bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
-		bbox = _vehicle_hull_bbox(td)
-		if bbox is None:
-			bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
-		try:
-			hw = max(abs(bbox[0][0]), abs(bbox[1][0]))
-			hl_b = abs(bbox[0][2])
-			hl_f = abs(bbox[1][2])
-		except (AttributeError, KeyError, TypeError, IndexError):
-			raise RuntimeError('#1513 hull hit tester bbox is invalid')
-		vehicle_box = _vehicle_swept_box(pos, yaw, vel, bbox)
+		# Registration consumes chunk identity, never hull contact geometry.
+		# Motion callers build their own current sweep after this prewarm pass.
+		bbox = vehicle_box = None
+		if not registration_only:
+			bbox = _vehicle_hull_bbox(td)
+			if bbox is None:
+				bbox = ((-1.6, -1.0, -3.6), (1.6, 1.0, 3.6), None)
+			vehicle_box = _vehicle_swept_box(pos, yaw, vel, bbox)
 		_current_cid = AreaDestructibles.chunkIDFromPosition(
 			Math.Vector3(pos.x, pos.y, pos.z))
 		_receipt_key = None
-		if _current_cid is not None and _destructible_catalog is not None:
+		if (not registration_only and _current_cid is not None and
+				_destructible_catalog is not None):
 			_receipt_key = _proximity_receipt_key_1513(
 				spaceID, _current_cid, pos, vehicle_box)
-			if (not registration_only and
-					_empty_proximity_receipt_valid_1513(
-					_receipt_key, mgr, _st['chunks'])):
+			if _empty_proximity_receipt_valid_1513(
+					_receipt_key, mgr, _st['chunks']):
 				return
 		_native_neighbourhood = _native_geometry.neighbourhood(
 			_native_sensor, AreaDestructibles, pos, sin_y, cos_y, vel,
@@ -7354,10 +7084,6 @@ def _fell_trees_near(
 									detail=error)
 								_slot_diag['result'] = 'isolated'
 								continue
-						if _layout_repair_pending_1513(cid):
-							_retry_registry = True
-							_slot_diag['result'] = 'layout_pending'
-							continue
 						_tree_slot = ((_destructible_catalog or {}).get(
 							'tree_instances', {}).get((int(cid), int(_ti))))
 						if _tree_slot is not None:
@@ -7644,6 +7370,15 @@ def _fell_trees_near(
 			if registration_only:
 				continue
 			if not registry['count']:
+				continue
+			if abs(vel) < 1.0 and not _st['publish_pending']:
+				# Both the reference law and Store::body require >= 1 m/s to
+				# fell a tree/pole. Keep streaming registration above, but avoid
+				# preparing/querying every ready chunk for an ineligible body.
+				# Do not mint an empty-space receipt: these items can become
+				# contacts immediately when the vehicle accelerates.
+				_found_nearby = True
+				combat_count('destructible_body_below_speed_skips')
 				continue
 			if _native_body_pose is None:
 				_native_body_pose = _native_geometry.pose(pos, yaw, bbox)
@@ -8043,12 +7778,54 @@ def _registered_shot_exit_1513(chunkID, itemIndex, matKind, filename,
 	return exits[0] if len(exits) == 1 else None
 
 
+def _crush_gate_diagnostic_1513(candidate, speed, cap, td,
+		physical, kinetic, contact, now):
+	'''Bounded per-module evidence; diagnostics never choose a collision result.'''
+	key = tuple(candidate[:3])
+	times = globals().setdefault('g_offh_destr_crush_gate_times', {})
+	if now < times.get(key, -1.0e30) + 2.0:
+		return
+	if len(times) >= 4096:
+		times.clear()
+	times[key] = now
+	try:
+		import AreaDestructibles
+		import DestructiblesCache
+		import json
+		# Read the already-proved resource directly. A diagnostic lookup must
+		# never quarantine an item or alter collision admission on failure.
+		desc = AreaDestructibles.g_cache.getDescByFilename(candidate[3]) or {}
+		health = ((desc.get('modules') or {}).get(candidate[2], {}).get('health')
+			if candidate[4]=='structure' else desc.get('health'))
+		mass = float(_descriptor_value(_descriptor_value(td, 'physics'), 'weight'))
+		correction = (pow(mass/float(AreaDestructibles.g_cache.unitVehicleMass),
+			float(desc['kineticDamageCorrection'])) if candidate[4]!='structure' and
+			desc.get('kineticDamageCorrection') is not None else 1.)
+		scaled = (None if health is None else
+			DestructiblesCache.scaledDestructibleHealth(candidate[5], health))
+		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE %s\n' %
+			json.dumps(dict(identity=key, resource=candidate[3],kind=candidate[4],
+				sampled_at=now,descriptor_found=bool(desc),descriptor_type=desc.get('type'),
+				kinetic_correction=correction,
+				gate=('solid_railway_vehicle' if railway_vehicle_resource(candidate[3]) else
+					'physical_speed' if physical else 'directional_cap' if kinetic else 'energy_rejected'),
+				health=health, scaled_health=scaled, scale=candidate[5], mass=mass,
+				speed=speed, cap=cap, physical=bool(physical),
+				kinetic=bool(kinetic), hull_contact=bool(contact),
+				energy=0.5*mass*speed*speed*0.00015*correction,
+				cap_energy=None if cap is None else 0.5*mass*cap*cap*0.00015*correction)))
+	except Exception as error:
+		_sys.stdout.write('[Offline LAN 0.9.22] DESTR CRUSH GATE unavailable %s\n' % error)
+
+
 def _stock_crushable_1513(mat_info, vel, td, item_scale=None):
 	"""Apply the exact retail Vehicle kinetic law to one proved contact."""
 	decoded = _decode_mat_info_1513(mat_info)
 	if decoded is None or td is None:
 		return False
 	unused_hit, unused_normal, chunkID, itemIndex, matKind, fname = decoded
+	if railway_vehicle_resource(fname) or _railway_identity_1513((chunkID, itemIndex)):
+		return False
 	import AreaDestructibles
 	import DestructiblesCache
 	desc = _runtime_material_descriptor_1513(
@@ -8165,8 +7942,7 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 		catalog.get('baked_instances', {}).get(identity) or
 		catalog.get('tree_instances', {}).get(identity))
 	result = {
-		'layout_generation': _layout_generation_1513(identity[0]),
-		'layout_pending': _layout_repair_pending_1513(identity[0]),
+		'isolation_provenance': globals().get('g_offh_destr_isolation_reasons', {}).get(identity),
 		'excluded': identity in catalog.get('excluded_instances', ()),
 		'isolated': _destructible_isolated_1513(*identity),
 		'quarantined': (identity[0] in globals().get(
@@ -8177,9 +7953,6 @@ def _native_contact_slot_evidence_1513(space_id, surface):
 		'catalog_signature': None if instance is None else
 			instance.get('signature'),
 	}
-	proved = globals().get('g_offh_destr_proved_layouts', {}).get(
-		(int(space_id), identity[0]))
-	result['proved_filename'] = None if proved is None else proved[1].get(identity[1])
 	result['cached_native_category'] = globals().get(
 		'g_offh_destr_native_slot_types', {}).get(
 		(int(space_id), identity[0]), {}).get(identity[1])

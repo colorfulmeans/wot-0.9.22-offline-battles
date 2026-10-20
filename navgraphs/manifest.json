@@ -15,17 +15,17 @@
     {
       "file": "04_himmelsdorf.json",
       "map": "04_himmelsdorf",
-      "sha256": "1098f6606873dac662cdae316ec1cafb1384c291b8333729d4c78ea68e57929e"
+      "sha256": "c3b9317c761ae2f61811f46705905ea6e17cdce1b8e2d431005dd5b6821ab64f"
     },
     {
       "file": "05_prohorovka.json",
       "map": "05_prohorovka",
-      "sha256": "5a1cec4c66860e755132b3050d173db20118c1588b4b7b3311ff0b066059c86b"
+      "sha256": "b806019845f8ca79f1120a55542e813310422532e8c49c45755f4eb6c3cdd890"
     },
     {
       "file": "06_ensk.json",
       "map": "06_ensk",
-      "sha256": "576e6da22082607ee79c219a2c2817708f1d83c29753ac014b397b315e8ba669"
+      "sha256": "8a6864a30972b1257892b107b17831a69ed4e462e37e65b7afa06d7b9532a1f1"
     },
     {
       "file": "07_lakeville.json",
@@ -60,7 +60,7 @@
     {
       "file": "17_munchen.json",
       "map": "17_munchen",
-      "sha256": "543d7c7b754d1f928460998facaef4a83a05a5e03e26ee7d6a8576e328ee28e7"
+      "sha256": "23ac5aed9c288e7256722d669cfa3da02b22ef20fa877b898df6a2d93efc0a12"
     },
     {
       "file": "18_cliff.json",
@@ -110,7 +110,7 @@
     {
       "file": "35_steppes.json",
       "map": "35_steppes",
-      "sha256": "ea7cb53866cf631e83bffd31a71d52fe8a37de98e2abccb5dbd1cda4ea988adf"
+      "sha256": "d41c31dd809033976b3d22c92a3871f04a2aa5dc6e3207a043140eb45177faa4"
     },
     {
       "file": "36_fishing_bay.json",
@@ -130,17 +130,17 @@
     {
       "file": "44_north_america.json",
       "map": "44_north_america",
-      "sha256": "c1ed781a218d581c8ac4e03f54cd28860d2965ea03fcff9a195a4903d4b59c36"
+      "sha256": "bff1c87c1c9f79565ae7a83256530a8d6ce3ef98d2c40512af73ae55b94de561"
     },
     {
       "file": "45_north_america.json",
       "map": "45_north_america",
-      "sha256": "b06e92442f3b6ce8cb093963eed2a37a98ea490fe18d6822479401a516504eaf"
+      "sha256": "2557537a598a7b65ea7cc58580a0d4ef64442a214c7252108e93b5b257fb5f17"
     },
     {
       "file": "47_canada_a.json",
       "map": "47_canada_a",
-      "sha256": "ab4b55dbac8d2f6d6fe6050ae8925e581c3f175101dcaa328b177233c219c6bc"
+      "sha256": "befd46acde0e44e7ff249b07800f14fd53d97844c2a5000c8f04220f0c462575"
     },
     {
       "file": "59_asia_great_wall.json",
@@ -165,17 +165,17 @@
     {
       "file": "84_winter.json",
       "map": "84_winter",
-      "sha256": "d8cd1c9727adda851feaf0e2548a98e113915b0b888ea79ff0bff428f94b981f"
+      "sha256": "f0700b11ba30223ef55e9095fae31d318c0c3dc358b8c1601aa0d7f896576a23"
     },
     {
       "file": "86_himmelsdorf_winter.json",
       "map": "86_himmelsdorf_winter",
-      "sha256": "19a0ea4aba986943c78ac7e03f3828bba61dee969e9b970447e14b4b6e8f35f3"
+      "sha256": "4d029077583c65ce35821d7be713252307193fd8e9976a5ac881d24ed6850a52"
     },
     {
       "file": "92_stalingrad.json",
       "map": "92_stalingrad",
-      "sha256": "454244514c4ed31b0f8cca2b28dfdc14f77b0a3abdeccef83c6da93abad8d64d"
+      "sha256": "3ef91c94bdf2f4d68c3d1019e8dead1f15db854172e0031f7c952b92320d3233"
     },
     {
       "file": "95_lost_city.json",
@@ -205,7 +205,7 @@
     {
       "file": "114_czech.json",
       "map": "114_czech",
-      "sha256": "8ab02541b190b94abca2c71576a636a5dd5f118c13308be585252f52980f4859"
+      "sha256": "6cbda0b56d373168e551d45c978dd4ebad78e88fde4cb8fe814751b9546be1e2"
     }
   ],
   "version": 2

@@ -65,8 +65,9 @@ def _record_projectile_fallback(method, args, reason):
         pass
     try:
         evidence = _input_description(args)
+        from gui.mods.offline_lan_0922.native_input_diagnostics import structural_signature
         signature = (method, operation, reason,
-                     json.dumps(_input_description(args, values=False), sort_keys=True))
+                     structural_signature(_input_description(args, values=False)))
         if signature in _projectile_fallback_reported or len(_projectile_fallback_reported) >= 16:
             return
         _projectile_fallback_reported.add(signature)
@@ -82,7 +83,7 @@ def _record_projectile_fallback(method, args, reason):
         sys.stdout.write('[Offline LAN 0.9.22] NATIVE PROJECTILE FALLBACK %s\n' %
             json.dumps({'method': method, 'operation': operation, 'reason': reason,
                         'inputs': evidence, 'callers': stack,
-                        'count': _projectile_fallback_counts.get(key, 0)}, sort_keys=True))
+                        'count': _projectile_fallback_counts.get(key, 0)}))
     except Exception:
         pass
 

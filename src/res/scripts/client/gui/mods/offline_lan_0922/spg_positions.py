@@ -425,7 +425,7 @@ def parking_point_available(point, clearance, team, excluded, occupied):
 @observed('parking.assign_catalog')
 def assign_initial_positions(map_name, graph, states, mode='regular', catalog=None,
                              actor_ids=None, excluded=(), occupied=(), preferred_zone=None,
-                             allocation_seed=None, deleted_positions=()):
+                             allocation_seed=None, deleted_positions=(), excluded_zones=()):
     """Return bot-id -> plan and typed per-SPG outcomes without mutating input.
 
     This runs once before the round manifest is published. It selects a whole
@@ -489,6 +489,8 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         reachable = grid.distances(origin)
         choices = []
         for zone, cell, index, point in candidates:
+            if zone['id'] in excluded_zones:
+                continue
             if 'spg_%d_%s' % (team, zone['id']) in deleted_positions:
                 continue
             if not parking_point_available(point, radius, team, excluded, occupied):

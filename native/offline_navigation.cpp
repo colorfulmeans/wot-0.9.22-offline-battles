@@ -60,27 +60,108 @@ SegmentKey segment_key(Point start, Point end) {
              static_cast<int64_t>(std::floor(end[1]/8.+.5))}};
 }
 struct Map : MapInput {
+    std::unordered_map<Cell,int,CellHash> local_indices;
+    std::unordered_map<Cell,Point,CellHash> local_points;
+    std::unordered_map<Cell,std::vector<Cell>,CellHash> local_edges;
+    std::vector<std::vector<Cell>> local_keys;
     explicit Map(MapInput value) : MapInput(std::move(value)) {
         const size_t count=static_cast<size_t>(width)*static_cast<size_t>(height);
         if (width<=0 || height<=0 || heights.size()!=count || links.size()!=count || hazards.size()!=count)
             throw std::invalid_argument("invalid navigation map");
         cell_size=std::max(1.,cell_size); max_grade=std::max(.05,max_grade);
+        for(size_t n=0;n<local_meshes.size();++n) {
+            const auto &p=local_meshes[n];
+            if(p.width<=0 || p.height<=0 || p.cell_size<=0. ||
+               p.heights.size()!=static_cast<size_t>(p.width)*p.height ||
+               p.links.size()!=p.heights.size() || p.hazards.size()!=p.heights.size())
+                throw std::invalid_argument("invalid local navigation mesh");
+            std::vector<Cell> keys;
+            for(size_t i=0;i<p.heights.size();++i) {
+                Point point={{p.origin_x+(i%p.width)*p.cell_size,p.heights[i],p.origin_z+(i/p.width)*p.cell_size}};
+                Cell key=cell_for(point);
+                const Point base={{origin_x+key[0]*cell_size,0.,origin_z+key[1]*cell_size}};
+                if(!(valid(key) && std::isfinite(point[1]) && distance(base,point)<1.e-6 && std::abs(heights[index(key)]-point[1])<.01)) {
+                    key={{-static_cast<int>(n)-1,static_cast<int>(i)}};
+                    local_indices[key]=static_cast<int>(heights.size());local_points[key]=point;
+                    heights.push_back(point[1]);links.push_back(p.links[i]);hazards.push_back(p.hazards[i]);
+                }
+                keys.push_back(key);
+            }
+            local_keys.push_back(keys);
+            for(size_t i=0;i<keys.size();++i) if(std::isfinite(p.heights[i])) {
+                for(size_t bit=0;bit<DIRECTIONS.size();++bit) if(p.links[i]&(1U<<bit)) {
+                    const int x=static_cast<int>(i%p.width)+DIRECTIONS[bit][0], z=static_cast<int>(i/p.width)+DIRECTIONS[bit][1];
+                    if(x<0 || x>=p.width || z<0 || z>=p.height || !std::isfinite(p.heights[z*p.width+x]))
+                        throw std::invalid_argument("invalid local navigation edge");
+                    local_edges[keys[i]].push_back(keys[z*p.width+x]);
+                }
+            }
+        }
     }
-    bool flat(Cell cell) const { return cell[0]>=0 && cell[0]<width && cell[1]>=0 && cell[1]<height; }
-    int index(Cell cell) const { return cell[1]*width+cell[0]; }
+    bool flat(Cell cell) const { return local_indices.count(cell) || (cell[0]>=0 && cell[0]<width && cell[1]>=0 && cell[1]<height); }
+    int index(Cell cell) const { const auto i=local_indices.find(cell);return i==local_indices.end()?cell[1]*width+cell[0]:i->second; }
     bool valid(Cell cell) const { return flat(cell) && std::isfinite(heights[index(cell)]); }
     Cell cell_for(Point point) const {
         return {{static_cast<int>(std::floor((point[0]-origin_x)/cell_size+.5)),
                  static_cast<int>(std::floor((point[2]-origin_z)/cell_size+.5))}};
     }
     Point point_for(Cell cell) const {
-        return {{origin_x+cell[0]*cell_size,heights[index(cell)],origin_z+cell[1]*cell_size}};
+        const auto p=local_points.find(cell);if(p!=local_points.end())return p->second;
+        return {{origin_x+cell[0]*cell_size,flat(cell)?heights[index(cell)]:0.,origin_z+cell[1]*cell_size}};
+    }
+    bool local_cell(Point point,Cell &out) const {
+        for(size_t n=0;n<local_meshes.size();++n) {
+            const auto &p=local_meshes[n];const double x=(point[0]-p.origin_x)/p.cell_size,z=(point[2]-p.origin_z)/p.cell_size;
+            if(x>=0. && z>=0. && x<=p.width-1 && z<=p.height-1) {
+                out=local_keys[n][static_cast<int>(std::floor(z+.5))*p.width+static_cast<int>(std::floor(x+.5))];return true;
+            }
+        }
+        return false;
+    }
+    bool touches(Point a,Point b) const {
+        for(const auto &p:local_meshes) {
+            double low=0.,high=1.;
+            for(int axis: {0,2}) {
+                const double first=axis==0?p.origin_x:p.origin_z,last=first+((axis==0?p.width:p.height)-1)*p.cell_size;
+                const double delta=b[axis]-a[axis];
+                if(std::abs(delta)<1.e-9) {if(a[axis]<first || a[axis]>last){high=-1.;break;}}
+                else {double f=(first-a[axis])/delta,s=(last-a[axis])/delta;if(f>s)std::swap(f,s);low=std::max(low,f);high=std::min(high,s);}
+            }
+            if(low<=high)return true;
+        }
+        return false;
+    }
+    double cell_distance(Cell a,Cell b) const {
+        if(a[0]>=0 && b[0]>=0) {const double dx=a[0]-b[0],dz=a[1]-b[1];return std::sqrt(dx*dx+dz*dz);}
+        return distance(point_for(a),point_for(b))/cell_size;
+    }
+    std::vector<Cell> neighbours(Cell cell) const {
+        std::vector<Cell> result;
+        if(cell[0]>=0) for(size_t bit=0;bit<DIRECTIONS.size();++bit) if(links[index(cell)]&(1U<<bit)) {
+            const auto d=DIRECTIONS[bit];result.push_back({{cell[0]+d[0],cell[1]+d[1]}});
+        }
+        const auto extra=local_edges.find(cell);if(extra!=local_edges.end()) result.insert(result.end(),extra->second.begin(),extra->second.end());
+        return result;
     }
     bool inside(Point point) const {
         return !has_bounds || (bounds[0]<=point[0] && point[0]<=bounds[2] && bounds[1]<=point[2] && point[2]<=bounds[3]);
     }
-    bool nearest(Cell cell, int radius, Cell &out) const {
+    bool nearest(Cell cell, int radius, Cell &out, bool use_local=true) const {
         if (valid(cell)) { out=cell; return true; }
+        if(use_local && !local_meshes.empty()) {
+            const Point point=point_for(cell);Cell local;
+            if(local_cell(point,local)) {
+                if(valid(local)){out=local;return true;}
+                const auto &p=local_meshes[-local[0]-1];const int x=local[1]%p.width,z=local[1]/p.width;
+                const int reach=static_cast<int>(std::ceil(radius*cell_size/p.cell_size));
+                bool found=false;int best=0;
+                for(int dz=-reach;dz<=reach;++dz) for(int dx=-reach;dx<=reach;++dx) if(x+dx>=0 && x+dx<p.width && z+dz>=0 && z+dz<p.height) {
+                    const auto key=local_keys[-local[0]-1][(z+dz)*p.width+x+dx];const int d=dx*dx+dz*dz;
+                    if(valid(key) && (!found || d<best || (d==best && key<out))){out=key;best=d;found=true;}
+                }
+                if(found)return true;
+            }
+        }
         bool found=false; int best_distance=0;
         for (int reach=1;reach<=radius;++reach) {
             for (int z=cell[1]-reach;z<=cell[1]+reach;++z)
@@ -95,21 +176,44 @@ struct Map : MapInput {
         }
         return false;
     }
-    std::vector<Cell> segment_cells(Point start, Point end, bool require_height=true) const {
+    std::vector<Cell> segment_cells(Point start, Point end, bool require_height=true, bool use_local=true) const {
+        if(use_local && touches(start,end)) {
+            double step=cell_size;for(const auto &p:local_meshes)step=std::min(step,p.cell_size);
+            const int count=std::max(1,static_cast<int>(std::ceil(distance(start,end)/(step*.42))));
+            std::vector<Cell> result;
+            for(int i=0;i<=count;++i) {
+                Point p=start;for(int axis: {0,2})p[axis]+=(end[axis]-start[axis])*i/count;
+                Cell c;if(!local_cell(p,c))c=cell_for(p);
+                if(result.empty() || result.back()!=c)result.push_back(c);
+            }
+            if(require_height && !nearest(result.front(),2,result.front()))return {};
+            result.erase(std::unique(result.begin(),result.end()),result.end());
+            for(auto c:result)if(require_height?!valid(c):!flat(c))return {};
+            return result;
+        }
         Cell first=cell_for(start), last=cell_for(end);
         if (require_height) {
-            if (!nearest(first,2,first) || !valid(last)) return {};
+            if (!nearest(first,2,first,use_local) || !valid(last)) return {};
         } else if (!flat(first) || !flat(last)) return {};
         return crossed_cells(first,last);
     }
     bool linked(Cell a, Cell b) const {
         if (!valid(a) || !valid(b)) return false;
+        const auto e=local_edges.find(a);if(e!=local_edges.end() && std::find(e->second.begin(),e->second.end(),b)!=e->second.end())return true;
+        if(a[0]<0 || b[0]<0)return false;
         const Cell delta={{b[0]-a[0],b[1]-a[1]}};
         for (size_t direction=0;direction<DIRECTIONS.size();++direction)
             if (DIRECTIONS[direction]==delta) return (links[index(a)]&(1U<<direction))!=0;
         return false;
     }
     bool corridor(Point start, Point end, bool dry) const {
+        if(touches(start,end)) {
+            const auto base=segment_cells(start,end,true,false);
+            bool clear=!base.empty();
+            for(size_t i=1;i<base.size();++i)
+                if(!linked(base[i-1],base[i]) || (dry && (hazards[index(base[i])]&4U)))clear=false;
+            if(clear)return true;
+        }
         const auto cells=segment_cells(start,end);
         if (cells.empty()) return false;
         for (size_t offset=1;offset<cells.size();++offset) {
@@ -119,6 +223,7 @@ struct Map : MapInput {
         return true;
     }
     bool shallow_free(Point start, Point end) const {
+        if(touches(start,end) && corridor(start,end,true))return true;
         const auto cells=segment_cells(start,end);
         if (cells.empty()) return false;
         for (size_t offset=1;offset<cells.size();++offset)
@@ -127,6 +232,7 @@ struct Map : MapInput {
     }
     unsigned link_count(Cell cell) const {
         if (!valid(cell)) return 0;
+        if(cell[0]<0) {const auto i=local_edges.find(cell);return i==local_edges.end()?0:std::min(8U,static_cast<unsigned>(i->second.size()));}
         unsigned value=links[index(cell)]&255U, count=0;
         while (value) {value&=value-1; ++count;}
         return count;
@@ -216,7 +322,8 @@ struct Job {
     }
     bool needs_review(Point a,Point b) const {
         if (review_cells.empty()) return false;
-        for (Cell cell:map->segment_cells(a,b,false)) if (review_cells.count(cell)) return true;
+        for (Cell cell:map->segment_cells(a,b,false))
+            if (review_cells.count(cell) || review_cells.count(map->cell_for(map->point_for(cell)))) return true;
         return false;
     }
     // -1: oracle pending, 0: blocked, 1: clear. The long native-review
@@ -238,14 +345,22 @@ struct Job {
     }
     bool hard_segment(Point a,Point b) const {
         if (hard.empty()) return false;
-        const auto cells=crossed_cells(map->cell_for(a),map->cell_for(b));
+        if(map->touches(a,b)) {
+            const auto base=crossed_cells(map->cell_for(a),map->cell_for(b));
+            for(size_t i=1;i<base.size();++i)if(hard.count(edge(base[i-1],base[i])))return true;
+        }
+        const auto cells=map->segment_cells(a,b,false);
         for (size_t index=1;index<cells.size();++index)
             if (hard.count(edge(cells[index-1],cells[index]))) return true;
         return false;
     }
     bool world_segment(Point a,Point b) const {
         if (world.empty()) return false;
-        const auto cells=crossed_cells(map->cell_for(a),map->cell_for(b));
+        if(map->touches(a,b)) {
+            const auto base=crossed_cells(map->cell_for(a),map->cell_for(b));
+            for(size_t i=1;i<base.size();++i)if(penalty_for(world,edge(base[i-1],base[i]))>0.)return true;
+        }
+        const auto cells=map->segment_cells(a,b,false);
         for (size_t index=1;index<cells.size();++index)
             if (penalty_for(world,edge(cells[index-1],cells[index]))>0.) return true;
         return false;
@@ -340,8 +455,7 @@ struct Job {
                 nodes.emplace(start,Node{0.,{},false});
                 frontier.push({0.,0.,0,start});
                 closest=start;
-                const double dx=start[0]-goal[0],dz=start[1]-goal[1];
-                closest_distance=std::sqrt(dx*dx+dz*dz);
+                closest_distance=map->cell_distance(start,goal);
                 stage=Stage::Expand;
             }
             if (stage==Stage::Expand) {
@@ -351,23 +465,19 @@ struct Job {
                 const auto node=nodes.find(entry.cell);
                 if (node==nodes.end() || entry.cost!=node->second.cost) continue;
                 --quantum;++expanded;++attempt_expanded;current=entry.cell;
-                const double dx=current[0]-goal[0],dz=current[1]-goal[1];
-                const double goal_distance=std::sqrt(dx*dx+dz*dz);
+                const double goal_distance=map->cell_distance(current,goal);
                 if (goal_distance<closest_distance) {closest=current;closest_distance=goal_distance;}
                 if (current==goal) {reached=current;has_reached=true;stage=Stage::Finish;continue;}
                 const Point a=map->point_for(current);
-                const unsigned links=map->links[map->index(current)];
                 candidates.clear();
-                for (size_t direction=0;direction<DIRECTIONS.size();++direction) {
-                    if (!(links&(1U<<direction))) continue;
-                    const Cell delta=DIRECTIONS[direction];
-                    const Cell next={{current[0]+delta[0],current[1]+delta[1]}};
+                for (const Cell next:map->neighbours(current)) {
                     if (!map->valid(next)) continue;
                     const Edge key=edge(current,next);
                     if (hard.count(key)) continue;
                     const Point b=map->point_for(next);
                     if (reviewed_blocked(a,b)) continue;
-                    const double run=map->cell_size*(delta[0] && delta[1]?std::sqrt(2.):1.);
+                    const bool coarse=current[0]>=0 && next[0]>=0;
+                    const double run=coarse?map->cell_size*((current[0]!=next[0] && current[1]!=next[1])?std::sqrt(2.):1.):distance(a,b);
                     // 0.10.0: legal baked slopes carry no comfort surcharge.
                     double corridor_cost=0.;
                     if(input.has_route_corridor) {
@@ -391,8 +501,7 @@ struct Job {
             if (stage==Stage::Relax) {
                 for (const auto &candidate:candidates) {
                     nodes[candidate.cell]={candidate.cost,current,true};
-                    const double dx=candidate.cell[0]-goal[0],dz=candidate.cell[1]-goal[1];
-                    const double heuristic=std::sqrt(dx*dx+dz*dz)*map->cell_size*map->heuristic_weight;
+                    const double heuristic=map->cell_distance(candidate.cell,goal)*map->cell_size*map->heuristic_weight;
                     frontier.push({candidate.cost+heuristic,candidate.cost,++sequence,candidate.cell});
                 }
                 stage=Stage::Expand;continue;

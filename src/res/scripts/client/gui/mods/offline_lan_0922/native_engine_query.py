@@ -9,13 +9,14 @@ from __future__ import print_function
 
 import functools
 import operator
+import struct
 try:
     from thread import get_ident as _thread_ident
 except ImportError:
     from _thread import get_ident as _thread_ident
 
 from . import destructibles_sensor as sensor
-from .worker_diagnostics import observed_ray
+from .worker_diagnostics import observed_ray, count
 from .collision_flags import VEHICLE_SKIP_FLAGS
 
 _SKIN_LAWS = (sensor._compiled_motion_skin_1513,
@@ -42,6 +43,7 @@ class EngineQuery(object):
         self.unavailable = object()
         self._vector = self._runtime.math.Vector3
         self._xyz = operator.attrgetter('x', 'y', 'z')
+        self._ray_scopes = []
         safe = lambda function: functools.partial(self._invoke, function)
         # This tuple is borrowed only by one synchronous native Session.
         # Its indices are documented by engine_query::Capability.
@@ -79,6 +81,29 @@ class EngineQuery(object):
                 getattr(self._bots, 'round_id', None) != self._round):
             raise RuntimeError('Native engine query owner changed')
 
+    def begin_ray_scope(self):
+        """Reuse exact unfiltered rays during one synchronous world solve.
+
+        A nested solve gets a separate cache. No result survives a caller,
+        frame, actor move, or destructive effect. Filtered rays retain their
+        native callback: its thread-local candidate/exclusion context is NOT
+        represented by the callable's identity and must run on every query.
+        """
+        self._live()
+        scope = {}
+        self._ray_scopes.append(scope)
+        return scope
+
+    def end_ray_scope(self, scope):
+        if not self._ray_scopes or self._ray_scopes[-1] is not scope:
+            raise RuntimeError('Native world ray scope order changed')
+        self._ray_scopes.pop()
+
+    def invalidate_ray_scope(self):
+        for cache in self._ray_scopes:
+            cache.clear()
+        count('world_ray_reuse_invalidated')
+
     def _remember(self, error):
         if self._error is None:
             self._error = error
@@ -107,12 +132,28 @@ class EngineQuery(object):
     def _ray(self, start, end, collision_filter, ground):
         try:
             self._live()
+            scope = (self._ray_scopes[-1] if collision_filter is None and
+                     self._ray_scopes and
+                     self._skip_flags == VEHICLE_SKIP_FLAGS else None)
+            key = None
+            if scope is not None:
+                revision = sensor._spatial_revision_1513()
+                key = (struct.pack('6d', start.x, start.y, start.z,
+                                   end.x, end.y, end.z), bool(ground), revision)
+                if key in scope:
+                    count('world_ray_reuse_hit')
+                    return scope[key]
+                count('world_ray_reuse_miss')
             args = (self._space, start, end, self._skip_flags)
             if collision_filter is not None:
                 args += (collision_filter,)
             label = 'native.motion.ground' if ground else self._ray_label
             result = observed_ray(label, self._native_ray, *args)
             self._live()
+            if key is not None and revision == sensor._spatial_revision_1513():
+                if len(scope) >= 256:
+                    scope.clear()
+                scope[key] = result
             return result
         except (AttributeError, IndexError, TypeError, ValueError) as error:
             return self.unavailable if ground else self._remember(error)

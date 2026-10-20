@@ -100,6 +100,8 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertNotIn('wreck_push', self.decide())
 
     def test_world_refusal_cannot_be_erased_by_small_recovery_motion(self):
+        # Isolate checked physical recovery without an active engagement.
+        self.order['target_id'] = None
         self.state['push_pose_clear'] = lambda yaw: False
         self.assertEqual('world_turn_refused', self.decide()['wreck_push']['phase'])
         self.state['position'] = (0., 0., .75)
@@ -109,6 +111,8 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertEqual('exhausted', command['wreck_push']['phase'])
 
     def test_world_refused_push_hands_back_to_driver_without_fourteen_second_hold(self):
+        # Isolate checked physical recovery without an active engagement.
+        self.order['target_id'] = None
         self.state['push_pose_clear'] = lambda yaw: False
         before = dict(self.peer)
         command = self.decide()
@@ -118,6 +122,8 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.assertNotEqual('wreck_push', self.decide()['recovery_mode'])
 
     def test_amx_report_gap_keeps_forward_torque_and_steers_into_wreck(self):
+        # Isolate checked physical recovery without an active engagement.
+        self.order['target_id'] = None
         self.state.update(position=(-18.01417788982463,.26,29.474571555355627),
                           yaw=.6820790716546388,
                           collision_shape=(1.717499971,3.550543070,-.000231,1.906605959),
@@ -154,6 +160,8 @@ class WreckContactRecoveryTests(unittest.TestCase):
             self.assertEqual('drive',command['recovery_mode'])
 
     def test_live_ally_side_contact_retains_checked_avoidance(self):
+        # Isolate checked physical recovery without an active engagement.
+        self.order['target_id'] = None
         self.peer.update(alive=True,team=1)
         commands=[self.decide() for unused in range(40)]
         self.assertEqual({-1.,1.},set(c['throttle'] for c in commands))
@@ -273,19 +281,23 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.state.update(neighbours=[], pose_clear=lambda yaw: True)
         self.assertNotEqual(0., self.decide()['turn'])
 
-    def test_side_wreck_push_is_continuous_while_enemy_hold_is_preserved(self):
+    def test_selected_enemy_hold_preempts_side_push_until_combat_releases(self):
         for team in (1, 2):
             self.setUp()
             self.peer.update(alive=False, team=team)
             commands = [self.decide() for unused in range(40)]
-            self.assertTrue(all(c['recovery_mode']=='wreck_push' and
-                                c['throttle']==1.0 and c['turn']>0.0 for c in commands))
+            self.assertTrue(all(c['recovery_mode']=='arrived' and
+                                c['throttle']==0.0 for c in commands))
             self.assertTrue(all(c['fire_allowed'] and c['target_id']==9 for c in commands))
+            self.order['target_id'] = None
+            self.assertEqual('wreck_push', self.decide()['recovery_mode'])
         self.peer.update(alive=True, team=2)
         self.assertFalse(self.decide()['movement_intent'])
         self.assertEqual(0., self.decide()['throttle'])
 
     def test_rear_hull_requires_checked_forward_exit(self):
+        # Isolate checked physical recovery without an active engagement.
+        self.order['target_id'] = None
         rear = dict(self.peer, id=3, alive=True, position=(0., 0., -8.))
         self.state['neighbours'].append(rear)
         command = self.decide()

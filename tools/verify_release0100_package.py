@@ -12,6 +12,7 @@ import zipfile
 from PyInstaller.archive.readers import CArchiveReader
 
 ROOT = Path(__file__).resolve().parents[1]
+from verify_native_payload import verify_bytes
 app = Path(sys.argv[1]).resolve()
 archive = CArchiveReader(str(app / 'wot-0.9.22-offline-battles.exe'))
 pyz = archive.open_embedded_archive('PYZ.pyz')
@@ -52,9 +53,10 @@ for relative in server_sources:
     assert bundled.read_bytes().replace(b'\r\n', b'\n') == (ROOT / relative).read_bytes().replace(b'\r\n', b'\n'), relative
 
 with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
+    verify_bytes(str(ROOT), client.read('mods/0.9.22.0.1/offline_math_batch_native.pyd'))
     assert client.read('offline_worker_starter.exe') == (ROOT / 'native/offline_worker_starter.exe').read_bytes()
     mod_name = next(n for n in client.namelist() if n.endswith('.wotmod'))
-    assert mod_name.endswith('_0.10.1.wotmod')
+    assert mod_name.endswith('_0.10.2.wotmod')
     with tempfile.TemporaryDirectory(prefix='release0100-') as temp:
         path = Path(temp) / mod_name
         path.parent.mkdir(parents=True)
@@ -64,7 +66,7 @@ with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         command = module.prepare_runtime(temp)
-        # Execute the official runtime that the installed 0.10.1 mod supplied.
+        # Execute the official runtime that the installed 0.10.2 mod supplied.
         result = subprocess.check_output(command[:3] + ['-c', 'import sys;print(sys.version_info[:3])'], creationflags=0x08000000)
         assert b'(3, 11, 9)' in result, result
         with zipfile.ZipFile(path) as mod:
@@ -72,5 +74,6 @@ with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
             assert mod.read('res/offline_replay/replay_reader_process.py') == (ROOT / 'tools/replay/replay_reader_process.py').read_bytes()
 print(json.dumps({'frozen_source_modules_verified': len(verified),
                   'bundled_server_sources_verified': len(server_sources),
+                  'native_math_matches_current_sources': True,
                   'replay_entry_bundled': True, 'recorder_runtime_executed': True,
                   'native_starter_matches_source_tree': True}))

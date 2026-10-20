@@ -2,6 +2,7 @@
 """Load versioned navigation graphs shipped with the offline-battle mod."""
 
 import json
+import hashlib
 import math
 import os
 
@@ -14,6 +15,24 @@ from gui.mods.offline_lan_0922.navigation_graph_schema import (
 # Cell centres are baked on an exact multiple of the cell size, so this only
 # absorbs the float error of the division itself.
 _CELL_EPSILON = 1.0e-6
+
+
+def graph_summary(graph):
+	"""Describe installed geometry without queries or per-frame array scans."""
+	graph = graph or {}
+	bake = graph.get('bake') or {}
+	rebake = bake.get('resolution_rebake') or {}
+	return dict(map=graph.get('map'), cell_size=graph.get('cell_size'),
+		local_meshes=[dict(origin=p['origin'], cell_size=p['cell_size'],
+			width=p['width'], height=p['height']) for p in graph.get('local_meshes', ())],
+		width=graph.get('width'), height=graph.get('height'),
+		origin=graph.get('origin'),
+		source_identity=graph.get('_source_sha256'),
+		collision_height_intervals=bake.get('collision_height_intervals'),
+		collision_cell_raster=bake.get('collision_cell_raster'),
+		sampling_policy=rebake.get('sampling_policy'),
+		collision_edge_sample_metres=rebake.get('collision_edge_sample_metres'),
+		previous_identity=graph.get('navigation_previous_sha256'))
 
 
 def mod_dir():
@@ -50,12 +69,14 @@ def load_graph(map_name, base_dir=None):
 	path = os.path.join(directory, short_name + '.json')
 	if not os.path.isfile(path):
 		return None
-	handle = open(path, 'r')
+	handle = open(path, 'rb')
 	try:
-		graph = json.load(handle)
+		raw = handle.read()
+		graph = json.loads(raw)
 	finally:
 		handle.close()
 	graph = _validate(graph, short_name)
+	graph['_source_sha256'] = hashlib.sha256(raw).hexdigest()
 	if (base_dir is None and short_name in (
 			'63_tundra', '44_north_america') and
 			'objective_base_radii' not in graph):
@@ -277,7 +298,33 @@ def with_shore_hazards(graph):
 		if near_water:
 			classified[index] |= SHORE_EDGE
 	result['hazards'] = tuple(classified)
+	if graph.get('local_meshes'):
+		patches = []
+		for patch in graph['local_meshes']:
+			local = dict(patch, bake=graph.get('bake') or {})
+			local = with_shore_hazards(local)
+			local.pop('bake', None)
+			patches.append(local)
+		result['local_meshes'] = patches
 	return result
+
+
+def local_cell_at(graph, position):
+	"""Return the same nearest local sample used by LocalMeshes.cell."""
+	if not isinstance(graph, dict):
+		return None
+	x, z = float(position[0]), float(position[2])
+	for patch in graph.get('local_meshes', ()):
+		size = float(patch['cell_size'])
+		column = (x-float(patch['origin'][0]))/size
+		row = (z-float(patch['origin'][1]))/size
+		if 0.0 <= column <= patch['width']-1 and 0.0 <= row <= patch['height']-1:
+			index = int(math.floor(row+.5))*patch['width']+int(math.floor(column+.5))
+			# Older additive patches omit hazard evidence on unsupported samples.
+			# Such an unknown must not erase the parent's existing water veto.
+			if patch['heights_mm'][index] is not None or int(patch['hazards'][index]):
+				return patch, index
+	return None
 
 
 def pose_is_safe(graph, position, shoulder_cells=0, hazard_mask=3):
@@ -306,6 +353,12 @@ def pose_is_safe(graph, position, shoulder_cells=0, hazard_mask=3):
 	for check_row in range(row - radius, row + radius + 1):
 		for check_column in range(column - radius, column + radius + 1):
 			index = check_row * width + check_column
-			if int(hazards[index]) & hazard_mask:
+			point = (float(origin[0])+check_column*cell_size, 0.,
+			         float(origin[1])+check_row*cell_size)
+			# With no shoulder, retain the actual sub-cell physical pose. Snapping
+			# to its coarse centre recreated the bridge-apron veto after planning.
+			local = local_cell_at(graph, position if radius == 0 else point)
+			value = int(local[0]['hazards'][local[1]]) if local is not None else int(hazards[index])
+			if value & hazard_mask:
 				return False
 	return True

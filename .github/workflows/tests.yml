@@ -13,10 +13,39 @@ permissions:
   actions: read
 
 jobs:
+  navigation-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Build shipping search benchmark
+        run: >-
+          g++ -O3 -std=c++17 -pthread -I native
+          tools/benchmark_navigation_resolution.cpp
+          native/offline_navigation.cpp native/offline_async_worker.cpp
+          -o /tmp/navigation-resolution
+      - name: Verify retained routes, every reverse edge and paired native search
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: >-
+          python tools/check_navigation_resolution.py
+          --baseline-ref ca22f9095e917ce3fc09458a82e53593a34015c9
+          --output build/navigation-resolution
+          --native-executable /tmp/navigation-resolution
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navigation-resolution-evidence
+          path: build/navigation-resolution/report.json
   bot-behavior-regressions:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -29,13 +58,36 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
           --pattern 'test_port_0922_ai.py'
+          --pattern 'test_port_0922_three_round_handoffs.py'
+          --pattern 'test_port_0922_crush_progress_handoffs.py'
+          --pattern 'test_port_0922_motion_052854.py'
+          --pattern 'test_port_0922_motion_064702.py'
+          --pattern 'test_port_0922_current_rule_lifecycle.py'
+          --pattern 'test_port_0922_himmelsdorf_resolution.py'
+          --pattern 'test_port_0922_basic_slope_pose.py'
           --pattern 'test_port_0922_eroded_fallback_cycle.py'
           --pattern 'test_port_0922_initial_allocation.py'
+          --pattern 'test_port_0922_initial_navigation_handoffs.py'
           --pattern 'test_port_0922_navigation*.py'
           --pattern 'test_port_0922_driver*.py'
           --pattern 'test_port_0922_traffic*.py'
           --pattern 'test_port_0922_bot*.py'
           --pattern 'test_port_0922_contact*.py'
+          --pattern 'test_port_0922_capture_contact_launch.py'
+          --pattern 'test_port_0922_magazine_followup.py'
+          --pattern 'test_port_0922_windstorm_bridge.py'
+          --pattern 'test_port_0922_windstorm_north.py'
+            --pattern 'test_port_0922_recovery_commit_consistency.py'
+            --pattern 'test_port_0922_motion_hazard_prefix.py'
+          --pattern 'test_replay_capacity.py'
+          --pattern 'test_port_0922_connector*.py'
+          --pattern 'test_port_0922_local_refusal*.py'
+          --pattern 'test_port_0922_recovery*.py'
+          --pattern 'test_port_0922_runtime_bypass*.py'
+          --pattern 'test_port_0922_oct03_bot_egress.py'
+          --pattern 'test_port_0922_separation_progress.py'
+          --pattern 'test_port_0922_fjord_departure.py'
+          --pattern 'test_port_0922_airfield_live_egress.py'
           --pattern 'test_port_0922_wreck*.py'
           --pattern 'test_port_0922_artillery*.py'
           --pattern 'test_port_0922_spg*.py'
@@ -43,8 +95,26 @@ jobs:
           --pattern 'test_port_0922_parking*.py'
           --pattern 'test_port_0922_withdrawal*.py'
           --pattern 'test_port_0922_gun_angle*.py'
+          --pattern 'test_port_0922_rear_limited_aim.py'
+          --pattern 'test_port_0922_local_action_sweep.py'
+          --pattern 'test_port_0922_combat_tracking_lifecycle.py'
           --pattern 'test_port_0922_wait_parking.py'
           --pattern 'test_port_0922_server_bot_ai.py'
+          --pattern 'test_port_0922_target_evidence.py'
+          --pattern 'test_port_0922_terminal_route_handoff.py'
+          --pattern 'test_port_0922_complete_navigation_receipts.py'
+          --pattern 'test_port_0922_withdraw_receipts.py'
+          --pattern 'test_port_0922_scoped_failure_progress.py'
+          --pattern 'test_port_0922_combat_progress_ownership.py'
+            --pattern 'test_port_0922_escape_observation_contract.py'
+          --pattern 'test_port_0922_near_goal_evidence.py'
+          --pattern 'test_port_0922_worker_query_reuse.py'
+          --pattern 'test_port_0922_unknown_water.py'
+          --pattern 'test_port_0922_railway_obstacles.py'
+          --pattern 'test_port_0922_radio_routes.py'
+          --pattern 'test_port_0922_minute_recovery.py'
+          --pattern 'test_port_0922_shot_geometry.py'
+          --pattern 'test_port_0922_tactical_geometry.py'
 
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
@@ -53,6 +123,18 @@ jobs:
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+      - name: Check bonds settlement and worker collision preparation
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern test_port_0922_ground_filter_batch.py
+          --pattern test_port_0922_destructibles.py
+          --pattern test_port_0922_world_collision.py
+          --pattern test_port_0922_world_ray_reuse.py
       - name: Compile all client code under Python 2.7
         if: ${{ !cancelled() }}
         run: |
@@ -131,11 +213,17 @@ jobs:
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_control.py \
               --extension /tmp/offline_math_batch_native.so \
               --client-scripts /src/src/res/scripts/client
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_navigation.py \
+              /tmp/offline_math_batch_native.so /src/src/res/scripts/client --water-only
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_railway_filter.py \
+              /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_control_projection.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_simulation_weapons.py \
               /tmp/offline_math_batch_native.so /src/src/res/scripts/client
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_destructibles.py \
+              /tmp/offline_math_batch_native.so
+            PYTHONDONTWRITEBYTECODE=1 python tools/check_native_box_geometry.py \
               /tmp/offline_math_batch_native.so
             PYTHONDONTWRITEBYTECODE=1 python tools/check_native_visibility_frontier.py \
               /tmp/offline_math_batch_native.so
@@ -158,11 +246,14 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p test_port_0922_worker_diagnostics.py
           python3 -m unittest discover -s tests -p test_port_0922_battle_visibility.py
+          python3 -m unittest discover -s tests -p test_native_payload_identity.py
   test:
     needs: windows-server
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -217,7 +308,7 @@ jobs:
           -w /work python:2.7.18
           sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
-        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.1.wotmod
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.2.wotmod
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py
@@ -463,7 +554,7 @@ jobs:
       - name: Install pinned Windows packager
         run: >-
           python -m pip install
-          -r server/requirements-windows-build.txt
+          -r launcher/requirements-build.txt
       - name: Take the built 0.9.22 client package
         uses: actions/download-artifact@v4
         with:

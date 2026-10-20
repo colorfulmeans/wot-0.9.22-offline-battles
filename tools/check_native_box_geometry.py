@@ -20,6 +20,36 @@ ref._native_geometry.box_envelope = lambda *args, **kwargs: None
 ref._native_geometry.motion_witnesses = lambda *args, **kwargs: None
 b = imp.load_dynamic('offline_math_batch_native', sys.argv[1])
 
+# Exact union/order parity, including overlapping rectangles and Python int
+# truncation. Out-of-domain inputs retain the reference path without callbacks.
+cell_cases = [(), ((-2, 2, -3, 4),), ((0, 1, 0, 1), (1, 2, -1, 2)),
+              ((4, 2, 0, 2),), ((-2.9, 2.9, -1.8, 1.8),)]
+cell_random = random.Random(287)
+for unused in range(200):
+    cell_cases.append(tuple(tuple(cell_random.randint(-12, 12) for axis in range(4))
+                            for rectangle in range(4)))
+def reference_cells(rectangles):
+    return tuple(sorted(set((x, z) for a, b_, c, d in rectangles
+        for x in range(int(a), int(b_)+1) for z in range(int(c), int(d)+1))))
+for rectangles in cell_cases:
+    assert b.destr_box_geometry(3, rectangles) == reference_cells(rectangles)
+assert b.destr_box_geometry(3, ((0, 1000000, 0, 1000000),)) is None
+class CustomCell(object):
+    def __int__(self):
+        raise AssertionError('Native grid must not invoke custom conversion')
+assert b.destr_box_geometry(3, ((CustomCell(), 2, 0, 2),)) is None
+sample = ((-8, 8, -8, 8), (-4, 12, -4, 12))
+stamp = time.clock()
+for unused in range(3000):
+    reference_cells(sample)
+reference_cells_ms = (time.clock()-stamp)*1000.
+stamp = time.clock()
+for unused in range(3000):
+    b.destr_box_geometry(3, sample)
+native_cells_ms = (time.clock()-stamp)*1000.
+print('Spatial cell union: reference %.3f ms, native %.3f ms; excludes engine work' %
+      (reference_cells_ms, native_cells_ms))
+
 
 class Vector(object):
     def __init__(self, values):
@@ -137,7 +167,8 @@ dispatch = imp.load_source('box_geometry_dispatch_check', os.path.join(root,
 dispatch._backend = b
 for op, payload in ((0, ((unit,), None, (-2.,0.,0.), (2.,0.,0.), 0., 2)),
                     (1, (unit,)),
-                    (2, ((unit,), (0.,0.,0.), (-2.,0.,0.), (2.,0.,0.), epsilon, None))):
+                    (2, ((unit,), (0.,0.,0.), (-2.,0.,0.), (2.,0.,0.), epsilon, None)),
+                    (3, ((-2, 2, -3, 3),))):
     close(dispatch.call('destr_box_geometry', op, payload), b.destr_box_geometry(op, payload))
-assert dispatch._calls['destr_box_geometry'] == 3 and dispatch._fallbacks == 0
-print('Actual adapter passed opcodes 0/1/2 without fallback')
+assert dispatch._calls['destr_box_geometry'] == 4 and dispatch._fallbacks == 0
+print('Actual adapter passed opcodes 0/1/2/3 without fallback')

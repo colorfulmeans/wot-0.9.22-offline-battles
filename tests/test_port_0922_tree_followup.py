@@ -104,19 +104,6 @@ class RailSideTreeEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(self.sample(now=2.01, stage='commit'))
         self.assertIsNotNone(self.sample(now=0.0, space=2))
 
-    def test_layout_completion_rebuilds_observation_wire_without_guessing(self):
-        self.sample()
-        catalog = sensor._destructible_catalog
-        catalog['layout_generations'][32641] = 1
-        catalog['layout_repairs'].add(32641)
-        self.assertTrue(self.target(self.sample(now=2.0))['layout_pending'])
-        record = catalog['tree_instances'].pop(self.wire)
-        catalog['tree_instances'][(32641, 65)] = record
-        catalog['layout_repairs'].remove(32641)
-        self.wire = (32641, 65)
-        row = self.target(self.sample(now=3.0))
-        self.assertFalse(row['layout_pending'])
-        self.assertEqual(self.point, row['authored_position'])
 
     def test_all_reported_poplars_have_fall_profiles_and_geometric_contacts(self):
         catalog = sensor._destructible_catalog

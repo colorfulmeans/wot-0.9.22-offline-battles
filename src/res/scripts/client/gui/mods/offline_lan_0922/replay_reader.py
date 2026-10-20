@@ -23,7 +23,7 @@ except ImportError:
 from gui.mods.offline_lan_0922 import offline_replay, replay_process
 
 RESOURCE='res/offline_replay/replay_reader_process.py'
-DIGEST='5ad6a0bfaa92e99826d8d9ed3cd385503600f5583aa464a3955033d6355d65ca'
+DIGEST='650232176cf0080ea7c3fe4e8c97c9ffea0884acabed33f9731640a7dbdc37e6'
 MAX_BYTES=8*1024*1024
 MAX_ROWS=128
 NOW=getattr(time,'monotonic',time.time)

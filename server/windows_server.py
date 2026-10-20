@@ -26,7 +26,7 @@ SERVER_BOT_EXCLUDED_VEHICLES_ENV = "WOT_0922_BOT_EXCLUDED_VEHICLES"
 SERVER_LOOPBACK_ONLY_ENV = "WOT_0922_LOOPBACK_ONLY"
 SERVER_VEHICLE_OVERLAY_ROOT_ENV = "WOT_0922_VEHICLE_OVERLAY_ROOT"
 BUILD_SEMANTIC_VERSION_ENV = "WOT_OFFLINE_SEMANTIC_VERSION"
-SERVER_VERSION = "0.10.1"
+SERVER_VERSION = "0.10.2"
 BUILD_IDENTITY_ENV = "WOT_OFFLINE_BUILD_IDENTITY"
 WINDOWS_FIREWALL_RULE_PREFIX = "WoT 0.9.22 LAN Server"
 # Get-NetFirewallRule can take many seconds on a busy machine.
@@ -167,6 +167,11 @@ def _pause_after_error():
 
 def _load_server():
     from lan_battle_server import DEFAULT_MAP, run_server
+    from gui.mods.offline_lan_0922 import roof_crush_test
+    if roof_crush_test.enabled():
+        from lan_battle_server import BattleState
+        from server_bot_ai import BotPlanner
+        roof_crush_test.install_server(BattleState, BotPlanner)
     return (DEFAULT_MAP, run_server)
 
 

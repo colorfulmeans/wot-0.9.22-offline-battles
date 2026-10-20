@@ -49,7 +49,9 @@ class BotAdapter(object):
         self._contact_escapes = {}
         self._wreck_attempts = {}
         self._wreck_history = {}
+        self._wreck_last_terminal = {}
         self._withdrawal_attempts = {}
+        self._flank_arrivals = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -62,7 +64,9 @@ class BotAdapter(object):
         self._contact_escapes.pop(int(bot_id), None)
         self._wreck_attempts.pop(int(bot_id), None)
         self._wreck_history.pop(int(bot_id), None)
+        self._wreck_last_terminal.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
+        self._flank_arrivals.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -70,6 +74,8 @@ class BotAdapter(object):
             state.get('half_width', 1.7), state.get('half_length', 3.5),
             tank_collision.DEFAULT_SHAPE[2], tank_collision.DEFAULT_SHAPE[3])
         previous = self._contact_peers.get(bot_id)
+        own_body = self.driver.collision_body(state)
+        state['_hull_contact_receipt'] = dict(at=state.get('now'), separated=[])
         for peer in state.get('neighbours', ()):
             where = _position(peer.get('position', peer))
             other_shape = tank_collision._tank_shape(peer)
@@ -82,12 +88,20 @@ class BotAdapter(object):
                       if not peer.get('alive', True) or peer.get('id') == previous
                       else tank_collision.POSITION_SLOP)
             if overlap[2] >= -margin:
+                other_body = self.driver.collision_body(peer)
+                proof = {}
+                if (own_body is not None and other_body is not None and
+                        tank_collision.swept_body_separated(own_body, other_body, (0., 0., 0.), proof)):
+                    state['_hull_contact_receipt']['separated'].append(dict(peer=peer.get('id'), proof=proof))
+                    continue
+                state['_hull_contact_receipt']['blocker'] = peer.get('id')
                 self._contact_peers[bot_id] = peer.get('id')
                 return {
                     'peer_id': peer.get('id'),
                     'peer_team': peer.get('team'),
                     'peer_alive': peer.get('alive', True),
                     'normal': overlap[:2],
+                    'depth': overlap[2],
                     'peer_position': where,
                 }
         self._contact_peers.pop(bot_id, None)
@@ -157,7 +171,7 @@ class BotAdapter(object):
                 reason = 'terrain_withdrawn'
             elif self.driver._reverse_blocked_by_vehicle(
                     position, current_heading+math.pi, state.get('neighbours', ()),
-                    escape['half_length'], escape['half_width']) is not None:
+                    escape['half_length'], escape['half_width'], body=self.driver.collision_body(state)) is not None:
                 reason = 'vehicle_withdrawn'
         if reason is not None:
             self._contact_escapes.pop(bot_id, None)
@@ -230,7 +244,7 @@ class BotAdapter(object):
             # axis equal this candidate's direction of travel.
             blocker = self.driver._reverse_blocked_by_vehicle(
                 position, heading + math.pi, neighbours,
-                half_length, half_width)
+                half_length, half_width, body=self.driver.collision_body(state))
             if blocker is not None:
                 continue
             distance = 2.0 * half_length + WAYPOINT_ARRIVAL_RADIUS
@@ -292,7 +306,8 @@ class BotAdapter(object):
                                    _position(peer.get('position', peer))[2]-position[2]) <=
                         2.0*length + 2.0*width) or
                        self.driver._static_hull_ahead(
-                          position, desired, [peer], length, width))), None)
+                          position, desired, [peer], length, width,
+                          body=self.driver.collision_body(state)))), None)
         if wreck is None:
             if active is not None:
                 state['_wreck_push_evidence'] = dict(
@@ -335,6 +350,8 @@ class BotAdapter(object):
         own_progress = ((position[0]-attempt['own_origin'][0])*math.sin(attempt['own_heading']) +
                         (position[2]-attempt['own_origin'][2])*math.cos(attempt['own_heading']))
         evidence.update(own_progress=own_progress, own_best_progress=attempt['own_best_progress'])
+        if attempt.get('terminal') is not None:
+            evidence['terminal'] = dict(attempt['terminal'])
         state['_wreck_push_evidence'] = evidence
         # Ordinary recovery movement must not resurrect a spent motor attempt.
         if attempt['exhausted']:
@@ -357,7 +374,13 @@ class BotAdapter(object):
             # Never turn an exhausted motor attempt into a permanent hold.
             attempt.update(exhausted=True, exhausted_position=position)
             attempt['elapsed'] = max(14.0, attempt['elapsed'])
+            attempt['terminal'] = dict(reason='own_stalled' if attempt['own_elapsed'] >= 14.0
+                else 'push_stalled', at=state.get('now'), position=position,
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'],
+                own_progress=own_progress, best_progress=attempt['own_best_progress'])
+            evidence['terminal'] = dict(attempt['terminal'])
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
@@ -365,7 +388,7 @@ class BotAdapter(object):
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]
         if self.driver._reverse_blocked_by_vehicle(
-                position, yaw+math.pi, living, length, width) is not None:
+                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state)) is not None:
             evidence['phase'] = 'live_hull_blocked'
             return None
         # Keep forward torque throughout one admitted episode. Side contact
@@ -381,7 +404,13 @@ class BotAdapter(object):
             # Release this failed episode to normal checked recovery immediately.
             attempt['elapsed'] = 14.0
             attempt.update(exhausted=True, exhausted_position=position)
+            attempt['terminal'] = dict(reason='world_turn_refused',
+                at=state.get('now'), position=position, yaw=yaw,
+                requested_yaw=yaw + math.copysign(min(0.45, abs(turn)), turn),
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'])
+            evidence['terminal'] = dict(attempt['terminal'])
             evidence.update(phase='world_turn_refused', elapsed=14.0)
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
         if not side_wreck and attempt['elapsed'] >= 8.0:
             side = 1.0 if int((attempt['elapsed']-6.0)/2.0) % 2 else -1.0
@@ -447,7 +476,7 @@ class BotAdapter(object):
         Native motion still independently proves every realised movement.
         """
         if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
             return None
         if strategic.get('throttle_override') is not None:
@@ -505,12 +534,13 @@ class BotAdapter(object):
         clear = True
         blocker = None
         pose_clear = state.get('pose_clear')
+        body = self.driver.collision_body(state)
         for fraction in (0.0, 0.25, 0.5, 0.75, 1.0):
             sample_yaw = yaw + error * fraction
             clear = clear and self.driver._clear(
                 direction_clear, sample_yaw + math.pi, reach)
             blocker = blocker or self.driver._reverse_blocked_by_vehicle(
-                position, sample_yaw, state.get('neighbours', ()), length, width)
+                position, sample_yaw, state.get('neighbours', ()), length, width, body=body)
             try:
                 if pose_clear is not None:
                     clear = clear and bool(pose_clear(sample_yaw))
@@ -554,6 +584,10 @@ class BotAdapter(object):
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
                               direction_clear):
+        # Navigation waits, withdrawal and contact plans do not execute drive.
+        # Their receipts must not reuse the previous drive call's distances.
+        self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
+        self.driver.states.get(bot_id, {}).pop('pedal_observation', None)
         state.pop('_contact_escape_evidence', None)
         state.pop('_wreck_push_evidence', None)
         state.pop('_withdrawal_evidence', None)
@@ -589,18 +623,34 @@ class BotAdapter(object):
             escape = self._contact_escapes.pop(bot_id, None)
             if escape is not None:
                 self._contact_escape_evidence(state, escape, 'parking_cancelled')
-        contact_plan = (None if parked else self._retained_contact_escape(
+        combat_hold = (strategic.get('target_id') is not None and
+            strategic.get('combat_mode') in ('engage', 'support_hold', 'cover_hold') and
+            strategic.get('throttle_override') == 0.0)
+        if combat_hold:
+            escape = self._contact_escapes.pop(bot_id, None)
+            if escape is not None:
+                self._contact_escape_evidence(state, escape, 'combat_handoff')
+        contact_plan = (None if parked or combat_hold else self._retained_contact_escape(
             state, position, direction_clear))
-        if not parked and contact_plan is None:
+        if not parked and not combat_hold and contact_plan is None:
             contact_plan = self._wreck_push_plan(
                 bot_id, state, position, strategic, direction_clear, contact)
         side_contact = bool(contact is not None and abs(
             math.sin(state.get('yaw', 0.0))*contact['normal'][0] +
             math.cos(state.get('yaw', 0.0))*contact['normal'][1]) < 0.35)
+        if side_contact:
+            # Touching a parallel hull does not obstruct travel along its side.
+            # Keep the original escape for penetration or a goal into the peer;
+            # do not turn a clear route (or a deliberate hold) into a reversal.
+            into_contact = (
+                (target[0]-position[0])*contact['normal'][0] +
+                (target[2]-position[2])*contact['normal'][1])
+            side_contact = (contact['depth'] > 1.e-9 or
+                            into_contact < -tank_collision.POSITION_SLOP)
         exhausted_wreck = bool(contact is not None and not contact['peer_alive'] and
             self._wreck_history.get(bot_id, {}).get(
                 contact['peer_id'], {}).get('exhausted', False))
-        if (not parked and not exhausted_wreck and contact_plan is None and contact is not None and
+        if (not parked and not combat_hold and not exhausted_wreck and contact_plan is None and contact is not None and
                 (side_contact or (strategic.get('throttle_override') is not None and
                  (not contact['peer_alive'] or contact['peer_team'] != state.get('team'))))):
             contact_plan = self._contact_escape_plan(
@@ -614,11 +664,37 @@ class BotAdapter(object):
         if contact_plan is not None:
             throttle_override = None
             stop_at_target = False
+        flank_key = (tuple(move_position), strategic.get('target_id'))
+        flank_arrival = self._flank_arrivals.get(bot_id)
+        if (strategic.get('combat_mode') != 'flank' or contact_plan is not None or
+                (flank_arrival is not None and (
+                    flank_arrival['key'] != flank_key or
+                    math.hypot(position[0]-flank_arrival['position'][0],
+                               position[2]-flank_arrival['position'][2]) >
+                    max(WAYPOINT_ARRIVAL_RADIUS, float(state.get('half_length', 3.5)))))):
+            self._flank_arrivals.pop(bot_id, None)
+            flank_arrival = None
+        if flank_arrival is not None:
+            # A completed flank point becomes a firing hold. Track-pivot
+            # movement while facing the enemy cannot restart the finished leg.
+            # A changed order, real displacement or contact releases ownership.
+            throttle_override = 0.0
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
+        # Rear/gun-angle laying expresses a real firing hold with a current
+        # pose goal, sometimes without an explicit pedal override. Pause its
+        # travel episode too; an aged approach must not move this hold away.
+        mechanical_hold = (contact_plan is None and
+            strategic.get('target_id') is not None and
+            strategic.get('combat_mode') == 'engage' and
+            throttle_override is None and
+            math.hypot(move_position[0]-position[0], move_position[2]-position[2]) <=
+            WAYPOINT_ARRIVAL_RADIUS)
+        if mechanical_hold:
+            movement_intent = False
         if strategic.get('combat_mode') not in (
-                'withdraw', 'low_health_retreat', 'under_fire_withdraw',
+                'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
             self._withdrawal_attempts.pop(bot_id, None)
         requested_dx = float(move_position[0]) - float(position[0])
@@ -644,6 +720,9 @@ class BotAdapter(object):
         if not navigation_wait:
             self.driver.end_navigation_wait(bot_id)
         if contact_plan is not None:
+            # Contact motion has taken over from the old traffic hold. Ordinary
+            # drive clears this flag itself, but this owner bypasses drive.
+            self.driver.states.get(bot_id, {}).pop('traffic_waiting', None)
             local = contact_plan[1]
         elif navigation_wait:
             local = self.driver.wait_for_navigation(
@@ -652,7 +731,8 @@ class BotAdapter(object):
                 float(state.get('dt', 0.0)), state.get('neighbours', ()),
                 direction_clear, half_length=float(state.get('half_length', 3.5)),
                 half_width=float(state.get('half_width', 1.7)),
-                recovery_allowed=bool(state.get('navigation_recovery_allowed')))
+                recovery_allowed=bool(state.get('navigation_recovery_allowed')),
+                body=self.driver.collision_body(state))
         else:
             local = self._reverse_withdrawal(
                 state, strategic, position, target, move_position, direction_clear)
@@ -662,6 +742,7 @@ class BotAdapter(object):
                     float(state.get('yaw', 0.0)),
                     float(state.get('speed', 0.0)), float(state.get('dt', 0.0)),
                     target, state.get('neighbours', ()), direction_clear,
+                    body=self.driver.collision_body(state),
                     velocity=state.get('velocity'),
                     half_length=float(state.get('half_length', 3.5)),
                     half_width=float(state.get('half_width', 1.7)),
@@ -674,12 +755,22 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
+                    progress_identity=(('combat', strategic.get('target_kind'), strategic['target_id'])
+                        if strategic.get('target_id') is not None and
+                        not strategic.get('parking_phase') and strategic.get('combat_mode') not in
+                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
         # their stable 12-30 degree hull angle while the turret keeps tracking
         # ``aim_position``.  Local recovery directions still outrank it.
         recovery_mode = local.get('recovery_mode', 'drive')
+        if (strategic.get('combat_mode') == 'flank' and
+                contact_plan is None and recovery_mode == 'arrived' and
+                math.hypot(position[0]-move_position[0], position[2]-move_position[2]) <=
+                WAYPOINT_ARRIVAL_RADIUS and flank_arrival is None):
+            flank_arrival = dict(key=flank_key, position=position)
+            self._flank_arrivals[bot_id] = flank_arrival
         vehicle_blockage = bool(contact or state.get('_wreck_push_evidence') or
                                local.get('forward_blocked_by') or local.get('reverse_blocked_by'))
         # A realised native-world rotation refusal is also physical blockage,
@@ -730,12 +821,38 @@ class BotAdapter(object):
             'movement_intent': movement_intent,
             'withdrawal_aim': bool(local.get('withdrawal_aim', False)),
         }
+        # Evidence only: retain the driver's result before face intent and
+        # the runtime's combat/traffic/track gates can overwrite it.
+        result['control_trace'] = dict(
+            sampled_at=state.get('now'), driver_throttle=local['throttle'],
+            driver_turn=local['turn'], driver_target_yaw=local['target_yaw'],
+            face_override=(recovery_mode == 'arrived' and dx*dx+dz*dz > .01),
+            face_position=face_position, aim_position=aim_position,
+            strategic_move_position=move_position, local_target=target,
+            throttle_override=throttle_override, stop_at_target=stop_at_target,
+            navigation_wait=navigation_wait,
+            navigation_status=state.get('navigation_status'),
+            hull_contact=state.get('_hull_contact_receipt'),
+            combat_hold=bool(combat_hold),
+            mechanical_hold=bool(mechanical_hold),
+            action_owner=('combat_hold' if combat_hold else
+                'base_defense' if strategic.get('combat_mode') == 'base_defense' else
+                'contact_recovery' if contact_plan is not None else
+                strategic.get('combat_mode', 'route')),
+            arrival=dict(self.driver.states.get(bot_id, {}).get('arrival_trace') or {}),
+            pedal=dict(self.driver.states.get(bot_id, {}).get('pedal_observation') or
+                dict(reason='non_drive_terminal', mode=local['recovery_mode'],
+                     throttle=local['throttle'], turn=local['turn'],
+                     brake=bool(local.get('brake', False)))),
+            hull_angle_degrees=strategic.get('hull_angle_degrees'),
+            flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
+                     'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
                      'navigation_recovery', 'navigation_replan'):
             if name in local:
                 result[name] = local[name]
@@ -743,6 +860,8 @@ class BotAdapter(object):
             result['contact_escape'] = dict(state['_contact_escape_evidence'])
         if state.get('_wreck_push_evidence') is not None:
             result['wreck_push'] = dict(state['_wreck_push_evidence'])
+        if bot_id in self._wreck_last_terminal:
+            result['wreck_push_last_terminal'] = dict(self._wreck_last_terminal[bot_id])
         if state.get('_withdrawal_evidence') is not None:
             result['withdrawal'] = dict(state['_withdrawal_evidence'])
         if state.get('navigation_progress_target') is not None:
@@ -753,8 +872,11 @@ class BotAdapter(object):
         while difference < -math.pi:
             difference += 2.0 * math.pi
         if (throttle_override is not None and
-                recovery_mode in ('drive', 'arrived') and
+                not result['brake'] and
+                recovery_mode == 'drive' and
                 abs(difference) < 0.65):
+            # Strategic travel requests cannot override local turn alignment,
+            # arrival or safety braking. The driver owns pedal arbitration.
             result['throttle'] = max(
                 -1.0, min(1.0, float(throttle_override)))
         if throttle_override is not None and float(throttle_override) == 0.0:

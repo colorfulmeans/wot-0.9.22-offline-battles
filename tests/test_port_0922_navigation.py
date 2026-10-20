@@ -105,7 +105,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
                 nav,path,poses,goal,request,calls = self._el_halluf_active_bend()
                 if obstruction == 'wall':
                     original = nav.grid.segment_clear
-                    nav.grid.segment_clear = lambda start,end: (
+                    nav.grid.segment_clear = lambda start,end,*evidence: (
                         end != path[1] and original(start,end))
                 elif obstruction == 'penalty':
                     nav.bot_failed_edges[21] = dict((edge,(100.,240.)) for edge in
@@ -189,7 +189,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
     @staticmethod
     def _open_grid():
         grid = TerrainGrid(lambda x, z, hint: 0.0, cell_size=10.0)
-        grid.segment_clear = lambda start, end, native_capability=None: True
+        grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         grid.segment_penalty = lambda start, end, now: 0.0
         grid.segment_has_baked_hazard = lambda start, end, mask: False
         return grid
@@ -243,7 +243,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
 
     def test_lookahead_does_not_skip_turning_setup_point(self):
         navigator = TerrainNavigator(lambda x, z, hint: 0.0)
-        navigator.grid.segment_clear = lambda start, end, native_capability=None: True
+        navigator.grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         navigator.grid.segment_penalty = lambda start, end, now: 0.0
         path = (
             (0.0, 0.0, 0.0),
@@ -260,7 +260,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
 
     def test_flat_lookahead_keeps_original_bounded_target(self):
         navigator = TerrainNavigator(lambda x, z, hint: 0.0)
-        navigator.grid.segment_clear = lambda start, end, native_capability=None: True
+        navigator.grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         navigator.grid.segment_penalty = lambda start, end, now: 0.0
         path = (
             (0.0, 0.0, 0.0),
@@ -278,7 +278,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
     def test_speed_horizon_advances_farther_along_a_proved_flat_corridor(self):
         navigator = TerrainNavigator(
             lambda x, z, hint: 0.0, cell_size=4.0)
-        navigator.grid.segment_clear = lambda start, end, native_capability=None: True
+        navigator.grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         navigator.grid.segment_penalty = lambda start, end, now: 0.0
         path = tuple((0.0, 0.0, float(index * 4)) for index in range(8))
         navigator._path = lambda key, start, goal, now, avoid, native_capability=None: (key, path)
@@ -291,7 +291,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
 
     def test_near_waypoint_advance_still_keeps_climb_setup_point(self):
         navigator = TerrainNavigator(lambda x, z, hint: 0.0)
-        navigator.grid.segment_clear = lambda start, end, native_capability=None: True
+        navigator.grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         navigator.grid.segment_penalty = lambda start, end, now: 0.0
         path = (
             (0.0, 0.0, 0.0),
@@ -308,7 +308,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
 
     def test_continuation_lookahead_keeps_climb_setup_point(self):
         navigator = TerrainNavigator(lambda x, z, hint: 0.0)
-        navigator.grid.segment_clear = lambda start, end, native_capability=None: True
+        navigator.grid.segment_clear = lambda start, end, native_capability=None, evidence=None: True
         navigator.grid.segment_penalty = lambda start, end, now: 0.0
         current = (0.0, 0.0, 0.0)
         goal = (30.0, 3.0, 10.0)
@@ -392,7 +392,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
                 if blocker == 'collision':
                     original = navigator.grid.segment_clear
                     navigator.grid.segment_clear = (
-                        lambda start, end, native_capability=None: end != next_point and
+                        lambda start, end, native_capability=None, evidence=None: end != next_point and
                         original(start, end))
                 else:
                     navigator.grid.segment_penalty = (
@@ -478,7 +478,7 @@ class ClimbApproachNavigationTests(unittest.TestCase):
             with self.subTest(distance=distance):
                 navigator = TerrainNavigator(lambda x, z, hint: 0.0)
                 navigator.grid.segment_clear = (
-                    lambda start, end, native_capability=None: end != (0.0, 3.0, 10.0))
+                    lambda start, end, native_capability=None, evidence=None: end != (0.0, 3.0, 10.0))
                 navigator.grid.segment_penalty = (
                     lambda start, end, now: 0.0)
                 navigator.grid.safe_local_target = (
@@ -613,7 +613,7 @@ class ArenaRectangleClipTests(unittest.TestCase):
 
 
 class StaticHullNavigationTests(unittest.TestCase):
-    def test_el_halluf_e3_centreline_needs_its_installed_width_around_wz_wreck(self):
+    def test_el_halluf_e3_planning_does_not_inflate_wreck_by_largest_tank(self):
         graph=prebaked_navigation.load_graph('29_el_hallouf',str(PORT_ROOT))
         grid=TerrainGrid(lambda *unused:0., obstacle_probe=lambda *unused:False,baked_graph=graph)
         wreck=((24,-107.3865118374,-212.6340347494,.7122862294,3.6386919022,1.6741000414),)
@@ -621,14 +621,10 @@ class StaticHullNavigationTests(unittest.TestCase):
               (-106.,38.552,-218.),(-106.,39.767,-222.))
         grid.set_static_hulls(wreck)
         self.assertFalse(grid.path_crosses_static_hull(path))
-        grid.set_static_hulls(wreck,clearance=1.8657310009)
-        self.assertTrue(grid.path_crosses_static_hull(path))
         revision=grid.static_hull_revision
-        self.assertFalse(grid.set_static_hulls(wreck,clearance=1.8657310009))
+        self.assertFalse(grid.set_static_hulls(wreck))
         self.assertEqual(revision,grid.static_hull_revision)
-        detour=grid.plan(path[0],(-167.115,0.,-263.719),now=719.,max_expansions=5000)
-        self.assertTrue(detour)
-        self.assertFalse(grid.path_crosses_static_hull(detour))
+        self.assertEqual(wreck,grid._static_hulls)
 
     """A destroyed hull is exact static geometry the graph has to carry."""
 
@@ -662,21 +658,19 @@ class StaticHullNavigationTests(unittest.TestCase):
             lambda *unused: None,
             baked_graph=self._flat_graph(cell_size)).grid
 
-    def test_a_hull_between_cell_centres_still_marks_both_cells(self):
+    def test_hull_between_centres_marks_crossing_edge_not_adjacent_lanes(self):
         grid = self._grid()
-        # A 3.4 metre wide hull straddling the x=18 boundary of a four-metre
-        # bake covers neither the x=16 nor the x=20 cell centre. Ranking the
-        # cell square instead of its centre keeps both columns blocking.
+        # A wreck between centres still intersects their connecting edge,
+        # but must not spread its veto onto both adjacent clear edges.
         self.assertTrue(grid.set_static_hulls(
             ((7, 18.0, 40.0, 0.0, 3.5, 1.7),)))
         edges = grid._static_hull_edges
 
         self.assertEqual((16.0, 0.0, 40.0), grid.point_for((4, 10), 0.0))
         self.assertEqual((20.0, 0.0, 40.0), grid.point_for((5, 10), 0.0))
-        # Both columns the hull straddles are entered through a marked edge.
         self.assertIn(((4, 10), (5, 10)), edges)
-        self.assertIn(((3, 10), (4, 10)), edges)
-        self.assertIn(((5, 10), (6, 10)), edges)
+        self.assertNotIn(((3, 10), (4, 10)), edges)
+        self.assertNotIn(((5, 10), (6, 10)), edges)
         # Only edges that touch the hull are marked; the next lane is free.
         self.assertNotIn(((2, 10), (3, 10)), edges)
         self.assertNotIn(((6, 10), (7, 10)), edges)

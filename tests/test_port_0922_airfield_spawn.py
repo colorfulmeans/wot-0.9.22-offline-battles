@@ -12,6 +12,7 @@ from unittest import mock
 import test_port_0922_battle_runtime as runtime_fixture
 import test_port_0922_destructibles as destructible_fixture
 import test_port_0922_server_bot_ai as server_fixture
+from gui.mods.offline_lan_0922 import world_collision
 from gui.mods.offline_lan_0922 import destructibles_sensor as sensor
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 
@@ -104,10 +105,19 @@ class AirfieldSpawnTests(unittest.TestCase):
             self.assertEqual((1, 22, 0), calls[0][:3])
 
     def test_candidate_probe_never_fells_tree(self):
-        with self.tree_scene() as (battle, desc, unused_mgr, calls):
-            self.assertEqual('clear', battle._resolve_bot_motion(
-                8, (0., 0., -2.), 0., 20., desc, .2, 1., commit_enabled=False))
-            self.assertEqual([], calls)
+        # The tree-only scene has no native chassis descriptor. Supply its
+        # collision seam explicitly: readonly probes must not reuse the
+        # realised-action corridor receipt, and must never fell the tree.
+        for status in ('clear', 'hard'):
+            with self.subTest(status=status), self.tree_scene() as scene:
+                battle, desc, unused_mgr, calls = scene
+                with mock.patch.object(world_collision,
+                        'check_horizontal_collision', return_value=status) as sweep:
+                    self.assertEqual(status, battle._resolve_bot_motion(
+                        8, (0., 0., -2.), 0., 20., desc, .2, 1., commit_enabled=False))
+                sweep.assert_called_once()
+                self.assertFalse(sweep.call_args.kwargs['commit_enabled'])
+                self.assertEqual([], calls)
 
     def test_unstreamed_tree_registry_does_not_freeze_motion_and_recovers(self):
         with self.tree_scene(streamed=False) as (battle, desc, manager, calls):

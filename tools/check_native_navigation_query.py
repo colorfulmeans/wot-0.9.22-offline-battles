@@ -31,7 +31,7 @@ for name in ('gui', 'gui.mods'):
     package.__path__ = [os.path.join(client, *name.split('.'))]
     sys.modules[name] = package
 from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
-from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid, NAVIGABLE_WATER_DEPTH
 from gui.mods.offline_lan_0922 import native_navigation_query as query, worker_diagnostics as diagnostic
 backend = imp.load_dynamic('offline_math_batch_native', options.extension)
 
@@ -142,6 +142,7 @@ for degrees in (24.99, 25.01, 26.0, 27.5):
 for key, value in (
         ('missing', True), ('ray_failure', 1), ('ray_failure', 2), ('short_hit', True),
         ('gx', .37), ('gz', .39), ('gz', -.41), ('water', .90), ('water', .91),
+        ('water', NAVIGABLE_WATER_DEPTH), ('water', NAVIGABLE_WATER_DEPTH + .01),
         ('water_failure', True), ('water_none', True), ('water_vector_failure', True),
         ('layers', [(6., 1.), (5., 1.)]),
         ('layers', [(6., 1.), (5., 1.), (4., 0.)]),
@@ -176,7 +177,7 @@ for index, (scenario, start, end) in enumerate(CASES):
     if 'expected_clear' in scenario:
         assert arms[0][0] == arms[1][0] == scenario['expected_clear'], (
             'navigation_25_degree_boundary', scenario, arms)
-    if scenario.get('water', 0.) > .90:
+    if scenario.get('water', 0.) > NAVIGABLE_WATER_DEPTH:
         # A measured forbidden water depth is a known blocker, unlike absent
         # support. The old ground callback loses that distinction as None.
         assert arms[0][:3] == arms[1][:3], ('deep_water_queries', arms)

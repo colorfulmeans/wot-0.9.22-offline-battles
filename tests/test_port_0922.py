@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.10.1', packager.MOD_VERSION)
+        self.assertEqual('0.10.2', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.10.1')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.10.1')", source)
-            self.assertIn('filevers=(0, 10, 1, 0)', source)
-            self.assertIn('prodvers=(0, 10, 1, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '0.10.2')", source)
+            self.assertIn("StringStruct('ProductVersion', '0.10.2')", source)
+            self.assertIn('filevers=(0, 10, 2, 0)', source)
+            self.assertIn('prodvers=(0, 10, 2, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -493,7 +493,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.10.1', identity['semanticVersion'])
+            self.assertEqual('0.10.2', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -512,6 +512,15 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual(b'native geometry', (
                 Path(overlay) / 'mods' / '0.9.22.0.1' /
                 packager.NATIVE_MATH_FILENAME).read_bytes())
+            # A native-only update must get a new install identity even when
+            # Python bytecode, server and all other binaries are unchanged.
+            native_math.write_bytes(b'updated native geometry')
+            next_overlay, unused_archive = packager._write_client_overlay(
+                str(root), str(package), str(checksum), 'a' * 64,
+                str(graphs), str(PORT_ROOT / 'foliage'), str(PORT_ROOT / 'destructibles'),
+                native_bridge_source=str(native_bridge), native_math_source=str(native_math),
+                worker_starter_source=str(worker_starter), server_executable_source=str(server_executable))
+            self.assertNotEqual(Path(overlay).name, Path(next_overlay).name)
             packed_xml = _load_tool('packed_xml')
             for filename, preferences_leaf in packager.PREFERENCES_CONFIGS:
                 packaged_config = (
@@ -7116,7 +7125,9 @@ class BootstrapContractTests(unittest.TestCase):
         package.PORT_VERSION = '0.6.1'
         package.TARGET_CLIENT_VERSION = '0.9.22.0.1'
         package.TARGET_CLIENT_BUILD = '1513'
-        package.__path__ = []
+        # Bootstrap imports the real customization rules. Keep the package
+        # searchable while substituting only the explicit engine owners below.
+        package.__path__ = [str(bootstrap_path.parent)]
         config = types.ModuleType('gui.mods.offline_lan_0922.config')
         config.PLAYER_MODE = 'player'
         config.SIMULATION_WORKER_MODE = 'simulation_worker'

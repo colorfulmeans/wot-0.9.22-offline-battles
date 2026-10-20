@@ -2216,7 +2216,7 @@ class LANClient(object):
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
-                   gun_checkpoint=None, up_cosine=None):
+                   gun_checkpoint=None, up_cosine=None, wreck_pose=False):
         if not self.ready or self.phase != 'battle':
             return False
         if self._input_seq_round != self.round_id:
@@ -2276,6 +2276,8 @@ class LANClient(object):
                 message['pitch'] = _canonical_angle(pitch)
             if roll is not None:
                 message['roll'] = _canonical_angle(roll)
+            if wreck_pose:
+                message['wreck_pose'] = True
             if up_cosine is not None:
                 if (isinstance(up_cosine, bool) or
                         not isinstance(up_cosine, integer_types + (float,))):
@@ -2475,6 +2477,8 @@ class LANClient(object):
             }
             if pending.get('module_contacts'):
                 wire['module_contacts'] = list(pending['module_contacts'])
+            if pending.get('vehicle_contact'):
+                wire['vehicle_contact'] = list(pending['vehicle_contact'])
             pending['wire'] = wire
         sent = bool(self._send(dict(wire)))
         pending['sent'] = sent
@@ -2483,7 +2487,7 @@ class LANClient(object):
             pending.pop('refresh_input_on_retry', None)
         return sent
 
-    def send_landing_observation(self, impact_speed, module_contacts=None):
+    def send_landing_observation(self, impact_speed, module_contacts=None, vehicle_contact=None):
         """Publish one physical landing observation, never a damage verdict."""
         if (isinstance(impact_speed, bool) or
                 not isinstance(impact_speed, integer_types + (float,))):
@@ -2503,6 +2507,12 @@ class LANClient(object):
             module_contacts = environment_modules.normalize_contacts(module_contacts or [])
         except (TypeError, ValueError):
             return False
+        if vehicle_contact is not None:
+            from . import vehicle_stack
+            try:
+                vehicle_contact = list(vehicle_stack.carrier(vehicle_contact))
+            except (TypeError,ValueError):
+                return False
         if self._landing_observation_round != self.round_id:
             self._landing_observation_round = self.round_id
             self._landing_observation_seq = 0
@@ -2526,6 +2536,7 @@ class LANClient(object):
                 'input_seq': int(self._input_seq),
                 'impact_speed': round(impact_speed, 6),
                 'module_contacts': module_contacts,
+                'vehicle_contact': vehicle_contact,
             })
             if (not pending.get('sent', False) and
                     pending.get('retry_on_input', False)):
@@ -2539,6 +2550,7 @@ class LANClient(object):
             'input_seq': int(self._input_seq),
             'impact_speed': round(impact_speed, 6),
                 'module_contacts': module_contacts,
+            'vehicle_contact': vehicle_contact,
             'sent': False,
             'reported': False,
         }
@@ -2557,6 +2569,7 @@ class LANClient(object):
             'input_seq': int(queued['input_seq']),
             'impact_speed': float(queued['impact_speed']),
             'module_contacts': list(queued.get('module_contacts', ())),
+            'vehicle_contact': queued.get('vehicle_contact'),
             'sent': False,
             'reported': True,
         }
@@ -5592,7 +5605,10 @@ class LANClient(object):
                         for value in contact['threatened_bot_ids']) and
                     len(set(contact['threatened_bot_ids'])) == len(contact['threatened_bot_ids']) and
                     (bool(contact.get('fresh')) or not contact['threatened_bot_ids']))) and
-                (bool(contact.get('fresh')) or
+                # Direct spotting freshness and a separately proved shooting
+                # lane have different lifetimes. The worker/server may retain
+                # a current lane while this team contact uses spotting memory.
+                (bool(contact.get('visible')) or
                  not contact.get('shootable_by_bot_ids'))
                 for contact in (contacts or ()))
             if self.phase != 'battle' or not valid_contacts:

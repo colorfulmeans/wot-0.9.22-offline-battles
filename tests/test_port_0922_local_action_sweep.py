@@ -1,0 +1,262 @@
+"""Local candidates must use non-committing realised body geometry."""
+import math
+import types
+import unittest
+from unittest import mock
+from test_port_0922_battle_runtime import _runtime, BattleRuntime
+from test_port_0922_bot_runtime import _combat_descriptor
+
+
+class LocalActionSweepTests(unittest.TestCase):
+    def test_recovery_arc_does_not_stop_at_its_clear_first_frame(self):
+        battle,state,descriptor=self.scene()
+        start=1.2836156064
+        battle._resolve_bot_rotation=mock.Mock(side_effect=lambda *args,**kw:
+            abs(args[3]-start) < .1)
+        value=battle._probe_bot_local_motion(8,(0,0,0),start,start+.85,None,descriptor,.104,233.86)
+        self.assertFalse(value['clear'])
+        self.assertTrue(value['proved'])
+        self.assertAlmostEqual(start+.85,value['checked_yaw'])
+        self.assertFalse(battle._resolve_bot_rotation.call_args.kwargs['commit_enabled'])
+
+    def test_long_arc_stops_at_first_rejected_chunk(self):
+        battle,state,descriptor=self.scene()
+        battle._resolve_bot_rotation=mock.Mock(side_effect=(True,False))
+        value=battle._probe_bot_local_motion(8,(0,0,0),0.,math.pi,None,descriptor,.1,1.)
+        self.assertFalse(value['clear'])
+        self.assertEqual(2,value['checked_chunks'])
+        self.assertEqual(3,value['planned_chunks'])
+
+    def test_recovery_fractions_keep_independent_native_proofs(self):
+        import test_port_0922_bot_runtime as bots
+        fixture=bots.BotRuntimeTests();fixture.setUp()
+        try:
+            runtime=fixture.runtime
+            runtime.battle_start(fixture.start)
+            state=runtime.states[11];state['yaw']=1.2836156064
+            runtime._local_sweep_step=.104
+            runtime.local_sweep_probe=mock.Mock(return_value={'clear':True})
+            for fraction in (.25,.5,.75,1.):
+                yaw=state['yaw']+.85*fraction
+                value=runtime._planning_local_sweep(state,(0,0,0),yaw,None,233.86)
+                self.assertFalse(value['cache_reused'])
+                self.assertAlmostEqual(yaw,runtime.local_sweep_probe.call_args.args[3])
+            self.assertEqual(4,runtime.local_sweep_probe.call_count)
+            value=runtime._planning_local_sweep(state,(0,0,0),yaw,None,233.86)
+            self.assertTrue(value['cache_reused'])
+            self.assertEqual(4,runtime.local_sweep_probe.call_count)
+        finally:fixture.tearDown()
+
+    def test_recent_real_refusal_overrides_clear_coarse_pose_only_until_expiry(self):
+        import contextlib,io
+        import test_port_0922_bot_runtime as bots
+        fixture=bots.BotRuntimeTests();fixture.setUp()
+        try:
+            runtime=fixture.runtime;runtime.battle_start(fixture.start)
+            state=runtime.states[11]
+            state['_native_rotation_refused_until']=2.
+            runtime.local_sweep_probe=mock.Mock(return_value={
+                'clear':False,'reason':'local_sweep_blocked','source':'authoritative_body_sweep'})
+            runtime.rotation_resolver=mock.Mock(return_value=True)
+            runtime.navigator.grid.hull_pose_clear=mock.Mock(return_value=True)
+            observed=[]
+            def decide(state,clear):
+                observed.append(state['pose_clear'](state['yaw']+.9))
+                return {'throttle':0.,'turn':0.,'target_yaw':state['yaw'],'fire_allowed':False}
+            runtime.adapter.decide=decide
+            with contextlib.redirect_stdout(io.StringIO()):runtime.update(.1,1.)
+            self.assertEqual([False],observed)
+            runtime._decision_cache.clear();observed[:]=[]
+            runtime.local_sweep_probe.reset_mock()
+            with contextlib.redirect_stdout(io.StringIO()):runtime.update(.1,3.)
+            self.assertTrue(all(observed))
+            self.assertEqual(0,runtime.local_sweep_probe.call_count)
+        finally:fixture.tearDown()
+
+    def scene(self):
+        battle=BattleRuntime(_runtime())
+        state=dict(id=8,alive=True,movement_dir=0,rotation_dir=1,
+                   _rotation_contact_trace={'realised':'rotation'},
+                   _world_contact_trace={'realised':'translation'})
+        battle._bots=types.SimpleNamespace(states={8:state})
+        battle._bot_motion_kinds={8:'original'}
+        return battle,state,_combat_descriptor()
+
+    def test_rotation_previews_requested_arc_without_commit(self):
+        battle,state,descriptor=self.scene()
+        def turn(*args,**kwargs):
+            self.assertFalse(kwargs['commit_enabled'])
+            state['_rotation_contact_trace']={'hit':(61.3968,1.7,-51.8394)}
+            return False
+        battle._resolve_bot_rotation=mock.Mock(side_effect=turn)
+        result=battle._probe_bot_local_motion(8,(58.877,1.1,-48.988),-.1804,-1.1184,None,descriptor,.1,241.341)
+        self.assertFalse(result['clear'])
+        self.assertEqual('local_sweep_blocked',result['reason'])
+        self.assertAlmostEqual(-1.1184,result['checked_yaw'])
+        self.assertEqual('requested_rotation_arc',result['proof_scope'])
+        self.assertEqual({'realised':'rotation'},state['_rotation_contact_trace'])
+        self.assertEqual('original',battle._bot_motion_kinds[8])
+
+    def test_signed_left_right_and_wrapped_rotation_arcs(self):
+        for start, goal in ((0., .05), (0., -.05), (0., 2.), (0., -2.),
+                            (3.13, -3.13), (-3.13, 3.13), (0.,math.pi)):
+            with self.subTest(start=start, goal=goal):
+                battle,state,descriptor=self.scene()
+                battle._resolve_bot_rotation=mock.Mock(return_value=True)
+                value=battle._probe_bot_local_motion(8,(0.,1.1,0.),start,goal,None,descriptor,.1,1.)
+                delta=math.atan2(math.sin(goal-start),math.cos(goal-start))
+                if abs(abs(delta)-math.pi)<1.e-12:delta=-math.pi
+                self.assertAlmostEqual(delta,value['checked_yaw']-start)
+                calls=battle._resolve_bot_rotation.call_args_list
+                self.assertLessEqual(len(calls),3)
+                self.assertAlmostEqual(start,calls[0].args[2])
+                for previous,current in zip(calls,calls[1:]):
+                    self.assertAlmostEqual(previous.args[3],current.args[2])
+                for call in calls:
+                    self.assertLessEqual(abs(call.args[3]-call.args[2]),math.pi/3.+1.e-9)
+                    self.assertFalse(call.kwargs['commit_enabled'])
+                self.assertEqual(len(calls),value['checked_chunks'])
+
+    def test_preview_and_real_commit_sweep_the_same_reported_rotation(self):
+        # KV-1 at 22:11:12.749 in report c31c22a3a1fb: the left sweep
+        # strikes a wall, while the mirrored right sweep is clear.
+        start=.7943278541736059
+        for delta in (-.055154066175541, .055154066175541):
+            with self.subTest(delta=delta):
+                battle,state,descriptor=self.scene()
+                battle._destructible_pose_sweep=mock.Mock(return_value={
+                    'status':'clear','requires_commit':False})
+                battle._tree_motion_proposal=mock.Mock(return_value={
+                    'status':'clear','requires_commit':False})
+                battle._complete_bot_tree_contact=mock.Mock(return_value='clear')
+                def native(position, first, last, td, **kwargs):
+                    return last > first
+                battle._native_world_rotation_is_clear=mock.Mock(side_effect=native)
+                position=(189.242936047,1.100000143,-287.227001755)
+                preview=battle._probe_bot_local_motion(8,position,start,
+                    start+delta,None,descriptor,.1580047607421875,161.154)
+                proposed=battle._native_world_rotation_is_clear.call_args
+                realised=battle._resolve_bot_rotation(8,position,start,
+                    start+delta,descriptor,.1580047607421875,161.154,.75)
+                committed=battle._native_world_rotation_is_clear.call_args
+                self.assertEqual(delta > 0.,preview['clear'])
+                self.assertEqual(realised,preview['clear'])
+                self.assertEqual(proposed,committed)
+                self.assertAlmostEqual(start+delta,proposed.args[2])
+
+    def test_aligned_front_and_rear_use_full_motion_resolver_and_restore_controls(self):
+        for yaw,sign in ((0.,1),(math.pi,-1)):
+            battle,state,descriptor=self.scene()
+            def move(*args,**kwargs):
+                self.assertFalse(kwargs['commit_enabled'])
+                self.assertIsNone(kwargs.get('motion_yaw'))
+                self.assertEqual(sign,state['movement_dir'])
+                self.assertAlmostEqual(.54,abs(args[3])*args[5])
+                state['_world_contact_trace']={'hit':(57.78,1.7,-44.49)}
+                return 'hard'
+            battle._resolve_bot_motion=mock.Mock(side_effect=move)
+            result=battle._probe_bot_local_motion(8,(0.,1.1,0.),0.,yaw,.54,descriptor,.1,305.)
+            self.assertFalse(result['clear'])
+            self.assertEqual('signed_drive',result['motion_law'])
+            self.assertEqual(yaw,result['checked_yaw'])
+            self.assertEqual(0,state['movement_dir'])
+            self.assertEqual(1,state['rotation_dir'])
+            self.assertEqual({'realised':'translation'},state['_world_contact_trace'])
+
+    def test_unaligned_future_exit_keeps_its_existing_rotation_owner(self):
+        battle,state,descriptor=self.scene()
+        battle._resolve_bot_motion=mock.Mock(side_effect=AssertionError('sideways prediction'))
+        value=battle._probe_bot_local_motion(8,(0,0,0),0.,.5,2.,descriptor,.1,1.)
+        self.assertIsNone(value['clear'])
+        self.assertEqual('local_sweep_not_aligned',value['reason'])
+
+    def test_translation_preview_matches_real_driving_world_arguments_in_both_directions(self):
+        from gui.mods.offline_lan_0922 import battle_runtime as module
+        for body,sign,blocked in ((-.5534,-1,False),(-2.426,-1,False),
+                                  (3.13,1,True),(-3.13,-1,True)):
+            with self.subTest(body=body,sign=sign,blocked=blocked):
+                battle,state,td=self.scene()
+                state.update(yaw=body,pitch=.0474,terrain_pitch=.0474,roll=.0713)
+                battle._avatar=types.SimpleNamespace(spaceID=1)
+                battle._destructibles=None
+                battle._turret_motion_is_clear=mock.Mock(return_value=True)
+                battle._destructible_drive_speed_cap=mock.Mock(return_value=None)
+                battle._bot_destructible_travel_descriptor=mock.Mock(return_value=None)
+                target=body if sign>0 else body+math.pi
+                with mock.patch.object(module.world_collision,'check_horizontal_collision',
+                                       return_value='hard' if blocked else 'clear') as world:
+                    preview=battle._probe_bot_local_motion(8,(1.,2.,3.),body,target,.5,td,.1,1.)
+                    before=world.call_args
+                    state.update(movement_dir=sign,rotation_dir=0)
+                    actual=battle._resolve_bot_motion(8,(1.,2.,3.),body,
+                        preview['checked_speed'],td,preview['checked_dt'],1.)
+                    after=world.call_args
+                self.assertEqual(not blocked,preview['clear'])
+                self.assertEqual(actual,preview['status'])
+                self.assertEqual(before.args[:3],after.args[:3])
+                self.assertEqual(tuple(getattr(before.args[3],axis) for axis in ('x','y','z')),
+                                 tuple(getattr(after.args[3],axis) for axis in ('x','y','z')))
+                self.assertEqual(before.args[4:],after.args[4:])
+                first=dict(before.kwargs);last=dict(after.kwargs)
+                self.assertFalse(first.pop('commit_enabled'))
+                self.assertTrue(last.pop('commit_enabled'))
+                self.assertIsNone(first['motion_yaw'])
+                self.assertEqual(first,last)
+
+    def test_pending_destruction_is_deferred_to_real_commit(self):
+        battle,state,descriptor=self.scene()
+        battle._resolve_bot_rotation=mock.Mock(return_value=None)
+        result=battle._probe_bot_local_motion(8,(0,0,0),0.,1.,None,descriptor,.1,1.)
+        self.assertTrue(result['clear'])
+        self.assertFalse(result['proved'])
+        self.assertEqual('local_sweep_commit_required',result['reason'])
+
+    def test_preview_exception_restores_realised_evidence(self):
+        battle,state,descriptor=self.scene()
+        def failure(*args,**kwargs):
+            state['movement_dir']=-99
+            state['_world_contact_trace']={'candidate':True}
+            raise RuntimeError('native failure')
+        battle._resolve_bot_motion=mock.Mock(side_effect=failure)
+        with self.assertRaises(RuntimeError):
+            battle._probe_bot_local_motion(8,(0,0,0),0.,0.,2.,descriptor,.1,1.)
+        self.assertEqual(0,state['movement_dir'])
+        self.assertEqual({'realised':'translation'},state['_world_contact_trace'])
+
+    def test_real_rotation_resolver_never_commits_candidate_destruction(self):
+        battle,state,descriptor=self.scene()
+        battle._destructible_pose_sweep=mock.Mock(return_value={
+            'status':'crushed','requires_commit':True,'token':('prop',)})
+        battle._native_world_rotation_is_clear=mock.Mock(side_effect=AssertionError('uncommitted replacement'))
+        value=battle._resolve_bot_rotation(8,(0,0,0),0.,.01,descriptor,.1,1.,0.,commit_enabled=False)
+        self.assertIsNone(value)
+        self.assertEqual(1,battle._destructible_pose_sweep.call_count)
+
+    def test_runtime_direction_and_rotation_callbacks_publish_full_sweep_evidence(self):
+        import contextlib,io
+        import test_port_0922_bot_runtime as bots
+        fixture=bots.BotRuntimeTests();fixture.setUp()
+        try:
+            runtime=fixture.runtime
+            runtime.battle_start(fixture.start)
+            runtime.local_sweep_probe=mock.Mock(return_value={
+                'clear':False,'reason':'local_sweep_blocked','source':'authoritative_body_sweep'})
+            runtime.rotation_resolver=mock.Mock(return_value=True)
+            runtime.navigator.grid.hull_pose_clear=mock.Mock(return_value=False)
+            observed=[]
+            def decide(state,clear):
+                observed.append(state['pose_clear'](state['yaw']+.9))
+                observed.append(state['pose_clear'](state['yaw']+1.2))
+                observed.append(clear(state['yaw'],.54))
+                return {'throttle':0.,'turn':0.,'target_yaw':state['yaw'],'fire_allowed':False}
+            runtime.adapter.decide=decide
+            with contextlib.redirect_stdout(io.StringIO()):runtime.update(.1,1.)
+            self.assertEqual([False,False,False],observed)
+            # Distinct requested arcs cannot reuse one next-frame proof.
+            self.assertEqual(3,runtime.local_sweep_probe.call_count)
+            for call in runtime.local_sweep_probe.call_args_list:
+                self.assertIs(call.args[5],runtime._descriptors[11])
+        finally:fixture.tearDown()
+
+
+if __name__=='__main__':unittest.main()

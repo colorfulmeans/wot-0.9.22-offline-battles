@@ -29,7 +29,16 @@ PyObject *WOT_CDECL nav_query_filter(PyObject *, PyObject *args) {
     }
     const long material = read<long>(reinterpret_cast<const char *>(values[0]) + sizeof(PyObject));
     profile.compute();
-    const int result = material >= 71 && material < 86 ? 0 : 1;
+    // Material alone cannot distinguish a crushable fence from solid railway
+    // stock. The existing owner callback has exact baked/streamed identities.
+    if (material >= 71 && material < 86) {
+        if (!context) return int_new(1);
+        PyObject *result = profiled_object_call(NativeCallback::NavigationQuery,
+            "navigation.query", 7, 1, context->capabilities[8], args);
+        if (!result) profile.fail();
+        return result;
+    }
+    const int result = 1;
     profile.output();
     return int_new(result);
 }

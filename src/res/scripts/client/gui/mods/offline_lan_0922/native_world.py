@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """Keep live engine effects on the caller while C++ runs the world law."""
+from .worker_diagnostics import observed
 
+@observed('motion.world_bridge')
 def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
         return_status=False, allow_kinetic=False, kinetic_speed=None,
         commit_enabled=True, motion_yaw=None, pitch=0.0, roll=0.0,
@@ -24,7 +26,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             query_owner._native_world_query = query
         if query._runtime.bigworld is not BigWorld or query._runtime.math is not Math or query._space != spaceID:
             raise RuntimeError('World query owner does not match its live engine')
-    bounds = module._vehicle_motion_bounds(td)
+    bounds, heights = module._vehicle_motion_geometry(td)
     if bounds is None:
         bounds = (-1.5, 1.5, 3.5, 3.5)
     left, right, back, front = bounds
@@ -35,7 +37,6 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                      airborne=airborne,
                      extents=(max(abs(left), abs(right)), back, front),
                      lateral_bounds=(left, right))
-    heights = module._vehicle_motion_heights(td)
     snapshot = (pos.x, pos.y, pos.z, yaw, vel, dt, pitch, roll,
                 0.0 if motion_yaw is None else motion_yaw) + tuple(bounds) + tuple(heights) + (
                 motion_yaw is not None, airborne, exact_footprint,
@@ -49,6 +50,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
     def xyz(v):
         return (v.x, v.y, v.z)
+    @observed('motion.world_dispatch')
     def dispatch(op, rows):
         if query is not None:
             query._live()
@@ -76,6 +78,8 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
             return None
         if op == 5:
             a, b, handle = rows[0]
+            if query is not None:
+                query.invalidate_ray_scope()
             result = module._destroy_and_recast(
                 spaceID, V(*a), V(*b), handle if query is not None else hits[handle], yaw, vel, td,
                 crush, allow_kinetic, kinetic_speed, commit_enabled, state[0])
@@ -121,8 +125,13 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                 result.append((xyz(hit[0]), normal, handle, xyz(start), xyz(end)))
         return tuple(result)
     # An exception propagates. Replaying the law could repeat destruction.
-    status = native_math.world_run(snapshot, dispatch, query,
-        (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
+    scope = query.begin_ray_scope() if query is not None else None
+    try:
+        status = native_math.world_run(snapshot, dispatch, query,
+            (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
+    finally:
+        if scope is not None:
+            query.end_ray_scope(scope)
     if status is None:
         return None
     if return_status:

@@ -28,6 +28,9 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                               'src', 'res', 'scripts', 'client'))
 
+from gui.mods.offline_lan_0922.scenery_policy import railway_vehicle_resource
+from gui.mods.offline_lan_0922.ai.navigation import NAVIGABLE_WATER_DEPTH
+
 from packed_xml import (TYPE_ELEMENT, TYPE_STRING, TYPE_VECTOR, read_packed_xml)
 from space_bin_0922 import (CompiledSpace, CompiledSpaceError,
                             UnsafeBakeInputError, describe_space)
@@ -71,7 +74,7 @@ NAVIGATION_BASELINE_SHA256 = {
 # line: water the baseline itself calls navigable stays plain ground, and
 # HAZARD_SHALLOW_WATER marks only what needed it - a reviewed ford cell that
 # its own scoped depth limit admits beyond WATER_DEPTH_LIMIT.
-SHALLOW_WATER_THRESHOLD = 0.90
+SHALLOW_WATER_THRESHOLD = NAVIGABLE_WATER_DEPTH
 
 _GREAT_WALL_MAP = '59_asia_great_wall'
 _GREAT_WALL_GRID_CELL_SIZE = 4.0
@@ -469,6 +472,11 @@ def _legacy_baker():
         spec.loader.exec_module(module)
     finally:
         sys.dont_write_bytecode = previous_bytecode_policy
+    # Keep the verified vendor bytes intact; #1513 owns its water policy.
+    # Local mesh builders use this returned module too, including the
+    # existing_graph geometry-only entry which bypasses bake_graph below.
+    module.WATER_DEPTH_LIMIT = NAVIGABLE_WATER_DEPTH
+    module.SHALLOW_WATER_THRESHOLD = NAVIGABLE_WATER_DEPTH
     return module
 
 
@@ -502,6 +510,11 @@ def _target_sampling_bounds(map_name, map_config, cell_size):
         math.ceil(arena[2] / size) * size,
         math.ceil(arena[3] / size) * size,
     )
+    if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and size == 2.0:
+        # Nested refinement: keep the old even-coordinate 4m centres and add
+        # their 2m midpoints. The default odd-coordinate phase replaces every
+        # old centre and leaves the southern rubble neck split diagonally.
+        return tuple(value - 1.0 for value in sampled)
     if (map_name != _GREAT_WALL_MAP or
             float(cell_size) != _GREAT_WALL_GRID_CELL_SIZE):
         return sampled
@@ -958,7 +971,7 @@ def _bsp_triangle_record(section, offset):
     return (values[0:3], values[3:6], values[6:9]), material_id
 
 
-NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-no-original-destructibles-v1'
+NAVIGATION_COLLISION_POLICY = 'compiled-vehicle-surfaces-solid-railway-stock-v3'
 NAVIGATION_VEHICLE_SKIP_FLAGS = 0x10 | 0x40
 NAVIGATION_ORIGINAL_MATERIAL_MIN = 71
 NAVIGATION_ORIGINAL_MATERIAL_END = 86
@@ -991,7 +1004,50 @@ def _compiled_collision_materials(bsmo, collider, model_id):
     return result
 
 
-def compiled_navigation_obstacles(compiled, vfs, legacy):
+def _clip_collision_triangle(triangle, minimum_x, maximum_x, minimum_z, maximum_z):
+    """Clip in 3D so a sloped face contributes only its local cell heights."""
+    return _clip_collision_polygon(triangle,((0,minimum_x,True),(0,maximum_x,False),
+                                             (2,minimum_z,True),(2,maximum_z,False)))
+
+
+def _clip_collision_polygon(triangle, planes):
+    polygon=list(triangle)
+    for axis,value,above in planes:
+        if not polygon:
+            break
+        clipped=[]
+        previous=polygon[-1]
+        previous_inside=previous[axis]>=value if above else previous[axis]<=value
+        for current in polygon:
+            inside=current[axis]>=value if above else current[axis]<=value
+            if inside != previous_inside:
+                fraction=(value-previous[axis])/(current[axis]-previous[axis])
+                clipped.append(tuple(previous[i]+fraction*(current[i]-previous[i])
+                                     for i in range(3)))
+            if inside:
+                clipped.append(current)
+            previous,previous_inside=current,inside
+        polygon=clipped
+    return polygon
+
+
+def collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,radius):
+    """Exact body-height triangle/disk overlap; no cell-sized wall inflation."""
+    polygon=_clip_collision_polygon(triangle,((1,minimum,True),(1,maximum,False)))
+    if not polygon:return False
+    signs=[];area=0.
+    for first,last in zip(polygon,polygon[1:]+polygon[:1]):
+        dx,dz=last[0]-first[0],last[2]-first[2]
+        length=dx*dx+dz*dz
+        t=max(0.,min(1.,((x-first[0])*dx+(z-first[2])*dz)/length)) if length else 0.
+        if math.hypot(x-first[0]-dx*t,z-first[2]-dz*t)<=radius+1.e-9:return True
+        cross=dx*(z-first[2])-dz*(x-first[0])
+        if abs(cross)>1.e-9:signs.append(cross>0.)
+        area+=first[0]*last[2]-last[0]*first[2]
+    return abs(area)>1.e-9 and bool(signs) and all(s==signs[0] for s in signs)
+
+
+def compiled_navigation_obstacles(compiled, vfs, legacy, precise_regions=()):
     """Build the static route raster directly from placed compiled colliders.
 
     All original destructible surfaces (71..85) are removed BEFORE node,
@@ -1012,9 +1068,28 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
     colliders = bsmo['models_colliders']
 
     class CompiledObstacles(legacy.ObstacleField):
+        def _raster_triangle(self,triangle):
+            # Raster occupancy is triangle/cell intersection, not the vertical
+            # bounds of the entire model face copied across its whole footprint.
+            size=self.raster_size
+            for cx in range(int(math.floor(min(v[0] for v in triangle)/size)),
+                            int(math.floor(max(v[0] for v in triangle)/size))+1):
+                for cz in range(int(math.floor(min(v[2] for v in triangle)/size)),
+                                int(math.floor(max(v[2] for v in triangle)/size))+1):
+                    local=_clip_collision_triangle(triangle,cx*size,(cx+1)*size,
+                                                   cz*size,(cz+1)*size)
+                    if local:
+                        self._mark_cell(cx,cz,min(v[1] for v in local),
+                                        max(v[1] for v in local))
+                        if any(left-4<=cx*size<=right+4 and bottom-4<=cz*size<=top+4
+                               for left,bottom,right,top in precise_regions):
+                            self.precise_cells.setdefault((cx,cz),[]).append(triangle)
+
         def __init__(self):
             self.raster_size = 1.0
             self.cells, self.surface_cells = {}, {}
+            self.height_intervals = {}
+            self.precise_cells = {}
             self.instance_count = self.bridge_instance_count = 0
             self.bridge_surface_triangle_count = self.soft_instance_count = 0
             self.local_instance_count = self.skipped = self.invalid_triangles = 0
@@ -1025,7 +1100,43 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
                 original_surfaces_excluded=0, nonvehicle_surfaces_excluded=0,
                 hard_surfaces_retained=0, mixed_instances=0,
                 unselected_component_surfaces=0, empty_collision_resources=0)
+
+        def _mark_cell(self, cell_x, cell_z, minimum_y, maximum_y):
+            # A roof icicle and fallen icicle may share X/Z while leaving the
+            # vehicle-height band empty. A bounding min/max fills that air gap.
+            legacy.ObstacleField._mark_cell(self,cell_x,cell_z,minimum_y,maximum_y)
+            key=(cell_x,cell_z)
+            intervals=sorted(self.height_intervals.get(key,[])+[(minimum_y,maximum_y)])
+            merged=[]
+            for low,high in intervals:
+                if merged and low <= merged[-1][1]:
+                    merged[-1]=(merged[-1][0],max(high,merged[-1][1]))
+                else:
+                    merged.append((low,high))
+            self.height_intervals[key]=merged
+
+        def blocked(self,x,z,ground_y,margin=legacy.VEHICLE_HALF_WIDTH):
+            radius=int(math.ceil(float(margin)/self.raster_size))
+            cx=int(math.floor(float(x)/self.raster_size))
+            cz=int(math.floor(float(z)/self.raster_size))
+            minimum=float(ground_y)+legacy.VEHICLE_GROUND_CLEARANCE
+            maximum=float(ground_y)+legacy.VEHICLE_CLEARANCE_HEIGHT
+            precise=any(left<=x<=right and bottom<=z<=top for left,bottom,right,top in precise_regions)
+            examined=set()
+            for ix in range(cx-radius,cx+radius+1):
+                for iz in range(cz-radius,cz+radius+1):
+                    if math.hypot((ix+.5)*self.raster_size-x,(iz+.5)*self.raster_size-z) > margin+self.raster_size*math.sqrt(2.)*.5:
+                        continue
+                    if any(high >= minimum and low <= maximum
+                           for low,high in self.height_intervals.get((ix,iz),())):
+                        if not precise:return True
+                        for triangle in self.precise_cells.get((ix,iz),()):
+                            if triangle in examined:continue
+                            examined.add(triangle)
+                            if collision_triangle_blocks_disk(triangle,x,z,minimum,maximum,margin):return True
+            return False
     obstacles = CompiledObstacles()
+    obstacles.railway_obstacles = CompiledObstacles()
     mesh_cache = {}
     material_cache = {}
     for instance_id, (model_id, transform, mask) in enumerate(zip(model_ids, transforms, masks)):
@@ -1049,6 +1160,7 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
         if not isinstance(name, str) or not name.lower().endswith('.primitives'):
             raise UnsafeBakeInputError('BSMO model %d has an invalid BSP resource: %r' % (model_id, name))
         name = name[:-len('.primitives')] + '.primitives_processed'
+        railway_vehicle = railway_vehicle_resource(name)
         if model_id not in material_cache:
             material_cache[model_id] = _compiled_collision_materials(bsmo, collider, model_id)
         materials = material_cache[model_id]
@@ -1099,7 +1211,8 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             if flags & NAVIGATION_VEHICLE_SKIP_FLAGS:
                 obstacles.collision_stats['nonvehicle_surfaces_excluded'] += 1
                 continue
-            if (NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
+            if (not railway_vehicle and
+                    NAVIGATION_ORIGINAL_MATERIAL_MIN <= material_kind <
                     NAVIGATION_ORIGINAL_MATERIAL_END):
                 soft_count += 1
                 obstacles.collision_stats['original_surfaces_excluded'] += 1
@@ -1125,6 +1238,9 @@ def compiled_navigation_obstacles(compiled, vfs, legacy):
             # Do not skip a whole short model: an elevated/rotated short shape
             # can still be a hard obstacle, and mixed models need face granularity.
             _raster_compiled_collision_instance(obstacles, name, hard, legacy)
+            if railway_vehicle:
+                _raster_compiled_collision_instance(
+                    obstacles.railway_obstacles, name, hard, legacy)
     obstacles.soft_spawn_obbs = tuple(obstacles.soft_spawn_obbs)
     return obstacles
 
@@ -2021,11 +2137,11 @@ SPAWN_SOFT_DESTRUCTIBLE_CLEARANCE = 0.5
 
 
 def representative_vehicle_chassis_envelope(client_root):
-    """Measure a conservative chassis OBB from the pinned #1513 resources.
+    """Measure a conservative mounted-body OBB from the pinned #1513 resources.
 
     BattleRuntime admits every non-secret vehicle in the current battle tier
     band.  A map bake therefore cannot assume the selected player vehicle or a
-    hand-picked medium tank.  The collision-client chassis bounds are the same
+    hand-picked medium tank.  The collision-client chassis and mounted hull bounds are the same
     authored bodies loaded by ``ModelHitTester``; combining the widest and the
     longest stock bodies gives one conservative rectangle for every possible
     line-up without teaching the runtime to move a slot.
@@ -2039,14 +2155,48 @@ def representative_vehicle_chassis_envelope(client_root):
         raise UnsafeBakeInputError(
             'pinned client has no standard vehicle resource packages')
     seen = set()
+    # Full mounted hulls can be wider/longer than the chassis (M40/M43).
+    # Use every donated chassis mount for the corresponding vehicle resource.
+    mounts = {}
+    with zipfile.ZipFile(os.path.join(packages, 'scripts.pkg')) as scripts:
+        for name in scripts.namelist():
+            if not (name.startswith('scripts/item_defs/vehicles/') and
+                    name.endswith('.xml') and len(name.split('/')) == 5):
+                continue
+            root = read_packed_xml(scripts.read(name))
+            chassis = _children(root, 'chassis')
+            if not chassis or chassis[0].value_type != TYPE_ELEMENT:
+                continue
+            values = []
+            for unused, item in chassis[0].value.children:
+                if item.value_type != TYPE_ELEMENT:
+                    continue
+                positions = _children(item.value, 'hullPosition')
+                if positions:
+                    values.append(_vector3(positions[0]))
+            if values:
+                mounts['vehicles/' + '/'.join(name.split('/')[3:])[:-4]] = values
+                pending = [value for unused, value in root.children]
+                while pending:
+                    value = pending.pop()
+                    if value.value_type == TYPE_ELEMENT:
+                        pending.extend(item for unused, item in value.value.children)
+                    elif value.value_type == TYPE_STRING:
+                        path = value.value.decode('utf8').strip().replace('\\', '/')
+                        if path.startswith('vehicles/') and len(path.split('/')) >= 4:
+                            key = '/'.join(path.split('/')[:3])
+                            mounts.setdefault(key, []).extend(
+                                offset for offset in values if offset not in mounts.get(key, ()))
     maximum_width = None
     maximum_length = None
+    undonated_hulls = []
     for package_name in package_names:
         package_path = os.path.join(packages, package_name)
         with zipfile.ZipFile(package_path, 'r') as package:
             for resource_name in package.namelist():
-                if (not resource_name.endswith(
-                        '/collision_client/Chassis.visual_processed') or
+                hull = resource_name.endswith('/collision_client/Hull.visual_processed')
+                if (not (resource_name.endswith(
+                        '/collision_client/Chassis.visual_processed') or hull) or
                         resource_name in seen):
                     continue
                 seen.add(resource_name)
@@ -2058,8 +2208,18 @@ def representative_vehicle_chassis_envelope(client_root):
                         resource_name)
                 minimum = _vector3(_child(bounds.value, 'min'))
                 maximum = _vector3(_child(bounds.value, 'max'))
-                half_width = max(abs(minimum[0]), abs(maximum[0]))
-                half_length = max(abs(minimum[2]), abs(maximum[2]))
+                key = resource_name.split('/collision_client/')[0].split('/')
+                key[1] = {'american':'usa', 'british':'uk', 'chinese':'china',
+                    'french':'france', 'german':'germany', 'japanese':'japan',
+                    'russian':'ussr', 'swedish':'sweden', 'polish':'poland',
+                    'italian':'italy'}.get(key[1], key[1])
+                offsets = (mounts.get('/'.join(key)) or mounts.get(
+                    resource_name.split('/collision_client/')[0])) if hull else [(0.,0.,0.)]
+                if not offsets:
+                    undonated_hulls.append(resource_name)
+                    continue
+                half_width = max(abs(value + offset[0]) for value in (minimum[0], maximum[0]) for offset in offsets)
+                half_length = max(abs(value + offset[2]) for value in (minimum[2], maximum[2]) for offset in offsets)
                 if (not math.isfinite(half_width) or
                         not math.isfinite(half_length) or
                         half_width <= 0.0 or half_length <= 0.0):
@@ -2081,7 +2241,8 @@ def representative_vehicle_chassis_envelope(client_root):
         'width_source': maximum_width[1],
         'length_source': maximum_length[1],
         'resources_scanned': len(seen),
-        'source': '#1513 collision_client chassis visual boundingBox',
+        'undonated_hull_resources': sorted(undonated_hulls),
+        'source': '#1513 collision_client chassis and mounted hull boundingBox',
     }
 
 
@@ -2558,6 +2719,27 @@ def refine_terrain_edges(graph, terrain, obstacles, legacy):
     return result
 
 
+def _resolution_segment_clear(terrain, obstacles, start, end, legacy, original):
+    """Keep collision/width/grade laws; densely prove new short grid edges."""
+    if not original(terrain, obstacles, start, end):
+        return False
+    distance = math.hypot(end[0] - start[0], end[2] - start[2])
+    steps = max(1, int(math.ceil(distance / .25)))
+    previous = start
+    for index in range(1, steps + 1):
+        fraction = float(index) / steps
+        x = start[0] + (end[0] - start[0]) * fraction
+        z = start[2] + (end[2] - start[2]) * fraction
+        y = legacy._ground_height(terrain, obstacles, x, z)
+        if y is None:
+            return False
+        current = (x, y, z)
+        if not original(terrain, obstacles, previous, current):
+            return False
+        previous = current
+    return True
+
+
 def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_graph=None):
     """Bake a #1513 CTF map with compiled BSP collision and BWWa water cells."""
     if os.path.basename(NAVIGATION_BAKER) != 'bake_navigation.py':
@@ -2706,10 +2888,14 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             legacy._expanded_bounds = target_expanded_bounds
             legacy.SHALLOW_WATER_THRESHOLD = SHALLOW_WATER_THRESHOLD
             original_terrain, original_obstacles = legacy.Terrain, legacy.ObstacleField
+            original_segment_clear = legacy._segment_clear
             original_validate = legacy.validate_graph
             original_bake_routes = legacy.bake_tactical_routes
             original_retain = legacy.retain_base_component
             legacy.Terrain, legacy.ObstacleField = (lambda unused_resources, unused_map: terrain), (lambda unused_resources, unused_map, soft_models=None: obstacles)
+            if map_name in ('04_himmelsdorf', '86_himmelsdorf_winter') and float(cell_size) == 2.0:
+                legacy._segment_clear = lambda terrain, obstacles, start, end: _resolution_segment_clear(
+                    terrain, obstacles, start, end, legacy, original_segment_clear)
             ingress_records = {}
             # The stock CTF XML has no teamSpawnPoints: the client forms a
             # safe line around the flag.  Retain the *real* flags while choosing
@@ -2829,11 +3015,14 @@ def bake_map_graph(client_root, map_name, output=None, cell_size=4.0, existing_g
             legacy._expanded_bounds = original_expanded_bounds
             legacy.SHALLOW_WATER_THRESHOLD = original_shallow_threshold
             legacy.Terrain, legacy.ObstacleField = original_terrain, original_obstacles
+            legacy._segment_clear = original_segment_clear
             legacy.validate_graph = original_validate
             legacy.bake_tactical_routes = original_bake_routes
             legacy.retain_base_component = original_retain
         graph['bake']['source'] = '0.9.22 placed BSMI/BSMO colliders with per-model BSP material mapping'
         graph['bake']['navigation_collision_policy'] = NAVIGATION_COLLISION_POLICY
+        graph['bake']['collision_height_intervals'] = 'overlapping_union_preserves_vertical_gaps-v1'
+        graph['bake']['collision_cell_raster'] = 'triangle_clipped_to_cell-v1'
         graph['bake']['original_destructible_surfaces_excluded'] = True
         graph['bake']['compiled_collision_filter'] = obstacles.collision_stats
         graph['bake']['water_mode'] = ('BWWa-cell-surface-depth' if water_cells else

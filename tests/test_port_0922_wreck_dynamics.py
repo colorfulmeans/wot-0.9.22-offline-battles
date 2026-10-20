@@ -160,8 +160,7 @@ class WreckOwnerTests(unittest.TestCase):
         bt.ShovedWreckTests.setUp(self)
         if self._testMethodName in (
                 'test_report_bank_releases_live_and_dead_hulls_without_drive_input',
-                'test_authority_update_advances_bank_slide_for_live_and_dead_states',
-                'test_contact_promotes_live_bot_to_track_support_before_cliff_departure'):
+                'test_authority_update_advances_bank_slide_for_live_and_dead_states'):
             # Explicit detailed-support experiment; production stays disabled.
             support=mock.patch.object(self.module,'BOT_FULL_SUPPORT_ENABLED',True)
             support.start();self.addCleanup(support.stop)
@@ -171,8 +170,8 @@ class WreckOwnerTests(unittest.TestCase):
     _wreck = bt.ShovedWreckTests._wreck
 
     def _full_suspension_case(self, terrain):
-        # These cases exercise the retained detailed solver. Production uses
-        # basic support; restore the switch even when a test raises or fails.
+        # These cases force the retained detailed solver rather than the
+        # production five-point selector. Always restore that global switch.
         patcher = mock.patch.object(self.module, 'BOT_FULL_SUPPORT_ENABLED', True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -498,8 +497,8 @@ class WreckOwnerTests(unittest.TestCase):
         worker._apply_wreck_contact_response(state,dict(delta_velocity=(0.,0.),correction=(0.,0.)),.02)
         self.assertFalse(worker._suspension_param_failures)
 
-    def test_contact_promotes_live_bot_to_track_support_before_cliff_departure(self):
-        worker,state,unused=self._full_suspension_case(
+    def test_contact_keeps_basic_support_until_a_footprint_point_is_lost(self):
+        worker,state,unused=bt.BotRuntimeTests._suspension_case(self,
             lambda x,z:0. if x<=0. else -30.)
         worker.states={state['id']:state}
         worker._wreck_ground_probe=worker._suspension_ground_probe
@@ -508,12 +507,22 @@ class WreckOwnerTests(unittest.TestCase):
         state.update(x=-4.,alive=True,mass=25000.,collision_shape=c.DEFAULT_SHAPE)
         self.assertIsNone(worker._suspension_params_for(state['id']))
         worker.motion_resolver=lambda *args,**kwargs:'clear'
-        with mock.patch('sys.stdout'):
+        with mock.patch.object(self.module,'BOT_FULL_SUPPORT_ENABLED',False), \
+                mock.patch('sys.stdout'):
             worker._apply_tank_contact_response(state,dict(
                 delta_velocity=(2.,0.),correction=(0.,0.)),0.,advance_push=False)
+            # An impulse on continuous ground is not a support-mode trigger.
+            self.assertIsNone(worker._suspension_params_for(state['id']))
+            self.assertEqual(5,sum(row['valid'] for row in
+                                  worker._basic_support_status(state)))
+            # Only the right footprint point has left the deck. Production
+            # must admit detailed support immediately, without another shove.
+            state.update(x=-1.,speed=0.)
             self.assertIsNotNone(worker._suspension_params_for(state['id']))
-            # The contact moved its centre off the lip; no centre-height snap
-            # may replace the now unsupported track/rigid-body state.
+            self.assertEqual(4,sum(row['valid'] for row in
+                                  state['_support_mode_sample'][1]))
+            self.assertTrue(state['_edge_support_active'])
+            # No centre-height snap may replace the unsupported rigid body.
             state.update(x=4.,speed=0.)
             for unused in range(20):
                 worker._update_vertical_motion(state,.05)
@@ -800,7 +809,8 @@ class HeadOnOwnerTests(unittest.TestCase):
 
     def travel(self, human_mass, human_hp, bot_mass, bot_hp, hz,
                delay=0.0, reverse=False, prediction=True, input_delay=0.0,
-               human_throttle=1, bot_throttle=1, drop_edge=None, alive=True):
+               human_throttle=1, bot_throttle=1, drop_edge=None, alive=True,
+               motion_samples=None):
         worker=self._runtime()
         worker.states.pop(12)
         worker.baked_graph=bt._flat_open_graph()
@@ -893,6 +903,8 @@ class HeadOnOwnerTests(unittest.TestCase):
                     # guards, human receipts and complete contact pass.
                     raw=bt._admit_player(raw,mass=human_mass)
                     worker._update_once(bank,clock[0],[raw])
+                    if motion_samples is not None:
+                        motion_samples.append((clock[0],state['z'],state['y']))
                     queue.append((clock[0]+delay,int(clock[0]*1000000),tick+1,copy.deepcopy(state)))
                     bank=0.
                 while queue and queue[0][0]<=clock[0]+1.e-9:
@@ -907,11 +919,18 @@ class HeadOnOwnerTests(unittest.TestCase):
         return state['z']-6.99
 
     def test_separate_owners_can_shove_live_and_dead_hulls_off_a_supported_edge(self):
-        for alive in (True,False):
-            with self.subTest(alive=alive):
+        for alive,bot_throttle in ((True,1),(True,0),(False,1),(False,0)):
+            with self.subTest(alive=alive,bot_throttle=bot_throttle):
+                samples=[]
                 state=self.travel(100575.,1200.,23496.,520.,60,delay=.15,
-                    input_delay=.15,drop_edge=9.,alive=alive)
-                self.assertGreater(state['z'],9.)
+                    input_delay=.15,drop_edge=9.,alive=alive,
+                    bot_throttle=bot_throttle,motion_samples=samples)
+                # A powered live hull can drive back underneath the ledge
+                # after falling. Its final Z is not evidence of a failed shove.
+                crossings=[time for time,z,y in samples if z>9.]
+                self.assertTrue(crossings,samples)
+                self.assertTrue(any(time>=crossings[0] and z>9. and y<-20.
+                                    for time,z,y in samples),samples)
                 self.assertLess(state['y'],-20.)
 
     def test_empty_authority_descriptor_cache_reproduces_report_head_on_deadlock(self):

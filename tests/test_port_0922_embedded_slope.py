@@ -37,13 +37,15 @@ class EmbeddedSlopeTests(unittest.TestCase):
         self.assertTrue(self.runtime._update_slope_pose(self.state))
         self.assertEqual(count, len(self.calls))
         self.assertFalse(self.tick())
-    def test_cached_attitude_converges_without_more_ground_columns(self):
+    def test_basic_support_applies_the_exact_plane_without_repeated_columns(self):
         self.state['y'] = 40.62900161743164
         self.assertTrue(self.runtime._update_slope_pose(self.state))
-        first = self.state['pitch']
-        for unused in range(10):self.runtime._update_slope_pose(self.state)
-        self.assertGreater(self.state['pitch'], first)
-        self.assertAlmostEqual(math.atan(.33) * .9, self.state['terrain_pitch'], delta=.001)
+        self.assertAlmostEqual(math.atan(.33), self.state['terrain_pitch'], places=12)
+        self.assertAlmostEqual(math.atan(.12 / math.sqrt(1.+.33*.33)),
+                               self.state['roll'], places=12)
+        for unused in range(10):
+            self.assertFalse(self.runtime._update_slope_pose(self.state))
+        self.assertAlmostEqual(math.atan(.33), self.state['pitch'], places=12)
         self.assertEqual(4, len(self.calls))
     def test_native_pose_denial_cannot_commit_height_repair(self):
         self.runtime._turret_motion_probe.return_value = False
@@ -55,13 +57,14 @@ class EmbeddedSlopeTests(unittest.TestCase):
         self.assertNotIn('_slope_pose_target', self.state)
         self.assertNotIn('pose_sample', self.state)
 
-    def test_cached_convergence_does_not_move_ground_sampling_anchor(self):
+    def test_exact_cached_pose_does_not_move_ground_sampling_anchor(self):
         self.state['y'] = 40.62900161743164
         self.assertTrue(self.runtime._update_slope_pose(self.state))
         anchor = self.state['pose_sample']
         self.state['x'] = 2.
-        self.assertTrue(self.runtime._update_slope_pose(self.state))
+        self.assertFalse(self.runtime._update_slope_pose(self.state))
         self.assertEqual(anchor, self.state['pose_sample'])
+        self.assertEqual(4, len(self.calls))
         self.state['x'] = 5.
         self.assertTrue(self.runtime._update_slope_pose(self.state))
         self.assertEqual(8, len(self.calls))
@@ -119,8 +122,17 @@ class EmbeddedSlopeTests(unittest.TestCase):
         runtime._turret_motion_probe = mock.Mock(return_value=False)
         calls[:] = []
         runtime.update(.04, 1.)
-        self.assertEqual(29 + 4 * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, len(calls))
+        # Every hull owns a centre settle and all five support witnesses.
+        # Only the additional four-column attitude refresh is staggered.
+        self.assertEqual(29 * 6 + 4 * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, len(calls))
         self.assertEqual(self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME,
             sum(state.get('_slope_pose_attempt', 0) for state in runtime.states.values()))
         self.assertFalse(any('_slope_pose_target' in state for state in runtime.states.values()))
+        for frame in range(1, 6):
+            before = sum(s.get('_slope_pose_attempt', 0) for s in runtime.states.values())
+            runtime.update(.04, 1. + .04*frame)
+            after = sum(s.get('_slope_pose_attempt', 0) for s in runtime.states.values())
+            self.assertLessEqual(after-before, self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
+        self.assertTrue(all(s.get('_slope_pose_attempt', 0) for s in runtime.states.values()))
+        self.assertFalse(any('pose_sample' in s for s in runtime.states.values()))
 if __name__ == '__main__':unittest.main()

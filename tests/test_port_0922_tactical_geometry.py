@@ -64,10 +64,10 @@ class TacticalGeometryTests(unittest.TestCase):
         runtime, battle, source, target, unused = self.scene()
         rays = []
         runtime.bigworld.wg_collideSegment = lambda *args: rays.append(args) or None
-        battle._bot_aim_damage_score = lambda d, e, s, t, o, p: 100.0 if p[1] > 1.8 else 0.0
+        battle._bot_aim_damage_score = lambda d, e, s, t, o, p: 100.0 if p[1] > 1.0 else 0.0
         self.assertTrue(battle._bot_firing_lane(source, target))
         self.assertEqual(2, len(rays))
-        self.assertGreater(battle._bot_aim_point(source, target)['aim_position'][1], 1.8)
+        self.assertAlmostEqual(1.2, battle._bot_aim_point(source, target)['aim_position'][1])
 
     def test_nominal_damage_does_not_sample_projectile_rng_or_live_angles(self):
         runtime, battle, source, target, descriptor = self.scene()

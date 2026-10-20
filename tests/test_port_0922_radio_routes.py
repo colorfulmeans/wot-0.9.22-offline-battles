@@ -18,6 +18,9 @@ class RadioRouteTests(unittest.TestCase):
 
     def _fixture(self, recipients=(), lease=10.0, legacy=False):
         planner = BotPlanner()
+        # This fixture holds poses fixed across minute evaluations. Isolate
+        # pressure assignment from the independent 20-second stuck reroute.
+        planner._reroute_wreck_stall = lambda *unused: None
         left = fixture._route('left', [(-300, 0, False), (-300, 300, True)])
         right = fixture._route('right', [(300, 0, False), (300, 300, True)])
         manifest = [fixture._bot(
@@ -60,24 +63,58 @@ class RadioRouteTests(unittest.TestCase):
         self.assertEqual('left', orders[13]['route_id'])
         self.assertTrue(planner._route_assignments[11]['radio_scoped'])
 
-    def test_disconnect_retires_route_lease_before_rebalance_interval(self):
+    def test_disconnect_retires_route_only_at_minute_evaluation(self):
         planner, manifest, states, players, contacts = self._fixture((11,))
         orders = self._orders(planner, manifest, states, players, 1.0)
         self.assertEqual('right', orders[11]['route_id'])
         for contact in contacts:
             contact['radio_recipients'] = []
         planner.report_contacts(contacts, planner.known_targets(states, players), 1.1)
-        for now in (1.1, 5.0, 9.0):
+        for now in (1.1, 5.0, 59.0):
             orders = self._orders(planner, manifest, states, players, now)
-            self.assertEqual('left', orders[11]['route_id'])
-            self.assertEqual(0.0, planner._route_assignments[11]['until'])
+            self.assertEqual('right', orders[11]['route_id'])
+        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
+        self.assertEqual(0., planner._route_assignments[11]['until'])
+
+    def test_active_assignment_survives_last_original_route_owner_death(self):
+        planner, manifest, states, players, contacts = self._fixture((11,))
+        self.assertEqual('right', self._orders(
+            planner, manifest, states, players, 1.)[11]['route_id'])
+        states[-1]['alive'] = False
+        states[-1]['health'] = 0
+        orders = self._orders(planner, manifest, states, players, 1.1)
+        self.assertEqual('right', orders[11]['route_id'])
+        self.assertGreater(planner._route_assignments[11]['until'], 1.1)
+        for contact in contacts: contact['radio_recipients'] = []
+        planner.report_contacts(contacts, planner.known_targets(states, players), 1.2)
+        self.assertEqual('right', self._orders(
+            planner, manifest, states, players, 1.2)[11]['route_id'])
+        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
+        receipt = planner._route_assignment_receipts[11]
+        self.assertEqual(['radio_knowledge_lost'],
+                         receipt['selection']['invalidation_causes'])
+
+    def test_invalidation_knowledge_is_a_frozen_snapshot(self):
+        planner, manifest, states, players, contacts = self._fixture((11,))
+        self._orders(planner, manifest, states, players, 1.)
+        planner.report_contacts(contacts, planner.known_targets(states, players), 60.9)
+        planner._route_assignments[11]['until'] = 60.95
+        self._orders(planner, manifest, states, players, 61.)
+        evidence = next(event['selection']['knowledge_contacts'] for event in planner._route_assignment_receipts[11]['history'] if event['reason'] == 'lease_expired')
+        self.assertTrue(evidence)
+        frozen = copy.deepcopy(evidence)
+        for contact in planner._contacts[1].values():
+            contact['position']['x'] = 9999.
+            contact['radio_bot_until'].clear()
+        self.assertEqual(frozen, evidence)
 
     def test_expired_radio_lease_does_not_retain_route_movement(self):
         planner, manifest, states, players, unused = self._fixture((11,), lease=0.5)
         self.assertEqual('right', self._orders(
             planner, manifest, states, players, 1.0)[11]['route_id'])
-        self.assertEqual('left', self._orders(
+        self.assertEqual('right', self._orders(
             planner, manifest, states, players, 1.6)[11]['route_id'])
+        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
 
     def test_one_receivers_disconnect_keeps_another_receivers_knowledge(self):
         planner, manifest, states, players, contacts = self._fixture((11,))
@@ -88,6 +125,10 @@ class RadioRouteTests(unittest.TestCase):
                 {'kind': 'bot', 'id': 12, 'time_left': 10.0}]
         planner.report_contacts(changed, planner.known_targets(states, players), 5.0)
         orders = self._orders(planner, manifest, states, players, 5.0)
+        self.assertEqual('right', orders[11]['route_id'])
+        self.assertEqual('left', orders[12]['route_id'])
+        planner.report_contacts(changed, planner.known_targets(states, players), 60.9)
+        orders = self._orders(planner, manifest, states, players, 61.)
         self.assertEqual('left', orders[11]['route_id'])
         self.assertEqual('right', orders[12]['route_id'])
         self.assertEqual('left', orders[13]['route_id'])
@@ -102,6 +143,10 @@ class RadioRouteTests(unittest.TestCase):
         old_deadline = planner._route_assignments[donor]['until']
         orders = self._orders(planner, manifest, states, players, 5.0)
         self.assertEqual('right', orders[donor]['route_id'])
+        self.assertEqual(planner._route_assignments[donor]['until'], old_deadline)
+        contacts = self._fixture(legacy=True)[-1]
+        planner.report_contacts(contacts, planner.known_targets(states, players), 60.9)
+        self._orders(planner, manifest, states, players, 61.)
         self.assertGreater(planner._route_assignments[donor]['until'], old_deadline)
 
 

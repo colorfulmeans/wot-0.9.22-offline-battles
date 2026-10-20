@@ -31,6 +31,19 @@ from server_bot_ai import BotPlanner
 PACKAGE_ROOT = PORT_ROOT / 'src' / 'res' / 'scripts' / 'client' / 'gui' / 'mods' / 'offline_lan_0922'
 
 
+def _motion_rows(text):
+    # Native records may fragment after additional execution evidence is added.
+    # Exercise the shipped diagnostic reader rather than assuming one log line.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('motion_evidence_reader', ROOT / 'tools/read_native_evidence.py')
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    parsed = reader.parse_lines(text.splitlines(), 'worker')
+    if parsed['issues']:
+        raise AssertionError(parsed['issues'])
+    return [row['data'] for row in parsed['records'] if row['label'] == 'BOT MOTION']
+
+
 def _graph(map_name='01_karelia', waypoint_count=2):
     waypoints = tuple((float(index * 4), 0.0, False)
                       for index in range(waypoint_count))
@@ -1398,7 +1411,7 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                         for value in connection.payloads]
             self.assertEqual([relay], payloads)
 
-    def test_memory_contact_rejects_freshness_and_shooter_mismatches(self):
+    def test_memory_contact_keeps_independent_lane_but_rejects_false_freshness(self):
         server, unused_authority_socket, unused_guest_socket = self._server()
         bad_time = self._message(server.round_id)
         bad_time['contacts'][0]['time_left'] = 0.0
@@ -1407,12 +1420,20 @@ class ServerBotObservationRelayTests(unittest.TestCase):
             'fresh': False,
             'visible_by_bot_ids': [],
             'shootable_by_bot_ids': [11],
+            'radio_recipients': [{'kind': 'bot', 'id': 11, 'time_left': 4.0}],
         })
 
         self.assertFalse(server.update_bot_observation(
             SIMULATION_WORKER_AUTHORITY_ID, bad_time))
+        relay = server.update_bot_observation(
+            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter)
+        self.assertIsInstance(relay, dict)
+        self.assertEqual([11], relay['contacts'][0]['shootable_by_bot_ids'])
+        self.assertFalse(relay['contacts'][0]['fresh'])
+        false_freshness = copy.deepcopy(remembered_shooter)
+        false_freshness['contacts'][0]['fresh'] = True
         self.assertFalse(server.update_bot_observation(
-            SIMULATION_WORKER_AUTHORITY_ID, remembered_shooter))
+            SIMULATION_WORKER_AUTHORITY_ID, false_freshness))
 
     def test_valid_first_hidden_observation_is_a_noop_not_a_rejection(self):
         server, authority_socket, guest_socket = self._server()
@@ -1555,6 +1576,8 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                     initial = self._message(server.round_id)
                     initial['contacts'][0]['shootable_by_bot_ids'] = [12]
                     initial['contacts'][0]['threatened_bot_ids'] = [12]
+                    initial['contacts'][0]['radio_recipients'] = [
+                        {'kind': 'bot', 'id': 12, 'time_left': 4.0}]
                     renewed = copy.deepcopy(initial)
                     renewed['contacts'][0]['visible_by_bot_ids'] = [12]
                     observer_id, team, target = 11, 2, ('player', 2)
@@ -1573,7 +1596,8 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                 self.assertEqual(10.0, contact['time_left'])
                 self.assertEqual([], contact['visible_by_bot_ids'])
                 self.assertEqual([], contact['visible_by_player_ids'])
-                self.assertEqual([], contact['shootable_by_bot_ids'])
+                self.assertEqual([12] if observer_kind == 'bot' else [],
+                                 contact['shootable_by_bot_ids'])
                 self.assertEqual([], contact.get('threatened_bot_ids', []))
                 self.assertEqual({target}, set(server.team_lit_targets[team]))
                 self.assertIsInstance(server.update_bot_observation(
@@ -1583,6 +1607,13 @@ class ServerBotObservationRelayTests(unittest.TestCase):
                     observer_kind, observer_id)['spotted'])
                 self.assertEqual(0, server._statistics_row(
                     observer_kind, next_id)['spotted'])
+                if observer_kind == 'bot':
+                    # Losing a direct observer does not erase another live
+                    # shooter's independent receipt. Losing the shooter does.
+                    server.bot_states[12]['alive'] = False
+                    dead_shooter = server.update_bot_observation(
+                        SIMULATION_WORKER_AUTHORITY_ID, initial)
+                    self.assertEqual([], dead_shooter['contacts'][0]['shootable_by_bot_ids'])
 
     def test_a_malformed_retired_observer_batch_preserves_spot_state(self):
         server, _, _ = self._server()
@@ -4191,7 +4222,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
         self.assertEqual([(11, attempted_yaw, 5.0)],
-                         adapter.driver.calls)
+                         [call[:3] for call in adapter.driver.calls])
+        self.assertEqual('hard_translation_contact', adapter.driver.calls[0][3]['source'])
+        self.assertEqual(before_position, adapter.driver.calls[0][3]['origin'])
         self.assertEqual(1, len(contact_reports))
         realised_edge = (math.sin(attempted_yaw) * 4.0, 0.0,
                          math.cos(attempted_yaw) * 4.0)
@@ -4458,7 +4491,10 @@ class BotRuntimeTests(unittest.TestCase):
                         'hard_contact_episode'][
                             'uses_navigation_target'])
                 self.assertEqual([(11, report_yaw, 5.0)],
-                                 adapter.driver.calls)
+                                 [call[:3] for call in adapter.driver.calls])
+                self.assertEqual('hard_translation_contact',
+                                 adapter.driver.calls[0][3]['source'])
+                self.assertEqual(.25, adapter.driver.calls[0][3]['hull_yaw'])
 
     def test_unresolved_reverse_hard_contact_reports_a_stable_episode_edge(self):
         yaw = 0.25
@@ -5041,8 +5077,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertAlmostEqual(10.0, state['y'], places=6)
         self.assertFalse(state['airborne'])
         self.assertAlmostEqual(0.0, state['vertical_speed'], places=6)
-        # One centre column on flat ground, five only at the fall transition.
-        self.assertEqual(5, len(calls))
+        # Five mode-admission points, five basic support queries, and five
+        # handback points: no detailed descriptor exists in this fixture.
+        self.assertEqual(15, len(calls))
 
     def test_fast_bot_checks_track_support_before_following_a_trench_floor(self):
         self.runtime.battle_start(self.start)
@@ -5062,7 +5099,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertAlmostEqual(10.0, state['y'])
         self.assertFalse(state['airborne'])
-        self.assertEqual(5, len(calls))
+        self.assertEqual(15, len(calls))
 
     def test_fast_bot_follow_gap_cannot_pull_down_an_unbridged_drop(self):
         for single_rim in (False, True):
@@ -5080,13 +5117,14 @@ class BotRuntimeTests(unittest.TestCase):
                     return 8.46 - z * 0.2
                 self.runtime._physics_ground_probe = probe
 
+                already_detailed = bool(state.get("_edge_support_active"))
                 self.assertFalse(self.runtime._update_vertical_motion(state, 0.15))
 
                 self.assertAlmostEqual(
                     10.0 - self.module.vehicle_physics.GRAVITY * 0.15 ** 2,
                     state['y'])
                 self.assertTrue(state['airborne'])
-                self.assertEqual(5, len(calls))
+                self.assertEqual(10 if already_detailed else 15, len(calls))
 
     def test_bot_bridges_a_slot_running_along_its_hull(self):
         self.runtime.battle_start(self.start)
@@ -5141,7 +5179,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertTrue(state['airborne'])
         self.assertLess(state['y'], 10.0)
 
-    def test_bot_keeps_the_single_column_fast_path_on_flat_ground(self):
+    def test_bot_keeps_basic_support_with_five_point_mode_check_on_flat_ground(self):
         self.runtime.battle_start(self.start)
         state = self.runtime.states[11]
         state.update(x=0.0, y=10.0, z=0.0, yaw=0.0, speed=4.0,
@@ -5152,7 +5190,7 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertFalse(self.runtime._update_vertical_motion(state, 0.04))
 
-        self.assertEqual(1, len(calls))
+        self.assertEqual(6, len(calls))
         self.assertAlmostEqual(10.0, state['y'], places=6)
 
     def test_bot_steep_hull_keeps_falling_without_support(self):
@@ -6256,7 +6294,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertNotIn('destructible_contact_speed', state)
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
-        self.assertEqual([(11, 0.75, 5.0)], failures)
+        self.assertEqual([(11, 0.75, 5.0)], [call[:3] for call in failures])
+        self.assertEqual('support_rise_obstacle', failures[0][3]['source'])
 
     def test_vertical_motion_uses_edge_fallback_or_ballistic_fall(self):
         def edge_ground(unused_x, z, unused_y):
@@ -6439,14 +6478,15 @@ class BotRuntimeTests(unittest.TestCase):
                 0, 29 - frame * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
             sampled = min(
                 self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, remaining)
-            self.assertEqual(29 + 4 * sampled, len(calls) - before)
+            self.assertEqual(6 * 29 + 4 * sampled, len(calls) - before)
         self.assertTrue(all(
             'pose_sample' in state for state in runtime.states.values()))
 
-        # Stationary bots keep the sampled pose; only support remains.
+        # Stationary bots keep the sampled pose; five mode probes plus
+        # the existing centre support query remain per Bot.
         before = len(calls)
         runtime.update(0.04, 2.0)
-        self.assertEqual(29, len(calls) - before)
+        self.assertEqual(6 * 29, len(calls) - before)
 
 
     def test_traffic_stopping_cache_reuses_only_identical_inputs(self):
@@ -7154,7 +7194,7 @@ class BotRuntimeTests(unittest.TestCase):
             'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
             'gun_pitch', 'speed', 'push_x', 'push_z', 'movement_dir', 'rotation_dir',
             'reload_time', 'burst_time_left', 'siege_time_left_ms',
-            'combat_fire_elapsed', 'combat_fire_timer'))
+            'combat_fire_elapsed', 'combat_fire_timer', 'aim_feedback_error'))
         represented = set(('critical', 'equipment_states', 'ammo_remaining',
                            'shot_yaw', 'shot_pitch'))
         codec = self.module.bot_state_codec
@@ -7162,7 +7202,7 @@ class BotRuntimeTests(unittest.TestCase):
                       if not name.startswith('_'))
         carried |= set(('alive', 'world_pose', 'ammo_reload_pending',
                         'burst_active', 'movement_dir', 'rotation_dir',
-                        'route_wreck_blocked', 'push_x', 'push_z'))
+                        'route_wreck_blocked', 'local_combat_manoeuvre', 'push_x', 'push_z'))
         carried |= represented
         for unused_bit, names in codec.OPTIONAL_GROUPS:
             carried |= set(names)
@@ -7200,6 +7240,12 @@ class BotRuntimeTests(unittest.TestCase):
             'ram_seq': 1,
         }], 50)
         self.assertGreater(rammed[1], reverted[1])
+        state['local_combat_manoeuvre'] = True
+        moving = self.runtime._mark_publication_edge(states, [], [], 60)
+        state['local_combat_manoeuvre'] = False
+        finished = self.runtime._mark_publication_edge(states, [], [], 70)
+        self.assertGreater(moving[1], rammed[1])
+        self.assertGreater(finished[1], moving[1])
 
     def test_worker_stall_refreshes_control_once_and_consumes_all_elapsed(self):
         adapter = _Adapter()
@@ -9503,7 +9549,7 @@ class BotRuntimeTests(unittest.TestCase):
                 0, 29 - frame * self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME)
             sampled = min(
                 self.module.MAX_SLOPE_POSE_SAMPLES_PER_FRAME, remaining)
-            self.assertEqual(29 + 4 * sampled,
+            self.assertEqual(6 * 29 + 4 * sampled,
                              len(ground_calls) - before)
         self.assertTrue(all(
             'pose_sample' in state for state in runtime.states.values()))
@@ -9648,7 +9694,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertEqual(rear, runtime.states[11]['hull_aiming'])
                 self.assertEqual(0, state['fire_seq'])
 
-    def test_no_target_gun_keeps_safe_bearing_and_rests_horizontally(self):
+    def test_no_target_gun_follows_hull_and_rests_horizontally(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(),
             ground_probe=lambda *unused: 0.0,
@@ -9673,11 +9719,46 @@ class BotRuntimeTests(unittest.TestCase):
         finally:
             runtime._exact_shot_origin = original_origin
 
-        self.assertAlmostEqual(0.65, desired_yaw, places=9)
+        self.assertAlmostEqual(0.0, desired_yaw, places=9)
         self.assertEqual(0.0, horizontal)
         self.assertAlmostEqual(0.0, state['desired_gun_pitch'], places=9)
         self.assertGreater(state['gun_pitch'], -.30)
         self.assertFalse(state['gun_aligned'])
+
+    def test_no_target_rest_follows_hull_turns_and_pi_seam(self):
+        runtime = self.module.BotRuntime(
+            1, descriptor_resolver=lambda unused: _combat_descriptor(),
+            ground_probe=lambda *unused: 0.0,
+            physics_ground_probe=lambda *unused: 0.0,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        command = {'aim_position': (0.0, -100.0, 1.0),
+                   '_ballistic_solution': None}
+        for yaw in (math.pi / 2, -math.pi / 2, math.pi - .01, -math.pi + .01):
+            state.update(yaw=yaw, turret_yaw=.65, aim_yaw=0.)
+            for unused in range(50):
+                desired, horizontal = runtime._update_gun_aim(
+                    state, command, None, .20)
+            self.assertAlmostEqual(yaw, desired)
+            self.assertAlmostEqual(0., state['turret_yaw'], places=6)
+            self.assertEqual(0., horizontal)
+            self.assertEqual('hull_forward_rest',
+                             state['_diagnostic_aim_intent']['owner'])
+            self.assertFalse(state['gun_aligned'])
+        # Chassis pitch/roll may couple a horizontal world ray into nonzero
+        # local yaw. Idle rest must still centre on the actual chassis.
+        original = runtime._local_gun_angles_for_world
+        runtime._local_gun_angles_for_world = lambda *unused: (.30, -.10)
+        try:
+            state.update(turret_yaw=.65, pitch=.20, roll=.15)
+            for unused in range(50):
+                runtime._update_gun_aim(state, command, None, .20)
+            self.assertAlmostEqual(0., state['turret_yaw'], places=6)
+            self.assertAlmostEqual(-.10,
+                                   state['_diagnostic_aim_intent']['gun_pitch'])
+        finally:
+            runtime._local_gun_angles_for_world = original
 
     def test_point_blank_target_tracks_its_live_world_bearing(self):
         runtime = self.module.BotRuntime(
@@ -9754,8 +9835,8 @@ class BotRuntimeTests(unittest.TestCase):
             'shell_index': 0, 'fire_allowed': False,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
-            'aim_position': (0.0, 1.0, 100.0),
-            'face_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
+            'face_position': (0.0, 1.0, 0.0),
             'move_position': (0.0, 0.0, 0.0),
             'recovery_mode': 'arrived', 'movement_intent': False,
         }
@@ -9790,9 +9871,10 @@ class BotRuntimeTests(unittest.TestCase):
 
         runtime._ballistic_solution = counted_solve
         runtime._update_gun_aim = counted_aim
+        # Bot spawns at z=100: keep this aiming fixture clear of its hull.
         player = _admit_player({
             'id': 2, 'team': 1, 'alive': True,
-            'x': 0.0, 'y': 1.0, 'z': 100.0,
+            'x': 0.0, 'y': 1.0, 'z': 0.0,
         })
 
         for frame in range(60):
@@ -9853,8 +9935,8 @@ class BotRuntimeTests(unittest.TestCase):
             'shell_index': 0, 'fire_allowed': True,
             'target_id': self.module.HUMAN_TARGET_ID_BASE + 2,
             'fire_range': 500.0, 'combat_mode': 'engage',
-            'aim_position': (0.0, 1.0, 100.0),
-            'face_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
+            'face_position': (0.0, 1.0, 0.0),
             'move_position': (0.0, 0.0, 0.0),
             'recovery_mode': 'arrived', 'movement_intent': False,
         }
@@ -9875,16 +9957,17 @@ class BotRuntimeTests(unittest.TestCase):
         runtime._next_shot_lane_refresh = 100.0
         runtime._next_cover_refresh = 100.0
         solution = {
-            'aim_position': (0.0, 1.0, 100.0),
+            'aim_position': (0.0, 1.0, 0.0),
             'yaw': 0.0, 'pitch': 0.0, 'flight_time': 0.1,
             'arc': 'low', '_origin': (0.0, 1.0, 0.0),
         }
         freshness = [False]
         runtime._cadenced_ballistic_solution = lambda *unused, **kwargs: (
             solution, freshness[0])
+        # Bot spawns at z=100: keep this aiming fixture clear of its hull.
         player = _admit_player({
             'id': 2, 'team': 1, 'alive': True,
-            'x': 0.0, 'y': 1.0, 'z': 100.0,
+            'x': 0.0, 'y': 1.0, 'z': 0.0,
         })
 
         stale = bot_state_rows.bots(runtime.update(0.2, 1.0, players=[player])[0])[0]
@@ -12516,12 +12599,20 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn(11, runtime._friendly_repositions)
         initial_position = self.module._position(state)
         initial_ammo = list(state['ammo_remaining'])
+        deadline = runtime._friendly_repositions[11]['deadline']
+        self.assertLessEqual(deadline-now, self.module.FRIENDLY_REPOSITION_MAX_SECONDS)
         expired = False
-        for index in range(1, 140):
+        for index in range(1, int(math.ceil((deadline-now)/.04))+3):
             runtime.update(.04, now + .04 * index, players=[player])
+            self.assertEqual(initial_position, self.module._position(state))
+            self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertEqual(0, state['fire_seq'])
             if 11 not in runtime._friendly_repositions:
+                self.assertGreaterEqual(now+.04*index,deadline)
                 expired = True
+                self.assertEqual('timeout',state['_friendly_reposition_last_terminal']['outcome'])
                 break
+            self.assertEqual(deadline,runtime._friendly_repositions[11]['deadline'])
 
         self.assertTrue(expired)
         self.assertEqual(initial_position, self.module._position(state))
@@ -17072,13 +17163,13 @@ class BotRuntimeTests(unittest.TestCase):
         from contextlib import redirect_stdout
         self.runtime.battle_start(self.start)
         state=self.runtime.states[11]
-        state['_motion_stall_pending']={}
+        state['_motion_stall_pending']={'start': (state['x'],state['y'],state['z']), 'controls': {'motion': (0.,0.)}}
         state['_gun_angle_rejected']={('bot',2):108.0,('human',1):99.0}
         position=(state['x'],state['y'],state['z'])
         output=io.StringIO()
         with redirect_stdout(output):
             self.runtime._finish_motion_stall(state,False,False,position,100.0)
-        row=json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ',1)[1])
+        row=_motion_rows(output.getvalue())[0]
         self.assertEqual([8.0,0.0],[r['seconds_left'] for r in row['gun_angle_rejected']])
         self.assertNotIn('_motion_stall_pending',state)
 
@@ -17105,7 +17196,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.runtime._log_motion_stall(state, order, 0.0, 0.0, True, {}, 3.0)
             self.runtime._finish_motion_stall(state, False, False,
                 (state['x'], state['y'], state['z']),3.0)
-        row = json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         receipt = row['navigation']
         self.assertEqual(7, len(receipt['path_near_target']))
         self.assertEqual(200, receipt['path_length'])
@@ -17152,7 +17243,7 @@ class BotRuntimeTests(unittest.TestCase):
                 traffic_input=order, traffic_output=safety)
             self.runtime._finish_motion_stall(state, False, False, position,3.0)
         self.assertIn('traffic=vehicle_brake', output.getvalue())
-        row = json.loads(output.getvalue().split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual('vehicle_brake', row['traffic_mode'])
         self.assertEqual(1.0, row['requested_turn'])
         self.assertEqual([0.0, 1.0], row['controls']['before_traffic'])
@@ -17190,7 +17281,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
-        row = json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual(5.0,row['gun_angle_rejected'][0]['seconds_left'])
         self.assertNotIn('_motion_stall_pending',state)
 
@@ -17222,7 +17313,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(1, output.getvalue().count('[BOT STALL]'))
         line = next(line for line in output.getvalue().splitlines()
                     if line.startswith('[Offline LAN 0.9.22] BOT MOTION '))
-        row = json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
+        row = _motion_rows(output.getvalue())[0]
         self.assertEqual(1.0, row['requested_throttle'])
         self.assertEqual([1.0, -0.4], row['controls']['planner'])
         self.assertEqual([1.0, -0.4], row['controls']['before_traffic'])
@@ -17249,8 +17340,7 @@ class BotRuntimeTests(unittest.TestCase):
                 self.runtime._traffic_coordinator, 'safe_controls',
                 side_effect=lambda body, command, *args: dict(command)):
             self.runtime.update(.04, 3.0)
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines() if '[Offline LAN 0.9.22] BOT MOTION ' in line]
+        rows = _motion_rows(output.getvalue())
         self.assertTrue(rows)
         row = next(row for row in rows if row['id'] == 11)
         self.assertTrue(row['hull_rotation_contact_blocked'])
@@ -17279,9 +17369,7 @@ class BotRuntimeTests(unittest.TestCase):
                 if '_motion_stall_pending' in state:
                     self.runtime._finish_motion_stall(
                         state, False, False, (state['x'], state['y'], state['z']),float(second))
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines()
-                if line.startswith('[Offline LAN 0.9.22] BOT MOTION ')]
+        rows = _motion_rows(output.getvalue())
         self.assertEqual(2, len(rows))
         self.assertEqual([15.0, 30.0],
                          [row['local_roaming']['elapsed'] for row in rows])
@@ -19945,7 +20033,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
 
-    def test_close_support_withdraws_without_losing_limited_traverse_fire(self):
+    def test_low_health_support_keeps_facing_and_firing_without_retreat(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(
                 reload_time=8.0, clip=(1,),
@@ -19968,6 +20056,7 @@ class BotRuntimeTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0,
                      aim_yaw=0.0, speed=0.0)
+        state['health'] = max(1, int(state.get('max_health', 1000) * .2))
         manifest[0]['route'] = {
             'id': 'support_lane', 'waypoints': [
                 {'x': 0.0, 'y': 0.0, 'z': -120.0},
@@ -19993,8 +20082,8 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('withdraw', order['combat_mode'])
-        self.assertIsNone(order['throttle_override'])
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
         self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
                          order['move_position'])
         runtime.apply_snapshot({
@@ -20029,6 +20118,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(max(abs(value) for value in yaws), 0.001)
         self.assertTrue(runtime.states[11]['gun_aligned'])
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
+        self.assertAlmostEqual(0.,runtime.states[11]['z'])
 
     def test_non_close_support_target_still_uses_engage_hold(self):
         planner = BotPlanner()
@@ -21361,7 +21451,9 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0.0, state['vertical_speed'])
         self.assertNotIn(11, runtime._decision_cache)
         self.assertNotIn(11, runtime._motion_probe_cache)
-        self.assertEqual([(11, 0.25, 5.0)], failures)
+        self.assertEqual([(11, 0.25, 5.0)], [call[:3] for call in failures])
+        self.assertEqual('baked_pose_guard', failures[0][3]['source'])
+        self.assertEqual((state['x'], state['y'], state['z']), failures[0][3]['origin'])
 
     def test_realised_guard_rejects_only_outward_map_boundary_progress(self):
         graph = _graph()
@@ -21449,9 +21541,7 @@ class BotRuntimeTests(unittest.TestCase):
         output = io.StringIO()
         with redirect_stdout(output):
             runtime.update(.04, 1.0)
-        rows = [json.loads(line.split('[Offline LAN 0.9.22] BOT MOTION ', 1)[1])
-                for line in output.getvalue().splitlines()
-                if '[Offline LAN 0.9.22] BOT MOTION ' in line]
+        rows = _motion_rows(output.getvalue())
         self.assertEqual(1, len(rows))
         self.assertTrue(rows[0]['pose_rollback'])
         self.assertFalse(rows[0]['support_rollback'])
@@ -21523,6 +21613,32 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertGreaterEqual(busiest[0][1], 1)
         # Reading the report clears the window's counters.
         self.assertEqual((), runtime.load_report()['busiest'])
+
+
+    def test_rejected_candidate_pose_uses_native_sweep_when_current_pose_is_valid(self):
+        for native_clear in (False, True, None):
+            observed = []
+            class PoseAdapter(_FixedAdapter):
+                def decide(self, state, clear):
+                    observed.append(state['pose_clear'](.5))
+                    return dict(self.command)
+            proof = mock.Mock(return_value=None if native_clear is None else dict(clear=native_clear, proved=True,
+                status='clear' if native_clear else 'hard',
+                source='authoritative_body_sweep',reason='local_sweep_clear' if native_clear else 'local_sweep_blocked'))
+            runtime = self.module.BotRuntime(1,
+                descriptor_resolver=lambda unused: _combat_descriptor(),
+                adapter_factory=lambda *unused: PoseAdapter(self._stationary_command()),
+                direction_probe=lambda *unused: {'clear':True,'slope':0.},
+                ground_probe=lambda *unused:0., physics_ground_probe=lambda *unused:0.,
+                spawn_resolver=_spawn_resolver, baked_graph=_graph(),
+                rotation_resolver=mock.Mock(return_value=True), local_sweep_probe=proof)
+            runtime.battle_start(self.start)
+            runtime.navigator.grid.hull_pose_clear = lambda position,yaw,*unused: abs(yaw)<.01
+            runtime.states[11].update(x=0.,y=0.,z=0.,yaw=0.,speed=0.,grounded_once=True)
+            runtime.update(.04,1.)
+            self.assertTrue(proof.called)
+            self.assertTrue(observed)
+            self.assertTrue(all(value is bool(native_clear) for value in observed))
 
 
 class ShovedWreckTests(unittest.TestCase):

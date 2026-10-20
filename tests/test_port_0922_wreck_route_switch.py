@@ -76,14 +76,35 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual(('banana',4),(skipped['route_id'],skipped['route_index']))
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])
 
-    def test_cleared_blocker_resets_next_gate_attempt_clock(self):
+    def test_blocker_receipt_changes_keep_the_unfinished_gate_clock(self):
         self.orders(0);self.orders(20)
         self.states[0]['route_wreck_blocked']=False
         self.orders(30)
         self.states[0]['route_wreck_blocked']=True
         self.orders(40)
-        self.assertEqual('banana',self.orders(59.9)[17]['route_id'])
-        self.assertEqual('rail',self.orders(60)[17]['route_id'])
+        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+
+    def test_contact_flicker_cannot_renew_an_unmoved_gate(self):
+        self.orders(0)
+        for now in range(1, 41):
+            self.states[0]['route_wreck_blocked'] = bool((now // 7) % 2)
+            orders = self.orders(now)
+        self.assertEqual('rail', orders[17]['route_id'])
+
+    def test_base_defense_pauses_and_resumes_the_same_gate_budget(self):
+        bot = self.planner._alive_bots(self.manifest, self.states)[0]
+        self.planner._route_states[17] = dict(route_id='banana', index=1)
+        def order(mode):
+            return dict(route_id='banana', route_index=1, combat_mode=mode,
+                        move_position=self.lane['waypoints'][1])
+        self.planner._reroute_wreck_stall(order('route'), bot, self.manifest, 0)
+        self.planner._reroute_wreck_stall(order('base_defense'), bot, self.manifest, 12)
+        self.planner._reroute_wreck_stall(order('base_defense'), bot, self.manifest, 30)
+        resumed = order('route')
+        self.planner._reroute_wreck_stall(resumed, bot, self.manifest, 40)
+        self.assertEqual(12., resumed['route_attempt']['elapsed'])
+        self.planner._reroute_wreck_stall(resumed, bot, self.manifest, 48)
+        self.assertEqual('skip_gate', resumed['route_attempt']['action'])
 
     def test_proved_obstruction_close_to_gate_skips_without_returning(self):
         self.states[0].update(x=190,z=-64)

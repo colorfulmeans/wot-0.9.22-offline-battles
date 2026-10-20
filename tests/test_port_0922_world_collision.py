@@ -99,6 +99,45 @@ class _ItemMatrix(object):
 
 class WorldCollisionTests(unittest.TestCase):
 
+    def test_recorded_side_contact_uses_drive_exit_but_still_blocks_new_rear_wall(self):
+        import json
+        rows=json.loads((ROOT/'tests/fixtures/local_drive_side_contacts_0922.json').read_text())
+        for row in rows:
+            left,right,back,front=row['bounds'];yaw=row['yaw'];pos=_Vector(*row['position'])
+            td=_Strict1513Component(hull=_Strict1513Component(hitTester=_Strict1513Component(
+                bbox=((left,0.,-back),(right,3.,front)))),
+                chassis=_Strict1513Component(hullPosition=(0.,0.,0.),hitTester=_Strict1513Component(
+                    bbox=((left,0.,-back),(right,3.,front)))))
+            for passive,wall,expected in ((False,False,'clear'),(True,False,'hard'),(False,True,'hard')):
+                def collide(space,start,end,*unused):
+                    # A finite patch of the reported face is a controlled
+                    # witness, not a claim to reproduce the whole native map.
+                    point=_Vector(*row['hit']);normal=_Vector(*row['normal']);delta=end-start
+                    faces=[(point,normal,True)]
+                    if wall:
+                        faces.append((pos+_Vector(-math.sin(yaw),0.,-math.cos(yaw)).scale(back+.25),
+                                      _Vector(math.sin(yaw),0.,math.cos(yaw)),False))
+                    hits=[]
+                    for p,n,finite in faces:
+                        denom=delta.x*n.x+delta.y*n.y+delta.z*n.z
+                        if abs(denom)<1.e-9:continue
+                        t=((p.x-start.x)*n.x+(p.y-start.y)*n.y+(p.z-start.z)*n.z)/denom
+                        if not 0.<=t<=1.:continue
+                        hit=start+delta.scale(t)
+                        if finite and (hit-p).length>.35:continue
+                        hits.append((t,hit,n))
+                    if hits:
+                        unused,p,n=min(hits,key=lambda h:h[0]);return p,n,0
+                    return None
+                scene=types.SimpleNamespace(wg_collideSegment=collide)
+                with self.subTest(vehicle=row['vehicle'],passive=passive,wall=wall), \
+                        mock.patch.object(world_collision,'prepare_horizontal_collision_filter',return_value=None), \
+                        mock.patch.object(world_collision,'_destroy_and_recast',return_value=False):
+                    self.assertEqual(expected,world_collision.check_horizontal_collision(
+                        scene,types.SimpleNamespace(Vector3=_Vector),1,pos,yaw,-5.,td,False,.1,
+                        return_status=True,motion_yaw=yaw+math.pi if passive else None,
+                        pitch=row['pitch'],roll=row['roll']))
+
     def test_posed_filter_envelope_covers_every_swept_body_corner(self):
         # Independent vertex enumeration keeps the collision-filter envelope
         # exact for asymmetric tracks, tipped bodies and signed travel.
@@ -1013,6 +1052,29 @@ class WorldCollisionTests(unittest.TestCase):
                     scene, types.SimpleNamespace(Vector3=_Vector),
                     1, _Vector(), 0.0, direction * 2.0, descriptor, False, 0.04,
                     motion_yaw=0.0 if direction > 0 else math.pi))
+
+    def test_report_su122a_contact_log_distinguishes_existing_edge_from_safe_departure(self):
+        pos=(-196.8437635,1.4555323,-228.0199790)
+        trace=dict(position=pos,yaw=-2.4260271601,pitch=.04100092,roll=-1.12e-5,
+            motion_yaw=.71556549346,speed=-5.,dt=.1,
+            lateral_bounds=(-1.3567670584,1.3567670584),
+            extents=(1.3567670584,2.4903841019,2.2507559657))
+        hit=(_Vector(-199.265976,1.9671428,-228.7384033),
+             _Vector(.0091512,-.0350958,-.9993421),0)
+        world_collision._record_hard_contact(trace,'solid_lane',_Vector(*pos),
+                                            _Vector(-195.96,2.15,-224.94),hit)
+        geometry=trace['contact_geometry']
+        self.assertEqual('inward',geometry['relation'])
+        self.assertLess(geometry['signed_normal_displacement'],-.3)
+        self.assertAlmostEqual(1.3567670584,geometry['local_hit'][0],places=4)
+        self.assertTrue(geometry['observed_only'])
+        # Being inside the current footprint does not alone authorize crossing
+        # a solid. The existing departure law still rejects inward movement.
+        release=world_collision._translation_departing_contact(_Vector(*pos),trace['yaw'],
+            (-1.3567670584,1.3567670584,2.4903841019,2.2507559657),
+            world_collision._hull_pose_y(trace['pitch'],trace['roll']),
+            math.sin(trace['motion_yaw'])*.5,math.cos(trace['motion_yaw'])*.5)
+        self.assertFalse(release(hit))
 
     def test_departing_wall_retains_inward_corner_and_unwitnessed_face(self):
         departing = world_collision._translation_departing_contact(

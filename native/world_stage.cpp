@@ -531,9 +531,9 @@ struct Engine {
       for (int i = 0; i < 2; ++i) {
         double delta = re[i] - ls[i], lo = i ? -back : left,
                hi = i ? front : right;
-        if (delta > 0)
+        if (delta > 1.e-9)
           fraction = std::min(fraction, (hi - ls[i]) / delta);
-        else if (delta < 0)
+        else if (delta < -1.e-9)
           fraction = std::min(fraction, (lo - ls[i]) / delta);
       }
       fraction = std::max(0., std::min(1., fraction));

@@ -48,7 +48,8 @@ jobs:
                   assert mod.testzip() is None
                   assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.10.1'
               native = client.read('mods/0.9.22.0.1/offline_math_batch_native.pyd')
-              assert native == Path('native/offline_math_batch_native.pyd').read_bytes()
+              from tools.verify_native_payload import verify_bytes
+              verify_bytes('.', native)
               offset = struct.unpack_from('<I', native, 0x3c)[0]
               assert struct.unpack_from('<H', native, offset + 4)[0] == 0x14c
           output = Path('release-assets')

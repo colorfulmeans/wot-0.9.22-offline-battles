@@ -8,6 +8,12 @@ namespace offline_navigation {
 using Point = std::array<double, 3>;
 using Cell = std::array<int, 2>;
 struct EdgePenalty { Cell first, second; double value; };
+struct LocalMeshInput {
+    double origin_x=0., origin_z=0., cell_size=2.;
+    int width=0, height=0;
+    std::vector<double> heights;
+    std::vector<unsigned> links, hazards;
+};
 struct MapInput {
     double origin_x = 0., origin_z = 0., cell_size = 4.;
     int width = 0, height = 0;
@@ -16,6 +22,7 @@ struct MapInput {
     bool has_bounds = false;
     std::array<double, 4> bounds = {};
     double max_grade = .30, heuristic_weight = 1.70;
+    std::vector<LocalMeshInput> local_meshes;
 };
 struct SearchInput {
     int64_t job_id = 0, hull_revision = 0;

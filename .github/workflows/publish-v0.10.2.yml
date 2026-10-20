@@ -1,0 +1,99 @@
+name: Build and publish v0.10.2
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-0102
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-launcher.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wot-0.9.22-offline-battles-windows-*
+          merge-multiple: true
+          path: verified-launcher
+      - name: Prepare the verified launcher, source and guide assets
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import io, json, struct, zipfile
+          from xml.etree import ElementTree
+          root = Path('verified-launcher')
+          data = (root / 'wot-0.9.22-offline-battles.exe').read_bytes()
+          offset = struct.unpack_from('<I', data, 0x3c)[0]
+          assert struct.unpack_from('<H', data, offset + 4)[0] == 0x8664
+          with zipfile.ZipFile(root / '_internal/client/0.9.22.zip') as client:
+              identity = json.loads(client.read('mods/configs/offline_lan_0922/build_identity.json'))
+              assert identity['semanticVersion'] == '0.10.2', identity
+              mods = [n for n in client.namelist() if n.endswith('.wotmod')]
+              assert len(mods) == 1 and mods[0].endswith('_0.10.2.wotmod'), mods
+              with zipfile.ZipFile(io.BytesIO(client.read(mods[0]))) as mod:
+                  assert mod.testzip() is None
+                  assert ElementTree.fromstring(mod.read('meta.xml')).findtext('version') == '0.10.2'
+              native = client.read('mods/0.9.22.0.1/offline_math_batch_native.pyd')
+              from tools.verify_native_payload import verify_bytes
+              verify_bytes('.', native)
+              offset = struct.unpack_from('<I', native, 0x3c)[0]
+              assert struct.unpack_from('<H', native, offset + 4)[0] == 0x14c
+          output = Path('release-assets')
+          output.mkdir()
+          target = output / 'wot-0.9.22-offline-battles-0.10.2-Windows-x64.zip'
+          with zipfile.ZipFile(target, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+              for path in sorted(root.rglob('*')):
+                  if path.is_file():
+                      archive.write(path, path.relative_to(root).as_posix())
+          with zipfile.ZipFile(target) as archive:
+              assert archive.testzip() is None
+              assert 'wot-0.9.22-offline-battles.exe' in archive.namelist()
+              for entry in ('START_SPIKE_PROFILE.bat', 'START_ROOF_CRUSH_TEST.bat', 'START_ROOF_SHOT_DROP_TEST.bat'):
+                  assert archive.read(entry) == Path('tools', entry).read_bytes(), entry
+          PY
+          git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.10.2-Source-and-validation.zip HEAD
+          git tag backup/v0.10.2-source HEAD
+          git bundle create release-assets/wot-0.9.22-offline-battles-0.10.2-History.bundle --all
+          git bundle verify release-assets/wot-0.9.22-offline-battles-0.10.2-History.bundle
+          cp docs/releases/v0.10.2-restore.md release-assets/wot-0.9.22-offline-battles-0.10.2-Restore.md
+          cp docs/bot-editor-guide-en.md release-assets/wot-0.9.22-offline-battles-0.10.2-Bot-Editor-Guide-English.md
+      - name: Stage and publish the new release from the current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f ref=refs/tags/v0.10.2 -f sha="$GITHUB_SHA" > /dev/null
+          gh release create v0.10.2 --target "$GITHUB_SHA" --draft \
+            --title 'v0.10.2 — Bot recovery, combat and vehicle contact fixes' \
+            --notes-file docs/releases/v0.10.2.md
+          gh release upload v0.10.2 release-assets/*
+          gh release view v0.10.2 --json assets > release-assets/manifest.json
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          expected = {path.name: path.stat().st_size for path in Path('release-assets').iterdir()
+                      if path.suffix in ('.zip', '.md', '.bundle')}
+          actual = {item['name']: item['size'] for item in json.loads(
+              Path('release-assets/manifest.json').read_text())['assets']}
+          assert actual == expected, (actual, expected)
+          PY
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v0.10.2" --jq .object.sha)" = "$GITHUB_SHA"
+          gh release edit v0.10.2 --draft=false --prerelease=false --latest

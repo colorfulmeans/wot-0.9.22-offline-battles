@@ -42,6 +42,13 @@ class NativeInputDiagnosticsTests(unittest.TestCase):
         self.assertTrue(all(len(line.encode('utf-8'))<7000
                             for line in self.output.getvalue().splitlines()))
 
+    def test_signature_is_canonical_without_using_the_python_json_encoder(self):
+        first={'z':[{'type':'float','length':3}],'a':1}
+        second={'a':1,'z':[{'length':3,'type':'float'}]}
+        with mock.patch.object(self.module.json,'dumps',side_effect=AssertionError('encoder')):
+            self.assertEqual(self.module.structural_signature(first),
+                             self.module.structural_signature(second))
+
     def test_prepare_quota_preserves_counts_and_other_method_reports(self):
         for i in range(20):
             self.module.record('destr_prepare',tuple(range(i)))
