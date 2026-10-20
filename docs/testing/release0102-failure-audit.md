@@ -62,6 +62,12 @@ launcher or claim that source tests prove native gameplay.
   consumer pins were updated then, but the independent package validator
   still pinned both old resources. Match the reviewed current bytes and
   assert that both independent resource pins agree with their consumers. Keep the strict archive validation and actual replay capacity tests.
+- After all 378 client files and 23 launcher files passed in CI, its client
+  packaging step exposed another producer omission: the general test workflow
+  used the tracked old native binary without rebuilding it. The release build
+  already rebuilt correctly. Add that same source-stamped x86 build before
+  general CI packaging; retain the strict source/payload identity rejection.
+  Never replace the identity check with a stamp-only rewrite of old bytes.
 - Include the repository root in isolated test sys.path so namespace imports
   work even with the Windows embedded interpreter's _pth isolation. Add an
   actual isolated import regression. File-level test isolation remains.
