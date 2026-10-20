@@ -16,14 +16,16 @@ spec.loader.exec_module(runner)
 
 
 class IsolatedRunnerTests(unittest.TestCase):
-    def run_files(self, files):
+    def run_files(self, files, patterns=()):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);tests=root/'tests';tests.mkdir()
             for name, source in files.items():
                 (tests/name).write_text(source,encoding='utf-8')
             output=io.StringIO()
-            with mock.patch.object(runner,'ROOT',root), mock.patch('sys.argv',[
-                    'runner','--jobs','2','--logs',str(root/'logs')]), \
+            arguments=['runner','--jobs','2','--logs',str(root/'logs')]
+            for pattern in patterns:
+                arguments.extend(['--pattern',pattern])
+            with mock.patch.object(runner,'ROOT',root), mock.patch('sys.argv',arguments), \
                     contextlib.redirect_stdout(output):
                 failed=runner.main()
             logs={path.name:path.read_text(encoding='utf-8') for path in (root/'logs').glob('*.log')}
@@ -43,6 +45,16 @@ class IsolatedRunnerTests(unittest.TestCase):
             'test_root_import.py': "import unittest,fixture_support\nclass Checks(unittest.TestCase):\n def test_value(self):self.assertEqual(42,fixture_support.VALUE)\n"})
         self.assertFalse(failed)
         self.assertIn('1 passed, 0 failed', output)
+
+    def test_unmatched_pattern_fails_even_when_other_files_match(self):
+        error=io.StringIO()
+        with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as raised:
+            self.run_files({'test_good.py':
+                "import unittest\nclass Checks(unittest.TestCase):\n def test_good(self):self.assertTrue(True)\n"},
+                patterns=('test_good.py','test_deleted_*.py'))
+        self.assertEqual(2,raised.exception.code)
+        self.assertIn('test_deleted_*.py',error.getvalue())
+        self.assertIn('matched no files',error.getvalue())
 
     def test_import_errors_are_not_converted_to_success(self):
         failed,output,logs=self.run_files({'test_bad.py':"raise RuntimeError('fixture import failed')\n"})

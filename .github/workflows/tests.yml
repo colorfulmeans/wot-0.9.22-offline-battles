@@ -81,10 +81,10 @@ jobs:
             'test_port_0922_recovery_commit_consistency.py'
             'test_port_0922_motion_hazard_prefix.py'
             'test_replay_capacity.py'
-            'test_port_0922_connector*.py'
-            'test_port_0922_local_refusal*.py'
+            'test_port_0922_authored_route_progress.py'
+            'test_port_0922_crush_progress_handoffs.py'
             'test_port_0922_recovery*.py'
-            'test_port_0922_runtime_bypass*.py'
+            'test_port_0922_three_round_handoffs.py'
             'test_port_0922_oct03_bot_egress.py'
             'test_port_0922_separation_progress.py'
             'test_port_0922_fjord_departure.py'
@@ -121,7 +121,7 @@ jobs:
           for pattern in "${patterns[@]}"; do
             arguments+=(--pattern "$pattern")
           done
-          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results "${arguments[@]}"
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/traffic "${arguments[@]}"
 
       - name: Check customization economy and durable rental settlement
         if: ${{ !cancelled() }}
@@ -129,14 +129,15 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
-          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_save_customizations.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/economy --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+          python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/bot-test-results/customization --pattern test_save_customizations.py
       - name: Check bonds settlement and worker collision preparation
         if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client:launcher
         run: >-
-          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/bonds
           --pattern test_port_0922_bonds_and_directives.py
           --pattern test_port_0922_ground_filter_batch.py
           --pattern test_port_0922_destructibles.py
