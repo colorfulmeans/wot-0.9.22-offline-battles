@@ -16,8 +16,12 @@ class _Socket(object):
         pass
 
 
-class _Planner(object):
+from server_bot_ai import BotPlanner
+
+
+class _Planner(BotPlanner):
     def __init__(self):
+        super().__init__()
         self.team_orders = []
 
     def reset(self):

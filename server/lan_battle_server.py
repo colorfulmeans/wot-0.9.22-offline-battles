@@ -33,7 +33,10 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-_PORT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+_SERVER_ROOT = os.path.abspath(os.path.dirname(__file__))
+if _SERVER_ROOT not in sys.path:
+    sys.path.insert(0, _SERVER_ROOT)
+_PORT_ROOT = os.path.abspath(os.path.join(_SERVER_ROOT, '..'))
 _CLIENT_SCRIPT_ROOT = os.path.join(
     _PORT_ROOT, 'src', 'res', 'scripts', 'client')
 if _CLIENT_SCRIPT_ROOT not in sys.path:

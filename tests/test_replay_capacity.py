@@ -87,5 +87,7 @@ class ReplayCapacityTests(unittest.TestCase):
     def test_reader_digest_is_updated_for_packaged_helper(self):
         digest=hashlib.sha256((ROOT/'tools/replay/replay_reader_process.py').read_bytes()).hexdigest()
         self.assertIn("DIGEST='"+digest+"'",(CLIENT/'replay_reader.py').read_text())
+        validator=module('capacity_validator',ROOT/'tools/validate_wotmod.py')
+        self.assertEqual(digest, validator.REPLAY_RESOURCES[validator.REPLAY_READER])
 
 if __name__=='__main__':unittest.main()

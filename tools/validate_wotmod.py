@@ -14,7 +14,7 @@ ENTRY = 'res/scripts/client/gui/mods/mod_offline_lan_0922.pyc'
 SOURCE_ROOT = Path(__file__).resolve().parents[1] / 'src'
 REPLAY_READER = 'res/offline_replay/replay_reader_process.py'
 REPLAY_RESOURCES = {
-    REPLAY_READER: '5ad6a0bfaa92e99826d8d9ed3cd385503600f5583aa464a3955033d6355d65ca',
+    REPLAY_READER: '650232176cf0080ea7c3fe4e8c97c9ffea0884acabed33f9731640a7dbdc37e6',
     'res/offline_replay/recorder-runtime.zip':
         '8aee9faae63078408922d2ec000dc4211195a62a6921422a096042be3fe5f37b',
 }

@@ -129,7 +129,7 @@ class NavigationOwnershipTests(unittest.TestCase):
         for status in (0, 1):
             with self.subTest(status=status):
                 self.grid._native_review_cache.clear()
-                oracle = mock.Mock()
+                oracle = mock.Mock(last_receipt={})
                 oracle.run.return_value = (status, 10, 4)
                 self.grid.native_query_oracle = oracle
                 with mock.patch.object(self.grid, 'ground_probe',
@@ -142,7 +142,7 @@ class NavigationOwnershipTests(unittest.TestCase):
 
     def test_corridor_unknown_retries_next_frame_without_caching_blocker(self):
         start, end = (0., 0., 0.), (4., 0., 0.)
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.side_effect = [(-1, 2, 0), (1, 10, 4)]
         self.grid.native_query_oracle = oracle
         self.grid._native_review_pending = set()
@@ -155,7 +155,7 @@ class NavigationOwnershipTests(unittest.TestCase):
         self.assertEqual(oracle.run.call_count, 2)
 
     def test_corridor_unavailable_before_dispatch_retains_python_proof(self):
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.return_value = None
         self.grid.native_query_oracle = oracle
         columns, corridors = [], []
@@ -170,7 +170,7 @@ class NavigationOwnershipTests(unittest.TestCase):
         def dispatch(*unused):
             effects.append('engine query')
             raise RuntimeError('failure after dispatch')
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.side_effect = dispatch
         self.grid.native_query_oracle = oracle
         self.grid._native_review_pending = set()
@@ -203,7 +203,7 @@ class NavigationOwnershipTests(unittest.TestCase):
     def test_proved_blocker_answers_false_instead_of_waiting_for_streaming(self):
         job = self.submit()
         start, end = (0., 0., 0.), (4., 0., 0.)
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.return_value = (0, 1, 1)
         self.grid.native_query_oracle = oracle
         self.grid._native_review_pending = set()
@@ -218,7 +218,7 @@ class NavigationOwnershipTests(unittest.TestCase):
         for bound_oracle in (False, True):
             with self.subTest(bound_oracle=bound_oracle):
                 job = self.submit()
-                oracle = mock.Mock()
+                oracle = mock.Mock(last_receipt={})
                 oracle.run.return_value = None
                 self.grid.native_query_oracle = oracle if bound_oracle else None
                 self.grid.ground_probe = lambda *args: None
@@ -232,7 +232,7 @@ class NavigationOwnershipTests(unittest.TestCase):
     def test_unknown_receipt_waits_for_ready_without_answering_false(self):
         job = self.submit()
         start, end = (0., 0., 0.), (4., 0., 0.)
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.side_effect = [(-1, 1, 0), (1, 10, 4)]
         self.grid.native_query_oracle = oracle
         self.backend.queries = [(1, job.job_id, start, end)]
@@ -253,7 +253,7 @@ class NavigationOwnershipTests(unittest.TestCase):
         first, second = self.submit(), self.submit()
         unknown = ((0., 0., 0.), (4., 0., 0.))
         clear = ((0., 0., 4.), (4., 0., 4.))
-        oracle = mock.Mock()
+        oracle = mock.Mock(last_receipt={})
         oracle.run.side_effect = [(-1, 1, 0), (1, 10, 4)]
         self.grid.native_query_oracle = oracle
         self.grid._native_review_pending = set()
@@ -353,8 +353,8 @@ class NavigationOwnershipTests(unittest.TestCase):
         key = (('route', 'test'), (4, 0))
         navigator.searches[key] = job
         navigator.search_times[key] = 1.
-        navigator.grid._static_hull_edges[((1, 0), (2, 0))] = 240.
-        navigator.grid.static_hull_revision = 1
+        # Publish the real planning footprint as well as its graph costs.
+        navigator.grid.set_static_hulls(((99, 8., 0., 0., 2., 2.),))
         self.assertFalse(navigator._finish_search(key, job, 1.2))
         self.assertNotIn(key, navigator.paths)
         self.assertNotIn(key, navigator.searches)

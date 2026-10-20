@@ -18,7 +18,7 @@ BOOTSTRAP = """
 import os, sys, unittest
 from pathlib import Path
 root=Path(sys.argv[1]); directory=sys.argv[2]; pattern=sys.argv[3]
-sys.path[:0]=[str(root/directory), str(root/'tests'), str(root/'server'),
+sys.path[:0]=[str(root), str(root/directory), str(root/'tests'), str(root/'server'),
               str(root/'launcher'), str(root/'src/res/scripts/client')]
 os.environ['PYTHONDONTWRITEBYTECODE']='1'
 unittest.main(module=None, argv=['unittest','discover','-s',str(root/directory),
