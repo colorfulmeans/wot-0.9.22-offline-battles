@@ -1138,6 +1138,12 @@ def suspension_point_offset(point, pitch=0.0, roll=0.0):
 	return _suspension_point_offset(point, _suspension_rotation(pitch, roll))
 
 
+def suspension_point_offsets(points, pitch=0.0, roll=0.0):
+	'''Share immutable rotation preparation for points on one current pose.'''
+	rotation = _suspension_rotation(pitch, roll)
+	return tuple(_suspension_point_offset(point, rotation) for point in points)
+
+
 def _suspension_world_points(points, position, yaw, pitch, roll):
 	x, unused_y, z = map(float, position)
 	sine, cosine = math.sin(float(yaw)), math.cos(float(yaw))

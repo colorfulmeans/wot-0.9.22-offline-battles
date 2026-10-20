@@ -9443,3 +9443,55 @@ Navigation strategy, C/avoidance, retry/switching, target selection, real collis
 water limits, crushing and live suspension rules remain unchanged. Support still
 enables at one invalid point and disables at all five valid points. Native
 BigWorld gameplay acceptance remains for the user's next run.
+
+
+## 2026-10-20 Somua recovery commitment and support evidence
+
+Report `wot-error-report-20261020-205455-a0dbd9e08542.zip` runs 695427dc on
+Windstorm. Somua SM Bot 16 holds (127.145985,-8.950384,-279.887359), yaw
+1.443479696 rad, from at least 20:51:51 to 20:52:07. Its retained forward
+escape repeatedly proves only .0959976 m while execution checks at least .5 m.
+The former stays in safe southern mesh cell 2419; the latter reaches wet-edge
+cell 2420 (bits 10). Native local probes are clear, but the commitment cuts
+throttle. The same grid disagreement reproduces on 4855e49d. The vehicle later
+escapes; this is not evidence of a permanent round-long deadlock.
+
+Retained forward escapes now use the same .5 m minimum as the execution owner.
+Fixed-endpoint short forward/reverse escapes keep their separate endpoint law.
+If an already aligned forward escape is nevertheless refused by the baked
+commitment, retire that cached action and motion receipt and forward a scoped
+`motion_forecast` refusal to the existing finite driver failure ledger. It is
+not a realised contact and does not create a new route policy. Unaligned
+catch-up turns retain their command, and expired failure evidence allows the
+original retry behavior to resume. Real collision, deep water and fall guards
+remain authoritative; do not clear a hazard simply to make this exit pass.
+
+`BOT RECOVERY COMMIT` records each such terminal action with round/Bot/vehicle,
+execution time, origin/yaw/reach, final verdict, cache retirement, retry feedback
+and the original planning receipt (including original sample time and queries).
+The evidence reader assembles this label through the same multipart protocol.
+Lost basic support points now carry their existing layered column producer
+verdict, including miss/limit/normal/exception evidence. Unbounded upper probes
+retain their original owner and are labelled as such; logs never cast again.
+Enable/disable records include active ram contact pairs. Existing point, sample,
+pose, previous transition and solver evidence remain intact. This targets the
+southern crowd and short support episodes without guessing a new navigation or
+hysteresis rule: one invalid enables, all five valid disable.
+
+Reduce repeated preparation only: all five basic support witnesses share one
+immutable pitch/roll rotation instead of five preparations; each collision-bound
+axis shares its live mount conversion between lower and upper calculations.
+No result is reused across poses or frames, and current Siege mount changes
+remain visible. No physical sample, simulation interval, collision shape, native
+ray or support point is removed. A local Python 3 five-point preparation benchmark
+(100,000 calls, median of five) measured .231142 s before / .152891 s after;
+this measures preparation, not native-game FPS or whole-worker latency.
+
+Eight focused regressions cover the recorded mesh disagreement, retained reach,
+lease expiry, rejected aligned-action retirement and finite retry feedback,
+preserved unaligned turns, exact batched offsets, no-extra-cast support evidence
+and mutable descriptor geometry. Running these on isolated baseline 695427dc
+reproduces the two behavioral failures; the two new API/evidence assertions
+also fail there as expected. Real Windows driving and whole-worker timing remain
+for the next report. Southern congestion beyond proved refusal remains under
+observation; no speculative traffic, route, slope or capture changes are added.

@@ -31,6 +31,7 @@ BOT_TEAM_SLOT_COUNT = 15
 RECOVERY_TIMING_STRIDE = 7
 RECOVERY_YAW_OFFSET = 0.85
 RECOVERY_SWEEP_FRACTIONS = (0.25, 0.50, 0.75, 1.0)
+RECOVERY_COMMIT_MINIMUM = 0.5
 
 
 def recovery_probe_distance(half_length):
@@ -1171,10 +1172,15 @@ class LocalDriver(object):
 			return None
 		distance = _distance(position, escape['start'])
 		remaining = max(0.0, escape['distance'] - distance)
+		# The execution owner checks at least this reach for forward_escape.
+		# A 9 cm remainder must not repeatedly admit a command whose 50 cm
+		# commitment reaches a wet edge. Fixed-endpoint short escapes retain
+		# their separate endpoint law.
+		probe_distance = max(RECOVERY_COMMIT_MINIMUM, remaining)
 		if (remaining <= 0.05 or state['clock'] >= escape['until'] or
 				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
 				self._failure_penalty(state, yaw) > 0.0 or
-				not self._clear(direction_clear, yaw, remaining) or
+				not self._clear(direction_clear, yaw, probe_distance) or
 				self._reverse_blocked_by_vehicle(position, yaw + math.pi,
 					neighbours, half_length, half_width, remaining, body=state.get('collision_body')) is not None):
 			state.pop('translation_escape', None)

@@ -3035,19 +3035,23 @@ class BotRuntime(object):
         # plane here would compare a second, uncommitted pose to the solver.
         projected = False
         rows = []
-        for name, side, forward in (('centre',0.,0.), ('front',0.,length),
-                ('rear',0.,-length), ('right',width,0.), ('left',-width,0.)):
-            ox, oy, oz = vehicle_physics.suspension_point_offset(
-                dict(x=side, y=0., z=forward), pitch, roll)
+        points = (('centre',0.,0.), ('front',0.,length),
+                  ('rear',0.,-length), ('right',width,0.), ('left',-width,0.))
+        offsets = vehicle_physics.suspension_point_offsets(
+            [dict(x=side, y=0., z=forward) for unused, side, forward in points], pitch, roll)
+        columns = []
+        for (name, side, forward), (ox, oy, oz) in zip(points, offsets):
             px, pz, expected = x+cosine*ox+sine*oz, z-sine*ox+cosine*oz, support_y+oy
-            ground = self._ground_probe_at(px, pz, expected, expected+0.6)
+            ground = self._ground_probe_at(px, pz, expected, expected+0.6, evidence=columns)
             continuous_rise = False
             upper_candidate = None
+            upper_column = None
             # A clipped uphill top is not loss of support. Admit it only with
             # physical continuous-ground proof, independently of drive grade;
             # a wall/roof/upper bridge with no connecting ground remains invalid.
             if ground is None and rows and rows[0]['ground'] is not None:
                 upper_candidate = self._ground_probe_at(px, pz, expected)
+                upper_column = dict(source='unbounded_ground_probe', height=upper_candidate)
                 if upper_candidate is not None and float(upper_candidate) > expected+0.6:
                     centre = rows[0]
                     distance = math.hypot(px-x, pz-z)
@@ -3058,10 +3062,16 @@ class BotRuntime(object):
             gap = None if ground is None else expected-float(ground)
             valid = gap is not None and (continuous_rise or
                 -0.6 <= gap <= vehicle_physics.GROUND_FOLLOW_MIN)
+            # Preserve the producer's actual layered verdict for lost points.
+            # No diagnostic recast, and no full trace on supported points.
+            if not valid:
+                column = dict(columns[-1] or dict(source='untraced_ground_probe', height=ground))
+                column['upper_query'] = upper_column
             rows.append(dict(name=name, x=px, z=pz, expected=expected,
                 raw_expected=y+oy, basic_follow_y=support_y,
                 ground=ground, gap=gap, valid=valid, continuous_rise=continuous_rise,
                 upper_candidate=upper_candidate,
+                column_evidence=column if not valid else None,
                 verdict=('continuous_rise' if continuous_rise else 'supported' if valid
                          else 'missing_ground' if ground is None else 'outside_reach')))
         if all(row['valid'] for row in rows) and not state.get('airborne'):
@@ -3172,6 +3182,8 @@ class BotRuntime(object):
             support_basis=state.get('_support_mode_basis'),
             previous_transition=previous,
             episode=episode, sample=state.get('_support_mode_receipt'),
+            contact_pairs=(sorted(pair for pair in self._ram_contacts if state['id'] in pair)
+                           if phase in ('enable', 'disable') else None),
             opening=opening if phase == 'disable' else None,
             point_changes=comparison,
             motion=state.get('_support_motion_receipt'),
@@ -7005,10 +7017,12 @@ class BotRuntime(object):
         return self._suspension_path_supports_plane(
             previous_plane, motion_pose, position)
 
-    def _ground_probe_at(self, x, z, hint, maximum_y=None, receipt=None):
+    def _ground_probe_at(self, x, z, hint, maximum_y=None, receipt=None, evidence=None):
         """Run one accounted physics ground column."""
         self._probe_totals[3] += 1
         probe_started = self._probe_started()
+        if evidence is not None:
+            evidence.append(None)
         if receipt is not None:
             receipt.update(x=x, z=z, hint_y=hint, maximum_y=maximum_y,
                            outcome='query_started', height=None)
@@ -7016,6 +7030,8 @@ class BotRuntime(object):
             if (maximum_y is not None or receipt is not None) and callable(self._physics_ground_limit_probe):
                 result = self._physics_ground_limit_probe(x,z,hint,maximum_y)
                 if isinstance(result,dict):
+                    if evidence is not None:
+                        evidence[-1] = result
                     if receipt is not None:
                         receipt.update(result)
                         receipt['outcome'] = 'hit' if result['height'] is not None else 'unavailable'
@@ -16581,7 +16597,7 @@ class BotRuntime(object):
                     self._decision_cache.pop(state['id'], None)
             elif command.get('recovery_mode') in (
                     'contact_escape', 'forward_escape', 'wreck_push'):
-                maximum_probe_distance = max(0.5, _number(
+                maximum_probe_distance = max(ai_driver.RECOVERY_COMMIT_MINIMUM, _number(
                     command.get('recovery_probe_distance'),
                     ai_driver.recovery_probe_distance(state.get('half_length', 3.5))))
             elif (travel_sign < 0.0 and reactive_horizon is not None and
@@ -17039,8 +17055,10 @@ class BotRuntime(object):
                     path_clear = False
                     throttle = 0.0
                     state['movement_dir'] = 0
-                    if (command.get('recovery_mode') in
-                            ('short_forward_escape', 'short_reverse_escape') and
+                    if ((command.get('recovery_mode') in
+                            ('short_forward_escape', 'short_reverse_escape') or
+                            (command.get('recovery_mode') == 'forward_escape' and
+                             abs(state['_committed_corridor']['throttle_before']) > 0.01)) and
                             abs(_angle_delta(candidate_hull_yaw,
                                 command.get('target_yaw', candidate_hull_yaw))) < 0.03):
                         # A straight escape is already aligned, so there is no
@@ -17049,6 +17067,25 @@ class BotRuntime(object):
                         # a cached lease which the execution guard refused.
                         self._decision_cache.pop(state['id'], None)
                         state['_committed_corridor']['cache_retired'] = True
+                        if command.get('recovery_mode') == 'forward_escape':
+                            # This is a forecast refusal, not physical contact.
+                            # Feed it to the existing finite retry ledger so a
+                            # fresh decision cannot retain the same escape.
+                            self._motion_probe_cache.pop(state['id'], None)
+                            driver = getattr(self.adapter, 'driver', None)
+                            remember = getattr(driver, 'remember_failure', None)
+                            if callable(remember):
+                                remember(state['id'], committed_travel_yaw, None, dict(
+                                    source='motion_forecast', origin=tuple(position),
+                                    distance=maximum_probe_distance,
+                                    reason='committed_baked_corridor'))
+                            state['_committed_corridor']['retry_feedback'] = bool(callable(remember))
+                        from .native_input_diagnostics import write_json_record
+                        write_json_record('BOT RECOVERY COMMIT', dict(
+                            round=self.round_id, bot=state['id'], vehicle=state.get('vehicle'),
+                            at=now, outcome='rejected_action_retired',
+                            committed=dict(state['_committed_corridor']),
+                            planning=command.get('planning_receipt')))
                 # The corridor grade ranks future navigation, but a trench
                 # below that probe need not support the tracks now. Reuse the
                 # accepted suspension plane for drive gravity, projected onto
