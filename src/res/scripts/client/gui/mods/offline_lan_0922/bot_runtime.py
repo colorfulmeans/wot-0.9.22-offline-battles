@@ -6700,6 +6700,29 @@ class BotRuntime(object):
         return tank_collision.rotation_fraction(position, yaw, candidate,
             shape, self._rotation_neighbours_for(state, supplied))
 
+    @staticmethod
+    def _planning_grid_pose_pair(grid, position, yaw, candidate, half_length,
+                                 half_width, current_samples):
+        """Reuse the unchanged baked footprint only inside one planning call.
+
+        This is the coarse grid test, never a native collision/sweep receipt.
+        Planning callbacks do not commit poses or mutate the grid snapshot.
+        The caller discards this dictionary before the next actor/decision.
+        """
+        probe = getattr(grid, 'hull_pose_clear', None)
+        if not callable(probe):
+            return None, None
+        key = (id(grid), tuple(position), yaw, half_length, half_width)
+        if key not in current_samples:
+            current_samples[key] = bool(probe(position, yaw, half_length, half_width))
+            combat_count('planning_current_footprint_sampled')
+        else:
+            combat_count('planning_current_footprint_reused')
+        current = current_samples[key]
+        selected = (current if candidate == yaw else
+                    bool(probe(position, candidate, half_length, half_width)))
+        return current, selected
+
     def _planning_rotation_fraction_for(self, state, position, yaw, candidate,
                                         supplied, allow_wreck_push=False):
         """Keep traffic policy while projecting fresh numeric poses in C++."""
@@ -7255,6 +7278,7 @@ class BotRuntime(object):
                 'planning_goal', 'selected_target', 'final_target', 'runtime_leg_handoff')},
             query_policy='existing_receipts_only'))
 
+    @observed('bot.motion_diagnostic_prepare')
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
                           traffic_input=None, traffic_output=None):
@@ -7310,6 +7334,9 @@ class BotRuntime(object):
                 'local_fallback') or {})
         navigation['target_receipt'] = dict(state.get('_navigation_target_receipt') or {})
         navigation['target_history'] = list(state.get('_navigation_target_history') or ())
+        lineage = state.get('_navigation_handoff_lineage') or {}
+        navigation['handoff_lineage'] = dict(lineage)
+        navigation['handoff_lineage']['events'] = list(lineage.get('events') or ())
         navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
         search_receipt = getattr(nav, 'bot_search_diagnostics', None)
         if callable(search_receipt):
@@ -7589,6 +7616,7 @@ class BotRuntime(object):
         if row['first_decision'] is None:
             row['first_decision'] = planning.get('id')
 
+    @observed('bot.motion_diagnostic_finish')
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
         """Log the actual authority outcome without extra world queries."""
@@ -7667,7 +7695,7 @@ class BotRuntime(object):
                 settled=settled_position,
                 basis='same_physics_slice_after_contacts_and_support')
         from .native_input_diagnostics import write_json_record
-        write_json_record('BOT MOTION', trace)
+        observed_call('bot.motion_diagnostic_write', write_json_record, 'BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
 
     def _queue_navigation_surface_trace(self, state, trace, now):
@@ -10180,12 +10208,60 @@ class BotRuntime(object):
 
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
+        result, failed = None, False
         try:
-            return self._navigation_target_impl(bot_id,position,goal,strategic,state)
+            result = self._navigation_target_impl(bot_id,position,goal,strategic,state)
+            return result
+        except Exception:
+            failed = True
+            raise
         finally:
             links = getattr(getattr(self.navigator,'grid',None),'local_height_links',None)
             if links is not None:
                 links.origin = None
+            authority = self.states.get(int(bot_id))
+            if authority is not None:
+                self._record_navigation_handoff(
+                    authority, position, goal, strategic, state, result, failed)
+
+    @staticmethod
+    def _record_navigation_handoff(authority, position, goal, strategic, state,
+                                    result, failed=False):
+        """Observe every return without feeding evidence into route selection."""
+        receipt = authority.get('_navigation_target_receipt') or {}
+        lineage = authority.setdefault('_navigation_handoff_lineage', dict(
+            calls=0, changes=0, events=[], dropped_events=0,
+            first_at=state.get('now'), first_position=tuple(position)))
+        previous = lineage.get('last_target')
+        point = tuple(result) if result is not None else None
+        delta = (_distance(previous, point)
+                 if previous is not None and point is not None else None)
+        anchor = lineage.get('event_target')
+        event_delta = (_distance(anchor, point)
+                       if anchor is not None and point is not None else None)
+        source = receipt.get('source')
+        mode = strategic.get('combat_mode', 'route')
+        outcome = 'exception' if failed else 'no_target' if point is None else 'returned'
+        # Two metres is the existing driver local-leg identity boundary, used
+        # here only to retain significant history while counting every call.
+        changed = (lineage['calls'] == 0 or (previous is None) != (point is None) or
+                   event_delta is not None and event_delta > 2.0 or
+                   (source, mode, outcome) != lineage.get('last_owner'))
+        lineage['calls'] += 1
+        lineage.update(last_at=state.get('now'), last_target=point,
+            last_position=tuple(position), last_goal=tuple(goal),
+            last_owner=(source, mode, outcome), last_delta=delta)
+        if changed:
+            lineage['event_target'] = point
+            lineage['changes'] += 1
+            lineage['events'].append(dict(at=state.get('now'), origin=tuple(position),
+                previous=previous, selected=point, requested_goal=tuple(goal),
+                source=source, mode=mode, outcome=outcome, delta=delta,
+                selected_distance=_distance(position, point) if point is not None else None,
+                leg_handoff=dict(receipt.get('runtime_leg_handoff') or {})))
+            if len(lineage['events']) > 16:
+                lineage['dropped_events'] += len(lineage['events']) - 16
+                del lineage['events'][:-16]
 
     def _navigation_target_impl(self, bot_id, position, goal, strategic, state):
         state.pop('navigation_progress_target', None)
@@ -16068,6 +16144,7 @@ class BotRuntime(object):
             decision_deadline = None
             raw_command = None
             planner_probe_samples = {}
+            current_footprint_samples = {}
             planning_verdicts = []
             planning_receipt = dict(
                 id=[self.round_id, int(state['id']),
@@ -16126,12 +16203,10 @@ class BotRuntime(object):
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
                 try:
-                    current_grid_clear = (bool(pose_probe(position, state['yaw'],
-                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
-                        if callable(pose_probe) else None)
-                    candidate_grid_clear = (bool(pose_probe(position, sample_yaw,
-                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
-                        if callable(pose_probe) else None)
+                    current_grid_clear, candidate_grid_clear = self._planning_grid_pose_pair(
+                        pose_grid, position, state['yaw'], sample_yaw,
+                        state.get('half_length', 3.5), state.get('half_width', 1.7),
+                        current_footprint_samples)
                 except Exception:
                     planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
                     return True

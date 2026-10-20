@@ -28,16 +28,19 @@ def _write_record(payload):
 def write_json_record(label, payload):
     """Keep every engine stdout line below its 8 KiB truncation boundary."""
     global _record_sequence
-    encoded = json.dumps(payload)
+    encoded = json.dumps(payload, separators=(',', ':'))
     if len(encoded) <= 6000:
         sys.stdout.write('[Offline LAN 0.9.22] %s %s\n' % (label, encoded))
         return
     _record_sequence += 1
-    pieces = [encoded[i:i + 3000] for i in range(0, len(encoded), 3000)]
-    for index, piece in enumerate(pieces):
+    parts = (len(encoded) + 2999) // 3000
+    pid = os.getpid()
+    for index in range(parts):
+        piece = encoded[index * 3000:(index + 1) * 3000]
         sys.stdout.write('[Offline LAN 0.9.22] %s PART %s\n' % (label,
-            json.dumps({'schema': 1, 'pid': os.getpid(), 'record': _record_sequence,
-                'part': index + 1, 'parts': len(pieces), 'data': piece})))
+            json.dumps({'schema': 1, 'pid': pid, 'record': _record_sequence,
+                'part': index + 1, 'parts': parts, 'data': piece},
+                separators=(',', ':'))))
 
 
 def _type_name(value):

@@ -96,7 +96,42 @@ thresholds, gun target priorities or crushing damage. Keep one invalid
 support point enabling detailed support and five valid points disabling it.
 Low vegetation crushing is deliberately unchanged by user decision.
 
-## Publication withdrawn; PR verification only
+## Follow-up from the 2026-10-21 03:50 report
+
+- The retained enemy entity is hidden on an AOI/spotting exit, but remains
+  registered and keeps receiving poses. Exact #1513 PostmortemDelay normally
+  freezes its provider in __onVehicleLeaveWorld. Forward that camera-only
+  lifecycle edge when the hidden entity is its active killer, including a
+  hide during the initial fade. Keep the stock five-second return timer and
+  kill credit. Do not broadcast entity destruction or replace shared methods.
+  Reconcile unchanged dark presentation passes; deduplicate by a weak reference
+  to the actual delay, not a reusable object address. Pin the exact callback
+  signature and names in the native ABI auditor. Test fade/vision timing,
+  marker-only memory, other targets, visible wrecks, new delay identity and
+  normal return to the local wreck.
+- T28 Concept repeatedly aligned to nearby local points; ISU-122S repeatedly
+  recovered around a real SU-122-44 wreck. The report does not establish a safe
+  navigation-law correction. Preserve all driving/retry policy. Record compact
+  target lineage at every navigation return, including early no-target returns
+  and exceptions, with owner, requested/returned/previous points, rebase distance,
+  counts, bounded event history and explicit history truncation. Publish it
+  with the existing final motion/execution evidence. Observe accumulated small
+  rebases too. No additional native probes are introduced by this observation.
+- Reuse only the unchanged current baked hull footprint within one synchronous
+  actor planning call. Exact position, yaw, dimensions and grid identity are
+  keys; candidate poses remain checked and all native collision sweeps remain.
+  Discard the cache before the next call. For five candidate headings the focused
+  test reduces ten footprint calls to five while preserving all verdicts.
+- Compact JSON and avoid allocating a full extra list of fragment strings.
+  Keep every field and every fragment below the engine line limit. Reassembly
+  tests include embedded spaces, quotes and slashes. In a CPython 2.7 benchmark
+  over 20 recorded motion payloads, output fell from 2,659,593 to 2,472,622 bytes
+  and writes from 810 to 753; serialization CPU was approximately unchanged.
+  This is an I/O/allocation reduction, not evidence of an in-game FPS gain.
+  Add separate observed preparation, finish and JSON-write stages so the next
+  report can distinguish diagnostic overhead from simulation work.
+
+## Publication status
 
 The owner withdrew publication on 2026-10-21. GitHub has no v0.10.2 release
 or tag; the publisher's outstanding runs were cancelled and its workflow

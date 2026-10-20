@@ -630,6 +630,7 @@ EXPECTED_ABI = {
         'PostmortemDelay.start': ('self',),
         'PostmortemDelay.__moveCameraTo': (
             'self', 'vehicleID', 'sourceVehicleID'),
+        'PostmortemDelay.__onVehicleLeaveWorld': ('self', 'vehicle'),
     },
     'scripts/client/CommandMapping.pyc': {
         'CommandMapping.isFired': ('self', 'command', 'key'),
@@ -1452,6 +1453,11 @@ EXPECTED_CODE_NAMES = {
             'inputHandler',
             'steadyVehicleMatrixCalculator', 'outputMProv',
             '_PostmortemDelay__setCameraSettings'),
+        'PostmortemDelay.__onVehicleLeaveWorld': (
+            '_PostmortemDelay__bActive', 'id',
+            '_PostmortemDelay__killerVehicleID',
+            '_PostmortemDelay__bKillerVisionActive', 'Math', 'Matrix',
+            '_PostmortemDelay__arcadeCamera', 'vehicleMProv'),
     },
     'scripts/client/AvatarInputHandler/__init__.pyc': {
         'AvatarInputHandler.__constructComponents': (

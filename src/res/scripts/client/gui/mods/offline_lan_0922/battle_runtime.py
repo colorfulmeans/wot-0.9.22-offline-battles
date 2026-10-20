@@ -9,6 +9,7 @@ import collections
 import copy
 import json
 import math
+import weakref
 import os
 import random
 import sys
@@ -28885,6 +28886,40 @@ class BattleRuntime(object):
             self._binding.destroy_entity(record['engine_id'])
         record['visible_destroy_requested'] = True
 
+    def _freeze_hidden_killer_camera(self, record, vehicle):
+        """Forward the synthetic AOI exit only to #1513's death camera.
+
+        Retained LAN entities must keep receiving authoritative poses. Stock
+        PostmortemDelay normally snapshots its provider on leave-world; hiding
+        a retained compound alone cannot deliver that camera lifecycle edge.
+        Reconcile on every dark presentation pass so darkness during the
+        initial two-second fade is also handled when killer vision starts.
+        """
+        handler = getattr(self._avatar, 'inputHandler', None)
+        control = getattr(handler, '_AvatarInputHandler__curCtrl', None)
+        delay = getattr(control, 'curPostmortemDelay', None)
+        if (delay is None or not getattr(
+                delay, '_PostmortemDelay__bActive', False) or not getattr(
+                delay, '_PostmortemDelay__bKillerVisionActive', False) or
+                getattr(delay, '_PostmortemDelay__killerVehicleID', None) !=
+                record.get('engine_id')):
+            return False
+        frozen_delay = record.get('_death_camera_frozen_delay')
+        if frozen_delay is not None and frozen_delay() is delay:
+            return False
+        callback = getattr(delay, '_PostmortemDelay__onVehicleLeaveWorld', None)
+        if not callable(callback):
+            raise RuntimeError('#1513 killer camera AOI callback is unavailable')
+        # Do not broadcast a false entity destruction to unrelated listeners,
+        # stop the delay, clear kill credit, or replace shared camera methods.
+        callback(vehicle)
+        record['_death_camera_frozen_delay'] = weakref.ref(delay)
+        native_input_diagnostics.write_json_record('KILLER CAMERA', dict(
+            phase='hidden_killer_frozen', engine_id=record['engine_id'],
+            source='stock_PostmortemDelay_leave_world',
+            return_timer_preserved=True))
+        return True
+
     def _set_record_spot_visibility(self, record, visible,
                                     marker_visible=None):
         """Apply independent model and team-knowledge presentation gates.
@@ -28908,6 +28943,8 @@ class BattleRuntime(object):
         vehicle._spot_visible = visible
         alive = self._record_alive(record, vehicle)
         draw_vehicle = visible or not alive
+        if not draw_vehicle:
+            self._freeze_hidden_killer_camera(record, vehicle)
         signature = (visible, marker_visible, draw_vehicle, alive)
         if signature != record.get('_spot_presentation_signature'):
             if record.get('native_remote'):

@@ -9,6 +9,72 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def test_current_baked_footprint_is_reused_only_for_one_planning_snapshot(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        calls = []
+        def probe(position, yaw, length, width):
+            calls.append((position, yaw, length, width))
+            return abs(yaw) < 1.0
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for yaw in (0., .25, .5, 1., 1.5):
+            self.assertEqual((True, abs(yaw) < 1.), BotRuntime._planning_grid_pose_pair(
+                grid, (1., 2., 3.), 0., yaw, 3., 1.5, cache))
+        self.assertEqual(5, len(calls))  # one current pose, four other candidates
+        self.assertEqual(1, sum(row[1] == 0. for row in calls))
+        BotRuntime._planning_grid_pose_pair(grid, (1., 2., 3.), 0., .25, 3., 1.5, {})
+        self.assertEqual(7, len(calls))  # next decision rechecks the grid
+
+    def test_baked_reuse_does_not_cross_pose_geometry_or_grid_identity(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        probe = mock.Mock(return_value=False)
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for point, yaw, length in (((0, 0, 0), 0., 3.),
+                                   ((1, 0, 0), 0., 3.),
+                                   ((1, 0, 0), .1, 3.),
+                                   ((1, 0, 0), .1, 4.)):
+            self.assertEqual((False, False), BotRuntime._planning_grid_pose_pair(
+                grid, point, yaw, yaw, length, 1.5, cache))
+        self.assertEqual(4, probe.call_count)
+        other = types.SimpleNamespace(hull_pose_clear=probe)
+        BotRuntime._planning_grid_pose_pair(other, (1, 0, 0), .1, .1, 4., 1.5, cache)
+        self.assertEqual(5, probe.call_count)
+
+    def test_navigation_handoff_keeps_early_returns_exceptions_and_gradual_rebases(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        authority = {'_navigation_target_receipt': {'source': 'retained'}}
+        for step in range(5):
+            BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+                {'combat_mode': 'route'}, {'now': step}, (3 + step, 0, 0))
+        lineage = authority['_navigation_handoff_lineage']
+        self.assertEqual(5, lineage['calls'])
+        self.assertEqual(2, lineage['changes'])  # accumulated rebase exceeds 2 m
+        BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+            {}, {'now': 5}, None)
+        self.assertEqual('no_target', lineage['events'][-1]['outcome'])
+        BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+            {}, {'now': 6}, None, failed=True)
+        self.assertEqual('exception', lineage['events'][-1]['outcome'])
+        self.assertEqual((50, 0, 0), lineage['last_goal'])
+
+    def test_navigation_wrapper_records_actual_return_and_preserves_original_exception(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        runtime = object.__new__(BotRuntime)
+        links = types.SimpleNamespace(origin=(1, 0, 0))
+        runtime.navigator = types.SimpleNamespace(grid=types.SimpleNamespace(local_height_links=links))
+        runtime.states = {1: {}}
+        runtime._navigation_target_impl = mock.Mock(return_value=None)
+        self.assertIsNone(runtime._navigation_target(1, (0, 0, 0), (10, 0, 0), {}, {'now': 1}))
+        self.assertIsNone(links.origin)
+        self.assertEqual('no_target', runtime.states[1]['_navigation_handoff_lineage']['events'][-1]['outcome'])
+        error = ValueError('original failure')
+        runtime._navigation_target_impl.side_effect = error
+        with self.assertRaises(ValueError) as raised:
+            runtime._navigation_target(1, (0, 0, 0), (10, 0, 0), {}, {'now': 2})
+        self.assertIs(error, raised.exception)
+        self.assertEqual('exception', runtime.states[1]['_navigation_handoff_lineage']['events'][-1]['outcome'])
+
     def test_shared_motion_geometry_is_exact_and_reads_the_hull_once(self):
         import random
         import struct
