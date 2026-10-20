@@ -14565,7 +14565,8 @@ class BotRuntime(object):
         # Fire permission is still owned by reload, alignment, live world,
         # wreck and friendly checks later in this same control update.
         return dict(order, combat_mode='engage', move_position=_position(state),
-                    face_position=_point(target.get('position'), _position(target)),
+                    face_position=(order.get('face_position') or
+                        _point(target.get('position'), _position(target))),
                     throttle_override=0.0)
 
     def _rear_laying_order(self, state, order, targets, now):

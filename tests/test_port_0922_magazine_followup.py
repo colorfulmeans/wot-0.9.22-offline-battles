@@ -108,6 +108,15 @@ class MagazineFollowupTests(unittest.TestCase):
         self.assertEqual('engage',self.order(18.)['combat_mode'])
         self.assertNotIn('_gun_angle_pivot_refusal',self.s)
 
+    def test_existing_stationary_turret_armour_face_is_preserved(self):
+        self.s['profile']={'class_tag':'mediumTank'}
+        self.arm()
+        order=dict(self.move,stable_hull_face=True,face_position=(500.,0.,-350.),
+                   hull_angle_degrees=20.)
+        result=self.order(order=order)
+        self.assertEqual(order['face_position'],result['face_position'])
+        self.assertEqual(20.,result['hull_angle_degrees'])
+
     def test_reload_fire_permission_not_fabricated_and_turret_vehicle_supported(self):
         self.s['profile']={'class_tag':'mediumTank'}
         self.arm();result=self.order(order=dict(self.move,fire_allowed=False))
