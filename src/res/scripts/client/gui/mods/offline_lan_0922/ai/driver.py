@@ -119,11 +119,25 @@ def gun_yaw_limits(descriptor):
 	return minimum, maximum, limited
 
 
+def _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+                         rear_turn, allow_rear_start):
+    """The tactical cooldown gates both native and reference aim admission."""
+    relative = _angle_delta(target_yaw, hull_yaw)
+    margin = min(0.04, max(0.0, maximum_yaw-minimum_yaw)*0.25)
+    return (not allow_rear_start and not rear_turn and
+            not (minimum_yaw <= -math.pi + 0.1 and maximum_yaw >= math.pi - 0.1) and
+            abs(relative) > math.pi * 0.5 and
+            not minimum_yaw+margin <= relative <= maximum_yaw-margin)
+
+
 def _reference_combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
 		turn, throttle, recovery_mode, has_target=True,
 		combat_mode=None, movement_intent=False, withdrawal_aim=False,
 		rear_turn=0.0, allow_rear_start=True):
 	"""Turn a limited-traverse hull until its gun can physically bear."""
+	if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+			rear_turn, allow_rear_start):
+		return float(turn), float(throttle), False
 	if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
 		# Deployment keeps the current travel steering even for a rear threat.
 		# A stationary firing area may lay the hull after physical arrival.
@@ -225,14 +239,8 @@ def combat_hull_aim(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
         turn, throttle, recovery_mode, has_target=True,
         combat_mode=None, movement_intent=False, withdrawal_aim=False,
         rear_turn=0.0, allow_rear_start=True):
-    relative = _angle_delta(target_yaw, hull_yaw)
-    margin = min(0.04, max(0.0, maximum_yaw-minimum_yaw)*0.25)
-    if (not allow_rear_start and not rear_turn and
-            not (minimum_yaw <= -math.pi + 0.1 and maximum_yaw >= math.pi - 0.1) and
-            abs(relative) > math.pi * 0.5 and
-            not minimum_yaw+margin <= relative <= maximum_yaw-margin):
-        # The cooldown owns final steering, including native ordinary-aim
-        # fallthrough. Front-arc aiming and active episodes remain unchanged.
+    if _rear_laying_deferred(hull_yaw, target_yaw, minimum_yaw, maximum_yaw,
+                            rear_turn, allow_rear_start):
         return float(turn), float(throttle), False
     if movement_intent and combat_mode in ('artillery_deploy', 'artillery_relocate'):
         return float(turn), float(throttle), False

@@ -160,6 +160,9 @@ class TortoiseHandoffTests(unittest.TestCase):
                 self.assertEqual((0.,0.,False),driver.combat_hull_aim(state['yaw'],bearing,-.349,.349,
                     0.,0.,'arrived',True,combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
                 native.assert_not_called()
+                self.assertEqual((0.,0.,False),driver._reference_combat_hull_aim(
+                    state['yaw'],bearing,-.349,.349,0.,0.,'arrived',True,
+                    combat_mode='cover_hold',movement_intent=False,allow_rear_start=False))
         rt._gun_angle_order(state,out,{8:target},2.,lambda *args:True)
         moved=rt._gun_angle_order(state,out,{8:target},4.,lambda *args:True)
         self.assertIn(moved['combat_mode'],('gun_angle_adjust','withdraw'))
