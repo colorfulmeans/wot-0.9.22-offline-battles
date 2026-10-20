@@ -91,10 +91,13 @@ class FriendlyManoeuvreTests(unittest.TestCase):
             self.assertEqual(marker['destination'], command['move_position'])
         self.assertTrue(self.state['local_combat_manoeuvre'])
 
-    def test_turreted_vehicle_keeps_original_four_second_budget(self):
+    def test_turreted_vehicle_gets_same_bounded_turn_budget(self):
         self.runtime._gun_yaw_limits[8] = (-math.pi, math.pi, False)
         self.mark(10.)
-        self.assertEqual(14., self.runtime._friendly_repositions[8]['deadline'])
+        marker = self.runtime._friendly_repositions[8]
+        self.assertAlmostEqual(20.5, marker['deadline'])
+        self.assertEqual('bot', marker['target_kind'])
+        self.assertEqual(10.5, marker['time_budget']['granted'])
 
     def test_repeated_blocked_shot_cannot_extend_active_deadline(self):
         self.mark(10.)

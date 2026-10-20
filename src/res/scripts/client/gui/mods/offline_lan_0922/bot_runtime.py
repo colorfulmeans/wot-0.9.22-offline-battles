@@ -11809,8 +11809,8 @@ class BotRuntime(object):
                 _number(raw.get('yaw')), shape[1], shape[0]))
         if self._turret_hulls_provider is not None:
             hulls.extend(self._turret_hulls_provider())
-        # One shared centreline clearance uses the installed travelling hulls,
-        # not an invented vehicle class size. Local motion keeps its full sweep.
+        # Centreline paths still need room for the travelling chassis. Only the
+        # wreck's advisory outline is inset; local motion keeps its full sweep.
         clearance = max([0.0] + [_number(state.get('half_width'), 1.7)
             for state in self.states.values() if state.get('alive', True)])
         publish(hulls, clearance=clearance)
@@ -13898,16 +13898,14 @@ class BotRuntime(object):
             position[1],
             position[2] - math.sin(shot_yaw) * clearance * side,
         )
-        # Fixed-gun vehicles must rotate the hull before translating sideways.
-        # Grant that measured angular travel in addition to the normal budget.
-        duration = FRIENDLY_REPOSITION_SECONDS
-        limits = self._gun_yaw_limits.get(bot_id)
-        if limits is not None and limits[2]:
-            params = self._physics_params_for(bot_id)
-            rate = max(0.1, abs(_number((params or {}).get('rotSpd'), 0.1)))
-            yaw = math.atan2(destination[0]-position[0], destination[2]-position[2])
-            duration = min(FRIENDLY_REPOSITION_MAX_SECONDS,
-                duration + abs(_angle_delta(yaw, state.get('yaw', 0.0))) / rate + 2.0)
+        # Every chassis rotates before translating sideways, including tanks
+        # with a freely rotating turret. Keep the existing bounded allowance.
+        params = self._physics_params_for(bot_id)
+        rate = max(0.1, abs(_number((params or {}).get('rotSpd'), 0.1)))
+        yaw = math.atan2(destination[0]-position[0], destination[2]-position[2])
+        turn_angle = abs(_angle_delta(yaw, state.get('yaw', 0.0)))
+        duration = min(FRIENDLY_REPOSITION_MAX_SECONDS,
+            FRIENDLY_REPOSITION_SECONDS + turn_angle / rate + 2.0)
         self._friendly_repositions[bot_id] = {
             'target_id': target_id,
             'target_kind': target.get('kind') if isinstance(target, dict)
@@ -13916,6 +13914,10 @@ class BotRuntime(object):
             'shell_index': int(state.get('shell_index', 0)),
             'fire_range': max(0.0, _number(command.get('fire_range'))),
             'deadline': _number(now) + duration,
+            'time_budget': dict(base=FRIENDLY_REPOSITION_SECONDS,
+                turn_angle=turn_angle, turn_rate=rate, turn_seconds=turn_angle/rate,
+                settle_seconds=2.0, maximum=FRIENDLY_REPOSITION_MAX_SECONDS,
+                granted=duration),
             'started_at': now, 'origin': position, 'identity': identity,
             'blocker_position': blocker_position, 'side': side,
             'attempts': int(retry['attempts']) if retry is not None else 0,
@@ -14784,6 +14786,7 @@ class BotRuntime(object):
             target.get('position'), _position(target))
         return {
             'target_id': marker['target_id'],
+            'target_kind': marker['target_kind'],
             'aim_position': target_position,
             'face_position': target_position,
             'move_position': destination,

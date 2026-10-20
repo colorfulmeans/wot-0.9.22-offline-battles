@@ -58,6 +58,9 @@ BLOCKED_STEP_EDGE_PENALTY = 240.0
 # class as the other edge penalties, so a single-lane choke keeps a connected
 # graph and ends in an honest hold instead of an unplannable map.
 STATIC_HULL_EDGE_PENALTY = 240.0
+# Advisory path centres may skim a wreck. Physical sweeps and contact response
+# retain the complete installed shapes; this is never a collision tolerance.
+STATIC_HULL_PLANNING_INSET = 0.15
 # LocalDriver deliberately owns short-lived contact recovery, but displacement
 # alone cannot detect a tank that rocks or circles without advancing its route.
 # Track progress towards the navigator's stable local target and, after a long
@@ -93,29 +96,23 @@ def _distance_2d(first, second):
 	return math.sqrt(dx * dx + dz * dz)
 
 
-def _hull_covers_cell(centre_x, centre_z, half_extent,
-		hull_x, hull_z, sine, cosine, half_length, half_width):
-	"""Return whether a hull box overlaps one axis-aligned graph cell square.
-
-	Testing the cell square rather than its centre matters: a 3.4 metre wide
-	hull can sit entirely between the centres of a four-metre bake and cover
-	neither of them while still blocking both.
-	"""
-	dx = float(hull_x) - float(centre_x)
-	dz = float(hull_z) - float(centre_z)
-	# The two cell axes, then the two hull axes: forward is (sin, cos) and the
-	# side is (cos, -sin), matching this module's atan2(x, z) yaw convention.
-	if abs(dx) > (half_extent + abs(sine) * half_length +
-			abs(cosine) * half_width):
-		return False
-	if abs(dz) > (half_extent + abs(cosine) * half_length +
-			abs(sine) * half_width):
-		return False
-	cell_radius = half_extent * (abs(sine) + abs(cosine))
-	if abs(dx * sine + dz * cosine) > half_length + cell_radius:
-		return False
-	if abs(dx * cosine - dz * sine) > half_width + cell_radius:
-		return False
+def _segment_crosses_hull(start, end, hull):
+	"""Clip an actual segment against one planning OBB, not its raster cells."""
+	unused_id, x, z, sine, cosine, length, width = hull
+	dx, dz = start[0]-x, start[2]-z
+	sx, sz = end[0]-start[0], end[2]-start[2]
+	low, high = 0.0, 1.0
+	for origin, delta, extent in (
+			(dx*sine+dz*cosine, sx*sine+sz*cosine, length),
+			(dx*cosine-dz*sine, sx*cosine-sz*sine, width)):
+		if abs(delta) < 1.e-12:
+			if abs(origin) > extent:
+				return False
+			continue
+		first, last = (-extent-origin)/delta, (extent-origin)/delta
+		low, high = max(low, min(first, last)), min(high, max(first, last))
+		if low > high:
+			return False
 	return True
 
 
@@ -168,6 +165,8 @@ class TerrainGrid(object):
 		self._static_hulls = ()
 		self._static_hull_key = None
 		self._static_hull_padding = None
+		self._planning_static_hulls = ()
+		self._static_hull_segment_cache = {}
 		self.static_hull_revision = 0
 		self._native_review_cells = set()
 		self._native_review_seeds = set()
@@ -508,8 +507,9 @@ class TerrainGrid(object):
 		A wreck is physical geometry that can be pushed. Marking the graph
 		edges it currently occupies routes later searches
 		around it, refuses the direct shortcut, and drops the cached paths that
-		used to run through it. The caller's chassis half-width expands the box
-		for centreline searches; native hull sweeps still check the final motion.
+		used to run through it. Only edges crossing a slightly inset footprint
+		carry its cost, with the travelling chassis width for centreline paths.
+		Full hull sweeps still check final motion and sliding.
 		Unchanged occupied edges do not invalidate routes again.
 
 		Returns whether the published set changed.
@@ -527,34 +527,29 @@ class TerrainGrid(object):
 			return False
 		self._static_hull_key = key
 		self._static_hull_padding = padding
+		self._static_hull_segment_cache.clear()
+		self._planning_static_hulls = tuple(
+			(actor, x, z, math.sin(yaw), math.cos(yaw),
+			 max(0.05, length-STATIC_HULL_PLANNING_INSET)+padding,
+			 max(0.05, width-STATIC_HULL_PLANNING_INSET)+padding)
+			for actor, x, z, yaw, length, width in key)
 		edges = {}
-		half_extent = self.cell_size * 0.5
-		for unused_id, x, z, yaw, half_length, half_width in key:
-			# Paths describe hull centres. A centreline skimming a wreck still
-			# collides unless the travelling hull's width is included.
-			half_length = max(0.5, half_length) + padding
-			half_width = max(0.3, half_width) + padding
-			sine = math.sin(yaw)
-			cosine = math.cos(yaw)
+		for hull in self._planning_static_hulls:
+			unused_id, x, z, sine, cosine, half_length, half_width = hull
 			radius = math.sqrt(half_length * half_length +
 			                   half_width * half_width)
-			first = self.cell_for((x - radius, 0.0, z - radius))
-			last = self.cell_for((x + radius, 0.0, z + radius))
+			first = self.cell_for((x - radius-self.cell_size, 0.0, z - radius-self.cell_size))
+			last = self.cell_for((x + radius+self.cell_size, 0.0, z + radius+self.cell_size))
 			for cell_z in range(first[1], last[1] + 1):
 				for cell_x in range(first[0], last[0] + 1):
 					centre = self.point_for((cell_x, cell_z), 0.0)
-					if not _hull_covers_cell(
-							centre[0], centre[2], half_extent,
-							x, z, sine, cosine, half_length, half_width):
-						continue
 					for step_z in (-1, 0, 1):
 						for step_x in (-1, 0, 1):
 							if step_x == 0 and step_z == 0:
 								continue
-							edges[tuple(sorted((
-								(cell_x, cell_z),
-								(cell_x + step_x, cell_z + step_z))))] = (
-									STATIC_HULL_EDGE_PENALTY)
+							next_cell = (cell_x+step_x, cell_z+step_z)
+							if _segment_crosses_hull(centre, self.point_for(next_cell, 0.0), hull):
+								edges[tuple(sorted(((cell_x, cell_z), next_cell)))] = STATIC_HULL_EDGE_PENALTY
 		# A shove changes the exact pose every tick, often without changing
 		# any occupied graph edge. Only changed planning geometry retires paths.
 		if edges == self._static_hull_edges:
@@ -564,12 +559,12 @@ class TerrainGrid(object):
 		return True
 
 	def segment_penalty(self, start, end, now):
-		if not self._failed_edges and not self._static_hull_edges:
+		if not self._failed_edges and not self._planning_static_hulls:
 			return 0.0
-		penalty = 0.0
+		penalty = (STATIC_HULL_EDGE_PENALTY if self.path_crosses_static_hull((start, end)) else 0.0)
 		for key in self._edge_keys_for_segment(start, end):
 			penalty = max(penalty,
-			              self._failed_edge_penalty(key[0], key[1], now))
+			              self._failed_edge_timed_penalty(key, now))
 		return penalty
 
 	def _baked_segment_cells(self, start, end, require_height=True, use_local=True):
@@ -711,16 +706,20 @@ class TerrainGrid(object):
 	def _live_exit_clear(self, start, end, now, evidence=None, native_capability=None):
 		"""Admit a bounded native exit without treating a coarse cost as a wall.
 
-		Timed failures remain vetoes. Published wrecks use their exact oriented
-		footprint against the same 2.15 m corridor as the native proof; the driver
-		and final full-hull collision owner still check the realised movement.
+		Timed failures remain vetoes. Published wrecks use the same inset planning
+		footprint as every other path consumer; the native world proof, driver
+		and full-hull collision owner still check realised movement.
 		No admission is cached across moving wrecks or changing native geometry.
 		"""
 		if evidence is None:
 			evidence = {}
 		evidence.update(start=tuple(start), end=tuple(end), at=float(now),
 			coarse_penalty=self.segment_penalty(start, end, now),
-			static_hull_revision=self.static_hull_revision)
+			static_hull_revision=self.static_hull_revision,
+			static_hull_planning_inset=STATIC_HULL_PLANNING_INSET,
+			static_hull_centreline_clearance=self._static_hull_padding,
+			static_hull_crossing=self.path_crosses_static_hull((start,end)),
+			timed_failure=self.path_has_penalty((start,end),now))
 		if self.path_has_penalty((start, end), now):
 			evidence['egress_reason'] = 'timed_failed_edge'
 			return False
@@ -728,19 +727,12 @@ class TerrainGrid(object):
 		if distance > 24.0:
 			evidence['egress_reason'] = 'requires_local_join'
 			return False
-		yaw = math.atan2(end[0]-start[0], end[2]-start[2])
-		cx, cz = (start[0]+end[0])*0.5, (start[2]+end[2])*0.5
 		evidence['static_hulls_checked'] = 0
-		for actor, x, z, angle, length, width in self._static_hulls:
-			contact = tank_collision._obb_overlap(cx, cz, yaw, (2.15, distance*0.5),
-				x, z, angle, (width, length))
+		for hull in self._planning_static_hulls:
 			evidence['static_hulls_checked'] += 1
-			nearest = evidence.get('nearest_static_hull')
-			if nearest is None or contact[2] > nearest['contact'][2]:
-				evidence['nearest_static_hull'] = dict(id=actor, contact=contact)
-			if contact[2] >= 0.0:
-				evidence.update(egress_reason='static_hull_corridor', blocker=actor,
-					contact=contact)
+			if _segment_crosses_hull(start, end, hull):
+				evidence.update(egress_reason='static_hull_corridor', blocker=hull[0],
+					planning_hull=hull)
 				return False
 		return self._live_baked_egress_clear(start, end, native_capability, evidence)
 
@@ -759,13 +751,18 @@ class TerrainGrid(object):
 			return self._live_exit_clear(start, end, now, evidence)
 		reason = 'clear'
 		if self.segment_penalty(start, end, now) > 0.0:
-			reason = 'timed_failed_edge' if self.path_has_penalty((start, end), now) else 'coarse_static_hull'
+			reason = 'timed_failed_edge' if self.path_has_penalty((start, end), now) else 'static_hull_path'
 		elif self.segment_has_baked_hazard(start, end, BAKED_SHALLOW_WATER):
 			reason = 'shallow_water'
 		elif not self.segment_clear(start, end, None, evidence):
 			reason = 'terrain_or_native_rejected'
 		if evidence is not None:
-			evidence['egress_reason'] = reason
+			evidence.update(egress_reason=reason,
+				static_hull_revision=self.static_hull_revision,
+				static_hull_planning_inset=STATIC_HULL_PLANNING_INSET,
+				static_hull_centreline_clearance=self._static_hull_padding,
+				static_hull_crossing=self.path_crosses_static_hull((start, end)),
+				timed_failure=self.path_has_penalty((start, end), now))
 		return reason == 'clear'
 
 	def path_has_penalty(self, path, now):
@@ -785,12 +782,19 @@ class TerrainGrid(object):
 		it is newer than the plan; re-planning with the same wrecks in place is
 		the best answer available even where the route still has to pass one.
 		"""
-		if not self._static_hull_edges:
+		if not self._planning_static_hulls:
 			return False
 		for index in range(len(path) - 1):
-			for key in self._edge_keys_for_segment(path[index], path[index + 1]):
-				if key in self._static_hull_edges:
-					return True
+			start, end = path[index], path[index+1]
+			key = (start[0], start[2], end[0], end[2])
+			cache = self._static_hull_segment_cache
+			if key not in cache:
+				if len(cache) >= 2048:
+					cache.clear()
+				cache[key] = any(_segment_crosses_hull(start, end, hull)
+					for hull in self._planning_static_hulls)
+			if cache[key]:
+				return True
 		return False
 
 	def path_has_edge_penalty(self, path, edge_penalties):
@@ -1494,6 +1498,10 @@ class TerrainGrid(object):
 		"""
 		if diagnostic is not None:
 			diagnostic.clear()
+			diagnostic.update(static_hull_revision=self.static_hull_revision,
+				static_hull_planning_inset=STATIC_HULL_PLANNING_INSET,
+				static_hull_centreline_clearance=self._static_hull_padding,
+				static_hulls=self._static_hull_key or ())
 			diagnostic.update(at=float(now), current=tuple(current), goal=tuple(goal),
 				attempted=0, missing_ground=0, failed_edge=0, shallow_or_unknown=0,
 				corridor_rejected=0, private_edge=0, accepted=0, selected=None, candidates=[],
@@ -1610,6 +1618,9 @@ class TerrainGrid(object):
 				corridor_evidence = {}
 				if self.segment_penalty(current, candidate, now) > 0.0:
 					reason = 'failed_edge'
+					corridor_evidence.update(
+						static_hull_crossing=self.path_crosses_static_hull((current,candidate)),
+						timed_failure=self.path_has_penalty((current,candidate),now))
 				elif self.segment_has_baked_hazard(current, candidate, BAKED_SHALLOW_WATER):
 					reason = 'shallow_or_unknown'
 				elif not self.segment_clear(current, candidate, None, corridor_evidence):

@@ -1,5 +1,45 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 20 report 135041: wreck-edge and friendly-lane avoidance
+
+The captured f64ad975 run reproduces blocked advisory wreck edges for T28,
+Nameless and JagdPanther II while full installed-body translation is clear.
+The former raster marked every edge adjacent to any covered cell, spreading
+one wreck over otherwise usable local exits. Build graph costs only for edges
+that intersect the oriented planning box. Direct/local/cached path checks use
+the actual segment against that same box, rather than the raster edge list.
+Inset each wreck planning half-extent by 0.15 m, retaining travelling chassis
+width for centreline clearance. Do not remove that chassis width: a full runtime
+corridor simulation catches the resulting impossible near-wreck paths.
+Physical bodies, rotation/translation sweeps, sliding, push clocks and contact
+damage retain their full dimensions and existing rules. Native terrain proof,
+timed failed edges, retries and route switching remain authoritative.
+
+Cache bounded segment answers by actual endpoint coordinates and the published
+planning poses; clear on pose or clearance changes, even if occupied graph
+edges do not change. Unchanged occupied edges still do not repeatedly retire
+all plans. Native exit admission uses the same planning footprint before its
+existing native proof. Diagnostic receipts include the inset, chassis clearance,
+published wreck identities/poses and separate timed-failure versus wreck causes.
+
+Friendly-lane reposition already retains target kind in its marker but omitted
+it from the emitted order. Forward it to the adapter so a combat action cannot
+reset its progress identity from (combat, bot, id) to (combat, None, id).
+Human planner IDs retain their existing mapping. Extend the existing limited-
+traverse timing formula to every chassis: 4 s plus required hull angle / installed
+rotation speed plus 2 s, capped at 16 s. Preserve the original deadline, timeout,
+arrival, retry/cooldown and priority-release behavior. Start and terminal receipts
+retain the angle, rate, uncapped turn time, granted budget and target identity.
+
+Regression checks replay the three report exits, actual physical rejection,
+rotated/sub-cell crossings, graph boundary precision, cache invalidation,
+native/terrain/timed refusal and the complete runtime wreck detour. Producer to
+adapter checks cover bot/human identity, all turret types, absolute timeout,
+retry, arrival, target loss/change, parking and base-defense handoff. These are
+engine-free contracts; native Windows gameplay and rubbing/sliding feel still
+require the supplied package test. The one-invalid-enable/all-five-valid-disable
+support rule and navigation strategy are unchanged.
+
 ## October 20 report 050321: mechanical aim / movement handoff
 
 The report identifies `75c77651`, not an older installation. WZ-111G FT 25

@@ -69,7 +69,7 @@ class UnknownWaterTests(unittest.TestCase):
         grid._failed_edges[edges[0]]=(5.,240.)
         self.assertEqual(240.,grid.segment_penalty(a,b,1.))
         self.assertEqual(0.,grid.segment_penalty(a,b,5.))
-        grid._static_hull_edges[edges[0]]=240.
+        grid.set_static_hulls(((7,16.,4.,0.,1.,1.),))
         self.assertEqual(240.,grid.segment_penalty(a,b,10.))
         grid._edge_keys_for_segment(a,(2000.,0.,4.))
         self.assertTrue(all(len(row)<=8 for row in grid._segment_edge_keys.values()))
