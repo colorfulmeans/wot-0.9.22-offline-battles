@@ -155,22 +155,17 @@ class SPGDisplacementTests(unittest.TestCase):
 
 
 class RetreatEndpointTests(unittest.TestCase):
-    def test_low_health_keeps_endpoint_then_arrival_and_pause_release_it(self):
-        planner = BotPlanner()
-        state = _state(11, 1, 0, 100)
-        state['health'] = 200
-        bot = _bot(11, 1, 0, _route('road', [(0, 0, False), (0, 100, False), (0, 200, False)]), 'AT-SPG')
-        planner._route_states[11] = dict(route_id='road', index=1)
-        actor = dict(bot, state=state)
-        planner._apply_retreat_order({}, actor, dict(x=0, y=0, z=0), dict(x=0, y=0, z=200), 1, 'low_health_retreat', 'low_health_defend')
-        order = planner.build_orders([bot], [state], [], 8)['orders'][0]
-        self.assertEqual('low_health_retreat', order['combat_mode'])
-        self.assertEqual(0, order['move_position']['z'])
-        state['z'] = 4
-        order = planner.build_orders([bot], [state], [], 9)['orders'][0]
-        self.assertEqual('low_health_defend', order['tactical_phase'])
-        self.assertEqual(0, order['throttle_override'])
-        self.assertEqual('route', planner.build_orders([bot], [state], [], 25)['orders'][0]['combat_mode'])
+    def test_legacy_low_health_endpoint_does_not_own_travel(self):
+        planner=BotPlanner()
+        state=_state(11,1,0,100);state['health']=200
+        bot=_bot(11,1,0,_route('road',[(0,0,False),(0,100,False),(0,200,False)]),'AT-SPG')
+        planner._route_states[11]=dict(route_id='road',index=1)
+        planner._apply_retreat_order({},dict(bot,state=state),dict(x=0,y=0,z=0),
+            dict(x=0,y=0,z=200),1,'low_health_retreat','low_health_defend')
+        for now in (8,9,25):
+            order=planner.build_orders([bot],[state],[],now)['orders'][0]
+            self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+            self.assertNotIn(11,planner._retreat_states)
 
 
 class OccupiedTravelPointTests(unittest.TestCase):

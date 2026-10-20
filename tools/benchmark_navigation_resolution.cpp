@@ -5,13 +5,17 @@
 #include <cmath>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
 int main(int argc, char **argv) {
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 3) return 2;
+    const bool include_paths=argc==3 && std::string(argv[2])=="--paths";
+    if(include_paths)std::cout << std::setprecision(17);
     std::ifstream input(argv[1]);
     offline_navigation::MapInput map;
     input >> map.width >> map.height >> map.origin_x >> map.origin_z
@@ -48,6 +52,7 @@ int main(int argc, char **argv) {
     const auto context=offline_navigation::open(std::move(map));
     std::vector<double> times;
     std::vector<offline_navigation::Completion> incomplete;
+    std::vector<offline_navigation::Completion> first_paths;
     unsigned expanded=0, partial=0;
     const auto started=std::chrono::steady_clock::now();
     int submitted=0, completed=0;
@@ -65,6 +70,7 @@ int main(int argc, char **argv) {
                 ++partial; incomplete.push_back(c);
             }
             times.push_back(c.worker_seconds*1000); expanded+=c.expanded; ++completed;
+            if(include_paths && c.job_id<=static_cast<unsigned>(count))first_paths.push_back(c);
         }
         if (std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count()>90.)
             throw std::runtime_error("search timeout");
@@ -84,5 +90,19 @@ int main(int argc, char **argv) {
         if(!c.path.empty()) std::cout << ",\"end\":[" << c.path.back()[0] << ',' << c.path.back()[1] << ',' << c.path.back()[2] << ']';
         std::cout << '}';
     }
-    std::cout << "]}\n";
+    std::cout << ']';
+    if(include_paths) {
+        std::cout << ",\"paths\":[";
+        for(size_t n=0;n<first_paths.size();++n) {
+            const auto &c=first_paths[n];if(n)std::cout << ',';
+            std::cout << "{\"case\":" << c.job_id-1 << ",\"expanded\":" << c.expanded << ",\"points\":[";
+            for(size_t j=0;j<c.path.size();++j) {
+                if(j)std::cout << ',';
+                std::cout << '[' << c.path[j][0] << ',' << c.path[j][1] << ',' << c.path[j][2] << ']';
+            }
+            std::cout << "]}";
+        }
+        std::cout << ']';
+    }
+    std::cout << "}\n";
 }

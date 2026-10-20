@@ -52,6 +52,21 @@ class ArtilleryControllerTests(unittest.TestCase):
             'yaw': math.pi * 0.5, 'speed': 8.0,
         }
 
+    def test_status_distinguishes_requested_pose_from_active_job_progress(self):
+        controller=self.module.ArtilleryController()
+        source,target,descriptor=self.source(),self.target(),_descriptor()
+        controller.request(source,target,descriptor,0,1.)
+        before=controller.status(source,target,0,1.1)['planning']
+        self.assertEqual(before['requested_key'],before['active_key'])
+        self.assertEqual(1.1,before['sampled_at'])
+        self.assertIn('chord',before)
+        moved=dict(source,x=100.)
+        changed=controller.status(moved,target,0,1.2)['planning']
+        self.assertEqual('pose_changed',changed['state'])
+        self.assertNotEqual(changed['requested_key'],changed['active_key'])
+        self.assertEqual(before['chord'],changed['previous_job']['chord'])
+        self.assertGreater(changed['previous_job']['age'],before['age'])
+
     def test_pending_and_cached_family_requests_do_not_rebuild_candidates(self):
         for completed in (False, True):
             with self.subTest(completed=completed):

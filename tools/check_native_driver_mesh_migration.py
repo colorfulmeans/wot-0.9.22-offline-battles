@@ -111,7 +111,8 @@ def run(backend):
                           yaw+delta, (0.,0.,.42,-.42,.78,-.78,2.*math.pi,-2.*math.pi))
         for case in range(100):
             state = {'clock':10.,'failed_yaws':{12:9.,13:11.},
-                     'escape_side_until':11.,'escape_side':1.}
+                     'escape_side_until':11.,'escape_side':1.,
+                     'collision_body': {'probe_identity': case}}
             yaw, cutoff = rng.uniform(-math.pi,math.pi), rng.randrange(1,16)
             traces = []
             for use_native in (False, True):
@@ -123,7 +124,10 @@ def run(backend):
                 def clear(angle):
                     trace.append(('clear',angle,dict(current['failed_yaws'])))
                     return True
-                obj._static_hull_ahead = lambda *args: False
+                def static_hull_ahead(position, angle, peers, length, width, body=None):
+                    assert body is current['collision_body'], 'physical pose lost before hull precheck'
+                    return False
+                obj._static_hull_ahead = static_hull_ahead
                 result = obj._choose_yaw(current,yaw,clear,position=(0.,0.,0.),
                                          neighbours=[],pose_clear=pose)
                 traces.append((result,current,trace))

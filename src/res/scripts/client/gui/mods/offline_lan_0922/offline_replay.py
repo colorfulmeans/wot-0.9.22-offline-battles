@@ -23,7 +23,9 @@ CLIENT = '0.9.22.0.1-cn-1513'
 EXTENSION = '.wotlanreplay'
 ENVIRONMENT = 'WOT_OFFLINE_REPLAY_FILE'
 MAX_LINE = 2 * 1024 * 1024
-MAX_TOTAL = 768 * 1024 * 1024
+# Cumulative decompressed bytes, not a RAM allocation. The 20261020 battle
+# exceeded the former 768-MiB cap after eight minutes. Keep streaming bounds.
+MAX_TOTAL = 8 * 1024 * 1024 * 1024
 MAX_DURATION = 4 * 3600.0
 # No account, inventory, receipt or command acknowledgement can be replayed.
 MESSAGE_TYPES = frozenset((

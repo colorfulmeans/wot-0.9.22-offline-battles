@@ -22259,8 +22259,9 @@ class BattleRuntime(object):
                                 distance, descriptor, step, now):
         """Preview a local action through its authoritative, non-committing sweep.
 
-        Rotations prove the next physical slice, not an invented complete turn
-        while the hull is still translating. Straight local exits prove their
+        Rotations prove the requested stationary arc, not only its first frame.
+        This is a candidate proof, not a committed moving-body prediction.
+        Straight local exits prove their
         requested displacement, with the actual front/rear body envelope.
         """
         state = getattr(self._bots, 'states', {}).get(int(bot_id), {})
@@ -22287,10 +22288,24 @@ class BattleRuntime(object):
             if distance is None:
                 cap = max(float(params['rotSpd']),
                     abs(getattr(self._bots,'_turn_speeds',{}).get(bot_id,0.)))
-                checked = max(-cap*dt, min(cap*dt, delta))
-                receipt['checked_yaw'] = body_yaw+checked
-                clear = self._resolve_bot_rotation(bot_id, position, body_yaw,
-                    body_yaw+checked, descriptor, dt, now, cap, commit_enabled=False)
+                # The native sweep owns at most sixteen five-degree slices.
+                # Cover even a wrapped half-turn with <= three sixty-degree
+                # chunks instead of truncating or exceeding that native bound.
+                chunks = max(1, int(math.ceil(abs(delta)/(math.pi/3.0))))
+                clear = True
+                receipt.update(proof_scope='requested_rotation_arc',
+                               requested_delta=delta, checked_chunks=0,
+                               planned_chunks=chunks)
+                for index in range(chunks):
+                    first = body_yaw+delta*index/chunks
+                    last = body_yaw+delta*(index+1)/chunks
+                    receipt['checked_yaw'] = last
+                    receipt['checked_chunks'] = index+1
+                    clear = self._resolve_bot_rotation(bot_id, position, first,
+                        last, descriptor, max(dt,abs(last-first)/max(.001,cap)),
+                        now, cap, commit_enabled=False)
+                    if clear is not True:
+                        break
                 receipt['trace'] = state.get('_rotation_contact_trace')
                 status = 'commit_required' if clear is None else 'clear' if clear else 'hard'
             else:
@@ -22309,7 +22324,8 @@ class BattleRuntime(object):
                     checked_speed=speed, checked_dt=dt)
                 status = self._resolve_bot_motion(bot_id, position, body_yaw,
                     speed, descriptor, dt, now, commit_enabled=False)
-                clear = status in ('clear','crushed','approach','soft')
+                clear = (None if status == 'commit_required' else
+                         status in ('clear','crushed','approach','soft'))
                 receipt['trace'] = state.get('_world_contact_trace')
             receipt.update(status=status, clear=(True if clear is None else bool(clear)),
                 proved=clear is not None,
@@ -22520,11 +22536,18 @@ class BattleRuntime(object):
         # A native kinetic result is only a forward candidate.  Always hand it
         # to the catalog's exact contact seam; its ``approach`` result keeps a
         # nearby but non-contact prop clear without granting a destroy.
-        detail = self._destructibles._catalog_motion_blocked(
-            self._avatar.spaceID, pos, yaw, speed, descriptor, now,
-            dt=dt, kinetic_speed=kinetic_speed, return_detail=True,
-            kinetic_commit=allow_crush_drive and commit_enabled,
-            commit_enabled=commit_enabled, **destructible_motion)
+        if commit_enabled:
+            detail = self._destructibles._catalog_motion_blocked(
+                self._avatar.spaceID, pos, yaw, speed, descriptor, now,
+                dt=dt, kinetic_speed=kinetic_speed, return_detail=True,
+                kinetic_commit=allow_crush_drive,
+                commit_enabled=True, **destructible_motion)
+        else:
+            # Use the existing mutation-free transaction proposal. Disabling
+            # a commit is not evidence that its crushable contact is solid.
+            detail = self._destructibles._catalog_motion_proposal(
+                self._avatar.spaceID, pos, yaw, speed, descriptor, now,
+                dt=dt, kinetic_speed=kinetic_speed, **destructible_motion)
         if isinstance(detail, bool):
             detail = {'status': 'hard' if detail else 'clear'}
         elif isinstance(detail, str):
@@ -22542,6 +22565,12 @@ class BattleRuntime(object):
                 dt=dt, commit_enabled=commit_enabled, catalog={key:detail.get(key)
                     for key in ('status', 'kinds', 'reason', 'token', 'requires_commit')})
             return 'hard'
+        if not commit_enabled and detail.get('requires_commit', False):
+            bot_state['_world_contact_trace'] = dict(reason='catalog_commit_required',
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=False, catalog={key:detail.get(key)
+                    for key in ('status', 'kinds', 'token', 'requires_commit')})
+            return 'commit_required'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
         if used_kinetic_speed and not (
@@ -27017,6 +27046,11 @@ class BattleRuntime(object):
 
     def _bot_aim_context(self, source, target):
         """Keep candidate ownership on the current source/target records."""
+        if not isinstance(source, dict):
+            return None
+        receipt = dict(at=self._last_frame_time, source=source.get('id'),
+                       reason='target_unavailable')
+        source['_aim_context_receipt'] = receipt
         if not isinstance(target, dict) or not target.get('alive', True):
             return None
         try:
@@ -27025,24 +27059,33 @@ class BattleRuntime(object):
             target_key = '%s:%d' % (
                 kind, int(target.get('network_id', target.get('id'))))
         except (KeyError, TypeError, ValueError, OverflowError):
+            receipt['reason'] = 'identity_invalid'
             return None
+        receipt.update(source_key=source_key, target_key=target_key)
         source_record = self._records.get(source_key)
         target_record = self._records.get(target_key)
+        receipt['records'] = [dict(present=row is not None,
+            tombstone=row.get('tombstone') if row is not None else None,
+            ready=row.get('ready') if row is not None else None)
+            for row in (source_record, target_record)]
         if (source_record is None or target_record is None or
                 source_record.get('tombstone') or
                 target_record.get('tombstone') or
                 not source_record.get('ready') or
                 not target_record.get('ready')):
+            receipt['reason'] = 'record_unavailable'
             return None
         source_entity = self._server_entity(source_record.get('engine_id'))
         target_entity = self._server_entity(target_record.get('engine_id'))
-        if (source_entity is None or target_entity is None or
-                not getattr(source_entity, 'isStarted', False) or
-                not getattr(target_entity, 'isStarted', False)):
+        receipt['entities_started'] = [bool(row is not None and getattr(row, 'isStarted', False))
+                                       for row in (source_entity, target_entity)]
+        if not all(receipt['entities_started']):
+            receipt['reason'] = 'native_entity_unavailable'
             return None
         descriptor = getattr(target_entity, 'typeDescriptor', None)
         source_descriptor = getattr(source_entity, 'typeDescriptor', None)
         if descriptor is None or source_descriptor is None:
+            receipt.update(reason='descriptor_unavailable', descriptors_present=[source_descriptor is not None, descriptor is not None])
             return None
         candidates = source_record.setdefault('bot_aim_targets', {})
         entry = candidates.get(target_key)
@@ -27057,18 +27100,27 @@ class BattleRuntime(object):
                      'geometry_ready': geometry_ready,
                      'cursor': 0, 'selected': None}
             candidates[target_key] = entry
+        receipt.update(reason='ready', selected=entry['selected'], cursor=entry['cursor'], geometry_ready=geometry_ready)
         return source_record, source_descriptor, entry
 
     def _bot_aim_point(self, source, target):
         """Project the selected part at the supplied, visibility-owned pose."""
+        if not isinstance(source, dict):
+            return None
+        receipt = dict(at=self._last_frame_time, reason='context_unavailable')
+        source['_aim_point_receipt'] = receipt
         try:
             context = self._bot_aim_context(source, target)
+            receipt['context'] = dict(source.get('_aim_context_receipt') or {})
+            receipt['lane'] = dict(source.get('_aim_candidate_receipt') or {})
             if context is None:
                 return None
             entry = context[2]
             sample = entry['selected']
             if sample is None:
+                receipt['reason'] = 'selection_missing'
                 return None
+            receipt.update(reason='selected', sample=sample)
             return {
                 'aim_position': shot_geometry.vehicle_aim_point(sample, target),
                 # Replacing an entity or descriptor invalidates a solved shot,
@@ -27076,7 +27128,8 @@ class BattleRuntime(object):
                 'aim_token': (id(entry['record']), id(entry['descriptor']),
                               sample),
             }
-        except Exception:
+        except Exception as error:
+            receipt.update(reason='point_exception', exception=type(error).__name__)
             return None
 
     def _bot_aim_damage_score(self, descriptor, entry, source, target,
@@ -27129,9 +27182,14 @@ class BattleRuntime(object):
 
     def _bot_firing_lane(self, source, target):
         """Select a real exposed part with at most two static rays per job."""
+        receipt = dict(at=self._last_frame_time, target_kind=target.get('kind'),
+            target_id=target.get('network_id', target.get('id')),
+            checks=[], selected=None, reason='context_unavailable')
+        source['_aim_candidate_receipt'] = receipt
         profile = source.get('profile')
         profile = profile if isinstance(profile, dict) else {}
         if str(profile.get('class_tag') or '') == 'SPG':
+            receipt['reason'] = 'artillery_owner'
             if self._artillery is None or self._bots is None:
                 return False
             descriptor = self._bots._descriptors.get(int(source.get('id')))
@@ -27147,6 +27205,7 @@ class BattleRuntime(object):
             record, descriptor, entry = context
             samples = entry['samples']
             if not samples:
+                receipt['reason'] = 'no_samples'
                 return False
             pose_key = (id(descriptor), self._last_frame_time,
                         source.get('fire_seq', 0)) + tuple(source.get(name, 0.0)
@@ -27160,6 +27219,7 @@ class BattleRuntime(object):
                     int(source.get('fire_seq', 0)) + 1, 0.0, 0.0, 0.0)
                 if origin is None:
                     entry['selected'] = None
+                    receipt['reason'] = 'launch_origin_unavailable'
                     return False
                 record['bot_lane_origin'] = (pose_key, origin)
             selected = entry['selected']
@@ -27195,8 +27255,13 @@ class BattleRuntime(object):
             best = None
             best_score = None
             exposed = None
+            mechanical = receipt['checks']
+            mechanical_fallback = None
+            reach_probe = getattr(self._bots, 'bot_aim_point_reachable', None)
             for sample in attempts:
                 point = shot_geometry.vehicle_aim_point(sample, target)
+                check = dict(sample=sample, point=point, reachable=None, reason='world_blocked')
+                mechanical.append(check)
                 hit = self._runtime.bigworld.wg_collideSegment(
                     self._avatar.spaceID, self._vector(origin),
                     self._vector(point), 128)
@@ -27204,6 +27269,20 @@ class BattleRuntime(object):
                     continue
                 if self._wreck_blocks_bot_path(
                         wreck_rows, (origin, point), lane_ends):
+                    check['reason'] = 'wreck_blocked'
+                    continue
+                reachable = (reach_probe(
+                    source, target, descriptor, origin, point)
+                    if callable(reach_probe) else None)
+                check.update(reachable=reachable, reason=(
+                    'mechanically_unreachable' if reachable is False else 'exposed'))
+                if callable(reach_probe):
+                    check['mechanical'] = source.get('_aim_reachability_receipt')
+                if reachable is False:
+                    # Keep an exposed fallback for bounded gun-angle recovery,
+                    # but it cannot displace a reachable existing candidate.
+                    if mechanical_fallback is None:
+                        mechanical_fallback = sample
                     continue
                 score = self._bot_aim_damage_score(
                     descriptor, entry, source, target, origin, point)
@@ -27221,9 +27300,14 @@ class BattleRuntime(object):
                 # claim. Preserve the exposed-part behaviour in that case.
                 if score is None or not ranks:
                     break
-            entry['selected'] = best if best is not None else exposed
+            entry['selected'] = (best if best is not None else
+                exposed if exposed is not None else mechanical_fallback)
+            receipt.update(selected=entry['selected'], cursor=entry['cursor'],
+                reason='selected' if best is not None or exposed is not None else
+                       'mechanical_relocation_required' if mechanical_fallback is not None else 'blocked')
             return entry['selected'] is not None
-        except Exception:
+        except Exception as error:
+            receipt.update(reason='query_failed', error=type(error).__name__)
             if entry is not None:
                 entry['selected'] = None
             return False

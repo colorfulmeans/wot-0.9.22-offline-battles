@@ -85,7 +85,6 @@ NEAREST_TARGET_SCORE_PER_METRE = 0.12
 HUMAN_TARGET_SCORE_BONUS = 60.0
 # How much of the ranking the most nearly dead contact is worth.
 TARGET_HEALTH_SCORE_SPAN = 28.0
-LOW_HEALTH_BASE_FRACTION = 0.18
 CROSSFIRE_MIN_ANGLE = math.radians(55.0)
 CROSSFIRE_MAX_DISTANCE = 360.0
 TEAM_ORDER_COMMANDS = frozenset((
@@ -781,7 +780,9 @@ class BotPlanner(object):
                     defenders.get(team, {}).get(bot["id"]), team_axis,
                     team_bots, capture_targets[team],
                     not self._contacts_for_bot(bot, contacts[team], now) and
-                    bot["id"] in capture_ids)
+                    bot["id"] in capture_ids,
+                    active_capture=('bot', bot['id']) in
+                        self._defense_contributor_keys(defense, 3-team))
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
                 self._apply_team_order(
@@ -1189,6 +1190,8 @@ class BotPlanner(object):
         states = defense.get("states")
         states = states if isinstance(states, dict) else {}
         bases = defense.get("bases")
+        capturing = dict((team, self._defense_contributor_keys(defense, 3 - team))
+                         for team in (1, 2))
         live_by_team = dict((team, [
             bot for bot in bots
             if bot["team"] == team and self._base_defense_eligible(bot)
@@ -1198,12 +1201,25 @@ class BotPlanner(object):
             incident = self._base_defense.setdefault(team, {})
             responders = incident.setdefault("responders", {})
             blocked_until = incident.setdefault("blocked_until", {})
+            protected = sorted(bot["id"] for bot in bots if bot["team"] == team
+                               and ("bot", bot["id"]) in capturing[team])
+            previous_protected = (incident.get("capture_protection") or {}).get("protected", [])
+            released = sorted(set(protected).intersection(responders))
+            history = incident.setdefault("capture_protection_history", [])
+            if protected != previous_protected or released:
+                history.append(dict(at=_number(now), entered=sorted(set(protected)-set(previous_protected)),
+                    exited=sorted(set(previous_protected)-set(protected)), released_responders=released))
+                del history[:-16]
+            incident["capture_protection"] = dict(
+                at=_number(now), base_team=3 - team, protected=protected,
+                released_responders=released,
+                source="canonical_capture_contributors")
             for bot_id, deadline in list(blocked_until.items()):
                 if _number(now) >= deadline:
                     del blocked_until[bot_id]
             live = dict((bot["id"], bot) for bot in live_by_team[team])
             for bot_id in list(responders):
-                if bot_id not in live:
+                if bot_id not in live or ("bot", bot_id) in capturing[team]:
                     del responders[bot_id]
             raw_state = states.get(str(team), states.get(team, {}))
             raw_state = raw_state if isinstance(raw_state, dict) else {}
@@ -1262,7 +1278,8 @@ class BotPlanner(object):
                         record['last_progress_at'] = _number(now)
                     backups = [value for value in live
                                if value not in responders and
-                               value not in blocked_until]
+                               value not in blocked_until and
+                               ("bot", value) not in capturing[team]]
                     if (distance > ROUTE_ARRIVAL_RADIUS and backups and
                             _number(now) - record["last_progress_at"] >= 10.0):
                         blocked_until[bot_id] = _number(now) + 15.0
@@ -1331,7 +1348,8 @@ class BotPlanner(object):
                     candidates = []
                     for bot in live.values():
                         if (bot["id"] in responders or
-                                bot["id"] in blocked_until):
+                                bot["id"] in blocked_until or
+                                ("bot", bot["id"]) in capturing[team]):
                             continue
                         selected = min(points, key=lambda value: (
                             math.hypot(
@@ -4064,7 +4082,7 @@ class BotPlanner(object):
 
     def _order_for(self, bot, index, count, focus, contacts, now,
                    travel_override=None, team_axis=None, team_bots=None,
-                   capture_target=None, no_known_enemies=False):
+                   capture_target=None, no_known_enemies=False, active_capture=False):
         capture_screen = bool(
             capture_target is not None and not contacts and
             not no_known_enemies and
@@ -4079,8 +4097,6 @@ class BotPlanner(object):
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         health_fraction = (_number(state.get("health"), 1.0) /
                            max(1.0, _number(state.get("max_health"), 1.0)))
-        low_health = health_fraction <= (
-            LOW_HEALTH_BASE_FRACTION + personality["caution"] * 0.18)
         recent_hit = self._recent_hit(bot["id"], now)
         threat_contact = self._recent_threat_contact(bot, contacts, now)
         magazine_followup = self._magazine_has_followup(bot)
@@ -4089,21 +4105,15 @@ class BotPlanner(object):
             _integer(state.get('clip')) <= 0 and
             _integer(state.get('fire_seq')) > 0 and
             self._weapon_can_recover(bot))
-        low_health_trigger = low_health
-        # Finish the physically loaded magazine before a combat withdrawal.
-        # A missing target must not manufacture an endless empty-the-clip hold.
-        low_health = bool(low_health and not (focus is not None and magazine_followup))
         retreat = self._retreat_states.get(bot['id'])
         retreat_before = dict(retreat or {})
         retreat_release = None
         if retreat is not None and (
-                retreat.get('moving_mode') not in ('low_health_retreat', 'magazine_reload_retreat') or
-                (retreat.get('moving_mode') == 'magazine_reload_retreat' and not magazine_reload) or
-                (retreat.get('moving_mode') == 'low_health_retreat' and not low_health)):
-            retreat_release = ('magazine_ready_or_exhausted'
+                retreat.get('moving_mode') != 'magazine_reload_retreat' or
+                not magazine_reload or active_capture):
+            retreat_release = ('active_capture_reload' if active_capture else
+                'magazine_ready_or_exhausted'
                 if retreat.get('moving_mode') == 'magazine_reload_retreat' else
-                'low_health_deferred_or_recovered'
-                if retreat.get('moving_mode') == 'low_health_retreat' else
                 'retreat_trigger_removed')
             self._retreat_states.pop(bot['id'], None)
         order = {
@@ -4138,16 +4148,15 @@ class BotPlanner(object):
                 dict(at=now, outcome='direct_order_call', candidates=[], selected=None)),
             focus=(focus.get('target_kind'), focus['id']) if focus is not None else None,
             recent_hit=dict(recent_hit or {}), withdraw_after_hit=False,
-            withdrawal=dict(reason='low_health_or_empty_magazine_only',
-                low_health_trigger=low_health_trigger,
+            withdrawal=dict(reason='empty_magazine_only',
                 magazine_followup=magazine_followup, magazine_reload=magazine_reload,
-                deferred_for_magazine=bool(low_health_trigger and not low_health),
+                active_capture=bool(active_capture),
                 released=retreat_release,
                 clip=state.get('clip'), clip_size=state.get('clip_size'),
                 reload_time=state.get('reload_time'), fire_seq=state.get('fire_seq')),
             threat=(threat_contact.get('target_kind'), threat_contact['id'])
                 if threat_contact is not None else None,
-            low_health=bool(low_health), health_fraction=health_fraction,
+            health_fraction=health_fraction,
             weapon_ready=self._weapon_ready(bot),
             retreat_before=retreat_before)
         if travel_override is not None:
@@ -4182,6 +4191,16 @@ class BotPlanner(object):
                     bool(focus.get("visible")))
             self._apply_artillery_order(order, bot, team_axis)
             self._firing_holds.pop(bot["id"], None)
+            return order
+
+        if active_capture and magazine_reload:
+            # Canonical capture membership includes newly entered and hit-reset
+            # contributors with zero points. Reload in place, retaining aim.
+            if focus is not None:
+                self._set_target(order, bot, focus, profile, personality, False)
+            order.update(combat_mode='magazine_reload_hold',
+                         move_position=_point(state), throttle_override=0.0)
+            self._firing_holds.pop(bot['id'], None)
             return order
 
         if magazine_reload and (focus is not None or
@@ -4225,12 +4244,7 @@ class BotPlanner(object):
                 self._firing_holds.pop(bot["id"], None)
                 return order
             self._cover_states.pop(bot["id"], None)
-            if low_health:
-                self._apply_retreat_order(
-                    order, bot, retreat_point, move, now,
-                    "low_health_retreat", "low_health_defend")
-            else:
-                self._retreat_states.pop(bot["id"], None)
+            self._retreat_states.pop(bot["id"], None)
             self._firing_holds.pop(bot["id"], None)
             return order
 
@@ -4257,25 +4271,6 @@ class BotPlanner(object):
         close_limit = desired_range * (0.48 + personality["aggression"] * 0.10)
         support_score = self._ally_support_score(
             bot, team_bots or (), focus)
-
-        if low_health:
-            self._engage_anchors.pop(bot["id"], None)
-            self._combat_states.pop(bot["id"], None)
-            if (distance <= fire_range * 1.15 and
-                    self._apply_cover_order(
-                        order, bot, focus, personality, now,
-                        urgent=True, hold_only=True)):
-                self._retreat_states.pop(bot["id"], None)
-                self._firing_holds.pop(bot["id"], None)
-                return order
-            self._cover_states.pop(bot["id"], None)
-            self._apply_retreat_order(
-                order, bot, retreat_point, focus["position"], now,
-                "low_health_retreat", "low_health_defend")
-            self._apply_stationary_angling(
-                order, bot, profile, personality)
-            self._firing_holds.pop(bot["id"], None)
-            return order
 
         if not locally_shootable:
             if focus.get("movement_lease"):

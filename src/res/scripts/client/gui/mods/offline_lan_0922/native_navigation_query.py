@@ -49,6 +49,7 @@ class Oracle(object):
         self.failures = 0
         self.rays = 0
         self.waters = 0
+        self.last_receipt = {}
         self._capabilities = None
         if (backend is None or not hasattr(backend, 'nav_query_run') or
                 not hasattr(backend, 'nav_query_filter')):
@@ -80,11 +81,13 @@ class Oracle(object):
     def run(self, start, end, cell_size, max_grade_up, max_grade_down,
             slope_limit=None):
         global _reported_active
+        self.last_receipt = dict(start=tuple(start), end=tuple(end), reason='unavailable')
         if self._capabilities is None:
             return None
         if (self.owner._avatar is not self._avatar or
                 getattr(self.owner, '_bots', None) is not self._bots or
                 self.owner._avatar.spaceID != self._capabilities[5]):
+            self.last_receipt['reason'] = 'owner_identity_changed'
             return (-1, 0, 0)
         from .bot_runtime import BOT_WATER_AVOID_DEPTH
         snapshot = tuple(start) + tuple(end) + (
@@ -108,9 +111,11 @@ class Oracle(object):
                 diagnostic.stop('native.navigation.ray', holder[0])
                 holder[0] = None
             self.failures += 1
+            self.last_receipt.update(reason='native_exception', error=type(error).__name__)
             _report_failure(error)
             return (-1, -1, -1)
         if result is None:
+            self.last_receipt['reason'] = 'unsupported_before_dispatch'
             _report_failure('unsupported navigation input before engine dispatch')
             return None  # unsupported BEFORE the first engine call
         if not _reported_active:
@@ -120,6 +125,8 @@ class Oracle(object):
                                  'active: nav_query_run\n')
             except Exception:
                 pass
+        self.last_receipt.update(reason='unknown' if result[0] < 0 else
+                                 'clear' if result[0] else 'blocked', result=list(result))
         self.calls += 1
         self.rays += max(0, result[1])
         self.waters += max(0, result[2])

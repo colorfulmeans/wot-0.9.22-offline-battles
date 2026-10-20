@@ -578,10 +578,14 @@ class ArtilleryController(object):
         slot = self._planning_slot(source, target, shell_index)
         key = self._settled_planning_key(
             slot, self._planning_key(source, target, shell_index, now))
-        if self._planning_keys.get(slot) != key:
-            output['planning'] = {'state': 'pose_changed'}
+        active_key = self._planning_keys.get(slot)
+        if active_key != key:
+            output['planning'] = {'state': 'pose_changed',
+                'previous_job': self.queue.status(active_key, now)}
         else:
             output['planning'] = self.queue.status(key, now)
+        output['planning'].update(requested_key=key, active_key=active_key,
+                                  sampled_at=float(now), slot=slot)
         return output
 
     def diagnostics(self):

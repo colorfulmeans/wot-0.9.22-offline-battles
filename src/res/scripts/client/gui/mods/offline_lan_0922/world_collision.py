@@ -35,10 +35,14 @@ def _vehicle_motion_geometry(descriptor):
 	mount = _descriptor_value(chassis, 'hullPosition')
 	if box is None or mount is None:
 		raise RuntimeError('#1513 chassis collision descriptor is unavailable')
-	lower = tuple(min(float(box[0][i]), float(hull[0][i])+float(mount[i]))
-		for i in (0, 1, 2))
-	upper = tuple(max(float(box[1][i]), float(hull[1][i])+float(mount[i]))
-		for i in (0, 1, 2))
+	# Share each live mount conversion across the lower/upper calculation.
+	# No descriptor or collision result survives this call (Siege can mutate
+	# these values in place). Avoid two generator traversals on every sweep.
+	lower, upper = [], []
+	for i in (0, 1, 2):
+		offset = float(mount[i])
+		lower.append(min(float(box[0][i]), float(hull[0][i]) + offset))
+		upper.append(max(float(box[1][i]), float(hull[1][i]) + offset))
 	return (lower[0], upper[0], -lower[2], upper[2]), (lower[1], upper[1])
 
 

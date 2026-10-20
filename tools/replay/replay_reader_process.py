@@ -12,7 +12,9 @@ import struct
 import sys
 
 MAX_LINE=2*1024*1024
-MAX_TOTAL=768*1024*1024
+# Cumulative decompressed bytes, not a RAM allocation. The 20261020 battle
+# exceeded the former 768-MiB cap after eight minutes. Keep streaming bounds.
+MAX_TOTAL=8*1024*1024*1024
 MAX_FRAME=4*1024*1024
 TYPES={'battle_live','snapshot','events','bot_observation','team_chat','team_command','team_command_terminal','player_destructible_contact_result','landing_observation_result'}
 

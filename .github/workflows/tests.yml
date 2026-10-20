@@ -58,6 +58,8 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
           --pattern 'test_port_0922_ai.py'
+          --pattern 'test_port_0922_three_round_handoffs.py'
+          --pattern 'test_port_0922_crush_progress_handoffs.py'
           --pattern 'test_port_0922_motion_052854.py'
           --pattern 'test_port_0922_motion_064702.py'
           --pattern 'test_port_0922_current_rule_lifecycle.py'
@@ -71,6 +73,13 @@ jobs:
           --pattern 'test_port_0922_traffic*.py'
           --pattern 'test_port_0922_bot*.py'
           --pattern 'test_port_0922_contact*.py'
+          --pattern 'test_port_0922_capture_contact_launch.py'
+          --pattern 'test_port_0922_magazine_followup.py'
+          --pattern 'test_port_0922_windstorm_bridge.py'
+          --pattern 'test_port_0922_windstorm_north.py'
+            --pattern 'test_port_0922_recovery_commit_consistency.py'
+            --pattern 'test_port_0922_motion_hazard_prefix.py'
+          --pattern 'test_replay_capacity.py'
           --pattern 'test_port_0922_connector*.py'
           --pattern 'test_port_0922_local_refusal*.py'
           --pattern 'test_port_0922_recovery*.py'
@@ -87,6 +96,8 @@ jobs:
           --pattern 'test_port_0922_withdrawal*.py'
           --pattern 'test_port_0922_gun_angle*.py'
           --pattern 'test_port_0922_rear_limited_aim.py'
+          --pattern 'test_port_0922_local_action_sweep.py'
+          --pattern 'test_port_0922_combat_tracking_lifecycle.py'
           --pattern 'test_port_0922_wait_parking.py'
           --pattern 'test_port_0922_server_bot_ai.py'
           --pattern 'test_port_0922_target_evidence.py'
@@ -94,6 +105,8 @@ jobs:
           --pattern 'test_port_0922_complete_navigation_receipts.py'
           --pattern 'test_port_0922_withdraw_receipts.py'
           --pattern 'test_port_0922_scoped_failure_progress.py'
+          --pattern 'test_port_0922_combat_progress_ownership.py'
+            --pattern 'test_port_0922_escape_observation_contract.py'
           --pattern 'test_port_0922_near_goal_evidence.py'
           --pattern 'test_port_0922_worker_query_reuse.py'
           --pattern 'test_port_0922_unknown_water.py'
@@ -295,7 +308,7 @@ jobs:
           -w /work python:2.7.18
           sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
-        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.1.wotmod
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_0.10.2.wotmod
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py

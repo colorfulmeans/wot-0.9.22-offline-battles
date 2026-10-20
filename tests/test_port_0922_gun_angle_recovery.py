@@ -119,7 +119,7 @@ class GunAngleRecoveryTests(unittest.TestCase):
 
     def test_friendly_lane_reposition_uses_full_throttle_and_expires(self):
         self.runtime._friendly_repositions[11] = dict(
-            target_id=28, destination=(0., 0., 10.), deadline=5.,
+            target_id=28, target_kind='bot', destination=(0., 0., 10.), deadline=5.,
             fire_range=400., shell_index=0)
         order, expired = self.runtime._friendly_reposition_order(self.state, self.targets, 2.)
         self.assertFalse(expired)

@@ -1,5 +1,97 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 20 report 135041: wreck-edge and friendly-lane avoidance
+
+The captured f64ad975 run reproduces blocked advisory wreck edges for T28,
+Nameless and JagdPanther II while full installed-body translation is clear.
+The former raster marked every edge adjacent to any covered cell, spreading
+one wreck over otherwise usable local exits. Build graph costs only for edges
+that intersect the oriented planning box. Direct/local/cached path checks use
+the actual segment against that same box, rather than the raster edge list.
+Inset each wreck planning half-extent by 0.15 m, retaining travelling chassis
+width for centreline clearance. Do not remove that chassis width: a full runtime
+corridor simulation catches the resulting impossible near-wreck paths.
+Physical bodies, rotation/translation sweeps, sliding, push clocks and contact
+damage retain their full dimensions and existing rules. Native terrain proof,
+timed failed edges, retries and route switching remain authoritative.
+
+Cache bounded segment answers by actual endpoint coordinates and the published
+planning poses; clear on pose or clearance changes, even if occupied graph
+edges do not change. Unchanged occupied edges still do not repeatedly retire
+all plans. Native exit admission uses the same planning footprint before its
+existing native proof. Diagnostic receipts include the inset, chassis clearance,
+published wreck identities/poses and separate timed-failure versus wreck causes.
+
+Friendly-lane reposition already retains target kind in its marker but omitted
+it from the emitted order. Forward it to the adapter so a combat action cannot
+reset its progress identity from (combat, bot, id) to (combat, None, id).
+Human planner IDs retain their existing mapping. Extend the existing limited-
+traverse timing formula to every chassis: 4 s plus required hull angle / installed
+rotation speed plus 2 s, capped at 16 s. Preserve the original deadline, timeout,
+arrival, retry/cooldown and priority-release behavior. Start and terminal receipts
+retain the angle, rate, uncapped turn time, granted budget and target identity.
+
+Regression checks replay the three report exits, actual physical rejection,
+rotated/sub-cell crossings, graph boundary precision, cache invalidation,
+native/terrain/timed refusal and the complete runtime wreck detour. Producer to
+adapter checks cover bot/human identity, all turret types, absolute timeout,
+retry, arrival, target loss/change, parking and base-defense handoff. These are
+engine-free contracts; native Windows gameplay and rubbing/sliding feel still
+require the supplied package test. The one-invalid-enable/all-five-valid-disable
+support rule and navigation strategy are unchanged.
+
+## October 20 report 050321: mechanical aim / movement handoff
+
+The report identifies `75c77651`, not an older installation. WZ-111G FT 25
+alternates approach steering and stationary limited-traverse laying against
+the same target. The previous change installed the movement lease before an
+existing laying episode could replace the order. Its completion condition
+still mistook a temporary engage/current-position order for physical arrival.
+Retain the admitted movement goal, origin and absolute clock through those
+temporary holds. A completed shot, actual travel/arrival, explicit parking or
+priority hold releases the lease. Exhaustion returns the already-admitted
+combat approach, including when the incoming order is a temporary engage;
+target identity, final launch checks and the existing retry window remain.
+This does not replace route selection or the driver's progress/recovery laws.
+
+T-62A 23 and AMX 30 B 7 retain ammunition and each other as targets, but record
+mechanical elevation refusal. The logged fallback aim inputs exceed their
+5/8-degree depression limits; these are not exact selected lower-hull-point
+angles. Candidate selection now checks elevation with the existing ballistic
+solver, current launch origin, target velocity and installed mechanical limits.
+A reachable retained candidate remains stable. An unreachable one cannot beat
+a reachable candidate; the existing cursor and two-ray budget remain. If every
+tested exposed candidate is unreachable, keep an exposed fallback so bounded
+mechanical relocation still runs rather than erasing the enemy or starving the
+gun. Unknown ballistic evidence preserves the previous selection behavior.
+Final traverse, alignment, range, obstruction and firing proofs still apply.
+
+Mechanical relocation previously tried the ground-clear forward direction
+before reverse without considering the opponent's occupied hull. Both tanks
+therefore repeatedly selected movements stopped by their mutual contact.
+For this relocation only, sweep the existing descriptor-derived source and
+target hulls with the contact solver's translation fraction. A blocked forward
+candidate can yield to the already-existing reverse candidate. Do not change
+ordinary ramming, world clearance, navigation, peer contact or physical commit.
+Missing target hull evidence is reported as unknown, not an invented blocker.
+
+Object 704 27 still produces nine enable/disable pairs near a footprint boundary.
+The captured closing solver has step zero and a changed accepted horizontal
+position. This is evidence of repeated boundary crossing, not sufficient proof
+that a delay or altered point threshold would repair physics. Keep one invalid
+point enable / all five valid disable exactly. Extend every transition receipt
+with the current vertical step, input/rollback/reference poses, active owner,
+speed, and measured passive-slide delta. No extra rays, hysteresis, frozen
+support, dropped time, or navigation change is introduced for this unresolved
+cause. Native Windows replay acceptance is still required for these contacts.
+
+Regression contracts cover the captured lease inputs, alternating holds and
+approaches through exhaustion, genuine release conditions, contact-blocked
+forward versus reverse relocation, moving-pose candidate revalidation, later
+reachable candidates, all-unreachable relocation, real wall rejection, and
+zero-time versus timed support receipts. These checks do not establish native
+gameplay acceptance or claim that all repeated alignment is eliminated.
+
 ## September 24 exchange confirmation and elite-notification audit
 
 Report `20260924-003508-5e4675963357` runs the v0.9.4 original-Bot077
@@ -9183,3 +9275,545 @@ The one-invalid-point enable / all-five-valid disable support rule, crush and
 wreck physics, module damage, HUD dispatch and independent test layouts are
 unchanged. Windows client gameplay acceptance remains required for the new
 planning ray construction.
+
+
+## Report 163803: capture reload, wreck corridors and deferred firing (2026-10-20)
+
+The report uses `008d5964`. T57 remains excluded from base-defense selection
+while it is an enemy-base capture contributor, but empty-magazine withdrawal
+first takes it outside the circle; defense then legitimately selects it. Guard
+only that withdrawal with canonical capture membership, including zero-point
+entrants and hit-reset contributors. Reload at the current pose with the same
+target, resume combat after reload, and release the guard on actual capture exit.
+Do not change responder ranking or the rest of the withdrawal policy.
+
+Maus has a padded yaw-only local rejection beside the Strv wreck even though
+its complete physical translation is clear. Refine aligned forward/reverse
+prechecks with the existing physical translation solver, retaining full body
+shapes, intervening-body sweeps, terrain checks and conservative missing-pose
+behavior. A candidate pivot still requires the existing rotation proof; this
+admission is not permission to pass through a wreck.
+
+Tortoise repeatedly tries a blocked rear-target pivot. Contact response consumes
+its traffic flag before the tactical owner can react, and ordinary hull aiming
+can recreate a just-expired rear episode despite its retry cooldown. Preserve a
+pose/target-bound contact refusal for the next handoff, fence the final shared
+native/reference aiming adapter during that cooldown, and use the existing
+bounded mechanical relocation. Its pivot refusal must survive unrelated pitch
+solution refreshes until arrival, failure, target change or priority handoff.
+Forward-arc aiming, reachable wide-turret targets and normal limited-traverse
+rear laying remain with their existing owners.
+
+M53/M55 remains at zero shots while its exact launch queue repeatedly shows
+chord zero. Its stationary source Y alternates by 4.76837158203125e-7 metres.
+That changes the freshly sampled physical pivot, hence the strict launch key,
+and discards pending work. Freeze the complete source pose for each admitted
+pending shot. Keep real-motion/orientation invalidation, strict trajectory keys,
+bounded chord budgets, world/friendly obstruction checks and the proved launch
+origin on final fire. SPG gate receipts now include frozen/current source poses,
+intent creation time and next fire sequence. No trajectory-key rounding or
+unchecked firing is introduced.
+
+Report-derived and lifecycle tests cover capture reload/exit, physical corridor
+admission/rejection, runtime pivot denial through relocation, all relocation
+terminal paths, and jittered bounded launch completion through ammunition/fire
+commit. Engine-free oracles and package inspection do not establish native map
+acceptance or measured worker performance. Support still enables on one invalid
+point and disables on all five valid points. No navigation strategy, map
+catalog, real collision shape, crushing law or independent test layout changes.
+
+
+## 2026-10-20 Windstorm southern bridge mixed-resolution repair
+
+Report `wot-error-report-20261020-185732-563755263824.zip` contains Steyr WT 24
+at (126.7290046558638, -8.950407028198242, -276.07781896536494). Its native
+corridor probe admitted yaw 1.654004054630426 rad over 3.120000877 m, but the
+runtime driver vetoed the same exit on a 4 m wet-edge apron. This is a static
+map/readers disagreement, not evidence that target or retry policy should change.
+
+Add one 1 m mesh over (106,-302)-(214,-230), covering the entire southern bridge
+and both mouths. Decode the original CN1513 client terrain and compiled BSP;
+retain exact triangle/body-height clipping, original obstacle margins, water
+limit, shoulder erosion, grade checks and quarter-metre link proof. Preserve the
+4 m map dimensions, heights, hazard arrays, routes, spawn formations and all other
+maps. Keep 7,957 local samples (1,879 supported) and 13,216 directed fine links.
+Refine only two directed coarse links at the eastern mouth: the old shortcut
+crossed rejected fine edge samples and bypassed the safe fine detour. Both Python
+and C++ receive those same serialized link masks, with no search policy changes.
+
+Classify local wet-edge evidence with the existing shore classifier. Let final
+pose checks use the same nearest fine sample as corridor/motion queries, including
+the actual sub-cell pose rather than its 4 m centre. Unsupported legacy patches
+with no hazard evidence cannot clear a parent's water veto. Direction receipts
+identify the selected mesh, resolution, sample index and hazard bits. Real native
+collision remains authoritative; no collision or fall exemption is added.
+Retain prior graph hashes so existing user route profiles remain compatible.
+
+Validation: eight forward/reverse cases, including the exact reported Steyr exit,
+passed 2,015 quarter-metre original-geometry samples at half-widths 1.2/1.8/2.15 m.
+Bridge hull prechecks cover both directions and those widths. All 4,871 fine water
+and 1,006 wet-edge samples retain their final-pose veto. Tests cover the actual
+runtime precheck, final-pose admission, both mouths, fine hazard identity and
+unknown legacy patch fallback. Reproducers are `tools/build_windstorm_bridge_mesh.py`
+and `tools/verify_windstorm_bridge_mesh.py`; the latter refuses unchanged coarse
+shortcuts that disagree with the new mesh rather than skipping a failed passage.
+
+No throttle, target, avoidance, C cost, route retry/switching, magazine, physical
+body shape, support-switch threshold or independent crushing layout changes.
+Support still enables at one invalid point and disables at all five valid points.
+Engine-free geometry and native search checks do not replace BigWorld gameplay
+acceptance or establish a frame-rate improvement; this remains a user test build.
+
+The paired search benchmark checks 164 preserved/default route segments plus
+recorded bridge exits in both grids: all Python cases and 492 native C++ jobs
+per grid complete. Native worker p95 measured 0.105 ms before / 0.2615 ms after;
+maximum 0.3137 / 0.5244 ms in this run. These are isolated search costs, not live
+worker latency. `tools/check_windstorm_navigation.py` preserves the reproducer.
+The CI selection includes the new bridge regression file.
+
+
+The first CI editor run caught a stale catalog fingerprint after the graph
+changed. Regenerate both bot_editor_maps and first-run PROFILE_JSON identities,
+retain the prior graph fingerprint for saved profiles, and make the bridge baker
+perform that catalog generation itself. No route coordinates are regenerated.
+Add an all-41-map catalog/default identity regression. Rebuild the frozen server
+because it also embeds these pure-data modules; verify all 82 compiled modules
+against final source. Actual Windows Tk editor/localization/navigation tests
+exercise loading the new resource, not merely raw JSON parsing. The intermediate
+404e2a58 package was withheld from delivery; use the subsequent catalog-corrected
+package. This is a repaired in-scope packaging regression, not an old CI failure.
+
+
+## 2026-10-20 Windstorm north bridge and shallow-bank continuity
+
+Report `wot-error-report-20261020-200127-fc16972fef56.zip` on 4855e49d shows
+Emil I (Bot 4) at (280.3538467765204,-14.974234580993652,219.5717056753799),
+yaw -1.2797609560299639 rad. The native direction receipt admits its 3.430860 m
+exit, but the final 0.5 m commitment crosses a different coarse cell and vetoes
+it as a wet edge. Throttle is requested at 1, there are no nearby vehicles or
+physical contacts, and the final gate cuts it to zero. This is a verified local
+geometry/raster disagreement, not a reason to replace retries or traffic policy.
+
+Append a 1 m mesh over (202,190)-(310,274), retaining the southern patch verbatim.
+The north patch contains 9,265 samples, 5,989 supported nodes and 44,184 directed
+links. Preserve the base grid scale/heights/hazards, spawn formations, all route
+coordinates and other maps. Refine 38 directed coarse shortcuts only where the
+new local geometry contradicts them; Python and C++ receive the same masks.
+Keep resource manifest, editor catalog and first-run defaults synchronized, with
+both earlier fingerprints accepted for saved profiles.
+
+Ordinary navigable water remains governed by the original .9 m depth limit; no
+new ford exception, route cost, yaw law or runtime probe is introduced. The
+reviewed bank (260,210)-(284,230) and both mouth rectangles are measured over the
+full original 2.15 m half-width on a quarter-metre lattice. This replaces a
+blanket 6 m spare bank apron only where the complete footprint proves support,
+water depth and existing drop/grade limits. Deep-water shoulders remain invalid.
+The north deck also needs full-width support instead of a centre-only 1 m
+shoulder: otherwise a coarse shortcut can select a wide vehicle's outer lip.
+
+Bridge support heights come from the existing 1 m surface raster's cell centres.
+Use those actual sample anchors when comparing heights; treating a one-cell
+height difference as a .24 m query separation invented cliffs at both bridge
+ends. Recorded examples include a .129892 m height difference incorrectly divided
+by .238889 m. The bake support proof now measures the correct sample baseline;
+synthetic regressions still reject a real 3 m cliff and water beyond .9 m.
+No live support solver or physical shape changes are made.
+
+Validation rejects remote detours and requires paths to stay inside this bridge
+region. Fourteen forward/reverse original-client geometry cases pass 2,374 quarter-metre
+centre samples plus complete 6.4 m hull support rectangles at half-widths
+1.2/1.8/2.15 m, plus the exact recorded Emil half-width 1.300434947 m and
+half-length 2.930860043 m. Maximum sampled hull-support depth is .704921 m. The same Emil
+heading is admitted at every tested prefix from .05 m through 3.430860 m and by
+the actual runtime corridor gate at both recorded lengths. All 1,277 deep-water
+and 1,585 wet-edge fine samples retain their pose veto. The earlier southern
+bridge's eight cases/2,015 samples are also rechecked.
+
+Paired search covers 176 route/bridge cases in each graph: Python reaches every
+endpoint, and 528 C++ jobs per graph satisfy the existing 8 m completion bound.
+Native path evidence also proves local bridge-region bounds, bounded path length,
+every committed segment and quarter-metre final-pose checks; a remote crossing
+is not accepted as proof of this bridge. One isolated run measured native p95
+.2158 ms before / .3715 ms after, maximum .6109 / 3.6994 ms.
+These are search costs, not BigWorld frame-rate or total hidden-worker latency.
+Reproducers: `tools/build_windstorm_north_mesh.py`,
+`tools/verify_windstorm_north_mesh.py`, and `tools/check_windstorm_navigation.py`.
+
+Navigation strategy, C/avoidance, retry/switching, target selection, real collision,
+water limits, crushing and live suspension rules remain unchanged. Support still
+enables at one invalid point and disables at all five valid points. Native
+BigWorld gameplay acceptance remains for the user's next run.
+
+
+## 2026-10-20 Somua recovery commitment and support evidence
+
+Report `wot-error-report-20261020-205455-a0dbd9e08542.zip` runs 695427dc on
+Windstorm. Somua SM Bot 16 holds (127.145985,-8.950384,-279.887359), yaw
+1.443479696 rad, from at least 20:51:51 to 20:52:07. Its retained forward
+escape repeatedly proves only .0959976 m while execution checks at least .5 m.
+The former stays in safe southern mesh cell 2419; the latter reaches wet-edge
+cell 2420 (bits 10). Native local probes are clear, but the commitment cuts
+throttle. The same grid disagreement reproduces on 4855e49d. The vehicle later
+escapes; this is not evidence of a permanent round-long deadlock.
+
+Retained forward escapes now use the same .5 m minimum as the execution owner.
+Fixed-endpoint short forward/reverse escapes keep their separate endpoint law.
+If an already aligned forward escape is nevertheless refused by the baked
+commitment, retire that cached action and motion receipt and forward a scoped
+`motion_forecast` refusal to the existing finite driver failure ledger. It is
+not a realised contact and does not create a new route policy. Unaligned
+catch-up turns retain their command, and expired failure evidence allows the
+original retry behavior to resume. Real collision, deep water and fall guards
+remain authoritative; do not clear a hazard simply to make this exit pass.
+
+`BOT RECOVERY COMMIT` records each such terminal action with round/Bot/vehicle,
+execution time, origin/yaw/reach, final verdict, cache retirement, retry feedback
+and the original planning receipt (including original sample time and queries).
+The evidence reader assembles this label through the same multipart protocol.
+Lost basic support points now carry their existing layered column producer
+verdict, including miss/limit/normal/exception evidence. Unbounded upper probes
+retain their original owner and are labelled as such; logs never cast again.
+Enable/disable records include active ram contact pairs. Existing point, sample,
+pose, previous transition and solver evidence remain intact. This targets the
+southern crowd and short support episodes without guessing a new navigation or
+hysteresis rule: one invalid enables, all five valid disable.
+
+Reduce repeated preparation only: all five basic support witnesses share one
+immutable pitch/roll rotation instead of five preparations; each collision-bound
+axis shares its live mount conversion between lower and upper calculations.
+No result is reused across poses or frames, and current Siege mount changes
+remain visible. No physical sample, simulation interval, collision shape, native
+ray or support point is removed. A local Python 3 five-point preparation benchmark
+(100,000 calls, median of five) measured .231142 s before / .152891 s after;
+this measures preparation, not native-game FPS or whole-worker latency.
+
+Eight focused regressions cover the recorded mesh disagreement, retained reach,
+lease expiry, rejected aligned-action retirement and finite retry feedback,
+preserved unaligned turns, exact batched offsets, no-extra-cast support evidence
+and mutable descriptor geometry. Running these on isolated baseline 695427dc
+reproduces the two behavioral failures; the two new API/evidence assertions
+also fail there as expected. Real Windows driving and whole-worker timing remain
+for the next report. Southern congestion beyond proved refusal remains under
+observation; no speculative traffic, route, slope or capture changes are added.
+
+
+## 2026-10-20 Physical hazard prefixes and complete local handoffs
+
+Report `wot-error-report-20261020-214449-92452fcc51c2.zip` runs 39340810 on
+Windstorm. VK4502A Bot 3 repeatedly turns around (155,-13,-13) before eventually
+leaving. Its actual origin is (155.240676431,-13.843542099,-12.604771773).
+Along the same 18.49-degree direction, the 1.62 m motion segment enters cell
+(163,122), hazard bits 10, while the old 3.907553 m segment jumps directly from
+(163,121) to (164,122). Rounding the endpoints and Bresenham-traversing their
+centres loses the real cell boundary crossing. This disagreement exists in
+39340810; the prior Somua minimum-reach fix addresses a different disagreement.
+
+Motion hazard checks now traverse physical world-space cell boundaries, including
+local mesh entry/exit and fine cell boundaries. Exact geometry keys bound the
+immutable crossing cache to 512 entries; masks and routing heights are not cached
+as verdicts. Occupied known start cells remain escapable, entered unknown cells
+still reject, and graph links/vertex interpolation are unchanged. The planner
+precheck and committed motion gate use this same traversal. No map/hazard bit,
+true collision shape, water/fall protection, C cost, avoidance, retry, route
+switching or slope policy is changed. Execution receipts include entered cells,
+mask, first rejected cell, hazard bits and traversal law without recasting rays.
+
+The 489 assembled motion records and server route/shot histories distinguish
+stationary combat and magazine reloads from movement stalls. Sturer Emil Bot 12
+crosses the northern bridge, later alternates its path point (18,.605,122) and
+retained local point (33.89777,-.33064,139.03467) for about 88 seconds, then
+switches route and leaves. A later eastern-bank episode also contains hazard
+vetoes and active finite retries. Its local proofs change around wrecks; the
+old sampled receipts cannot identify every owner-clear transition. Do not replace
+the original retry/route policy from that observation alone.
+
+SU-122-44 Bot 25 alternates engage/approach while retaining target Bot 4. Some
+observed required pitches exceed the actual four-degree maximum, so withheld
+shots alone are correct. Mechanical adjustment repeatedly terminates with
+`mechanical_refusal_cleared`, but that flag is also cleared before missing-muzzle,
+unavailable-aim, invalid-aim, no-intercept and out-of-range early returns. The
+report does not distinguish these from a positively reachable new solution.
+This patch observes every solver terminal result; it does not fabricate a firing
+lane, extend a lease, retain a stale refusal or change aim candidate selection.
+
+`BOT LOCAL HANDOFF` immediately records local creation, arrival/passing, unsafe
+proof, timeout, changed intent/request, connector refusal and movement hold,
+with actual prior target, owner/request, progress clock and replacement evidence.
+Bounded history is also included in existing search/motion diagnostics. All five
+local-target deletion sites publish their cause before deleting it. `BOT GUN
+SOLUTION` immediately records reason transitions, previous/current refusal,
+source/target identity, shell, pose, muzzle and solved pitch where available.
+Repeated identical reason signatures coalesce in bounded history; final handoff
+and terminal receipts retain both the solver result and prior adjustment marker.
+Aim-point producer receipts distinguish record readiness/tombstones, native entity
+startup, descriptor availability, missing selected sample and candidate-lane results.
+The solver freezes those exact producer receipts, including their own sample times,
+rather than pairing an old candidate snapshot with a later refusal clear.
+Both labels use the existing multipart writer/reader. Logging does not add native
+queries, navigation goals, waits or collision exemptions.
+
+Support enables twice and disables twice in the report, each 4-valid to 5-valid;
+there is no rapid-toggle reproducer in this run. Somua dumps/reloads its magazine
+and later continues driving; no old aligned 9 cm replay is recorded. The launcher
+explicitly starts stopping the worker before the disconnect termination, and
+neither exception file contains an exception: this is not evidence of a native
+crash. Early worker callbacks are slow with the full live roster; native collision,
+physics support and contacts dominate, not background A*. No whole-worker FPS
+improvement is claimed for the geometry fix. Real Windows acceptance of the new
+motion checks and uncertain local/aim handoffs remains for the next report.
+
+
+## 2026-10-20 Windstorm 1.2 m shoal and SPG reproof ownership
+
+Report `wot-error-report-20261020-222744-48cc0923612c.zip` contains two
+Windstorm rounds on f317c4e6. The manually authored HT/MT crossing at
+z=188..189 lies outside the previous north local patch (minimum z=190).
+The shortest measured crossing is (306,189) to (264,189). Raising a runtime
+constant alone leaves the old baked water/shore veto intact.
+
+Use a shared 1.20 m navigation-water limit in the runtime and #1513 baker
+adapter. Preserve the hash-checked vendored baker; configure its returned
+module before either full baking or the geometry-only/local-mesh entry.
+Drowning still uses each actual vehicle's mounted native sensor, pitch/roll
+and continuous timer; 1.20 m is a navigation limit, not a universal drowning
+threshold. The 0.90 m coarse batch and other maps are retained conservatively,
+not relabelled as newly surveyed water. Future rebakes use the new policy.
+
+Expand only the existing Windstorm north mesh to (202,170)-(322,274), adding
+the measured shoal to full-width quarter-metre support proofs. Keep the southern
+bridge mesh, coarse heights/hazards, route polylines, spawn formations and
+unrelated catalogs. Clear water/edge bits only by rebaking exact terrain,
+BWWa and compiled geometry; never by erasing selected bits. Preserve the
+previous shipped graph fingerprint so the user's active custom HT/MT profile
+continues to load. Regenerate manifest/editor/default-profile resource identities.
+
+The exact-client verifier covers 22 directed bridge/bank/shoal/access cases,
+4,498 quarter-metre centre samples, and support rectangles for narrow, reported
+Emil, medium and 4.30 m wide chassis. It checks planned paths, motion-hazard
+traversal, final pose and physical collision/support/water across both shoulders
+and longitudinal ends. The shoal crosses directly in about 40-42 m instead of
+about 176-182 m via the bridge. Maximum water depth across the complete case
+set is 1.158722 m; the selected straight crossing's prior dense width survey
+is 1.067897 m. Deep-water and unsafe-shore vetoes remain. Native gameplay
+acceptance is still required; static compiled geometry is not a BigWorld drive.
+
+SU-14 Bot 29 in round two repeatedly queues exact launch proofs without a shot.
+The source code contains a reproducible ownership defect: the long-lived
+reproof compares all eight source-pose components, including original turret
+traverse and gun elevation. A legitimate new lead solution therefore cancels
+its own reproof while the barrel slews to it. Preserve chassis position/yaw/
+pitch/roll, target, physical shell, sequence and absolute deadlines across
+reproofs. Once one exact dispersed shot is pending, separately validate that
+shot's frozen traverse/elevation. Real barrel movement still cancels the old
+world receipt. Do not bypass collision, friendly-lane, dispersion, current-aim
+or target-staleness checks. The full-eight-component fixture fails before
+this correction and passes after it. Gameplay may have additional causes;
+the report's sampled gate rows cannot prove this explains every withheld shot.
+
+`SPG PROOF` immediately freezes creation, stale/current aim receipt, pose/
+identity changes, deadline expiry, exact-launch failure, fire-order withdrawal,
+relocation, successful fire and cleanup. Stale receipts include actual velocity,
+planned and current predicted impact, error, permitted error, proof latency,
+attempts/chords and deadlines. Retain a bounded 16-event per-vehicle history,
+with a compact final-transition summary in the existing fire gate. The report
+reader recognizes both whole and fragmented proof events; regression tests use
+the real writer/reader round trip, not an assumed logging stub.
+
+No Bot navigation ranking, pressure dispatch, target priority, retry/route-switch
+policy, true collision hull, or support switching rule is changed. Support
+remains one invalid point enables detailed suspension; all five valid disables.
+The inspected round-one bridge delays eventually resume travel/fire; round-two
+BatChat engine repair progresses while firing; Object 261 has completed its
+worker-owned local parking and fires despite an older strategic deployment
+label. These observations do not justify speculative navigation changes.
+
+The shipping C++ search source was independently compiled for the local parity
+check (not substituted with the Python planner). Across 178 directed default,
+bridge and new-shoal cases, 534 current jobs finish with zero partial/empty
+paths. The old graph reproduces a bounded 4,096-expansion failure on one new
+shoal direction (three repeated jobs); those expected old failures are kept
+explicit in the comparison, while every pre-existing route must still finish.
+The current search expands 38,592 nodes versus 61,248 in that batch. This is
+search-only evidence, not a client FPS claim.
+
+
+## Three-round contact and local-target handoff audit (2026-10-20)
+
+Reports 231748, 233102 and 233622 on build 45008602 establish two navigation
+handoff defects and a human-contact laying defect. Occupied-point bypasses
+cached a target that the same Bot had retired through its private retry ledger.
+Both cached/retained/new bypass admission and final runtime-target publication
+now respect the existing active refusal, without renewing progress or adding a
+blacklist. Expired refusals can be retried. Contact recovery clears an obsolete
+traffic-wait flag when it takes ownership; ordinary traffic waits still pause
+navigation progress exactly as before.
+
+M46 Patton KR repeatedly selected a lower hull point outside its 10-degree
+native depression limit. Its translation was fully blocked by player 1, yet its
+remote-owned impulse velocity remained 3.217 m/s. Mechanical laying now measures
+realised contact travel separately from physical momentum. A blocked player
+approach can hand off to the existing bounded gun-angle recovery and retain that
+recovery through approach/hold alternation. Unblocked travel, base defense,
+parking, target priority, native pitch limits, collision and shot validation keep
+their owners. No aim-point order, navigation strategy or physical contact formula
+changes are included.
+
+Lane jobs use copied source poses; publish their bounded candidate/reachability
+receipts to the live source so the final solver no longer logs an empty or old
+producer. Preserve realised rotation evidence on early non-blocked planner
+returns. Native corridor evidence now distinguishes cache reuse, same-batch
+pending, changed owner/revision, unsupported input, unknown result and exceptions,
+including the tested endpoints. SPG status includes requested and active keys,
+sample time and the previous job's chord/age when poses differ.
+
+The long Tortoise proof wait, T95/Ferdinand physical refusal pockets, WZ bridge
+jam and SU-14 planning resets are not all proved false collisions or safe shots.
+Their guards remain; the new receipts expose the unresolved boundary instead of
+inventing a permissive result. Worker CPU cost remains an acceptance concern;
+this change does not claim a measured frame-rate improvement. Support remains
+one invalid point on/all five valid points off; water stays at 1.20 m and all
+existing local meshes, route points and retry/switch policies are retained.
+
+Regression fixtures exercise the recorded bypass refusal and expiry, contact
+movement-owner transfer, human/Bot lane receipt parity, blocked versus genuinely
+moving player contacts, and pending native/SPG proof identities. Pure tests and
+package parity do not prove Windows BigWorld gameplay; the resulting package
+requires the user's next playtest.
+
+The expanded CI also exposed an existing support diagnostic error: an analytic
+or other untraced ground probe can supply a valid height without appending a
+column witness. Indexing the empty witness list raised IndexError before the
+five-point support rule ran. Preserve the measured height and mark its evidence
+untraced, just as the existing missing-witness branch intended; do not fabricate
+a new height or change validity. The retained current-rule lifecycle test covers
+each individual failed point, four-point retention and five-point release.
+
+
+## Crush-preview and local-action progress audit (2026-10-21)
+
+Windows reports `20261021-002130-14157186c968`,
+`20261021-003223-2ad1430d5787` and `20261021-003829-6b84af4c773b`
+run payload `98d20246`. Type 61 was boxed in by WZ-132A wreck 26 and
+winter pole `(33405, 77)`, resource `env414_Pole3_winter.model`. Its exact
+crush gate reported physical/kinetic acceptance (energy 81.0198, health 20),
+but a non-committing translation preview returned catalog hard. The
+preview called the committing catalog seam with commits disabled, which
+intentionally cannot report an already accepted native destruction.
+
+Translation previews now use the existing mutation-free catalog proposal.
+A crushable proposal becomes `commit_required` (advisory admission, not a
+proved empty corridor); the realised movement still repeats the actual
+world/catalog checks, owns destruction/publication and checks replacement
+BSP. A hard sibling, true world collision, unknown identity and uncrushable
+material remain blocking. Forward and reverse share the transaction.
+No map catalog, collision body, railway classification or water policy changed.
+
+SU-101 and Somua SM recordings also reproduce a competing progress clock:
+real movement toward the executed local endpoint did not beat the older
+tactical-distance/radial frontier. The eight-second objective timeout then
+selected reverse even while translation was making useful local progress.
+Keep the existing order identity, connector minima and retry/reroute policy.
+Credit a new fixed local-endpoint minimum only with actual displacement and
+nonzero movement speed. A bounded 16-point action ledger preserves minima
+across revisits when the executed target differs from the macro progress
+point. New selection, rebasing, enemy motion and turning alone earn no
+translation credit. Existing macro progress retains its diagnostic priority.
+The recorded sparse Sherman orbit remains a regression case, not an obsolete
+assertion to delete. Its zero-speed pose adjustments must not perpetually
+renew movement progress.
+
+A successfully completed checked short/long translation also retires its
+parent timed backout, once. Failure/expiry does not masquerade as success.
+Actual collision checks still precede execution; no unconditional movement,
+slope refusal, height-selection or new route strategy is added.
+
+Unresolved Foch near-point alignment and other local pockets are diagnostic
+work: motion records now include a frozen recovery trigger (reason, both
+goals, displacement and original progress scalars), and escape terminal
+(success/failure, endpoint, remaining distance and parent timer). Both carry
+sample/observation clocks and explicit age through cached/final motion
+serialization. No new per-frame diagnostic probes are introduced.
+
+Validation includes the real catalog proposal fixture without native mutation,
+forward/reverse previews, hard siblings, real walls, replacement BSP, local
+translation/arrival, no-motion rebasing, repeated-point orbits and escape
+completion/failure/idempotence. The old read-only runtime fixture now mocks
+and asserts the proposal API rather than the committing seam. CI explicitly
+discovers the new handoff regression file. Final counts, package bytecode/source
+parity and startup results are recorded in the delivered validation manifest.
+These are engine-free/package checks; exact BigWorld gameplay acceptance is
+left to the next Windows test. Use the standard EXE for representative normal
+play; SPIKE_PROFILE adds fine observer overhead and is diagnostic only.
+
+### Passive preview consumer regression (2026-10-21)
+
+Report `20261021-011249-44f7ae836b70`, final Windstorm round 3, runs
+`6f460eef`. At 01:12:25 local time the worker raises
+`bot passive motion resolver returned an invalid status` from
+`_hard_contact_response -> _passive_motion_status`; the server then closes
+the round as `worker_disconnected`. This is a Python contract regression,
+not a demonstrated native crash or network timeout. The immediately preceding
+catalog gate is the physically crushable forged fence `(33149, 85)`.
+
+The preceding change added `commit_required` to the shared read-only motion
+resolver and handled it in active local planning, but omitted the passive
+consumer. Passive glancing, contact separation and coupled wreck rotation use
+that consumer. A non-committing passive proposal now explicitly remains hard
+until a real commit owner clears the contact, preserving its pre-change
+blocking policy. It neither destroys the item nor admits an uncommitted
+corridor. Active translation proposals and their final native commit remain
+unchanged. Committing calls and truly invalid statuses retain strict validation.
+The existing contact trace also records the passive policy without new probes.
+
+Composition tests connect the real BattleRuntime preview producer to
+BotRuntime's forward/reverse hard-contact response, assert no destruction or
+slide, and verify movement-intent restoration. A status matrix checks all old
+statuses, unknown results and committing calls. Both tests reproduce failures
+with the previous passive consumer and pass with this fix. The earlier isolated
+preview and mocked passive tests were insufficient to prove this composition;
+the new tests are in the already-discovered handoff regression file. Full local
+and package results are recorded in the replacement package manifest. Actual
+Windstorm acceptance still requires the user's next Windows battle.
+
+### Completed occupied-corner bypass handoff (2026-10-21)
+
+Report `20261021-012806-5b2cbcc51207` runs `24e4e90d` and completes
+normally. Sturer Emil 12 spends about 51 seconds around the northern bridge
+approach. Corner `(26, -0.183, 126)` is inside the existing occupancy circle
+of Jagdpanther II wreck 27 (7.586 m separation versus 7.764 m combined
+clearance). This circle is an advisory occupancy test, not proof that the
+installed chassis rectangles collide.
+
+At 01:25:55, 01:26:01, 01:26:07 and 01:26:14 the runtime modifies that
+same A* corner into points at 12, 8, 12 and 8 metres on its hull-facing
+side. The recorded coordinates reproduce the selector's arithmetic. Each
+temporary leg reaches its arrival disk; the old modifier then regenerates
+another point from the shifted hull. Near-corner alignment correctly brakes
+and faces each newly issued point, amplifying the repeated reversal. The
+original server budget does work: it skips the gate at 01:26:15, then switches
+from `class_td_ice_road` to `north_ridge` at 01:26:44 after another sustained
+failure. It is therefore a completed-local-leg lifecycle gap, not a missing
+server retry/switch mechanism or proved native collision failure.
+
+Completion now retires the occupied-corner modifier for that same gate attempt,
+including a still-live cached target. Returning no modifier hands the original
+navigator corner back to the existing driver; it neither chooses the far macro
+goal nor grants physical clearance. A later ordinary navigation replan or changed
+static-hull geometry starts a new attempt. Rechecking an unoccupied endpoint
+cleans up the completed leg. Unfinished bypasses remain fixed, private failure
+cooldowns still apply, and all existing collision, obstruction, retry/switch,
+water and one-invalid-on/five-valid-off support checks remain owned by their
+original code. No new timer, route rank, point blacklist or driving fallback
+is introduced.
+
+The bounded occupied-bypass receipt covers cached returns, arrival handoff,
+sampled blocker persistence/release and final navigation publication. It states
+that no native clearance was claimed. New regression cases cover the recorded
+arrival before/after cache expiry, repeated calls without new targets, new
+replan/geometry retries, active-leg retention, blocker removal, refusal by the
+original corridor gate and the complete runtime handoff to the original corner.
+The pre-fix arrival test fails on the old cached target; the repaired tests pass.
+These tests supply corridor admission separately from recorded XZ coordinates;
+they do not constitute a native Windstorm replay. Final package checks and suite
+counts are recorded in the delivered manifest; the user's next battle remains
+the native acceptance test. The reported floating shrubs are not changed here.

@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.1** — [Release notes](docs/releases/v0.10.1.md).
+Current release: **v0.10.2** — [Release notes](docs/releases/v0.10.2.md).
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.10.1-Windows-x64.zip` from the releases,
+1. Download `wot-0.9.22-offline-battles-0.10.2-Windows-x64.zip` from the releases,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -444,6 +444,9 @@ whose profile changed after it started must be restarted first.
   hull resumes travel when it leaves the existing arrival area. Intermediate
   points, explicit waits, cover, withdrawal and collision checks keep their
   own owners. `tactical_evidence.route_terminal` records the decision and release.
+- Low health does not trigger Bot withdrawal. Combat withdrawal is reserved
+  for a fired, empty reloadable magazine; a loaded magazine keeps fighting,
+  and ammunition recovery releases the withdrawal owner.
 - Team text chat, minimap pings and fixed battle messages are relayed to
   human teammates, including the sender, independently from Bot responses.
   Text and pings remain available during the countdown and after the sender's

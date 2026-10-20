@@ -29,8 +29,8 @@ except ImportError:
     import pickle as _pickle
 
 RUNTIME_RESOURCE = 'res/offline_replay/recorder-runtime.zip'
-RUNTIME_DIGEST = '8aee9faae63078408922d2ec000dc4211195a62a6921422a096042be3fe5f37b'
-PACKAGE_NAME = 'org.colorfulmeans.offline_lan_0922_0.10.1.wotmod'
+RUNTIME_DIGEST = '8b9db9977d43f45c5153edf1f7c9084f1c1190f85daaf1d8b77df5bdb5311d14'
+PACKAGE_NAME = 'org.colorfulmeans.offline_lan_0922_0.10.2.wotmod'
 MAX_FRAME = 4 * 1024 * 1024
 MAX_QUEUE_BYTES = 16 * 1024 * 1024
 MAX_QUEUE_PACKETS = 512

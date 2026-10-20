@@ -306,7 +306,8 @@ class BotAdapter(object):
                                    _position(peer.get('position', peer))[2]-position[2]) <=
                         2.0*length + 2.0*width) or
                        self.driver._static_hull_ahead(
-                          position, desired, [peer], length, width))), None)
+                          position, desired, [peer], length, width,
+                          body=self.driver.collision_body(state)))), None)
         if wreck is None:
             if active is not None:
                 state['_wreck_push_evidence'] = dict(
@@ -681,6 +682,17 @@ class BotAdapter(object):
         movement_intent = not (
             throttle_override is not None and
             float(throttle_override) <= 0.0)
+        # Rear/gun-angle laying expresses a real firing hold with a current
+        # pose goal, sometimes without an explicit pedal override. Pause its
+        # travel episode too; an aged approach must not move this hold away.
+        mechanical_hold = (contact_plan is None and
+            strategic.get('target_id') is not None and
+            strategic.get('combat_mode') == 'engage' and
+            throttle_override is None and
+            math.hypot(move_position[0]-position[0], move_position[2]-position[2]) <=
+            WAYPOINT_ARRIVAL_RADIUS)
+        if mechanical_hold:
+            movement_intent = False
         if strategic.get('combat_mode') not in (
                 'withdraw', 'low_health_retreat', 'magazine_reload_retreat', 'under_fire_withdraw',
                 'crossfire_withdraw'):
@@ -708,6 +720,9 @@ class BotAdapter(object):
         if not navigation_wait:
             self.driver.end_navigation_wait(bot_id)
         if contact_plan is not None:
+            # Contact motion has taken over from the old traffic hold. Ordinary
+            # drive clears this flag itself, but this owner bypasses drive.
+            self.driver.states.get(bot_id, {}).pop('traffic_waiting', None)
             local = contact_plan[1]
         elif navigation_wait:
             local = self.driver.wait_for_navigation(
@@ -740,6 +755,10 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
+                    progress_identity=(('combat', strategic.get('target_kind'), strategic['target_id'])
+                        if strategic.get('target_id') is not None and
+                        not strategic.get('parking_phase') and strategic.get('combat_mode') not in
+                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
@@ -815,6 +834,7 @@ class BotAdapter(object):
             navigation_status=state.get('navigation_status'),
             hull_contact=state.get('_hull_contact_receipt'),
             combat_hold=bool(combat_hold),
+            mechanical_hold=bool(mechanical_hold),
             action_owner=('combat_hold' if combat_hold else
                 'base_defense' if strategic.get('combat_mode') == 'base_defense' else
                 'contact_recovery' if contact_plan is not None else
@@ -832,6 +852,7 @@ class BotAdapter(object):
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
+                     'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
                      'navigation_recovery', 'navigation_replan'):
             if name in local:
                 result[name] = local[name]

@@ -12599,12 +12599,20 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn(11, runtime._friendly_repositions)
         initial_position = self.module._position(state)
         initial_ammo = list(state['ammo_remaining'])
+        deadline = runtime._friendly_repositions[11]['deadline']
+        self.assertLessEqual(deadline-now, self.module.FRIENDLY_REPOSITION_MAX_SECONDS)
         expired = False
-        for index in range(1, 140):
+        for index in range(1, int(math.ceil((deadline-now)/.04))+3):
             runtime.update(.04, now + .04 * index, players=[player])
+            self.assertEqual(initial_position, self.module._position(state))
+            self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertEqual(0, state['fire_seq'])
             if 11 not in runtime._friendly_repositions:
+                self.assertGreaterEqual(now+.04*index,deadline)
                 expired = True
+                self.assertEqual('timeout',state['_friendly_reposition_last_terminal']['outcome'])
                 break
+            self.assertEqual(deadline,runtime._friendly_repositions[11]['deadline'])
 
         self.assertTrue(expired)
         self.assertEqual(initial_position, self.module._position(state))
@@ -20025,7 +20033,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(0, runtime.states[11]['fire_seq'])
         self.assertGreater(runtime.states[12]['fire_seq'], 0)
 
-    def test_low_health_support_withdraws_without_losing_limited_traverse_fire(self):
+    def test_low_health_support_keeps_facing_and_firing_without_retreat(self):
         runtime = self.module.BotRuntime(
             1, descriptor_resolver=lambda unused: _combat_descriptor(
                 reload_time=8.0, clip=(1,),
@@ -20074,9 +20082,9 @@ class BotRuntimeTests(unittest.TestCase):
             manifest, bot_states, [enemy], 1.0)
         order = payload['orders'][0]
 
-        self.assertEqual('low_health_retreat', order['combat_mode'])
-        self.assertIsNone(order['throttle_override'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': -120.0},
+        self.assertEqual('engage', order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': 0.0},
                          order['move_position'])
         runtime.apply_snapshot({
             'bot_order_revision': payload['revision'],
@@ -20110,7 +20118,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertLess(max(abs(value) for value in yaws), 0.001)
         self.assertTrue(runtime.states[11]['gun_aligned'])
         self.assertGreaterEqual(runtime.states[11]['fire_seq'], 1)
-        self.assertLess(runtime.states[11]['z'], -1.0)
+        self.assertAlmostEqual(0.,runtime.states[11]['z'])
 
     def test_non_close_support_target_still_uses_engage_hold(self):
         planner = BotPlanner()

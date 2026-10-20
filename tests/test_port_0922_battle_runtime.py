@@ -14870,7 +14870,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         cases = (
-            ((0.0, 0.91), 'dry entry'),
+            ((0.0, 1.21), 'dry entry'),
             ((2.0, 2.11), 'deeper water'),
         )
 
@@ -14883,7 +14883,19 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 self.assertTrue(result['water'])
 
         self.assertEqual(
-            0.90, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+            1.20, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+
+    def test_direction_probe_accepts_new_shoal_up_to_inclusive_limit(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        for depth in (0.91, 1.067897, 1.158722, 1.2):
+            with self.subTest(depth=depth):
+                battle._water_depth = mock.Mock(side_effect=(0., depth, depth))
+                result = battle._direction_probe((0.,0.,0.),0.)
+                self.assertTrue(result['clear'])
+                self.assertFalse(result['water'])
+                self.assertEqual(3,battle._water_depth.call_count)
 
     def test_visible_hull_drowning_only_drives_native_warning_ui(self):
         runtime = _runtime()
@@ -22726,9 +22738,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             11: {'movement_dir': 1, 'airborne': False},
         })
         battle._destructibles = mock.Mock()
-        battle._destructibles._catalog_motion_blocked.return_value = {
+        battle._destructibles._catalog_motion_proposal.return_value = {
             'status': 'clear', 'token': None,
-            'accepted_now': False, 'used_kinetic_speed': False,
+            'accepted_now': False, 'used_kinetic_speed': False, 'requires_commit': False,
         }
 
         with mock.patch(
@@ -22741,10 +22753,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual('clear', status)
         self.assertFalse(world_probe.call_args.kwargs['commit_enabled'])
-        sensor_call = (
-            battle._destructibles._catalog_motion_blocked.call_args)
-        self.assertFalse(sensor_call.kwargs['commit_enabled'])
-        self.assertFalse(sensor_call.kwargs['kinetic_commit'])
+        # The mutation-free proposal preserves crushability without entering
+        # the native destruction/publication consumer during a preview.
+        battle._destructibles._catalog_motion_proposal.assert_called_once()
+        battle._destructibles._catalog_motion_blocked.assert_not_called()
 
     def test_bot_glancing_probe_keeps_hull_pose_and_travel_separate(self):
         runtime = _runtime()

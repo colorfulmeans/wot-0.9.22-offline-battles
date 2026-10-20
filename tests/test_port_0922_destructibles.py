@@ -9447,6 +9447,19 @@ class DestructiblesCompatibilityTests(unittest.TestCase):
         authority.destroy_fragile.assert_not_called()
         authority.event_sink.assert_not_called()
 
+    def test_falling_pole_qualified_preview_proposes_without_any_native_mutation(self):
+        proposal, authority, unused_descriptor = self._stationary_contact_status(
+            [dict(kind='falling',health=20,z=3.7)],
+            current_speed=5.5556, kinetic_speed=5.5556, proposal_only=True)
+        self.assertEqual('crushed',proposal['status'])
+        self.assertTrue(proposal['requires_commit'])
+        self.assertFalse(proposal['accepted_now'])
+        self.assertEqual(((22,37,None),),proposal['token'])
+        authority.destroy_fragile.assert_not_called()
+        authority.destroy_module.assert_not_called()
+        authority.destroy_column.assert_not_called()
+        authority.event_sink.assert_not_called()
+
     def test_exact_hard_mix_commits_crushable_subset_but_still_blocks(self):
         proposal, proposal_authority, unused_descriptor = (
             self._stationary_contact_status(

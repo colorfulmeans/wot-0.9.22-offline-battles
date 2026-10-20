@@ -307,39 +307,29 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual('cover_peek', peeking['combat_mode'])
         self.assertEqual(1.0,peeking['throttle_override'])
 
-    def test_low_health_vehicle_retreats_without_waiting_for_a_hit(self):
-        planner = BotPlanner()
-        contacts = [_contact(2, 0, 150, [11])]
-        players = self._report(planner, contacts)
-        self.states[0]['health'] = 200
+    def test_low_health_vehicle_keeps_normal_combat(self):
+        orders=[]
+        for health in (1000,200,1):
+            planner=BotPlanner()
+            self.states[0]['health']=health
+            players=self._report(planner,[_contact(2,0,150,[11])])
+            order=planner.build_orders(self.manifest,self.states,players,1.)['orders'][0]
+            self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+            self.assertTrue(order['fire_allowed'])
+            orders.append({k:order[k]for k in ('combat_mode','move_position','target_id','face_position')})
+        self.assertEqual(orders[0],orders[1])
+        self.assertEqual(orders[0],orders[2])
 
-        order = planner.build_orders(
-            self.manifest, self.states, players, 1.0)['orders'][0]
-
-        self.assertEqual('low_health_retreat', order['combat_mode'])
-        self.assertEqual({'x': 0.0, 'y': 0.0, 'z': -100.0},
-                         order['move_position'])
-
-    def test_low_health_retreat_reaches_a_defensive_terminal(self):
-        planner = BotPlanner()
-        contact = _contact(2, 0, 150, [11])
-        players = self._report(planner, [contact])
-        self.states[0]['health'] = 200
-
-        retreat = planner.build_orders(
-            self.manifest, self.states, players, 1.0)['orders'][0]
-        self.states[0].update(retreat['move_position'])
-        self.assertEqual(1, planner.report_contacts(
-            [contact], planner.known_targets(self.states, players), 2.0))
-
-        holding = planner.build_orders(
-            self.manifest, self.states, players, 2.0)['orders'][0]
-
-        self.assertEqual('low_health_retreat', holding['combat_mode'])
-        self.assertEqual('low_health_defend', holding['tactical_phase'])
-        self.assertEqual(0.0, holding['throttle_override'])
-        self.assertEqual(retreat['move_position'], holding['move_position'])
-        self.assertTrue(holding['stable_hull_face'])
+    def test_legacy_low_health_retreat_state_releases_to_combat(self):
+        planner=BotPlanner()
+        players=self._report(planner,[_contact(2,0,150,[11])])
+        self.states[0]['health']=200
+        planner._retreat_states[11]=dict(moving_mode='low_health_retreat',phase='withdraw',
+            target_point=dict(x=0.,y=0.,z=-100.),face=dict(x=0.,y=0.,z=150.))
+        order=planner.build_orders(self.manifest,self.states,players,1.)['orders'][0]
+        self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
+        self.assertNotIn(11,planner._retreat_states)
+        self.assertTrue(order['fire_allowed'])
 
     def test_pending_shooter_refresh_releases_stationary_hold_but_keeps_target(self):
         planner = BotPlanner()

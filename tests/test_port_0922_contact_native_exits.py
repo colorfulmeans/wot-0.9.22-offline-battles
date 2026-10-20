@@ -91,12 +91,12 @@ class NativeExitAdmissionTests(unittest.TestCase):
         for c in DATA['connectors']:
             with self.subTest(bot=c['bot']):
                 nav=self.scene(c)
-                self.assertEqual(240.,nav.grid.segment_penalty(c['current'],c['candidate'],c['at']))
+                self.assertEqual(0.,nav.grid.segment_penalty(c['current'],c['candidate'],c['at']))
                 result,selection=self.select(nav,c)
                 self.assertEqual(tuple(c['candidate']),result)
                 self.assertEqual('selected',selection['outcome'])
                 self.assertEqual('clear',selection['connector']['reason'])
-                self.assertEqual(240.,selection['connector']['proof']['coarse_penalty'])
+                self.assertEqual(0.,selection['connector']['proof']['coarse_penalty'])
                 # Reuse still re-proves geometry; it is not a permanent exemption.
                 self.assertFalse(nav.bot_segment_penalized(c['bot'],c['current'],result,c['at']))
                 self.assertTrue(nav.grid.dry_segment_clear(c['current'],result,c['at']+1))
@@ -105,7 +105,7 @@ class NativeExitAdmissionTests(unittest.TestCase):
 
     def test_real_wreck_corridor_is_not_advisory(self):
         c=DATA['connectors'][0];nav=self.scene(c);a=c['current'];b=c['candidate']
-        nav.grid.set_static_hulls([(91,(a[0]+b[0])*.5,(a[2]+b[2])*.5,0.,2.,1.)],clearance=2.)
+        nav.grid.set_static_hulls([(91,(a[0]+b[0])*.5,(a[2]+b[2])*.5,0.,2.,1.)])
         receipt={}
         self.assertFalse(nav.grid._live_exit_clear(a,b,c['at'],receipt))
         self.assertEqual('static_hull_corridor',receipt['egress_reason'])
@@ -178,7 +178,7 @@ class NativeExitAdmissionTests(unittest.TestCase):
         nav.bot_states[c['bot']]=state
         self.assertEqual(target,nav._retained_local_fallback(c['bot'],c['current'],c['goal'],c['at']+.1,state))
         a,b=c['current'],target
-        nav.grid.set_static_hulls([(91,(a[0]+b[0])*.5,(a[2]+b[2])*.5,0.,2.,1.)],clearance=2.)
+        nav.grid.set_static_hulls([(91,(a[0]+b[0])*.5,(a[2]+b[2])*.5,0.,2.,1.)])
         self.assertIsNone(nav._retained_local_fallback(c['bot'],a,c['goal'],c['at']+.2,state))
         proof=nav.bot_search_diagnostics(c['bot'],a,c['at']+.2)['local_retained_proof']
         self.assertFalse(proof['clear'])

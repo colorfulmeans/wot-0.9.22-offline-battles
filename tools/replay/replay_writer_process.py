@@ -21,7 +21,9 @@ SCHEMA = 1
 CLIENT = '0.9.22.0.1-cn-1513'
 MAX_FRAME = 4 * 1024 * 1024
 MAX_LINE = 2 * 1024 * 1024
-MAX_TOTAL = 768 * 1024 * 1024
+# Cumulative decompressed bytes, not a RAM allocation. The 20261020 battle
+# exceeded the former 768-MiB cap after eight minutes. Keep streaming bounds.
+MAX_TOTAL = 8 * 1024 * 1024 * 1024
 MAX_DURATION = 4 * 3600.0
 MESSAGE_TYPES = frozenset((
     'battle_live', 'snapshot', 'events', 'bot_observation', 'team_chat',
@@ -203,8 +205,12 @@ class Writer:
     def write(self, value):
         data = (json.dumps(value, ensure_ascii=True, allow_nan=False,
                            separators=(',', ':')) + '\n').encode('utf-8')
-        if len(data) > MAX_LINE or self.bytes + len(data) > MAX_TOTAL:
-            raise ValueError('recording exceeds original file bounds')
+        if len(data) > MAX_LINE:
+            raise ValueError('replay row limit: bytes=%d limit=%d' %
+                             (len(data), MAX_LINE))
+        if self.bytes + len(data) > MAX_TOTAL:
+            raise ValueError('replay total limit: accepted=%d next=%d limit=%d' %
+                             (self.bytes, len(data), MAX_TOTAL))
         self.stream.write(data)
         self.bytes += len(data)
 
@@ -271,7 +277,7 @@ def main():
         writer = Writer(start)
         seq = 0
         status('ready', seq=0, path=writer.path, temp=writer.temp,
-               records=0, logical_bytes=writer.bytes)
+               records=0, logical_bytes=writer.bytes, logical_limit=MAX_TOTAL)
         while True:
             row = receive(sys.stdin.buffer)
             seq = row.get('seq', -1)
@@ -291,7 +297,8 @@ def main():
         if writer is not None:
             writer.abort()
         try:
-            status('failed', seq=seq, reason=type(error).__name__ + ': ' + str(error)[:500])
+            status('failed', seq=seq, logical_bytes=writer.bytes if writer else 0,
+                   logical_limit=MAX_TOTAL, reason=type(error).__name__ + ': ' + str(error)[:500])
         except Exception:
             pass
         return 2

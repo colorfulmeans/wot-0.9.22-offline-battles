@@ -96,7 +96,7 @@ class CombatTrackingLifecycleTests(unittest.TestCase):
         loaded = self.order()
         self.assertTrue(loaded['fire_allowed'])
         self.assertNotEqual('low_health_retreat', loaded['combat_mode'])
-        self.assertTrue(loaded['tactical_evidence']['withdrawal']['deferred_for_magazine'])
+        self.assertEqual('empty_magazine_only',loaded['tactical_evidence']['withdrawal']['reason'])
         self.fx.states[0].update(clip=1, reload_time=2., fire_seq=3)
         intershot = self.order(1.5)
         self.assertNotIn(intershot['combat_mode'], ('low_health_retreat', 'magazine_reload_retreat'))

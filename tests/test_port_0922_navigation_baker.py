@@ -670,9 +670,12 @@ class CompiledSpace0922Test(unittest.TestCase):
             with self.subTest(map=record['map']):
                 self.assertEqual(record['map'], graph_path.stem)
                 graph = json.loads(graph_path.read_text())
-                self.assertEqual(
-                    baker.SHALLOW_WATER_THRESHOLD,
-                    graph['bake']['shallow_water_threshold'])
+                # The retained coarse batch was baked at .9 m. A new
+                # runtime limit must not relabel or unblock its old cells;
+                # only the measured Windstorm local patch is rebaked here.
+                self.assertEqual(.9, graph['bake']['shallow_water_threshold'])
+                self.assertLessEqual(graph['bake']['shallow_water_threshold'],
+                                     baker.SHALLOW_WATER_THRESHOLD)
                 self.assertEqual(
                     record['sha256'],
                     hashlib.sha256(graph_path.read_bytes()).hexdigest())
@@ -1447,7 +1450,7 @@ class CompiledSpace0922Test(unittest.TestCase):
 
         self.assertEqual(legacy.WATER_DEPTH_LIMIT,
                          baker.SHALLOW_WATER_THRESHOLD)
-        self.assertEqual(0.9, baker.SHALLOW_WATER_THRESHOLD)
+        self.assertEqual(1.2, baker.SHALLOW_WATER_THRESHOLD)
 
     def test_reviewed_contracts_never_expect_shallow_water_on_a_closed_cell(self):
         # A cell the baker rejected carries only deep water and edge state.
