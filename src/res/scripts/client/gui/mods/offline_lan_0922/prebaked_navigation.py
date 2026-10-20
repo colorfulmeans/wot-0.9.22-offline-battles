@@ -298,7 +298,33 @@ def with_shore_hazards(graph):
 		if near_water:
 			classified[index] |= SHORE_EDGE
 	result['hazards'] = tuple(classified)
+	if graph.get('local_meshes'):
+		patches = []
+		for patch in graph['local_meshes']:
+			local = dict(patch, bake=graph.get('bake') or {})
+			local = with_shore_hazards(local)
+			local.pop('bake', None)
+			patches.append(local)
+		result['local_meshes'] = patches
 	return result
+
+
+def local_cell_at(graph, position):
+	"""Return the same nearest local sample used by LocalMeshes.cell."""
+	if not isinstance(graph, dict):
+		return None
+	x, z = float(position[0]), float(position[2])
+	for patch in graph.get('local_meshes', ()):
+		size = float(patch['cell_size'])
+		column = (x-float(patch['origin'][0]))/size
+		row = (z-float(patch['origin'][1]))/size
+		if 0.0 <= column <= patch['width']-1 and 0.0 <= row <= patch['height']-1:
+			index = int(math.floor(row+.5))*patch['width']+int(math.floor(column+.5))
+			# Older additive patches omit hazard evidence on unsupported samples.
+			# Such an unknown must not erase the parent's existing water veto.
+			if patch['heights_mm'][index] is not None or int(patch['hazards'][index]):
+				return patch, index
+	return None
 
 
 def pose_is_safe(graph, position, shoulder_cells=0, hazard_mask=3):
@@ -327,6 +353,12 @@ def pose_is_safe(graph, position, shoulder_cells=0, hazard_mask=3):
 	for check_row in range(row - radius, row + radius + 1):
 		for check_column in range(column - radius, column + radius + 1):
 			index = check_row * width + check_column
-			if int(hazards[index]) & hazard_mask:
+			point = (float(origin[0])+check_column*cell_size, 0.,
+			         float(origin[1])+check_row*cell_size)
+			# With no shoulder, retain the actual sub-cell physical pose. Snapping
+			# to its coarse centre recreated the bridge-apron veto after planning.
+			local = local_cell_at(graph, position if radius == 0 else point)
+			value = int(local[0]['hazards'][local[1]]) if local is not None else int(hazards[index])
+			if value & hazard_mask:
 				return False
 	return True

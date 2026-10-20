@@ -9321,3 +9321,52 @@ commit. Engine-free oracles and package inspection do not establish native map
 acceptance or measured worker performance. Support still enables on one invalid
 point and disables on all five valid points. No navigation strategy, map
 catalog, real collision shape, crushing law or independent test layout changes.
+
+
+## 2026-10-20 Windstorm southern bridge mixed-resolution repair
+
+Report `wot-error-report-20261020-185732-563755263824.zip` contains Steyr WT 24
+at (126.7290046558638, -8.950407028198242, -276.07781896536494). Its native
+corridor probe admitted yaw 1.654004054630426 rad over 3.120000877 m, but the
+runtime driver vetoed the same exit on a 4 m wet-edge apron. This is a static
+map/readers disagreement, not evidence that target or retry policy should change.
+
+Add one 1 m mesh over (106,-302)-(214,-230), covering the entire southern bridge
+and both mouths. Decode the original CN1513 client terrain and compiled BSP;
+retain exact triangle/body-height clipping, original obstacle margins, water
+limit, shoulder erosion, grade checks and quarter-metre link proof. Preserve the
+4 m map dimensions, heights, hazard arrays, routes, spawn formations and all other
+maps. Keep 7,957 local samples (1,879 supported) and 13,216 directed fine links.
+Refine only two directed coarse links at the eastern mouth: the old shortcut
+crossed rejected fine edge samples and bypassed the safe fine detour. Both Python
+and C++ receive those same serialized link masks, with no search policy changes.
+
+Classify local wet-edge evidence with the existing shore classifier. Let final
+pose checks use the same nearest fine sample as corridor/motion queries, including
+the actual sub-cell pose rather than its 4 m centre. Unsupported legacy patches
+with no hazard evidence cannot clear a parent's water veto. Direction receipts
+identify the selected mesh, resolution, sample index and hazard bits. Real native
+collision remains authoritative; no collision or fall exemption is added.
+Retain prior graph hashes so existing user route profiles remain compatible.
+
+Validation: eight forward/reverse cases, including the exact reported Steyr exit,
+passed 2,015 quarter-metre original-geometry samples at half-widths 1.2/1.8/2.15 m.
+Bridge hull prechecks cover both directions and those widths. All 4,871 fine water
+and 1,006 wet-edge samples retain their final-pose veto. Tests cover the actual
+runtime precheck, final-pose admission, both mouths, fine hazard identity and
+unknown legacy patch fallback. Reproducers are `tools/build_windstorm_bridge_mesh.py`
+and `tools/verify_windstorm_bridge_mesh.py`; the latter refuses unchanged coarse
+shortcuts that disagree with the new mesh rather than skipping a failed passage.
+
+No throttle, target, avoidance, C cost, route retry/switching, magazine, physical
+body shape, support-switch threshold or independent crushing layout changes.
+Support still enables at one invalid point and disables at all five valid points.
+Engine-free geometry and native search checks do not replace BigWorld gameplay
+acceptance or establish a frame-rate improvement; this remains a user test build.
+
+The paired search benchmark checks 164 preserved/default route segments plus
+recorded bridge exits in both grids: all Python cases and 492 native C++ jobs
+per grid complete. Native worker p95 measured 0.105 ms before / 0.2615 ms after;
+maximum 0.3137 / 0.5244 ms in this run. These are isolated search costs, not live
+worker latency. `tools/check_windstorm_navigation.py` preserves the reproducer.
+The CI selection includes the new bridge regression file.

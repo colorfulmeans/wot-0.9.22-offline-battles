@@ -15965,11 +15965,16 @@ class BotRuntime(object):
                 if distance is None and decision_state is not None:
                     distance = decision_state.get('navigation_probe_distance')
                 key = (round(normalised,4), None if distance is None else round(float(distance),2))
+                local_grid = prebaked_navigation.local_cell_at(self.baked_graph, position)
                 sample_clear.last_receipt = self._record_planning_verdict(planning_receipt, dict(kind='direction', yaw=sample_yaw,
                     distance=distance, clear=result, reason=planning_reason[0],
                     origin=position, sampled_at=now, drive_direction=drive_direction,
                     body_pose=(state['yaw'],self._terrain_pitch(state),state.get('roll',0.)),
-                    native_probe=planner_probe_samples.get(key)))
+                    native_probe=planner_probe_samples.get(key),
+                    motion_grid=(dict(source='local_mesh', origin=local_grid[0]['origin'],
+                        cell_size=local_grid[0]['cell_size'], index=local_grid[1],
+                        hazards=int(local_grid[0]['hazards'][local_grid[1]]))
+                        if local_grid is not None else dict(source='base_grid'))))
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):

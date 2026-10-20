@@ -73,6 +73,7 @@ jobs:
           --pattern 'test_port_0922_contact*.py'
           --pattern 'test_port_0922_capture_contact_launch.py'
           --pattern 'test_port_0922_magazine_followup.py'
+          --pattern 'test_port_0922_windstorm_bridge.py'
           --pattern 'test_replay_capacity.py'
           --pattern 'test_port_0922_connector*.py'
           --pattern 'test_port_0922_local_refusal*.py'
