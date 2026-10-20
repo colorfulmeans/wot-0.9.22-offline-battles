@@ -56,7 +56,15 @@ launcher or claim that source tests prove native gameplay.
   single-line correction missed two other over-indented lines. Replace the
   entire folded command with a literal Bash array and one invocation. Parse
   the actual YAML and execute shell argument capture: all 58 patterns and
-  their 120 selected files are preserved, with no split or dropped argument.
+  the selected files are preserved, with no split or dropped argument.
+  A final per-pattern audit also found three empty selectors for tests deleted
+  with the earlier navigation rollback. Replace them with current authored
+  progress, crush handoff and recorded-bypass tests. Reject any unmatched
+  selector even if other patterns match; add a negative regression so an
+  empty test name cannot silently count as verification. The customization
+  selector belongs to launcher/tests, so invoke it in that directory instead
+  of silently losing it in tests/. Separate per-stage report directories
+  preserve every summary rather than overwriting it with the last group.
   Retain nonzero failure status and every selected test.
 - The replay reader changed during the earlier capacity update. The reader and writer-runtime
   consumer pins were updated then, but the independent package validator

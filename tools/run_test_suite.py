@@ -34,7 +34,12 @@ def main():
     parser.add_argument('--logs', type=Path, default=ROOT/'build/test-results')
     args = parser.parse_args()
     patterns=args.pattern or ['test_*.py']
-    files=sorted({path for pattern in patterns for path in (ROOT/args.directory).glob(pattern)})
+    matches={pattern:list((ROOT/args.directory).glob(pattern)) for pattern in patterns}
+    unmatched=[pattern for pattern in patterns if not matches[pattern]]
+    if unmatched:
+        parser.error('test patterns matched no files in %s: %s' %
+                     (args.directory, ', '.join(unmatched)))
+    files=sorted({path for paths in matches.values() for path in paths})
     if not files or args.jobs < 1:
         parser.error('select at least one test file and a positive worker count')
     args.logs.mkdir(parents=True, exist_ok=True)
