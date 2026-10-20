@@ -7433,6 +7433,7 @@ class BotRuntime(object):
                 hull_aiming=state.get('hull_aiming'),
                 rear_hull_aim=state.get('_rear_hull_aim'),
                 rear_aim_episode=state.get('_rear_aim_episode'),
+                magazine_followup=state.get('_magazine_followup_receipt'),
                 rear_motion_lease=state.get('_rear_motion_lease'),
                 rear_motion_observation=state.get('_rear_motion_observation'),
                 rear_approach=state.get('_rear_approach_receipt'),
@@ -14478,8 +14479,102 @@ class BotRuntime(object):
         state['_rear_approach_blocked'] = blocked
         return blocked
 
+    def _retain_magazine_followup(self, state, command, target, now):
+        """Only a committed stationary magazine shot earns another aim window."""
+        if (target is None or int(state.get('clip_size', 1)) <= 1 or
+                int(state.get('clip', 0)) <= 0 or
+                (state.get('profile') or {}).get('class_tag') == 'SPG' or
+                command.get('combat_mode') not in
+                ('engage', 'support_hold', 'cover_hold', 'cover_peek') or
+                abs(_number(state.get('speed'))) > 0.5 or
+                abs(_number(command.get('throttle'))) > 0.01):
+            previous = state.pop('_magazine_followup', None)
+            if previous is not None:
+                state['_magazine_followup_terminal'] = dict(at=now,
+                    reason=('magazine_empty' if int(state.get('clip', 0)) <= 0
+                            else 'shot_not_eligible'), identity=previous['identity'],
+                    fire_seq=int(state.get('fire_seq', 0)))
+            return
+        state['_magazine_followup'] = dict(
+            identity=(target.get('kind'), target.get('network_id', target.get('id'))),
+            target_id=command.get('target_id'), fire_seq=int(state['fire_seq']),
+            origin=_position(state), fired_at=now,
+            deadline=now + max(0.0, _number(state.get('reload_time'))) + 2.0)
+        # A real shot already completes these older mechanical/movement leases.
+        # Do not leave their eight-second clocks running underneath this hold.
+        state.pop('_rear_aim_episode', None)
+        state.pop('_rear_hull_aim', None)
+        state.pop('_rear_motion_lease', None)
+        state['_rear_motion_blocked'] = False
+
+    def _magazine_followup_order(self, state, order, targets, now):
+        """Preserve the fired-at enemy briefly; never renew on turns or waits."""
+        hold = state.get('_magazine_followup')
+        receipt = dict(at=now, active=False, reason='no_committed_followup',
+                       last_terminal=state.get('_magazine_followup_terminal'))
+        state['_magazine_followup_receipt'] = receipt
+        if hold is None:
+            return None
+        target = targets.get(order.get('target_id'))
+        identity = ((target.get('kind'), target.get('network_id', target.get('id')))
+                    if target is not None else None)
+        sample = (self._shot_los_cache.get(self._shot_los_key(state, target))
+                  if target is not None else None)
+        fresh_blocked = bool(sample is not None and not sample[1] and
+            0.0 <= now-sample[0] <= SHOT_LANE_REFRESH_SECONDS + self._control_seconds + 1e-9)
+        reason = None
+        if not state.get('alive', True) or _number(state.get('health'), 1.0) <= 0:
+            reason = 'actor_dead'
+        elif target is None or not target.get('alive', True):
+            reason = 'target_lost_or_dead'
+        elif identity != hold['identity'] or order.get('target_id') != hold['target_id']:
+            reason = 'target_changed'
+        elif order.get('parking_phase') or order.get('combat_mode') == 'base_defense':
+            reason = 'priority_handoff'
+        elif int(state.get('clip', 0)) <= 0:
+            reason = 'magazine_empty'
+        elif (isinstance(state.get('ammo_remaining'), (list, tuple)) and
+                (int(state.get('shell_index', 0)) >= len(state['ammo_remaining']) or
+                 state['ammo_remaining'][int(state.get('shell_index', 0))] <= 0)):
+            reason = 'loaded_ammo_exhausted'
+        elif not target.get('visible', True) or fresh_blocked:
+            reason = 'lane_lost'
+        elif (state.get('_gun_angle_refusal') == identity or
+                state.get('_gun_angle_pivot_refusal') == identity or
+                state.get('_gun_angle_adjustment') is not None):
+            reason = 'mechanical_recovery'
+        elif _distance(_position(state), hold['origin']) > 1.5:
+            reason = 'translated'
+        elif now >= hold['deadline']:
+            reason = 'followup_timeout'
+        receipt.update(identity=hold['identity'], fire_seq=hold['fire_seq'],
+            fired_at=hold['fired_at'], deadline=hold['deadline'],
+            remaining=max(0.0, hold['deadline']-now),
+            incoming_mode=order.get('combat_mode'),
+            requested_move=order.get('move_position'),
+            lane_sample_at=sample[0] if sample is not None else None,
+            lane_clear=bool(sample[1]) if sample is not None else None)
+        if reason is not None:
+            state.pop('_magazine_followup', None)
+            terminal = dict(at=now, reason=reason, identity=hold['identity'],
+                            fire_seq=hold['fire_seq'])
+            state['_magazine_followup_terminal'] = terminal
+            receipt.update(reason=reason, last_terminal=terminal)
+            return None
+        receipt.update(active=True, reason='committed_magazine_followup')
+        # Fire permission is still owned by reload, alignment, live world,
+        # wreck and friendly checks later in this same control update.
+        return dict(order, combat_mode='engage', move_position=_position(state),
+                    face_position=_point(target.get('position'), _position(target)),
+                    throttle_override=0.0)
+
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
+        followup = self._magazine_followup_order(state, order, targets, now)
+        if followup is not None:
+            state['_rear_motion_observation'] = dict(at=now,
+                reason='magazine_followup_owns_aim', incoming_mode=order.get('combat_mode'))
+            return followup
         # A new enemy cannot renew the same stationary movement attempt.
         blocked_approach = self._rear_approach_blocked(state, order, targets, now)
         if blocked_approach:
@@ -17287,6 +17382,8 @@ class BotRuntime(object):
                         ammo_state=ammo_state,
                         launch_preview=launch_preview,
                         launch_time_us=step_end_time_us)
+                    if fired:
+                        self._retain_magazine_followup(state, command, target, now)
                     if fired and is_spg:
                         artillery_launch_stage = 'fired'
                         self._cancel_artillery_intent(state['id'])
