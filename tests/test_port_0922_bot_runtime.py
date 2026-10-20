@@ -12599,12 +12599,20 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertIn(11, runtime._friendly_repositions)
         initial_position = self.module._position(state)
         initial_ammo = list(state['ammo_remaining'])
+        deadline = runtime._friendly_repositions[11]['deadline']
+        self.assertLessEqual(deadline-now, self.module.FRIENDLY_REPOSITION_MAX_SECONDS)
         expired = False
-        for index in range(1, 140):
+        for index in range(1, int(math.ceil((deadline-now)/.04))+3):
             runtime.update(.04, now + .04 * index, players=[player])
+            self.assertEqual(initial_position, self.module._position(state))
+            self.assertEqual(initial_ammo, state['ammo_remaining'])
+            self.assertEqual(0, state['fire_seq'])
             if 11 not in runtime._friendly_repositions:
+                self.assertGreaterEqual(now+.04*index,deadline)
                 expired = True
+                self.assertEqual('timeout',state['_friendly_reposition_last_terminal']['outcome'])
                 break
+            self.assertEqual(deadline,runtime._friendly_repositions[11]['deadline'])
 
         self.assertTrue(expired)
         self.assertEqual(initial_position, self.module._position(state))
