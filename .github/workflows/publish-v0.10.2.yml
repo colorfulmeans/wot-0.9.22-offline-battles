@@ -16,8 +16,45 @@ jobs:
     if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/build-launcher.yml
 
+  verified-ci:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Require complete CI on the exact release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os, time, urllib.request
+          repo = os.environ['GITHUB_REPOSITORY']
+          sha = os.environ['GITHUB_SHA']
+          url = 'https://api.github.com/repos/%s/actions/workflows/tests.yml/runs?head_sha=%s&per_page=20' % (repo, sha)
+          headers = {'Authorization': 'Bearer '+os.environ['GH_TOKEN'],
+                     'Accept': 'application/vnd.github+json', 'User-Agent': 'WoT-release-ci'}
+          deadline = time.monotonic()+40*60
+          last = None
+          while time.monotonic() < deadline:
+              with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as response:
+                  runs = json.load(response)['workflow_runs']
+              runs = [r for r in runs if r['head_sha'] == sha and r['event'] == 'push' and r['head_branch'] == 'main']
+              run = max(runs, key=lambda r: r['id']) if runs else None
+              state = None if run is None else (run['id'], run['status'], run['conclusion'])
+              if state != last:
+                  print('Exact-commit CI:', state, flush=True)
+                  last = state
+              if run is not None and run['status'] == 'completed':
+                  if run['conclusion'] != 'success':
+                      raise SystemExit('Publication refused: complete CI is not successful: '+run['html_url'])
+                  print('Verified exact release commit:', sha)
+                  break
+              time.sleep(15)
+          else:
+              raise SystemExit('Publication refused: exact-commit CI did not finish successfully in time')
+          PY
+
   publish:
-    needs: build
+    needs: [build, verified-ci]
     runs-on: ubuntu-latest
     permissions:
       contents: write

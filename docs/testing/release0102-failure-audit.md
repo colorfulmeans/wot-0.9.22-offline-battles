@@ -73,6 +73,7 @@ support point enabling detailed support and five valid points disabling it.
 Low vegetation crushing is deliberately unchanged by user decision.
 
 Validation outputs must record exact test identities, skips and failures.
-Only publish after final source, CI and independently inspected package
-agree. The release contains the normal launcher and all three optional
+The publisher independently waits for successful complete main-branch CI
+on its exact source commit as well as a successful clean package build.
+Only publish after final source, CI and independently inspected package agree. The release contains the normal launcher and all three optional
 batch entries, complete source, history bundle and recovery instructions.
