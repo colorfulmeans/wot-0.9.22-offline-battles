@@ -9382,3 +9382,64 @@ against final source. Actual Windows Tk editor/localization/navigation tests
 exercise loading the new resource, not merely raw JSON parsing. The intermediate
 404e2a58 package was withheld from delivery; use the subsequent catalog-corrected
 package. This is a repaired in-scope packaging regression, not an old CI failure.
+
+
+## 2026-10-20 Windstorm north bridge and shallow-bank continuity
+
+Report `wot-error-report-20261020-200127-fc16972fef56.zip` on 4855e49d shows
+Emil I (Bot 4) at (280.3538467765204,-14.974234580993652,219.5717056753799),
+yaw -1.2797609560299639 rad. The native direction receipt admits its 3.430860 m
+exit, but the final 0.5 m commitment crosses a different coarse cell and vetoes
+it as a wet edge. Throttle is requested at 1, there are no nearby vehicles or
+physical contacts, and the final gate cuts it to zero. This is a verified local
+geometry/raster disagreement, not a reason to replace retries or traffic policy.
+
+Append a 1 m mesh over (202,190)-(310,274), retaining the southern patch verbatim.
+The north patch contains 9,265 samples, 5,989 supported nodes and 44,184 directed
+links. Preserve the base grid scale/heights/hazards, spawn formations, all route
+coordinates and other maps. Refine 38 directed coarse shortcuts only where the
+new local geometry contradicts them; Python and C++ receive the same masks.
+Keep resource manifest, editor catalog and first-run defaults synchronized, with
+both earlier fingerprints accepted for saved profiles.
+
+Ordinary navigable water remains governed by the original .9 m depth limit; no
+new ford exception, route cost, yaw law or runtime probe is introduced. The
+reviewed bank (260,210)-(284,230) and both mouth rectangles are measured over the
+full original 2.15 m half-width on a quarter-metre lattice. This replaces a
+blanket 6 m spare bank apron only where the complete footprint proves support,
+water depth and existing drop/grade limits. Deep-water shoulders remain invalid.
+The north deck also needs full-width support instead of a centre-only 1 m
+shoulder: otherwise a coarse shortcut can select a wide vehicle's outer lip.
+
+Bridge support heights come from the existing 1 m surface raster's cell centres.
+Use those actual sample anchors when comparing heights; treating a one-cell
+height difference as a .24 m query separation invented cliffs at both bridge
+ends. Recorded examples include a .129892 m height difference incorrectly divided
+by .238889 m. The bake support proof now measures the correct sample baseline;
+synthetic regressions still reject a real 3 m cliff and water beyond .9 m.
+No live support solver or physical shape changes are made.
+
+Validation rejects remote detours and requires paths to stay inside this bridge
+region. Fourteen forward/reverse original-client geometry cases pass 2,374 quarter-metre
+centre samples plus complete 6.4 m hull support rectangles at half-widths
+1.2/1.8/2.15 m, plus the exact recorded Emil half-width 1.300434947 m and
+half-length 2.930860043 m. Maximum sampled hull-support depth is .704921 m. The same Emil
+heading is admitted at every tested prefix from .05 m through 3.430860 m and by
+the actual runtime corridor gate at both recorded lengths. All 1,277 deep-water
+and 1,585 wet-edge fine samples retain their pose veto. The earlier southern
+bridge's eight cases/2,015 samples are also rechecked.
+
+Paired search covers 176 route/bridge cases in each graph: Python reaches every
+endpoint, and 528 C++ jobs per graph satisfy the existing 8 m completion bound.
+Native path evidence also proves local bridge-region bounds, bounded path length,
+every committed segment and quarter-metre final-pose checks; a remote crossing
+is not accepted as proof of this bridge. One isolated run measured native p95
+.2158 ms before / .3715 ms after, maximum .6109 / 3.6994 ms.
+These are search costs, not BigWorld frame-rate or total hidden-worker latency.
+Reproducers: `tools/build_windstorm_north_mesh.py`,
+`tools/verify_windstorm_north_mesh.py`, and `tools/check_windstorm_navigation.py`.
+
+Navigation strategy, C/avoidance, retry/switching, target selection, real collision,
+water limits, crushing and live suspension rules remain unchanged. Support still
+enables at one invalid point and disables at all five valid points. Native
+BigWorld gameplay acceptance remains for the user's next run.

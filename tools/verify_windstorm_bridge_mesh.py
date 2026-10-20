@@ -25,11 +25,13 @@ def verify(client, output, baseline):
                   'hazards', 'routes', 'spawn_formations', 'spawn_anchors', 'objective_bases'):
         assert source[field] == old[field], field
     expected_links = list(old['links'])
+    regions = source['bake']['local_meshes']['regions']
     for index, bit in source['bake']['local_meshes']['refined_coarse_links']:
         expected_links[index] &= ~(1 << bit)
         x = source['origin'][0]+index%source['width']*source['cell_size']
         z = source['origin'][1]+index//source['width']*source['cell_size']
-        assert REGION[0]-4 <= x <= REGION[2]+4 and REGION[1]-4 <= z <= REGION[3]+4
+        assert any(left-4 <= x <= right+4 and bottom-4 <= z <= top+4
+                   for left, bottom, right, top in regions)
     assert expected_links == source['links']
     meshes.EXTRA_REGIONS = (REGION,)
     terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
