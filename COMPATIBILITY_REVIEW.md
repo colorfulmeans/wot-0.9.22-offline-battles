@@ -9495,3 +9495,65 @@ reproduces the two behavioral failures; the two new API/evidence assertions
 also fail there as expected. Real Windows driving and whole-worker timing remain
 for the next report. Southern congestion beyond proved refusal remains under
 observation; no speculative traffic, route, slope or capture changes are added.
+
+
+## 2026-10-20 Physical hazard prefixes and complete local handoffs
+
+Report `wot-error-report-20261020-214449-92452fcc51c2.zip` runs 39340810 on
+Windstorm. VK4502A Bot 3 repeatedly turns around (155,-13,-13) before eventually
+leaving. Its actual origin is (155.240676431,-13.843542099,-12.604771773).
+Along the same 18.49-degree direction, the 1.62 m motion segment enters cell
+(163,122), hazard bits 10, while the old 3.907553 m segment jumps directly from
+(163,121) to (164,122). Rounding the endpoints and Bresenham-traversing their
+centres loses the real cell boundary crossing. This disagreement exists in
+39340810; the prior Somua minimum-reach fix addresses a different disagreement.
+
+Motion hazard checks now traverse physical world-space cell boundaries, including
+local mesh entry/exit and fine cell boundaries. Exact geometry keys bound the
+immutable crossing cache to 512 entries; masks and routing heights are not cached
+as verdicts. Occupied known start cells remain escapable, entered unknown cells
+still reject, and graph links/vertex interpolation are unchanged. The planner
+precheck and committed motion gate use this same traversal. No map/hazard bit,
+true collision shape, water/fall protection, C cost, avoidance, retry, route
+switching or slope policy is changed. Execution receipts include entered cells,
+mask, first rejected cell, hazard bits and traversal law without recasting rays.
+
+The 489 assembled motion records and server route/shot histories distinguish
+stationary combat and magazine reloads from movement stalls. Sturer Emil Bot 12
+crosses the northern bridge, later alternates its path point (18,.605,122) and
+retained local point (33.89777,-.33064,139.03467) for about 88 seconds, then
+switches route and leaves. A later eastern-bank episode also contains hazard
+vetoes and active finite retries. Its local proofs change around wrecks; the
+old sampled receipts cannot identify every owner-clear transition. Do not replace
+the original retry/route policy from that observation alone.
+
+SU-122-44 Bot 25 alternates engage/approach while retaining target Bot 4. Some
+observed required pitches exceed the actual four-degree maximum, so withheld
+shots alone are correct. Mechanical adjustment repeatedly terminates with
+`mechanical_refusal_cleared`, but that flag is also cleared before missing-muzzle,
+unavailable-aim, invalid-aim, no-intercept and out-of-range early returns. The
+report does not distinguish these from a positively reachable new solution.
+This patch observes every solver terminal result; it does not fabricate a firing
+lane, extend a lease, retain a stale refusal or change aim candidate selection.
+
+`BOT LOCAL HANDOFF` immediately records local creation, arrival/passing, unsafe
+proof, timeout, changed intent/request, connector refusal and movement hold,
+with actual prior target, owner/request, progress clock and replacement evidence.
+Bounded history is also included in existing search/motion diagnostics. All five
+local-target deletion sites publish their cause before deleting it. `BOT GUN
+SOLUTION` immediately records reason transitions, previous/current refusal,
+source/target identity, shell, pose, muzzle and solved pitch where available.
+Repeated identical reason signatures coalesce in bounded history; final handoff
+and terminal receipts retain both the solver result and prior adjustment marker.
+Both labels use the existing multipart writer/reader. Logging does not add native
+queries, navigation goals, waits or collision exemptions.
+
+Support enables twice and disables twice in the report, each 4-valid to 5-valid;
+there is no rapid-toggle reproducer in this run. Somua dumps/reloads its magazine
+and later continues driving; no old aligned 9 cm replay is recorded. The launcher
+explicitly starts stopping the worker before the disconnect termination, and
+neither exception file contains an exception: this is not evidence of a native
+crash. Early worker callbacks are slow with the full live roster; native collision,
+physics support and contacts dominate, not background A*. No whole-worker FPS
+improvement is claimed for the geometry fix. Real Windows acceptance of the new
+motion checks and uncertain local/aim handoffs remains for the next report.

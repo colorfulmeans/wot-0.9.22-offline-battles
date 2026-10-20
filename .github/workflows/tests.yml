@@ -76,6 +76,7 @@ jobs:
           --pattern 'test_port_0922_windstorm_bridge.py'
           --pattern 'test_port_0922_windstorm_north.py'
             --pattern 'test_port_0922_recovery_commit_consistency.py'
+            --pattern 'test_port_0922_motion_hazard_prefix.py'
           --pattern 'test_replay_capacity.py'
           --pattern 'test_port_0922_connector*.py'
           --pattern 'test_port_0922_local_refusal*.py'

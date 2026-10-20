@@ -7610,6 +7610,7 @@ class BotRuntime(object):
             'gun_angle_adjustment': dict(state.get('_gun_angle_adjustment') or {}),
             'gun_angle_handoff': dict(state.get('_gun_angle_handoff') or {}),
             'gun_angle_last_terminal': dict(state.get('_gun_angle_last_terminal') or {}),
+            'gun_solution_history': list(state.get('_gun_solution_history') or ()),
             'translation_sweep': dict(state.get('_translation_motion_receipt') or {}),
             'gun_angle_rejected': [
                 {'target': key, 'seconds_left': max(0.0, deadline - now)}
@@ -7985,7 +7986,7 @@ class BotRuntime(object):
     def _planner_corridor_clear(self, position, yaw, speed,
                                 wet_escape=False, allow_shallow=False,
                                 hazard_only=False, maximum_distance=None,
-                                native_capability=None):
+                                native_capability=None, evidence=None):
         """Rank one candidate through the validated baked static corridor.
 
         ``True`` admits a planner candidate and ``False`` rejects a known fatal
@@ -7996,6 +7997,8 @@ class BotRuntime(object):
         """
         if (wet_escape or (native_capability is not None and
                 native_capability != self.navigation_planning_capability())):
+            if evidence is not None:
+                evidence['planner_reason'] = 'wet_escape' if wet_escape else 'capability_mismatch'
             return None
         navigator = self.navigator
         grid = getattr(navigator, 'grid', None)
@@ -8009,9 +8012,13 @@ class BotRuntime(object):
                 not isinstance(clearance_radii, (list, tuple)) or
                 max([_number(value) for value in clearance_radii] or [0.0]) <
                 3.0):
+            if evidence is not None:
+                evidence['planner_reason'] = 'bake_contract_unavailable'
             return None
         try:
             if not grid.near_baked_navigation(position, 0):
+                if evidence is not None:
+                    evidence['planner_reason'] = 'outside_routing_support'
                 return None
             # Rank against one baked edge. Looking 15-20 metres straight ahead
             # rejects valid four-metre turns in tight spawn exits even though the
@@ -8032,17 +8039,29 @@ class BotRuntime(object):
             hazard_mask = prebaked_navigation.MOTION_FATAL_HAZARDS
             if not allow_shallow:
                 hazard_mask |= BAKED_SHALLOW_WATER
-            if grid.segment_has_motion_hazard(position, end, hazard_mask):
+            if (grid.segment_has_motion_hazard(position, end, hazard_mask, evidence)
+                    if evidence is not None else
+                    grid.segment_has_motion_hazard(position, end, hazard_mask)):
+                if evidence is not None:
+                    evidence['planner_reason'] = 'motion_hazard'
                 return False
             if hazard_only:
+                if evidence is not None:
+                    evidence['planner_reason'] = 'hazard_clear'
                 return True
             if grid.segment_clear(position, end):
+                if evidence is not None:
+                    evidence['planner_reason'] = 'corridor_clear'
                 return True
             # A coarse baked corridor can reject a valid short turn on uneven
             # terrain. Let the native candidate probe decide that ambiguous
             # negative; fatal baked hazards above remain an immediate veto.
+            if evidence is not None:
+                evidence['planner_reason'] = 'coarse_corridor_inconclusive'
             return None
-        except Exception:
+        except Exception as error:
+            if evidence is not None:
+                evidence.update(planner_reason='query_exception', exception=type(error).__name__)
             # The graph is a planner optimisation. Unknown graph state keeps
             # the old native candidate probe; it never becomes a clear path.
             return None
@@ -12101,25 +12120,46 @@ class BotRuntime(object):
     def _local_ballistic_solution(self, state, target, descriptor,
                                   shell_index):
         """Solve the ordinary low arc and moving-target lead without BSP."""
+        from .native_input_diagnostics import write_json_record
+        receipt = dict(at=getattr(self, '_contact_now', state.get('now')),
+            target=self._artillery_target_identity(target), shell_index=shell_index,
+            previous_refusal=state.get('_gun_angle_refusal'),
+            position=_position(state), yaw=state.get('yaw'),
+            pitch=state.get('pitch'), roll=state.get('roll'))
+        def finish(reason, result=None):
+            receipt.update(reason=reason, refusal=state.get('_gun_angle_refusal'))
+            state['_gun_solution_receipt'] = receipt
+            history = state.setdefault('_gun_solution_history', [])
+            signature = (receipt['target'], reason, receipt['previous_refusal'], receipt['refusal'])
+            if history and history[-1]['signature'] == signature:
+                history[-1].update(last=dict(receipt), count=history[-1]['count']+1)
+            else:
+                history.append(dict(signature=signature, first=dict(receipt),
+                                    last=dict(receipt), count=1))
+                write_json_record('BOT GUN SOLUTION',
+                    dict(receipt, bot=state.get('id'), round=self.round_id))
+            del history[:-16]
+            return result
         state.pop('_gun_angle_refusal', None)
         physical = _shot_ballistics(descriptor, shell_index)
         if target is None or physical is None:
-            return None
+            return finish('target_missing' if target is None else 'ballistics_missing')
         speed, gravity, maximum = physical
         start = self._exact_shot_origin(state, descriptor, shell_index)
         if start is None:
-            return None
+            return finish('muzzle_missing')
+        receipt['origin'] = start
         aim_token = None
         if callable(self.direct_aim_point_probe):
             selected = self.direct_aim_point_probe(state, target)
             if not isinstance(selected, dict):
-                return None
+                return finish('aim_selection_unavailable')
             try:
                 target_position = _water_sensor_vector(
                     selected['aim_position'], 3, 'bot aim point')
                 aim_token = selected['aim_token']
             except (KeyError, TypeError, ValueError):
-                return None
+                return finish('aim_selection_invalid')
         else:
             # The logical runtime has no target model. BattleRuntime always
             # supplies the exact part-selection seam above, including failure.
@@ -12135,20 +12175,22 @@ class BotRuntime(object):
             start, target_position, self._target_velocity(target),
             speed, gravity, -math.pi * 0.5, math.pi * 0.5)
         if solution is None:
-            return None
+            return finish('no_intercept')
         aim_position, pitch, flight_time = solution
+        receipt.update(aim_position=aim_position, world_pitch=pitch, flight_time=flight_time)
         if (flight_time > ballistics.PROJECTILE_MAX_FLIGHT_SECONDS or
                 speed * flight_time > maximum + 1e-6):
-            return None
+            return finish('out_of_range')
         yaw = math.atan2(
             aim_position[0] - start[0], aim_position[2] - start[2])
+        receipt['world_yaw'] = yaw
         if not self._world_solution_reachable(
                 state, descriptor, yaw, pitch):
             state['_gun_angle_refusal'] = self._artillery_target_identity(target)
-            return None
+            return finish('mechanical_refusal')
         identity = self._artillery_target_identity(target)
         (state.get('_gun_angle_rejected') or {}).pop(identity, None)
-        return {
+        return finish('reachable', {
             'aim_position': aim_position, 'yaw': yaw, 'pitch': pitch,
             'flight_time': flight_time, 'arc': 'low',
             # Gun aiming immediately follows this solve in the same authority
@@ -12157,7 +12199,7 @@ class BotRuntime(object):
             # transform a second time for the identical pose.
             '_origin': start,
             '_aim_token': aim_token,
-        }
+        })
 
     def bot_aim_point_reachable(self, state, target, descriptor, origin, point):
         """Check candidate elevation with the existing solver, without rays.
@@ -14729,7 +14771,9 @@ class BotRuntime(object):
         receipt = dict(sampled_at=now, eligible=eligible, speed=state.get('speed'),
                        target_id=order.get('target_id'), mode=order.get('combat_mode'),
                        throttle_override=order.get('throttle_override'),
-                       refusal=state.get('_gun_angle_refusal'), reason='ineligible')
+                       refusal=state.get('_gun_angle_refusal'), reason='ineligible',
+                       solution=dict(state.get('_gun_solution_receipt') or {}),
+                       previous_adjustment=dict(state.get('_gun_angle_adjustment') or {}))
         state['_gun_angle_handoff'] = receipt
         if not eligible:
             if state.get('_gun_angle_adjustment') is not None:
@@ -17025,12 +17069,14 @@ class BotRuntime(object):
                     (callable(controlled_shallow_commit) and
                      controlled_shallow_commit(
                          state['id'], position, committed_travel_yaw)))
+                committed_evidence = {}
                 committed_corridor = self._planner_corridor_clear(
                     position, committed_travel_yaw,
                     state.get('speed', 0.0),
                     wet_escape=committed_wet_escape,
                     allow_shallow=committed_shallow_admitted,
-                    hazard_only=True, maximum_distance=maximum_probe_distance)
+                    hazard_only=True, maximum_distance=maximum_probe_distance,
+                    evidence=committed_evidence)
                 state['_committed_corridor'] = dict(
                     reason=('hazard_rejected' if committed_corridor is False else
                             'clear' if committed_corridor is True else 'native_deferred'),
@@ -17041,6 +17087,7 @@ class BotRuntime(object):
                     throttle_before=throttle, turn=turn,
                     recovery_mode=command.get('recovery_mode'),
                     command_target_yaw=command.get('target_yaw'))
+                state['_committed_corridor']['hazard_evidence'] = committed_evidence
                 if committed_corridor is False:
                     state['_motion_control_gates'].append('committed_baked_corridor')
                     # Copied physics integrates the post-turn hull yaw, while

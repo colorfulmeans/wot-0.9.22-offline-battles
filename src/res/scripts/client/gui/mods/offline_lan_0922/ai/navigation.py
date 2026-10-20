@@ -17,6 +17,7 @@ from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
 from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 
 from gui.mods.offline_lan_0922.ai.driver import (
 	FIRST_CANDIDATE_OFFSET, WAYPOINT_ARRIVAL_RADIUS,
@@ -661,18 +662,86 @@ class TerrainGrid(object):
 			return bool(water)
 		return hazards is None or bool(hazards & int(hazard_mask))
 
-	def segment_has_motion_hazard(self, start, end, hazard_mask):
+	def _motion_segment_cells(self, start, end):
+		"""Traverse physical cell boundaries, independently of endpoint centres.
+
+		Routing links still connect baked vertices. Motion hazards describe the
+		actual ray: Bresenham between rounded vertices can skip a cell entered
+		by that ray, making a long precheck disagree with its shorter prefix.
+		Split at base/patch boundaries and sample each open interval and boundary.
+		No ground/native query or routing-height substitution is involved.
+		"""
+		if not self.prebaked:
+			return ()
+		key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]))
+		cache = getattr(self, '_motion_crossings', None)
+		if cache is None:
+			cache = self._motion_crossings = {}
+		if key in cache:
+			return cache[key]
+		cuts = set((0.0, 1.0))
+		meshes = self._local_meshes
+		layers = [(self._baked_origin, self.cell_size, None)]
+		if meshes is not None and meshes.touches(start, end):
+			layers.extend((p['origin'], p['cell_size'], (p['width'], p['height']))
+			              for p in meshes.patches)
+		for origin, scale, shape in layers:
+			for axis, coordinate in enumerate((0, 2)):
+				a, b = float(start[coordinate]), float(end[coordinate])
+				delta = b - a
+				if not delta:
+					continue
+				low, high = sorted(((a-origin[axis])/scale, (b-origin[axis])/scale))
+				first = int(math.ceil(low - .5))
+				last = int(math.floor(high - .5))
+				if shape is not None:
+					first, last = max(0, first), min(shape[axis]-2, last)
+					for edge in (origin[axis], origin[axis]+(shape[axis]-1)*scale):
+						t = (edge-a)/delta
+						if 0.0 < t < 1.0:
+							cuts.add(t)
+				for cell in range(first, last+1):
+					t = (origin[axis]+(cell+.5)*scale-a)/delta
+					if 0.0 < t < 1.0:
+						cuts.add(t)
+		ordered = sorted(cuts)
+		samples = [ordered[0]]
+		for a, b in zip(ordered, ordered[1:]):
+			samples.extend(((a+b)*.5, b))
+		cells = []
+		for t in samples:
+			point = (key[0]+(key[2]-key[0])*t, 0., key[1]+(key[3]-key[1])*t)
+			cell = (meshes.cell(point) if meshes is not None else None) or self.cell_for(point)
+			if not cells or cell != cells[-1]:
+				cells.append(cell)
+		result = tuple(cells)
+		if not result or self._baked_flat_index(result[0]) is None:
+			result = ()
+		if len(cache) >= 512:
+			cache.clear()
+		cache[key] = result
+		return result
+
+	def segment_has_motion_hazard(self, start, end, hazard_mask, evidence=None):
 		"""Read motion hazards even where erosion removed the routing height.
 
 		Use the occupied start cell, without snapping it to a nearby route.
 		Skipping that first cell still permits escape from an existing hazard.
 		"""
-		cells = self._baked_segment_cells(start, end, require_height=False)
+		cells = self._motion_segment_cells(start, end)
+		if evidence is not None:
+			evidence.update(start=tuple(start), end=tuple(end), mask=int(hazard_mask),
+				cells=cells, traversal='physical_boundaries', rejected_cell=None,
+				reason='clear' if cells else 'graph_unavailable')
 		if not cells:
 			return True
 		for cell in cells[1:]:
 			index = self._baked_flat_index(cell)
 			if index is None or int(self._baked_hazards[index]) & hazard_mask:
+				if evidence is not None:
+					evidence.update(rejected_cell=cell,
+						hazards=None if index is None else int(self._baked_hazards[index]),
+						reason='unknown_cell' if index is None else 'hazard_bits')
 				return True
 		return False
 
@@ -2133,6 +2202,7 @@ class TerrainNavigator(object):
 		"""
 		target = state.get('local_fallback_target')
 		intent_matches = state.get('local_fallback_intent') == self._local_fallback_intent(goal, state)
+		reason = None
 		if (target is not None and intent_matches and
 				(_distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS or
 				 self._local_fallback_passed(current, target, state))):
@@ -2150,6 +2220,7 @@ class TerrainNavigator(object):
 			deferred = (revision != self.grid._native_proof_revision or
 				getattr(self.grid, '_proof_deferred', False))
 			if not clear and not deferred:
+				reason = 'unsafe'
 				state['local_target_end_reason'] = 'unsafe'
 				self._record_local_retry_refusal(state, current, goal, now)
 			else:
@@ -2168,9 +2239,17 @@ class TerrainNavigator(object):
 					state['last_target'] = tuple(target)
 					return tuple(target)
 				state['local_target_end_reason'] = 'timeout'
+				reason = 'timeout'
 				state['local_target_retired'] = (tuple(target), float(now) + MACRO_STALL_SECONDS)
 				state.pop('local_target_retired_source', None)
 			self._observe_macro_progress(bot_id, state, current, goal, now)
+		if target is not None:
+			if reason is None:
+				reason = ('intent_changed' if not intent_matches else
+					'last_target_changed' if state.get('last_target', target) != target else
+					'reached' if _distance_2d(current, target) <= WAYPOINT_ARRIVAL_RADIUS else
+					'passed' if self._local_fallback_passed(current, target, state) else 'penalized')
+			self._local_target_event(state, now, reason, current=current, goal=goal)
 		if target is not None and state.get('last_target') == target:
 			# Pending-path bridging must not resurrect a consumed local point.
 			state.pop('last_target', None)
@@ -2218,6 +2297,21 @@ class TerrainNavigator(object):
 		tracker['failures'] = 0
 		return True
 
+	@staticmethod
+	def _local_target_event(state, now, reason, **details):
+		"""Keep terminal transitions through faster-than-log-cadence handoffs."""
+		event = dict(bot=state.get('diagnostic_bot_id'), at=now, reason=reason, target=state.get('local_fallback_target'),
+			last_target=state.get('last_target'), intent=state.get('local_fallback_intent'),
+			request=state.get('request_key'), replan_generation=state.get('replan_generation'),
+			progress_at=state.get('local_target_progress_at'),
+			best_distance=state.get('local_target_best_distance'),
+			best_heading=state.get('local_target_best_heading'))
+		event.update(details)
+		history = state.setdefault('local_target_events', [])
+		history.append(event)
+		del history[:-32]
+		write_json_record('BOT LOCAL HANDOFF', event)
+
 	def _remember_local_fallback(self, target, goal, state, start=None, now=None):
 		previous = state.get('local_fallback_target')
 		intent = self._local_fallback_intent(goal, state)
@@ -2227,6 +2321,8 @@ class TerrainNavigator(object):
 			state.get('local_fallback_intent') == intent and
 			all(abs(float(previous[i])-float(target[i])) <= 1.e-4 for i in range(3)))
 		if not same_leg:
+			self._local_target_event(state, now, 'new_leg', current=start, goal=goal,
+				replacement=tuple(target))
 			state.pop('local_target_best_heading', None)
 			state['local_target_progress_at'] = float(now if now is not None else state.get('macro_progress_at', 0.0))
 			state['local_target_best_distance'] = _distance_2d(start, target) if start is not None else float('inf')
@@ -2245,6 +2341,10 @@ class TerrainNavigator(object):
 		planned = state.get('planned_goal') or goal
 		if (not movement_intent or state.get('request_path_key') != tuple(path_key) or
 				_distance_2d(planned, goal) >= self.grid.cell_size * 2.0):
+			if state.get('local_fallback_target') is not None:
+				self._local_target_event(state, now, 'runtime_intent_handoff', current=current,
+					goal=goal, planned_goal=planned, movement_intent=movement_intent,
+					path_key=tuple(path_key), request_path_key=state.get('request_path_key'))
 			state.pop('local_fallback_target', None)
 			state.pop('local_retry_progress', None)
 			state.pop('reached_path_corner', None)
@@ -2370,6 +2470,9 @@ class TerrainNavigator(object):
 			deferred = (connector.get('reason') in ('native_revision_changed', 'native_deferred') or
 				getattr(self.grid, '_proof_deferred', False))
 			selection['connector_deferred'] = bool(deferred)
+			if state.get('local_fallback_target') is not None:
+				self._local_target_event(state, now, 'connector_rejected', current=current,
+					goal=goal, connector=dict(connector))
 			state.pop('local_completed_target', None)
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
@@ -2740,7 +2843,7 @@ class TerrainNavigator(object):
 			self.bot_states.get(bot_id, {}).pop('reached_path_corner', None)
 		state = self.bot_direct_progress.get(bot_id)
 		if state is None:
-			state = {'path_key': path_identity, 'target': tuple(goal),
+			state = {'diagnostic_bot_id': bot_id, 'path_key': path_identity, 'target': tuple(goal),
 			         'position': tuple(current), 'progress_at': float(now),
 			         'replans': 0}
 			self.bot_direct_progress[bot_id] = state
@@ -3010,6 +3113,7 @@ class TerrainNavigator(object):
 			'local_selection_age_ms': int(max(0.,float(now)-float(state.get('local_selection',{}).get('at',now)))*1000.),
 			'local_target_end_reason': state.get('local_target_end_reason'),
 			'local_target_update': dict(state.get('local_target_update') or {}),
+			'local_target_events': list(state.get('local_target_events') or ()),
 			'local_retry_age_ms': int(max(0.0, float(now) - float(
 				state.get('local_retry_progress', {}).get('at', now))) * 1000.0),
 			'local_retry_failures': state.get('local_retry_progress', {}).get('failures', 0),
@@ -3909,6 +4013,7 @@ class TerrainNavigator(object):
 			state['request_path_key'] = path_identity
 			state['planned_goal'] = tuple(goal)
 			state['planned_at'] = float(now)
+		state['diagnostic_bot_id'] = int(bot_id)
 		request_key = self._cache_key(path_key, goal)
 		refusal = state.get('path_endpoint_refusal')
 		if refusal and refusal.get('goal') != tuple(goal):
@@ -3922,6 +4027,9 @@ class TerrainNavigator(object):
 		allow_pending_last_target = True
 		if request_changed:
 			state.pop('path_endpoint_refusal', None)
+			if state.get('local_fallback_target') is not None:
+				self._local_target_event(state, now, 'request_changed', current=current,
+					goal=goal, replacement_request=request_key)
 			state.pop('local_fallback_target', None)
 			retired = state.get('local_target_retired')
 			if (state.get('local_target_retired_source') != 'hard_body' or
@@ -3965,6 +4073,8 @@ class TerrainNavigator(object):
 			# follower from its realised hull pose; never invent an edge veto.
 			self.request_replan(bot_id, current, now)
 		if not movement_intent:
+			if state.get('local_fallback_target') is not None:
+				self._local_target_event(state, now, 'movement_hold', current=current, goal=goal)
 			state.pop('local_fallback_target', None)
 			state.pop('reached_path_corner', None)
 		elif not request_changed:
