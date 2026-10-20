@@ -9679,3 +9679,11 @@ movement-owner transfer, human/Bot lane receipt parity, blocked versus genuinely
 moving player contacts, and pending native/SPG proof identities. Pure tests and
 package parity do not prove Windows BigWorld gameplay; the resulting package
 requires the user's next playtest.
+
+The expanded CI also exposed an existing support diagnostic error: an analytic
+or other untraced ground probe can supply a valid height without appending a
+column witness. Indexing the empty witness list raised IndexError before the
+five-point support rule ran. Preserve the measured height and mark its evidence
+untraced, just as the existing missing-witness branch intended; do not fabricate
+a new height or change validity. The retained current-rule lifecycle test covers
+each individual failed point, four-point retention and five-point release.

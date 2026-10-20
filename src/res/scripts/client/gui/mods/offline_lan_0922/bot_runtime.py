@@ -3068,7 +3068,8 @@ class BotRuntime(object):
             # Preserve the producer's actual layered verdict for lost points.
             # No diagnostic recast, and no full trace on supported points.
             if not valid:
-                column = dict(columns[-1] or dict(source='untraced_ground_probe', height=ground))
+                column = dict((columns[-1] if columns else None) or
+                              dict(source='untraced_ground_probe', height=ground))
                 column['upper_query'] = upper_column
             rows.append(dict(name=name, x=px, z=pz, expected=expected,
                 raw_expected=y+oy, basic_follow_y=support_y,
