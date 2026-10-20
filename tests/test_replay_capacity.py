@@ -89,5 +89,8 @@ class ReplayCapacityTests(unittest.TestCase):
         self.assertIn("DIGEST='"+digest+"'",(CLIENT/'replay_reader.py').read_text())
         validator=module('capacity_validator',ROOT/'tools/validate_wotmod.py')
         self.assertEqual(digest, validator.REPLAY_RESOURCES[validator.REPLAY_READER])
+        process=module('capacity_process',CLIENT/'replay_process.py')
+        self.assertEqual(process.RUNTIME_DIGEST,
+            validator.REPLAY_RESOURCES['res/offline_replay/recorder-runtime.zip'])
 
 if __name__=='__main__':unittest.main()

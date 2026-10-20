@@ -16,7 +16,7 @@ REPLAY_READER = 'res/offline_replay/replay_reader_process.py'
 REPLAY_RESOURCES = {
     REPLAY_READER: '650232176cf0080ea7c3fe4e8c97c9ffea0884acabed33f9731640a7dbdc37e6',
     'res/offline_replay/recorder-runtime.zip':
-        '8aee9faae63078408922d2ec000dc4211195a62a6921422a096042be3fe5f37b',
+        '8b9db9977d43f45c5153edf1f7c9084f1c1190f85daaf1d8b77df5bdb5311d14',
 }
 
 

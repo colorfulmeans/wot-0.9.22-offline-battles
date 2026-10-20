@@ -54,10 +54,10 @@ launcher or claim that source tests prove native gameplay.
 - A misplaced indentation in the folded CI command turned `--pattern` into
   a separate shell command after 69 passing test files. Correct the command,
   retain the selected test and the failing process status.
-- The replay reader changed during the earlier capacity update. Its runtime
-  pin was updated then, but the independent package validator still pinned
-  the old helper. Match the reviewed current bytes and assert that both pins
-  agree. Keep the strict archive validation and actual replay capacity tests.
+- The replay reader changed during the earlier capacity update. The reader and writer-runtime
+  consumer pins were updated then, but the independent package validator
+  still pinned both old resources. Match the reviewed current bytes and
+  assert that both independent resource pins agree with their consumers. Keep the strict archive validation and actual replay capacity tests.
 - Include the repository root in isolated test sys.path so namespace imports
   work even with the Windows embedded interpreter's _pth isolation. Add an
   actual isolated import regression. File-level test isolation remains.
