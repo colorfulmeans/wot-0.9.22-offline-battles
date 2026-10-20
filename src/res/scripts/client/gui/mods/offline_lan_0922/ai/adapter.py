@@ -720,6 +720,9 @@ class BotAdapter(object):
         if not navigation_wait:
             self.driver.end_navigation_wait(bot_id)
         if contact_plan is not None:
+            # Contact motion has taken over from the old traffic hold. Ordinary
+            # drive clears this flag itself, but this owner bypasses drive.
+            self.driver.states.get(bot_id, {}).pop('traffic_waiting', None)
             local = contact_plan[1]
         elif navigation_wait:
             local = self.driver.wait_for_navigation(

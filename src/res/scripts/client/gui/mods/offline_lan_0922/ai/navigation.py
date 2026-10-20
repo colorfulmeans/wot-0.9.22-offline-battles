@@ -184,6 +184,7 @@ class TerrainGrid(object):
 		self.native_query_oracle = None
 		self.local_height_links = None
 		self._native_review_pending = None
+		self._native_review_receipt = {}
 
 	def _install_baked_graph(self, graph):
 		if (graph.get('format') != BAKED_FORMAT_NAME or
@@ -904,6 +905,8 @@ class TerrainGrid(object):
 				evidence.update(clear=result, reason=reason,
 					proof_deferred=self._proof_deferred,
 					native_revision=self._native_proof_revision)
+				if reason in ('native_review', 'supported_slope_native'):
+					evidence['native_proof'] = dict(self._native_review_receipt)
 			return result
 		local = getattr(self,'local_height_links',None)
 		if local is not None:
@@ -1246,9 +1249,12 @@ class TerrainGrid(object):
 
 	def _native_segment_clear(self, start, end, slope_limit=None):
 		'''Prove an affected local segment without using cached baked heights.'''
+		self._native_review_receipt = dict(start=tuple(start), end=tuple(end), reason='not_dispatched')
+		diagnostic = self._native_review_receipt
 		distance = _distance_2d(start, end)
 		# Long shortcuts must use the bounded A* edges through this region.
 		if distance > self.cell_size * 12.0:
+			diagnostic['reason'] = 'long_shortcut'
 			return False
 		key = (self._point_key(start), self._point_key(end))
 		grade_limit = min(self.max_grade_up, self.max_grade_down)
@@ -1256,10 +1262,12 @@ class TerrainGrid(object):
 			grade_limit = min(float(slope_limit), NAVIGATION_MAX_GRADE)
 			key += (grade_limit,)
 		if key in self._native_review_cache:
+			diagnostic.update(reason='cached', clear=self._native_review_cache[key])
 			return self._native_review_cache[key]
 		pending = self._native_review_pending
 		exact_key = (tuple(start), tuple(end))
 		if pending is not None and exact_key in pending:
+			diagnostic['reason'] = 'already_deferred_in_batch'
 			self._proof_deferred = True
 			return False
 		oracle = self.native_query_oracle
@@ -1270,17 +1278,22 @@ class TerrainGrid(object):
 				             self.max_grade_up, self.max_grade_down)
 				receipt = (oracle.run(*arguments, slope_limit=slope_limit)
 				           if slope_limit is not None else oracle.run(*arguments))
-			except Exception:
+			except Exception as error:
+				diagnostic.update(reason='oracle_exception', error=type(error).__name__)
 				# Dispatch may have started: never replay engine work in Python.
 				if pending is not None:
 					pending.add(exact_key)
 				self._proof_deferred = True
 				return False
+			diagnostic.update(reason='oracle_return', oracle=dict(getattr(oracle, 'last_receipt', {}) or {}),
+				result=receipt, revision_before=revision, revision_after=self._native_proof_revision)
 			if revision != self._native_proof_revision:
+				diagnostic['reason'] = 'revision_changed'
 				self._proof_deferred = True
 				return False
 			if receipt is not None:
 				if receipt[0] < 0:
+					diagnostic['reason'] = 'oracle_unknown'
 					if pending is not None:
 						pending.add(exact_key)
 					self._proof_deferred = True
@@ -1301,6 +1314,7 @@ class TerrainGrid(object):
 				hint = previous[1] if previous is not None else start[1]
 				y = self.ground_probe(x, z, hint)
 				if y is None or math.isnan(float(y)) or math.isinf(float(y)):
+					diagnostic.update(reason='ground_unknown', sample=(x, hint, z))
 					if pending is not None and oracle is None:
 						pending.add(exact_key)
 					self._proof_deferred = True
@@ -1309,6 +1323,7 @@ class TerrainGrid(object):
 				if previous is not None and abs(point[1] - previous[1]) > (
 						_distance_2d(point, previous) *
 						grade_limit):
+					diagnostic.update(reason='grade_blocked', previous=previous, point=point)
 					clear = False
 					break
 				if first is None:
@@ -1318,10 +1333,14 @@ class TerrainGrid(object):
 				revision = self._native_proof_revision
 				blocked = self._probe_obstacle(first, previous, 2.15)
 				if blocked == 'deferred' or revision != self._native_proof_revision:
+					diagnostic.update(reason='collision_deferred' if blocked == 'deferred' else 'revision_changed',
+						revision_before=revision, revision_after=self._native_proof_revision)
 					self._proof_deferred = True
 					return False
 				clear = not blocked
-		except Exception:
+				diagnostic.update(reason='clear' if clear else 'collision_blocked', clear=clear)
+		except Exception as error:
+			diagnostic.update(reason='python_probe_exception', error=type(error).__name__)
 			if pending is not None and oracle is None:
 				pending.add(exact_key)
 			return False
@@ -2368,8 +2387,13 @@ class TerrainNavigator(object):
 		"""Publish the final proved bypass, rather than its pre-offset A* vertex."""
 		state = self.bot_states.get(int(bot_id))
 		if state is not None:
+			if self._bot_edges_penalized(bot_id, current, target, now):
+				self._local_target_event(state, now, 'runtime_target_refused',
+					target=tuple(target), current=tuple(current), goal=tuple(goal))
+				return False
 			self._remember_local_fallback(target, state.get('planned_goal') or goal, state, current, now)
 			state['last_target'] = tuple(target)
+		return True
 
 	def _local_fallback_origin(self, current, goal, state):
 		# A consumed native-proved exit may lie in an eroded baked cell.
@@ -3146,6 +3170,7 @@ class TerrainNavigator(object):
 				if state.get('native_capability') is not None else None),
 			'path_native_refusal': getattr(self, 'path_native_refusals', {}).get(state.get('path_key')),
 			'native_review_cells': len(self.grid._native_review_cells),
+			'native_proof': dict(getattr(self.grid, '_native_review_receipt', {}) or {}),
 		}
 
 	def _stationary_ingress_escape(self, bot_id, state, current, goal, now,

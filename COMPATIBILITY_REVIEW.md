@@ -9635,3 +9635,47 @@ shoal direction (three repeated jobs); those expected old failures are kept
 explicit in the comparison, while every pre-existing route must still finish.
 The current search expands 38,592 nodes versus 61,248 in that batch. This is
 search-only evidence, not a client FPS claim.
+
+
+## Three-round contact and local-target handoff audit (2026-10-20)
+
+Reports 231748, 233102 and 233622 on build 45008602 establish two navigation
+handoff defects and a human-contact laying defect. Occupied-point bypasses
+cached a target that the same Bot had retired through its private retry ledger.
+Both cached/retained/new bypass admission and final runtime-target publication
+now respect the existing active refusal, without renewing progress or adding a
+blacklist. Expired refusals can be retried. Contact recovery clears an obsolete
+traffic-wait flag when it takes ownership; ordinary traffic waits still pause
+navigation progress exactly as before.
+
+M46 Patton KR repeatedly selected a lower hull point outside its 10-degree
+native depression limit. Its translation was fully blocked by player 1, yet its
+remote-owned impulse velocity remained 3.217 m/s. Mechanical laying now measures
+realised contact travel separately from physical momentum. A blocked player
+approach can hand off to the existing bounded gun-angle recovery and retain that
+recovery through approach/hold alternation. Unblocked travel, base defense,
+parking, target priority, native pitch limits, collision and shot validation keep
+their owners. No aim-point order, navigation strategy or physical contact formula
+changes are included.
+
+Lane jobs use copied source poses; publish their bounded candidate/reachability
+receipts to the live source so the final solver no longer logs an empty or old
+producer. Preserve realised rotation evidence on early non-blocked planner
+returns. Native corridor evidence now distinguishes cache reuse, same-batch
+pending, changed owner/revision, unsupported input, unknown result and exceptions,
+including the tested endpoints. SPG status includes requested and active keys,
+sample time and the previous job's chord/age when poses differ.
+
+The long Tortoise proof wait, T95/Ferdinand physical refusal pockets, WZ bridge
+jam and SU-14 planning resets are not all proved false collisions or safe shots.
+Their guards remain; the new receipts expose the unresolved boundary instead of
+inventing a permissive result. Worker CPU cost remains an acceptance concern;
+this change does not claim a measured frame-rate improvement. Support remains
+one invalid point on/all five valid points off; water stays at 1.20 m and all
+existing local meshes, route points and retry/switch policies are retained.
+
+Regression fixtures exercise the recorded bypass refusal and expiry, contact
+movement-owner transfer, human/Bot lane receipt parity, blocked versus genuinely
+moving player contacts, and pending native/SPG proof identities. Pure tests and
+package parity do not prove Windows BigWorld gameplay; the resulting package
+requires the user's next playtest.

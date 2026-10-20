@@ -7874,7 +7874,9 @@ class BotRuntime(object):
             state['_planner_blocked_handoff'] = dict(at=now, target=target,
                 recovery_mode=command.get('recovery_mode'),
                 reason='no_blocked_movement', hard_body_refusals=0,
-                private_replan=False, reviewed=False)
+                private_replan=False, reviewed=False,
+                realised_rotation=dict((state.get('_rotation_contact_trace') or {})),
+                translation_sweep=dict((state.get('_translation_motion_receipt') or {})))
         if (target is None or
                 command.get('recovery_mode') != 'blocked' or
                 not command.get('movement_intent')):
@@ -9987,7 +9989,17 @@ class BotRuntime(object):
         # occupied endpoint needs this temporary navigation destination.
         key = (grid.cell_for(goal), bool(direct_only))
         cache = own.setdefault('_occupied_route_targets', {})
+        penalty = getattr(self.navigator, 'bot_segment_penalized', None)
+        def admitted(point):
+            return point is None or not (callable(penalty) and
+                penalty(bot_id, position, point, now))
         cached = cache.get(key)
+        if cached is not None and not admitted(cached[1]):
+            cache.pop(key, None)
+            own.pop('_occupied_route_leg', None)
+            own['_occupied_route_refusal'] = dict(at=now, target=cached[1],
+                reason='active_private_refusal', source='cached_bypass')
+            cached = None
         if cached is not None and now < cached[0]:
             if cached[2]:own['route_wreck_blocked'] = True
             if not direct_only:own['_occupied_route_point'] = cached[2]
@@ -10021,7 +10033,7 @@ class BotRuntime(object):
             # One endpoint belongs to the occupied gate, rather than to each
             # refreshed hull pose. Navigation/server attempt budgets retire a
             # stalled intent; pose-dependent regeneration cannot renew them.
-            if (leg is not None and leg[0] == key and
+            if (leg is not None and leg[0] == key and admitted(leg[1]) and
                     _distance(position, leg[1]) > ai_driver.WAYPOINT_ARRIVAL_RADIUS and
                     not occupied(leg[1]) and corridor_available(leg[1]) and
                     (not direct_only or grid.dry_segment_clear(position, leg[1], now))):
@@ -10040,7 +10052,7 @@ class BotRuntime(object):
                     point = (x, y, z)
                     if math.hypot(x-position[0], z-position[2]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS:
                         continue
-                    if (occupied(point) or not corridor_available(point) or grid.point_has_baked_hazard(point,
+                    if (not admitted(point) or occupied(point) or not corridor_available(point) or grid.point_has_baked_hazard(point,
                             BAKED_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
                         continue
                     if direct_only and not grid.dry_segment_clear(position, point, now):
@@ -10335,9 +10347,17 @@ class BotRuntime(object):
                        'already_in_arrival_radius' if not unconsumed else
                        'remember_owner_unavailable')
         if movement_intent and horizontal_change and unconsumed and callable(remember):
-            remember(bot_id, position, goal, target, now)
+            accepted = remember(bot_id, position, goal, target, now)
             handoff['reason'] = 'horizontal_bypass_issued'
+            if accepted is False:
+                handoff.update(reason='active_private_refusal', rejected=tuple(target))
+                target = (selected_target if not callable(bot_edges_penalized) or
+                    not bot_edges_penalized(bot_id, position, selected_target, now)
+                    else tuple(position))
+                handoff['resolved'] = tuple(target)
         target_receipt['runtime_leg_handoff'] = handoff
+        target_receipt['occupied_refusal'] = dict(
+            (self.states.get(int(bot_id), {}).get('_occupied_route_refusal') or {}))
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         progress_receipt = getattr(self.navigator, 'driver_progress_target', None)
@@ -13370,6 +13390,14 @@ class BotRuntime(object):
         try:
             value = bool(self.firing_lane_probe(source, target))
         finally:
+            # Lane service uses a pose snapshot. Publish its bounded evidence
+            # back to the actor that consumes the selected part, for both
+            # human and Bot targets; selection itself lives in the record.
+            actor = self.states.get(int(source.get('id', -1)))
+            if actor is not None and actor is not source:
+                for name in ('_aim_candidate_receipt', '_aim_reachability_receipt'):
+                    if name in source:
+                        actor[name] = source[name]
             self._probe_finished(1, probe_started)
         self._shot_los_cache[key] = (_number(now), value)
         if self._combat_diagnostics is not None:
@@ -14816,6 +14844,17 @@ class BotRuntime(object):
         result.pop('throttle_override', None)
         return result
 
+    @staticmethod
+    def _mechanical_approach_speed(state):
+        """Use realised travel for laying, without rewriting contact momentum."""
+        sweep = state.get('_translation_motion_receipt') or {}
+        if (sweep.get('outcome') == 'velocity_owned_by_remote_player' and
+                sweep.get('fraction', 1.0) < 1.0 and sweep.get('step', 0.0) > 0.0):
+            start = sweep['start']
+            return ((state.get('x', 0.0)-start[0])*math.sin(state.get('yaw', 0.0)) +
+                    (state.get('z', 0.0)-start[2])*math.cos(state.get('yaw', 0.0))) / sweep['step'], 'realised_player_contact'
+        return _number(state.get('speed')), 'physical_speed'
+
     def _gun_angle_order(self, state, order, targets, now, direction_clear):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
@@ -14828,11 +14867,15 @@ class BotRuntime(object):
         or suppressing an independently proved native firing lane.
         Actual gun solving and native motion remain authoritative throughout.
         """
+        approach_speed, speed_basis = self._mechanical_approach_speed(state)
+        blocked_contact = (speed_basis == 'realised_player_contact' and abs(approach_speed) <= 1.0)
         eligible = ((state.get('profile') or {}).get('class_tag') != 'SPG' and
                     not order.get('parking_phase') and
-                    order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold'))
+                    (order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold') or
+                     (order.get('combat_mode') == 'advance_contact' and blocked_contact)))
         position = _position(state)
         receipt = dict(sampled_at=now, eligible=eligible, speed=state.get('speed'),
+                       approach_speed=approach_speed, speed_basis=speed_basis,
                        target_id=order.get('target_id'), mode=order.get('combat_mode'),
                        throttle_override=order.get('throttle_override'),
                        refusal=state.get('_gun_angle_refusal'), reason='ineligible',
@@ -14881,8 +14924,8 @@ class BotRuntime(object):
         stationary_hold = order.get('throttle_override') == 0.0
         receipt.update(anchor_distance=_distance(position, goal),
                        stationary_hold=stationary_hold)
-        if marker is None and (abs(_number(state.get('speed'))) > 1.0 or
-                (not stationary_hold and
+        if marker is None and (abs(approach_speed) > 1.0 or
+                (not stationary_hold and not blocked_contact and
                  _distance(position, goal) > ai_driver.WAYPOINT_ARRIVAL_RADIUS)):
             state.pop('_gun_angle_pivot_refusal', None)
             receipt['reason'] = 'existing_approach_in_progress'
