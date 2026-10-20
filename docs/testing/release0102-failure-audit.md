@@ -117,6 +117,10 @@ Low vegetation crushing is deliberately unchanged by user decision.
   counts, bounded event history and explicit history truncation. Publish it
   with the existing final motion/execution evidence. Observe accumulated small
   rebases too. No additional native probes are introduced by this observation.
+  The isolated height-scope exception fixture must include the runtime's
+  existing states registry (empty for that cleanup-only test). Preserve the
+  original exception and scope-release assertions; the new owner-present
+  test separately verifies exception receipts without masking the error.
 - Reuse only the unchanged current baked hull footprint within one synchronous
   actor planning call. Exact position, yaw, dimensions and grid identity are
   keys; candidate poses remain checked and all native collision sweeps remain.
