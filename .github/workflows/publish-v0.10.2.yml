@@ -68,7 +68,7 @@ jobs:
                   assert archive.read(entry) == Path('tools', entry).read_bytes(), entry
           PY
           git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.10.2-Source-and-validation.zip HEAD
-          git tag backup/v0.10.2-source HEAD
+          git tag v0.10.2 HEAD
           git bundle create release-assets/wot-0.9.22-offline-battles-0.10.2-History.bundle --all
           git bundle verify release-assets/wot-0.9.22-offline-battles-0.10.2-History.bundle
           cp docs/releases/v0.10.2-restore.md release-assets/wot-0.9.22-offline-battles-0.10.2-Restore.md
