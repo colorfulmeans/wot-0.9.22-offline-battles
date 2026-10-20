@@ -1,5 +1,6 @@
 """Reported Steyr exit: planning, admission and final pose share the fine mesh."""
 import copy
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -91,6 +92,13 @@ class WindstormBridgeTests(unittest.TestCase):
     def test_runtime_shore_classification_does_not_mutate_catalog(self):
         self.assertFalse(any(v & 8 for p in self.raw['local_meshes'] for v in p['hazards']))
         self.assertTrue(any(v & 8 for p in self.graph['local_meshes'] for v in p['hazards']))
+
+    def test_editor_and_first_run_catalogs_match_all_actual_graphs(self):
+        from gui.mods.offline_lan_0922 import bot_editor_maps, bot_tactics
+        for name, metadata in bot_editor_maps.MAPS.items():
+            digest = hashlib.sha256((ROOT/'navgraphs'/(name+'.json')).read_bytes()).hexdigest()
+            self.assertEqual(digest, metadata['resource_sha256'], name)
+            self.assertEqual(digest, bot_tactics.default_map(name)['resource_sha256'], name)
 
 
 class WindstormRuntimeAdmissionTests(unittest.TestCase):

@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import sys
 import subprocess
+import runpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_local_navigation_meshes as meshes
@@ -84,6 +85,11 @@ def build(client):
         if row['file'] == '84_winter.json':
             row['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest_path.write_bytes((json.dumps(manifest, indent=2) + '\n').encode())
+    # Authoring, first-run defaults and runtime share this exact fingerprint.
+    runpy.run_path(str(ROOT/'tools/build_bot_editor_maps.py'), run_name='__main__')
+    for name in ('bot_editor_maps.py', 'bot_tactics_default_data.py'):
+        catalog = ROOT/'src/res/scripts/client/gui/mods/offline_lan_0922'/name
+        catalog.write_bytes(catalog.read_bytes().replace(b'\r\n', b'\n'))
     print('Windstorm local nodes: %d; supported: %d; directed links: %d' % (
         len(patch['links']), sum(v is not None for v in patch['heights_mm']),
         sum(bin(v).count('1') for v in patch['links'])))

@@ -9370,3 +9370,15 @@ per grid complete. Native worker p95 measured 0.105 ms before / 0.2615 ms after;
 maximum 0.3137 / 0.5244 ms in this run. These are isolated search costs, not live
 worker latency. `tools/check_windstorm_navigation.py` preserves the reproducer.
 The CI selection includes the new bridge regression file.
+
+
+The first CI editor run caught a stale catalog fingerprint after the graph
+changed. Regenerate both bot_editor_maps and first-run PROFILE_JSON identities,
+retain the prior graph fingerprint for saved profiles, and make the bridge baker
+perform that catalog generation itself. No route coordinates are regenerated.
+Add an all-41-map catalog/default identity regression. Rebuild the frozen server
+because it also embeds these pure-data modules; verify all 82 compiled modules
+against final source. Actual Windows Tk editor/localization/navigation tests
+exercise loading the new resource, not merely raw JSON parsing. The intermediate
+404e2a58 package was withheld from delivery; use the subsequent catalog-corrected
+package. This is a repaired in-scope packaging regression, not an old CI failure.
