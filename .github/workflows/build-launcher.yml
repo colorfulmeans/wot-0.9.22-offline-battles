@@ -219,6 +219,7 @@ jobs:
               -Value "<version> v.0.9.22.0.1 #1513 </version>"
 
           @'
+          import io
           import json
           import os
           import sys
@@ -226,10 +227,20 @@ jobs:
 
           sys.path.insert(0, os.path.join(os.getcwd(), 'tools'))
           from verify_native_payload import verify_bytes
+          from verify_launch_entries import ENTRIES, verify_archive
           sys.path.insert(0, os.path.join(os.getcwd(), 'launcher'))
           import core
 
           payload, fake082, fake0922 = sys.argv[1:4]
+          entries = io.BytesIO()
+          with zipfile.ZipFile(entries, 'w') as archive:
+              for name in ENTRIES:
+                  with open(os.path.join(os.path.dirname(payload), name), 'rb') as stream:
+                      archive.writestr(name, stream.read())
+          entries.seek(0)
+          with zipfile.ZipFile(entries) as archive:
+              verify_archive(archive)
+          print('All three downloaded launch entries match reviewed source')
           for port in core.SUPPORTED_PORTS:
               archive_path = os.path.join(payload, 'client', port + '.zip')
               with zipfile.ZipFile(archive_path) as archive:

@@ -96,6 +96,23 @@ thresholds, gun target priorities or crushing damage. Keep one invalid
 support point enabling detailed support and five valid points disabling it.
 Low vegetation crushing is deliberately unchanged by user decision.
 
+## Publication withdrawn; PR verification only
+
+The owner withdrew publication on 2026-10-21. GitHub has no v0.10.2 release
+or tag; the publisher's outstanding runs were cancelled and its workflow
+was disabled. v0.10.1 remains the current published version. Source and
+verification fixes continue in PR #113 on `fix/0102-release-verification`.
+Do not merge as a publication shortcut, create a release tag, or re-enable
+publication before new explicit authorization after Windows acceptance.
+
+The exact main commit `df24fdf974dafb7727de690441ff1492969db8ed`
+passed complete CI run 39481277906. Earlier complete CI runs 39479640906
+and 39481242691 also passed; they establish repeated checks but do not
+substitute for validation of the final PR commit and its fresh package.
+The additional launch-entry verifier must pass on the final PR tree.
+Build the candidate through `build-launcher.yml` on the PR branch, without
+running the publisher. Inspect the downloaded artifact independently.
+
 Validation outputs must record exact test identities, skips and failures.
 The publisher independently waits for successful complete main-branch CI
 on its exact source commit as well as a successful clean package build.
