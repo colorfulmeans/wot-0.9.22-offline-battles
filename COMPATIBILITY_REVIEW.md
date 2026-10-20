@@ -9545,6 +9545,10 @@ SOLUTION` immediately records reason transitions, previous/current refusal,
 source/target identity, shell, pose, muzzle and solved pitch where available.
 Repeated identical reason signatures coalesce in bounded history; final handoff
 and terminal receipts retain both the solver result and prior adjustment marker.
+Aim-point producer receipts distinguish record readiness/tombstones, native entity
+startup, descriptor availability, missing selected sample and candidate-lane results.
+The solver freezes those exact producer receipts, including their own sample times,
+rather than pairing an old candidate snapshot with a later refusal clear.
 Both labels use the existing multipart writer/reader. Logging does not add native
 queries, navigation goals, waits or collision exemptions.
 

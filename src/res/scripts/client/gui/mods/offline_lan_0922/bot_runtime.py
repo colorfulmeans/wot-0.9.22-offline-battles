@@ -12130,7 +12130,10 @@ class BotRuntime(object):
             receipt.update(reason=reason, refusal=state.get('_gun_angle_refusal'))
             state['_gun_solution_receipt'] = receipt
             history = state.setdefault('_gun_solution_history', [])
-            signature = (receipt['target'], reason, receipt['previous_refusal'], receipt['refusal'])
+            point_receipt = receipt.get('aim_point') or {}
+            signature = (receipt['target'], reason, receipt['previous_refusal'], receipt['refusal'],
+                point_receipt.get('reason'), (point_receipt.get('context') or {}).get('reason'),
+                (receipt.get('candidate_selection') or {}).get('reason'))
             if history and history[-1]['signature'] == signature:
                 history[-1].update(last=dict(receipt), count=history[-1]['count']+1)
             else:
@@ -12152,6 +12155,8 @@ class BotRuntime(object):
         aim_token = None
         if callable(self.direct_aim_point_probe):
             selected = self.direct_aim_point_probe(state, target)
+            receipt['aim_point'] = dict(state.get('_aim_point_receipt') or {})
+            receipt['candidate_selection'] = dict(state.get('_aim_candidate_receipt') or {})
             if not isinstance(selected, dict):
                 return finish('aim_selection_unavailable')
             try:

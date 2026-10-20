@@ -27032,6 +27032,11 @@ class BattleRuntime(object):
 
     def _bot_aim_context(self, source, target):
         """Keep candidate ownership on the current source/target records."""
+        if not isinstance(source, dict):
+            return None
+        receipt = dict(at=self._last_frame_time, source=source.get('id'),
+                       reason='target_unavailable')
+        source['_aim_context_receipt'] = receipt
         if not isinstance(target, dict) or not target.get('alive', True):
             return None
         try:
@@ -27040,24 +27045,33 @@ class BattleRuntime(object):
             target_key = '%s:%d' % (
                 kind, int(target.get('network_id', target.get('id'))))
         except (KeyError, TypeError, ValueError, OverflowError):
+            receipt['reason'] = 'identity_invalid'
             return None
+        receipt.update(source_key=source_key, target_key=target_key)
         source_record = self._records.get(source_key)
         target_record = self._records.get(target_key)
+        receipt['records'] = [dict(present=row is not None,
+            tombstone=row.get('tombstone') if row is not None else None,
+            ready=row.get('ready') if row is not None else None)
+            for row in (source_record, target_record)]
         if (source_record is None or target_record is None or
                 source_record.get('tombstone') or
                 target_record.get('tombstone') or
                 not source_record.get('ready') or
                 not target_record.get('ready')):
+            receipt['reason'] = 'record_unavailable'
             return None
         source_entity = self._server_entity(source_record.get('engine_id'))
         target_entity = self._server_entity(target_record.get('engine_id'))
-        if (source_entity is None or target_entity is None or
-                not getattr(source_entity, 'isStarted', False) or
-                not getattr(target_entity, 'isStarted', False)):
+        receipt['entities_started'] = [bool(row is not None and getattr(row, 'isStarted', False))
+                                       for row in (source_entity, target_entity)]
+        if not all(receipt['entities_started']):
+            receipt['reason'] = 'native_entity_unavailable'
             return None
         descriptor = getattr(target_entity, 'typeDescriptor', None)
         source_descriptor = getattr(source_entity, 'typeDescriptor', None)
         if descriptor is None or source_descriptor is None:
+            receipt.update(reason='descriptor_unavailable', descriptors_present=[source_descriptor is not None, descriptor is not None])
             return None
         candidates = source_record.setdefault('bot_aim_targets', {})
         entry = candidates.get(target_key)
@@ -27072,18 +27086,27 @@ class BattleRuntime(object):
                      'geometry_ready': geometry_ready,
                      'cursor': 0, 'selected': None}
             candidates[target_key] = entry
+        receipt.update(reason='ready', selected=entry['selected'], cursor=entry['cursor'], geometry_ready=geometry_ready)
         return source_record, source_descriptor, entry
 
     def _bot_aim_point(self, source, target):
         """Project the selected part at the supplied, visibility-owned pose."""
+        if not isinstance(source, dict):
+            return None
+        receipt = dict(at=self._last_frame_time, reason='context_unavailable')
+        source['_aim_point_receipt'] = receipt
         try:
             context = self._bot_aim_context(source, target)
+            receipt['context'] = dict(source.get('_aim_context_receipt') or {})
+            receipt['lane'] = dict(source.get('_aim_candidate_receipt') or {})
             if context is None:
                 return None
             entry = context[2]
             sample = entry['selected']
             if sample is None:
+                receipt['reason'] = 'selection_missing'
                 return None
+            receipt.update(reason='selected', sample=sample)
             return {
                 'aim_position': shot_geometry.vehicle_aim_point(sample, target),
                 # Replacing an entity or descriptor invalidates a solved shot,
@@ -27091,7 +27114,8 @@ class BattleRuntime(object):
                 'aim_token': (id(entry['record']), id(entry['descriptor']),
                               sample),
             }
-        except Exception:
+        except Exception as error:
+            receipt.update(reason='point_exception', exception=type(error).__name__)
             return None
 
     def _bot_aim_damage_score(self, descriptor, entry, source, target,

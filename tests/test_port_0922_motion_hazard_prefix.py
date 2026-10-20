@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 import test_port_0922_bot_runtime as harness
 import test_port_0922_navigation_wait_lifecycle as waits
+import test_port_0922_battle_runtime as battle_fixtures
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -168,6 +169,26 @@ class HandoffEvidenceTests(unittest.TestCase):
         with mock.patch.object(self.fixture.module.ballistics,'ballistic_intercept',return_value=((0.,0.,150.),0.,1000.)):
             runtime._local_ballistic_solution(state,target,descriptor,0)
         self.assertEqual('out_of_range',state['_gun_solution_receipt']['reason'])
+
+    def test_aim_point_producer_explains_missing_records_entities_descriptors_and_selection(self):
+        for cause in ('target_unavailable','identity_invalid','record_unavailable','native_entity_unavailable','descriptor_unavailable','selection_missing','selected'):
+            rt,battle,source,target,descriptor=battle_fixtures.BattleRuntimeContractTests()._bot_lane_scene()
+            if cause=='target_unavailable':target['alive']=False
+            if cause=='identity_invalid':source['id']='bad'
+            if cause=='record_unavailable':battle._records['bot:12']['ready']=False
+            if cause=='native_entity_unavailable':rt.bigworld.entities[20].isStarted=False
+            if cause=='descriptor_unavailable':rt.bigworld.entities[20].typeDescriptor=None
+            if cause=='selected':
+                rt.bigworld.wg_collideSegment=lambda *a:None
+                self.assertTrue(battle._bot_firing_lane(source,target))
+            result=battle._bot_aim_point(source,target)
+            point=source['_aim_point_receipt']
+            self.assertEqual(cause,point['reason'] if cause in ('selection_missing','selected') else point['context']['reason'])
+            if cause=='selected':self.assertIsNotNone(result)
+            else:self.assertIsNone(result)
+            runtime=self.fixture.module.BotRuntime(1,direct_aim_point_probe=battle._bot_aim_point)
+            runtime._local_ballistic_solution(source,target,harness._combat_descriptor(),0)
+            self.assertEqual(source['_aim_point_receipt'],source['_gun_solution_receipt']['aim_point'])
 
     def test_every_solver_early_return_explains_refusal_clearing_and_preserves_behavior(self):
         module=self.fixture.module;runtime=module.BotRuntime(1)
