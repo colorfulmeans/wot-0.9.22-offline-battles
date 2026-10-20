@@ -22324,7 +22324,8 @@ class BattleRuntime(object):
                     checked_speed=speed, checked_dt=dt)
                 status = self._resolve_bot_motion(bot_id, position, body_yaw,
                     speed, descriptor, dt, now, commit_enabled=False)
-                clear = status in ('clear','crushed','approach','soft')
+                clear = (None if status == 'commit_required' else
+                         status in ('clear','crushed','approach','soft'))
                 receipt['trace'] = state.get('_world_contact_trace')
             receipt.update(status=status, clear=(True if clear is None else bool(clear)),
                 proved=clear is not None,
@@ -22535,11 +22536,18 @@ class BattleRuntime(object):
         # A native kinetic result is only a forward candidate.  Always hand it
         # to the catalog's exact contact seam; its ``approach`` result keeps a
         # nearby but non-contact prop clear without granting a destroy.
-        detail = self._destructibles._catalog_motion_blocked(
-            self._avatar.spaceID, pos, yaw, speed, descriptor, now,
-            dt=dt, kinetic_speed=kinetic_speed, return_detail=True,
-            kinetic_commit=allow_crush_drive and commit_enabled,
-            commit_enabled=commit_enabled, **destructible_motion)
+        if commit_enabled:
+            detail = self._destructibles._catalog_motion_blocked(
+                self._avatar.spaceID, pos, yaw, speed, descriptor, now,
+                dt=dt, kinetic_speed=kinetic_speed, return_detail=True,
+                kinetic_commit=allow_crush_drive,
+                commit_enabled=True, **destructible_motion)
+        else:
+            # Use the existing mutation-free transaction proposal. Disabling
+            # a commit is not evidence that its crushable contact is solid.
+            detail = self._destructibles._catalog_motion_proposal(
+                self._avatar.spaceID, pos, yaw, speed, descriptor, now,
+                dt=dt, kinetic_speed=kinetic_speed, **destructible_motion)
         if isinstance(detail, bool):
             detail = {'status': 'hard' if detail else 'clear'}
         elif isinstance(detail, str):
@@ -22557,6 +22565,12 @@ class BattleRuntime(object):
                 dt=dt, commit_enabled=commit_enabled, catalog={key:detail.get(key)
                     for key in ('status', 'kinds', 'reason', 'token', 'requires_commit')})
             return 'hard'
+        if not commit_enabled and detail.get('requires_commit', False):
+            bot_state['_world_contact_trace'] = dict(reason='catalog_commit_required',
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=False, catalog={key:detail.get(key)
+                    for key in ('status', 'kinds', 'token', 'requires_commit')})
+            return 'commit_required'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
         if used_kinetic_speed and not (

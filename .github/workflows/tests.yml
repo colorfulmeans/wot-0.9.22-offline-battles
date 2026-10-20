@@ -59,6 +59,7 @@ jobs:
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results
           --pattern 'test_port_0922_ai.py'
           --pattern 'test_port_0922_three_round_handoffs.py'
+          --pattern 'test_port_0922_crush_progress_handoffs.py'
           --pattern 'test_port_0922_motion_052854.py'
           --pattern 'test_port_0922_motion_064702.py'
           --pattern 'test_port_0922_current_rule_lifecycle.py'

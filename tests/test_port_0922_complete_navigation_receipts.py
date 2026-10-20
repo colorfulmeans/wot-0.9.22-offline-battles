@@ -121,6 +121,27 @@ class RuntimeReceiptTests(unittest.TestCase):
         self.assertEqual(62.1,row['spg_deployment']['progress']['best'])
         self.assertEqual('alternate_selected',row['spg_deployment']['retry_receipt']['outcome'])
 
+    def test_recovery_trigger_and_escape_terminal_reach_serialized_motion_with_age(self):
+        import types
+        self.runtime.update(.04,1.)
+        state=self.runtime.states[11]
+        self.runtime.adapter.driver=types.SimpleNamespace(states={11:dict(clock=5.,
+            recovery_trigger=dict(at=2.,reason='objective_timeout',target=(1.,0.,3.)),
+            escape_terminal=dict(at=4.,reason='distance_completed',sign=1.,remaining=0.))})
+        command=self.runtime._decision_cache[11][3]
+        state['_motion_stall_log']=((state['x'],state['y'],state['z']),-10.)
+        output=io.StringIO()
+        with redirect_stdout(output):
+            self.runtime._log_motion_stall(state,command,0.,0.,False,dict(clear=False),1.04)
+            self.runtime._finish_motion_stall(state,False,False,(state['x'],state['y'],state['z']),1.04)
+        parsed=parse_lines(output.getvalue().splitlines(),'worker')
+        self.assertEqual([],parsed['issues'])
+        row=next(r['data'] for r in parsed['records'] if r['label']=='BOT MOTION')
+        self.assertEqual('objective_timeout',row['driver']['recovery_trigger']['reason'])
+        self.assertEqual(3.,row['driver']['recovery_trigger']['age_seconds'])
+        self.assertEqual('distance_completed',row['driver']['escape_terminal']['reason'])
+        self.assertEqual(1.,row['driver']['escape_terminal']['age_seconds'])
+
     def test_order_evidence_freezes_input_points_without_changing_the_order(self):
         from gui.mods.offline_lan_0922.bot_runtime import _order_evidence
         order=dict(combat_mode='withdraw',move_position=dict(x=1.,y=2.,z=3.),

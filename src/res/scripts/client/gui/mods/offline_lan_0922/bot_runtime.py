@@ -7352,6 +7352,12 @@ class BotRuntime(object):
         driver_trace['alignment_observation'] = dict(driver_state.get('alignment_observation') or {})
         driver_trace['recovery_replan'] = dict(driver_state.get('recovery_replan_episode') or {})
         driver_trace['recovery_pocket'] = dict(driver_state.get('recovery_pocket') or {})
+        for name in ('recovery_trigger', 'escape_terminal'):
+            evidence = dict(driver_state.get(name) or {})
+            if evidence:
+                evidence.update(observed_at=driver_state.get('clock'),
+                    age_seconds=max(0.0, driver_state.get('clock', 0.0)-evidence['at']))
+            driver_trace[name] = evidence
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
         if driver_state:
             driver_trace['short_escape_observation'] = ai_driver.LocalDriver.short_escape_diagnostics(driver_state)

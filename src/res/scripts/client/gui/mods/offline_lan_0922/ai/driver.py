@@ -1091,6 +1091,21 @@ class LocalDriver(object):
 						recovery_mode='short_reverse_escape' if sign < 0 else 'short_forward_escape')
 		return None
 
+	@staticmethod
+	def _finish_translation_escape(state, escape, position, reason, remaining):
+		state['escape_terminal'] = dict(at=state['clock'],
+			clock_basis='driver_elapsed_seconds', origin=escape['start'],
+			position=tuple(position), reason=reason, remaining=remaining,
+			sign=escape.get('sign', 1.0), distance=escape['distance'],
+			recovery_time_before=state.get('recovery_time', 0.0))
+		if reason == 'distance_completed':
+			if state.get('recovery_time', 0.0) > 0.0:
+				state['recovery_count'] = state.get('recovery_count', 0) + 1
+			state['recovery_time'] = 0.0
+			state['recovery_side'] = 0.0
+			state['stuck_time'] = 0.0
+			state['heading_progress_yaw'] = None
+
 	def _retained_short_escape(self, state, position, yaw, neighbours,
 			direction_clear, half_length, half_width):
 		escape = state.get('short_translation_escape')
@@ -1133,6 +1148,7 @@ class LocalDriver(object):
 					reason = 'vehicle_occupied'
 		validation['reason'] = reason or 'clear'
 		if reason is not None:
+			self._finish_translation_escape(state, escape, position, reason, remaining)
 			state.pop('short_translation_escape', None)
 			return None
 		validation['result'] = 'retained'
@@ -1183,6 +1199,8 @@ class LocalDriver(object):
 				not self._clear(direction_clear, yaw, probe_distance) or
 				self._reverse_blocked_by_vehicle(position, yaw + math.pi,
 					neighbours, half_length, half_width, remaining, body=state.get('collision_body')) is not None):
+			self._finish_translation_escape(state, escape, position,
+				'distance_completed' if remaining <= 0.05 else 'execution_rejected', remaining)
 			state.pop('translation_escape', None)
 			return None
 		return dict(throttle=1.0, turn=0.0, target_yaw=escape['yaw'],
@@ -1408,6 +1426,27 @@ class LocalDriver(object):
 					'new_order_distance' if new_order_distance
 					else 'new_travel_frontier')
 				objective_advanced = True
+			# The executed near endpoint can differ from the macro progress
+			# point. Keep fixed per-point minima across revisits, so completing
+			# a real dogleg is not undone by the older tactical-distance clock.
+			# Selection/rebasing alone earns no credit, nor does moving a target.
+			if local_progress_admitted:
+				actions = progress.setdefault('action_points', [])
+				action = next((item for item in actions
+					if _distance(item['goal'], target) <= 2.0), None)
+				if action is None:
+					action = dict(goal=tuple(target), best=target_distance)
+					actions.append(action)
+					del actions[:-16]
+				else:
+					action_distance = _distance(position, action['goal'])
+					if (displacement >= 0.08 and abs(float(speed)) > 0.05 and
+							action_distance + 0.08 <= action['best']):
+						action['best'] = action_distance
+						progress['at'] = state['clock']
+						progress['translation_credit'] = True
+						progress['credit_reason'] = 'new_best_action_translation'
+						objective_advanced = True
 			# A connector's best distance and its current distance must use
 			# the SAME fixed point. Native rebasing/steering may supply another
 			# point within the existing 2 m identity tolerance without travel.
@@ -1417,6 +1456,15 @@ class LocalDriver(object):
 			if distance + 0.08 <= progress['best']:
 				objective_advanced = True
 				progress['best'] = distance
+				if (local_progress_admitted and displacement >= 0.08 and
+						abs(float(speed)) > 0.05 and not (new_travel or new_order_distance or departed)):
+					# A checked dogleg/mechanical action may approach its fixed
+					# endpoint while moving away from the older tactical anchor.
+					# Revisited connectors keep their old best; merely changing
+					# the point or turning does not renew this translation clock.
+					progress['at'] = state['clock']
+					progress['translation_credit'] = True
+					progress['credit_reason'] = 'new_best_local_translation'
 				# Real translation earns distance credit, but must not grant
 				# the same already-earned turn a fresh alignment anchor.
 			elif distance + 0.002 < progress['best']:
@@ -1534,6 +1582,17 @@ class LocalDriver(object):
 				if state.get('last_clear_yaw') is not None:
 					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
 						state['clock'] + self.failure_ttl)
+				state['recovery_trigger'] = dict(at=state['clock'],
+					clock_basis='driver_elapsed_seconds', origin=tuple(position),
+					target=tuple(target), goal=tuple(pocket_goal),
+					reason=('objective_timeout' if objective_stalled else
+						'native_translation_timeout' if native_translation_stalled else 'local_stuck'),
+					translation_age=state['clock']-state['translation_progress_at'],
+					displacement=displacement, objective={key:value for key,value in
+						(state.get('objective_progress') or {}).items() if key in (
+						'goal', 'best', 'at', 'order_goal', 'order_best', 'order_distance',
+						'travel_origin', 'travel_best', 'travel_distance', 'credit_reason',
+						'credit_age_seconds', 'translation_credit', 'alignment_credit')})
 				state['recovery_time'] = (
 					self.recovery_seconds + timing_phase * 0.28)
 				state['recovery_side'] = self._select_recovery_side(

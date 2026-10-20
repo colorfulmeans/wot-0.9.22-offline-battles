@@ -22738,9 +22738,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
             11: {'movement_dir': 1, 'airborne': False},
         })
         battle._destructibles = mock.Mock()
-        battle._destructibles._catalog_motion_blocked.return_value = {
+        battle._destructibles._catalog_motion_proposal.return_value = {
             'status': 'clear', 'token': None,
-            'accepted_now': False, 'used_kinetic_speed': False,
+            'accepted_now': False, 'used_kinetic_speed': False, 'requires_commit': False,
         }
 
         with mock.patch(
@@ -22753,10 +22753,10 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual('clear', status)
         self.assertFalse(world_probe.call_args.kwargs['commit_enabled'])
-        sensor_call = (
-            battle._destructibles._catalog_motion_blocked.call_args)
-        self.assertFalse(sensor_call.kwargs['commit_enabled'])
-        self.assertFalse(sensor_call.kwargs['kinetic_commit'])
+        # The mutation-free proposal preserves crushability without entering
+        # the native destruction/publication consumer during a preview.
+        battle._destructibles._catalog_motion_proposal.assert_called_once()
+        battle._destructibles._catalog_motion_blocked.assert_not_called()
 
     def test_bot_glancing_probe_keeps_hull_pose_and_travel_separate(self):
         runtime = _runtime()

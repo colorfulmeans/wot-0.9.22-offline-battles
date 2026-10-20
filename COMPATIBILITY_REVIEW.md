@@ -9687,3 +9687,60 @@ five-point support rule ran. Preserve the measured height and mark its evidence
 untraced, just as the existing missing-witness branch intended; do not fabricate
 a new height or change validity. The retained current-rule lifecycle test covers
 each individual failed point, four-point retention and five-point release.
+
+
+## Crush-preview and local-action progress audit (2026-10-21)
+
+Windows reports `20261021-002130-14157186c968`,
+`20261021-003223-2ad1430d5787` and `20261021-003829-6b84af4c773b`
+run payload `98d20246`. Type 61 was boxed in by WZ-132A wreck 26 and
+winter pole `(33405, 77)`, resource `env414_Pole3_winter.model`. Its exact
+crush gate reported physical/kinetic acceptance (energy 81.0198, health 20),
+but a non-committing translation preview returned catalog hard. The
+preview called the committing catalog seam with commits disabled, which
+intentionally cannot report an already accepted native destruction.
+
+Translation previews now use the existing mutation-free catalog proposal.
+A crushable proposal becomes `commit_required` (advisory admission, not a
+proved empty corridor); the realised movement still repeats the actual
+world/catalog checks, owns destruction/publication and checks replacement
+BSP. A hard sibling, true world collision, unknown identity and uncrushable
+material remain blocking. Forward and reverse share the transaction.
+No map catalog, collision body, railway classification or water policy changed.
+
+SU-101 and Somua SM recordings also reproduce a competing progress clock:
+real movement toward the executed local endpoint did not beat the older
+tactical-distance/radial frontier. The eight-second objective timeout then
+selected reverse even while translation was making useful local progress.
+Keep the existing order identity, connector minima and retry/reroute policy.
+Credit a new fixed local-endpoint minimum only with actual displacement and
+nonzero movement speed. A bounded 16-point action ledger preserves minima
+across revisits when the executed target differs from the macro progress
+point. New selection, rebasing, enemy motion and turning alone earn no
+translation credit. Existing macro progress retains its diagnostic priority.
+The recorded sparse Sherman orbit remains a regression case, not an obsolete
+assertion to delete. Its zero-speed pose adjustments must not perpetually
+renew movement progress.
+
+A successfully completed checked short/long translation also retires its
+parent timed backout, once. Failure/expiry does not masquerade as success.
+Actual collision checks still precede execution; no unconditional movement,
+slope refusal, height-selection or new route strategy is added.
+
+Unresolved Foch near-point alignment and other local pockets are diagnostic
+work: motion records now include a frozen recovery trigger (reason, both
+goals, displacement and original progress scalars), and escape terminal
+(success/failure, endpoint, remaining distance and parent timer). Both carry
+sample/observation clocks and explicit age through cached/final motion
+serialization. No new per-frame diagnostic probes are introduced.
+
+Validation includes the real catalog proposal fixture without native mutation,
+forward/reverse previews, hard siblings, real walls, replacement BSP, local
+translation/arrival, no-motion rebasing, repeated-point orbits and escape
+completion/failure/idempotence. The old read-only runtime fixture now mocks
+and asserts the proposal API rather than the committing seam. CI explicitly
+discovers the new handoff regression file. Final counts, package bytecode/source
+parity and startup results are recorded in the delivered validation manifest.
+These are engine-free/package checks; exact BigWorld gameplay acceptance is
+left to the next Windows test. Use the standard EXE for representative normal
+play; SPIKE_PROFILE adds fine observer overhead and is diagnostic only.
