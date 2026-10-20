@@ -1193,14 +1193,30 @@ class LocalDriver(object):
 		# commitment reaches a wet edge. Fixed-endpoint short escapes retain
 		# their separate endpoint law.
 		probe_distance = max(RECOVERY_COMMIT_MINIMUM, remaining)
-		if (remaining <= 0.05 or state['clock'] >= escape['until'] or
-				abs(_angle_delta(yaw, escape['yaw'])) > 0.30 or
-				self._failure_penalty(state, yaw) > 0.0 or
-				not self._clear(direction_clear, yaw, probe_distance) or
-				self._reverse_blocked_by_vehicle(position, yaw + math.pi,
-					neighbours, half_length, half_width, remaining, body=state.get('collision_body')) is not None):
-			self._finish_translation_escape(state, escape, position,
-				'distance_completed' if remaining <= 0.05 else 'execution_rejected', remaining)
+		reason = None
+		proof = None
+		blocker = None
+		if remaining <= 0.05:
+			reason = 'distance_completed'
+		elif state['clock'] >= escape['until']:
+			reason = 'lease_expired'
+		elif abs(_angle_delta(yaw, escape['yaw'])) > 0.30:
+			reason = 'heading_changed'
+		elif self._failure_penalty(state, yaw) > 0.0:
+			reason = 'remembered_failure'
+		else:
+			clear = self._clear(direction_clear, yaw, probe_distance)
+			proof = dict(self._last_direction_receipt)
+			if not clear:
+				reason = proof.get('reason') or 'direction_callback_rejected'
+			else:
+				blocker = self._reverse_blocked_by_vehicle(position, yaw + math.pi,
+					neighbours, half_length, half_width, remaining, body=state.get('collision_body'))
+				if blocker is not None:
+					reason = 'vehicle_occupied'
+		if reason is not None:
+			self._finish_translation_escape(state, escape, position, reason, remaining)
+			state['escape_terminal'].update(probe_receipt=proof, blocker=blocker)
 			state.pop('translation_escape', None)
 			return None
 		return dict(throttle=1.0, turn=0.0, target_yaw=escape['yaw'],
@@ -1572,16 +1588,6 @@ class LocalDriver(object):
 				state['heading_progress_yaw'] = None
 		else:
 			if state['stuck_time'] >= threshold:
-				if progress_target is not None:
-					state['objective_progress']['at'] = state['clock']
-					state['objective_progress']['credit_reason'] = 'recovery_retry'
-					state['objective_progress']['credit_age_seconds'] = 0.0
-				if rotation_refused and state.get('recovery_pocket') is None:
-					state['recovery_pocket'] = dict(origin=tuple(position),
-						at=state['clock'], goal=tuple(pocket_goal))
-				if state.get('last_clear_yaw') is not None:
-					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
-						state['clock'] + self.failure_ttl)
 				state['recovery_trigger'] = dict(at=state['clock'],
 					clock_basis='driver_elapsed_seconds', origin=tuple(position),
 					target=tuple(target), goal=tuple(pocket_goal),
@@ -1593,6 +1599,16 @@ class LocalDriver(object):
 						'goal', 'best', 'at', 'order_goal', 'order_best', 'order_distance',
 						'travel_origin', 'travel_best', 'travel_distance', 'credit_reason',
 						'credit_age_seconds', 'translation_credit', 'alignment_credit')})
+				if progress_target is not None:
+					state['objective_progress']['at'] = state['clock']
+					state['objective_progress']['credit_reason'] = 'recovery_retry'
+					state['objective_progress']['credit_age_seconds'] = 0.0
+				if rotation_refused and state.get('recovery_pocket') is None:
+					state['recovery_pocket'] = dict(origin=tuple(position),
+						at=state['clock'], goal=tuple(pocket_goal))
+				if state.get('last_clear_yaw') is not None:
+					state['failed_yaws'][self._yaw_key(state['last_clear_yaw'])] = (
+						state['clock'] + self.failure_ttl)
 				state['recovery_time'] = (
 					self.recovery_seconds + timing_phase * 0.28)
 				state['recovery_side'] = self._select_recovery_side(

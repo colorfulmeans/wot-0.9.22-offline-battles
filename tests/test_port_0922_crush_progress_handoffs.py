@@ -102,6 +102,8 @@ class ActionProgressTests(unittest.TestCase):
         command=self.drive(driver,(0.,0.,0.),target=(0.,0.,6.))
         self.assertEqual('reverse_turn',command['recovery_mode'])
         self.assertEqual('objective_timeout',state['recovery_trigger']['reason'])
+        self.assertEqual(0.,state['recovery_trigger']['objective']['at'])
+        self.assertGreaterEqual(state['recovery_trigger']['objective']['credit_age_seconds'],8.)
         self.assertAlmostEqual(.1,state['recovery_trigger']['translation_age'])
 
     def test_revisiting_already_reached_local_points_cannot_credit_an_orbit(self):
@@ -137,6 +139,17 @@ class ActionProgressTests(unittest.TestCase):
         self.assertEqual('distance_completed',state['escape_terminal']['reason'])
         self.assertEqual(0.,state['recovery_time'])
         self.assertNotIn('short_translation_escape',state)
+
+    def test_long_translation_terminal_reasons_preserve_query_order_without_fresh_probes(self):
+        for reason,clock,yaw in (('lease_expired',31.,0.),('heading_changed',10.,.5)):
+            with self.subTest(reason=reason):
+                driver,state=self.scene();state.update(clock=clock,recovery_time=.7)
+                state['translation_escape']=dict(start=(0.,0.,0.),yaw=0.,distance=2.,until=30.)
+                probe=mock.Mock(side_effect=AssertionError('unexpected query'))
+                driver._retained_translation_escape(state,(0.,0.,0.),yaw,(),probe,3.,1.5)
+                self.assertEqual(reason,state['escape_terminal']['reason'])
+                self.assertEqual(.7,state['recovery_time'])
+                probe.assert_not_called()
 
     def test_completed_long_translation_retires_parent_backout_once(self):
         driver,state=self.scene();state.update(recovery_time=.7,recovery_count=2)
