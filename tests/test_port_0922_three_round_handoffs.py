@@ -15,6 +15,96 @@ class RecordedHandoffTests(unittest.TestCase):
         self.addCleanup(self.fixture.tearDown)
         self.runtime = self.fixture.module.BotRuntime(1)
 
+    def occupied_emil(self, cache_until=0.):
+        runtime=self.runtime
+        from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+        grid=TerrainGrid(lambda *args:0.,baked_graph=harness._flat_open_graph())
+        # Preserve recorded XZ; height availability/native clearance are supplied
+        # separately, rather than claiming this fixture replays native terrain.
+        grid._baked_index=lambda cell:0
+        grid._baked_cell_height=lambda cell:0.
+        grid.point_has_baked_hazard=mock.Mock(return_value=False)
+        grid.dry_segment_clear=mock.Mock(return_value=True)
+        runtime.navigator=types.SimpleNamespace(grid=grid,bot_states={12:{'replan_generation':1}})
+        goal=(26.,-.183,126.)
+        target=(35.902488708496094,-.2777712345123291,132.7779541015625)
+        key=(grid.cell_for(goal),True)
+        runtime.states[12]=dict(id=12,half_length=3.3402910232543945,
+            half_width=1.5805059671401978,
+            _occupied_route_leg=(key,target,dict(epoch=(0,1),phase='active',
+                goal=goal,origin=(33.61885715383492,-.04217660427093506,131.2148822954759))),
+            _occupied_route_targets={key:(cache_until,target,True)})
+        runtime._physical_parking_occupancy=mock.Mock(return_value=[
+            (None,(29.81,0.,119.44),math.hypot(3.17,1.64))])
+        return runtime,grid,goal,target
+
+    def test_recorded_completed_bypass_returns_original_corner_even_before_cache_expiry(self):
+        arrived=(34.88200447005671,-.12273275852203369,131.94391922028694)
+        for until in (0.,400.):
+            with self.subTest(cache_until=until):
+                runtime,grid,goal,target=self.occupied_emil(until)
+                self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,325.367,True))
+                self.assertEqual('completed_handoff',runtime.states[12]['_occupied_route_bypass_observations'][-1]['reason'])
+                for now in (325.6,326.,330.):
+                    self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,now,True))
+
+    def test_completed_bypass_allows_existing_replan_retry_and_new_geometry(self):
+        arrived=(34.88200447005671,-.12273275852203369,131.94391922028694)
+        for changed in ('retry','geometry'):
+            with self.subTest(changed=changed):
+                runtime,grid,goal,target=self.occupied_emil()
+                self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,325.,True))
+                if changed=='retry':runtime.navigator.bot_states[12]['replan_generation']=2
+                else:grid.static_hull_revision+=1
+                self.assertIsNotNone(runtime._occupied_route_target(12,arrived,goal,326.,True))
+
+    def test_unfinished_bypass_remains_fixed_and_completed_handoff_does_not_claim_clearance(self):
+        runtime,grid,goal,target=self.occupied_emil(400.)
+        before=(33.61885715383492,-.04217660427093506,131.2148822954759)
+        self.assertEqual(target,runtime._occupied_route_target(12,before,goal,320.,True))
+        runtime._physical_parking_occupancy.assert_not_called()
+        self.assertEqual('cached',runtime.states[12]['_occupied_route_bypass_observations'][-1]['source'])
+        arrived=(34.88200447005671,-.12273275852203369,131.94391922028694)
+        self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,325.,True))
+        self.assertTrue(runtime.states[12]['route_wreck_blocked'])
+        grid.dry_segment_clear.return_value=False
+        runtime.navigator.bot_states[12]['replan_generation']=2
+        self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,326.,True))
+
+    def test_completed_bypass_releases_when_blocker_clears(self):
+        runtime,grid,goal,target=self.occupied_emil()
+        arrived=(34.88200447005671,-.12273275852203369,131.94391922028694)
+        runtime._occupied_route_target(12,arrived,goal,325.,True)
+        runtime._physical_parking_occupancy.return_value=[]
+        self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,327.,True))
+        self.assertNotIn('_occupied_route_leg',runtime.states[12])
+        self.assertFalse(runtime.states[12]['_occupied_route_bypass_observations'][-1]['blocked'])
+
+    def test_runtime_completed_bypass_hands_back_to_original_navigation_corner(self):
+        runtime,grid,corner,target=self.occupied_emil(400.)
+        own=runtime.states[12];own['team']=1
+        position=(34.88200447005671,-.12273275852203369,131.94391922028694)
+        macro=(10.007,0.,114.068)
+        runtime.navigator.next_target=mock.Mock(return_value=corner)
+        runtime.navigator.retained_local_target=mock.Mock(return_value=None)
+        runtime.navigator.target_is_terminal=mock.Mock(return_value=False)
+        runtime.navigator.remember_runtime_target=mock.Mock()
+        runtime._navigation_height_columns=None
+        runtime._route_lane_target=lambda bot,pos,goal,selected,*args:selected
+        grid.dry_segment_clear.return_value=False
+        result=runtime._navigation_target_impl(12,position,macro,
+            dict(combat_mode='route',route_id='class_td_ice_road',route_index=3),
+            dict(now=325.367,speed=0.,yaw=2.97))
+        self.assertEqual(corner,result)
+        self.assertNotEqual(macro,result)
+        runtime.navigator.next_target.assert_called_once()
+        runtime.navigator.remember_runtime_target.assert_not_called()
+        receipt=own['_navigation_target_receipt']
+        self.assertEqual('same_horizontal_endpoint',receipt['runtime_leg_handoff']['reason'])
+        self.assertEqual('completed_handoff',receipt['occupied_bypass'][-1]['reason'])
+        self.assertTrue(own['route_wreck_blocked'])
+        self.assertFalse(receipt['occupied_bypass'][-1]['native_clearance_claimed'])
+
     def test_reported_cached_bypass_cannot_readmit_retired_target(self):
         runtime = self.runtime
         p=(180.1784,-9.4646,-261.9659)

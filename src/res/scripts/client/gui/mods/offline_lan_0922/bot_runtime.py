@@ -10004,6 +10004,40 @@ class BotRuntime(object):
         # occupied endpoint needs this temporary navigation destination.
         key = (grid.cell_for(goal), bool(direct_only))
         cache = own.setdefault('_occupied_route_targets', {})
+        nav_state = getattr(self.navigator, 'bot_states', {}).get(int(bot_id), {})
+        epoch = (getattr(grid, 'static_hull_revision', 0),
+                 nav_state.get('replan_generation', 0))
+        leg = own.get('_occupied_route_leg')
+        metadata = (dict(leg[2]) if leg is not None and leg[0] == key and len(leg) > 2 else {})
+        def finish(result, blocked, reason, source):
+            observations = own.setdefault('_occupied_route_bypass_observations', [])
+            observations.append(dict(at=now, goal=tuple(goal), position=tuple(position),
+                target=result, blocked=bool(blocked), reason=reason, source=source,
+                epoch=epoch, leg_target=leg[1] if leg is not None and leg[0] == key else None,
+                phase=metadata.get('phase'), completed_at=metadata.get('completed_at'),
+                native_clearance_claimed=False))
+            del observations[:-4]
+            if blocked:own['route_wreck_blocked'] = True
+            if not direct_only:own['_occupied_route_point'] = bool(blocked)
+            return result
+        if leg is not None and leg[0] == key:
+            if metadata.get('epoch', epoch) != epoch:
+                # Only the existing replan owner or changed physical geometry
+                # renews this gate attempt; a completed short leg does not.
+                own.pop('_occupied_route_leg', None)
+                cache.pop(key, None)
+                leg = None
+                metadata = {}
+            elif (metadata.get('phase') != 'completed' and
+                    _distance(position, leg[1]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS):
+                metadata.update(epoch=epoch, phase='completed', completed_at=now)
+                leg = (key, leg[1], metadata)
+                own['_occupied_route_leg'] = leg
+                cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, True)
+                # Retire only this post-navigation modifier. Returning None
+                # leaves the original checked corner and driver/retry owners
+                # in charge; it is not permission to cross the occupied hull.
+                return finish(None, True, 'completed_handoff', 'arrival')
         penalty = getattr(self.navigator, 'bot_segment_penalized', None)
         def admitted(point):
             return point is None or not (callable(penalty) and
@@ -10016,15 +10050,14 @@ class BotRuntime(object):
                 reason='active_private_refusal', source='cached_bypass')
             cached = None
         if cached is not None and now < cached[0]:
-            if cached[2]:own['route_wreck_blocked'] = True
-            if not direct_only:own['_occupied_route_point'] = cached[2]
-            return cached[1]
+            return finish(cached[1], cached[2],
+                'completed_handoff' if metadata.get('phase') == 'completed' else 'cached_result', 'cached')
         radius = math.hypot(own.get('half_length', 3.5), own.get('half_width', 1.7))
         index = grid._baked_index(grid.cell_for(goal))
         height = grid._baked_cell_height(grid.cell_for(goal)) if index is not None else None
         if height is None:
             cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, False)
-            return None
+            return finish(None, False, 'ground_unavailable', 'sampled')
         bodies = self._physical_parking_occupancy(own, travel=True)
         physical = [entry for entry in bodies if entry[0] is None and
                     abs(entry[1][1]-height) <= max(3.0, radius)]
@@ -10043,8 +10076,15 @@ class BotRuntime(object):
             return True
         result = None
         blocked = occupied(goal)
+        if not blocked and leg is not None and leg[0] == key:
+            own.pop('_occupied_route_leg', None)
+            leg = None
+            metadata = {}
         if blocked:
             leg = own.get('_occupied_route_leg')
+            if leg is not None and leg[0] == key and metadata.get('phase') == 'completed':
+                cache[key] = (now+TACTICAL_REFRESH_SECONDS, None, True)
+                return finish(None, True, 'completed_handoff', 'sampled')
             # One endpoint belongs to the occupied gate, rather than to each
             # refreshed hull pose. Navigation/server attempt budgets retire a
             # stalled intent; pose-dependent regeneration cannot renew them.
@@ -10073,14 +10113,17 @@ class BotRuntime(object):
                     if direct_only and not grid.dry_segment_clear(position, point, now):
                         continue
                     result = point
-                    own['_occupied_route_leg'] = (key, point)
+                    metadata = dict(epoch=epoch, phase='active', origin=tuple(position))
+                    leg = (key, point, metadata)
+                    own['_occupied_route_leg'] = leg
                     break
                 if result is not None:break
             own['route_wreck_blocked'] = True
         if not direct_only:own['_occupied_route_point'] = blocked
         if len(cache) >= 4:cache.clear()
         cache[key] = (now+TACTICAL_REFRESH_SECONDS, result, blocked)
-        return result
+        return finish(result, blocked, 'bypass_issued' if result is not None else
+            'no_checked_bypass' if blocked else 'endpoint_unoccupied', 'sampled')
 
     @staticmethod
     def navigation_planning_capability(bot_id=None, direction=1.0):
@@ -10165,6 +10208,7 @@ class BotRuntime(object):
         if authority_state is not None:
             authority_state['route_wreck_blocked'] = False
             authority_state['_occupied_route_point'] = False
+            authority_state['_occupied_route_bypass_observations'] = []
         stop_at_goal = mode not in ('route', 'advance')
         if self.navigator is None:
             state['navigation_stop_at_target'] = stop_at_goal
@@ -10373,6 +10417,8 @@ class BotRuntime(object):
         target_receipt['runtime_leg_handoff'] = handoff
         target_receipt['occupied_refusal'] = dict(
             (self.states.get(int(bot_id), {}).get('_occupied_route_refusal') or {}))
+        target_receipt['occupied_bypass'] = list(
+            (self.states.get(int(bot_id), {}).get('_occupied_route_bypass_observations') or ()))
         state['navigation_status'] = getattr(self.navigator, 'bot_states', {}).get(
             int(bot_id), {}).get('navigation_status', 'pending')
         progress_receipt = getattr(self.navigator, 'driver_progress_target', None)

@@ -9774,3 +9774,46 @@ preview and mocked passive tests were insufficient to prove this composition;
 the new tests are in the already-discovered handoff regression file. Full local
 and package results are recorded in the replacement package manifest. Actual
 Windstorm acceptance still requires the user's next Windows battle.
+
+### Completed occupied-corner bypass handoff (2026-10-21)
+
+Report `20261021-012806-5b2cbcc51207` runs `24e4e90d` and completes
+normally. Sturer Emil 12 spends about 51 seconds around the northern bridge
+approach. Corner `(26, -0.183, 126)` is inside the existing occupancy circle
+of Jagdpanther II wreck 27 (7.586 m separation versus 7.764 m combined
+clearance). This circle is an advisory occupancy test, not proof that the
+installed chassis rectangles collide.
+
+At 01:25:55, 01:26:01, 01:26:07 and 01:26:14 the runtime modifies that
+same A* corner into points at 12, 8, 12 and 8 metres on its hull-facing
+side. The recorded coordinates reproduce the selector's arithmetic. Each
+temporary leg reaches its arrival disk; the old modifier then regenerates
+another point from the shifted hull. Near-corner alignment correctly brakes
+and faces each newly issued point, amplifying the repeated reversal. The
+original server budget does work: it skips the gate at 01:26:15, then switches
+from `class_td_ice_road` to `north_ridge` at 01:26:44 after another sustained
+failure. It is therefore a completed-local-leg lifecycle gap, not a missing
+server retry/switch mechanism or proved native collision failure.
+
+Completion now retires the occupied-corner modifier for that same gate attempt,
+including a still-live cached target. Returning no modifier hands the original
+navigator corner back to the existing driver; it neither chooses the far macro
+goal nor grants physical clearance. A later ordinary navigation replan or changed
+static-hull geometry starts a new attempt. Rechecking an unoccupied endpoint
+cleans up the completed leg. Unfinished bypasses remain fixed, private failure
+cooldowns still apply, and all existing collision, obstruction, retry/switch,
+water and one-invalid-on/five-valid-off support checks remain owned by their
+original code. No new timer, route rank, point blacklist or driving fallback
+is introduced.
+
+The bounded occupied-bypass receipt covers cached returns, arrival handoff,
+sampled blocker persistence/release and final navigation publication. It states
+that no native clearance was claimed. New regression cases cover the recorded
+arrival before/after cache expiry, repeated calls without new targets, new
+replan/geometry retries, active-leg retention, blocker removal, refusal by the
+original corridor gate and the complete runtime handoff to the original corner.
+The pre-fix arrival test fails on the old cached target; the repaired tests pass.
+These tests supply corridor admission separately from recorded XZ coordinates;
+they do not constitute a native Windstorm replay. Final package checks and suite
+counts are recorded in the delivered manifest; the user's next battle remains
+the native acceptance test. The reported floating shrubs are not changed here.
