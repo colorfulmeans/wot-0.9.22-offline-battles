@@ -76,6 +76,12 @@ launcher or claim that source tests prove native gameplay.
   already rebuilt correctly. Add that same source-stamped x86 build before
   general CI packaging; retain the strict source/payload identity rejection.
   Never replace the identity check with a stamp-only rewrite of old bytes.
+- Independent inspection of the completed Windows download found identical
+  batch scripts encoded as CRLF while Linux checkout uses LF. The initial
+  publisher raw-byte comparison wrongly rejected that representation. Verify
+  the three text entries with CRLF/LF normalization only; preserve every
+  other byte and all binary/data integrity checks. Regress both line endings,
+  altered test-mode flags and every missing entry.
 - Include the repository root in isolated test sys.path so namespace imports
   work even with the Windows embedded interpreter's _pth isolation. Add an
   actual isolated import regression. File-level test isolation remains.
