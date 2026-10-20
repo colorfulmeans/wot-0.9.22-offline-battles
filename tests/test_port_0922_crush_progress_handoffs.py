@@ -67,6 +67,43 @@ class CrushPreviewTests(unittest.TestCase):
         with mock.patch.object(battle_module.world_collision,'check_horizontal_collision',side_effect=('clear','hard')):
             self.assertEqual('hard',battle._resolve_bot_motion(8,(0,0,0),0.,5.,td,.1,1.))
 
+    def test_passive_glancing_uses_real_preview_without_accepting_uncommitted_crush(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        for sign in (-1., 1.):
+            with self.subTest(sign=sign):
+                battle,state,td=self.setup_motion(dict(status='crushed',
+                    requires_commit=True,accepted_now=False,kinds='falling',
+                    token=((33405,77,None),)))
+                runtime=BotRuntime(1,motion_resolver=battle._resolve_bot_motion)
+                state['movement_dir']=int(sign)
+                with mock.patch.object(battle_module.world_collision,
+                        'check_horizontal_collision',return_value='clear'):
+                    speed,position,slid=runtime._hard_contact_response(
+                        state,(0.,0.,0.),0.,sign*5.,td,.1,1.)
+                self.assertFalse(slid)
+                self.assertEqual((0.,0.,0.),position)
+                self.assertEqual(int(sign),state['movement_dir'])
+                battle._destructibles._catalog_motion_blocked.assert_not_called()
+                self.assertEqual('catalog_commit_required',state['_world_contact_trace']['reason'])
+                self.assertEqual('uncommitted_contact_blocks_passive_motion',
+                    state['_world_contact_trace']['passive_policy'])
+
+    def test_passive_status_contract_preserves_old_results_and_commit_validation(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        for enabled in (False,True):
+            for result in ('clear','crushed','soft','hard','commit_required','invalid'):
+                with self.subTest(enabled=enabled,result=result):
+                    runtime=BotRuntime(1,motion_resolver=mock.Mock(return_value=result))
+                    state=dict(id=8,yaw=.4)
+                    if result=='invalid' or (enabled and result=='commit_required'):
+                        with self.assertRaises(RuntimeError):
+                            runtime._passive_motion_status(state,(0.,0.,0.),0.,5.,{},.1,1.,enabled)
+                    else:
+                        expected='hard' if result=='commit_required' else result
+                        self.assertEqual(expected,runtime._passive_motion_status(
+                            state,(0.,0.,0.),0.,5.,{},.1,1.,enabled))
+                    self.assertNotIn('movement_dir',state)
+
 
 class ActionProgressTests(unittest.TestCase):
     def scene(self):

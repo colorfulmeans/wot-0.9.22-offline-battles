@@ -9744,3 +9744,33 @@ parity and startup results are recorded in the delivered validation manifest.
 These are engine-free/package checks; exact BigWorld gameplay acceptance is
 left to the next Windows test. Use the standard EXE for representative normal
 play; SPIKE_PROFILE adds fine observer overhead and is diagnostic only.
+
+### Passive preview consumer regression (2026-10-21)
+
+Report `20261021-011249-44f7ae836b70`, final Windstorm round 3, runs
+`6f460eef`. At 01:12:25 local time the worker raises
+`bot passive motion resolver returned an invalid status` from
+`_hard_contact_response -> _passive_motion_status`; the server then closes
+the round as `worker_disconnected`. This is a Python contract regression,
+not a demonstrated native crash or network timeout. The immediately preceding
+catalog gate is the physically crushable forged fence `(33149, 85)`.
+
+The preceding change added `commit_required` to the shared read-only motion
+resolver and handled it in active local planning, but omitted the passive
+consumer. Passive glancing, contact separation and coupled wreck rotation use
+that consumer. A non-committing passive proposal now explicitly remains hard
+until a real commit owner clears the contact, preserving its pre-change
+blocking policy. It neither destroys the item nor admits an uncommitted
+corridor. Active translation proposals and their final native commit remain
+unchanged. Committing calls and truly invalid statuses retain strict validation.
+The existing contact trace also records the passive policy without new probes.
+
+Composition tests connect the real BattleRuntime preview producer to
+BotRuntime's forward/reverse hard-contact response, assert no destruction or
+slide, and verify movement-intent restoration. A status matrix checks all old
+statuses, unknown results and committing calls. Both tests reproduce failures
+with the previous passive consumer and pass with this fix. The earlier isolated
+preview and mocked passive tests were insufficient to prove this composition;
+the new tests are in the already-discovered handoff regression file. Full local
+and package results are recorded in the replacement package manifest. Actual
+Windstorm acceptance still requires the user's next Windows battle.

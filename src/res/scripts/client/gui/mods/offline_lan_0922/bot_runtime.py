@@ -8325,6 +8325,14 @@ class BotRuntime(object):
                 state['movement_dir'] = movement_dir
             else:
                 state.pop('movement_dir', None)
+        if not commit_enabled and status == 'commit_required':
+            # Active-drive previews may propose a crush transaction. Passive
+            # separation/rotation has no commit owner, so retain its existing
+            # blocked policy rather than accepting an uncommitted corridor.
+            trace = state.get('_world_contact_trace')
+            if isinstance(trace, dict):
+                trace['passive_policy'] = 'uncommitted_contact_blocks_passive_motion'
+            return 'hard'
         if status not in ('clear', 'crushed', 'soft', 'hard'):
             raise RuntimeError(
                 'bot passive motion resolver returned an invalid status')
