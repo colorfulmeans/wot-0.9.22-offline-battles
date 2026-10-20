@@ -41,7 +41,7 @@ class NorthBridgeTests(unittest.TestCase):
                 length = sum(math.hypot(last[0]-first[0], last[2]-first[2])
                              for first, last in zip(path, path[1:]))
                 self.assertLess(length, math.hypot(end[0]-start[0], end[2]-start[2])*1.8+12.)
-                self.assertTrue(all(198 <= p[0] <= 314 and 186 <= p[2] <= 278 for p in path))
+                self.assertTrue(all(198 <= p[0] <= 326 and 166 <= p[2] <= 278 for p in path))
                 for first, last in zip(path, path[1:]):
                     self.assertFalse(grid.segment_has_motion_hazard(first, last, 1|4|8), (first, last))
 
@@ -56,9 +56,9 @@ class NorthBridgeTests(unittest.TestCase):
             for flag in counts:
                 counts[flag] += bool(hazard & flag)
         self.assertTrue(all(counts.values()))
-        # A centre shallower than .9 m is insufficient when its full width
-        # reaches deeper water. The exact-client proof keeps this sample out.
-        self.assertFalse(pn.pose_is_safe(self.graph, (262., -15., 226.), hazard_mask=9))
+        # This bank's full width exceeded .9 m but is inside the newly
+        # measured 1.2 m envelope. Other deep/edge samples above stay vetoed.
+        self.assertTrue(pn.pose_is_safe(self.graph, (262., -15., 226.), hazard_mask=9))
 
     def test_surveyed_shallow_bank_has_support_and_fine_links(self):
         grid = TerrainGrid(lambda *a: None, baked_graph=self.graph)
@@ -80,7 +80,7 @@ class NorthBridgeTests(unittest.TestCase):
     def test_north_geometry_carries_full_width_water_and_drop_proof(self):
         proof = self.source['bake']['local_meshes']['north_bridge']
         self.assertEqual(2.15, proof['bank_support_half_width'])
-        self.assertEqual(.9, proof['water_depth_limit'])
+        self.assertEqual(1.2, proof['water_depth_limit'])
         self.assertEqual(.25, proof['support_sample_metres'])
         self.assertGreater(len(proof['measured_bank_nodes']), 0)
 

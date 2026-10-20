@@ -14870,7 +14870,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle = BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
         cases = (
-            ((0.0, 0.91), 'dry entry'),
+            ((0.0, 1.21), 'dry entry'),
             ((2.0, 2.11), 'deeper water'),
         )
 
@@ -14883,7 +14883,19 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 self.assertTrue(result['water'])
 
         self.assertEqual(
-            0.90, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+            1.20, battle_runtime_module.BOT_WATER_AVOID_DEPTH)
+
+    def test_direction_probe_accepts_new_shoal_up_to_inclusive_limit(self):
+        runtime = _runtime()
+        battle = BattleRuntime(runtime)
+        battle._avatar = runtime.bigworld.avatar
+        for depth in (0.91, 1.067897, 1.158722, 1.2):
+            with self.subTest(depth=depth):
+                battle._water_depth = mock.Mock(side_effect=(0., depth, depth))
+                result = battle._direction_probe((0.,0.,0.),0.)
+                self.assertTrue(result['clear'])
+                self.assertFalse(result['water'])
+                self.assertEqual(3,battle._water_depth.call_count)
 
     def test_visible_hull_drowning_only_drives_native_warning_ui(self):
         runtime = _runtime()

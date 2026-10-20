@@ -13,8 +13,9 @@ sys.path.insert(0, str(ROOT/'tools'))
 import build_local_navigation_meshes as meshes
 import bake_navigation_0922 as baker
 
-REGION = (202, 190, 310, 274)
+REGION = (202, 170, 322, 274)
 BANK = (260, 210, 284, 230)
+SOUTH_SHOAL = (258, 180, 314, 200)
 MOUTHS = ((210, 202, 234, 228), (258, 230, 290, 260))
 BASELINE = '4855e49d'
 ORIGIN = (280.3538467765204, -14.974234580993652, 219.5717056753799)
@@ -61,11 +62,13 @@ def footprint_support(terrain, obstacles, legacy, x, z, y):
 
 def bank_support(terrain, obstacles, legacy, x, z, y):
     return (any(left <= x <= right and bottom <= z <= top
-                for left, bottom, right, top in (BANK,)+MOUTHS) and
+                for left, bottom, right, top in (BANK, SOUTH_SHOAL)+MOUTHS) and
             footprint_support(terrain, obstacles, legacy, x, z, y))
 
 
 def build(client):
+    current_raw = (ROOT/'navgraphs/84_winter.json').read_bytes()
+    current = json.loads(current_raw)
     raw = subprocess.check_output(['git', 'show', BASELINE+':navgraphs/84_winter.json'], cwd=ROOT)
     graph = json.loads(raw)
     meshes.EXTRA_REGIONS = (REGION,)
@@ -126,7 +129,8 @@ def build(client):
     meta['regions'].append(REGION)
     meta['refined_coarse_links'] += refined
     meta['north_bridge'] = dict(
-        region=REGION, measured_bank=BANK, measured_mouths=MOUTHS, baseline=BASELINE,
+        region=REGION, measured_bank=BANK, measured_mouths=MOUTHS,
+        measured_south_shoal=SOUTH_SHOAL, baseline=BASELINE,
         supported_nodes=sum(v is not None for v in patch['heights_mm']),
         measured_bank_nodes=[list(p) for p in sorted(measured)],
         bank_support_half_width=legacy.VEHICLE_HALF_WIDTH,
@@ -136,6 +140,8 @@ def build(client):
         drop_grade_limit=legacy.MAX_GRADE, coarse_links_refined=refined,
         recorded_origin=ORIGIN, recorded_yaw=YAW, recorded_distances=[.5, 3.4308600425720215])
     previous = set(graph.get('navigation_previous_sha256s', ()))
+    previous.update(current.get('navigation_previous_sha256s', ()))
+    previous.add(hashlib.sha256(current_raw).hexdigest())
     previous.add(hashlib.sha256(raw).hexdigest())
     graph['navigation_previous_sha256s'] = sorted(previous)
     assert graph['local_meshes'][0] == json.loads(raw)['local_meshes'][0]

@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
                               'src', 'res', 'scripts', 'client'))
 
 from gui.mods.offline_lan_0922.scenery_policy import railway_vehicle_resource
+from gui.mods.offline_lan_0922.ai.navigation import NAVIGABLE_WATER_DEPTH
 
 from packed_xml import (TYPE_ELEMENT, TYPE_STRING, TYPE_VECTOR, read_packed_xml)
 from space_bin_0922 import (CompiledSpace, CompiledSpaceError,
@@ -73,7 +74,7 @@ NAVIGATION_BASELINE_SHA256 = {
 # line: water the baseline itself calls navigable stays plain ground, and
 # HAZARD_SHALLOW_WATER marks only what needed it - a reviewed ford cell that
 # its own scoped depth limit admits beyond WATER_DEPTH_LIMIT.
-SHALLOW_WATER_THRESHOLD = 0.90
+SHALLOW_WATER_THRESHOLD = NAVIGABLE_WATER_DEPTH
 
 _GREAT_WALL_MAP = '59_asia_great_wall'
 _GREAT_WALL_GRID_CELL_SIZE = 4.0
@@ -471,6 +472,11 @@ def _legacy_baker():
         spec.loader.exec_module(module)
     finally:
         sys.dont_write_bytecode = previous_bytecode_policy
+    # Keep the verified vendor bytes intact; #1513 owns its water policy.
+    # Local mesh builders use this returned module too, including the
+    # existing_graph geometry-only entry which bypasses bake_graph below.
+    module.WATER_DEPTH_LIMIT = NAVIGABLE_WATER_DEPTH
+    module.SHALLOW_WATER_THRESHOLD = NAVIGABLE_WATER_DEPTH
     return module
 
 

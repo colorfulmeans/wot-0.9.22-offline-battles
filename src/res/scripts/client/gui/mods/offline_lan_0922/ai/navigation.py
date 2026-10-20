@@ -25,6 +25,9 @@ from gui.mods.offline_lan_0922.ai.driver import (
 
 
 SQRT_TWO = math.sqrt(2.0)
+# One policy for exact-client baking, local exits and committed driving.
+# Drowning remains owned by the vehicle's native water sensor.
+NAVIGABLE_WATER_DEPTH = 1.20
 BAKED_FATAL_HAZARDS = 1 | 2
 # A reviewed ford cell whose scoped depth limit admits it beyond the baked
 # graph's ordinary navigable water limit. It stays passable when no dry route

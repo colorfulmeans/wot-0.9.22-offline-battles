@@ -44,7 +44,11 @@ def verify(client, output):
               ('bank', (282., -15., 220.), (272., -15., 220.), False),
               ('reported_route', ORIGIN, (217.724, -11., 216.479), False),
               ('reported_authored_leg', (279.912, -12., 248.157), (217.724, -11., 216.479), False),
-              ('bank_to_mouth', ORIGIN, (276., -12., 244.), False)]
+              ('bank_to_mouth', ORIGIN, (276., -12., 244.), False),
+              ('south_shoal', (306., -14., 189.), (264., -14., 189.), False),
+              ('shoal_east_approach', (390., -10., 238.), (306., -14., 189.), False),
+              ('shoal_heavy_west_exit', (264., -14., 189.), (201.8841, -11., 207.3365), False),
+              ('shoal_medium_west_exit', (264., -14., 189.), (201.668, -11., 208.1516), False)]
     records = []
     for name, a, b, direct in cases:
         for start, finish in ((a, b), (b, a)):
@@ -54,7 +58,7 @@ def verify(client, output):
             assert path and math.hypot(path[-1][0]-finish[0], path[-1][2]-finish[2]) < 2., (name, path)
             length = sum(math.hypot(q[0]-p[0], q[2]-p[2]) for p, q in zip(path, path[1:]))
             assert length < math.hypot(finish[0]-start[0], finish[2]-start[2])*1.8+12., (name, 'remote_detour', length)
-            assert all(REGION[0]-4 <= p[0] <= REGION[2]+4 and
+            assert name == 'shoal_east_approach' or all(REGION[0]-4 <= p[0] <= REGION[2]+4 and
                        REGION[1]-4 <= p[2] <= REGION[3]+4 for p in path), (name, 'left_local_region')
             count, maximum_depth = 0, 0.
             for first, last in zip(path, path[1:]):

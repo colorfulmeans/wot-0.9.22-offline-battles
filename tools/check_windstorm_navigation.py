@@ -33,7 +33,8 @@ north_cases=(((282.,250.),(216.,210.)),((282.,220.),(272.,220.)),
             ((280.3538467765204,219.5717056753799),(217.724,216.479)),
             ((279.912,248.157),(217.724,216.479)),
             ((280.3538467765204,219.5717056753799),(277.0672636779235,220.55617109769526)))
-for a,b in north_cases:
+shoal_cases=(((306.,189.),(264.,189.)),)
+for a,b in north_cases+shoal_cases:
  pairs.update(((a,b),(b,a)))
 cases=sorted(pairs);out={}
 for name,g in (('baseline',old),('current',new)):
@@ -46,14 +47,17 @@ for name,g in (('baseline',old),('current',new)):
  native=json.loads(subprocess.check_output([str(args.native_executable.resolve()),str(inp.resolve()),'--paths']))
  if name=='current':
   import math
-  local_cases=set(north_cases)|{(b,a)for a,b in north_cases}
+  local_cases=set(north_cases+shoal_cases)|{(b,a)for a,b in north_cases+shoal_cases}
   for row in native['paths']:
    a,b=cases[row['case']]
    if (a,b)not in local_cases:continue
    path=row['points']
    length=sum(math.hypot(q[0]-p[0],q[2]-p[2])for p,q in zip(path,path[1:]))
    assert path and length<math.hypot(b[0]-a[0],b[1]-a[1])*1.8+12.,('native_remote_detour',a,b,length)
-   assert all(198<=p[0]<=314 and 186<=p[2]<=278 for p in path),('native_left_bridge_region',a,b)
+   if (a,b) in set(shoal_cases)|{(q,p)for p,q in shoal_cases}:
+    assert length<50. and all(185<=p[2]<=193 for p in path),('native_shoal_detour',a,b,path)
+   else:
+    assert all(198<=p[0]<=314 and 186<=p[2]<=278 for p in path),('native_left_bridge_region',a,b)
    for first,last in zip(path,path[1:]):
     assert not grid.segment_has_motion_hazard(first,last,13),('native_commit_hazard',a,b,first,last)
     steps=max(1,int(math.ceil(math.hypot(last[0]-first[0],last[2]-first[2])/.25)))
@@ -61,7 +65,16 @@ for name,g in (('baseline',old),('current',new)):
      point=tuple(first[k]+(last[k]-first[k])*step/steps for k in range(3))
      assert pn.pose_is_safe(graph,point,hazard_mask=9),('native_final_pose_hazard',a,b,point)
  out[name]=dict(cases=len(cases),python=rows,native=native)
- assert not native['partial_or_empty'],(name,native)
- assert all(r['reached']for r in rows),(name,[r for r in rows if not r['reached']])
+ new_cases=set(shoal_cases)|{(b,a)for a,b in shoal_cases}
+ incomplete=native.get('incomplete_cases',())
+ if name=='baseline':
+  # The new shoal is intentionally blocked in the old graph. Keep those
+  # failures visible, but require every pre-existing route to finish.
+  assert all(cases[r['case']] in new_cases for r in incomplete),(name,incomplete)
+  assert all(r['reached'] or (r['start'],r['end']) in new_cases for r in rows),(name,'existing_route_failed')
+  out[name]['expected_old_shoal_failures']=list(incomplete)
+ else:
+  assert not native['partial_or_empty'],(name,incomplete)
+  assert all(r['reached']for r in rows),(name,[r for r in rows if not r['reached']])
  print(name,len(cases),{k:v for k,v in native.items()if k!='paths'},flush=True)
 (args.output/'report.json').write_bytes(json.dumps(out,indent=2).encode())

@@ -18,7 +18,8 @@ from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import driver as ai_driver
 from gui.mods.offline_lan_0922.ai import planner as ai_planner
 from gui.mods.offline_lan_0922.ai.navigation import (
-    BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator, STATIC_PLANNING_POLICY)
+    BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, TerrainNavigator, STATIC_PLANNING_POLICY,
+    NAVIGABLE_WATER_DEPTH)
 from gui.mods.offline_lan_0922 import critical_statistics
 from gui.mods.offline_lan_0922 import critical_damage
 from gui.mods.offline_lan_0922 import ballistics
@@ -247,7 +248,7 @@ FIRE_TICK_SECONDS = 1.0
 SIEGE_ENABLE_DEBOUNCE_SECONDS = 0.30
 SIEGE_DISABLE_DEBOUNCE_SECONDS = 0.80
 SIEGE_LONG_TRAVEL_METRES = 35.0
-BOT_WATER_AVOID_DEPTH = 0.90
+BOT_WATER_AVOID_DEPTH = NAVIGABLE_WATER_DEPTH
 BOT_DROWNING_PROBE_SECONDS = 0.30
 BOT_DROWNING_SECONDS = 10.0
 BOT_DROWNING_DEATH_REASON = 5
@@ -2549,7 +2550,9 @@ class BotRuntime(object):
             'native_query_oracle', None)
         self.navigator = navigator
         from .native_input_diagnostics import write_json_record
-        write_json_record('BOT NAV GRID', prebaked_navigation.graph_summary(graph))
+        summary = prebaked_navigation.graph_summary(graph)
+        summary['navigation_water_limit'] = BOT_WATER_AVOID_DEPTH
+        write_json_record('BOT NAV GRID', summary)
         close = getattr(previous_navigator, 'close', None)
         if callable(close):
             close()
@@ -12292,11 +12295,37 @@ class BotRuntime(object):
             _number(state.get('gun_pitch')),
         )
 
-    def _cancel_artillery_intent(self, bot_id, preserve_reproof=False):
+    def _record_artillery_transition(self, bot_id, reason, now=None, evidence=None):
+        """Freeze producer evidence before a pending shot is replaced/removed."""
+        intent = self._artillery_intents.get(bot_id) or {}
+        reproof = self._artillery_reproofs.get(bot_id) or {}
+        receipt = dict(round=self.round_id, bot=bot_id, reason=reason, at=now,
+            intent_created=intent.get('created'), fire_seq=intent.get('fire_seq'),
+            source_pose=intent.get('source_pose'), target=intent.get('target_identity'),
+            target_position=intent.get('target_position'), solution=intent.get('solution'),
+            reproof=dict((key, reproof.get(key)) for key in (
+                'created', 'deadline', 'absolute_deadline', 'attempts',
+                'proof_latency', 'last_proof_latency', 'last_aim_staleness',
+                'proof_chords', 'proof_maximum_step', 'target_identity')),
+            evidence=evidence)
+        # JSON round-trip prevents later mutation from rewriting the cause.
+        receipt = json.loads(json.dumps(receipt, separators=(',', ':')))
+        state = self.states.get(bot_id)
+        if state is not None:
+            history = state.setdefault('_spg_proof_history', [])
+            history.append(receipt)
+            del history[:-16]
+        from .native_input_diagnostics import write_json_record
+        write_json_record('SPG PROOF', receipt)
+
+    def _cancel_artillery_intent(self, bot_id, preserve_reproof=False,
+                                 reason='owner_cancelled', now=None, evidence=None):
         try:
             bot_id = int(bot_id)
         except (TypeError, ValueError, OverflowError):
             return False
+        if bot_id in self._artillery_intents or bot_id in self._artillery_reproofs:
+            self._record_artillery_transition(bot_id, reason, now, evidence)
         intent = self._artillery_intents.pop(bot_id, None)
         reproof = self._artillery_reproofs.get(bot_id)
         if not preserve_reproof:
@@ -12317,7 +12346,7 @@ class BotRuntime(object):
         bot_ids = set(self._artillery_intents)
         bot_ids.update(self._artillery_reproofs)
         for bot_id in list(bot_ids):
-            self._cancel_artillery_intent(bot_id)
+            self._cancel_artillery_intent(bot_id, reason='round_cleanup')
 
     def _active_artillery_reproof(
             self, state, target, descriptor, shell_index, now):
@@ -12339,7 +12368,7 @@ class BotRuntime(object):
             (pose[index] - baseline[index]) ** 2 for index in range(3)))
         orientation_changed = any(
             abs(_angle_delta(pose[index], baseline[index])) > 0.001
-            for index in range(3, min(len(pose), len(baseline))))
+            for index in range(3, min(6, len(pose), len(baseline))))
         invalid = (
             target_dead or
             self._artillery_target_identity(target) !=
@@ -12349,10 +12378,15 @@ class BotRuntime(object):
             physical != reproof['physical'] or
             moved > 0.05 or orientation_changed)
         if invalid:
-            self._cancel_artillery_intent(bot_id)
+            self._cancel_artillery_intent(bot_id, reason='proof_identity_or_pose_changed',
+                now=now, evidence=dict(target_dead=target_dead,
+                    target=self._artillery_target_identity(target), shell_index=int(shell_index),
+                    fire_seq=int(state.get('fire_seq', 0))+1, physical=physical,
+                    current_pose=pose, baseline_pose=baseline, moved=moved,
+                    orientation_changed=orientation_changed))
             return None
         if _number(now) > reproof['deadline'] + 1e-9:
-            self._cancel_artillery_intent(bot_id)
+            self._cancel_artillery_intent(bot_id, reason='proof_deadline_expired', now=now)
             return None
         return reproof
 
@@ -12368,6 +12402,18 @@ class BotRuntime(object):
         reproof = self._active_artillery_reproof(
             state, target, descriptor, shell_index, now)
         if reproof is None:
+            return None
+        # A reproof deliberately changes gun elevation/traverse to lead the
+        # target again. Its chassis anchor stays fixed, but its original
+        # barrel angles cannot veto that new aim before it can be submitted.
+        # Once an exact shot is pending, all eight frozen pose values belong
+        # to that shot; a real barrel change still cancels its world receipt.
+        pose = self._artillery_source_pose(state)
+        baseline = intent.get('source_pose', reproof['source_pose'])
+        if any(abs(_angle_delta(pose[index], baseline[index])) > 0.001
+               for index in range(6, min(len(pose), len(baseline)))):
+            self._cancel_artillery_intent(bot_id, reason='pending_barrel_changed',
+                now=now, evidence=dict(current_pose=pose, frozen_pose=baseline))
             return None
         return intent
 
@@ -12447,6 +12493,8 @@ class BotRuntime(object):
             'deadline': reproof['deadline'],
         }
         self._artillery_intents[bot_id] = intent
+        self._record_artillery_transition(bot_id, 'intent_created', now,
+            dict(target_velocity=self._target_velocity(target)))
         return intent
 
     def _artillery_reproof_solution(
@@ -13676,7 +13724,7 @@ class BotRuntime(object):
             intended_impact = _point(intent_solution['aim_position'])
             flight_time = float(receipt['flight_time'])
         except (KeyError, TypeError, ValueError, OverflowError):
-            self._cancel_artillery_intent(state.get('id'))
+            self._cancel_artillery_intent(state.get('id'), reason='invalid_aim_receipt', now=now)
             return True
         target_velocity = self._target_velocity(target)
         target_position = _point(
@@ -13690,15 +13738,18 @@ class BotRuntime(object):
                       for index in range(3))
         if any(math.isnan(value) or math.isinf(value)
                for value in target_at_impact + intended_impact + error):
-            self._cancel_artillery_intent(state.get('id'))
+            self._cancel_artillery_intent(state.get('id'), reason='nonfinite_aim_receipt', now=now)
             return True
         distance = math.sqrt(sum(value * value for value in error))
         if distance <= ARTILLERY_AIM_STALENESS_METRES + 1e-9:
+            self._record_artillery_transition(state['id'], 'aim_receipt_current', now,
+                dict(error_metres=distance, target_velocity=target_velocity,
+                    target_at_impact=target_at_impact, intended_impact=intended_impact))
             return False
         reproof = self._active_artillery_reproof(
             state, target, descriptor, shell_index, now)
         if reproof is None:
-            self._cancel_artillery_intent(state.get('id'))
+            self._cancel_artillery_intent(state.get('id'), reason='stale_aim_without_active_proof', now=now)
             return True
         # Re-lead only for target motion accumulated while the native world
         # proof was pending.  Never feed the dispersed terminal back as an aim
@@ -13725,7 +13776,12 @@ class BotRuntime(object):
         reproof['last_aim_staleness'] = distance
         reproof['arc'] = str(intent_solution.get('arc') or '')
         self._cancel_artillery_intent(
-            state.get('id'), preserve_reproof=True)
+            state.get('id'), preserve_reproof=True, reason='aim_receipt_stale', now=now,
+            evidence=dict(error_metres=distance, allowed_error=ARTILLERY_AIM_STALENESS_METRES,
+                target_velocity=target_velocity, target_at_impact=target_at_impact,
+                intended_impact=intended_impact, flight_time=flight_time,
+                proof_chords=receipt.get('proof_chords'),
+                proof_maximum_step=receipt.get('proof_maximum_step')))
         return True
 
     def _artillery_launch_receipt(
@@ -13777,7 +13833,8 @@ class BotRuntime(object):
                 value.get('shell_index') == int(shell_index)):
             state['_spg_launch_failure'] = dict(value)
             state['_spg_launch_failure_target'] = self._observer_target_key(target)
-            self._cancel_artillery_intent(state['id'])
+            self._cancel_artillery_intent(state['id'], reason='exact_launch_failed',
+                now=now, evidence=value)
             self._ballistic_solution_cache.pop(state['id'], None)
             self._spg_aim_solutions.pop(state['id'], None)
             return None
@@ -14122,7 +14179,7 @@ class BotRuntime(object):
         state.pop('_spg_deployment_progress', None)
         state['_spg_position_event'] = 'blocked_deployment_alternate_parking'
         self._decision_cache.pop(state['id'], None)
-        self._cancel_artillery_intent(state['id'])
+        self._cancel_artillery_intent(state['id'], reason='deployment_relocated', now=now)
         return replacement
 
     def _observe_spg_fire_position(self, state, command, target, planning,
@@ -14258,7 +14315,7 @@ class BotRuntime(object):
         state['_spg_position_event'] = ('fire_position_same_zone' if
             replacement['zone'] == initial['zone'] else 'fire_position_other_zone')
         self._decision_cache.pop(state['id'], None)
-        self._cancel_artillery_intent(state['id'])
+        self._cancel_artillery_intent(state['id'], reason='fire_position_relocated', now=now)
         return replacement
 
     @timed('parking.position_order')
@@ -14392,7 +14449,7 @@ class BotRuntime(object):
                             'visited': visited, 'since': now}
                 state['_spg_position'] = position
                 state['_spg_position_event'] = 'adopted_rear_waypoint'
-                self._cancel_artillery_intent(state['id'])
+                self._cancel_artillery_intent(state['id'], reason='rear_waypoint_adopted', now=now)
             else:
                 state['_spg_position_event'] = 'no_safe_rear_waypoint'
             state.pop('_spg_obstruction', None)
@@ -14488,6 +14545,8 @@ class BotRuntime(object):
             'pending_created': (self._artillery_intents.get(state['id']) or {}).get('created'),
             'pending_fire_seq': (self._artillery_intents.get(state['id']) or {}).get('fire_seq'),
             'reproof': state['id'] in self._artillery_reproofs,
+            'last_proof_transition': dict((key, (state.get('_spg_proof_history') or [{}])[-1].get(key))
+                for key in ('reason', 'at', 'reproof')),
             'position_event': state.get('_spg_position_event'),
             'deployment_retry': state.get('_spg_deployment_retry_receipt'),
             'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
@@ -16418,7 +16477,9 @@ class BotRuntime(object):
                 # never the server's desired future selection.
                 intent_shell = int(state['shell_index'])
                 if not command.get('fire_allowed'):
-                    self._cancel_artillery_intent(state['id'])
+                    self._cancel_artillery_intent(state['id'], reason='order_fire_withdrawn', now=now,
+                        evidence=dict(target=self._artillery_target_identity(target),
+                            mode=command.get('combat_mode')))
                 else:
                     pending_intent = self._active_artillery_intent(
                         state, target, descriptor, intent_shell, now)
@@ -17481,7 +17542,7 @@ class BotRuntime(object):
                         self._retain_magazine_followup(state, command, target, now)
                     if fired and is_spg:
                         artillery_launch_stage = 'fired'
-                        self._cancel_artillery_intent(state['id'])
+                        self._cancel_artillery_intent(state['id'], reason='fired', now=now)
                 elif launch is not None:
                     self._mark_friendly_reposition(
                         state, command, target, launch, lane_verdict, now)
@@ -17489,7 +17550,8 @@ class BotRuntime(object):
                         # The proved path belongs to the old muzzle pose. A
                         # moving SPG must discard it and prove the next shot
                         # again after its normal safe-driver motion completes.
-                        self._cancel_artillery_intent(state['id'])
+                        self._cancel_artillery_intent(state['id'], reason='friendly_lane_blocked',
+                            now=now, evidence=lane_verdict)
             if is_spg and publish:
                 try:
                     self._record_artillery_gate(

@@ -9561,3 +9561,77 @@ crash. Early worker callbacks are slow with the full live roster; native collisi
 physics support and contacts dominate, not background A*. No whole-worker FPS
 improvement is claimed for the geometry fix. Real Windows acceptance of the new
 motion checks and uncertain local/aim handoffs remains for the next report.
+
+
+## 2026-10-20 Windstorm 1.2 m shoal and SPG reproof ownership
+
+Report `wot-error-report-20261020-222744-48cc0923612c.zip` contains two
+Windstorm rounds on f317c4e6. The manually authored HT/MT crossing at
+z=188..189 lies outside the previous north local patch (minimum z=190).
+The shortest measured crossing is (306,189) to (264,189). Raising a runtime
+constant alone leaves the old baked water/shore veto intact.
+
+Use a shared 1.20 m navigation-water limit in the runtime and #1513 baker
+adapter. Preserve the hash-checked vendored baker; configure its returned
+module before either full baking or the geometry-only/local-mesh entry.
+Drowning still uses each actual vehicle's mounted native sensor, pitch/roll
+and continuous timer; 1.20 m is a navigation limit, not a universal drowning
+threshold. The 0.90 m coarse batch and other maps are retained conservatively,
+not relabelled as newly surveyed water. Future rebakes use the new policy.
+
+Expand only the existing Windstorm north mesh to (202,170)-(322,274), adding
+the measured shoal to full-width quarter-metre support proofs. Keep the southern
+bridge mesh, coarse heights/hazards, route polylines, spawn formations and
+unrelated catalogs. Clear water/edge bits only by rebaking exact terrain,
+BWWa and compiled geometry; never by erasing selected bits. Preserve the
+previous shipped graph fingerprint so the user's active custom HT/MT profile
+continues to load. Regenerate manifest/editor/default-profile resource identities.
+
+The exact-client verifier covers 22 directed bridge/bank/shoal/access cases,
+4,498 quarter-metre centre samples, and support rectangles for narrow, reported
+Emil, medium and 4.30 m wide chassis. It checks planned paths, motion-hazard
+traversal, final pose and physical collision/support/water across both shoulders
+and longitudinal ends. The shoal crosses directly in about 40-42 m instead of
+about 176-182 m via the bridge. Maximum water depth across the complete case
+set is 1.158722 m; the selected straight crossing's prior dense width survey
+is 1.067897 m. Deep-water and unsafe-shore vetoes remain. Native gameplay
+acceptance is still required; static compiled geometry is not a BigWorld drive.
+
+SU-14 Bot 29 in round two repeatedly queues exact launch proofs without a shot.
+The source code contains a reproducible ownership defect: the long-lived
+reproof compares all eight source-pose components, including original turret
+traverse and gun elevation. A legitimate new lead solution therefore cancels
+its own reproof while the barrel slews to it. Preserve chassis position/yaw/
+pitch/roll, target, physical shell, sequence and absolute deadlines across
+reproofs. Once one exact dispersed shot is pending, separately validate that
+shot's frozen traverse/elevation. Real barrel movement still cancels the old
+world receipt. Do not bypass collision, friendly-lane, dispersion, current-aim
+or target-staleness checks. The full-eight-component fixture fails before
+this correction and passes after it. Gameplay may have additional causes;
+the report's sampled gate rows cannot prove this explains every withheld shot.
+
+`SPG PROOF` immediately freezes creation, stale/current aim receipt, pose/
+identity changes, deadline expiry, exact-launch failure, fire-order withdrawal,
+relocation, successful fire and cleanup. Stale receipts include actual velocity,
+planned and current predicted impact, error, permitted error, proof latency,
+attempts/chords and deadlines. Retain a bounded 16-event per-vehicle history,
+with a compact final-transition summary in the existing fire gate. The report
+reader recognizes both whole and fragmented proof events; regression tests use
+the real writer/reader round trip, not an assumed logging stub.
+
+No Bot navigation ranking, pressure dispatch, target priority, retry/route-switch
+policy, true collision hull, or support switching rule is changed. Support
+remains one invalid point enables detailed suspension; all five valid disables.
+The inspected round-one bridge delays eventually resume travel/fire; round-two
+BatChat engine repair progresses while firing; Object 261 has completed its
+worker-owned local parking and fires despite an older strategic deployment
+label. These observations do not justify speculative navigation changes.
+
+The shipping C++ search source was independently compiled for the local parity
+check (not substituted with the Python planner). Across 178 directed default,
+bridge and new-shoal cases, 534 current jobs finish with zero partial/empty
+paths. The old graph reproduces a bounded 4,096-expansion failure on one new
+shoal direction (three repeated jobs); those expected old failures are kept
+explicit in the comparison, while every pre-existing route must still finish.
+The current search expands 38,592 nodes versus 61,248 in that batch. This is
+search-only evidence, not a client FPS claim.
