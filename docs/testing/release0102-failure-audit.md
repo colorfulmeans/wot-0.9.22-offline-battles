@@ -51,9 +51,13 @@ launcher or claim that source tests prove native gameplay.
 
 ## Build and verification defects
 
-- A misplaced indentation in the folded CI command turned `--pattern` into
-  a separate shell command after 69 passing test files. Correct the command,
-  retain the selected test and the failing process status.
+- Mixed indentation in the folded CI command turned later `--pattern`
+  arguments into separate commands after 69 passing test files. A first
+  single-line correction missed two other over-indented lines. Replace the
+  entire folded command with a literal Bash array and one invocation. Parse
+  the actual YAML and execute shell argument capture: all 58 patterns and
+  their 120 selected files are preserved, with no split or dropped argument.
+  Retain nonzero failure status and every selected test.
 - The replay reader changed during the earlier capacity update. The reader and writer-runtime
   consumer pins were updated then, but the independent package validator
   still pinned both old resources. Match the reviewed current bytes and
