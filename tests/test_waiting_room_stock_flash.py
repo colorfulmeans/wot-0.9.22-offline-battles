@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT/'src/res/scripts/client'), str(ROOT/'tools')]
 from gui.mods.offline_lan_0922 import waiting_room_ui as ui
 from gui.mods.offline_lan_0922 import waiting_room_flash as flash
-from build_waiting_room_swf import tags
+from build_waiting_room_swf import tags, validate_control_linkages
 
 
 class StockRoomTests(unittest.TestCase):
@@ -115,6 +115,34 @@ class StockRoomTests(unittest.TestCase):
         self.assertIn('UIComponent(window).invalidate(Window.INVALID_SRC_VIEW)', publish)
         self.assertLess(publish.index('UIComponent(window).validateNow();'), publish.index('placeRoom();'))
         self.assertIn('roomChars=', publish)
+
+    def test_runtime_linkages_cannot_use_authoring_names(self):
+        with self.assertRaisesRegex(ValueError, 'Unknown native control linkage'):
+            validate_control_linkages('item.itemRenderer = "DropDownListItemRendererSoundUI";',
+                                      {'DropDownListItemRendererSound'})
+        self.assertEqual(['DropDownListItemRendererSound'], validate_control_linkages(
+            'item.itemRenderer = "DropDownListItemRendererSound";', {'DropDownListItemRendererSound'}))
+
+    def test_stock_sizing_and_dropdown_contract(self):
+        source = (ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_text(encoding='utf8')
+        initialize = source.split('override protected function initialize():void {')[1].split(
+            'override protected function configUI():void {')[0]
+        self.assertIn('_originalWidth = 620', initialize)
+        self.assertIn('_originalHeight = 244', initialize)
+        self.assertIn('setActualScale(1, 1)', initialize)
+        component = source.split('private function component(')[1].split('private function button(')[0]
+        self.assertIn('App.utils.classFactory.getComponent', component)
+        self.assertIn('item.width = w', component)
+        self.assertNotIn('item.setSize', component)
+        self.assertNotIn('item.height = 22;\n            item.width', component.split('if (linkage == "ButtonRed")')[0])
+        dropdown = source.split('private function dropdown(')[1].split('private function clicked(')[0]
+        self.assertIn('item.rowCount = 8', dropdown)
+        self.assertIn('item.menuRowsFixed = false', dropdown)
+        self.assertIn('item.thumbOffsetTop = 0', dropdown)
+        self.assertIn('item.thumbOffsetBottom = 0', dropdown)
+        self.assertNotIn('item.rowHeight', dropdown)
+        self.assertNotIn('item.menuRowCount', dropdown)
+        self.assertIn('DropDownListItemRendererSound"', dropdown)
 
     def test_build_rejects_a_stale_movie_after_actionscript_changes(self):
         import build_wotmod

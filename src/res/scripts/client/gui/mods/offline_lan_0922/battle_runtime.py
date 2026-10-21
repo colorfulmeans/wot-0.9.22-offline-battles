@@ -60,6 +60,7 @@ from gui.mods.offline_lan_0922.snapshot_sync import SnapshotSync
 from gui.mods.offline_lan_0922.siege_hud import PersistentSiegeHints
 from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
+from gui.mods.offline_lan_0922.native_world import readonly_queries
 from gui.mods.offline_lan_0922.worker_diagnostics import (
     WorkerCombatDiagnostics, timed, call as timed_call, observed_ray,
     observed_call, observed)
@@ -21987,6 +21988,8 @@ class BattleRuntime(object):
                     candidate['torque'], angle, move, fraction))
         return (end, end_yaw) if clear else None
 
+    @timed('bot.world_rotation')
+    @readonly_queries
     def _native_world_rotation_is_clear(
             self, position, start_yaw, end_yaw, descriptor,
             pitch=None, roll=None, record_local=True, pivot_offset=0.0,
@@ -22481,6 +22484,7 @@ class BattleRuntime(object):
             if old_kind is missing: self._bot_motion_kinds.pop(int(bot_id),None)
             else: self._bot_motion_kinds[int(bot_id)]=old_kind
 
+    @timed('bot.physics.rotation')
     def _resolve_bot_rotation(
             self, bot_id, position, start_yaw, end_yaw, descriptor, dt, now,
             rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0),
@@ -22567,6 +22571,7 @@ class BattleRuntime(object):
                 descriptor, 0.0, now, dt, commit_enabled, 'clear') in ('clear', 'crushed')
         return clear
 
+    @timed('bot.physics.translation')
     def _resolve_bot_motion(self, bot_id, position, yaw, speed,
                             descriptor, dt, now, commit_enabled=True,
                             motion_yaw=None):

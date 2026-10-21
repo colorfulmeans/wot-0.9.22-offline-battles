@@ -1,6 +1,29 @@
 # -*- coding: utf-8 -*-
 """Keep live engine effects on the caller while C++ runs the world law."""
+import functools
 from .worker_diagnostics import observed
+
+
+def readonly_queries(function):
+    """Share raw static rays only across one synchronous read-only sweep.
+
+    Nested sweeps are isolated. Every world operation must also explicitly
+    disable commits before it can borrow this scope; normal driving cannot.
+    """
+    @functools.wraps(function)
+    def invoke(owner, *args, **kwargs):
+        missing = object()
+        previous = getattr(owner, '_readonly_world_rays', missing)
+        owner._readonly_world_rays = {}
+        try:
+            return function(owner, *args, **kwargs)
+        finally:
+            if previous is missing:
+                del owner._readonly_world_rays
+            else:
+                owner._readonly_world_rays = previous
+    return invoke
+
 
 @observed('motion.world_bridge')
 def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
@@ -125,7 +148,7 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                 result.append((xyz(hit[0]), normal, handle, xyz(start), xyz(end)))
         return tuple(result)
     # An exception propagates. Replaying the law could repeat destruction.
-    scope = query.begin_ray_scope() if query is not None else None
+    scope = query.begin_ray_scope(reuse_readonly=not commit_enabled) if query is not None else None
     try:
         status = native_math.world_run(snapshot, dispatch, query,
             (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))

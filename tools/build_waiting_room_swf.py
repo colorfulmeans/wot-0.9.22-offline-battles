@@ -7,6 +7,7 @@ The installed trainingWindow.swf and shared control movies are never patched.
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -35,6 +36,33 @@ def tags(raw):
         if code == 0:
             break
     return raw[:start], result
+
+
+def symbol_classes(raw):
+    result = set()
+    for code, body in tags(raw)[1]:
+        if code != 76:
+            continue
+        count = struct.unpack_from('<H', body)[0]
+        offset = 2
+        for unused in range(count):
+            offset += 2
+            end = body.index(b'\0', offset)
+            result.add(body[offset:end].decode('utf8'))
+            offset = end + 1
+    return result
+
+
+def validate_control_linkages(source, available):
+    # Runtime strings evade the AS3 type checker. Verify them against actual
+    # stock SymbolClass definitions, not inferred authoring instance names.
+    names = re.findall(r'item\.(?:dropdown|itemRenderer) = "([^"]+)"', source)
+    names += re.findall(r'button\("[^"]+", "([^"]+)"', source)
+    names += re.findall(r'component\(key, "([^"]+)"', source)
+    missing = sorted(set(names) - set(available))
+    if missing:
+        raise ValueError('Unknown native control linkage: ' + ', '.join(missing))
+    return sorted(set(names))
 
 
 def pack(header, parts):
@@ -90,6 +118,11 @@ def build(client, java, ffdec, output):
     with zipfile.ZipFile(Path(client) / 'res/packages/gui.pkg') as archive:
         original = archive.read('gui/flash/trainingWindow.swf')
         lobby = archive.read('gui/flash/lobby.swf')
+        available = set()
+        for movie in ('guiControlsLobbyBattle', 'guiControlsLoginBattle', 'guiControlsLogin'):
+            available.update(symbol_classes(archive.read('gui/flash/' + movie + '.swf')))
+    control_linkages = validate_control_linkages(
+        (ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_text(encoding='utf8'), available)
     if hashlib.sha256(original).hexdigest() != 'aeaf9efe4ef1180ed8c65cd7d1c2d9d2e7ddfa8297e5cf1e0819c34c7281a019':
         raise ValueError('Requires pinned #1513 trainingWindow.swf')
     if hashlib.sha256(lobby).hexdigest() != '3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55':
@@ -155,7 +188,7 @@ def build(client, java, ffdec, output):
         subprocess.run(command + ['-selectclass', 'OfflineWaitingRoomUI', '-export',
             'script', str(temp / 'verify'), str(output.resolve())], check=True)
         verified = (temp / 'verify/scripts/OfflineWaitingRoomUI.as').read_text(encoding='utf8')
-        for token in ('DropdownMenuUI', 'ButtonBlack', 'ButtonRed', 'modeTitle', 'exitButton'):
+        for token in tuple(control_linkages) + ('modeTitle', 'exitButton', '_originalWidth', 'rowCount'):
             if token not in verified: raise ValueError('Missing compiled room contract: ' + token)
     proof = dict(actionscript_sha256=hashlib.sha256((ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
                  builder_sha256=hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
@@ -163,7 +196,7 @@ def build(client, java, ffdec, output):
                  source_sha256=hashlib.sha256(original).hexdigest(),
                  lobby_sha256=hashlib.sha256(lobby).hexdigest(),
                  output_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
-                 shared_movies_unchanged=True)
+                 shared_movies_unchanged=True, native_control_linkages=control_linkages)
     output.with_suffix('.swf.json').write_bytes((json.dumps(proof, indent=2)+'\n').encode('utf8'))
     print('Built stock-component room:', output)
 

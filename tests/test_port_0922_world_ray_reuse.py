@@ -37,6 +37,57 @@ class WorldRayReuseTests(unittest.TestCase):
     def ray(self, collision_filter=None, ground=True):
         return self.query._ray(self.start, self.end, collision_filter, ground)
 
+    def test_readonly_rotation_subsolves_share_exact_raw_rays_only(self):
+        from gui.mods.offline_lan_0922.native_world import readonly_queries
+        @readonly_queries
+        def rotation(owner):
+            for unused in range(8):
+                scope = self.query.begin_ray_scope(reuse_readonly=True)
+                try:
+                    self.ray()
+                    self.ray()
+                finally:
+                    self.query.end_ray_scope(scope)
+        rotation(self.owner)
+        self.assertEqual(1, len(self.calls))
+        self.assertFalse(hasattr(self.owner, '_readonly_world_rays'))
+        rotation(self.owner)
+        self.assertEqual(2, len(self.calls))
+
+    def test_readonly_batch_retains_filter_geometry_revision_and_commit_boundaries(self):
+        from gui.mods.offline_lan_0922.native_world import readonly_queries
+        @readonly_queries
+        def rotation(owner):
+            def solve(filtered=False, commit=False):
+                scope = self.query.begin_ray_scope(reuse_readonly=not commit)
+                try: self.ray((lambda *args: True) if filtered else None)
+                finally: self.query.end_ray_scope(scope)
+            solve(); solve()
+            solve(filtered=True); solve(filtered=True)
+            self.start.x = .00001
+            solve()
+            self.revision += 1
+            solve()
+            self.query.invalidate_ray_scope()
+            solve()
+            solve(commit=True); solve(commit=True)
+        rotation(self.owner)
+        self.assertEqual(8, len(self.calls))
+        self.assertFalse(hasattr(self.owner, '_readonly_world_rays'))
+
+    def test_nested_readonly_batches_restore_outer_cache_even_on_failure(self):
+        from gui.mods.offline_lan_0922.native_world import readonly_queries
+        @readonly_queries
+        def fail(owner):
+            self.assertEqual({}, owner._readonly_world_rays)
+            raise ValueError('failed sweep')
+        outer = {'outer': None}
+        self.owner._readonly_world_rays = outer
+        with self.assertRaisesRegex(ValueError, 'failed sweep'):
+            fail(self.owner)
+        self.assertIs(outer, self.owner._readonly_world_rays)
+        self.assertEqual({'outer': None}, outer)
+
     def test_hit_and_miss_each_reuse_one_native_query(self):
         for value in (None, (self.vector(0., 0., 0.), self.vector(0., 1., 0.))):
             self.calls[:] = []

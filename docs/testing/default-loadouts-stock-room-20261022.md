@@ -150,3 +150,51 @@ rendering and real mouse-state behavior still require the next user test.
 Player garage shell overrides have been removed at the user's clarification;
 factory gun overrides, consumable order and full-skill sandbox defaults remain.
 Centurion 7/1 uses its native 105 mm L7 with HESH/APCR for Bots only.
+
+## Package 452 native-control and performance follow-up
+
+The user's 06:36 report and screenshot show that first-population ordering was
+only part of the room problem. The title/content now appear, but menu labels
+are compressed, dropdowns do not open, and the BlackButton face exceeds its slot.
+
+The pinned settingsWindow producer references DropDownListItemRendererSound;
+DropDownListItemRendererSoundUI is only an inferred authoring name and has no
+stock SymbolClass. The runtime string is corrected. Menu configuration now
+uses the native rowCount setter (which owns _maxRowCount), menuRowsFixed,
+Padding and finite thumb offsets. Stock dropdown/button heights are retained;
+only the explicitly compact red battle button changes height. BlackButton
+must use its width setter: setSize bypasses rescaleItems and leaves the internal
+160-pixel state clips unchanged. Components use the native class factory.
+
+The dynamic room establishes _originalWidth/_originalHeight before the Window
+captures content constraints. Replacing only graphics and logical setSize in
+configUI leaves the text prototype as the virtual scale denominator. Native
+constraint counter-scaling can then distort children despite correct logical
+620x244 dimensions. Initialization now establishes the correct scale baseline.
+One-time diagnostics include actual scale and each control's logical/bounded
+size. The builder validates runtime linkage strings against the pinned shared
+movies' SymbolClass tables before compilation.
+
+Performance evidence is independent of the UI: round 4's worst worker callback
+was 2696.619 ms, including 2439.587 ms in Bot updates and 250.743 ms in Bot events.
+It consumed 13 physical slices and 2.591 seconds of elapsed simulation time;
+the previous expensive callbacks caused additional catch-up work. At the same
+time the visible client did not exhibit a comparable multi-second main callback.
+This establishes worker CPU work rather than an Internet explanation, but does
+not identify every expensive collision path as redundant.
+
+The native frontier records repeat exact ray geometry. A read-only rotation
+sweep now allows its commit-disabled world sub-solves to share exact unfiltered
+raw rays. Filters, changed endpoints, ground/ordinary ray kinds, spatial
+revisions, effect invalidation, other owners and nested sweep lifetimes retain
+their boundaries. The batch is bounded by the existing 256-entry cache cap and
+is discarded in finally; ordinary driving cannot borrow it. Rotation and
+translation physics also have separate timing stages for the next report.
+No timestep is dropped or enlarged, and catch-up scheduling is unchanged.
+Tests demonstrate 16 identical read-only ray requests across eight sub-solves
+use one native call, then require a fresh call in the next sweep. This is a
+query-count proof, not a measured claim that the live 999ms spike is eliminated.
+
+No further save reset, ammunition change, navigation, collision/LOS policy or
+support-rule change is included in this follow-up. Exact-client UI interaction,
+resolution changes and live worker latency remain user acceptance checks.

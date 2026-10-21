@@ -6,7 +6,6 @@ package {
     import flash.geom.Rectangle;
     import flash.text.TextField;
     import flash.text.TextFormat;
-    import flash.utils.getDefinitionByName;
     import flash.utils.getQualifiedClassName;
     import net.wg.infrastructure.base.AbstractWindowView;
     import net.wg.gui.components.windows.Window;
@@ -14,6 +13,7 @@ package {
     import scaleform.clik.data.DataProvider;
     import scaleform.clik.events.ButtonEvent;
     import scaleform.clik.events.ListEvent;
+    import scaleform.clik.utils.Padding;
 
     // Compiled against #1513; the builder gives this movie its own class name.
     public dynamic class TrainingWindow extends AbstractWindowView {
@@ -27,6 +27,15 @@ package {
         private var reportedLayout:Boolean = false;
 
         public function TrainingWindow() { super(); }
+
+        override protected function initialize():void {
+            super.initialize();
+            // The retained authoring prototype is not the content's geometry.
+            // Window constraints capture scale before configUI runs.
+            _originalWidth = 620;
+            _originalHeight = 244;
+            setActualScale(1, 1);
+        }
 
         override protected function configUI():void {
             bodyFormat = this["battleType"].defaultTextFormat;
@@ -71,11 +80,14 @@ package {
         }
 
         private function component(key:String, linkage:String, xPos:Number, yPos:Number, w:Number):Object {
-            var cls:Class = getDefinitionByName(linkage) as Class;
-            var item:Object = new cls();
+            var item:Object = App.utils.classFactory.getComponent(linkage, UIComponent, null, loaderInfo);
             item.name = key;
             item.x = xPos; item.y = yPos;
-            item.setSize(w, 22);
+            // BlackButton.width rescales its internal state clips. setSize
+            // bypasses that override and leaves a 160px face in a 94px slot.
+            // Keep the other stock controls at their authored height too.
+            if (linkage == "ButtonRed") item.height = 22;
+            item.width = w;
             item.enabled = true;
             item.enableInitCallback = false;
             widgets[key] = item;
@@ -91,9 +103,21 @@ package {
         private function dropdown(key:String, xPos:Number, yPos:Number, w:Number):void {
             var item:Object = component(key, "DropdownMenuUI", xPos, yPos, w);
             item.dropdown = "DropdownMenu_ScrollingList";
-            item.itemRenderer = "DropDownListItemRendererSoundUI";
-            item.menuRowCount = 8;
-            item.rowHeight = 20;
+            item.itemRenderer = "DropDownListItemRendererSound";
+            item.autoSize = "none";
+            item.focusable = true;
+            item.menuDirection = "down";
+            item.menuMargin = 1;
+            item.menuOffset = new Padding(-5, 0, 0, 3);
+            item.menuPadding = new Padding(0, 0, 0, 0);
+            item.menuRowsFixed = false;
+            item.rowCount = 8;
+            item.menuWidth = -1;
+            item.menuWrapping = "normal";
+            item.scrollBar = "";
+            item.thumbOffsetTop = 0;
+            item.thumbOffsetBottom = 0;
+            item.showEmptyItems = false;
             item.addEventListener(ListEvent.INDEX_CHANGE, selected);
         }
 
@@ -146,9 +170,18 @@ package {
             if (!reportedLayout && offlineAction != null) {
                 reportedLayout = true;
                 offlineAction("diagnostics", "content=" + width + "x" + height +
+                    " actualScale=" + actualScaleX + "," + actualScaleY +
                     " frame=" + window.width + "x" + window.height +
                     " roomChars=" + TextField(fields["room"]).length +
                     " mapChars=" + String(widgets["map"].label).length);
+                for (var role:String in widgets) {
+                    var control:Object = widgets[role];
+                    var bounds:Rectangle = DisplayObject(control).getBounds(this);
+                    offlineAction("diagnostics", "control=" + role +
+                        " logical=" + control.width + "x" + control.height +
+                        " bounds=" + bounds.x + "," + bounds.y + "," + bounds.width + "," + bounds.height +
+                        " scale=" + control.actualScaleX + "," + control.actualScaleY);
+                }
             }
         }
 
