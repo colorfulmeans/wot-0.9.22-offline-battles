@@ -9863,3 +9863,10 @@ are added. The discarded 2 m survey failed full-width support and was not shippe
 
 Support activation/release remains one invalid point on/all five valid points
 off. No support solver, impact damage or ammunition-selection logic changes.
+
+
+A deferred, unavailable or failed direction query remains an unknown receipt,
+not a world-corridor terminal. Its original push timer continues. Within the same unchanged wreck encounter, active driver
+reverse leases (ordinary recovery and navigation-wait recovery) retain ownership
+until their existing completion or safety refusal; the adapter does not interrupt
+them with a newly clear push probe. No new recovery timer or route policy is added.

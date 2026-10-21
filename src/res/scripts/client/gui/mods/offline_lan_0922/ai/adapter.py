@@ -382,8 +382,24 @@ class BotAdapter(object):
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
             self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
+        driver_state = self.driver.states.get(bot_id) or {}
+        navigation_wait = driver_state.get('navigation_wait') or {}
+        if phase == 'resumed' and (driver_state.get('recovery_time', 0.0) > 0.0 or
+                (navigation_wait.get('active') and not navigation_wait.get('completed'))):
+            evidence.update(phase='driver_recovery_active',
+                recovery_time=driver_state.get('recovery_time'),
+                navigation_wait=dict(navigation_wait))
+            return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
+            proof = dict(self.driver._last_direction_receipt)
+            evidence['direction_receipt'] = proof
+            reason = str(proof.get('reason') or '')
+            if any(token in reason for token in ('deferred', 'unavailable', 'exception')):
+                # Unknown native work can pause an attempt but cannot prove a
+                # permanent obstacle. Keep its original elapsed motor budget.
+                evidence['phase'] = 'world_probe_pending'
+                return None
             # A denied push hands ownership back to checked recovery. Keeping
             # this episode live used to interrupt each reverse as soon as the
             # rotating forward probe briefly cleared again (E5, 2026-10-21).

@@ -361,3 +361,12 @@ protection, all retained Windstorm route legs, exact C++ search budget, and
 Himmelsdorf summer/winter route regressions. The initial 1 m search-budget and
 2 m full-hull failures were investigated rather than waived. No old test was
 removed to obtain a pass.
+
+
+Final handoff review adds explicit deferred/unavailable/exception probe cases.
+These observations cannot exhaust a wreck-push episode as a proved world wall.
+Within an unchanged encounter, an already-active ordinary or navigation-wait
+reverse retains its existing terminal ownership before pushing can resume. Tests prove both release and
+resumption, real world refusal, normal forward recovery, original motor budget
+and corpse-displacement renewal. This closes a missing boundary case discovered
+before delivering the candidate; the superseded build 435 is not the final package.

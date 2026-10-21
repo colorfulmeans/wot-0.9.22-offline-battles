@@ -34,6 +34,36 @@ class E5GridTests(unittest.TestCase):
 class E5PushTests(unittest.TestCase):
     wreck_scene = egress.EgressTests.wreck_scene
 
+    def test_unknown_probe_does_not_exhaust_the_existing_attempt(self):
+        for reason in ('native_probe_deferred', 'native_probe_unavailable',
+                       'direction_callback_exception', 'callback_receipt_unavailable'):
+            adapter, state, order = self.wreck_scene()
+            def probe(*a):
+                return False
+            probe.last_receipt = dict(reason=reason)
+            self.assertIsNone(adapter._wreck_push_plan(state['id'], state,
+                state['position'], order, probe))
+            self.assertEqual('world_probe_pending', state['_wreck_push_evidence']['phase'])
+            self.assertFalse(adapter._wreck_attempts[state['id']]['exhausted'])
+            self.assertIsNotNone(adapter._wreck_push_plan(state['id'], state,
+                state['position'], order, lambda *a: True))
+
+    def test_committed_reverse_owns_until_its_existing_terminal_condition(self):
+        adapter, state, order = self.wreck_scene()
+        self.assertIsNotNone(adapter._wreck_push_plan(state['id'], state,
+            state['position'], order, lambda *a: True))
+        driver = adapter.driver._state(state['id'], state['slot'], state['position'])
+        for ordinary in (True, False):
+            driver['recovery_time'] = .4 if ordinary else 0.
+            driver['navigation_wait'] = dict(active=not ordinary, completed=False)
+            self.assertIsNone(adapter._wreck_push_plan(state['id'], state,
+                state['position'], order, lambda *a: True))
+            self.assertEqual('driver_recovery_active', state['_wreck_push_evidence']['phase'])
+            self.assertFalse(adapter._wreck_attempts[state['id']]['exhausted'])
+        driver['navigation_wait']['completed'] = True
+        self.assertIsNotNone(adapter._wreck_push_plan(state['id'], state,
+            state['position'], order, lambda *a: True))
+
     def test_denied_push_has_terminal_handoff_and_does_not_reclaim_each_clear_frame(self):
         adapter, state, order = self.wreck_scene()
         first = adapter.decide_with_order(state, order, lambda *a: False)
