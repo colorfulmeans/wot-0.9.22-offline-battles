@@ -6719,8 +6719,14 @@ class BotRuntime(object):
         else:
             combat_count('planning_current_footprint_reused')
         current = current_samples[key]
-        selected = (current if candidate == yaw else
-                    bool(probe(position, candidate, half_length, half_width)))
+        selected_key = (id(grid), tuple(position), candidate, half_length, half_width)
+        if selected_key not in current_samples:
+            current_samples[selected_key] = bool(probe(
+                position, candidate, half_length, half_width))
+            combat_count('planning_candidate_footprint_sampled')
+        elif candidate != yaw:
+            combat_count('planning_candidate_footprint_reused')
+        selected = current_samples[selected_key]
         return current, selected
 
     def _planning_rotation_fraction_for(self, state, position, yaw, candidate,
@@ -10038,12 +10044,17 @@ class BotRuntime(object):
                  nav_state.get('replan_generation', 0))
         leg = own.get('_occupied_route_leg')
         metadata = (dict(leg[2]) if leg is not None and leg[0] == key and len(leg) > 2 else {})
+        previous_epoch = metadata.get('epoch')
+        epoch_action = 'unchanged'
+        geometry_receipt = {}
         def finish(result, blocked, reason, source):
             observations = own.setdefault('_occupied_route_bypass_observations', [])
             observations.append(dict(at=now, goal=tuple(goal), position=tuple(position),
                 target=result, blocked=bool(blocked), reason=reason, source=source,
                 epoch=epoch, leg_target=leg[1] if leg is not None and leg[0] == key else None,
                 phase=metadata.get('phase'), completed_at=metadata.get('completed_at'),
+                previous_epoch=previous_epoch, epoch_action=epoch_action,
+                geometry=geometry_receipt or metadata.get('geometry', {}),
                 native_clearance_claimed=False))
             del observations[:-4]
             if blocked:own['route_wreck_blocked'] = True
@@ -10051,13 +10062,21 @@ class BotRuntime(object):
             return result
         if leg is not None and leg[0] == key:
             if metadata.get('epoch', epoch) != epoch:
-                # Only the existing replan owner or changed physical geometry
-                # renews this gate attempt; a completed short leg does not.
-                own.pop('_occupied_route_leg', None)
+                # A global corpse revision invalidates geometry receipts, not
+                # this actor's completed action. Only its existing retry owner
+                # may renew the attempt; unrelated deaths must not restart it.
                 cache.pop(key, None)
-                leg = None
-                metadata = {}
-            elif (metadata.get('phase') != 'completed' and
+                if metadata.get('epoch', epoch)[1] != epoch[1]:
+                    own.pop('_occupied_route_leg', None)
+                    leg = None
+                    metadata = {}
+                    epoch_action = 'retry_renewed'
+                else:
+                    metadata['epoch'] = epoch
+                    leg = (key, leg[1], metadata)
+                    own['_occupied_route_leg'] = leg
+                    epoch_action = 'geometry_revalidation'
+            if (leg is not None and metadata.get('phase') != 'completed' and
                     _distance(position, leg[1]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS):
                 metadata.update(epoch=epoch, phase='completed', completed_at=now)
                 leg = (key, leg[1], metadata)
@@ -10105,6 +10124,14 @@ class BotRuntime(object):
             return True
         result = None
         blocked = occupied(goal)
+        geometry_receipt.update(sampled_at=now, radius=radius,
+            goal=tuple(goal), blocked=bool(blocked), blockers=[
+                dict(position=body[1], radius=body[2]) for body in physical
+                if math.hypot(goal[0]-body[1][0], goal[2]-body[1][2]) < radius+body[2]+0.5])
+        if leg is not None and leg[0] == key:
+            metadata['geometry'] = geometry_receipt
+            leg = (key, leg[1], metadata)
+            own['_occupied_route_leg'] = leg
         if not blocked and leg is not None and leg[0] == key:
             own.pop('_occupied_route_leg', None)
             leg = None
@@ -10142,7 +10169,8 @@ class BotRuntime(object):
                     if direct_only and not grid.dry_segment_clear(position, point, now):
                         continue
                     result = point
-                    metadata = dict(epoch=epoch, phase='active', origin=tuple(position))
+                    metadata = dict(epoch=epoch, phase='active', origin=tuple(position),
+                                    geometry=geometry_receipt)
                     leg = (key, point, metadata)
                     own['_occupied_route_leg'] = leg
                     break
@@ -13719,6 +13747,7 @@ class BotRuntime(object):
                     actor, key[1:], now)[:2] for actor in radio_keys)
             radio_values = dict(zip(radio_keys, radio_values))
             published_shooters = []
+            pending_shooters = []
             # A radio observation's 0.5-second *direct spotting* freshness is
             # not a firing-lane lifetime. At low worker FPS it expired between
             # two valid lane samples and silently removed ready shooters.
@@ -13749,12 +13778,19 @@ class BotRuntime(object):
                     lane_age=now-lane[0] if lane is not None else None,
                     mechanical_refusal=source.get('_gun_angle_refusal') == key[1:],
                     mechanical_retry_suppressed=bool(rejected))
+                evidence['movement_refresh_pending'] = bool(
+                    reason == 'lane_expired' and lane[1] and radio[0] > 0.0 and
+                    actor in selected_sources)
                 if actor in selected_sources:
                     source['_lane_publication_evidence'] = evidence
                 diagnostic = self._combat_diagnostics
                 if diagnostic is not None:
                     diagnostic.count('lane_publication_' + reason)
                 if reason != 'published':
+                    # Expiry is an unfinished refresh, not a new wall. It may
+                    # retain an existing movement owner but never permit fire.
+                    if evidence['movement_refresh_pending']:
+                        pending_shooters.append(actor)
                     continue
                 published_shooters.append(actor)
                 if diagnostic is not None and lane is not None:
@@ -13781,6 +13817,7 @@ class BotRuntime(object):
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
                 'shootable_by_bot_ids': published_shooters,
+                'pending_lane_by_bot_ids': pending_shooters,
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
                     incoming_by_target.get(key, ()))) if fresh else [],

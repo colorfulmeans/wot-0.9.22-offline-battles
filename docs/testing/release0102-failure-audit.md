@@ -135,6 +135,39 @@ Low vegetation crushing is deliberately unchanged by user decision.
   Add separate observed preparation, finish and JSON-write stages so the next
   report can distinguish diagnostic overhead from simulation work.
 
+## Report 20261021-135311: expired lanes and repeated occupied-point bypass
+
+- Jagdpanther II (27) retained the same human target while alternating between
+  contact approach and stationary laying. Positive native lane receipts aged
+  1.54-2.06 seconds and were omitted from the shooter list; the server treated
+  an unfinished refresh as a newly blocked lane. Publish selected expired
+  positive receipts separately as `pending_lane_by_bot_ids`. Validate live team
+  and radio ownership on admission. Retain only an already stationary combat
+  owner, with fire disabled. Fresh blocked evidence still releases that owner
+  to the original contact approach; fresh positive evidence restores ordinary
+  firing. No existing approach becomes a new hold. Final native fire checks
+  remain authoritative.
+- Sturer Emil (12) repeatedly received occupied-point bypasses while the global
+  corpse-grid revision advanced. That revision invalidated completed local
+  actions even when the original endpoint remained occupied. Revalidate
+  geometry after a revision without renewing the action. The original actor
+  replan generation still permits another attempt; an endpoint becoming free
+  releases the completed action. Log previous/current epoch, renewal versus
+  geometry-only invalidation, and timed physical blocker positions/radii.
+  This fixes the demonstrated invalidation defect, not every possible source
+  of route oscillation; preserve the complete target/driver lineage for the
+  owner's next gameplay report.
+- Extend synchronous exact baked-footprint reuse to identical candidate poses.
+  Twenty repeated checks of one candidate now need two grid calls rather than
+  twenty-one (current plus candidate); a new planning scope repeats both.
+  Native world queries, physical collision shapes, water and support are not
+  cached or bypassed. This call-count result is not a Windows FPS claim.
+- Regression coverage distinguishes pending/blocked/clear lanes, end-to-end
+  observation admission, radio/visibility loss, existing movement ownership,
+  completed bypass retention, original retry renewal and exact cache scope.
+  The report's detailed support enabled once with four valid points and
+  disabled once with five. Keep that rule unchanged.
+
 ## Publication status
 
 The owner withdrew publication on 2026-10-21. GitHub has no v0.10.2 release

@@ -331,7 +331,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertNotIn(11,planner._retreat_states)
         self.assertTrue(order['fire_allowed'])
 
-    def test_pending_shooter_refresh_releases_stationary_hold_but_keeps_target(self):
+    def test_blocked_shooter_releases_stationary_hold_but_keeps_target(self):
         planner = BotPlanner()
         contact = _contact(2, 0, 150, [11])
         players = self._report(planner, [contact])
@@ -360,6 +360,43 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertEqual(2, expired['target_id'])
         self.assertEqual(first['aim_position'], expired['aim_position'])
         self.assertFalse(expired['fire_allowed'])
+
+    def test_expired_positive_lane_keeps_hold_then_fresh_block_releases_it(self):
+        planner = BotPlanner()
+        contact = _contact(2, 0, 150, [11])
+        players = self._report(planner, [contact])
+        first = planner.build_orders(self.manifest, self.states, players, 1.)['orders'][0]
+        pending = dict(_contact(2, 0, 150, []), pending_lane_by_bot_ids=[11])
+        for now in (1.5, 2., 3.):
+            planner.report_contacts([pending], planner.known_targets(self.states, players), now)
+            held = planner.build_orders(self.manifest, self.states, players, now)['orders'][0]
+            self.assertEqual(first['combat_mode'], held['combat_mode'])
+            self.assertEqual(first['move_position'], held['move_position'])
+            self.assertEqual(0., held['throttle_override'])
+            self.assertFalse(held['fire_allowed'])
+            self.assertEqual('lane_refresh_pending',
+                held['tactical_evidence']['blocked_hold_handoff']['reason'])
+        planner.report_contacts([contact], planner.known_targets(self.states, players), 3.2)
+        restored = planner.build_orders(self.manifest, self.states, players, 3.2)['orders'][0]
+        self.assertTrue(restored['fire_allowed'])
+        blocked = _contact(2, 0, 150, [])
+        planner.report_contacts([blocked], planner.known_targets(self.states, players), 3.5)
+        approach = planner.build_orders(self.manifest, self.states, players, 3.5)['orders'][0]
+        self.assertEqual('advance_contact', approach['combat_mode'])
+        self.assertFalse(approach['fire_allowed'])
+
+    def test_pending_lane_does_not_create_hold_for_an_existing_approach(self):
+        planner = BotPlanner()
+        bot = dict(id=11, state=self.states[0])
+        focus = dict(target_kind='human', id=2, position=dict(x=0., y=0., z=150.),
+                     pending_lane_by_bot_ids=[11])
+        planner._last_orders = dict(orders=[dict(id=11, target_kind='human', target_id=2,
+            combat_mode='advance_contact', move_position=focus['position'], throttle_override=None)])
+        order = {}
+        self.assertTrue(planner._apply_leased_movement_order(order, bot, focus))
+        self.assertEqual('advance_contact', order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertFalse(order['fire_allowed'])
 
     def test_ready_shooter_preempts_a_reloading_target_lease(self):
         planner = BotPlanner()

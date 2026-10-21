@@ -41,6 +41,18 @@ class WorkerQueryReuseTests(unittest.TestCase):
         BotRuntime._planning_grid_pose_pair(other, (1, 0, 0), .1, .1, 4., 1.5, cache)
         self.assertEqual(5, probe.call_count)
 
+    def test_identical_candidate_footprints_share_only_the_synchronous_scope(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        probe = mock.Mock(side_effect=lambda p,y,l,w:y<1.)
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for unused in range(20):
+            self.assertEqual((True, True), BotRuntime._planning_grid_pose_pair(
+                grid, (0.,0.,0.), 0., .5, 3., 1.5, cache))
+        self.assertEqual(2, probe.call_count)
+        BotRuntime._planning_grid_pose_pair(grid, (0.,0.,0.), 0., .5, 3., 1.5, {})
+        self.assertEqual(4, probe.call_count)
+
     def test_navigation_handoff_keeps_early_returns_exceptions_and_gradual_rebases(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         authority = {'_navigation_target_receipt': {'source': 'retained'}}

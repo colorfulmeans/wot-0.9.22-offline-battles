@@ -5475,6 +5475,21 @@ class BattleState:
                     shooter_ids = [identity for identity in shooter_ids
                                    if identity in radio_bots]
                 contact["shootable_by_bot_ids"] = sorted(shooter_ids)
+                pending_ids = set()
+                raw_pending = contact.get("pending_lane_by_bot_ids")
+                if isinstance(raw_pending, (list, tuple)):
+                    for raw_bot_id in raw_pending[:len(known_bots)]:
+                        try:
+                            pending_id = _exact_int(raw_bot_id, 1, PROJECTILE_MAX_ID)
+                        except ValueError:
+                            continue
+                        pending_bot = known_bots.get(pending_id)
+                        if (pending_bot is not None and pending_bot.get("alive") and
+                                int(pending_bot.get("team", 0)) == observing_team and
+                                pending_id not in shooter_ids and
+                                ("radio_recipients" not in contact or pending_id in radio_bots)):
+                            pending_ids.add(pending_id)
+                contact["pending_lane_by_bot_ids"] = sorted(pending_ids)
                 # A threat is advisory native geometry: a malformed row must
                 # not make an otherwise valid observation batch fail or give
                 # a visible client a way to evict the worker.  It is useful

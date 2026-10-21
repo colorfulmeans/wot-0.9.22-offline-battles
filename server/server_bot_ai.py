@@ -369,6 +369,8 @@ class BotPlanner(object):
                     "armor": max(0.0, _number(raw.get("armor"), 0.0)),
                     "shootable_by_bot_ids": self._bot_id_list(
                         raw.get("shootable_by_bot_ids")),
+                    "pending_lane_by_bot_ids": self._bot_id_list(
+                        raw.get("pending_lane_by_bot_ids")),
                     # Positive incoming-fire evidence. None means this pair
                     # was not sampled; an empty list is still not a global
                     # proof that the team is safe.
@@ -410,6 +412,7 @@ class BotPlanner(object):
             elif previous is not None:
                 previous["visible"] = False
                 previous["shootable_by_bot_ids"] = []
+                previous["pending_lane_by_bot_ids"] = []
                 previous["threatened_bot_ids"] = []
                 if "radio_recipients" in raw or "radio_bot_until" in previous:
                     previous["radio_bot_until"] = {}
@@ -1921,6 +1924,15 @@ class BotPlanner(object):
             return False
         if (previous.get('combat_mode') in ('engage', 'support_hold') and
                 previous.get('throttle_override') == 0.0):
+            if bot['id'] in focus.get('pending_lane_by_bot_ids', ()):
+                # The authority retained a positive ray while refreshing it.
+                # Keep this stationary owner without authorizing a stale shot.
+                order.update(combat_mode=previous['combat_mode'],
+                    move_position=dict(previous['move_position']),
+                    throttle_override=0.0, fire_allowed=False)
+                order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
+                    reason='lane_refresh_pending', previous_mode=previous['combat_mode'])
+                return True
             # Release only the stationary hold. The caller keeps the combat
             # objective and lets the existing navigator seek an approach.
             order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
