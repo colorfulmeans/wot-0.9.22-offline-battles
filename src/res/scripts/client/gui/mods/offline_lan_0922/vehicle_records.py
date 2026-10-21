@@ -257,10 +257,8 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
             owned = record_inventory_items.setdefault(item_type, {})
             owned[compact_descr] = max(1, int(owned.get(compact_descr, 0)))
 
-    from gui.mods.offline_lan_0922.default_loadouts import garage_ammo
-    special_ammo = garage_ammo(descriptor) if top_modules else None
-    shells = (special_ammo if special_ammo is not None else
-              list(vehicles.getDefaultAmmoForGun(descriptor.gun)))
+    # Special shell policies belong to Bots; player garages retain native ammo.
+    shells = list(vehicles.getDefaultAmmoForGun(descriptor.gun))
     if not shells or len(shells) % 2:
         raise ValueError('default ammo must contain descriptor/count pairs')
     record_shell_items = record_inventory_items.setdefault(

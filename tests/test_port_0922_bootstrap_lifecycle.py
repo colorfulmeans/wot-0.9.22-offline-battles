@@ -1672,6 +1672,23 @@ class BootstrapLifecycleTests(unittest.TestCase):
         for record in selected['vehicles']:
             self.assertEqual(14, record['settings'])
 
+    def test_player_factory_ammunition_keeps_the_native_gun_default(self):
+        (bootstrap, callbacks, compatibility, app_loader, spaces, events, modules) = self._load()
+        native_ammo = modules['items'].vehicles.getDefaultAmmoForGun
+        seen = []
+        def record_native(gun):
+            result = native_ammo(gun)
+            seen.append(tuple(result))
+            return result
+        modules['items'].vehicles.getDefaultAmmoForGun = record_native
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(
+                DEFAULT_LOADOUTS, 'descriptor_roles', side_effect=AssertionError('Bot-only ammo policy')):
+            selected = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+        self.assertTrue(seen)
+        for record in selected['vehicles']:
+            self.assertIn(tuple(record['shells']), seen)
+            self.assertEqual(record['shells'], record['shellsLayout'][record['shellsLayoutIdx']])
+
     def test_sandbox_full_skills_do_not_add_spendable_crew_xp(self):
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events, modules) = self._load()

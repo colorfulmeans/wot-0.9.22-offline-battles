@@ -9,17 +9,18 @@ ballistics, target priority, recovery or difficulty law is changed.
 
 ## Fitting and ammunition
 
-`default_loadouts.py` contains 32 exact vehicle identities reviewed against the
+`default_loadouts.py` contains 33 exact vehicle identities reviewed against the
 Chinese HD 0.9.22.0.1 #1513 item definitions. It selects an installable turret/gun
 pair before fitting the remaining top modules. This matters for Waffentrager IV:
 its 128 mm L/61 requires the 128 mm platform, rather than the 150 mm platform.
 
-| Vehicle | Factory gun | Ordered ammunition roles |
+| Vehicle | Factory gun | Bot ammunition roles |
 | --- | --- | --- |
 | Rhm.-Borsig | 128 mm L/55 | AP, existing premium, HE |
 | Waffentrager IV | 128 mm L/61 | AP, existing premium, HE |
 | KV-2 | 152 mm M-10 | Silver HE, premium AP; no silver AP |
 | S35 CA | 105 mm Schneider AC | AP, existing premium, HE |
+| Centurion 7/1 | 105 mm L7 | Premium HESH, silver APCR; no silver HE |
 | Charioteer | 105 mm L7 | Premium HESH, silver APCR; no silver HE |
 | Conway | BL 5.5-inch | Premium HESH, silver AP; no silver HE |
 | FV4005 / FV215b (183) | 183 mm | Premium HESH, silver AP; no silver HE |
@@ -45,8 +46,9 @@ unchanged. Special layouts use 3:2:1 over three roles, 3:2 over two roles and
 100% over one role. Largest remainders fill the mounted gun's exact capacity.
 Excluded rounds carry zero inventory. Unlisted layouts retain existing rules.
 
-The same identity mapping drives factory garage layout, Bot inventory/initial
-round, the legacy client planner and server planner. The manifest sanitizer
+Gun overrides apply to factory garages and Bots. Player garage ammunition
+always uses native getDefaultAmmoForGun; special shell roles apply only to Bot
+inventory/initial round, the legacy client planner and server planner. The manifest sanitizer
 preserves complete descriptor names (including dots) instead of truncating
 these protocol keys as player display names. This avoids silently losing the
 policy in transit. A player's alternate mounted gun does not inherit a policy
@@ -125,3 +127,26 @@ Windows package build separately verifies the actual shipping native payload.
 The user must still check Chinese rendering, native dropdown animation, real
 resolution changes and the configured vehicles in the exact game client.
 Keep this candidate on PR113; do not tag, merge or publish 0.10.2.
+
+## Package 451 regressions and follow-up
+
+The 06:02 report confirms a worker startup failure at native_weapons._ammo_row:
+excluded native shot index 0 has no Bot role, but serialization indexed that
+sparse role map as dense. The native ABI requires one category per physical
+shot. The adapter now serializes excluded slots with zero inventory and an
+inert valid category; native availability checks already skip zero inventory.
+Nonzero inventory for an excluded slot is rejected. No native ammunition IDs,
+physical kinds or availability rules are changed.
+
+The stock CLIK producer initializes dynamic fields in configUI, which runs on
+first validation; Python population may publish earlier. The room now validates
+before applying the first model, initializes stock controls before setting their
+labels, then invalidates Window.INVALID_SRC_VIEW so native updateSource measures
+620x244 content rather than the retained prototype. A bounded initialization
+message records content/frame dimensions and text lengths. This lifecycle fix
+is compiled against the pinned native implementation, but exact-client visual
+rendering and real mouse-state behavior still require the next user test.
+
+Player garage shell overrides have been removed at the user's clarification;
+factory gun overrides, consumable order and full-skill sandbox defaults remain.
+Centurion 7/1 uses its native 105 mm L7 with HESH/APCR for Bots only.

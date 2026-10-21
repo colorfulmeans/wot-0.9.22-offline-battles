@@ -1,9 +1,9 @@
 {
-  "actionscript_sha256": "bfd941dbac9183cd5a3c63c7c64e8d2cd92df05b54d49ad4d3e6a248fabbe7ea",
+  "actionscript_sha256": "611a83e87fed38c100384903f8763fd830361a650d0179ce5f1d17469aae7e1c",
   "builder_sha256": "4954d4e130522a254e814ea8652a00bf70a3e6be160ea84829679518a1f045d9",
   "client": "Chinese HD 0.9.22.0.1 #1513",
   "source_sha256": "aeaf9efe4ef1180ed8c65cd7d1c2d9d2e7ddfa8297e5cf1e0819c34c7281a019",
   "lobby_sha256": "3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55",
-  "output_sha256": "611ee9f3f1e1640ea8a7f6606de25459cec254fefe04e3474d3a2c238f6c3e7e",
+  "output_sha256": "4ced8d1c09d857d8afdfce9222ce8ffc390a3a824373af4e4f7f5a4c68a6bdb2",
   "shared_movies_unchanged": true
 }

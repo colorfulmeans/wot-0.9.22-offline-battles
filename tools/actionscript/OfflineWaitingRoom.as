@@ -9,6 +9,8 @@ package {
     import flash.utils.getDefinitionByName;
     import flash.utils.getQualifiedClassName;
     import net.wg.infrastructure.base.AbstractWindowView;
+    import net.wg.gui.components.windows.Window;
+    import scaleform.clik.core.UIComponent;
     import scaleform.clik.data.DataProvider;
     import scaleform.clik.events.ButtonEvent;
     import scaleform.clik.events.ListEvent;
@@ -22,6 +24,7 @@ package {
         private var queue:Object;
         private var bodyFormat:TextFormat;
         private var embedded:Boolean;
+        private var reportedLayout:Boolean = false;
 
         public function TrainingWindow() { super(); }
 
@@ -71,7 +74,8 @@ package {
             var cls:Class = getDefinitionByName(linkage) as Class;
             var item:Object = new cls();
             item.name = key;
-            item.x = xPos; item.y = yPos; item.width = w; item.height = 22;
+            item.x = xPos; item.y = yPos;
+            item.setSize(w, 22);
             item.enabled = true;
             item.enableInitCallback = false;
             widgets[key] = item;
@@ -104,12 +108,19 @@ package {
         }
 
         public function as_update(data:Object):void {
+            // Python population can precede CLIK's first render validation.
+            // Build the fields before publishing data; otherwise the first
+            // model is discarded and the wrapper measures only the prototype.
+            validateNow();
             updating = true;
             window.title = data.title;
             window.useBottomBtns = true;
-            for (var key:String in fields) fields[key].text = data.labels[key] || "";
+            for (var key:String in fields) fields[key].text = data.labels[key] == null ? "" : String(data.labels[key]);
             for (key in widgets) {
                 var widget:Object = widgets[key];
+                // A stock animated control must finish configUI before its
+                // initial data/selection is applied.
+                widget.validateNow();
                 var state:Object = data.controls[key];
                 widget.visible = state != null && state.visible;
                 widget.enabled = state != null && state.enabled;
@@ -126,8 +137,19 @@ package {
                     widget.selected = state.selected;
                 }
             }
+            // Window.updateSource caches content size. Re-measure after our
+            // dynamic children exist, using the native padding/chrome contract.
+            UIComponent(window).invalidate(Window.INVALID_SRC_VIEW);
+            UIComponent(window).validateNow();
             updating = false;
             placeRoom();
+            if (!reportedLayout && offlineAction != null) {
+                reportedLayout = true;
+                offlineAction("diagnostics", "content=" + width + "x" + height +
+                    " frame=" + window.width + "x" + window.height +
+                    " roomChars=" + TextField(fields["room"]).length +
+                    " mapChars=" + String(widgets["map"].label).length);
+            }
         }
 
         override public function updateStage(w:Number, h:Number):void {

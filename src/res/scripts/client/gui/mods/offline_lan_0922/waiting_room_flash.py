@@ -105,6 +105,10 @@ class RoomWindow(object):
         room = self.room
         if not room._open or self.token not in _rooms:
             return
+        if role == 'diagnostics':
+            from gui.mods.offline_lan_0922.waiting_room_ui import _log
+            _log('stock room initialized: %s' % as_text(value)[:256])
+            return
         if role == 'tier':
             if room._training_status()[0]:
                 if value == ('on' if room._training_status()[1] else 'off'):

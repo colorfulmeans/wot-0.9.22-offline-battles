@@ -31,11 +31,42 @@ class SpecialDefaultsTests(unittest.TestCase):
         return types.SimpleNamespace(type=types.SimpleNamespace(name=vehicle, tags={'lightTank'}),
                                      gun=types.SimpleNamespace(name=gun_name, shots=shots, maxAmmo=23))
 
+    def bot_ammo(self, descriptor):
+        roles = policy.descriptor_roles(descriptor)
+        if roles is None:
+            return None
+        counts = policy.allocate(descriptor.gun.maxAmmo, roles, len(descriptor.gun.shots))
+        result = []
+        for role in ('standard', 'premium', 'he'):
+            for index in sorted(roles):
+                if roles[index] == role:
+                    result.extend((descriptor.gun.shots[index].shell.compactDescr, counts[index]))
+        return result
+
+    def test_centurion_vii_bot_uses_hesh_then_apcr_without_silver_he(self):
+        from gui.mods.offline_lan_0922.bot_runtime import _BotAmmoState
+        vehicle = 'uk:GB24_Centurion_Mk3'
+        self.assertEqual('_105mm_Gun_L7', policy.gun_override(vehicle))
+        descriptor = self.descriptor(vehicle)
+        names = ('_105mm_APCR_L7', '_105mm_HESH_L7', '_105mm_HE_L7')
+        for index, shot in enumerate(descriptor.gun.shots):
+            shot.shell.name = names[index]
+        descriptor.gun.shots.append(types.SimpleNamespace(shell=types.SimpleNamespace(
+            name=names[2], compactDescr=102, kind='HIGH_EXPLOSIVE',
+            piercingPower=(105,105), damage=(480,480)), speed=1173))
+        descriptor.gun.maxAmmo = 72
+        profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
+        state = _BotAmmoState(descriptor, profile)
+        self.assertEqual({1: 'standard', 0: 'premium'}, state.categories)
+        self.assertEqual([29, 43, 0], state.remaining)
+        self.assertEqual(1, state.loaded)
+        self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, False))
+
     def test_t49_keeps_native_indices_but_excludes_silver_he(self):
         descriptor = self.descriptor()
         roles = policy.descriptor_roles(descriptor)
         self.assertEqual({2: 'standard', 1: 'premium'}, roles)
-        self.assertEqual([102, 14, 101, 9], policy.garage_ammo(descriptor))
+        self.assertEqual([102, 14, 101, 9], self.bot_ammo(descriptor))
         profile = build_vehicle_profile(descriptor)
         wire = BattleState._sanitize_bot_profile(profile)
         self.assertEqual(roles, policy.profile_roles(wire))
@@ -54,18 +85,40 @@ class SpecialDefaultsTests(unittest.TestCase):
         self.assertEqual((2, 2), (state.loaded, state.next))
         self.assertEqual(2, state._available(0))
 
+    def test_excluded_rounds_serialize_for_native_worker_without_restoring_inventory(self):
+        from gui.mods.offline_lan_0922.bot_runtime import _BotAmmoState
+        from gui.mods.offline_lan_0922.native_weapons import _ammo_row
+        for vehicle, (gun, names) in policy.LOADOUTS.items():
+            if not names:
+                continue
+            descriptor = self.descriptor(vehicle)
+            # Keep a physical shot entry which the Bot policy excludes.
+            descriptor.gun.shots.insert(0, types.SimpleNamespace(shell=types.SimpleNamespace(
+                name='excluded_native_round', compactDescr=999, kind='HIGH_EXPLOSIVE',
+                piercingPower=(1, 1), damage=(1, 1)), speed=100))
+            state = _BotAmmoState(descriptor, build_vehicle_profile(descriptor))
+            row = _ammo_row(state)
+            self.assertEqual(state.shell_count, len(row[0]), vehicle)
+            self.assertEqual(state.shell_count, len(row[1]), vehicle)
+            self.assertEqual(0, row[1][0], vehicle)
+            self.assertEqual(descriptor.gun.maxAmmo, sum(row[1]), vehicle)
+            self.assertEqual('standard', state.categories[row[2]], vehicle)
+            state.remaining[0] = 1
+            with self.assertRaisesRegex(ValueError, 'excluded ammunition'):
+                _ammo_row(state)
+
     def test_lower_penetration_gold_ap_remains_primary(self):
         descriptor = self.descriptor('ussr:R49_SU100Y')
         profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
         self.assertEqual({1: 'standard', 0: 'premium', 2: 'he'}, policy.profile_roles(profile))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, True))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, False))
-        self.assertEqual([101, 11, 100, 8, 102, 4], policy.garage_ammo(descriptor))
+        self.assertEqual([101, 11, 100, 8, 102, 4], self.bot_ammo(descriptor))
 
     def test_two_japanese_premium_he_only_loads_fill_capacity(self):
         for vehicle in ('japan:J25_Type_4', 'japan:J20_Type_2605'):
             descriptor = self.descriptor(vehicle)
-            self.assertEqual([100, 23], policy.garage_ammo(descriptor))
+            self.assertEqual([100, 23], self.bot_ammo(descriptor))
 
     def test_all_role_counts_fill_capacity_without_excluded_rounds(self):
         for maximum in range(1, 150):
@@ -81,14 +134,14 @@ class SpecialDefaultsTests(unittest.TestCase):
         descriptor = self.descriptor()
         descriptor.gun.name = 'player_selected_alternate'
         self.assertIsNone(policy.descriptor_roles(descriptor))
-        self.assertIsNone(policy.garage_ammo(descriptor))
+        self.assertIsNone(self.bot_ammo(descriptor))
         self.assertIsNone(policy.gun_override('ussr:R11_MS-1'))
 
     def test_missing_named_shell_is_rejected_instead_of_using_wrong_round(self):
         descriptor = self.descriptor()
         descriptor.gun.shots = descriptor.gun.shots[:2]
         with self.assertRaisesRegex(ValueError, 'shell missing'):
-            policy.garage_ammo(descriptor)
+            self.bot_ammo(descriptor)
 
     def test_server_preserves_complete_descriptor_keys(self):
         raw = dict(vehicle_name='germany:G83_Pz_IV_AusfA', gun_name='_75mm_KwK_37_L24', shells=[

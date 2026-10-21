@@ -2,6 +2,7 @@ from __future__ import division
 
 """Explicit sandbox/Bot defaults for the pinned #1513 vehicle catalogue.
 
+Gun defaults apply to sandbox garages and Bots. Shell roles apply to Bots only.
 Shell roles describe loadout order, never physical kind, currency or native
 shot indices. Existing saved fittings are not rewritten by this policy.
 """
@@ -11,6 +12,7 @@ LOADOUTS = {
     'germany:G97_Waffentrager_IV': ('_128mm_K44_2_L61', ()),
     'ussr:R77_KV2': ('_152mm_M-10', ('_152mm_53-OF-530', '_152mm_MPB_1915')),
     'france:F33_S_35CA': ('Canon_de_105_mle_1930_Schneider_AC', ()),
+    'uk:GB24_Centurion_Mk3': ('_105mm_Gun_L7', ('_105mm_HESH_L7', '_105mm_APCR_L7')),
     'uk:GB80_Charioteer': ('_105mm_AT_Gun_L7', ('_105mm_HESH_L7', '_105mm_APCR_L7')),
     'uk:GB81_FV4004': ('_5_5inch_AT_Gun', ('_5_5inch_HESH_Mk_1', '_5_5inch_AP_Mk_1')),
     'uk:GB83_FV4005': ('_183mm_AT_Gun', ('_183mm_HESH', '_183mm_AP_Mk1')),
@@ -93,20 +95,4 @@ def allocate(maximum, roles, shell_count):
         -(maximum * weights[roles[i]] % total), indices.index(i)))
     for i in remainder[:maximum - sum(result)]:
         result[i] += 1
-    return result
-
-
-def garage_ammo(descriptor):
-    """Return ordered compact-descriptor/count pairs for an explicit loadout."""
-    roles = descriptor_roles(descriptor)
-    if roles is None:
-        return None
-    shots = descriptor.gun.shots
-    maximum = int(descriptor.gun.maxAmmo)
-    counts = allocate(maximum, roles, len(shots))
-    result = []
-    for role in ('standard', 'premium', 'he'):
-        for index in sorted(roles):
-            if roles[index] == role:
-                result.extend((int(shots[index].shell.compactDescr), counts[index]))
     return result

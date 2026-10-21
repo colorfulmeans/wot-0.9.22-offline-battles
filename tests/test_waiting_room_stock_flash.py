@@ -107,6 +107,15 @@ class StockRoomTests(unittest.TestCase):
                 deferred.pop(0)()
                 stale.destroy.assert_called_once_with()
 
+    def test_model_is_applied_after_clik_initialization_and_wrapper_is_remeasured(self):
+        source = (ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_text(encoding='utf8')
+        publish = source.split('public function as_update(data:Object):void {', 1)[1]
+        self.assertLess(publish.index('validateNow();'), publish.index('for (var key:String in fields)'))
+        self.assertLess(publish.index('widget.validateNow();'), publish.index('widget.label = state.label'))
+        self.assertIn('UIComponent(window).invalidate(Window.INVALID_SRC_VIEW)', publish)
+        self.assertLess(publish.index('UIComponent(window).validateNow();'), publish.index('placeRoom();'))
+        self.assertIn('roomChars=', publish)
+
     def test_build_rejects_a_stale_movie_after_actionscript_changes(self):
         import build_wotmod
         build_wotmod._validate_waiting_room_ui(str(ROOT))
