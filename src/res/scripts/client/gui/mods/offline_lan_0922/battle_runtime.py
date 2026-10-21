@@ -25396,13 +25396,22 @@ class BattleRuntime(object):
             timings['local_solver'] = timings.get('local_solver', 0.0) + max(
                 0.0, _PROFILE_CLOCK() - solver_started)
         now = self._clock()
-        if (any(value is None or getattr(value, 'offset', None) is not None
-                for value in ground) and
-                now >= getattr(self, '_next_local_edge_support_log', 0.0)):
+        abnormal = vehicle_physics.suspension_abnormal_step(physics_state, solved)
+        if ((any(value is None or getattr(value, 'offset', None) is not None
+                 for value in ground) and
+                 now >= getattr(self, '_next_local_edge_support_log', 0.0)) or
+                (abnormal and now >= getattr(self, '_next_local_abnormal_support_log', 0.0))):
             self._next_local_edge_support_log = now + 2.0
+            self._next_local_abnormal_support_log = now + .25
             from .native_input_diagnostics import write_json_record
             write_json_record('LOCAL EDGE SUPPORT', dict(position=position,
                 before=physics_state, solved=solved,
+                replay=vehicle_physics.suspension_replay_receipt(
+                    params, physics_state, ground, dt, pseudo_ground,
+                    support_vertical_speed, solved),
+                motion_pose=motion_pose, tick_pose=tick_pose,
+                yaw=yaw, previous_plane=previous_plane,
+                abnormal=abnormal,
                 spring_columns='x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset',
                 spring_probes=self._local_suspension_probe_trace,
                 applied_springs=[(p['x'],p.get('y',0.),p['z']) for p in params['springs']]))
@@ -25967,10 +25976,21 @@ class BattleRuntime(object):
             self._sender.send_current()
 
     def _canonicalize_local_attitude(self, yaw):
+        previous = (yaw, self._local_pitch, self._local_roll)
         yaw, self._local_pitch, self._local_roll, direction = \
             vehicle_physics.canonical_body_rotation(
                 yaw, self._local_pitch, self._local_roll)
         if direction < 0.0:
+            now = self._clock()
+            if now >= getattr(self, '_local_attitude_chart_log_at', -1.e30):
+                native_input_diagnostics.write_json_record('LOCAL ATTITUDE CHART', dict(
+                    before=previous, after=(yaw,self._local_pitch,self._local_roll),
+                    position=self._local_position, at=now,
+                    reason='equivalent_oververtical_rotation',
+                    speed_before=self._local_speed,
+                    pitch_velocity_before=self._local_suspension_pitch_velocity,
+                    roll_velocity=self._local_suspension_roll_velocity))
+                self._local_attitude_chart_log_at = now + .25
             self._local_speed *= direction
             self._local_suspension_pitch_velocity *= direction
             self._local_drive_pitch_history = None

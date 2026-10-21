@@ -2035,6 +2035,53 @@ def damper_suspension_step(params, state, ground_heights, dt,
 		pseudo_ground_heights, support_vertical_velocity)
 
 
+def suspension_replay_receipt(params, before, ground, dt, pseudo, support_speed, actual):
+	'''Capture the complete numeric solve without another world/native query.
+
+	The stage breakdown is explicitly a Python reference replay, not a claim
+	that those intermediates came from the shipping native solver. Compare its
+	terminal values with the actual result before using it to attribute a force.
+	Call only from an adapter's already bounded diagnostic emission.
+	'''
+	try:
+		return _suspension_replay_receipt(params, before, ground, dt, pseudo, support_speed, actual)
+	except Exception as error:
+		# Diagnostics cannot disable the real support solver or replace its result.
+		return dict(schema=1, scope='same_sample_reference_replay',
+			replay_error=type(error).__name__+': '+str(error))
+
+
+def suspension_abnormal_step(before, after):
+	'''Diagnostic admission only; never a physical angle or motion limit.'''
+	return (abs(float(after['height'])-float(before['height'])) > .15 or
+		any(abs(float(after[key])-float(before[key])) > .15 or
+			abs(float(before[key])) > .8 for key in ('pitch','roll')))
+
+
+def _suspension_replay_receipt(params, before, ground, dt, pseudo, support_speed, actual):
+	stages = []
+	reference = _reference_damper_suspension_step(params, before, ground, dt,
+		pseudo, support_speed, diagnostics=stages)
+	differences = dict((key, float(actual[key])-float(reference[key]))
+		for key in _SUSPENSION_RESULT_KEYS[:6])
+	mismatches = []
+	for key in _SUSPENSION_RESULT_KEYS:
+		left, right = actual[key], reference[key]
+		if left is None or right is None:
+			matches = left is right
+		else:
+			matches = abs(float(left)-float(right))<=1.e-7*max(1.,abs(float(left)))
+		if not matches:
+			mismatches.append(key)
+	return dict(schema=1, scope='same_sample_reference_replay',
+		input=dict(params=params, state=before,
+			ground=[None if value is None else float(value) for value in ground],
+			pseudo_ground=list(pseudo), dt=dt, support_vertical_speed=support_speed),
+		actual=dict(actual), reference=reference, stages=stages,
+		terminal_delta=differences, output_mismatches=mismatches,
+		terminal_matches=not mismatches)
+
+
 def suspension_contact_recovery(params, before, after, ground, pseudo_ground,
 		previous_plane, position, motion_pose):
 	"""Admit depenetration at a stationary, previously accepted support layer.
@@ -2068,7 +2115,7 @@ def suspension_contact_recovery(params, before, after, ground, pseudo_ground,
 
 
 def _reference_damper_suspension_step(params, state, ground_heights, dt,
-		pseudo_ground_heights=None, support_vertical_velocity=0.0):
+		pseudo_ground_heights=None, support_vertical_velocity=0.0, diagnostics=None):
 	'''Advance the model-origin ten-spring heave/pitch/roll trial.
 
 	Both motion adapters own model-origin X/Z separately. Translating only
@@ -2115,6 +2162,7 @@ def _reference_damper_suspension_step(params, state, ground_heights, dt,
 	pitch_acceleration = 0.0
 	roll_acceleration = 0.0
 	for substep_index in range(steps):
+		trace_before = dict(result) if diagnostics is not None else None
 		rotation = (_suspension_rotation(result['pitch'], result['roll'])
 			if constraints else None)
 		# Horizontal travel moves the reduced heave constraint from the
@@ -2209,9 +2257,17 @@ def _reference_damper_suspension_step(params, state, ground_heights, dt,
 		pre_projection_speed = result['vertical_velocity']
 		pre_projection_pitch_speed = result['pitch_velocity']
 		pre_projection_roll_speed = result['roll_velocity']
+		trace_free = dict(result) if diagnostics is not None else None
 		projected = _project_suspension_limits(
 			params, result, ground_heights, pseudo_ground_heights,
 			support_vertical_velocity, support_projection_offset, constraints)
+		if diagnostics is not None:
+			diagnostics.append(dict(index=substep_index, dt=step,
+				before=trace_before, free=trace_free, projected=dict(result),
+				force=total_force, pitch_torque=pitch_torque, roll_torque=roll_torque,
+				contacts=sorted(projected),
+				projection_delta=dict((key,result[key]-trace_free[key])
+					for key in _SUSPENSION_RESULT_KEYS[:6])))
 		if projected:
 			if step > 0.0:
 				# Hard contacts exert impulses too. Spring force alone cannot

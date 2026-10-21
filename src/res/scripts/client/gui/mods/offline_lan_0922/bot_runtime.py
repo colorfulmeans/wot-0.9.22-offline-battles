@@ -3199,6 +3199,8 @@ class BotRuntime(object):
 
     def _release_detailed_support(self, state):
         """Hand back only after admitted landing effects, without moving the hull."""
+        if state.get('_support_release_after_contacts'):
+            return False
         if BOT_FULL_SUPPORT_ENABLED or not state.get('_edge_support_active'):
             return False
         rows = self._basic_support_status(state)
@@ -7606,11 +7608,30 @@ class BotRuntime(object):
                 last_position=position, samples=0, travel=0.0, net=0.0,
                 forward=0, reverse=0, turning=0, held=0,
                 command_modes={}, last_control_at=None, first_decision=None,
-                last_decision=None, last_goal=None)
+                last_decision=None, last_goal=None, actions=[], actions_dropped=0)
             state['_execution_window'] = row
         trace = command.get('control_trace') or {}
         planning = command.get('planning_receipt') or {}
         mode = str(command.get('recovery_mode') or command.get('combat_mode') or 'unspecified')
+        signature = (mode, command.get('combat_mode'),
+            _point(command['move_position']) if command.get('move_position') is not None else None,
+            _point(trace['strategic_move_position']) if trace.get('strategic_move_position') is not None else None,
+            command.get('target_kind'), command.get('target_id'))
+        actions = row['actions']
+        if not actions or actions[-1]['signature'] != signature:
+            actions.append(dict(signature=signature, at=now, origin=position,
+                yaw_before=state.get('yaw'), first_decision=planning.get('id'),
+                mode=mode, combat_mode=command.get('combat_mode'),
+                goal=command.get('move_position'),
+                strategic_goal=trace.get('strategic_move_position'),
+                target=(command.get('target_kind'),command.get('target_id')), samples=0))
+            if len(actions)>32:
+                del actions[0]
+                row['actions_dropped'] += 1
+        actions[-1].update(last_at=now, last_decision=planning.get('id'),
+            controls=(throttle,turn), samples=actions[-1]['samples']+1,
+            arrival=dict(trace.get('arrival') or {}),
+            gates=list((trace.get('pedal') or {}).get('gates') or ()))
         row['command_modes'][mode] = row['command_modes'].get(mode, 0) + 1
         row['travel'] += math.hypot(position[0]-row['last_position'][0],
                                    position[2]-row['last_position'][2])
@@ -7629,6 +7650,15 @@ class BotRuntime(object):
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
         """Log the actual authority outcome without extra world queries."""
+        window=state.get('_execution_window') or {}
+        actions=window.get('actions') or []
+        if actions:
+            actions[-1]['outcome'] = dict(at=now, final=_position(state),
+                yaw=state.get('yaw'), speed=state.get('speed'),
+                settled=settled_position, support_rollback=bool(support_rollback),
+                pose_rollback=bool(pose_rollback),
+                displacement=math.hypot(state['x']-actions[-1]['origin'][0],
+                                        state['z']-actions[-1]['origin'][2]))
         trace = state.pop('_motion_stall_pending', None)
         if trace is None:
             return
@@ -8792,12 +8822,20 @@ class BotRuntime(object):
             params, physics_state, ground, step, pseudo_ground,
             support_vertical_speed)
         moment = float(getattr(self, '_contact_now', None) or 0.0)
-        if (state.get('_edge_support_active') and
-                moment >= state.get('_next_edge_support_log', -1.e30)):
+        abnormal = vehicle_physics.suspension_abnormal_step(physics_state, solved)
+        if ((state.get('_edge_support_active') or BOT_FULL_SUPPORT_ENABLED) and
+                (moment >= state.get('_next_edge_support_log', -1.e30) or
+                 (abnormal and moment >= state.get('_next_abnormal_support_log', -1.e30)))):
             state['_next_edge_support_log'] = moment + 2.0
+            state['_next_abnormal_support_log'] = moment + .25
             from .native_input_diagnostics import write_json_record
             write_json_record('BOT EDGE DYNAMICS', dict(round=self.round_id,
                 bot=state['id'], position=position, before=physics_state, solved=solved,
+                replay=vehicle_physics.suspension_replay_receipt(
+                    params, physics_state, ground, step, pseudo_ground,
+                    support_vertical_speed, solved),
+                abnormal=abnormal, yaw=state.get('yaw'), tick_pose=tick_pose,
+                motion_pose=motion_pose, previous_plane=previous_plane,
                 spring_columns='local_x,local_y,local_z,height,patch_offset',
                 springs=[(p['x'],p.get('y',0.),p['z'],height,getattr(height,'offset',None))
                     for p,height in zip(params['springs'],ground)],
@@ -17953,6 +17991,9 @@ class BotRuntime(object):
                     state['id'], state.get('yaw', 0.0))
                 was_airborne = bool(state.get('airborne', False))
                 driven_pose = _position(state)
+                # Contact translation can still replace this trial endpoint.
+                # Retire detailed support only at the final physical pose.
+                state['_support_release_after_contacts'] = True
                 support_blocked = self._update_vertical_motion(
                     state, frame_step,
                     tick_poses[state['id']], attempted_yaw)
@@ -18064,6 +18105,12 @@ class BotRuntime(object):
                 if callable(clear_contact):
                     clear_contact(bot_id)
             self._settle_unresolved_drive_sweep(state)
+            state.pop('_support_release_after_contacts', None)
+            if state.get('_edge_support_active'):
+                state.setdefault('_support_motion_receipt', {}).update(
+                    release_stage='after_contacts_and_pose_guards',
+                    release_position=_position(state), release_at=now)
+            self._release_detailed_support(state)
             self._observe_near_goal_motion(state,tick_poses[bot_id],drive_targets.get(bot_id),now)
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),

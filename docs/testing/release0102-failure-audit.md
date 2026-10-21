@@ -197,6 +197,47 @@ Low vegetation crushing is deliberately unchanged by user decision.
   target loss, priority handoff, ordinary movement and diagnostic provenance.
   Geometry replay verifies logic, not Windows gameplay feel.
 
+## Report 20261021-151509: final support ownership and full-solver replay
+
+- Build 431 reproduces the player's bridge-edge tumble at approximately
+  15:14:34-15:14:40. The player already runs detailed support. Do not describe
+  its instability as a support-mode toggle or a tank-on-tank contact bug.
+  Player and detailed Bot support share the numeric solver. This report does
+  not isolate which spring-force or hard-projection operation causes the
+  player's repeated lift, so no speculative solver-law change is made.
+- A separate confirmed worker ownership defect is corrected: the timed
+  vertical solve could release detailed support at its provisional endpoint,
+  before tank translation/separation restored a different endpoint. Somua SM
+  16 has repeated enable/disable pairs at those different X/Z poses around
+  15:13:11. Defer release through the final physical-contact and pose guards;
+  then check the actual five points. Keep one-invalid enable, all-five-valid
+  disable, real collision, gravity, landing effects and route laws.
+- Both detailed adapters now capture a complete serializable numeric input
+  and actual output. The explicitly labelled Python reference replay breaks
+  each substep into force integration and hard projection, and compares its
+  terminal result with the actual solver. No extra world or native query is
+  issued. Replay failure is diagnostic only. Normal edge samples remain at
+  two seconds; abnormal lift/rotation receives a bounded 0.25-second cadence.
+  The local YPR chart receipt distinguishes equivalent angle remapping from
+  a physical rotation, without modifying the existing remapping law.
+- WZ-120-1G FT 9 remains in a small pocket until 15:14:47 despite repeated
+  attempts. Existing evidence includes real collision refusals and changing
+  retreat/contact/defence actions, not a proven reason to change navigation.
+  The common applied-control window now retains a bounded sequence of action
+  goals, targets, decision identities, arrival gates and final physical
+  outcomes, including cached controls and no-emission frames. Omitted actions
+  are counted. No routing or retry timer is changed.
+- Sturer Emil 12's corpse push terminates as `own_stalled`, followed by reverse
+  and movement. Preserve that bounded attempt; do not call it a permanent
+  push or identify this German TD as Dicker Max. Tiger 18 and Somua 16 later
+  move/fire. ISU-122S 26 executes the existing mechanical recovery and fires
+  again; these facts do not prove that every blocked pocket is bug-free.
+- Tests include the runtime contact phase, final lost/restored support,
+  JSON-roundtrippable numeric replay, force/projection attribution, explicit
+  native/reference disagreement, diagnostic exception containment, cached
+  action lineage and bounded omissions. Full-solver Windows acceptance remains
+  pending; this candidate must not be presented as a verified tumble fix.
+
 ## Publication status
 
 The owner withdrew publication on 2026-10-21. GitHub has no v0.10.2 release
