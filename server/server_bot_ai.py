@@ -4414,6 +4414,13 @@ class BotPlanner(object):
         evidence = dict(sampled_at=now, mode=order.get('combat_mode'),
                         fire_seq=state.get('fire_seq'), reason='ineligible')
         order.setdefault('tactical_evidence', {})['firing_hold'] = evidence
+        if (order.get('tactical_evidence', {}).get('blocked_hold_handoff', {}).get(
+                'reason') == 'lane_refresh_pending'):
+            # Waiting for geometry is not eight seconds of a proved ready lane
+            # without a shot. Do not let the idle-shot timer undo this owner.
+            self._firing_holds.pop(bot_id, None)
+            evidence['reason'] = 'lane_refresh_pending'
+            return
         if state.get('local_combat_manoeuvre', False):
             # The worker owns the complete bounded lane/angle manoeuvre.
             # Time spent turning/moving for that action is not idle aiming.

@@ -367,7 +367,7 @@ class ServerBotTacticsTests(unittest.TestCase):
         players = self._report(planner, [contact])
         first = planner.build_orders(self.manifest, self.states, players, 1.)['orders'][0]
         pending = dict(_contact(2, 0, 150, []), pending_lane_by_bot_ids=[11])
-        for now in (1.5, 2., 3.):
+        for now in (1.5, 2., 3., 12., 13.):
             planner.report_contacts([pending], planner.known_targets(self.states, players), now)
             held = planner.build_orders(self.manifest, self.states, players, now)['orders'][0]
             self.assertEqual(first['combat_mode'], held['combat_mode'])
@@ -376,12 +376,13 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.assertFalse(held['fire_allowed'])
             self.assertEqual('lane_refresh_pending',
                 held['tactical_evidence']['blocked_hold_handoff']['reason'])
-        planner.report_contacts([contact], planner.known_targets(self.states, players), 3.2)
-        restored = planner.build_orders(self.manifest, self.states, players, 3.2)['orders'][0]
+            self.assertEqual('lane_refresh_pending', held['tactical_evidence']['firing_hold']['reason'])
+        planner.report_contacts([contact], planner.known_targets(self.states, players), 13.2)
+        restored = planner.build_orders(self.manifest, self.states, players, 13.2)['orders'][0]
         self.assertTrue(restored['fire_allowed'])
         blocked = _contact(2, 0, 150, [])
-        planner.report_contacts([blocked], planner.known_targets(self.states, players), 3.5)
-        approach = planner.build_orders(self.manifest, self.states, players, 3.5)['orders'][0]
+        planner.report_contacts([blocked], planner.known_targets(self.states, players), 13.5)
+        approach = planner.build_orders(self.manifest, self.states, players, 13.5)['orders'][0]
         self.assertEqual('advance_contact', approach['combat_mode'])
         self.assertFalse(approach['fire_allowed'])
 
