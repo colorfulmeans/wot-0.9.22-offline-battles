@@ -1,6 +1,8 @@
 """Temporary five-point support ownership and admitted landing damage."""
 import contextlib
 import io
+import json
+from pathlib import Path
 import unittest
 from unittest import mock
 import test_port_0922_contact_support_navigation as fixtures
@@ -9,6 +11,93 @@ from gui.mods.offline_lan_0922 import environment_modules as em
 
 class SupportLifecycleTests(unittest.TestCase):
     scene = fixtures.ContactSupportTests.scene
+    def test_handoff_receipt_rolls_back_and_resets_with_its_datum(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        state.update(_edge_support_active=True,airborne=False,y=.43,speed=0.,vertical_speed=0.)
+        runtime._contact_now=0.
+        with contextlib.redirect_stdout(io.StringIO()):
+            runtime._release_detailed_support(state)
+        snapshot=runtime._snapshot_bot_suspension_state(state)
+        runtime._contact_now=.1
+        runtime._revalidate_basic_support_datum(state,0.,.1)
+        self.assertNotIn('_basic_support_datum',state)
+        runtime._restore_bot_suspension_state(state,snapshot)
+        self.assertEqual(.43,state['_basic_support_datum'])
+        self.assertEqual('created',state['_basic_support_handoff']['phase'])
+        runtime._reset_bot_suspension_state(state)
+        self.assertNotIn('_basic_support_datum',state)
+        self.assertNotIn('_basic_support_handoff',state)
+
+    def test_emitted_support_receipt_contains_actual_clearance_proof(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        state.update(_basic_support_datum=.43,y=.43,airborne=False)
+        runtime._contact_now=1.
+        runtime._revalidate_basic_support_datum(state,0.,.1)
+        with mock.patch('gui.mods.offline_lan_0922.native_input_diagnostics.write_json_record') as emit:
+            runtime._report_support_mode(state,runtime._basic_support_status(state),'sample')
+        tag,record=emit.call_args[0]
+        self.assertEqual('BOT SUPPORT MODE',tag)
+        receipt=record['basic_support_handoff']
+        self.assertEqual('raw_footprint_supported',receipt['reason'])
+        self.assertEqual(5,len(receipt['points']))
+        self.assertIsNone(record['basic_support_datum'])
+        self.assertEqual(0.,receipt['raw_ground'])
+
+    def test_recorded_bank_and_flat_footprints_have_distinct_handoff_verdicts(self):
+        recorded=json.loads((Path(__file__).parent/'fixtures/lorraine_support_handoff_225005.json').read_text())
+        runtime,state=self.scene(lambda x,z:0.)
+        for phase,ground,points,position,expected in (
+                ('release',recorded['release']['points'][0]['ground'],
+                 recorded['release']['points'],recorded['release']['position'],True),
+                ('flat',recorded['flat']['raw_ground'],recorded['flat']['points'],
+                 recorded['flat']['position'],False)):
+            state.update(x=position[0],y=position[1],z=position[2],
+                         _basic_support_datum=.43095605320568176)
+            with self.subTest(phase=phase), mock.patch.object(runtime,
+                    '_basic_support_status',return_value=points):
+                runtime._revalidate_basic_support_datum(state,ground,.1)
+                self.assertEqual(expected,'_basic_support_datum' in state)
+                self.assertEqual(5,len(state['_basic_support_handoff']['points']))
+
+    def test_recorded_lorraine_gap_retires_without_reenabling_support(self):
+        runtime,state=self.scene(lambda x,z:0.)
+        state.update(_edge_support_active=True,airborne=False,
+            y=.43095605320568176,speed=0.,vertical_speed=-5.073396001779339)
+        runtime._contact_now=0.
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(runtime._release_detailed_support(state))
+            runtime._integrate_vertical_motion(state,0.)
+            self.assertAlmostEqual(.43095605320568176,state['y'])
+            for tick in range(1,601):
+                state['z']+=.1
+                runtime._contact_now=tick*.1
+                runtime._integrate_vertical_motion(state,.1)
+                self.assertLessEqual(state['y'],.43095605320568176)
+                if tick >= 10:
+                    self.assertAlmostEqual(0.,state['y'])
+                self.assertFalse(state.get('_edge_support_active',False))
+                self.assertEqual(5,sum(row['valid'] for row in runtime._basic_support_status(state)))
+        self.assertNotIn('_basic_support_datum',state)
+        self.assertEqual('raw_footprint_supported',state['_basic_support_handoff']['reason'])
+        self.assertIsNone(state['_basic_support_handoff']['datum_after'])
+
+    def test_handoff_requires_all_real_points_before_retiring_gap(self):
+        terrain=[True]
+        runtime,state=self.scene(lambda x,z:.9 if terrain[0] and z < -3. else 0.)
+        state.update(_edge_support_active=True,airborne=False,y=.43,
+                     speed=0.,vertical_speed=0.)
+        runtime._contact_now=0.
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(runtime._release_detailed_support(state))
+            runtime._contact_now=.1
+            self.assertAlmostEqual(.43,runtime._revalidate_basic_support_datum(state,0.,.1))
+            self.assertEqual('raw_footprint_would_lose_support',
+                             state['_basic_support_handoff']['reason'])
+            terrain[0]=False
+            runtime._contact_now=.2
+            self.assertEqual(0.,runtime._revalidate_basic_support_datum(state,0.,.1))
+        self.assertNotIn('_basic_support_datum',state)
+
     def test_turn_rebases_slope_before_deciding_detailed_support(self):
         import math
         runtime,state=self.scene(lambda x,z:.4*x+.2*z)
@@ -79,7 +168,7 @@ class SupportLifecycleTests(unittest.TestCase):
         self.assertNotIn(11,runtime._suspension_params)
         self.assertEqual(retained,{k:state[k] for k in retained})
 
-    def test_handoff_height_survives_subsequent_basic_ticks(self):
+    def test_handoff_returns_to_real_flat_ground_after_boundary(self):
         runtime,state=self.scene(lambda x,z:0.)
         # The report closes detailed support 0.135 m above its centre ray.
         state.update(_edge_support_active=True,airborne=False,y=.135,
@@ -90,10 +179,10 @@ class SupportLifecycleTests(unittest.TestCase):
                 runtime._contact_now=tick*.15
                 self.assertFalse(runtime._contact_edge_support_needed(state))
                 runtime._integrate_vertical_motion(state,.15)
-                self.assertAlmostEqual(.135,state['y'])
+                self.assertAlmostEqual(0.,state['y'])
                 self.assertFalse(state.get('airborne',False))
 
-    def test_handoff_datum_follows_real_slope_and_clears_at_a_ledge(self):
+    def test_handoff_retires_on_supported_slope_and_missing_ground(self):
         import math
         runtime,state=self.scene(lambda x,z:.1*z)
         state.update(_edge_support_active=True,airborne=False,y=.135,
@@ -106,13 +195,13 @@ class SupportLifecycleTests(unittest.TestCase):
                 runtime._contact_now=tick
                 self.assertFalse(runtime._contact_edge_support_needed(state))
                 runtime._integrate_vertical_motion(state,.15)
-                self.assertAlmostEqual(.135+.1*tick,state['y'])
+                self.assertAlmostEqual(.1*tick,state['y'])
             runtime._physics_ground_probe=lambda *args:None
             runtime._contact_now=9.
             self.assertTrue(runtime._contact_edge_support_needed(state))
             self.assertNotIn('_basic_support_datum',state)
 
-    def test_turning_on_supported_slope_keeps_the_admitted_height(self):
+    def test_turning_on_supported_slope_does_not_keep_old_height_gap(self):
         import math
         runtime,state=self.scene(lambda x,z:.2*x+.1*z)
         state.update(_edge_support_active=True,airborne=False,y=.135,
@@ -126,7 +215,7 @@ class SupportLifecycleTests(unittest.TestCase):
                 runtime._reorient_basic_ground_pose(state)
                 self.assertFalse(runtime._contact_edge_support_needed(state))
                 runtime._integrate_vertical_motion(state,.15)
-                self.assertAlmostEqual(.135,state['y'])
+                self.assertAlmostEqual(0.,state['y'])
 
     def test_airborne_fall_does_not_keep_handoff_datum_or_change_landing(self):
         runtime,state=self.scene(lambda x,z:0.)

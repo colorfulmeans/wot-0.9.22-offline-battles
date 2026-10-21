@@ -425,3 +425,29 @@ before delivering the candidate; the superseded build 435 is not the final packa
   variants connected without fallback, and four disabled variants absent.
 - Include the preceding saved-resource identity compatibility fix in this
   unpublished test package. Do not publish or tag v0.10.2.
+
+
+### Report 20261021-225005: Lorraine support handoff hover
+
+- Lorraine bot 29 enabled detailed support at 22:46:12.070 (four valid
+  footprint points) and released it at 22:46:12.308 (five valid points).
+  The handoff captured a 0.43095605320568176 m centre gap during the descent.
+  Every subsequent sampled basic pose retained that gap, including flat ground;
+  foreground model position matched the worker. Other Lorraines had no datum.
+- Preserve the accepted pose and velocity at the ownership boundary. On later
+  positive-time basic steps, reuse current real five-point support columns to
+  test the ordinary basic ground root. Retire the datum only when all five
+  shifted gaps satisfy the existing support reach. Otherwise retain it with
+  the measured rejection proof. Airborne/missing-support paths still clear it.
+  No timer, interpolated floor, navigation rule or support threshold was added.
+- Record created/retained/cleared handoff receipts, raw root, actual ground,
+  five shifted gaps, time and reason in existing BOT SUPPORT MODE/BOT MOTION
+  records. Snapshot/rollback and descriptor reset own this state too.
+- Replace old tests which required an arbitrary handoff gap to persist on
+  flat terrain. Replay both recorded bank and flat footprints, a zero-time
+  handoff, all-point retention, ordinary fall/ledge behavior and a sixty-metre
+  post-handoff flat traversal without repeated detailed activation.
+- The unexplained visible callback gap is not attributed to GPU or navigation.
+  Emit bounded structured frame_gap records with the already collected window,
+  CPU, callback and poll boundary evidence. Diagnostic tests parse the emitted
+  content and verify actual fields; no extra per-frame native query is added.

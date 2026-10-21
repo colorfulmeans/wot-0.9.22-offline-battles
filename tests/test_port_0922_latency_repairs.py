@@ -1,6 +1,7 @@
 """Captured worker latency classes: publication, queue fairness and gaps."""
 import types
 import io
+import json
 import sys
 import unittest
 from unittest import mock
@@ -49,10 +50,21 @@ class LatencyRepairsTests(unittest.TestCase):
         diagnostic.finish(frame, 0., .01, .01, {}, {}, {'role': 'guest'})
         wall[0], cpu[0], window[0] = .51, .007, (0, 1, 1)
         diagnostic.begin(.51, .51)
+        row=diagnostic._compact_frame(diagnostic._slow[0])
         diagnostic.flush()
         text = ''.join(lines)
         self.assertIn('window_before=[1,0,1] window_after=[0,1,1]', text)
         self.assertIn('gpu_measured=0\n', text)
+        self.assertEqual((1,0,1),row['window_before'])
+        self.assertEqual((0,1,1),row['window_after'])
+        self.assertEqual(('focused','minimized','known'),row['window_fields'])
+        evidence=[json.loads(line.split('frame_gap ',1)[1])
+                  for line in text.splitlines() if 'frame_gap {' in line]
+        self.assertEqual(1,len(evidence))
+        self.assertEqual([1,0,1],evidence[0]['frame']['window_before'])
+        self.assertEqual([0,1,1],evidence[0]['frame']['window_after'])
+        self.assertEqual('guest',evidence[0]['context']['role'])
+        self.assertFalse(evidence[0]['gpu_measured'])
         self.assertTrue(diagnostic.enabled)
 
     def test_hit_diagnostic_names_bot_and_player_targets(self):

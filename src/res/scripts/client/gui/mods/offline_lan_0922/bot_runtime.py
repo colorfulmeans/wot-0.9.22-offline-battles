@@ -276,6 +276,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
     '_basic_fall_origin_y', '_basic_continuous_support',
     '_legacy_straddle_reference_y', '_support_mode_basis', '_basic_support_datum',
+    '_basic_support_handoff',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -2899,6 +2900,7 @@ class BotRuntime(object):
         state.pop('_pseudo_ground_memory', None)
         state.pop('_suspension_ground_plane', None)
         state.pop('_basic_support_datum', None)
+        state.pop('_basic_support_handoff', None)
         state.pop('_support_mode_basis', None)
         if reset_grounded:
             state['grounded_once'] = False
@@ -3138,7 +3140,7 @@ class BotRuntime(object):
             selection_stage=selection_stage, pose_refreshed=bool(refreshed))
         missing = any(not row['valid'] for row in rows)
         if missing:
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state, 'point_support_lost')
             state['_edge_support_active'] = True
         self._report_support_mode(state, rows, 'enable' if missing else 'sample')
         return missing
@@ -3182,6 +3184,7 @@ class BotRuntime(object):
             total=5, points=rows, airborne=bool(state.get('airborne')),
             vertical_speed=state.get('vertical_speed'),
             basic_support_datum=state.get('_basic_support_datum'),
+            basic_support_handoff=state.get('_basic_support_handoff'),
             yaw=state.get('yaw'), terrain_pitch=self._terrain_pitch(state),
             roll=state.get('roll'), basic_basis_yaw=state.get('_basic_slope_basis_yaw'),
             support_basis=state.get('_support_mode_basis'),
@@ -3207,10 +3210,17 @@ class BotRuntime(object):
         if state.get('airborne') or not all(row['valid'] for row in rows):
             self._report_support_mode(state, rows, 'sample')
             return False
-        # The accepted rigid pose need not put its root exactly on the
-        # centre ray. Preserve that measured datum when the basic owner
-        # resumes; dropping it on the next frame recreates point loss.
+        # Preserve this ownership boundary's pose. The next positive-time
+        # basic step must revalidate the datum against its current footprint;
+        # a transient landing gap is not a permanent raised ground surface.
         state['_basic_support_datum'] = float(state['y'])-float(rows[0]['ground'])
+        state['_basic_support_handoff'] = dict(
+            phase='created', reason='accepted_detailed_pose',
+            created_at=getattr(self, '_contact_now', None),
+            at=getattr(self, '_contact_now', None),
+            origin=_position(state), raw_ground=float(rows[0]['ground']),
+            datum_before=state['_basic_support_datum'],
+            datum_after=state['_basic_support_datum'])
         state.pop('_edge_support_active', None)
         self._suspension_params.pop(int(state['id']), None)
         # Solver memory must not suppress the basic four-point pose owner.
@@ -3227,6 +3237,49 @@ class BotRuntime(object):
         state.pop('_legacy_straddle_reference_y', None)
         self._report_support_mode(state, rows, 'disable')
         return True
+
+    def _revalidate_basic_support_datum(self, state, ground, step):
+        """Retire handoff height only when the real basic pose keeps all five points."""
+        datum = state['_basic_support_datum']
+        receipt = dict(state.get('_basic_support_handoff') or {})
+        now = getattr(self, '_contact_now', None)
+        receipt.update(at=now, datum_before=datum, raw_ground=ground,
+                       root_before=float(state['y']), step=step)
+        if step <= 0. or (receipt.get('created_at') is not None and
+                         receipt['created_at'] == now):
+            receipt.update(phase='retained', reason='handoff_or_projection_slice',
+                           datum_after=datum)
+            state['_basic_support_handoff'] = receipt
+            return datum
+        # Reuse the normal five-point contract, at the same X/Z and attitude.
+        # Only root Y changes, so cached real ground columns remain applicable.
+        rows = self._basic_support_status(state)
+        shift = float(ground)-float(state['y'])
+        proof = [dict(name=row['name'], ground=row['ground'], gap=row['gap'],
+                      basic_gap=(None if row['gap'] is None else row['gap']+shift))
+                 for row in rows]
+        supported = all(row['basic_gap'] is not None and
+                        -0.6 <= row['basic_gap'] <= vehicle_physics.GROUND_FOLLOW_MIN
+                        for row in proof)
+        receipt.update(points=proof, phase='cleared' if supported else 'retained',
+                       reason='raw_footprint_supported' if supported else
+                              'raw_footprint_would_lose_support',
+                       datum_after=None if supported else datum)
+        state['_basic_support_handoff'] = receipt
+        if supported:
+            state.pop('_basic_support_datum', None)
+            return 0.
+        return datum
+
+    def _clear_basic_support_datum(self, state, reason):
+        if '_basic_support_datum' not in state:
+            return
+        receipt = dict(state.get('_basic_support_handoff') or {})
+        receipt.update(phase='cleared', reason=reason,
+                       at=getattr(self, '_contact_now', None),
+                       datum_before=state.pop('_basic_support_datum'),
+                       datum_after=None, root_before=state.get('y'))
+        state['_basic_support_handoff'] = receipt
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -7717,6 +7770,7 @@ class BotRuntime(object):
                     'ground_ahead','profile','native_surface_candidates',
                     'native_surface_columns','pivot_offset')},
             'support_datum': state.get('_basic_support_datum'),
+            'support_handoff': dict(state.get('_basic_support_handoff') or {}),
             'near_goal_motion': dict(state.get('_near_goal_motion') or {}),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
@@ -9295,11 +9349,10 @@ class BotRuntime(object):
         ground = centre if centre is not None else highest
         raw_support_centre = centre
         if was_basic_airborne or ground is None:
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state,
+                'airborne' if was_basic_airborne else 'missing_ground')
         elif '_basic_support_datum' in state:
-            # This is a reference-frame transfer from an admitted detailed
-            # pose, not an invented floor or an upward velocity impulse.
-            datum = state['_basic_support_datum']
+            datum = self._revalidate_basic_support_datum(state, ground, step)
             ground += datum
             centre = centre+datum if centre is not None else None
         if trace is not None:
@@ -9438,7 +9491,7 @@ class BotRuntime(object):
         # the last downward interval so the next query can see a crossed floor,
         # rather than rejecting that floor as an overhead bridge forever.
         if state.get('airborne', False):
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state, 'became_airborne')
             state['_basic_fall_origin_y'] = fall_origin_y
         else:
             state.pop('_basic_fall_origin_y', None)

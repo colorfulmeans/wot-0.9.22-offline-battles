@@ -853,6 +853,9 @@ class _FrameDiagnostics(object):
             'between_callbacks_cpu_ms': (round(row['between_callbacks_cpu'] * 1000.0, 3)
                 if row.get('between_callbacks_cpu') is not None else None),
             'between_callbacks_wall_ms': round(row.get('between_callbacks_wall', 0.0) * 1000.0, 3),
+            'window_before': row.get('window_before'),
+            'window_after': row.get('window_after'),
+            'window_fields': ('focused', 'minimized', 'known'),
             'outside_ms': round(row['outside'] * 1000.0, 3),
             'lan_poll_ms': (dict((name, round(
                 row['lan_poll'][name + '_wall_seconds'] * 1000.0, 3))
@@ -1283,6 +1286,13 @@ class _FrameDiagnostics(object):
                     if row.get('between_callbacks_cpu') is not None else 'unavailable'),
                 json.dumps(row.get('window_before'), separators=(',', ':')),
                 json.dumps(row.get('window_after'), separators=(',', ':'))))
+            if context.get('role') != 'worker':
+                # Preserve foreground boundary evidence as one structured row.
+                # This measures callback/CPU/poll time, never a guessed GPU cause.
+                lines.append(_combat_log_lines(prefix, 'frame_gap', {
+                    'schema': 1, 'window': self._window_id, 'rank': rank,
+                    'context': dict(context), 'frame': self._compact_frame(row),
+                    'gpu_measured': False}))
             if context.get('role') == 'worker':
                 frames = [('focus', 0, self._compact_frame(row))]
                 if rank == 1:
