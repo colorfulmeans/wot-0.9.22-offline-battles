@@ -584,9 +584,11 @@ class SkillVocabularyParityTests(unittest.TestCase):
         waiting_room_ui = _load('waiting_room_ui')
 
         self.assertEqual(
-            tuple(gunnery.SKILL_MODES),
+            ('mixed', 'easy', 'relaxed', 'hard', 'brutal'),
             tuple(value for value, unused_label
                   in waiting_room_ui.BOT_SKILL_OPTIONS))
+        self.assertEqual(set(gunnery.SKILL_MODES),
+                         set(value for value, label in waiting_room_ui.BOT_SKILL_OPTIONS))
 
     def test_the_wire_accepts_exactly_the_supported_presets(self):
         lan_client = _load('lan_client')

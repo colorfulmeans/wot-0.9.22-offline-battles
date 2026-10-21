@@ -9899,3 +9899,33 @@ builders preserves the class; visible UI acceptance remains an owner test.
 Report 214201 round 3 bot 26 (WT E100) had fired five rounds, zero clip and
 38.53 seconds of reload remaining at 21:40:42. It waited after magazine
 withdrawal, then moved and fired shot 6; that wait adds no gameplay change.
+
+Serene Coast report 232823 exposed unsafe retained spawn slots and unequal
+support frames in direction probes. Audit all 30 slots with the exact client's
+terrain and the largest shipping chassis envelope; move only five unsafe slots
+within 16 m, preserving headings, the other 25 slots, every route and grid.
+The offline repair checks full footprint gradients, hard/soft scenery clearance,
+maximum chassis spacing and directed home connectivity. It introduces no live
+spawn relocation or navigation policy.
+
+Selected motion probes now carry the same grounded yaw/pitch/roll as planner
+probes. Reverse travel changes the travel heading, not the occupied body frame;
+airborne probes retain their previous unposed behavior. Invalidate a cached
+support-plane proof after the existing 0.005-radian attitude tolerance, and do
+not acquire a flat-only exact corridor receipt on a banked hull. Native sweep,
+wall, water, missing-ground and support-mode rules remain authoritative. Record
+fresh live push blockers and all queried heading rejection stages, with original
+sample times and observation ages, instead of treating a retained receipt as a
+current explanation. These changes require owner Windows gameplay acceptance.
+
+The standard and training waiting room share a larger aligned canvas, original
+RGBA olive/red button textures, and a translucent dark panel. Baked texture
+colours avoid #1513's ignored textured-quad tint; the cursor and independent
+daily-services panel retain their existing primitives, font and dimensions.
+The difficulty dropdown orders mixed/easy/relaxed/hard/brutal as Mixed, Rookie,
+Regular, Veteran, Elite (Chinese labels match the launcher). Wire presets,
+ratings and the mixed first-run default are unchanged. Persist the last chosen
+preset only after a matching server acknowledgement in the same connection;
+restore it once when reconnecting as host, never impose it on a remote host.
+Small screens use the existing smaller font. Native rendering acceptance is
+still a Windows owner test; layout/resource and lifecycle tests are engine-free.

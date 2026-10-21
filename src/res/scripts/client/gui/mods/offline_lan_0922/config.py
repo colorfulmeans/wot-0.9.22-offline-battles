@@ -850,6 +850,11 @@ def _normalise_waiting_room_state(value):
     if not isinstance(value, dict) or value.get('schema') != 1:
         raise ValueError('LAN waiting room settings are invalid')
     state = _empty_waiting_room_state()
+    skill = value.get('bot_skill_mode')
+    if skill is not None:
+        if skill not in ('mixed', 'easy', 'relaxed', 'hard', 'brutal'):
+            raise ValueError('LAN waiting room Bot difficulty is invalid')
+        state['bot_skill_mode'] = skill
     selected_map = value.get('map')
     if selected_map is not None:
         if not isinstance(selected_map, string_types) or not selected_map:
@@ -908,7 +913,7 @@ def load_waiting_room_state(path=WAITING_ROOM_STATE_PATH):
 
 
 def save_waiting_room_state(value, path=WAITING_ROOM_STATE_PATH):
-    """Persist the last map, capacities and player team atomically."""
+    """Persist acknowledged difficulty and existing room choices atomically."""
     try:
         state = _normalise_waiting_room_state(value)
         payload = {
@@ -919,6 +924,8 @@ def save_waiting_room_state(value, path=WAITING_ROOM_STATE_PATH):
             'team_sizes': dict((str(team), size) for team, size in
                                state['team_sizes'].items()),
         }
+        if 'bot_skill_mode' in state:
+            payload['bot_skill_mode'] = state['bot_skill_mode']
         write_json(path, payload)
     except (IOError, OSError, OverflowError, TypeError, ValueError):
         return False

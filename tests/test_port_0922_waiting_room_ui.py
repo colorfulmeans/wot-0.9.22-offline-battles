@@ -69,7 +69,7 @@ class _Surface(object):
         self.resorts = 0
 
     def window(self):
-        return _Component('window', '')
+        return _Component('window', 'gui/maps/offline_lan/waiting_panel.dds')
 
     def simple(self, texture=''):
         return _Component('simple', texture)
@@ -248,9 +248,10 @@ class WaitingRoomTests(unittest.TestCase):
         self.assertEqual(self._root_count(), len(self.surface.roots))
         self.assertEqual(2, self.surface.resorts)
 
-    def test_the_panel_draws_untextured_flat_colour(self):
+    def test_the_panel_draws_its_baked_translucent_skin(self):
         self.room.install()
-        self.assertEqual('', self.room._panel.texture)
+        self.assertEqual(self.module.PANEL_TEXTURE, self.room._panel.texture)
+        self.assertEqual('BLEND', self.room._panel.properties['materialFX'])
 
     def test_the_host_sees_the_map_selector_and_start_button(self):
         self.room.open()
@@ -552,6 +553,38 @@ class WaitingRoomTests(unittest.TestCase):
         self.assertTrue(room.activate('tier_next'))
         self.assertEqual('random', requested[-1])
 
+    def test_difficulty_dropdown_keeps_wire_presets_and_requested_chinese_order(self):
+        for training in (False, True):
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_UI_LANGUAGE': 'zh'}):
+                requested = []
+                room = self.module.WaitingRoomUI(lambda name: True, lambda: self.pool,
+                    surface=_Surface(), host=lambda: True,
+                    training_status=lambda: (training, True),
+                    bot_skill_status=lambda: {'mode': 'mixed', 'supported': True},
+                    request_bot_skill_mode=lambda mode: requested.append(mode) or True)
+                room.open()
+                self.assertIn('混合', room._labels['skill'].properties['text'])
+                self.assertTrue(room.activate('skill'))
+                options = self.module.BOT_SKILL_OPTIONS
+                self.assertEqual(('mixed', 'easy', 'relaxed', 'hard', 'brutal'),
+                                 tuple(value for value, label in options))
+                self.assertEqual(['混合', '新手', '普通', '老兵', '精英'],
+                    [room._labels['skill_choice_'+value].properties['text'] for value, label in options])
+                self.assertTrue(all(room._controls['skill_choice_'+value].properties['visible']
+                                    for value, label in options))
+                self.assertFalse(room._controls['start'].properties['visible'])
+                self.assertFalse(room._labels['map'].properties['visible'])
+                self.assertTrue(room.activate('skill_choice_brutal'))
+                self.assertEqual(['brutal'], requested)
+                self.assertFalse(room._skill_menu_open)
+                self.assertTrue(room._controls['start'].properties['visible'])
+                self.assertTrue(room._labels['map'].properties['visible'])
+                self.assertTrue(all(not room._controls['skill_choice_'+value].properties['visible']
+                                    for value, label in options))
+                self.assertIn('精英', room._labels['skill'].properties['text'])
+                room.close()
+                self.assertFalse(room._skill_menu_open)
+
     def test_host_can_cycle_the_bot_skill_preset(self):
         requested = []
         skill_state = {'mode': 'mixed', 'supported': True}
@@ -565,12 +598,12 @@ class WaitingRoomTests(unittest.TestCase):
         self.assertTrue(room.open())
         for role in self.module._BOT_SKILL_CONTROLS:
             self.assertTrue(room._controls[role].properties['visible'])
-        self.assertIn('Pub mix', room._labels['skill'].properties['text'])
+        self.assertIn('Mixed', room._labels['skill'].properties['text'])
         self.assertTrue(room.activate('skill_next'))
-        self.assertEqual(['hard'], requested)
-        self.assertIn('Hard', room._labels['skill'].properties['text'])
+        self.assertEqual(['easy'], requested)
+        self.assertIn('Rookie', room._labels['skill'].properties['text'])
         self.assertTrue(room.activate('skill_previous'))
-        self.assertEqual(['hard', 'mixed'], requested)
+        self.assertEqual(['easy', 'mixed'], requested)
 
     def test_a_guest_never_sees_the_bot_skill_controls(self):
         room = self.module.WaitingRoomUI(
@@ -594,9 +627,9 @@ class WaitingRoomTests(unittest.TestCase):
 
         self.assertTrue(room.open())
         self.assertTrue(room.activate('skill_next'))
-        self.assertIn('Hard', room._labels['skill'].properties['text'])
-        self.assertTrue(room.reject_bot_skill_mode('hard'))
-        self.assertIn('Pub mix', room._labels['skill'].properties['text'])
+        self.assertIn('Rookie', room._labels['skill'].properties['text'])
+        self.assertTrue(room.reject_bot_skill_mode('easy'))
+        self.assertIn('Mixed', room._labels['skill'].properties['text'])
 
     def test_the_bot_skill_row_never_overlaps_its_neighbours(self):
         """Both preset rows and the map row share one narrow native panel."""
@@ -673,6 +706,29 @@ class WaitingRoomTests(unittest.TestCase):
     @staticmethod
     def _label_for(room, role):
         return room._labels[role].properties['text']
+
+    def test_standard_and_training_share_aligned_skinned_controls(self):
+        for training in (False, True):
+            surface = _Surface()
+            screen = [(1280, 720)]
+            surface.screen_size = lambda: screen[0]
+            room = self.module.WaitingRoomUI(lambda name: True, lambda: self.pool,
+                surface=surface, host=lambda: True,
+                training_status=lambda: (training, True))
+            room.open()
+            self.assertEqual(self.module.ROOM_FONT, room._labels['title'].properties['font'])
+            for role in room._controls:
+                c = room._controls[role].properties
+                x, y, z = c['position']
+                self.assertLessEqual(abs(x)+c['width']/2., 1.)
+                self.assertLessEqual(abs(y)+c['height']/2., 1.)
+                if role in room._labels:
+                    self.assertEqual((x, y), room._labels[role].properties['position'][:2])
+            self.assertEqual(self.module.START_TEXTURE, room._controls['start'].texture)
+            screen[0] = (800, 600)
+            room.refresh()
+            self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
+            room.close()
 
     def test_panel_geometry_is_raised_and_bounded_at_common_resolutions(self):
         for screen in ((800, 600), (1024, 768), (1280, 720),
@@ -1134,7 +1190,7 @@ class NativeSurfaceTests(unittest.TestCase):
         surface.remove_root('window')
         surface.resort()
         self.assertEqual(calls, [
-            ('Window', ''),
+            ('Window', self.module.PANEL_TEXTURE),
             ('Simple', ''),
             ('Text', ''),
             ('addRoot', 'window'),
@@ -1269,7 +1325,9 @@ class RoomTextureTests(unittest.TestCase):
         # An untextured GUI.Simple draws nothing here, so anything meant to
         # be seen needs the one texture this client renders.
         texture = self.module.CONTROL_TEXTURE
-        self.assertEqual(texture, self.room._controls['start'].texture)
+        self.assertEqual(self.module.START_TEXTURE, self.room._controls['start'].texture)
+        self.assertTrue(all(c.texture == self.module.BUTTON_TEXTURE
+                            for role, c in self.room._controls.items() if role != 'start'))
         drawn = set(part.texture
                     for part, unused_x, unused_y, unused_z
                     in self.room._pointer_parts)
@@ -1278,8 +1336,8 @@ class RoomTextureTests(unittest.TestCase):
         self.assertEqual(
             set([texture, self.module.OUTLINE_TEXTURE]), drawn)
 
-    def test_button_labels_are_dark_enough_to_read_on_white(self):
-        colour = self.module.CONTROL_TEXT_COLOUR
+    def test_button_labels_are_light_enough_for_olive_and_red_skins(self):
+        colour = self.module.ROOM_TEXT_COLOUR
         self.assertEqual(
             colour, self.room._labels['start'].properties['colour'])
         # The free-floating labels stay light: they sit over the garage.

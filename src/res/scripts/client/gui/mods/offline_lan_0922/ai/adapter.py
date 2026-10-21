@@ -312,6 +312,7 @@ class BotAdapter(object):
             if active is not None:
                 state['_wreck_push_evidence'] = dict(
                     peer_id=active['key'], phase='candidate_missing',
+                    sampled_at=state.get('now'), origin=position,
                     elapsed=active['elapsed'], best_progress=active['best_progress'])
             self._wreck_attempts.pop(bot_id, None)
             return None
@@ -342,7 +343,8 @@ class BotAdapter(object):
         self._wreck_attempts[bot_id] = attempt
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
-        evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
+        evidence = dict(peer_id=key, phase=phase, sampled_at=state.get('now'),
+                        origin=position, elapsed=attempt['elapsed'],
                         progress=progress, best_progress=attempt['best_progress'],
                         wreck_displacement=wreck_displacement,
                         own_elapsed=attempt['own_elapsed'],
@@ -422,9 +424,13 @@ class BotAdapter(object):
             evidence['phase'] = 'world_blocked'
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]
-        if self.driver._reverse_blocked_by_vehicle(
-                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state)) is not None:
-            evidence['phase'] = 'live_hull_blocked'
+        blocker = self.driver._reverse_blocked_by_vehicle(
+                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state))
+        evidence['live_hull_check'] = dict(
+            self.driver._last_reverse_receipt,
+            sampled_at=state.get('now'), checked_peers=[peer.get('id') for peer in living])
+        if blocker is not None:
+            evidence.update(phase='live_hull_blocked', live_blocker=blocker)
             return None
         # Keep forward torque throughout one admitted episode. Side contact
         # requires steering towards the wreck, not translating parallel to it.

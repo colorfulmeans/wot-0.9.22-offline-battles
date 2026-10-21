@@ -1032,12 +1032,24 @@ class LocalDriver(object):
 		candidates = self._rank_yaw_candidates(state, desired_yaw)
 		# Probe in score order and return the first fully viable direction. Most
 		# frames need one terrain ray set instead of probing all seven candidates.
+		trace = dict(at=state['clock'], origin=position, desired_yaw=desired_yaw,
+			candidates=[], selected=None, clock_basis='driver_elapsed_seconds')
+		state['heading_selection'] = trace
 		for unused_score, candidate in candidates:
-			if ((pose_clear is None or pose_clear(candidate)) and
-					self._clear(direction_clear, candidate) and
-					not (position is not None and self._static_hull_ahead(
-						position, candidate, neighbours,
-						half_length, half_width, body=state.get('collision_body')))):
+			row = dict(yaw=candidate, score=unused_score, outcome='pose_rejected')
+			trace['candidates'].append(row)
+			pose_ok = pose_clear is None or pose_clear(candidate)
+			clear = pose_ok and self._clear(direction_clear, candidate)
+			if pose_ok:
+				row.update(outcome='world_rejected',
+					direction_receipt=dict(self._last_direction_receipt))
+			occupied = clear and position is not None and self._static_hull_ahead(
+				position, candidate, neighbours, half_length, half_width,
+				body=state.get('collision_body'))
+			if clear:
+				row['outcome'] = 'static_hull_rejected' if occupied else 'selected'
+			if clear and not occupied:
+				trace['selected'] = candidate
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
@@ -1263,6 +1275,9 @@ class LocalDriver(object):
 		requested_target = tuple(target)
 		# Cleared for every call, including arrival/hold/recovery early returns.
 		state.pop('pedal_observation', None)
+		# Reset on every invocation so a cached command cannot inherit an old block.
+		state['blocked_observation'] = dict(reason='not_blocked', at=state['clock'] + max(0., float(dt)),
+			origin=tuple(position), target=tuple(target), yaw=float(yaw))
 		alignment = state.get('alignment_target')
 		previous_alignment = alignment
 		release_reason = ('movement_hold' if not movement_intent else
@@ -1720,6 +1735,11 @@ class LocalDriver(object):
 							blocked['reverse_blocked_by'] = reverse_blocker
 						if forward_blocker is not None:
 							blocked['forward_blocked_by'] = forward_blocker
+						state['blocked_observation'].update(
+							reason='recovery_no_clear_translation_or_pivot',
+							forward_blocker=forward_blocker, reverse_blocker=reverse_blocker,
+							direction_receipt=dict(self._last_direction_receipt),
+							vehicle_receipt=dict(getattr(self, '_last_reverse_receipt', {})))
 						return blocked
 				result = dict(throttle=0.0, turn=direction,
 					target_yaw=recovery_yaw, recovery_mode='pivot_recovery')
@@ -1780,6 +1800,12 @@ class LocalDriver(object):
 				own_half_length, own_half_width, pose_clear)
 			state['plan_age'] = 0.0
 		if chosen_yaw is None:
+			state['blocked_observation'].update(reason='no_forward_heading',
+				desired_yaw=desired_yaw,
+				direction_receipt=dict(getattr(self, '_last_direction_receipt', {})),
+				vehicle_receipt=dict(getattr(self, '_last_reverse_receipt', {})),
+				neighbours=[dict(id=peer.get('id'), alive=peer.get('alive', True),
+					position=peer.get('position'), yaw=peer.get('yaw')) for peer in neighbours])
 			# No forward ray is usable.  Start a timed recovery on the next tick
 			# rather than issuing an unsafe blind turn.
 			state['stuck_time'] = max(state['stuck_time'], threshold)

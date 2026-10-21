@@ -823,6 +823,15 @@ class _DailySurface(NativeSurface):
 
 
 class ServicePanel(WaitingRoomUI):
+    # Waiting-room restyling does not repaint the independent daily panel.
+    panel_size = (680, 340)
+    panel_font = 'system/fonts/offline_lan_cjk.font'
+    control_text_colour = CONTROL_TEXT_COLOUR
+    control_hover_colour = (14, 82, 140, 255)
+
+    def _control_texture(self, role):
+        return 'system/maps/col_white.dds'
+
     """Daily missions on an empty native page, with no stock tab below it."""
     def __init__(self, page='daily', on_close=None, surface=None):
         WaitingRoomUI.__init__(self, lambda unused: False, lambda: (),

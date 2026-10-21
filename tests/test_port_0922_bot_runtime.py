@@ -1810,6 +1810,77 @@ class BotRuntimeTests(unittest.TestCase):
                 sys.modules.pop(key, None)
         sys.modules.update(self._modules)
 
+    def test_selected_motion_probe_receives_grounded_attitude_in_both_directions(self):
+        for sign in (1., -1.):
+            for airborne in (False, True):
+                calls = []
+                command = dict(self._stationary_command(), throttle=sign,
+                    turn=0., combat_mode='route', recovery_mode='drive',
+                    movement_intent=True, move_position=(0., 0., sign*100.))
+                def probe(position, yaw, speed, descriptor, distance=None,
+                          width=None, capability=None, body_pose=None):
+                    calls.append((yaw, body_pose))
+                    return {'clear': True, 'slope': 0., 'body_pose': body_pose}
+                runtime = self.module.BotRuntime(1,
+                    descriptor_resolver=lambda unused: _combat_descriptor(),
+                    adapter_factory=lambda *args, **kwargs: _FixedAdapter(command),
+                    direction_probe=probe, ground_probe=lambda *args: 0.,
+                    physics_ground_probe=lambda *args: 0.,
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
+                runtime.battle_start(self.start)
+                state = runtime.states[11]
+                starting_yaw = state['yaw']
+                state.update(pitch=-.0368, terrain_pitch=-.0368, roll=.3857,
+                             airborne=airborne)
+                runtime.update(.04, 1.)
+                self.assertTrue(calls)
+                pose = calls[0][1]
+                if airborne:
+                    self.assertIsNone(pose)
+                else:
+                    self.assertAlmostEqual(-.0368, pose[1])
+                    self.assertAlmostEqual(.3857, pose[2])
+                    # Reverse changes travel heading, never the occupied hull pose.
+                    self.assertAlmostEqual(starting_yaw, pose[0])
+                self.assertEqual(pose, runtime._motion_probe_cache[11]['result']['body_pose'])
+
+    def test_banked_motion_reprobes_changed_plane_without_flat_exact_receipt(self):
+        poses, exact = [], []
+        command = dict(self._stationary_command(), throttle=1., turn=0.,
+            combat_mode='route', recovery_mode='drive', movement_intent=True,
+            move_position=(0., 0., -100.))
+        def probe(position, yaw, speed, descriptor, distance=None,
+                  width=None, capability=None, body_pose=None):
+            poses.append(body_pose)
+            return {'clear': True, 'slope': 0.}
+        runtime = self.module.BotRuntime(1,
+            descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *args, **kwargs: _FixedAdapter(command),
+            direction_probe=probe, world_receipt_probe=lambda *args: exact.append(args) or False,
+            ground_probe=lambda *args: 0., physics_ground_probe=lambda *args: 0.,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(pitch=0., terrain_pitch=0., roll=.38)
+        runtime.update(.04, 1.)
+        self.assertTrue(poses)
+        first_count = len(poses)
+        state.update(pitch=0., terrain_pitch=0., roll=.28)
+        runtime.update(.04, 1.04)
+        self.assertGreater(len(poses), first_count)
+        self.assertAlmostEqual(.28, poses[-1][2])
+        self.assertEqual([], exact)
+
+    def test_support_plane_cache_change_is_not_a_flat_yaw_change(self):
+        same = self.module.BotRuntime._same_probe_support_plane
+        self.assertTrue(same((0., 0., 0.), (2., 0., 0.)))
+        self.assertTrue(same((0., .03, .38), (0., .0301, .3801)))
+        self.assertFalse(same((0., 0., 0.), (0., .03, .38)))
+        self.assertFalse(same((0., .03, .38), (.5, .03, .38)))
+        self.assertTrue(same(None, None))
+        self.assertFalse(same(None, (0., 0., 0.)))
+        self.assertFalse(same((0., 0., 0.), None))
+
     def test_runtime_owned_numeric_helpers_do_not_reparse_state(self):
         state = {
             'health': 500, 'alive': True, 'critical': {},

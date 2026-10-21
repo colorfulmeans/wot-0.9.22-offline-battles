@@ -6568,6 +6568,18 @@ class BotRuntime(object):
         return None
 
     @staticmethod
+    def _same_probe_support_plane(previous, current):
+        if previous is None or current is None:
+            return previous is None and current is None
+        if previous == current:
+            return True
+        # Level ground stays the same plane through a yaw-only turn. Comparing
+        # Euler yaw here would needlessly invalidate every turning flat hull.
+        first = tank_collision.pose_axes(*previous)[1]
+        second = tank_collision.pose_axes(*current)[1]
+        return sum((a-b)**2 for a, b in zip(first, second)) <= .005**2
+
+    @staticmethod
     @observed('motion.cache_check')
     def _motion_probe_reusable(cached, position, travel_yaw, speed, now,
                                settled=False, dt=None,
@@ -7473,6 +7485,18 @@ class BotRuntime(object):
                 command_mode=command.get('recovery_mode'))
         driver_trace['failure_receipts'] = list(driver_state.get('failure_receipts') or ())
         driver_trace['arrival_trace'] = dict(driver_state.get('arrival_trace') or {})
+        blocked_observation = dict(driver_state.get('blocked_observation') or {})
+        if blocked_observation:
+            blocked_observation.update(observed_at=driver_state.get('clock'),
+                age_seconds=max(0., driver_state.get('clock', 0.)-blocked_observation['at']),
+                control_sampled_at=(command.get('control_trace') or {}).get('sampled_at'),
+                observed_simulation_at=now)
+        driver_trace['blocked_observation'] = blocked_observation
+        heading_selection = dict(driver_state.get('heading_selection') or {})
+        if heading_selection:
+            heading_selection.update(observed_at=driver_state.get('clock'),
+                age_seconds=max(0., driver_state.get('clock', 0.)-heading_selection['at']))
+        driver_trace['heading_selection'] = heading_selection
         driver_trace['failed_yaw_deadlines'] = sorted(
             (driver_state.get('failed_yaws') or {}).items())
         driver_trace['action_observation'] = dict(
@@ -17152,6 +17176,16 @@ class BotRuntime(object):
                         throttle = 0.0
                         turn = 0.0
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
+            motion_body_pose = ((state['yaw'], self._terrain_pitch(state),
+                                 state.get('roll', 0.))
+                                if not state.get('airborne', False) else None)
+            previous_body_pose = (cached_motion_probe or {}).get('body_pose')
+            # A corridor cast in another support plane cannot prove this one.
+            # Keep the existing angular tolerance used by settled motion.
+            motion_attitude_matches = bool(
+                'body_pose' not in (cached_motion_probe or {}) or
+                (previous_body_pose is None and motion_body_pose is None) or
+                self._same_probe_support_plane(previous_body_pose, motion_body_pose))
             # A frozen pose keeps this slice's realised translation at zero
             # without claiming that the corridor is blocked, so it must not
             # arm the failed-yaw, blocked-step or contact escalations that
@@ -17163,6 +17197,7 @@ class BotRuntime(object):
                 state.get('grounded_once', False) and
                 not state.get('airborne', False))
             motion_probe_reusable = bool(
+                motion_attitude_matches and
                 (not decision_due or self._motion_probe_covers_distance(
                     cached_motion_probe, maximum_probe_distance)) and
                 self._motion_probe_reusable(
@@ -17172,6 +17207,7 @@ class BotRuntime(object):
             cached_motion_result = (
                 (cached_motion_probe or {}).get('result') or {})
             cached_motion_geometry_reusable = bool(
+                motion_attitude_matches and
                 isinstance(cached_motion_result, dict) and
                 self._probe_is_clear(cached_motion_result) and
                 self._motion_probe_covers_distance(
@@ -17216,8 +17252,10 @@ class BotRuntime(object):
                 # reused or acquired.
                 motion_probe = self._probe_direction(
                     position, travel_yaw, state.get('speed', 0.0), descriptor,
-                    maximum_probe_distance)
-                # Planner alternatives keep the mature six horizontal rays.
+                    maximum_probe_distance, body_pose=motion_body_pose)
+                # Use the same occupied support plane as planner alternatives.
+                # Horizontal side lanes can intersect the uphill bank of an
+                # already grounded, rolled hull (GW Tiger, Serene Coast).
                 # Only the finally selected, translating, non-turning travel
                 # sample pays for the exact 3x3 receipt used by commit-side
                 # motion.  Releasing the throttle does not stop an already
@@ -17227,6 +17265,9 @@ class BotRuntime(object):
                         self._probe_is_clear(motion_probe) and
                         not motion_probe.get('deferred', False) and
                         abs(_number(motion_probe.get('slope'))) <= 0.01 and
+                        motion_body_pose is not None and
+                        abs(motion_body_pose[1]) <= .01 and
+                        abs(motion_body_pose[2]) <= .01 and
                         (abs(throttle) > 0.01 or
                          abs(state['speed']) > 0.0001) and
                         abs(turn) <= 0.01 and
@@ -17298,6 +17339,7 @@ class BotRuntime(object):
                         motion_probe.get('_world_receipt_pending', False))
                     self._motion_probe_cache[state['id']] = {
                         'result': motion_probe,
+                        'body_pose': motion_body_pose,
                         'position': position,
                         'yaw': travel_yaw,
                         'maximum_distance': maximum_probe_distance,

@@ -524,6 +524,8 @@ class LANSession(object):
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
         self._restored_team_sizes_generation = None
+        self._restored_skill_generation = None
+        self._pending_skill_preference = None
         self._published_progress_battles = (
             -1 if postbattle_store is None else
             int(postbattle_store.progress().get('battles', 0)))
@@ -1482,6 +1484,7 @@ class LANSession(object):
             self._status_notifier(
                 tr('The LAN server did not accept that Bot skill preset.'))
             return False
+        self._pending_skill_preference = (self._client_generation, mode)
         self._status_notifier(tr('Requesting Bot skill preset...'))
         return True
 
@@ -1547,9 +1550,33 @@ class LANSession(object):
         sizes[team] = size
         return self._save_room_preferences()
 
+    def _remember_accepted_bot_skill(self, message):
+        pending = self._pending_skill_preference
+        if pending is None:
+            return
+        generation, mode = pending
+        if generation != self._client_generation:
+            self._pending_skill_preference = None
+            return
+        if _message_value(message, 'bot_skill_mode') != mode:
+            return
+        self._pending_skill_preference = None
+        if self._room_preferences.get('bot_skill_mode') != mode:
+            self._room_preferences['bot_skill_mode'] = mode
+            self._save_room_preferences()
+
     def _restore_waiting_preferences(self):
-        """Apply saved capacities and team once after each connection."""
+        """Apply saved difficulty, capacities and team once per connection."""
         generation = self._client_generation
+        saved_skill = self._room_preferences.get('bot_skill_mode')
+        if (self._restored_skill_generation != generation and self._is_local_host()):
+            setter = getattr(self.client, 'set_bot_skill_mode', None)
+            current = getattr(self.client, 'bot_skill_mode', 'mixed')
+            if saved_skill is None or saved_skill == current:
+                self._restored_skill_generation = generation
+            elif callable(setter) and setter(saved_skill):
+                self._pending_skill_preference = (generation, saved_skill)
+                self._restored_skill_generation = generation
         if (self._restored_team_sizes_generation != generation and
                 self._is_local_host() and
                 self._server_supports_team_size_selection()):
@@ -2272,6 +2299,7 @@ class LANSession(object):
                 self.state = 'awaiting_battle_start'
                 return
             self.state = 'waiting'
+            self._remember_accepted_bot_skill(message)
             self._restore_waiting_preferences()
             self._publish_postbattle_progress()
             self._publish_postbattle_results()
@@ -2845,6 +2873,7 @@ class LANSession(object):
             else:
                 self._refresh_surface()
         elif kind == 'bot_skill_mode_denied':
+            self._pending_skill_preference = None
             code = _message_value(message, 'code')
             if code == 'host_only':
                 notice = tr('Only the LAN room host can change the Bot skill '
