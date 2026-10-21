@@ -16,7 +16,7 @@ Exact #1513 evidence for the native surface used here:
   native frame nine-slice sizing, and BLEND for their original alpha;
   cursor and legacy service controls retain their proven white/black textures.
 - Mod-owned Microsoft YaHei fonts provide dynamic Chinese glyphs. The waiting
-  room uses 14 px body/button text and a 16 px title, following the stock
+  room uses 13 px body/button text and a 16 px title, following the stock
   settings-window reference. Other service panels keep their 16 px font.
 - ``GUI.addRoot`` / ``GUI.delRoot`` / ``GUI.reSort`` and an overlay at
   ``position.z = 0.1`` with ``focus`` and ``moveFocus``:
@@ -357,7 +357,7 @@ class WaitingRoomUI(object):
 
     panel_size = (PANEL_WIDTH, PANEL_HEIGHT)
     panel_font = ROOM_FONT
-    control_text_colour = (211, 210, 190, 255)
+    control_text_colour = (242, 241, 225, 255)
     control_hover_colour = ROOM_HOVER_COLOUR
 
     def _control_texture(self, role):

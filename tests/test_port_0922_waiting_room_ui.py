@@ -801,7 +801,7 @@ class WaitingRoomTests(unittest.TestCase):
             self.assertNotIn('/', name)
             font = ET.parse(ROOT / 'src/res/system/fonts' / name).getroot()
             self.assertEqual('Microsoft YaHei', font.findtext('creation/sourceFont'))
-            self.assertEqual('14' if name == self.module.ROOM_FONT else '16',
+            self.assertEqual('13' if name == self.module.ROOM_FONT else '16',
                              font.findtext('creation/sourceFontSize'))
             self.assertIsNone(font.find('generated'))
             self.assertIsNone(font.find('creation/startChar'))

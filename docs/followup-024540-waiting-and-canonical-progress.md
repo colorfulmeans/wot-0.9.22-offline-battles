@@ -37,7 +37,7 @@ complete-path handoffs.
   flight time/range and excluded arc. Retain the receipt with its planning
   key through pending/cached/failed states; clear it on replacement/reset.
   Diagnostics reuse the already computed solver values.
-- Waiting form: 640x286, 14 px body/button text, original 16 px title;
+- Waiting form: 640x286, 13 px body/button text, original 16 px title;
   move its center upward by adjusting the reserved stock text band. Use
   pinned #1513 `guiControlsLoginBattle.swf` ButtonNormal bitmap 108, matching
   the stock Modify/Close control family. Nine-slice 24/100/128/180 x 22 faces
