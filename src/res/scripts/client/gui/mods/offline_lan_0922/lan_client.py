@@ -2407,6 +2407,15 @@ class LANClient(object):
 
     def send_player_environment(self, observations, sample_seq):
         """Publish bounded environment classifications from the worker."""
+        receipt = dict(reason='validating', sample_seq=sample_seq, round=self.round_id,
+            phase=self.phase, player=self.player_id, epoch=self.authority_epoch,
+            authority=self.is_bot_authority(),
+            client_capability=PLAYER_ENVIRONMENT_CAPABILITY in self.capabilities,
+            server_capability=PLAYER_ENVIRONMENT_CAPABILITY in self.server_capabilities)
+        self._player_environment_send_receipt = receipt
+        def reject(reason):
+            receipt['reason'] = reason
+            return False
         sequence = _projectile_int_range(
             sample_seq, 1, MAX_PROJECTILE_ID)
         epoch = _projectile_int_range(
@@ -2419,7 +2428,7 @@ class LANClient(object):
                 self.server_capabilities or
                 not isinstance(observations, (list, tuple)) or
                 len(observations) > 30):
-            return False
+            return reject('authority_phase_capability_or_batch_gate')
         rows = []
         seen = set()
         for raw in observations:
@@ -2428,7 +2437,7 @@ class LANClient(object):
                         {'player_id', 'input_seq', 'level'},
                         {'player_id', 'input_seq', 'level',
                          'drowning_critical'})):
-                return False
+                return reject('invalid_row_shape')
             player_id = _projectile_int_range(
                 raw.get('player_id'), 1, MAX_PROJECTILE_ID)
             input_seq = _projectile_int_range(
@@ -2436,7 +2445,7 @@ class LANClient(object):
             level = _projectile_int_range(raw.get('level'), 0, 2)
             if (player_id is None or input_seq is None or level is None or
                     player_id in seen):
-                return False
+                return reject('invalid_row_fields')
             seen.add(player_id)
             row = {
                 'player_id': player_id,
@@ -2445,16 +2454,19 @@ class LANClient(object):
             }
             if 'drowning_critical' in raw:
                 if level != 2 or not isinstance(raw['drowning_critical'], dict):
-                    return False
+                    return reject('invalid_critical_shape')
                 row['drowning_critical'] = raw['drowning_critical']
             rows.append(row)
-        return self._send({
+        sent = self._send({
             'type': 'player_environment',
             'round_id': self.round_id,
             'authority_epoch': epoch,
             'sample_seq': sequence,
             'observations': rows,
         })
+        receipt.update(reason='enqueued' if sent else 'transport_not_enqueued',
+                       rows=len(rows), sent=bool(sent))
+        return sent
 
     def _send_pending_landing_observation(self, rebind=False):
         pending = self._landing_observation_pending

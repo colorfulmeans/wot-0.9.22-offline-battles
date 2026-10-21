@@ -2427,6 +2427,7 @@ class BattleRuntime(object):
         self._drown_started = None
         self._player_environment_check = 0.0
         self._player_environment_seq = 0
+        self._drowning_diagnostics = {}
         self._overturn_check = 0.0
         self._overturn_time = 0.0
         self._overturn_level = 0
@@ -2792,6 +2793,7 @@ class BattleRuntime(object):
         self._drown_started = None
         self._player_environment_check = 0.0
         self._player_environment_seq = 0
+        self._drowning_diagnostics = {}
         self._overturn_check = 0.0
         self._overturn_time = 0.0
         self._overturn_level = 0
@@ -7034,22 +7036,51 @@ class BattleRuntime(object):
             trace.update(classification='clear', reason='native_corridor_clear')
         return False
 
-    def _water_depth(self, point):
+    def _log_drowning(self, stage, player_id, now, reason, **fields):
+        """Trace all water boundaries without adding world queries."""
+        row = dict(stage=stage, player=player_id, at=now, reason=reason,
+                   round=getattr(self.client, 'round_id', None), role='worker' if self._worker_mode else 'visible')
+        row.update(fields)
+        key = (stage, player_id)
+        signature = (reason, fields.get('level'), fields.get('proposal_status'),
+                     fields.get('sent'), tuple((row.get('player'), row.get('level'),
+                         row.get('critical_present')) for row in fields.get('rows', ())))
+        previous = self._drowning_diagnostics.get(key)
+        if previous is not None and previous[1] == signature and now-previous[0] < 2.0:
+            return
+        self._drowning_diagnostics[key] = (now, signature)
+        try:
+            native_input_diagnostics.write_json_record('PLAYER WATER', row)
+        except Exception:
+            # Diagnostic formatting cannot withdraw the water/HP rule.
+            pass
+
+    def _water_depth(self, point, receipt=None):
         collide = getattr(self._runtime.bigworld, 'wg_collideWater', None)
+        if receipt is not None:
+            receipt.update(point=tuple(point), start=(point[0], point[1]+20., point[2]),
+                           end=(point[0], point[1]-5., point[2]))
         if not callable(collide):
+            if receipt is not None:
+                receipt['reason'] = 'native_water_unavailable'
             return -1.0
         try:
             value = observed_call('native.motion.water', collide,
                 self._vector((point[0], point[1] + 20.0, point[2])),
                 self._vector((point[0], point[1] - 5.0, point[2])), False)
-        except Exception:
+        except Exception as error:
+            if receipt is not None:
+                receipt.update(reason='native_water_exception',
+                    error=type(error).__name__ + ': ' + str(error)[:240])
             return -1.0
+        if receipt is not None:
+            receipt.update(raw_distance=value, reason='no_water_hit' if value is None or value < 0.0 else 'water_hit')
         if value is None or value < 0.0:
             return -1.0
         return 20.0 - float(value)
 
     def _drowning_hull_pose(self, entity, position, yaw, pitch, roll,
-                            record=None):
+                            record=None, receipt=None):
         """Reuse the owned body pose, including hydraulic angle and pivot.
 
         Local copied body providers already carry the active suspension
@@ -7058,11 +7089,15 @@ class BattleRuntime(object):
         twice or reads a remote render interpolation as physical position.
         """
         fallback = (position, yaw, pitch, roll)
+        if receipt is not None:
+            receipt['body_source'] = 'input_pose'
         record = record or {}
         try:
             source = None
             if record.get('local'):
                 source = self._local_body_pose()
+                if receipt is not None:
+                    receipt['body_source'] = 'local_body' if source is not None else 'input_pose_no_local_body'
             elif (self._worker_mode and record.get('native_remote') and
                     entity is not None):
                 ground = self._runtime.math.Matrix()
@@ -7070,6 +7105,8 @@ class BattleRuntime(object):
                 ground.translation = self._vector(position)
                 source = self._projectile_vehicle_matrices(
                     record, entity, ground)[0]
+                if receipt is not None:
+                    receipt['body_source'] = 'worker_collision_body' if source is not None else 'input_pose_no_worker_body'
             if source is None:
                 return fallback
             matrix = self._runtime.math.Matrix(source)
@@ -7078,10 +7115,15 @@ class BattleRuntime(object):
             angles = (float(matrix.yaw), float(matrix.pitch), float(matrix.roll))
             if any(math.isnan(value) or math.isinf(value)
                    for value in origin + angles):
+                if receipt is not None:
+                    receipt['body_source'] = 'input_pose_nonfinite_body'
                 return fallback
             return (origin,) + angles
         except (AttributeError, IndexError, KeyError, TypeError, ValueError,
-                OverflowError, RuntimeError):
+                OverflowError, RuntimeError) as error:
+            if receipt is not None:
+                receipt.update(body_source='input_pose_body_error',
+                    body_error=type(error).__name__ + ': ' + str(error)[:240])
             # Native model refreshes may temporarily withdraw a provider.
             # The existing copied pose remains valid; no new pose is guessed.
             return fallback
@@ -7132,16 +7174,38 @@ class BattleRuntime(object):
             state.get('roll', 0.0), record)
 
     def _vehicle_drowning_level(self, entity, position, yaw, pitch, roll,
-                                record=None):
+                                record=None, receipt=None):
         """Sample the mounted hull's half-height and top in its current pose."""
+        if receipt is not None:
+            receipt.update(input_pose=[position, yaw, pitch, roll])
         position, yaw, pitch, roll = self._drowning_hull_pose(
-            entity, position, yaw, pitch, roll, record)
+            entity, position, yaw, pitch, roll, record, receipt=receipt)
         sample = water_geometry.hull_sample(
             getattr(entity, 'typeDescriptor', None), position, yaw, pitch, roll)
+        if receipt is not None:
+            receipt.update(body_pose=[position, yaw, pitch, roll])
+            descriptor = getattr(entity, 'typeDescriptor', None)
+            try:
+                bbox = descriptor.hull.hitTester.bbox
+                mount = descriptor.chassis.hullPosition
+                receipt['geometry'] = dict(bbox=[list(bbox[0]), list(bbox[1])] if bbox else None,
+                                           hull_mount=list(mount))
+            except (AttributeError, TypeError, IndexError, ValueError) as error:
+                receipt['geometry_error'] = type(error).__name__ + ': ' + str(error)[:240]
         if sample is None:
+            if receipt is not None:
+                receipt['reason'] = 'hull_geometry_unavailable'
             return None
         bottom, height = sample
-        return water_geometry.warning_level(self._water_depth(bottom), height)
+        water = {}
+        depth = (self._water_depth(bottom, receipt=water) if receipt is not None
+                 else self._water_depth(bottom))
+        level = water_geometry.warning_level(depth, height)
+        if receipt is not None:
+            receipt.update(bottom=bottom, hull_height=height, hull_top=bottom[1]+height,
+                water=water, depth_above_bottom=depth, level=level,
+                reason='classified' if level is not None else 'invalid_water_geometry')
+        return level
 
     def _barrel_under_water(self, point):
         """Mirror #1513's positive-distance barrel water gate."""
@@ -7225,14 +7289,17 @@ class BattleRuntime(object):
             return False
         record = self._records.get('player:%s' % self.client.player_id)
         if record is None:
+            self._log_drowning('warning', self.client.player_id, now, 'record_unavailable')
             return False
         authoritative = record.get('state') or {}
         if (not bool(authoritative.get('alive', True)) or
                 _number(authoritative.get('health', 1.0)) <= 0.0):
+            self._log_drowning('warning', self.client.player_id, now, 'canonical_dead')
             return False
         entity = self._server_entity(record['engine_id'])
         if (entity is None or
                 _number(getattr(entity, 'health', 0.0)) <= 0.0):
+            self._log_drowning('warning', self.client.player_id, now, 'entity_unavailable_or_dead')
             return False
         self._drown_check += dt
         if self._drown_check < 0.3:
@@ -7243,10 +7310,13 @@ class BattleRuntime(object):
         # permanently late after every hitch.
         elapsed = self._drown_check
         self._drown_check = 0.0
+        proof = {}
         level = self._vehicle_drowning_level(
             entity, self._local_position, self._local_yaw,
-            self._local_pitch, self._local_roll, record)
+            self._local_pitch, self._local_roll, record, receipt=proof)
         if level is None:
+            self._log_drowning('warning', self.client.player_id, now, 'sample_unavailable',
+                sample=proof, elapsed=self._drown_time)
             return False
         if level == 2:
             if self._drown_level != 2:
@@ -7264,6 +7334,9 @@ class BattleRuntime(object):
         if changed:
             self._drown_level = level
             self._present_drowning_level(level, now)
+        self._log_drowning('warning', self.client.player_id, now, 'warning_updated',
+            level=level, elapsed=self._drown_time, started=self._drown_started,
+            sample=proof, input_seq=authoritative.get('input_seq'), changed=changed)
         # The visible process owns only this native UI state. BattleState
         # applies the ten-second law after a hidden-worker observation; no
         # local record, HP or critical state changes here.
@@ -7274,6 +7347,8 @@ class BattleRuntime(object):
         if (not self._worker_mode or dt <= 0.0 or
                 self.client is None or
                 not self.client.is_bot_authority()):
+            self._log_drowning('publish', None, now, 'authority_or_cadence_gate',
+                worker=self._worker_mode, dt=dt, client_present=self.client is not None)
             return False
         self._player_environment_check += float(dt)
         if self._player_environment_check < PLAYER_ENVIRONMENT_SECONDS:
@@ -7283,26 +7358,39 @@ class BattleRuntime(object):
         # later observations permanently behind the battle clock.
         self._player_environment_check %= PLAYER_ENVIRONMENT_SECONDS
         observations = []
+        sequence = self._player_environment_seq + 1
         for key in sorted(self._records):
             record = self._records[key]
-            if (record.get('kind') != 'player' or record.get('local') or
-                    int(record.get('network_id', 0) or 0) <= 0):
+            if record.get('kind') != 'player':
+                continue
+            if record.get('local') or int(record.get('network_id', 0) or 0) <= 0:
+                self._log_drowning('sample', record.get('network_id'), now, 'ineligible_player_record',
+                    sample_seq=sequence, local=record.get('local'), engine_id=record.get('engine_id'))
                 continue
             state = record.get('state') or {}
             if (not bool(state.get('alive', True)) or
                     _number(state.get('health', 0.0)) <= 0.0):
+                self._log_drowning('sample', record.get('network_id'), now, 'canonical_dead',
+                    sample_seq=sequence, health=state.get('health'))
                 continue
             entity = self._server_entity(record['engine_id'])
             if entity is None:
+                self._log_drowning('sample', record['network_id'], now, 'entity_unavailable',
+                    sample_seq=sequence, engine_id=record['engine_id'], input_seq=state.get('input_seq'))
                 continue
             pose = self._projectile_record_pose(
                 key, record, self._record_position(record))
             if pose is None:
+                self._log_drowning('sample', record['network_id'], now, 'pose_unavailable',
+                    sample_seq=sequence, engine_id=record['engine_id'], input_seq=state.get('input_seq'))
                 continue
+            proof = {}
             level = self._vehicle_drowning_level(
                 entity, (pose['x'], pose['y'], pose['z']),
-                pose['yaw'], pose['pitch'], pose['roll'], record)
+                pose['yaw'], pose['pitch'], pose['roll'], record, receipt=proof)
             if level is None:
+                self._log_drowning('sample', record['network_id'], now, 'sample_unavailable',
+                    sample_seq=sequence, input_seq=state.get('input_seq'), sample=proof)
                 continue
             try:
                 input_seq = max(0, int(state.get('input_seq', 0) or 0))
@@ -7313,22 +7401,44 @@ class BattleRuntime(object):
                 'input_seq': input_seq,
                 'level': int(level),
             }
+            proposal_status = 'not_drowning'
+            proposal_error = None
             if int(level) == 2:
                 try:
                     # The worker has the native descriptor and crew roster.
                     # Publish a proposal for the server to admit only after
                     # its authoritative continuous countdown completes.
                     critical = critical_damage.propose_drowning(entity)
-                except Exception:
+                except Exception as error:
                     critical = None
+                    proposal_error = type(error).__name__ + ': ' + str(error)[:240]
+                proposal_status = ('ready' if isinstance(critical, dict) else
+                                   'exception' if proposal_error else 'no_transition')
                 if isinstance(critical, dict):
                     observation['drowning_critical'] = critical
+            self._log_drowning('sample', record['network_id'], now, 'observation_ready',
+                sample_seq=sequence, input_seq=input_seq, engine_id=record['engine_id'],
+                level=level, sample=proof, proposal_status=proposal_status,
+                proposal_error=proposal_error,
+                critical=observation.get('drowning_critical'))
             observations.append(observation)
         sender = getattr(self.client, 'send_player_environment', None)
         if not callable(sender):
+            self._log_drowning('publish', None, now, 'sender_unavailable', sample_seq=sequence)
             return False
-        sequence = self._player_environment_seq + 1
-        if not sender(observations, sequence):
+        try:
+            sent = sender(observations, sequence)
+        except Exception as error:
+            self._log_drowning('publish', None, now, 'send_exception', sample_seq=sequence,
+                error=type(error).__name__ + ': ' + str(error)[:240], sent=False)
+            raise
+        self._log_drowning('publish', None, now, 'batch_sent' if sent else 'batch_not_sent',
+            sample_seq=sequence, sent=bool(sent),
+            transport=getattr(self.client, '_player_environment_send_receipt', None),
+            rows=[dict(player=row['player_id'],
+                input_seq=row['input_seq'], level=row['level'],
+                critical_present='drowning_critical' in row) for row in observations])
+        if not sent:
             return False
         self._player_environment_seq = sequence
         return True
@@ -32015,6 +32125,7 @@ class BattleRuntime(object):
         self._drown_started = None
         self._player_environment_check = 0.0
         self._player_environment_seq = 0
+        self._drowning_diagnostics = {}
         self._overturn_check = 0.0
         self._overturn_time = 0.0
         self._overturn_level = 0

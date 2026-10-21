@@ -260,3 +260,32 @@ The publisher independently waits for successful complete main-branch CI
 on its exact source commit as well as a successful clean package build.
 Only publish after final source, CI and independently inspected package agree. The release contains the normal launcher and all three optional
 batch entries, complete source, history bundle and recovery instructions.
+
+
+## Report 20261021-172717: authored combat approach and water evidence
+
+The owner narrowed this candidate after the audit: fix only the reproduced
+Jagdpanther approach-state omission. Do not change drowning rules before its
+actual failing boundary is captured. Keep PR #113 open; do not publish 0.10.2.
+
+- A fresh blocked firing lane released rear laying for `advance_contact`, but
+  `advance` bypassed that check. Report Bot 11 repeatedly received `advance`,
+  stopped/turned toward an occluded target, timed out, moved, and repeated.
+  Apply the same existing check to both combat approach modes. Preserve clear,
+  unknown and expired evidence behavior, ordinary rear aiming, parking and
+  withdrawal ownership, real collision and all route/retry/support rules.
+- Water is diagnostic-only: retain the ten-second gate, proposal admission,
+  damage attribution, module settlement, safe/stale handling, and remaining HP
+  displayed on drowning death. Do not claim the live drowning failure fixed.
+- Correlate `PLAYER WATER` records across the visible warning, worker hull/body
+  geometry and native ray result, proposal/error, send gate/transport, server
+  admission/ignored row, freshness/reset/countdown, missing terminal proposal
+  and terminal commit. Include round, player, input/sample sequence, time/tick,
+  actual hull bounds and query data. Repeated reasons are bounded at two
+  seconds; changed level/proposal/failure state is immediate. Reset per round.
+  No extra water/world query, protocol field, timer or terminal rule is added.
+- Regression coverage includes both approach names through real control
+  updates, retained normal rear aiming, complete JSON evidence, query counts,
+  unavailable geometry/entities, failed/recovered submission, rejected/stale
+  messages, countdown pause/reset, unchanged missing-proposal behavior,
+  remaining-HP death display, once-only settlement, and failed log sinks.

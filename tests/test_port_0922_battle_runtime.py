@@ -14916,7 +14916,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'engine_id': 10, 'state': {'health': 500, 'alive': True},
                 'kind': 'player', 'network_id': 1, 'local': True}}
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: 2.1 - point[1])
+            side_effect=lambda point, **unused: 2.1 - point[1])
         battle._local_last_attacker = ('player', 9)
         self.assertTrue(battle._tick_drowning(0.3, 1.0))
         self.assertEqual((10, 4, 2, (750.0, 10.0)),
@@ -14951,7 +14951,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'kind': 'player', 'network_id': 1, 'local': True}}
         surface = [0.5]
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: surface[0] - point[1])
+            side_effect=lambda point, **unused: surface[0] - point[1])
 
         battle._tick_drowning(0.3, 1.0)
         surface[0] = 2.1
@@ -14999,7 +14999,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'kind': 'player', 'network_id': 1, 'local': False}}
 
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: 2.1 - point[1])
+            side_effect=lambda point, **unused: 2.1 - point[1])
         self.assertTrue(battle._publish_player_environment(0.3, 1.0))
 
         sender.assert_called_once_with([{

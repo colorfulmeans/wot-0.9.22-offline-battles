@@ -14822,11 +14822,12 @@ class BotRuntime(object):
     def _rear_approach_blocked(self, state, order, targets, now):
         """A fresh blocked lane leaves authored approach in control of travel.
 
-        Unknown/expired evidence cannot veto normal limited-traverse laying.
+        Both authored-route advance and direct contact approach use the same
+        evidence gate. Unknown/expired evidence cannot veto normal laying.
         This reads the existing pair/pose cache and performs no extra scan.
         """
         target = targets.get(order.get('target_id'))
-        eligible = (order.get('combat_mode') == 'advance_contact' and
+        eligible = (order.get('combat_mode') in ('advance_contact', 'advance') and
                     not order.get('parking_phase') and target is not None and
                     target.get('alive', True))
         sample = (self._shot_los_cache.get(self._shot_los_key(state, target))

@@ -2474,6 +2474,7 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self._player_water_diagnostics = {}
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
@@ -2861,6 +2862,7 @@ class BattleState:
             self.player_environment_seq = -1
             self.player_environment_authority_epoch = -1
             self.player_drowning_seconds = {}
+            self._player_water_diagnostics = {}
             self.environment_pushes = {}
             self.environment_push_sequences = {}
             self.environment_fall_totals = {}
@@ -3687,6 +3689,7 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self._player_water_diagnostics = {}
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
@@ -7606,9 +7609,33 @@ class BattleState:
             worker.simulation_progress_frame_seq = frame_seq
             return True
 
+    def _log_player_water(self, stage, player_id, reason, force=False, **fields):
+        """Bound repeated water receipts; preserve reason and level changes."""
+        row = dict(stage=stage, player=player_id, reason=reason,
+                   round=self.round_id, tick=self.tick, epoch=self.authority_epoch,
+                   sample_seq=self.player_environment_seq)
+        row.update(fields)
+        key = (stage, player_id)
+        signature = (reason, fields.get('level'), fields.get('critical_present'))
+        previous = self._player_water_diagnostics.get(key)
+        if (not force and previous is not None and previous[1] == signature and
+                self.tick - previous[0] < TICK_HZ * 2):
+            return
+        self._player_water_diagnostics[key] = (self.tick, signature)
+        try:
+            _server_log('PLAYER WATER ' + json.dumps(row, sort_keys=True))
+        except Exception:
+            # Evidence must not change the existing water rule.
+            pass
+
     def update_player_environment(self, authority_id, message):
         """Accept only internal water observations; never a client verdict."""
         with self.lock:
+            def reject(reason):
+                self._log_player_water('admission', None, reason,
+                    received_seq=message.get('sample_seq') if isinstance(message, dict) else None,
+                    received_round=message.get('round_id') if isinstance(message, dict) else None)
+                return False
             if (not isinstance(message, dict) or
                     set(message) != {
                         "type", "round_id", "authority_epoch",
@@ -7616,10 +7643,10 @@ class BattleState:
                     message.get("type") != "player_environment" or
                     authority_id != self.bot_authority_id or
                     authority_id != SIMULATION_WORKER_AUTHORITY_ID):
-                return False
+                return reject('invalid_envelope_or_authority')
             worker = self.simulation_worker
             if worker is None or not worker.connected:
-                return False
+                return reject('worker_unavailable')
             try:
                 round_id = _exact_int(
                     message.get("round_id"), 1, PROJECTILE_MAX_ID)
@@ -7630,10 +7657,10 @@ class BattleState:
                     message.get("sample_seq"), 1,
                     PROJECTILE_MAX_ID)
             except ValueError:
-                return False
+                return reject('invalid_sequence_fields')
             if (round_id != self.round_id or
                     authority_epoch != self.authority_epoch):
-                return False
+                return reject('round_or_epoch_mismatch')
             terminal_noop = bool(
                 not self._combat_accepting() or
                 self.battle_result is not None)
@@ -7644,7 +7671,7 @@ class BattleState:
             raw_observations = message.get("observations")
             if (not isinstance(raw_observations, list) or
                     len(raw_observations) > self.max_players):
-                return False
+                return reject('invalid_observation_batch')
             observations = {}
             seen_player_ids = set()
             for raw in raw_observations:
@@ -7653,7 +7680,7 @@ class BattleState:
                             {"player_id", "input_seq", "level"},
                             {"player_id", "input_seq", "level",
                              "drowning_critical"})):
-                    return False
+                    return reject('invalid_row_shape')
                 try:
                     player_id = _exact_int(
                         raw.get("player_id"), 1, PROJECTILE_MAX_ID)
@@ -7661,26 +7688,31 @@ class BattleState:
                         raw.get("input_seq"), 0, PROJECTILE_MAX_ID)
                     level = _exact_int(raw.get("level"), 0, 2)
                 except ValueError:
-                    return False
+                    return reject('invalid_row_fields')
                 player = self.players.get(player_id)
                 if player_id in seen_player_ids:
-                    return False
+                    return reject('duplicate_player')
                 seen_player_ids.add(player_id)
                 drowning_critical = None
                 if "drowning_critical" in raw:
                     if level != 2:
-                        return False
+                        return reject('critical_on_non_drowning_row')
                     try:
                         drowning_critical = _critical_payload(
                             raw["drowning_critical"])
-                    except ValueError:
-                        return False
+                    except ValueError as error:
+                        self._log_player_water('critical_admission', player_id,
+                            'invalid_proposal', received_seq=sample_seq,
+                            error=str(error)[:240], level=level)
+                        return reject('invalid_critical_proposal')
                 # The worker may have sampled a player immediately before the
                 # connection was removed from this room.  The row still has to
                 # pass the complete trusted-worker envelope above, but it no
                 # longer has canonical state to update and must not poison live
                 # rows in the same batch.
                 if player is None:
+                    self._log_player_water('row', player_id, 'departed_player',
+                        received_seq=sample_seq, input_seq=input_seq, level=level)
                     continue
                 previous = self.player_environment.get(player_id)
                 # A snapshot can be overtaken independently by player death,
@@ -7691,6 +7723,10 @@ class BattleState:
                         not player.alive or input_seq > player.input_seq or
                         (previous is not None and
                          input_seq < int(previous["input_seq"]))):
+                    self._log_player_water('row', player_id, 'overtaken_or_inactive',
+                        received_seq=sample_seq, input_seq=input_seq, level=level,
+                        canonical_input_seq=player.input_seq, alive=player.alive,
+                        connected=player.connected, participating=player.participating)
                     continue
                 observation = {
                     "input_seq": input_seq,
@@ -7705,10 +7741,21 @@ class BattleState:
             # terminal result. Validate the complete batch first, then retain
             # the last canonical water state as a successful no-op.
             if terminal_noop or stale_noop:
+                self._log_player_water('admission', None,
+                    'terminal_noop' if terminal_noop else 'stale_sequence_noop',
+                    received_seq=sample_seq, rows=len(raw_observations))
                 return True
             self.player_environment = observations
             self.player_environment_seq = sample_seq
             self.player_environment_authority_epoch = authority_epoch
+            for player_id, observation in observations.items():
+                self._log_player_water('accepted', player_id, 'observation_committed',
+                    input_seq=observation.get('input_seq'), level=observation['level'],
+                    critical_present='drowning_critical' in observation,
+                    elapsed=self.player_drowning_seconds.get(player_id, 0.0))
+            if not observations:
+                self._log_player_water('accepted', None, 'empty_batch',
+                    received_rows=len(raw_observations))
             return True
 
     def _remember_environment_push(self, attacker, victim, sequence=None):
@@ -7898,27 +7945,41 @@ class BattleState:
             # fresh worker observation arrives; only a fresh non-drowning
             # sample resets the continuous timer.
             if not fresh:
+                self._log_player_water('timer', player.player_id,
+                    'missing_observation' if observation is None else 'stale_observation',
+                    elapsed=self.player_drowning_seconds.get(player.player_id, 0.0),
+                    observed_tick=observation.get('observed_tick') if observation else None)
                 continue
             if int(observation["level"]) != 2:
                 receipt = self.environment_pushes.get(('player', player.player_id))
                 if receipt is not None and receipt['hazard_tick'] is not None:
                     self.environment_pushes.pop(('player', player.player_id), None)
-                self.player_drowning_seconds.pop(player.player_id, None)
+                previous_elapsed = self.player_drowning_seconds.pop(player.player_id, None)
+                self._log_player_water('timer', player.player_id, 'fresh_safe_reset',
+                    level=observation['level'], previous_elapsed=previous_elapsed,
+                    input_seq=observation.get('input_seq'))
                 continue
             self._environment_pusher(('player', player.player_id), hazard=True)
             elapsed = self.player_drowning_seconds.get(
                 player.player_id, 0.0) + max(0.0, float(dt))
             self.player_drowning_seconds[player.player_id] = elapsed
+            self._log_player_water('timer', player.player_id, 'counting',
+                level=2, elapsed=elapsed, input_seq=observation.get('input_seq'),
+                critical_present=observation.get('drowning_critical') is not None)
             if elapsed <= PLAYER_DROWNING_SECONDS:
                 continue
             critical = observation.get("drowning_critical")
             if critical is None:
+                self._log_player_water('terminal', player.player_id, 'missing_critical_proposal',
+                    elapsed=elapsed, health=player.health, input_seq=observation.get('input_seq'))
                 self.player_drowning_seconds[player.player_id] = (
                     PLAYER_DROWNING_SECONDS)
                 continue
             try:
                 critical = _critical_payload(critical)
-            except ValueError:
+            except ValueError as error:
+                self._log_player_water('terminal', player.player_id, 'invalid_critical_proposal',
+                    elapsed=elapsed, health=player.health, error=str(error)[:240])
                 self.player_drowning_seconds[player.player_id] = (
                     PLAYER_DROWNING_SECONDS)
                 continue
@@ -7956,6 +8017,9 @@ class BattleState:
             self.player_drowning_seconds.pop(player.player_id, None)
             self.player_overturn_state.pop(player.player_id, None)
             deaths += 1
+            self._log_player_water('terminal', player.player_id, 'death_committed',
+                force=True, elapsed=elapsed, health=player.health, alive=player.alive,
+                display_health=player.display_health, death_reason=player.death_reason)
             if self._maybe_finish_battle():
                 break
         return deaths

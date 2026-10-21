@@ -228,9 +228,60 @@ class RearApproachOwnershipTests(unittest.TestCase):
         self.assertEqual(0, state['fire_seq'])
         self.assertFalse(state['hull_aiming'])
 
+    def test_blocked_authored_advance_releases_episode_and_later_creation_gate(self):
+        state = self.state
+        target = dict(id=2, kind='human', alive=True, position=(0., 0., -100.))
+        order = dict(target_id=2, combat_mode='advance', move_position=(20., 0., 0.))
+        state.update(_rear_aim_episode=dict(target_id=2, identity=('human', 2),
+                     start=0., fire_seq=0))
+        key = self.runtime._shot_los_key(state, target)
+        self.runtime._shot_los_cache[key] = (2., False)
+        self.assertIs(order, self.runtime._rear_laying_order(state, order, {2: target}, 2.))
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertNotIn('_rear_hull_aim', state)
+        self.assertTrue(state['_rear_motion_blocked'])
+        # The same production gate passed to combat_hull_aim cannot recreate
+        # rear parking later in this update. Real final collision stays owner.
+        from gui.mods.offline_lan_0922.ai.driver import combat_hull_aim
+        self.assertEqual((.2, 1., False), combat_hull_aim(0., 2.9, -.1, .1,
+            .2, 1., 'drive', True, combat_mode='advance', movement_intent=True,
+            allow_rear_start=not state['_rear_motion_blocked']))
+        self.runtime._shot_los_cache[key] = (2.1, True)
+        self.runtime._rear_laying_order(state, order, {2: target}, 2.1)
+        self.assertFalse(state['_rear_motion_blocked'])
+
+    def test_real_update_blocked_authored_advance_does_not_restart_episode(self):
+        import contextlib
+        import io
+        import test_port_0922_bot_runtime as harness
+        descriptor = harness._combat_descriptor(turret_yaw_limits=(-.1, .1), turret_speed=1.)
+        runtime = self.fixture.module.BotRuntime(1,
+            descriptor_resolver=lambda unused: descriptor,
+            direction_probe=lambda *unused: dict(clear=True, slope=0.),
+            ground_probe=lambda *unused: 0., physics_ground_probe=lambda *unused: 0.,
+            spawn_resolver=lambda *unused: ((0., 0., 0.), 0.),
+            visibility_probe=lambda *unused: True, firing_lane_probe=lambda *unused: False,
+            baked_graph=harness._flat_open_graph())
+        runtime.battle_start(self.fixture.start)
+        runtime._apply_orders(dict(bot_order_revision=1, bot_orders=[dict(
+            id=11, team=2, combat_mode='advance', target_kind='human', target_id=2,
+            move_position=(30., 0., 0.), aim_position=(0., 0., -100.),
+            face_position=(0., 0., -100.), fire_range=500., fire_allowed=False)]))
+        player = harness._admit_player(dict(id=2, team=1, alive=True, x=0., y=0., z=-100.))
+        with contextlib.redirect_stdout(io.StringIO()):
+            for frame in range(1, 31):
+                runtime.update(.05, frame*.05, players=[player])
+        state = runtime.states[11]
+        self.assertTrue(state['_rear_approach_receipt']['blocked'])
+        self.assertNotIn('_rear_aim_episode', state)
+        self.assertNotIn('_rear_hull_aim', state)
+        self.assertEqual(0, state['fire_seq'])
+        self.assertFalse(state['hull_aiming'])
+
     def test_unknown_expired_and_withdraw_keep_normal_rear_laying(self):
         target = dict(id=2, kind='human', alive=True, position=(0., 0., -100.))
-        for mode, sample in (('advance_contact', None), ('advance_contact', (0., False)),
+        for mode, sample in (('advance', None), ('advance', (0., False)), ('advance', (2., True)),
+                             ('advance_contact', None), ('advance_contact', (0., False)),
                              ('withdraw', (2., False)), ('advance_contact', (2., True))):
             with self.subTest(mode=mode, sample=sample):
                 self.runtime._shot_los_cache.clear()
