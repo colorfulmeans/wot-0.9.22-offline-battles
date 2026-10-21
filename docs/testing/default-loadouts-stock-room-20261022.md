@@ -171,8 +171,9 @@ captures content constraints. Replacing only graphics and logical setSize in
 configUI leaves the text prototype as the virtual scale denominator. Native
 constraint counter-scaling can then distort children despite correct logical
 620x244 dimensions. Initialization now establishes the correct scale baseline.
-One-time diagnostics include actual scale and each control's logical/bounded
-size. The builder validates runtime linkage strings against the pinned shared
+Centering measures the stock frame background, so a popup or hover glow
+cannot enlarge the positioning rectangle. One-time diagnostics include actual
+scale and each control's logical/bounded size. The builder validates runtime linkage strings against the pinned shared
 movies' SymbolClass tables before compilation.
 
 Performance evidence is independent of the UI: round 4's worst worker callback

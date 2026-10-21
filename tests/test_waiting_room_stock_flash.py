@@ -177,6 +177,8 @@ class StockRoomTests(unittest.TestCase):
         self.assertIn('queue.modeTitle.getBounds(stage)', source)
         self.assertIn('DisplayObject(queue.exitButton).getBounds(stage)', source)
         self.assertIn('globalToLocal(globalPos)', source)
+        self.assertIn('window.getBackground().getBounds(stage)', source)
+        self.assertNotIn('DisplayObject(window).getBounds(stage)', source)
 
 
 if __name__ == '__main__': unittest.main()

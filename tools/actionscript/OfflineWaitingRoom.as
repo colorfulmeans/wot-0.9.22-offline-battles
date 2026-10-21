@@ -220,7 +220,9 @@ package {
                 top = titleBounds.bottom;
                 bottom = footerBounds.top;
             }
-            var frame:Rectangle = DisplayObject(window).getBounds(stage);
+            // An open popup or a glowing button must not change the anchor.
+            // Only the stock frame background defines the room rectangle.
+            var frame:Rectangle = window.getBackground().getBounds(stage);
             var origin:Point = DisplayObject(window).localToGlobal(new Point());
             var globalPos:Point = new Point((stage.stageWidth - frame.width) / 2 - (frame.x - origin.x),
                 top + (bottom - top - frame.height) / 2 - (frame.y - origin.y));
