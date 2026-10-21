@@ -7224,7 +7224,9 @@ class BotRuntime(object):
         row['decision_id'] = receipt['id']
         row['sampled_at'] = receipt['sampled_at']
         row['query_index'] = receipt['query_count'] + 1
-        row['reason'] = row.get('reason') or ('clear' if row.get('clear') else 'unspecified_callback_rejection')
+        row['reason'] = (row.get('reason') or
+            (row.get('native_sweep') or {}).get('reason') or
+            ('clear' if row.get('clear') else 'unspecified_callback_rejection'))
         receipt['query_count'] += 1
         counts = receipt['reason_counts']
         counts[row['reason']] = counts.get(row['reason'], 0) + 1
@@ -7519,6 +7521,7 @@ class BotRuntime(object):
                 'motion': (throttle, turn),
                 'forward_blocked_by': after_traffic.get('forward_blocked_by'),
                 'reverse_blocked_by': after_traffic.get('reverse_blocked_by'),
+                'rotation_safety': dict(state.get('_traffic_rotation_receipt') or {}),
             },
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
@@ -15030,6 +15033,44 @@ class BotRuntime(object):
                     (state.get('z', 0.0)-start[2])*math.cos(state.get('yaw', 0.0))) / sweep['step'], 'realised_player_contact'
         return _number(state.get('speed')), 'physical_speed'
 
+    def _record_traffic_pivot(self, state, command, safety, target, hull_aiming, now):
+        """Hand an actually denied firing pivot to the existing angle owner.
+
+        This observes the already executed traffic sweep; it never samples or
+        grants collision clearance. Clear an unconsumed handoff when the guard
+        clears, without cancelling an angle action that already owns its exit.
+        """
+        previous = state.get('_traffic_rotation_receipt') or {}
+        identity = self._artillery_target_identity(target)
+        receipt = dict(safety.get('rotation_safety') or {})
+        receipt.setdefault('queried', False)
+        receipt.setdefault('blocked', False)
+        eligible = bool(target is not None and hull_aiming and
+            not command.get('parking_phase') and
+            command.get('combat_mode') not in (
+                'base_defense', 'artillery_deploy', 'artillery_relocate') and
+            (state.get('profile') or {}).get('class_tag') != 'SPG')
+        handoff = bool(eligible and receipt.get('blocked'))
+        receipt.update(at=now, target=identity, hull_aiming=bool(hull_aiming),
+            eligible=eligible, handoff=handoff,
+            requested_mode=command.get('combat_mode'),
+            applied_turn=safety.get('turn'),
+            reason=receipt.get('reason', 'guard_not_queried'))
+        if handoff:
+            state['_gun_angle_pivot_refusal'] = identity
+            if not previous.get('handoff') or previous.get('target') != identity:
+                self._decision_cache.pop(state['id'], None)
+            receipt['owner'] = 'existing_gun_angle_recovery'
+        elif (previous.get('handoff') and
+                state.get('_gun_angle_adjustment') is None and
+                state.get('_gun_angle_pivot_refusal') == previous.get('target')):
+            state.pop('_gun_angle_pivot_refusal', None)
+            receipt['owner'] = 'unconsumed_handoff_released'
+        else:
+            receipt['owner'] = ('existing_gun_angle_recovery' if
+                state.get('_gun_angle_adjustment') is not None else 'ordinary_controls')
+        state['_traffic_rotation_receipt'] = receipt
+
     def _gun_angle_order(self, state, order, targets, now, direction_clear):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
 
@@ -16845,6 +16886,7 @@ class BotRuntime(object):
                 safety_body, traffic_input,
                 self._neighbours_for(state, neighbours), now,
                 current_stopping_distance, step)
+            self._record_traffic_pivot(state, command, safety, target, hull_aiming, now)
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             if siege_motion_locked:

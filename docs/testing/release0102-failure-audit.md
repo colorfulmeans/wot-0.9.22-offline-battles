@@ -168,6 +168,35 @@ Low vegetation crushing is deliberately unchanged by user decision.
   The report's detailed support enabled once with four valid points and
   disabled once with five. Keep that rule unchanged.
 
+## Report 20261021-144050: traffic-vetoed gun laying
+
+- First-round Jagdpanther II (27), 14:31:55-14:32:16, requested a positive
+  firing pivot but traffic safety returned zero turn. Replaying the recorded
+  poses identifies allied Steyr (24): the full requested sweep is blocked
+  (legal fraction approximately 0.34), while the gun remains outside its
+  +/-10 degree arc. The sweep veto is valid; the missing recovery handoff is
+  not. The stationary driver did not advance its movement-stall clock.
+- Preserve that exact rotation guard and record its timestamp, original and
+  candidate yaw, shape, allowed fraction and peer poses without a second
+  native query. A denied active gun-laying turn feeds the existing
+  `_gun_angle_pivot_refusal` owner and invalidates the old decision once.
+  Existing bounded gun-angle recovery then owns facing, checked relocation,
+  arrival, failure/cooldown and target/priority cancellation. Clear a pending
+  unconsumed handoff if the traffic veto clears; do not cancel an already
+  admitted relocation merely because it is no longer requesting a pivot.
+- Ordinary route steering, base defence, parking and artillery deployment
+  do not gain a new recovery policy. Actual collision shapes, shooting
+  obstruction, retry/route switching and support thresholds remain unchanged.
+- The German Emil, Swedish Emil and E50 eventually left their logged pockets.
+  Recorded terrain collisions and missing-ground rejects do not establish a
+  safe routing-rule correction. Keep their laws and full target lineage.
+  Preserve the nested native sweep's specific rejection reason in the outer
+  planning reason/counts instead of `unspecified_callback_rejection`.
+- A committed recorded-pose fixture tests guard -> refusal -> cache expiry ->
+  existing checked relocation -> stalled exit, alongside blocker release,
+  target loss, priority handoff, ordinary movement and diagnostic provenance.
+  Geometry replay verifies logic, not Windows gameplay feel.
+
 ## Publication status
 
 The owner withdrew publication on 2026-10-21. GitHub has no v0.10.2 release
