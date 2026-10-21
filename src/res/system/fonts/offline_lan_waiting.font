@@ -1,7 +1,7 @@
 <offline_lan_waiting.font>
     <creation>
         <sourceFont>Microsoft YaHei</sourceFont>
-        <sourceFontSize>14</sourceFontSize>
+        <sourceFontSize>12</sourceFontSize>
         <widestChar>U+FF1F</widestChar>
         <effectsMargin>1</effectsMargin>
         <textureMargin>1</textureMargin>

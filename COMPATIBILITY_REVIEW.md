@@ -2665,13 +2665,15 @@ the room's current arena and battle time. Whether that stock view hides or only
 disables the three fixed controls is a property of `gui.pkg`, not of any client
 script, and remains unproved until it is seen on the exact Windows client.
 
-The packaged picker replaces only the exact #1513 `trainingWindow.swf` resource.
-Its `maxPlayers` value is `DefineEditText` id 10 at sprite 16 depth 12, while
-the adjacent `#menu:training/create/maxPlayers` label is the unnamed id 14 at
-depth 16. The build keeps both objects and their layout but changes their text
-color alpha from 255 to zero. Exact `lobby.swf` bytecode only assigns
-`maxPlayers.text` when the map changes; it does not replace the text format or
-alpha, so repeated map selection cannot restore either string.
+The mod no longer overrides `trainingWindow.swf`. An earlier version hid the
+`maxPlayers` value (`DefineEditText` id 10 at sprite 16 depth 12) and adjacent
+label (id 14, depth 16) by zeroing their alpha bytes at decoded offsets 3708
+and 4055. The owner's current screenshot shows those strings black, refuting
+the previous static assumption that they would remain invisible. Remove the
+movie override and let the client supply its original text format and colours.
+The diagnostic exporter verifies those stock fields but writes only an
+unchanged client movie outside shipping resources. No per-field recolouring
+or replacement runtime display writer is installed.
 
 `updateTrainingRoom` is the single Scaleform-to-Python call of that view
 (`TrainingWindowMeta`). In this mode it records the map and the battle time and
@@ -9927,27 +9929,37 @@ Regular, Veteran, Elite (Chinese labels match the launcher). Wire presets,
 ratings and the mixed first-run default are unchanged. Persist the last chosen
 preset only after a matching server acknowledgement in the same connection;
 restore it once when reconnecting as host, never impose it on a remote host.
-The room scales uniformly into the vertical band from 26.5% to 78% of the
-screen, leaving the stock mode title and tank footer visible. The reported
-1143x696 viewport now uses a 716.88x358.44 panel instead of 960x480. Cursor,
-controls and hit rectangles retain the same parent-relative coordinates;
-independent service panels retain their previous size and placement.
+The redesigned room uses a 640x330 pixel canvas; it can shrink on short
+screens but never grows beyond that size, including 2560x1080 and 4K. Native
+logs from the owner's rejected build confirmed the previous 960x480 cap was
+still reached at high resolution. Testing only a small inferred viewport did
+not validate that design. The room remains inside the 26.5%-78% vertical
+band, with independent service panels retaining their previous geometry.
 
-The missing-Chinese regression used a full `system/fonts/...` path for
-`GUI.Text.font`; the stock #1513 `ChainView.addLabel` and `GUITest.create`
-assign bare `label_small.font` and `default_smaller.font` names. The room now
-uses the same relative-name contract for packaged YaHei fonts. Match the stock
-settings-window proportions with 14 px body/button text, a 16 px room title,
-and compact controls; independent service panels retain their 16 px text. Both
-skins contain baked colour and alpha, with seeded non-repeating grain,
-soft highlights and warmer olive/red metal instead of flat gradients.
-The owner's stock settings-window reference supplies the visual direction:
-olivine metal header/footer and narrow frame around recessed dark content.
-The room title sits inside that header and status text clears the footer.
-These original RGBA skins do not redistribute stock Flash bitmaps or replace
-the native GUI interaction/cursor implementation.
-Native rendering acceptance is still a Windows owner test; layout/resource
-and lifecycle tests are engine-free and do not prove CJK rasterization.
+Two selector columns share a compact form above full-width map and team rows.
+Dark recessed selector fields and muted olive buttons follow the stock
+settings-window proportions. A compact 26 px red/gold footer button starts the battle, using the
+client's existing battle-button bitmap instead of a wide banner. Body/button text is 12 px YaHei, the header is 16 px,
+secondary text is subdued and actionable labels are brighter. The existing
+native cursor, callbacks, dropdown menu roles and host restrictions remain.
+Map selection, difficulty preset order/default/memory and server behavior do
+not change. Record the actual screen, applied root size and font names once
+on open or geometry changes rather than assuming the fake's viewport is real.
+
+The missing-Chinese fix retains the native relative font-name contract:
+#1513 `ChainView.addLabel` and `GUITest.create` assign `label_small.font` and
+`default_smaller.font`, not full `system/fonts/...` paths. The packaged
+YaHei descriptors remain dynamic. `build_waiting_room_skin.py` losslessly extracts pinned #1513 bitmaps from
+`windows.swf` (window frame/body), `guiControlsLobbyBattle.swf` (normal
+button), `guiControlsLobby.swf` (recessed field) and `guiControlsLogin.swf`
+(red/gold battle button). Only the window uses standard nine-slice sizing;
+button/field DDS pixels match their native source content crops exactly.
+Trim baked shadow padding so the requested button height describes its face. There is no custom
+noise, gradient, recolouring or guessed art. Record member identities and
+bitmap IDs in `waiting_skin_source.json`. Keep the existing native GUI
+interaction implementation; no new native APIs or alternate display writer.
+Native appearance and CJK rasterization still require Windows owner
+acceptance; the engine-free geometry/lifecycle checks are not screenshots.
 
 ### All-map water rebake and authoring danger overlay
 

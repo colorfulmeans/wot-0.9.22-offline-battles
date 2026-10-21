@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-"""Self-drawn LAN waiting room for #1513.
+"""Native GUI LAN waiting room using client skin bitmaps for #1513.
 
 The room presents the reviewed 0.8.2 waiting-room law: a live room status, one
 map selector and one start button. The launcher owns the server address, so
@@ -12,10 +12,11 @@ Exact #1513 evidence for the native surface used here:
   ``scripts/client/PostProcessing/ChainView.pyc`` and
   ``scripts/client/bwobsolete_tests/GUITest.pyc``.
 - Vertex colour does not tint this client's textured quads. The room therefore
-  ships baked RGBA panel/button textures and uses BLEND for their real alpha;
+  uses the pinned client's window/button bitmaps, decoded to RGBA DDS with
+  native frame nine-slice sizing, and BLEND for their original alpha;
   cursor and legacy service controls retain their proven white/black textures.
 - Mod-owned Microsoft YaHei fonts provide dynamic Chinese glyphs. The waiting
-  room uses 14 px body/button text and a 16 px title, following the stock
+  room uses 12 px body/button text and a 16 px title, following the stock
   settings-window reference. Other service panels keep their 16 px font.
 - ``GUI.addRoot`` / ``GUI.delRoot`` / ``GUI.reSort`` and an overlay at
   ``position.z = 0.1`` with ``focus`` and ``moveFocus``:
@@ -45,11 +46,12 @@ from gui.mods.offline_lan_0922.ui_i18n import as_text, tr
 PANEL_TEXTURE = 'gui/maps/offline_lan/waiting_panel.dds'
 BUTTON_TEXTURE = 'gui/maps/offline_lan/waiting_button.dds'
 START_TEXTURE = 'gui/maps/offline_lan/waiting_start.dds'
+FIELD_TEXTURE = 'gui/maps/offline_lan/waiting_field.dds'
 CONTROL_TEXTURE = 'system/maps/col_white.dds'
 OUTLINE_TEXTURE = 'system/maps/col_black.dds'
 CONTROL_TEXT_COLOUR = (16, 26, 36, 255)
 CONTROL_HOVER_COLOUR = (14, 82, 140, 255)
-ROOM_TEXT_COLOUR = (224, 224, 194, 255)
+ROOM_TEXT_COLOUR = (178, 178, 160, 255)
 ROOM_HOVER_COLOUR = (255, 222, 141, 255)
 PANEL_FONT = ui_i18n.CHINESE_FONT
 # GUI.Text.font takes a name relative to system/fonts, as stock addLabel does.
@@ -59,8 +61,8 @@ OVERLAY_Z = 0.1
 # z=0 did not, so the pointer keeps the same 0.01 step inside that band.
 CONTROL_Z = 0.05
 CONTROL_FRAME_OFFSET = 0.01
-PANEL_WIDTH = 960
-PANEL_HEIGHT = 480
+PANEL_WIDTH = 640
+PANEL_HEIGHT = 330
 PANEL_SAFE_MARGIN = 16
 PANEL_RAISE_PIXELS = 24
 # The stock queue title and vehicle footer stay outside this vertical band.
@@ -355,10 +357,12 @@ class WaitingRoomUI(object):
 
     panel_size = (PANEL_WIDTH, PANEL_HEIGHT)
     panel_font = ROOM_FONT
-    control_text_colour = ROOM_TEXT_COLOUR
+    control_text_colour = (211, 210, 190, 255)
     control_hover_colour = ROOM_HOVER_COLOUR
 
     def _control_texture(self, role):
+        if role in ('tier', 'skill', 'map') or role.startswith('skill_choice_'):
+            return FIELD_TEXTURE
         return START_TEXTURE if role == 'start' else BUTTON_TEXTURE
 
     # The stock picker can only present the elected host.  This room also
@@ -416,6 +420,7 @@ class WaitingRoomUI(object):
         self._pending_bot_tier_mode = None
         self._pending_bot_skill_mode = None
         self._skill_menu_open = False
+        self._layout_receipt = None
 
     def install(self):
         """Build the native components without showing them."""
@@ -435,7 +440,7 @@ class WaitingRoomUI(object):
         self._set(panel, 'verticalAnchor', 'CENTER')
         self._set(panel, 'width', PANEL_WIDTH)
         self._set(panel, 'height', PANEL_HEIGHT)
-        # The RGBA texture supplies its own dark colour and transparency.
+        # The original client window bitmap supplies its own colour and alpha.
         self._set(panel, 'materialFX', 'BLEND')
         self._set(panel, 'colour', (5, 12, 20, 245))
         self._set(panel, 'position', (0.0, 0.0, OVERLAY_Z))
@@ -451,83 +456,63 @@ class WaitingRoomUI(object):
         # GUI.Window can never accept it.  Setting it only logged a skip.
         self._set(panel, 'visible', False)
         self._apply_layout(panel=panel, surface=surface)
-        make_control = lambda role, position, width, height: self._make_control(
-            role, position, width, height, panel=panel, controls=controls,
-            surface=surface)
-        make_label = lambda role, text, position, width, height, **kwargs: \
-            self._make_label(
-                role, text, position, width, height, panel=panel, labels=labels,
-                surface=surface, **kwargs)
-        make_control('tier_previous', (-0.72, 0.30, CONTROL_Z), 0.20, 0.13)
-        make_control('tier', (0.0, 0.30, CONTROL_Z), 1.15, 0.13)
-        make_control('tier_next', (0.72, 0.30, CONTROL_Z), 0.20, 0.13)
-        make_control('skill_previous', (-0.72, 0.15, CONTROL_Z), 0.20, 0.13)
-        make_control('skill', (0.0, 0.15, CONTROL_Z), 1.15, 0.13)
-        make_control('skill_next', (0.72, 0.15, CONTROL_Z), 0.20, 0.13)
-        make_control('map', (-0.30, 0.0, CONTROL_Z), 1.00, 0.13)
-        make_control('random', (0.62, 0.0, CONTROL_Z), 0.56, 0.13)
-        make_control('team1_down', (-0.82, -0.18, CONTROL_Z), 0.12, 0.13)
-        make_control('team1_up', (-0.22, -0.18, CONTROL_Z), 0.12, 0.13)
-        make_control('team2_down', (0.22, -0.18, CONTROL_Z), 0.12, 0.13)
-        make_control('team2_up', (0.82, -0.18, CONTROL_Z), 0.12, 0.13)
-        make_control('team1', (-0.52, -0.38, CONTROL_Z), 0.42, 0.13)
-        make_control('team2', (0.0, -0.38, CONTROL_Z), 0.42, 0.13)
-        make_control('team_random', (0.52, -0.38, CONTROL_Z), 0.42, 0.13)
-        make_control('start', (0.0, -0.58, CONTROL_Z), 1.20, 0.14)
-        make_control('close', (0.0, -0.90, CONTROL_Z), 0.50, 0.13)
-        make_label('title', tr('LAN WAITING ROOM'), (-0.86, 0.94, 0.0), 1.72,
-                   0.10, colour=(209, 185, 115, 255))
-        make_label('room', '', (-0.86, 0.62, 0.0), 1.72, 0.11,
-                   colour=ROOM_TEXT_COLOUR)
-        make_label('players', '', (-0.86, 0.44, 0.0), 1.72, 0.11,
-                   colour=ROOM_TEXT_COLOUR)
-        # The baked olive/red controls carry warm, readable native text.
-        make_label('tier_previous', '<', (-0.72, 0.30, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('tier', '', (0.0, 0.30, 0.0), 1.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('tier_next', '>', (0.72, 0.30, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('skill_previous', '<', (-0.72, 0.15, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('skill', '', (0.0, 0.15, 0.0), 1.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('skill_next', '>', (0.72, 0.15, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('map', '', (-0.30, 0.0, 0.0), 0.96, 0.10,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('random', tr('RANDOM MAP'), (0.62, 0.0, 0.0), 0.52, 0.10,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team1_down', '-', (-0.82, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team1_capacity', '', (-0.52, -0.18, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=ROOM_TEXT_COLOUR)
-        make_label('team1_up', '+', (-0.22, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team2_down', '-', (0.22, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team2_capacity', '', (0.52, -0.18, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=ROOM_TEXT_COLOUR)
-        make_label('team2_up', '+', (0.82, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team1', tr('TEAM 1'), (-0.52, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team2', tr('TEAM 2'), (0.0, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('team_random', tr('RANDOM'), (0.52, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('start', tr('START BATTLE'), (0.0, -0.58, 0.0), 1.16, 0.11,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('close', tr('LEAVE'), (0.0, -0.90, 0.0), 0.46, 0.10,
-                   anchor='CENTER', colour=self.control_text_colour)
-        make_label('message', '', (-0.86, -0.72, 0.0), 1.72, 0.10,
-                   colour=ROOM_TEXT_COLOUR)
+        # Design in actual pixels, then convert once to parent-relative CLIP.
+        # The root can shrink on short displays but never grows beyond 640x330.
+        def position(x, y, z):
+            return (2.0*x/PANEL_WIDTH-1.0, 1.0-2.0*y/PANEL_HEIGHT, z)
+
+        def make_control(role, x, y, width, height=22):
+            return self._make_control(role, position(x, y, CONTROL_Z),
+                2.0*width/PANEL_WIDTH, 2.0*height/PANEL_HEIGHT,
+                panel=panel, controls=controls, surface=surface)
+
+        def make_label(role, text, x, y, width, anchor='CENTER', colour=None):
+            return self._make_label(role, text, position(x, y, 0.0),
+                2.0*width/PANEL_WIDTH, 32.0/PANEL_HEIGHT, anchor=anchor,
+                colour=ROOM_TEXT_COLOUR if colour is None else colour,
+                panel=panel, labels=labels, surface=surface)
+
+        # Two compact selector columns; map and team rows occupy the full form.
+        for role, x, y, width in (
+                ('tier_previous', 34, 104, 24), ('tier', 164, 104, 232),
+                ('tier_next', 294, 104, 24),
+                ('skill_previous', 346, 104, 24), ('skill', 476, 104, 232),
+                ('skill_next', 606, 104, 24),
+                ('map', 250, 142, 456), ('random', 554, 142, 128),
+                ('team1_down', 34, 180, 24), ('team1_up', 294, 180, 24),
+                ('team2_down', 346, 180, 24), ('team2_up', 606, 180, 24),
+                ('team1', 116, 220, 188), ('team2', 320, 220, 188),
+                ('team_random', 524, 220, 188),
+                ('close', 67, 311, 90), ('start', 528, 311, 180)):
+            make_control(role, x, y, width, 26 if role == 'start' else 22)
+        make_label('title', tr('LAN WAITING ROOM'), 12, 12, 610,
+                   anchor='LEFT', colour=(219, 219, 204, 255))
+        make_label('room', '', 22, 49, 596, anchor='LEFT')
+        make_label('players', '', 22, 72, 596, anchor='LEFT')
+        for role, text, x, y, width in (
+                ('tier_previous', '<', 34, 104, 24), ('tier', '', 164, 104, 224),
+                ('tier_next', '>', 294, 104, 24),
+                ('skill_previous', '<', 346, 104, 24), ('skill', '', 476, 104, 224),
+                ('skill_next', '>', 606, 104, 24),
+                ('map', '', 250, 142, 448), ('random', tr('RANDOM MAP'), 554, 142, 120),
+                ('team1_down', '-', 34, 180, 24), ('team1_capacity', '', 164, 180, 232),
+                ('team1_up', '+', 294, 180, 24), ('team2_down', '-', 346, 180, 24),
+                ('team2_capacity', '', 476, 180, 232), ('team2_up', '+', 606, 180, 24),
+                ('team1', tr('TEAM 1'), 116, 220, 180),
+                ('team2', tr('TEAM 2'), 320, 220, 180),
+                ('team_random', tr('RANDOM'), 524, 220, 180),
+                ('start', tr('START BATTLE'), 528, 311, 172),
+                ('close', tr('LEAVE'), 67, 311, 82)):
+            make_label(role, text, x, y, width, colour=self.control_text_colour)
+        make_label('message', '', 22, 269, 596, anchor='LEFT')
+        # Put the dropdown directly below its own field. Its five hit/text
+        # surfaces share the same geometry, including when the root shrinks.
         for index, (value, caption) in enumerate(BOT_SKILL_OPTIONS):
             role = 'skill_choice_' + value
-            y = -0.15 * index
-            make_control(role, (0., y, CONTROL_Z), 1.15, .14)
-            make_label(role, tr(caption), (0., y, 0.), 1.10, .10,
-                       anchor='CENTER', colour=self.control_text_colour)
+            y = 127 + 22*index
+            make_control(role, 476, y, 232)
+            make_label(role, tr(caption), 476, y, 224,
+                       colour=self.control_text_colour)
         # Component construction is fallible on the native client. Commit the
         # installed state only after the complete graph exists.
         self._surface = surface
@@ -552,6 +537,13 @@ class WaitingRoomUI(object):
         self._set(panel, 'width', width)
         self._set(panel, 'height', height)
         self._set(panel, 'position', (0.0, y, OVERLAY_Z))
+        receipt = (screen_size, width, height, y)
+        if self.panel_font == ROOM_FONT and receipt != self._layout_receipt:
+            _log('LAN room layout screen=%r design=%dx%d applied=(%r,%r) '
+                 'clip_y=%.4f fonts=(body:%s,title:%s)' % (
+                     screen_size, PANEL_WIDTH, PANEL_HEIGHT,
+                     panel.width, panel.height, y, ROOM_FONT, PANEL_FONT))
+            self._layout_receipt = receipt
         return True
 
     def _font_for_label(self, role):
