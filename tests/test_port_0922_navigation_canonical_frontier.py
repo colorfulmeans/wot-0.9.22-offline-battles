@@ -49,6 +49,16 @@ class CanonicalFrontierTests(unittest.TestCase):
         self.assertTrue(s['macro_replan_active'])
         self.assertEqual({},nav.grid._failed_edges)
 
+    def test_hold_has_an_explicit_retired_receipt_and_resume_starts_fresh(self):
+        nav,s=self.scene();p=(0.,0.,0.);target=(10.,0.,0.);goal=(100.,0.,0.)
+        nav._observe_path_frontier(s,p,target,goal,0.)
+        nav.observe_direct_target(30,p,goal,('direct',30),30.,movement_intent=False)
+        self.assertNotIn('path_frontier',s)
+        self.assertFalse(s['path_frontier_observation']['active'])
+        self.assertEqual('direct_hold_or_arrival',s['path_frontier_observation']['reason'])
+        self.assertFalse(nav._observe_path_frontier(s,p,target,goal,100.))
+        self.assertTrue(s['path_frontier_observation']['active'])
+
     def test_changed_request_retires_old_progress(self):
         nav,s=self.scene();p=(0.,0.,0.);target=(10.,0.,0.);goal=(100.,0.,0.)
         nav._observe_path_frontier(s,p,target,goal,0.)

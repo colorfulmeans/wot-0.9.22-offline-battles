@@ -2380,7 +2380,7 @@ class TerrainNavigator(object):
 					path_key=tuple(path_key), request_path_key=state.get('request_path_key'))
 			state.pop('local_fallback_target', None)
 			state.pop('local_retry_progress', None)
-			state.pop('path_frontier', None)
+			self._retire_path_frontier(state, now, 'movement_handoff')
 			state.pop('reached_path_corner', None)
 			return None
 		target = state.get('local_fallback_target')
@@ -2878,7 +2878,7 @@ class TerrainNavigator(object):
 		bot_id = int(bot_id)
 		path_identity = tuple(path_key)
 		if not movement_intent or _distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS:
-			self.bot_states.get(bot_id, {}).pop('path_frontier', None)
+			self._retire_path_frontier(self.bot_states.get(bot_id, {}), now, 'direct_hold_or_arrival')
 			self.bot_states.get(bot_id, {}).pop('local_retry_progress', None)
 			self.bot_states.get(bot_id, {}).pop('reached_path_corner', None)
 		state = self.bot_direct_progress.get(bot_id)
@@ -3014,6 +3014,14 @@ class TerrainNavigator(object):
 			return tuple(target)
 		return None
 
+	@staticmethod
+	def _retire_path_frontier(state, now, reason):
+		tracker=state.pop('path_frontier',None)
+		if tracker is not None:
+			state['path_frontier_observation']=dict(active=False,at=float(now),
+				reason=reason,progress_at=tracker['at'],replans=tracker['replans'],
+				age_seconds=max(0.,float(now)-tracker['at']))
+
 	def _observe_path_frontier(self, state, current, target, goal, now):
 		"""Retain realised progress across canonical-path corner/replan churn."""
 		request = state.get('request_key')
@@ -3040,7 +3048,7 @@ class TerrainNavigator(object):
 				if len(tracker['best']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
 					tracker['best'].clear()
 				tracker['best'][key] = distance
-		state['path_frontier_observation'] = dict(at=float(now),
+		state['path_frontier_observation'] = dict(active=True,at=float(now),
 			progress_at=tracker['at'], age_seconds=max(0.,float(now)-tracker['at']),
 			reason=tracker['reason'], request=request, current=tuple(current),
 			target=tuple(target), distance=distance, previous_best=best,
@@ -3090,9 +3098,11 @@ class TerrainNavigator(object):
 					tracker['at']=float(now)
 					tracker['replans']+=1
 					tracker['reason']='private_retry_issued'
+					state['path_frontier_observation'].update(outcome='private_retry_issued',
+						replans=tracker['replans'],retry_at=float(now))
 					return True
 		else:
-			state.pop('path_frontier',None)
+			self._retire_path_frontier(state, now, 'no_target_or_arrival')
 		if (state.get('macro_replan_active') and
 				state.get('macro_escape_target') is None and
 				not self._active_macro_edge_penalties(bot_id, now)):
@@ -4163,7 +4173,7 @@ class TerrainNavigator(object):
 			# follower from its realised hull pose; never invent an edge veto.
 			self.request_replan(bot_id, current, now)
 		if not movement_intent:
-			state.pop('path_frontier', None)
+			self._retire_path_frontier(state, now, 'movement_handoff')
 			if state.get('local_fallback_target') is not None:
 				self._local_target_event(state, now, 'movement_hold', current=current, goal=goal)
 			state.pop('local_fallback_target', None)
