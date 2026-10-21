@@ -1,6 +1,7 @@
 {
   "client": "0.9.22.0.1 #1513",
   "source_members": {
+    "guiControlsLoginBattle": "9fb688dfc70081610fcde3db3d8d8696875af82f279d581ada78ec5a528c40be",
     "windows": "93d0e70d891fdbcc9083c70ba3740558c7409728dd5a1626aacff1d6c608ac3d",
     "guiControlsLobby": "def7e31310aa7fad75732ceb308e4a43ad2fb5c2dbf65229ee4232134c4292b3",
     "guiControlsLobbyBattle": "f6d12e6e40ab402703c2f4a15449665ed009cbfeab9689a85e745b119d761f92",
@@ -24,11 +25,11 @@
       ]
     },
     "button": {
-      "member": "gui/flash/guiControlsLobbyBattle.swf",
-      "character_id": 525,
+      "member": "gui/flash/guiControlsLoginBattle.swf",
+      "character_id": 108,
       "size": [
-        239,
-        39
+        160,
+        22
       ]
     },
     "start": {
@@ -57,9 +58,9 @@
     ],
     "button": [
       0,
-      6,
-      239,
-      33
+      0,
+      160,
+      22
     ],
     "field": [
       3,
@@ -75,8 +76,8 @@
     ]
   },
   "operations": {
-    "panel": "Native Window frame/content nine-slice at 640x330",
-    "button": "Native bitmap, shadow padding trimmed",
+    "panel": "Native Window frame/content nine-slice at 640x286",
+    "button": "ButtonNormal bitmap 108; sized faces preserve 5px side and 3px top/bottom bevels",
     "start": "Native battle button bitmap",
     "field": "Native recessed field bitmap, transparent padding trimmed"
   }

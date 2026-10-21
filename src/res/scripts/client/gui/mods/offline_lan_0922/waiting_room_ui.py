@@ -16,7 +16,7 @@ Exact #1513 evidence for the native surface used here:
   native frame nine-slice sizing, and BLEND for their original alpha;
   cursor and legacy service controls retain their proven white/black textures.
 - Mod-owned Microsoft YaHei fonts provide dynamic Chinese glyphs. The waiting
-  room uses 12 px body/button text and a 16 px title, following the stock
+  room uses 14 px body/button text and a 16 px title, following the stock
   settings-window reference. Other service panels keep their 16 px font.
 - ``GUI.addRoot`` / ``GUI.delRoot`` / ``GUI.reSort`` and an overlay at
   ``position.z = 0.1`` with ``focus`` and ``moveFocus``:
@@ -62,12 +62,12 @@ OVERLAY_Z = 0.1
 CONTROL_Z = 0.05
 CONTROL_FRAME_OFFSET = 0.01
 PANEL_WIDTH = 640
-PANEL_HEIGHT = 330
+PANEL_HEIGHT = 286
 PANEL_SAFE_MARGIN = 16
 PANEL_RAISE_PIXELS = 24
 # The stock queue title and vehicle footer stay outside this vertical band.
 ROOM_TOP_FRACTION = 0.265
-ROOM_BOTTOM_FRACTION = 0.78
+ROOM_BOTTOM_FRACTION = 0.72
 POINTER_TICK_SECONDS = 0.03
 RANDOM_MAP_OPTION = 'server_random'
 
@@ -363,7 +363,11 @@ class WaitingRoomUI(object):
     def _control_texture(self, role):
         if role in ('tier', 'skill', 'map') or role.startswith('skill_choice_'):
             return FIELD_TEXTURE
-        return START_TEXTURE if role == 'start' else BUTTON_TEXTURE
+        if role == 'start':
+            return START_TEXTURE
+        size = ('small' if role in _TEAM_SIZE_CONTROLS or role.endswith(('_previous','_next'))
+                else 'close' if role == 'close' else 'random' if role == 'random' else 'normal')
+        return 'gui/maps/offline_lan/waiting_button_' + size + '.dds'
 
     # The stock picker can only present the elected host.  This room also
     # presents the players who wait for that host.
@@ -457,7 +461,7 @@ class WaitingRoomUI(object):
         self._set(panel, 'visible', False)
         self._apply_layout(panel=panel, surface=surface)
         # Design in actual pixels, then convert once to parent-relative CLIP.
-        # The root can shrink on short displays but never grows beyond 640x330.
+        # The root can shrink on short displays but never grows beyond 640x286.
         def position(x, y, z):
             return (2.0*x/PANEL_WIDTH-1.0, 1.0-2.0*y/PANEL_HEIGHT, z)
 
@@ -474,42 +478,42 @@ class WaitingRoomUI(object):
 
         # Two compact selector columns; map and team rows occupy the full form.
         for role, x, y, width in (
-                ('tier_previous', 34, 104, 24), ('tier', 164, 104, 232),
-                ('tier_next', 294, 104, 24),
-                ('skill_previous', 346, 104, 24), ('skill', 476, 104, 232),
-                ('skill_next', 606, 104, 24),
-                ('map', 250, 142, 456), ('random', 554, 142, 128),
-                ('team1_down', 34, 180, 24), ('team1_up', 294, 180, 24),
-                ('team2_down', 346, 180, 24), ('team2_up', 606, 180, 24),
-                ('team1', 116, 220, 188), ('team2', 320, 220, 188),
-                ('team_random', 524, 220, 188),
-                ('close', 67, 311, 90), ('start', 528, 311, 180)):
+                ('tier_previous', 34, 100, 24), ('tier', 164, 100, 232),
+                ('tier_next', 294, 100, 24),
+                ('skill_previous', 346, 100, 24), ('skill', 476, 100, 232),
+                ('skill_next', 606, 100, 24),
+                ('map', 250, 136, 456), ('random', 554, 136, 128),
+                ('team1_down', 34, 172, 24), ('team1_up', 294, 172, 24),
+                ('team2_down', 346, 172, 24), ('team2_up', 606, 172, 24),
+                ('team1', 116, 208, 180), ('team2', 320, 208, 180),
+                ('team_random', 524, 208, 180),
+                ('close', 568, 271, 100), ('start', 422, 271, 180)):
             make_control(role, x, y, width, 26 if role == 'start' else 22)
         make_label('title', tr('LAN WAITING ROOM'), 12, 12, 610,
                    anchor='LEFT', colour=(219, 219, 204, 255))
         make_label('room', '', 22, 49, 596, anchor='LEFT')
         make_label('players', '', 22, 72, 596, anchor='LEFT')
         for role, text, x, y, width in (
-                ('tier_previous', '<', 34, 104, 24), ('tier', '', 164, 104, 224),
-                ('tier_next', '>', 294, 104, 24),
-                ('skill_previous', '<', 346, 104, 24), ('skill', '', 476, 104, 224),
-                ('skill_next', '>', 606, 104, 24),
-                ('map', '', 250, 142, 448), ('random', tr('RANDOM MAP'), 554, 142, 120),
-                ('team1_down', '-', 34, 180, 24), ('team1_capacity', '', 164, 180, 232),
-                ('team1_up', '+', 294, 180, 24), ('team2_down', '-', 346, 180, 24),
-                ('team2_capacity', '', 476, 180, 232), ('team2_up', '+', 606, 180, 24),
-                ('team1', tr('TEAM 1'), 116, 220, 180),
-                ('team2', tr('TEAM 2'), 320, 220, 180),
-                ('team_random', tr('RANDOM'), 524, 220, 180),
-                ('start', tr('START BATTLE'), 528, 311, 172),
-                ('close', tr('LEAVE'), 67, 311, 82)):
+                ('tier_previous', '<', 34, 100, 24), ('tier', '', 164, 100, 224),
+                ('tier_next', '>', 294, 100, 24),
+                ('skill_previous', '<', 346, 100, 24), ('skill', '', 476, 100, 224),
+                ('skill_next', '>', 606, 100, 24),
+                ('map', '', 250, 136, 448), ('random', tr('RANDOM MAP'), 554, 136, 120),
+                ('team1_down', '-', 34, 172, 24), ('team1_capacity', '', 164, 172, 232),
+                ('team1_up', '+', 294, 172, 24), ('team2_down', '-', 346, 172, 24),
+                ('team2_capacity', '', 476, 172, 232), ('team2_up', '+', 606, 172, 24),
+                ('team1', tr('TEAM 1'), 116, 208, 180),
+                ('team2', tr('TEAM 2'), 320, 208, 180),
+                ('team_random', tr('RANDOM'), 524, 208, 180),
+                ('start', tr('START BATTLE'), 422, 271, 172),
+                ('close', tr('LEAVE'), 568, 271, 92)):
             make_label(role, text, x, y, width, colour=self.control_text_colour)
-        make_label('message', '', 22, 269, 596, anchor='LEFT')
+        make_label('message', '', 22, 238, 596, anchor='LEFT')
         # Put the dropdown directly below its own field. Its five hit/text
         # surfaces share the same geometry, including when the root shrinks.
         for index, (value, caption) in enumerate(BOT_SKILL_OPTIONS):
             role = 'skill_choice_' + value
-            y = 127 + 22*index
+            y = 123 + 22*index
             make_control(role, 476, y, 232)
             make_label(role, tr(caption), 476, y, 224,
                        colour=self.control_text_colour)

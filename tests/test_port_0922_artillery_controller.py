@@ -52,6 +52,29 @@ class ArtilleryControllerTests(unittest.TestCase):
             'yaw': math.pi * 0.5, 'speed': 8.0,
         }
 
+    def test_zero_depression_rejection_records_actual_local_angle_and_limits(self):
+        controller=self.module.ArtilleryController()
+        source=self.source();target=dict(self.target(),position=(0.,0.,5.),speed=0.)
+        ready,result=controller.request(source,target,_descriptor(pitch=(-.8,0.)),0,1.)
+        self.assertTrue(ready)
+        self.assertIsNone(result)
+        rows=controller.status(source,target,0,1.01)['planning']['candidate_evidence']['rows']
+        low=next(row for row in rows if row.get('arc')=='low')
+        self.assertEqual('outside_pitch_limits',low['reason'])
+        self.assertGreater(low['local_pitch'],low['pitch_limits'][1])
+        self.assertTrue(all(row.get('reason') for row in rows))
+
+    def test_candidate_evidence_survives_cached_failure_without_extra_solver_work(self):
+        controller=self.module.ArtilleryController()
+        source=self.source();target=dict(self.target(),position=(0.,0.,5.),speed=0.)
+        descriptor=_descriptor(pitch=(-.8,0.))
+        controller.request(source,target,descriptor,0,1.)
+        before=controller.status(source,target,0,1.01)['planning']['candidate_evidence']
+        controller.request(source,target,descriptor,0,1.02)
+        self.assertEqual(before,controller.status(source,target,0,1.03)['planning']['candidate_evidence'])
+        controller.reset()
+        self.assertEqual({},controller._candidate_receipts)
+
     def test_status_distinguishes_requested_pose_from_active_job_progress(self):
         controller=self.module.ArtilleryController()
         source,target,descriptor=self.source(),self.target(),_descriptor()

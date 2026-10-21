@@ -726,8 +726,8 @@ class WaitingRoomTests(unittest.TestCase):
             self.assertEqual(self.module.START_TEXTURE, room._controls['start'].texture)
             self.assertEqual(self.module.ROOM_FONT, room._labels['start'].properties['font'])
             self.assertEqual(self.module.ROOM_FONT, room._labels['room'].properties['font'])
-            self.assertAlmostEqual(26, room._controls['start'].properties['height'] * 330 / 2.)
-            self.assertLessEqual(room._controls['close'].properties['height'], .14)
+            self.assertAlmostEqual(26, room._controls['start'].properties['height'] * 286 / 2.)
+            self.assertAlmostEqual(22.,room._controls['close'].properties['height']*self.module.PANEL_HEIGHT/2.)
             screen[0] = (1920, 1080)
             room.refresh()
             self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
@@ -750,9 +750,9 @@ class WaitingRoomTests(unittest.TestCase):
                                     self.module.PANEL_SAFE_MARGIN)
             self.assertGreaterEqual(bottom_margin,
                                     self.module.PANEL_SAFE_MARGIN)
-            self.assertAlmostEqual(640.0/330.0, width / height)
+            self.assertAlmostEqual(640.0/286.0, width / height)
             self.assertLessEqual(width, 640)
-            self.assertLessEqual(height, 330)
+            self.assertLessEqual(height, 286)
             self.assertGreaterEqual(top_margin,
                 screen[1] * self.module.ROOM_TOP_FRACTION - 0.001)
             self.assertGreaterEqual(bottom_margin,
@@ -760,19 +760,19 @@ class WaitingRoomTests(unittest.TestCase):
         width, height, y = self.module.panel_geometry((1143, 696))
         self.assertLessEqual(height, 360)
         self.assertLessEqual(width, 640)
-        self.assertEqual((640, 330), self.module.panel_geometry((2560, 1080))[:2])
+        self.assertEqual((640, 286), self.module.panel_geometry((2560, 1080))[:2])
 
     def test_compact_form_fields_and_footer_follow_native_control_proportions(self):
         self.room.open()
         panel = self.room._panel.properties
-        self.assertEqual((640, 330), (panel['width'], panel['height']))
+        self.assertEqual((640, 286), (panel['width'], panel['height']))
         for role in ('tier', 'skill', 'map'):
             self.assertEqual(self.module.FIELD_TEXTURE, self.room._controls[role].texture)
         self.assertLess(self.room._controls['tier'].position[0],
                         self.room._controls['skill'].position[0])
         for role in ('start', 'close'):
             control = self.room._controls[role]
-            self.assertAlmostEqual(26 if role == 'start' else 22, control.height * 330 / 2.)
+            self.assertAlmostEqual(26 if role == 'start' else 22, control.height * 286 / 2.)
             self.assertGreater(-control.position[1], .8)
         self.assertAlmostEqual(self.room._controls['start'].position[1],
                                self.room._controls['close'].position[1])
@@ -781,13 +781,27 @@ class WaitingRoomTests(unittest.TestCase):
             self.assertAlmostEqual(self.room._controls['skill'].position[0], choice.position[0])
             self.assertAlmostEqual(232, choice.width * 640 / 2.)
 
+    def test_compact_footer_and_native_normal_buttons_share_stock_dimensions(self):
+        self.room.install()
+        controls=self.room._controls
+        for role,width in (('close',100),('team1_down',24),('team1_up',24),
+                           ('team1',180),('team2',180),('random',128)):
+            c=controls[role]
+            self.assertAlmostEqual(width,c.width*self.module.PANEL_WIDTH/2.)
+            self.assertAlmostEqual(22,c.height*self.module.PANEL_HEIGHT/2.)
+            self.assertIn('waiting_button_',c.texture)
+        team_y=(1-controls['team1'].position[1])*self.module.PANEL_HEIGHT/2.
+        close_y=(1-controls['close'].position[1])*self.module.PANEL_HEIGHT/2.
+        self.assertLessEqual(close_y-team_y,63.)
+        self.assertEqual(controls['close'].position[1],controls['start'].position[1])
+
     def test_room_fonts_use_stock_relative_names_and_packaged_cjk_descriptors(self):
         import xml.etree.ElementTree as ET
         for name in (self.module.ROOM_FONT, self.module.PANEL_FONT):
             self.assertNotIn('/', name)
             font = ET.parse(ROOT / 'src/res/system/fonts' / name).getroot()
             self.assertEqual('Microsoft YaHei', font.findtext('creation/sourceFont'))
-            self.assertEqual('12' if name == self.module.ROOM_FONT else '16',
+            self.assertEqual('14' if name == self.module.ROOM_FONT else '16',
                              font.findtext('creation/sourceFontSize'))
             self.assertIsNone(font.find('generated'))
             self.assertIsNone(font.find('creation/startChar'))
@@ -1374,9 +1388,7 @@ class RoomTextureTests(unittest.TestCase):
         texture = self.module.CONTROL_TEXTURE
         self.assertEqual(self.module.START_TEXTURE, self.room._controls['start'].texture)
         for role, component in self.room._controls.items():
-            expected = self.module.START_TEXTURE if role == 'start' else (
-                self.module.FIELD_TEXTURE if role in ('tier', 'skill', 'map') or
-                role.startswith('skill_choice_') else self.module.BUTTON_TEXTURE)
+            expected = self.room._control_texture(role)
             self.assertEqual(expected, component.texture, role)
             self.assertTrue((ROOT / 'src/res' / expected).is_file())
         drawn = set(part.texture

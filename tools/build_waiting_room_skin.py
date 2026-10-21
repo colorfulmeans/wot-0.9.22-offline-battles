@@ -18,6 +18,7 @@ from build_map_picker_swf import (_validate_client, _decompress_swf,
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT/'src/res/gui/maps/offline_lan'
 SOURCE_HASHES = {
+    'guiControlsLoginBattle': '9fb688dfc70081610fcde3db3d8d8696875af82f279d581ada78ec5a528c40be',
     'windows': '93d0e70d891fdbcc9083c70ba3740558c7409728dd5a1626aacff1d6c608ac3d',
     'guiControlsLobby': 'def7e31310aa7fad75732ceb308e4a43ad2fb5c2dbf65229ee4232134c4292b3',
     'guiControlsLobbyBattle': 'f6d12e6e40ab402703c2f4a15449665ed009cbfeab9689a85e745b119d761f92',
@@ -26,14 +27,14 @@ SOURCE_HASHES = {
 BITMAPS = {
     'frame': ('windows', 2, (826,390)),
     'body': ('windows', 1, (803,340)),
-    'button': ('guiControlsLobbyBattle', 525, (239,39)),
+    'button': ('guiControlsLoginBattle', 108, (160,22)),
     'start': ('guiControlsLogin', 58, (158,50)),
     'field': ('guiControlsLobby', 349, (134,28)),
 }
 
 # Trim only the native bitmap's baked shadow/transparent padding so a
 # requested 22 px control has a 22 px face, as the stock component does.
-CROPS = {'frame':(8,8,817,377), 'button':(0,6,239,33),
+CROPS = {'frame':(8,8,817,377), 'button':(0,0,160,22),
          'field':(3,3,131,24), 'start':(0,0,158,50)}
 
 
@@ -103,11 +104,13 @@ def build(client_root, output):
     if set(found) != set(BITMAPS):
         raise ValueError('Missing native window/button bitmap')
     panel = nine_slice(found['frame'].crop(CROPS['frame']),
-                       (640,330),(8,26,8,38))
-    panel.alpha_composite(nine_slice(found['body'],(624,264),(8,8,8,8)),(8,27))
+                       (640,286),(3,27,3,30))
+    panel.alpha_composite(nine_slice(found['body'],(634,229),(3,3,3,3)),(3,27))
     textures = {'panel':panel}
     textures.update({role:found[role].crop(CROPS[role])
                      for role in ('button','start','field')})
+    for name,width in (('small',24),('normal',180),('close',100),('random',128)):
+        textures['button_'+name] = nine_slice(found['button'],(width,22),(5,3,5,3))
     output.mkdir(parents=True,exist_ok=True)
     for role,image in textures.items():
         image.save(output/('waiting_'+role+'.dds'))
@@ -115,8 +118,8 @@ def build(client_root, output):
                'bitmaps':{role:{'member':'gui/flash/'+member+'.swf',
                     'character_id':cid,'size':size} for role,(member,cid,size) in BITMAPS.items()},
                'native_content_crops':CROPS,
-               'operations':{'panel':'Native Window frame/content nine-slice at 640x330',
-                    'button':'Native bitmap, shadow padding trimmed', 'start':'Native battle button bitmap',
+               'operations':{'panel':'Native Window frame/content nine-slice at 640x286',
+                    'button':'ButtonNormal bitmap 108; sized faces preserve 5px side and 3px top/bottom bevels', 'start':'Native battle button bitmap',
                     'field':'Native recessed field bitmap, transparent padding trimmed'}}
     (output/'waiting_skin_source.json').write_bytes(
         (json.dumps(receipt,indent=2)+'\n').encode('utf-8'))

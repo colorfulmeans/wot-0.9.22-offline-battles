@@ -2380,6 +2380,7 @@ class TerrainNavigator(object):
 					path_key=tuple(path_key), request_path_key=state.get('request_path_key'))
 			state.pop('local_fallback_target', None)
 			state.pop('local_retry_progress', None)
+			state.pop('path_frontier', None)
 			state.pop('reached_path_corner', None)
 			return None
 		target = state.get('local_fallback_target')
@@ -2877,6 +2878,7 @@ class TerrainNavigator(object):
 		bot_id = int(bot_id)
 		path_identity = tuple(path_key)
 		if not movement_intent or _distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS:
+			self.bot_states.get(bot_id, {}).pop('path_frontier', None)
 			self.bot_states.get(bot_id, {}).pop('local_retry_progress', None)
 			self.bot_states.get(bot_id, {}).pop('reached_path_corner', None)
 		state = self.bot_direct_progress.get(bot_id)
@@ -3012,12 +3014,48 @@ class TerrainNavigator(object):
 			return tuple(target)
 		return None
 
+	def _observe_path_frontier(self, state, current, target, goal, now):
+		"""Retain realised progress across canonical-path corner/replan churn."""
+		request = state.get('request_key')
+		tracker = state.get('path_frontier')
+		cell = self.grid.cell_for(current)
+		if tracker is None or tracker['request'] != request:
+			tracker = dict(request=request, at=float(now), visited=set((cell,)),
+				best={}, reason='new_request', replans=0)
+			state['path_frontier'] = tracker
+		key = tuple(round(float(value), 3) for value in target)
+		distance = _distance_2d(current, target)
+		best = tracker['best'].get(key)
+		new_cell = cell not in tracker['visited']
+		improved = best is not None and best-distance >= MACRO_PROGRESS_METRES
+		if new_cell or improved:
+			tracker['at'] = float(now)
+			tracker['reason'] = 'new_realised_cell' if new_cell else 'new_leg_distance_best'
+		if len(tracker['visited']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+			tracker['visited'].clear()
+		tracker['visited'].add(cell)
+		if best is None or distance < best:
+			# Credit is measured from the last admitted best, not every substep.
+			if best is None or improved:
+				if len(tracker['best']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+					tracker['best'].clear()
+				tracker['best'][key] = distance
+		state['path_frontier_observation'] = dict(at=float(now),
+			progress_at=tracker['at'], age_seconds=max(0.,float(now)-tracker['at']),
+			reason=tracker['reason'], request=request, current=tuple(current),
+			target=tuple(target), distance=distance, previous_best=best,
+			new_cell=new_cell, improved=improved, cells=len(tracker['visited']),
+			targets=len(tracker['best']), replans=tracker['replans'])
+		return float(now)-tracker['at'] >= MACRO_STALL_SECONDS
+
 	def _observe_macro_progress(self, bot_id, state, current, goal, now):
 		"""Observe progress along the issued path target, not arbitrary motion."""
 		target = state.get('last_target')
 		fallback = bool(state.get('local_fallback_episode') ==
 			self._local_fallback_intent(goal, state))
 		if fallback:
+			if target is not None:
+				self._observe_path_frontier(state,current,target,goal,now)
 			# A retry's new tree and each two-metre fallback are still the same
 			# unfinished route. Count actual entry into new terrain, including a
 			# necessary retreat, rather than renew the deadline when A* changes
@@ -3043,6 +3081,18 @@ class TerrainNavigator(object):
 					state.get('macro_progress_replans', 0)) + 1
 			return bool(state.get('temporary_stalled'))
 		kind = 'path'
+		if target is not None and _distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS:
+			if self._observe_path_frontier(state,current,target,goal,now):
+				# Reuse the existing private retry. A changed index/path is not
+				# physical escape; it must not grant a fresh deadline forever.
+				if self._start_macro_replan(bot_id,state,current,target,now):
+					tracker=state['path_frontier']
+					tracker['at']=float(now)
+					tracker['replans']+=1
+					tracker['reason']='private_retry_issued'
+					return True
+		else:
+			state.pop('path_frontier',None)
 		if (state.get('macro_replan_active') and
 				state.get('macro_escape_target') is None and
 				not self._active_macro_edge_penalties(bot_id, now)):
@@ -3176,6 +3226,7 @@ class TerrainNavigator(object):
 			'macro_progress_age_ms': int(max(0.0, float(now) -
 				float(state.get('macro_progress_at', now))) * 1000.0),
 			'macro_progress_kind': state.get('macro_progress_kind'),
+			'path_frontier': state.get('path_frontier_observation'),
 			'macro_progress_replans': int(state.get('macro_progress_replans', 0)),
 			'native_capability': (state['native_capability'][0]
 				if state.get('native_capability') is not None else None),
@@ -4112,6 +4163,7 @@ class TerrainNavigator(object):
 			# follower from its realised hull pose; never invent an edge veto.
 			self.request_replan(bot_id, current, now)
 		if not movement_intent:
+			state.pop('path_frontier', None)
 			if state.get('local_fallback_target') is not None:
 				self._local_target_event(state, now, 'movement_hold', current=current, goal=goal)
 			state.pop('local_fallback_target', None)

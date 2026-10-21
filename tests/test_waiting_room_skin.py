@@ -50,7 +50,16 @@ class NativeSkinTests(unittest.TestCase):
                 crop = skin.CROPS[role]
                 self.assertEqual((crop[2]-crop[0],crop[3]-crop[1]),image.size)
         with Image.open(root/'waiting_panel.dds') as image:
-            self.assertEqual((640,330),image.size)
+            self.assertEqual((640,286),image.size)
+
+    def test_normal_faces_keep_native_bevel_pixels_at_every_control_width(self):
+        root=ROOT/'src/res/gui/maps/offline_lan'
+        with Image.open(root/'waiting_button.dds') as original:
+            for name,width in (('small',24),('normal',180),('close',100),('random',128)):
+                with Image.open(root/('waiting_button_'+name+'.dds')) as face:
+                    self.assertEqual((width,22),face.size)
+                    self.assertEqual(original.getpixel((1,1)),face.getpixel((1,1)))
+                    self.assertEqual(original.getpixel((158,20)),face.getpixel((width-2,20)))
 
     def test_client_map_picker_movie_is_not_overridden(self):
         self.assertFalse((ROOT/'src/res/gui/flash/trainingWindow.swf').exists())
