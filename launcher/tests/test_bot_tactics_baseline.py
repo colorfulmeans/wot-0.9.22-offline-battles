@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import tempfile
 import tkinter as tk
 import unittest
@@ -13,6 +14,33 @@ import bot_tactics_labels as labels
 
 
 class BaselineDataTests(unittest.TestCase):
+    def test_owner_windstorm_routes_are_the_first_run_baseline(self):
+        fixture = Path(__file__).resolve().parents[2] / 'tests/fixtures/windstorm_owner_routes_20261021.json'
+        routes = json.loads(fixture.read_text(encoding='utf8'))['default_routes']
+        with tempfile.TemporaryDirectory() as temp:
+            adopted = storage.Store(temp).active()
+            self.assertEqual(routes, adopted['maps']['84_winter']['default_routes'])
+            self.assertEqual(routes, storage.contract.default_map('84_winter')['default_routes'])
+            self.assertEqual(adopted, storage.contract.canonical(adopted))
+
+    def test_owner_windstorm_routes_reach_runtime_without_silent_fallback(self):
+        profile = storage.contract.default_profile()
+        graph = storage.graph_data('84_winter')
+        original = copy.deepcopy(graph)
+        routes, outcomes = storage.runtime.default_routes(profile, '84_winter', graph)
+        for edit in profile['maps']['84_winter']['default_routes']:
+            identity = storage.contract.default_route_id(edit)
+            key = '%s:%s' % (edit['team'], identity)
+            actual = next((r for r in routes[str(edit['team'])] if r['id'] == identity), None)
+            if edit.get('disabled'):
+                self.assertEqual('route_deleted', outcomes[key])
+                self.assertIsNone(actual)
+            else:
+                self.assertEqual('baked_route_connected', outcomes[key])
+                self.assertIsNotNone(actual)
+                self.assertEqual([p[:3] for p in edit['points']], actual['waypoints'])
+        self.assertEqual(original, graph)
+
     def test_complete_canonical_baseline_returns_independent_documents(self):
         a=storage.contract.default_profile()
         self.assertEqual(41,len(a['maps']))

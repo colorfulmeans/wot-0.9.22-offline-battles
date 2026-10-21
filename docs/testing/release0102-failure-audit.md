@@ -409,3 +409,19 @@ before delivering the candidate; the superseded build 435 is not the final packa
   A direct Windows run without the native test environment initially failed
   three existing runtime integration tests; rerunning through the documented
   CI seam passed. This does not establish real client startup acceptance.
+
+
+### Owner Windstorm default routes, 2026-10-21
+
+- Adopt the owner's current active Windstorm default_routes verbatim as the
+  package baseline: both teams, shared and class routes, priorities, waypoint
+  flags and disabled class variants. Keep the other forty maps, parking,
+  behaviour settings, mesh data and all navigation strategy unchanged.
+- Fresh profile creation, whole-profile restore, individual route reset and
+  runtime route construction consume the same packaged baseline. Existing
+  explicit profiles retain the normal user-edit override behavior.
+- Keep an independent owner-route fixture. Validate first-run persistence and
+  canonical loading, both teams' runtime waypoint parity, all sixteen enabled
+  variants connected without fallback, and four disabled variants absent.
+- Include the preceding saved-resource identity compatibility fix in this
+  unpublished test package. Do not publish or tag v0.10.2.
