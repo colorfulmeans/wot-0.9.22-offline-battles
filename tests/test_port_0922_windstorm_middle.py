@@ -13,6 +13,36 @@ from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
 
 
 class MiddleBridgeTests(unittest.TestCase):
+    def test_rebake_retains_input_and_rollback_base_profile_identities(self):
+        import hashlib
+        from build_windstorm_middle_mesh import retain_profile_identities
+        base = json.dumps({'navigation_previous_sha256s': ['base_ancestor']}).encode()
+        previous = json.dumps({'navigation_previous_sha256s': ['input_ancestor'],
+                               'navigation_previous_sha256': 'single_ancestor'}).encode()
+        graph = json.loads(base)
+        retain_profile_identities(graph, previous, base)
+        self.assertEqual(set(['base_ancestor', 'input_ancestor', 'single_ancestor',
+            hashlib.sha256(base).hexdigest(), hashlib.sha256(previous).hexdigest()]),
+            set(graph['navigation_previous_sha256s']))
+
+    def test_published_windstorm_profiles_load_without_losing_route_edits(self):
+        import copy
+        from gui.mods.offline_lan_0922 import bot_tactics as cfg
+        for identity in (
+                'f0700b11ba30223ef55e9095fae31d318c0c3dc358b8c1601aa0d7f896576a23',
+                '628e72bd770e5e0530faaeb4a21dee1df53f9efdbb94397871c3c75cc69f4bf0',
+                'cda6076246a291d79b7ede5b2abaee3d08fc805974c048524ff865461d91f060'):
+            profile = cfg.default_profile()
+            entry = profile['maps']['84_winter']
+            entry['resource_sha256'] = identity
+            entry['default_routes'][0]['disabled'] = True
+            expected = copy.deepcopy(entry)
+            expected['resource_sha256'] = cfg.MAPS['84_winter']['resource_sha256']
+            self.assertEqual(expected, cfg.canonical(profile)['maps']['84_winter'])
+        entry['resource_sha256'] = '0'*64
+        with self.assertRaises(cfg.TacticsError):
+            cfg.canonical(profile)
+
     def test_recorded_vk_bank_steps_agree_with_final_motion_guard(self):
         graph = pn.with_shore_hazards(json.loads((ROOT/'navgraphs/84_winter.json').read_bytes()))
         grid = TerrainGrid(lambda *a: None, baked_graph=graph)

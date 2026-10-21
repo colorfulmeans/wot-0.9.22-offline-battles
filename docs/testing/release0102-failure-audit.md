@@ -389,3 +389,23 @@ before delivering the candidate; the superseded build 435 is not the final packa
   movement and another shot. No retreat or navigation strategy changes.
 - Engine-free tests and compiled-geometry validation do not establish native
   traffic feel or rendered profile UI acceptance; the owner tests the package.
+
+
+### Report 20261021-221231: saved tactics blocked startup
+
+- Build 437 stopped in Store.ensure_active before starting the game:
+  the saved Windstorm resource identity belonged to the retained two-patch
+  graph. Rebuilding from that graph preserved its geometry but omitted its
+  own identity and discarded successor identity history from the input.
+- Retain both input and rollback-base identities and their accepted ancestors
+  during rebake. Restore the three known published identities in generated
+  metadata. Unknown fingerprints remain rejected. Geometry, links, hazards,
+  routes, navigation laws and support physics are unchanged.
+- The owner's active and named profiles were backed up before updating only
+  maps.84_winter.resource_sha256 to build 437's current identity. The actual
+  launcher Store loading boundary was verified against build 437's registry;
+  all route edits and other configuration values were retained.
+- Both affected test files pass (38 tests) through the engine-free CI seam.
+  A direct Windows run without the native test environment initially failed
+  three existing runtime integration tests; rerunning through the documented
+  CI seam passed. This does not establish real client startup acceptance.

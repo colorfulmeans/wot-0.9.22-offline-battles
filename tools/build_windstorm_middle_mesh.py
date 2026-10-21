@@ -16,6 +16,18 @@ from build_windstorm_north_mesh import footprint_support
 REGION = (82, -188, 164, -126)
 
 
+def retain_profile_identities(graph, *sources):
+    """Geometry rollback must retain both input and base profile identities."""
+    identities = set(graph.get('navigation_previous_sha256s', ()))
+    for raw in sources:
+        previous = json.loads(raw)
+        identities.add(hashlib.sha256(raw).hexdigest())
+        identities.update(previous.get('navigation_previous_sha256s', ()))
+        if previous.get('navigation_previous_sha256'):
+            identities.add(previous['navigation_previous_sha256'])
+    graph['navigation_previous_sha256s'] = sorted(identities)
+
+
 def edge_support(terrain, obstacles, legacy, start, end):
     """Retain full-hull support while refining the old circular apron.
 
@@ -44,12 +56,15 @@ def build(client):
     path = ROOT/'navgraphs/84_winter.json'
     raw = path.read_bytes()
     graph = json.loads(raw)
+    identity_sources = [raw]
     assert len(graph['local_meshes']) in (2, 3)
     if len(graph['local_meshes']) == 3:
         # Rebuild this patch from the retained pre-addition graph, so removed
         # coarse links are recalculated rather than accumulated on each bake.
-        graph = json.loads(subprocess.check_output(
-            ['git', 'show', '09b87889:navgraphs/84_winter.json'], cwd=ROOT))
+        base_raw = subprocess.check_output(
+            ['git', 'show', '09b87889:navgraphs/84_winter.json'], cwd=ROOT)
+        identity_sources.append(base_raw)
+        graph = json.loads(base_raw)
     meshes.EXTRA_REGIONS = (REGION,)
     terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
     original = legacy._has_safe_edge_clearance
@@ -112,8 +127,7 @@ def build(client):
         coarse_links_refined=refined, support_half_width=legacy.VEHICLE_HALF_WIDTH,
         support_sample_metres=.25, water_depth_limit=legacy.WATER_DEPTH_LIMIT,
         source='exact_0922_client_compiled_geometry')
-    graph['navigation_previous_sha256s'] = sorted(set(graph.get('navigation_previous_sha256s', ())) |
-                                                {hashlib.sha256(raw).hexdigest()})
+    retain_profile_identities(graph, *identity_sources)
     path.write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
     manifest_path = ROOT/'navgraphs/manifest.json'
     manifest = json.loads(manifest_path.read_bytes())
