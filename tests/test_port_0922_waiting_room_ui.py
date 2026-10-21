@@ -716,7 +716,7 @@ class WaitingRoomTests(unittest.TestCase):
                 surface=surface, host=lambda: True,
                 training_status=lambda: (training, True))
             room.open()
-            self.assertEqual(self.module.ROOM_FONT, room._labels['title'].properties['font'])
+            self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
             for role in room._controls:
                 c = room._controls[role].properties
                 x, y, z = c['position']
@@ -725,13 +725,16 @@ class WaitingRoomTests(unittest.TestCase):
                 if role in room._labels:
                     self.assertEqual((x, y), room._labels[role].properties['position'][:2])
             self.assertEqual(self.module.START_TEXTURE, room._controls['start'].texture)
+            screen[0] = (1920, 1080)
+            room.refresh()
+            self.assertEqual(self.module.ROOM_FONT, room._labels['title'].properties['font'])
             screen[0] = (800, 600)
             room.refresh()
             self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
             room.close()
 
-    def test_panel_geometry_is_raised_and_bounded_at_common_resolutions(self):
-        for screen in ((800, 600), (1024, 768), (1280, 720),
+    def test_panel_geometry_preserves_aspect_between_stock_title_and_footer(self):
+        for screen in ((800, 600), (1143, 696), (1024, 768), (1280, 720),
                        (1920, 1080), (2560, 1080), (3840, 2160)):
             width, height, y = self.module.panel_geometry(screen)
             center_y = y * screen[1] * 0.5
@@ -744,7 +747,24 @@ class WaitingRoomTests(unittest.TestCase):
                                     self.module.PANEL_SAFE_MARGIN)
             self.assertGreaterEqual(bottom_margin,
                                     self.module.PANEL_SAFE_MARGIN)
-            self.assertGreater(y, 0.0)
+            self.assertAlmostEqual(2.0, width / height)
+            self.assertGreaterEqual(top_margin,
+                screen[1] * self.module.ROOM_TOP_FRACTION - 0.001)
+            self.assertGreaterEqual(bottom_margin,
+                screen[1] * (1.-self.module.ROOM_BOTTOM_FRACTION) - 0.001)
+        width, height, y = self.module.panel_geometry((1143, 696))
+        self.assertLessEqual(height, 360)
+        self.assertLessEqual(width, 720)
+
+    def test_room_fonts_use_stock_relative_names_and_packaged_cjk_descriptors(self):
+        import xml.etree.ElementTree as ET
+        for name in (self.module.ROOM_FONT, self.module.PANEL_FONT):
+            self.assertNotIn('/', name)
+            font = ET.parse(ROOT / 'src/res/system/fonts' / name).getroot()
+            self.assertEqual('Microsoft YaHei', font.findtext('creation/sourceFont'))
+            self.assertIsNone(font.find('generated'))
+            self.assertIsNone(font.find('creation/startChar'))
+            self.assertIsNone(font.find('creation/endChar'))
 
     def test_failed_install_does_not_commit_a_partial_component_graph(self):
         class _InstallFailureSurface(_Surface):

@@ -51,7 +51,8 @@ CONTROL_HOVER_COLOUR = (14, 82, 140, 255)
 ROOM_TEXT_COLOUR = (224, 224, 194, 255)
 ROOM_HOVER_COLOUR = (255, 222, 141, 255)
 PANEL_FONT = ui_i18n.CHINESE_FONT
-ROOM_FONT = 'system/fonts/offline_lan_waiting.font'
+# GUI.Text.font takes a name relative to system/fonts, as stock addLabel does.
+ROOM_FONT = 'offline_lan_waiting.font'
 OVERLAY_Z = 0.1
 # Smaller z draws in front. The buttons render at CONTROL_Z and the pointer at
 # z=0 did not, so the pointer keeps the same 0.01 step inside that band.
@@ -61,6 +62,9 @@ PANEL_WIDTH = 960
 PANEL_HEIGHT = 480
 PANEL_SAFE_MARGIN = 16
 PANEL_RAISE_PIXELS = 24
+# The stock queue title and vehicle footer stay outside this vertical band.
+ROOM_TOP_FRACTION = 0.265
+ROOM_BOTTOM_FRACTION = 0.78
 POINTER_TICK_SECONDS = 0.03
 RANDOM_MAP_OPTION = 'server_random'
 
@@ -161,12 +165,11 @@ def friendly_bot_skill_mode(mode):
 
 
 def panel_geometry(screen_size, size=None):
-    """Return a compact panel geometry that stays inside the screen.
+    """Fit the room uniformly between the stock mode title and tank footer.
 
-    Native CLIP coordinates are resolution-independent, but the panel itself
-    has pixel dimensions.  Raising it by a fixed number of pixels keeps its
-    perceived position stable across aspect ratios, while the safe-margin
-    clamp prevents the move from pushing it off a short display.
+    Independent service panels retain their previous geometry. Room controls
+    use parent-relative CLIP coordinates, so scaling the root also scales their
+    positions, frames and hit rectangles together.
     """
     try:
         width, height = screen_size or (1024.0, 768.0)
@@ -178,12 +181,18 @@ def panel_geometry(screen_size, size=None):
     available_width = max(1.0, width - 2.0 * PANEL_SAFE_MARGIN)
     available_height = max(1.0, height - 2.0 * PANEL_SAFE_MARGIN)
     nominal_width, nominal_height = size or (PANEL_WIDTH, PANEL_HEIGHT)
-    panel_width = min(float(nominal_width), available_width)
-    panel_height = min(float(nominal_height), available_height)
-    raise_limit = max(
-        0.0, (height - panel_height) * 0.5 - PANEL_SAFE_MARGIN)
-    raise_pixels = min(float(PANEL_RAISE_PIXELS), raise_limit)
-    return panel_width, panel_height, 2.0 * raise_pixels / height
+    if (nominal_width, nominal_height) != (PANEL_WIDTH, PANEL_HEIGHT):
+        panel_width = min(float(nominal_width), available_width)
+        panel_height = min(float(nominal_height), available_height)
+        raise_limit = max(0.0, (height-panel_height)*0.5-PANEL_SAFE_MARGIN)
+        raise_pixels = min(float(PANEL_RAISE_PIXELS), raise_limit)
+        return panel_width, panel_height, 2.0*raise_pixels/height
+    top = height * ROOM_TOP_FRACTION
+    bottom = height * ROOM_BOTTOM_FRACTION
+    scale = min(1.0, available_width / nominal_width,
+                (bottom-top) / nominal_height)
+    return (nominal_width * scale, nominal_height * scale,
+            1.0 - (top+bottom) / height)
 
 
 class NativeSurface(object):
@@ -467,8 +476,10 @@ class WaitingRoomUI(object):
         make_control('close', (0.0, -0.90, CONTROL_Z), 0.50, 0.16)
         make_label('title', tr('LAN WAITING ROOM'), (-0.86, 0.82, 0.0), 1.72,
                    0.12, colour=(209, 185, 115, 255))
-        make_label('room', '', (-0.86, 0.62, 0.0), 1.72, 0.11)
-        make_label('players', '', (-0.86, 0.44, 0.0), 1.72, 0.11)
+        make_label('room', '', (-0.86, 0.62, 0.0), 1.72, 0.11,
+                   colour=ROOM_TEXT_COLOUR)
+        make_label('players', '', (-0.86, 0.44, 0.0), 1.72, 0.11,
+                   colour=ROOM_TEXT_COLOUR)
         # The baked olive/red controls carry warm, readable native text.
         make_label('tier_previous', '<', (-0.72, 0.30, 0.0), 0.18, 0.09,
                    anchor='CENTER', colour=self.control_text_colour)

@@ -9918,7 +9918,7 @@ fresh live push blockers and all queried heading rejection stages, with original
 sample times and observation ages, instead of treating a retained receipt as a
 current explanation. These changes require owner Windows gameplay acceptance.
 
-The standard and training waiting room share a larger aligned canvas, original
+The standard and training waiting room share an aligned canvas, original
 RGBA olive/red button textures, and a translucent dark panel. Baked texture
 colours avoid #1513's ignored textured-quad tint; the cursor and independent
 daily-services panel retain their existing primitives, font and dimensions.
@@ -9927,8 +9927,21 @@ Regular, Veteran, Elite (Chinese labels match the launcher). Wire presets,
 ratings and the mixed first-run default are unchanged. Persist the last chosen
 preset only after a matching server acknowledgement in the same connection;
 restore it once when reconnecting as host, never impose it on a remote host.
-Small screens use the existing smaller font. Native rendering acceptance is
-still a Windows owner test; layout/resource and lifecycle tests are engine-free.
+The room scales uniformly into the vertical band from 26.5% to 78% of the
+screen, leaving the stock mode title and tank footer visible. The reported
+1143x696 viewport now uses a 716.88x358.44 panel instead of 960x480. Cursor,
+controls and hit rectangles retain the same parent-relative coordinates;
+independent service panels retain their previous size and placement.
+
+The missing-Chinese regression used a full `system/fonts/...` path for
+`GUI.Text.font`; the stock #1513 `ChainView.addLabel` and `GUITest.create`
+assign bare `label_small.font` and `default_smaller.font` names. The room now
+uses the same relative-name contract for both packaged YaHei sizes. Small
+screens use the existing 16 px descriptor, larger panels use 20 px. Both
+skins contain baked colour and alpha, with seeded non-repeating grain,
+soft highlights and warmer olive/red metal instead of flat gradients.
+Native rendering acceptance is still a Windows owner test; layout/resource
+and lifecycle tests are engine-free and do not prove CJK rasterization.
 
 ### All-map water rebake and authoring danger overlay
 
