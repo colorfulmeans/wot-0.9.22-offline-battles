@@ -563,11 +563,20 @@ def parking_distance_checks():
                   (len(reference), reference_ms, native_ms))
         position = (213.2, -6.04, 172.49)
         start = grid.closest(position)
+        original_distances = grid.distances(position)
         old_links = graph['links'][start]
         graph['links'][start] = 0
         assert grid.distances(position) == {start: 0.0}
         graph['links'][start] = old_links
-        assert len(grid.distances(position)) == 10628
+        # Water rebaking can legitimately add reachable nodes. Prove cache
+        # restoration against the complete original and reference maps,
+        # rather than pinning the obsolete 0.9 m graph's node count.
+        restored = grid.distances(position)
+        reference = reference_distances(start)
+        assert set(restored) == set(original_distances) == set(reference)
+        for key in reference:
+            equal(restored[key], reference[key])
+            equal(restored[key], original_distances[key])
         checks[0] += 2
         with open(os.path.join(os.path.dirname(path), '08_ruinberg.json')) as stream:
             graph = json.load(stream)
