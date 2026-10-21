@@ -13689,6 +13689,14 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual([1.0, 0.0], drive_inputs)
         self.assertEqual([1.0, 0.0], turn_inputs)
+        # The adapter must receive the same physical hold before it advances
+        # its wreck-push clocks, not learn about it after pedals were zeroed.
+        runtime.update(.04, 1.5)
+        self.assertEqual(['leftTrackHealth'],
+            runtime.adapter.calls[-1][0]['wreck_push_motor_hold']['destroyed'])
+        state['critical'] = yellow
+        runtime.update(.04, 2.)
+        self.assertEqual({}, runtime.adapter.calls[-1][0]['wreck_push_motor_hold'])
 
     def test_explicit_yellow_state_applies_above_the_hp_threshold(self):
         descriptor = _critical_descriptor()

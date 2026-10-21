@@ -357,6 +357,13 @@ class BotAdapter(object):
         if attempt['exhausted']:
             evidence['phase'] = 'exhausted'
             return None
+        # A broken track/engine or overturned hull cannot spend a motor
+        # attempt. The runtime's same mobility gate also suppresses the final
+        # pedals; preserve this encounter's budget until it can execute again.
+        if state.get('wreck_push_motor_hold'):
+            evidence.update(phase='mobility_paused',
+                motor_hold=dict(state['wreck_push_motor_hold']))
+            return None
         if progress >= attempt['best_progress'] + 0.5:
             attempt['best_progress'] = progress
             attempt['elapsed'] = 0.0
@@ -408,6 +415,7 @@ class BotAdapter(object):
             attempt.update(exhausted=True, exhausted_position=position)
             attempt['terminal'] = dict(reason='world_corridor_refused',
                 at=state.get('now'), position=position, yaw=yaw,
+                direction_receipt=proof,
                 elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'])
             evidence['terminal'] = dict(attempt['terminal'])
             self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)

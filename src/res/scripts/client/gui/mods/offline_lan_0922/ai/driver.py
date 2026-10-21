@@ -1083,6 +1083,7 @@ class LocalDriver(object):
 				if clear and blocker is None:
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
+						selection_sequence=sequence,
 						until=state['clock'] + 4.0)
 					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
@@ -1098,6 +1099,22 @@ class LocalDriver(object):
 			position=tuple(position), reason=reason, remaining=remaining,
 			sign=escape.get('sign', 1.0), distance=escape['distance'],
 			recovery_time_before=state.get('recovery_time', 0.0))
+		# Keep every recent terminal across the slower motion-log cadence. The
+		# single last terminal used to hide an immediate forward/reverse pair.
+		terminal = dict(state['escape_terminal'])
+		terminal['selection_sequence'] = escape.get('selection_sequence')
+		validation = state.get('short_escape_validation') or {}
+		if (escape.get('selection_sequence') is not None and
+				validation.get('selection_sequence') == escape['selection_sequence']):
+			terminal['execution_check'] = dict((key, validation.get(key)) for key in
+				('sampled_at', 'reason', 'remaining', 'blocker', 'result'))
+			proof = validation.get('probe_receipt') or {}
+			terminal['direction_check'] = dict((key, proof.get(key)) for key in
+				('decision_id', 'query_index', 'sampled_at', 'reason', 'clear', 'motion_grid'))
+		history = state.setdefault('escape_terminals', [])
+		history.append(terminal)
+		state['escape_terminals_dropped'] = state.get('escape_terminals_dropped', 0) + max(0, len(history)-32)
+		del history[:-32]
 		if reason == 'distance_completed':
 			if state.get('recovery_time', 0.0) > 0.0:
 				state['recovery_count'] = state.get('recovery_count', 0) + 1

@@ -34,6 +34,59 @@ class E5GridTests(unittest.TestCase):
 class E5PushTests(unittest.TestCase):
     wreck_scene = egress.EgressTests.wreck_scene
 
+    def test_escape_terminal_history_keeps_both_directions_and_fences_old_checks(self):
+        adapter, unused, order = self.wreck_scene()
+        driver = adapter.driver
+        state = dict(clock=1., recovery_time=0., short_escape_validation=dict(
+            selection_sequence=1, reason='vehicle_occupied', blocker=22))
+        for sequence, sign in ((1, 1.), (2, -1.)):
+            escape = dict(start=(0.,0.,0.), distance=1., sign=sign,
+                selection_sequence=sequence)
+            driver._finish_translation_escape(state, escape, (1.,0.,0.), 'distance_completed', 0.)
+        self.assertEqual([1.,-1.], [r['sign'] for r in state['escape_terminals']])
+        self.assertEqual(22, state['escape_terminals'][0]['execution_check']['blocker'])
+        self.assertNotIn('execution_check', state['escape_terminals'][1])
+
+    def test_immobilised_time_does_not_spend_motor_budget_or_prevent_resume(self):
+        adapter, state, order = self.wreck_scene()
+        state['dt'] = 1.
+        for unused in range(3):
+            self.assertIsNotNone(adapter._wreck_push_plan(state['id'], state,
+                state['position'], order, lambda *a: True))
+        attempt = adapter._wreck_attempts[state['id']]
+        for hold in ({'destroyed': ['leftTrackHealth']},
+                     {'destroyed': ['rightTrackHealth']},
+                     {'destroyed': ['engineHealth']}, {'overturned': True}):
+            state['wreck_push_motor_hold'] = hold
+            for unused in range(20):
+                self.assertIsNone(adapter._wreck_push_plan(state['id'], state,
+                    state['position'], order, lambda *a: True))
+                self.assertEqual('mobility_paused', state['_wreck_push_evidence']['phase'])
+                self.assertEqual(3., attempt['own_elapsed'])
+                self.assertEqual(3., attempt['elapsed'])
+                self.assertFalse(attempt['exhausted'])
+        state['wreck_push_motor_hold'] = {}
+        self.assertIsNotNone(adapter._wreck_push_plan(state['id'], state,
+            state['position'], order, lambda *a: True))
+        self.assertEqual(4., attempt['own_elapsed'])
+        for unused in range(10):
+            adapter._wreck_push_plan(state['id'], state, state['position'], order, lambda *a: True)
+        self.assertTrue(attempt['exhausted'])
+        self.assertEqual('own_stalled', attempt['terminal']['reason'])
+
+    def test_refusal_retains_original_grid_reason_after_later_probes(self):
+        adapter, state, order = self.wreck_scene()
+        def probe(*unused):
+            return False
+        probe.last_receipt = dict(reason='baked_motion_hazard', sampled_at=1.,
+            motion_grid=dict(hazards=10, source='local_mesh'))
+        adapter._wreck_push_plan(state['id'], state, state['position'], order, probe)
+        probe.last_receipt = dict(reason='local_sweep_clear', sampled_at=2.)
+        adapter._wreck_push_plan(state['id'], state, state['position'], order, lambda *a: True)
+        proof = state['_wreck_push_evidence']['terminal']['direction_receipt']
+        self.assertEqual('baked_motion_hazard', proof['reason'])
+        self.assertEqual(1., proof['sampled_at'])
+
     def test_unknown_probe_does_not_exhaust_the_existing_attempt(self):
         for reason in ('native_probe_deferred', 'native_probe_unavailable',
                        'direction_callback_exception', 'callback_receipt_unavailable'):

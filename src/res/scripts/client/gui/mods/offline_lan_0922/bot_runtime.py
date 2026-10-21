@@ -7410,6 +7410,8 @@ class BotRuntime(object):
                     age_seconds=max(0.0, driver_state.get('clock', 0.0)-evidence['at']))
             driver_trace[name] = evidence
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
+        driver_trace['escape_terminals'] = list(driver_state.get('escape_terminals') or ())
+        driver_trace['escape_terminals_dropped'] = driver_state.get('escape_terminals_dropped', 0)
         if driver_state:
             driver_trace['short_escape_observation'] = ai_driver.LocalDriver.short_escape_diagnostics(driver_state)
             driver_trace['short_escape_observation'].update(
@@ -7477,6 +7479,7 @@ class BotRuntime(object):
                 position_event=state.get('_spg_position_event'),
                 occupied=state.get('_spg_parking_occupied')),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
+            'baked_pose_guards': list(state.get('_baked_pose_guards') or ()),
             'contact_escape': command.get('contact_escape'),
             'wreck_push': command.get('wreck_push'),
             'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
@@ -9481,6 +9484,21 @@ class BotRuntime(object):
                      else realised_pose, shoulder_cells=0,
                      hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS))):
             return False
+        guard_receipt = dict(reason=('arena_boundary' if moved_farther_outside
+            else 'baked_navigation_hazard'), before=tuple(tick_pose),
+            attempted=tuple(realised_pose), navigation_pose=navigation_pose,
+            navigation_hazards=bool(navigation_hazards),
+            before_safe=bool(tick_was_safe), yaw=state.get('yaw'),
+            hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS)
+        local = prebaked_navigation.local_cell_at(self.baked_graph,
+            navigation_pose if navigation_pose is not None else realised_pose)
+        if local is not None:
+            guard_receipt.update(grid='local_mesh', cell_size=local[0]['cell_size'],
+                cell_index=local[1], hazards=int(local[0]['hazards'][local[1]]))
+        else:
+            guard_receipt['grid'] = 'base_grid'
+        state.setdefault('_baked_pose_guards', []).append(guard_receipt)
+        del state['_baked_pose_guards'][:-2]
         state['x'], state['y'], state['z'] = tick_pose
         state['speed'] = 0.0
         state['movement_dir'] = 0
@@ -16546,7 +16564,14 @@ class BotRuntime(object):
                         decision_cache[3] if decision_cache is not None else {})
                     stopping_distance = self._cached_traffic_stopping_distance(
                         state, previous_command, physics_params)
+                unused_motor_devices, motor_destroyed, unused_motor_crew, unused_motor_yellow = _critical_parts(state)
+                motor_disabled = sorted(motor_destroyed.intersection((
+                    'engineHealth', 'leftTrackHealth', 'rightTrackHealth')))
+                motor_hold = (dict(destroyed=motor_disabled,
+                    overturned=bool(state.get('_overturned', False)))
+                    if motor_disabled or state.get('_overturned', False) else {})
                 decision_state = {
+                    'wreck_push_motor_hold': motor_hold,
                     'id': state['id'],
                     'team': state.get('team', 0),
                     'collision_shape': state.get('collision_shape'),
@@ -16848,6 +16873,7 @@ class BotRuntime(object):
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
+            state['_baked_pose_guards'] = []
             state['_short_escape_commit'] = dict(reason='not_short_escape')
             state['_committed_corridor'] = dict(reason='integration_not_run')
             throttle = max(-1.0, min(1.0, command['throttle']))

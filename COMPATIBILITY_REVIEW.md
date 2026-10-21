@@ -9870,3 +9870,32 @@ not a world-corridor terminal. Its original push timer continues. Within the sam
 reverse leases (ordinary recovery and navigation-wait recovery) retain ownership
 until their existing completion or safety refusal; the adapter does not interrupt
 them with a newly clear push probe. No new recovery timer or route policy is added.
+### Report 205154: bank admission, immobilised push clocks and mastery list
+
+The recorded VK168 native bank exits were admitted before final navigation
+pose rollback. Keep LocalHeightLinks unchanged. Native-only egress now checks
+the same fatal-motion mask as committed driving. Rebuild only the added
+Windstorm bridge patch: deck and adjoining bank use the existing 2.15 m support
+proof instead of a distant 3/6 m erosion apron. Validate full wide-body and
+recorded-VK corner support on each link; an unsafe corner exposed by the first
+revised bake was rejected before packaging. Coarse terrain/heights/hazards,
+authored routes, both older local meshes, real collision, water limits and
+retry/reroute laws are retained.
+
+AT7's destroyed tracks suppressed actual pedals while both wreck-failure
+clocks advanced. Pass the same track/engine/overturned gate into the adapter,
+pause the motor budget and resume it after repair. Real executing pushes still
+expire after 14 seconds without progress. Retain original refusal receipts and
+final pose-guard evidence. Short-escape terminals retain bounded history with
+selection identities, execution reasons and an explicit dropped count; their
+selection and direction policy are unchanged.
+
+Pinned ProfileTechnique reads the account markOfMasteryCut, separately from
+each vehicle's achievements.markOfMastery. Populate the native account cut from
+persisted highest classes (positive integer 1..4), including existing history.
+No panel or award formula is added. A CPython 2 roundtrip through pinned dossier
+builders preserves the class; visible UI acceptance remains an owner test.
+
+Report 214201 round 3 bot 26 (WT E100) had fired five rounds, zero clip and
+38.53 seconds of reload remaining at 21:40:42. It waited after magazine
+withdrawal, then moved and fired shot 6; that wait adds no gameplay change.

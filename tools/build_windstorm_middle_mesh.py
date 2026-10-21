@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import runpy
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,19 +16,49 @@ from build_windstorm_north_mesh import footprint_support
 REGION = (82, -188, 164, -126)
 
 
+def edge_support(terrain, obstacles, legacy, start, end):
+    """Retain full-hull support while refining the old circular apron.
+
+    Check the existing wide-body validation envelope and the recorded VK168
+    chassis separately. A supported centre must not create a corner shortcut
+    whose leading track passes through deep water.
+    """
+    distance = math.hypot(end[0]-start[0], end[2]-start[2])
+    yaw = math.atan2(end[0]-start[0], end[2]-start[2])
+    sine, cosine = math.sin(yaw), math.cos(yaw)
+    count = max(1, int(math.ceil(distance/.25)))
+    for i in range(count+1):
+        x = start[0]+(end[0]-start[0])*i/count
+        z = start[2]+(end[2]-start[2])*i/count
+        for length, width in ((3.2, 2.15), (4.265017986297607, 1.7200759649276733)):
+            for along in (-length, 0., length):
+                for across in (-width, 0., width):
+                    sx, sz = x+sine*along+cosine*across, z+cosine*along-sine*across
+                    y = legacy._ground_height(terrain, obstacles, sx, sz)
+                    if y is None or terrain.water_depth(sx, sz, y) > legacy.WATER_DEPTH_LIMIT:
+                        return False
+    return True
+
+
 def build(client):
     path = ROOT/'navgraphs/84_winter.json'
     raw = path.read_bytes()
     graph = json.loads(raw)
-    assert len(graph['local_meshes']) == 2, 'Apply once to the retained two-bridge graph'
+    assert len(graph['local_meshes']) in (2, 3)
+    if len(graph['local_meshes']) == 3:
+        # Rebuild this patch from the retained pre-addition graph, so removed
+        # coarse links are recalculated rather than accumulated on each bake.
+        graph = json.loads(subprocess.check_output(
+            ['git', 'show', '09b87889:navgraphs/84_winter.json'], cwd=ROOT))
     meshes.EXTRA_REGIONS = (REGION,)
     terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
     original = legacy._has_safe_edge_clearance
 
     def supported(t, o, x, z, y):
-        if o.surface_height(x, z) is not None:
-            return footprint_support(t, o, legacy, x, z, y)
-        return original(t, o, x, z, y)
+        # Deck AND adjoining bank use the same measured full-width support.
+        # A remote 6 m erosion apron rejected flat, fully supported approaches
+        # even though the native local exit admitted the identical movement.
+        return footprint_support(t, o, legacy, x, z, y)
 
     try:
         legacy._has_safe_edge_clearance = supported
@@ -41,6 +72,16 @@ def build(client):
                 patch['hazards'][i] = legacy.HAZARD_WATER
             elif not supported(terrain, obstacles, x, z, y):
                 patch['hazards'][i] = legacy.HAZARD_EDGE
+        for i, mask in enumerate(patch['links']):
+            start = (REGION[0]+i%patch['width'], patch['heights_mm'][i]/1000.
+                if patch['heights_mm'][i] is not None else 0., REGION[1]+i//patch['width'])
+            for bit, (dx, dz) in enumerate(legacy.DIRECTIONS):
+                if not mask & (1 << bit):
+                    continue
+                j = i+dx+dz*patch['width']
+                end = (start[0]+dx, patch['heights_mm'][j]/1000., start[2]+dz)
+                if not edge_support(terrain, obstacles, legacy, start, end):
+                    patch['links'][i] &= ~(1 << bit)
     finally:
         legacy._has_safe_edge_clearance = original
     graph['local_meshes'].append(patch)

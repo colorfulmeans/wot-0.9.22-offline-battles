@@ -370,3 +370,22 @@ reverse retains its existing terminal ownership before pushing can resume. Tests
 resumption, real world refusal, normal forward recovery, original motor budget
 and corpse-displacement renewal. This closes a missing boundary case discovered
 before delivering the candidate; the superseded build 435 is not the final package.
+### Report 205154 follow-up validation
+
+- Replay VK168's one-metre bank step and six-centimetre rolled-back step;
+  check native-egress/final-motion shoreline-mask agreement.
+- Preserve continuity detection and runtime physics. Rebuild the added bridge
+  patch with body support and full-body deep-water edge checks. Validate both
+  Python and C++ paths against exact geometry, in both directions.
+- Pause motor clocks for both destroyed tracks, engine and overturned holds;
+  cover repair/resume and the original real 14-second expiry.
+- Populate account markOfMasteryCut; cover parity with vehicle badges, old
+  saved highest classes, invalid values and repeated descriptor construction.
+- Retain original refusal proofs and identity-fenced escape terminal history.
+- The old shoreline traversal assertion depended on the disproved 6 m apron.
+  Use an explicit hazardous fine cell to preserve its traversal/cache contract,
+  and independently verify actual retained water/shore cells remain rejected.
+- Report 214201 WT E100 round 3 waiting is empty-magazine reload, followed by
+  movement and another shot. No retreat or navigation strategy changes.
+- Engine-free tests and compiled-geometry validation do not establish native
+  traffic feel or rendered profile UI acceptance; the owner tests the package.

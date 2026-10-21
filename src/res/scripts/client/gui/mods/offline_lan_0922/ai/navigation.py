@@ -17,6 +17,7 @@ from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
 from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922.prebaked_navigation import MOTION_FATAL_HAZARDS
 from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 
 from gui.mods.offline_lan_0922.ai.driver import (
@@ -1143,7 +1144,7 @@ class TerrainGrid(object):
 		if (not callable(self.ground_probe) or
 				not callable(self.obstacle_probe) or
 				self.segment_has_motion_hazard(
-					start, end, 1 | BAKED_SHALLOW_WATER)):
+					start, end, MOTION_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
 			if evidence is not None:
 				evidence['egress_reason'] = 'hazard_or_unavailable'
 			combat_count('nav_live_egress_hazard_or_unavailable')
