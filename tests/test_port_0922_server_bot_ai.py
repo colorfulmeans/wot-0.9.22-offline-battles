@@ -398,6 +398,20 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertIsNone(order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
 
+    def test_pending_lane_preserves_stationary_hull_angling_as_well_as_position(self):
+        planner = BotPlanner()
+        bot = dict(id=11, state=self.states[0])
+        focus = dict(target_kind='human', id=2, pending_lane_by_bot_ids=[11])
+        previous = dict(id=11, target_kind='human', target_id=2, combat_mode='engage',
+            move_position=dict(x=1.,y=0.,z=2.), face_position=dict(x=40.,y=0.,z=150.),
+            hull_angle_degrees=20., stable_hull_face=True, throttle_override=0.)
+        planner._last_orders = dict(orders=[previous])
+        order = {}
+        self.assertTrue(planner._apply_leased_movement_order(order, bot, focus))
+        for key in ('move_position','face_position','hull_angle_degrees','stable_hull_face'):
+            self.assertEqual(previous[key],order[key])
+        self.assertFalse(order['fire_allowed'])
+
     def test_ready_shooter_preempts_a_reloading_target_lease(self):
         planner = BotPlanner()
         manifest = [

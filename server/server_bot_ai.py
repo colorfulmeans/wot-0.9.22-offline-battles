@@ -1927,17 +1927,14 @@ class BotPlanner(object):
             if bot['id'] in focus.get('pending_lane_by_bot_ids', ()):
                 # The authority retained a positive ray while refreshing it.
                 # Keep this stationary owner without authorizing a stale shot.
-                order.update(combat_mode=previous['combat_mode'],
-                    move_position=dict(previous['move_position']),
-                    throttle_override=0.0, fire_allowed=False)
                 order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
                     reason='lane_refresh_pending', previous_mode=previous['combat_mode'])
-                return True
-            # Release only the stationary hold. The caller keeps the combat
-            # objective and lets the existing navigator seek an approach.
-            order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
-                reason='stationary_lane_lost', previous_mode=previous['combat_mode'])
-            return False
+            else:
+                # Release only the stationary hold. The caller keeps the combat
+                # objective and lets the existing navigator seek an approach.
+                order.setdefault('tactical_evidence', {})['blocked_hold_handoff'] = dict(
+                    reason='stationary_lane_lost', previous_mode=previous['combat_mode'])
+                return False
         if previous.get('combat_mode') == 'flank':
             state = bot['state']
             point = _point(previous.get('move_position'))
