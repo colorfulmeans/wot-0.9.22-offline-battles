@@ -104,6 +104,20 @@ class RailwayBirthDataTests(unittest.TestCase):
                 self.assertLessEqual(math.hypot(row['after'][0]-row['before'][0],
                     row['after'][2]-row['before'][2]),32.)
                 expected[row['team']][row['slot']]=row['after']
+            # Later, independently evidenced local ground repairs compose with
+            # the railway birth audit; they must not erase its retained receipt.
+            level=graph.get('validation',{}).get('spawn_level_ground_revalidation')
+            if level:
+                self.assertEqual('47_canada_a',path.stem)
+                self.assertEqual(30,level['slots_checked'])
+                for row in level['changes']:
+                    slot=row['slot']-1  # Ground audit uses user-facing slots.
+                    self.assertEqual(row['before'],expected[row['team']][slot])
+                    self.assertEqual(row['before'][3],row['after'][3])
+                    self.assertFalse(row['ground_before']['clear'])
+                    self.assertTrue(row['ground_after']['clear'])
+                    self.assertLessEqual(row['shift'],16.)
+                    expected[row['team']][slot]=row['after']
             self.assertEqual(expected,graph['spawn_formations'])
             checked+=receipt['slots_checked'];changed+=len(receipt['changes'])
             if path.stem=='06_ensk':
