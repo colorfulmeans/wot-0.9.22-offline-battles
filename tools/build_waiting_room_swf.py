@@ -164,7 +164,7 @@ def build(client, java, ffdec, output):
                  lobby_sha256=hashlib.sha256(lobby).hexdigest(),
                  output_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
                  shared_movies_unchanged=True)
-    output.with_suffix('.swf.json').write_text(json.dumps(proof, indent=2)+'\n', encoding='utf8')
+    output.with_suffix('.swf.json').write_bytes((json.dumps(proof, indent=2)+'\n').encode('utf8'))
     print('Built stock-component room:', output)
 
 
