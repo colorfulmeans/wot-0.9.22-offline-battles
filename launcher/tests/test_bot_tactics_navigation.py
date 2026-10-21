@@ -26,6 +26,36 @@ def graph():
 
 
 class NavigationDataTests(unittest.TestCase):
+    def test_red_danger_overlay_reads_worker_shore_flags_and_preserves_raw_graph(self):
+        data=graph();data['hazards'][12]=1;data['hazards'][11]=2
+        data['bake']=dict(water_depth_limit=1.2,edge_clearance_radii=[3.,6.],max_grade=.38)
+        before=copy.deepcopy(data)
+        classified=nav.classified_hazards(data)
+        self.assertEqual(10,classified['hazards'][11])
+        image=nav.danger_overlay_image(data,(0,0,16,16))
+        self.assertEqual(nav.DANGER_COLOR,image.getpixel((4,7)))
+        self.assertEqual(0,image.getpixel((1,1))[3])
+        self.assertEqual(10,nav.hazard_at(classified,(4.,8.)))
+        self.assertEqual(1.2,nav.danger_parameters(data)['water_depth'])
+        self.assertEqual(before,data)
+
+    def test_local_safe_cell_replaces_parent_hazard_but_unknown_cannot_hide_it(self):
+        data=graph();data['hazards'][12]=1
+        patch=dict(width=3,height=3,origin=[7.,7.],cell_size=1.,
+            heights_mm=[0]*9,links=[0]*9,hazards=[0]*9)
+        data['local_meshes']=[patch]
+        self.assertEqual(0,nav.hazard_at(data,(8.,8.)))
+        patch['heights_mm'][4]=None
+        self.assertEqual(1,nav.hazard_at(data,(8.,8.)))
+        patch['hazards'][4]=2
+        self.assertEqual(2,nav.hazard_at(data,(8.,8.)))
+
+    def test_local_exact_base_alias_retains_any_real_motion_grid_flag(self):
+        data=graph();data['hazards'][12]=4
+        data['local_meshes']=[dict(width=1,height=1,origin=[8.,8.],cell_size=1.,
+            heights_mm=[0],links=[0],hazards=[0])]
+        self.assertEqual(4,nav.hazard_at(data,(8.,8.)))
+
     def test_local_only_passage_is_visible_and_checked_by_shipping_planner(self):
         data=storage.graph_data('04_himmelsdorf');bounds=storage.contract.MAPS[data['map']]['bounds']
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
@@ -126,6 +156,26 @@ class NavigationDataTests(unittest.TestCase):
 @unittest.skipUnless(HAS_PIL and (os.name == 'nt' or os.environ.get('DISPLAY')),
                      'requires Pillow and Tk display')
 class NavigationUITests(unittest.TestCase):
+    def test_danger_switch_is_right_of_navigation_independent_and_read_only(self):
+        e=self.editor;before=copy.deepcopy(e.document)
+        self.assertFalse(e.danger_grid_var.get())
+        self.assertGreaterEqual(e.danger_grid_check.winfo_x(),
+            e.navigation_grid_check.winfo_x()+e.navigation_grid_check.winfo_width())
+        with mock.patch.object(ui.navigation_view,'danger_overlay_image',wraps=nav.danger_overlay_image) as render:
+            e.danger_grid_check.invoke();self.root.update()
+            self.assertIsNotNone(e.danger_photo)
+            self.assertIsNone(e.navigation_photo)
+            self.assertTrue(e.canvas.find_withtag('danger_grid'))
+            e.wheel(SimpleNamespace(x=300,y=300),delta=1);e.fit_view()
+            e.navigation_grid_check.invoke();self.root.update()
+            self.assertIsNotNone(e.navigation_photo)
+            self.assertIsNotNone(e.danger_photo)
+            e.danger_grid_check.invoke();self.assertIsNone(e.danger_photo)
+            self.assertIsNotNone(e.navigation_photo)
+            self.assertEqual(1,render.call_count)
+        self.assertIn('水深上限',e.danger_parameters_var.get())
+        self.assertEqual(before,e.document)
+
     def test_shared_geometry_clears_class_waits_and_class_edit_wins_later(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('AT-SPG');e.change_route_class()

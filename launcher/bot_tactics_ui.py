@@ -79,6 +79,8 @@ class BotTacticsEditor:
         self._wait_parent_cleared = False
         self.graph_cache = {}; self.image_cache = {}; self.background = None; self.photo = None
         self.navigation_image_cache = {}; self.navigation_photo = None
+        self.danger_image_cache = {}; self.danger_photo = None
+        self.danger_graph_cache = {}
         self.root = tk.Toplevel(parent)
         self.root.title(self.tr('Bot 配置与地图战术', 'Bot configuration and map tactics'))
         self.root.geometry('1200x820'); self.root.minsize(1000, 700)
@@ -243,6 +245,11 @@ class BotTacticsEditor:
             text=self.tr('显示导航网格','Show navigation grid'),
             variable=self.navigation_grid_var,command=self.redraw)
         self.navigation_grid_check.pack(side='left',padx=(12,0))
+        self.danger_grid_var=tk.BooleanVar(value=False)
+        self.danger_grid_check=ttk.Checkbutton(base_bar,
+            text=self.tr('显示危险区网格','Show danger grid'),
+            variable=self.danger_grid_var,command=self.redraw)
+        self.danger_grid_check.pack(side='left',padx=(12,0))
         ttk.Label(bar,text=self.tr('模式：标准战','Mode: standard')).pack(side='right')
         legend=ttk.Frame(parent);legend.pack(fill='x')
         for tag,color in CLASS_COLORS.items():
@@ -359,6 +366,15 @@ class BotTacticsEditor:
         ttk.Label(right,text=self.tr(
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n修改“全部车型”会同步各车型路线，之后单独修改某车型只影响该车型。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\nShift+点击插点；滚轮缩放；中键拖动。',
             'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared geometry edits update every class; later class edits affect only that class.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nShift-click inserts; wheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=24,column=0,sticky='w',pady=8)
+
+        danger=ttk.LabelFrame(right,text=self.tr('危险区参数（只读）','Danger parameters (read only)'))
+        danger.grid(row=25,column=0,sticky='ew',pady=(0,8))
+        self.danger_parameters_var=tk.StringVar()
+        ttk.Label(danger,textvariable=self.danger_parameters_var,justify='left',wraplength=245).pack(anchor='w',padx=4,pady=4)
+        ttk.Label(danger,text=self.tr(
+            '红格表示危险标记，不代表全部绝对禁行。\n深水：超过水深上限；岸沿：支撑/坠落保护；特殊渡口：按已验证规则有条件通过。\n局部加密区优先使用实际局部网格。鼠标移到图内可查看该位置的标记。',
+            'Red cells carry hazard flags; not all are absolute barriers.\nDeep water exceeds the depth limit. Edges protect support/falls. Reviewed fords remain conditional.\nLocal meshes use their actual flags. Hover the map to inspect them.'),
+            justify='left',wraplength=245).pack(anchor='w',padx=4,pady=4)
 
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
@@ -1174,7 +1190,17 @@ class BotTacticsEditor:
 
     def cursor(self,event):
         if hasattr(self,'view'):
-            x,z=self.view.world(event.x,event.y);self.coords.set('X %.2f   Z %.2f'%(x,z))
+            x,z=self.view.world(event.x,event.y)
+            text='X %.2f   Z %.2f'%(x,z)
+            if self.danger_grid_var.get():
+                graph=self._danger_graph()
+                if graph:
+                    flags=navigation_view.hazard_at(graph,(x,z))
+                    names=[self.tr(zh,en) for bit,zh,en in (
+                        (1,'深水','Deep water'),(2,'支撑边沿','Support edge'),
+                        (4,'特殊渡口','Reviewed ford'),(8,'近水岸沿保护','Wet-edge protection')) if flags&bit]
+                    text+='  '+(' / '.join(names) if names else self.tr('无危险标记','No hazard flag'))
+            self.coords.set(text)
 
     def pan_start(self,event):self.pan=(event.x,event.y,self.view.pan_x,self.view.pan_y)
     def pan_move(self,event):
@@ -1203,6 +1229,11 @@ class BotTacticsEditor:
             self._draw_navigation_grid()
         else:
             self.navigation_photo = None
+        if self.danger_grid_var.get():
+            self._draw_navigation_grid(danger=True)
+        else:
+            self.danger_photo=None
+        self._refresh_danger_parameters()
         c.create_rectangle(left,top,left+w,top+h,outline='#c6cece')
         for i in range(11):
             c.create_line(left+w*i/10,top,left+w*i/10,top+h,fill='#6d787d',dash=(2,6))
@@ -1301,14 +1332,38 @@ class BotTacticsEditor:
                 caption='%d: %s'%(slot+1,self.tr('一直停留','Stay') if place[2]<0 else '%gs'%place[2])
                 self.canvas.create_text(px+size+3,py-size-3,text=caption,fill='white',anchor='w',tags=('wait_caption',))
 
-    def _draw_navigation_grid(self):
+    def _danger_graph(self):
+        graph=self.graph_cache.get(self.map_name)
+        if graph and self.map_name not in self.danger_graph_cache:
+            self.danger_graph_cache.clear()
+            self.danger_graph_cache[self.map_name]=navigation_view.classified_hazards(graph)
+        return self.danger_graph_cache.get(self.map_name)
+
+    def _refresh_danger_parameters(self):
+        graph=self.graph_cache.get(self.map_name)
+        if not graph:return
+        p=navigation_view.danger_parameters(graph)
+        def value(number):
+            return '%g'%number if number is not None else self.tr('未记录','Unrecorded')
+        text=self.tr('水深上限：%s 米\n主网格岸沿采样半径：%s 米\n网格连接坡度上限：%s\n烘焙参考半宽：%s 米\n主网格：%s 米；局部：%s 米',
+            'Water limit: %s m\nBase edge sample radii: %s m\nGrid link grade limit: %s\nBake reference half-width: %s m\nBase grid: %s m; local: %s m')%(
+            value(p['water_depth']),'/'.join(map(value,p['edge_radii'])) or '—',
+            ('%.1f°'%math.degrees(math.atan(p['max_grade']))) if p['max_grade'] is not None else '—',
+            value(p['half_width']),value(p['base_cell_size']),'/'.join(map(value,p['local_cell_sizes'])) or '—')
+        if p['ford_depths']:
+            text+='\n'+self.tr('单独验证渡口上限：%s 米','Separately reviewed ford limits: %s m')%'/'.join(map(value,p['ford_depths']))
+        self.danger_parameters_var.set(text)
+
+    def _draw_navigation_grid(self,danger=False):
         graph=self.graph_cache.get(self.map_name)
         if not graph:return
         from PIL import Image,ImageTk
-        if self.map_name not in self.navigation_image_cache:
-            self.navigation_image_cache.clear()
-            self.navigation_image_cache[self.map_name]=navigation_view.overlay_image(graph,self.view.bounds)
-        image=self.navigation_image_cache[self.map_name]
+        cache=self.danger_image_cache if danger else self.navigation_image_cache
+        if self.map_name not in cache:
+            cache.clear()
+            render=navigation_view.danger_overlay_image if danger else navigation_view.overlay_image
+            cache[self.map_name]=render(graph,self.view.bounds)
+        image=cache[self.map_name]
         cell=graph['cell_size'];ox,oz=graph['origin']
         left,top=self.view.screen((ox-cell*.5,oz+(graph['height']-.5)*cell))
         scale=self.view.frame()[2]
@@ -1320,13 +1375,17 @@ class BotTacticsEditor:
         x1=min(image.width,int(math.ceil((self.view.width-left)/width*image.width)))
         y1=min(image.height,int(math.ceil((self.view.height-top)/height*image.height)))
         if x1<=x0 or y1<=y0:
-            self.navigation_photo=None;return
+            if danger:self.danger_photo=None
+            else:self.navigation_photo=None
+            return
         crop=image.crop((x0,y0,x1,y1))
         resized=crop.resize((max(1,round((x1-x0)*width/image.width)),
                              max(1,round((y1-y0)*height/image.height))),Image.Resampling.NEAREST)
-        self.navigation_photo=ImageTk.PhotoImage(resized,master=self.root)
+        photo=ImageTk.PhotoImage(resized,master=self.root)
+        if danger:self.danger_photo=photo
+        else:self.navigation_photo=photo
         self.canvas.create_image(left+x0*width/image.width,top+y0*height/image.height,
-                                 image=self.navigation_photo,anchor='nw')
+                                 image=photo,anchor='nw',tags=('danger_grid' if danger else 'navigation_grid',))
 
     def check_map(self):
         try:

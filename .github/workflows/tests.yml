@@ -40,6 +40,18 @@ jobs:
         with:
           name: navigation-resolution-evidence
           path: build/navigation-resolution/report.json
+      - name: Verify all 41 water-rebaked graphs with the shipping search
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: >-
+          python tools/check_navigation_water.py
+          --baseline-ref 100bac61f4d589f4e17b9854b4ed2154b7cda5c7
+          --output build/navigation-water
+          --native-executable /tmp/navigation-resolution
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navigation-water-evidence
+          path: build/navigation-water/report.json
   bot-behavior-regressions:
     runs-on: ubuntu-latest
     steps:
@@ -81,6 +93,7 @@ jobs:
             'test_port_0922_windstorm_middle.py'
             'test_port_0922_e5_wreck_handoff.py'
             'test_port_0922_water_surfaces.py'
+            'test_port_0922_water_rebake.py'
             'test_port_0922_recovery_commit_consistency.py'
             'test_port_0922_serene_coast_spawns.py'
             'test_port_0922_posed_direction_probe.py'

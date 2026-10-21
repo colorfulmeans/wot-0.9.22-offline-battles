@@ -95,8 +95,14 @@ class RailwayBirthDataTests(unittest.TestCase):
             if not receipt:continue
             original=json.loads(subprocess.check_output(
                 ['git','show','e87b0108:navgraphs/'+path.name],cwd=root))
+            # Verify the historical railway-only boundary against its retained
+            # pre-water-rebake output. The separate all-map water suite checks
+            # every current changed node/link and preserved gameplay field.
+            historical=json.loads(subprocess.check_output(
+                ['git','show','100bac61:navgraphs/'+path.name],cwd=root))
             for key in ('routes','heights_mm','links','hazards','local_meshes'):
-                self.assertEqual(original.get(key),graph.get(key),(path.name,key))
+                self.assertEqual(original.get(key),historical.get(key),(path.name,key))
+            self.assertEqual(original['routes'],graph['routes'])
             expected=copy.deepcopy(original['spawn_formations'])
             for row in receipt['changes']:
                 self.assertEqual(row['before'],expected[row['team']][row['slot']])

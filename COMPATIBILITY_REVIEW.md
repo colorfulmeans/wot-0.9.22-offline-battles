@@ -9929,3 +9929,48 @@ preset only after a matching server acknowledgement in the same connection;
 restore it once when reconnecting as host, never impose it on a remote host.
 Small screens use the existing smaller font. Native rendering acceptance is
 still a Windows owner test; layout/resource and lifecycle tests are engine-free.
+
+### All-map water rebake and authoring danger overlay
+
+Report 20261022-002558 showed Tiger I and A-44 motion rejected by the old
+shore apron on 45_north_america, despite clear native probes. Exact #1513
+quarter-metre width measurements found the existing north ford at about
+1.02 m maximum, below the current 1.2 m navigation limit. All 41 main grids
+still recorded 0.9 m; changing the baker/runtime constant had not rebuilt
+those retained assets. This was a data/consumer mismatch, not a reason to
+add another live exemption or change Bot steering.
+
+`tools/rebake_navigation_water.py` decodes exact terrain, BWWa water and
+compiled collision again, measures every main/local cell, reclassifies water
+and proves new shore nodes and reversible links under the existing support,
+width, grade and collision rules. It preserves grid placement/resolution,
+authored layers, old proved links, all routes and all spawns. Existing 1.2 m
+local support proofs are retained; separately reviewed deeper fords keep
+their original conditional permission. Isolated new water pockets cannot
+be published as navigation. Per-layer complete measurement/change receipts,
+current topology summaries and saved-profile identity migration accompany
+the new assets. The old coarse-only Windstorm validator omitted its local
+bridge passages; water validation now reads the actual layered search rather
+than discarding that failure or changing the route.
+
+Reproduce into a staging directory with `python tools/rebake_navigation_water.py
+--client "$WOT_0922_CLIENT" --previous navgraphs --output build/water-stage
+--all`. Inspect/validate the complete batch before replacing any live assets,
+then update the manifest and run `tools/build_bot_editor_maps.py`; the adopted
+default-profile resource identities must change with the editor registry.
+`tools/check_navigation_water.py` verifies the complete retained-geometry and
+receipt boundary and compares original/default route segments through the
+shipping C++ search. Its complete-search benchmark budget belongs only to
+offline connectivity validation; no worker cadence, search budget or live
+navigation strategy changes.
+
+The launcher adds an independent red danger overlay beside Show navigation
+grid in the shared route/SPG editor. It reads the worker's shore classifier
+and the local/parent flags used by pose and motion checks, including exact
+base-node aliases; unknown local data cannot hide a parent veto. Raster
+images are cached, clipped before display scaling and do not write profiles.
+The right panel shows the actual map's depth, base shoulder radii, link grade,
+bake width and grid resolutions, plus still-active reviewed ford limits.
+Hover identifies the hazard type. A red conditional ford is not presented
+as an absolute barrier, and missing routing height is not labelled water.
+Owner testing on the native client remains the gameplay acceptance boundary.

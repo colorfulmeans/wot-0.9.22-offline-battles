@@ -3,6 +3,7 @@ import json
 import math
 from pathlib import Path
 import sys
+import subprocess
 import unittest
 
 from gui.mods.offline_lan_0922 import prebaked_navigation as pn
@@ -121,8 +122,16 @@ class NorthRuntimeTests(unittest.TestCase):
             coarse = dict(graph, local_meshes=graph['local_meshes'][:1])
             runtime.baked_graph = coarse
             runtime.navigator.grid = RuntimeGrid(lambda *a: None, baked_graph=coarse)
-            self.assertIs(False, runtime._planner_corridor_clear(
+            # The all-map water rebake fixes this short coarse apron too.
+            self.assertIs(True, runtime._planner_corridor_clear(
                 ORIGIN, YAW, 0., hazard_only=True, maximum_distance=.5))
+            old=json.loads(subprocess.check_output(['git','show',
+                '100bac61:navgraphs/84_winter.json'],cwd=ROOT))
+            old=module.prebaked_navigation.with_shore_hazards(dict(old,local_meshes=old['local_meshes'][:1]))
+            runtime.baked_graph=old
+            runtime.navigator.grid=RuntimeGrid(lambda *a:None,baked_graph=old)
+            self.assertIs(False,runtime._planner_corridor_clear(
+                ORIGIN,YAW,0.,hazard_only=True,maximum_distance=.5))
         finally:
             fixture.tearDown()
 

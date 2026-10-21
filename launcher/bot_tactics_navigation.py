@@ -10,6 +10,66 @@ COLORS = {
     'navigation_hazard': ('#ee5869', (238, 88, 105, 140)),
     'no_navigation_links': ('#a88bdd', (168, 139, 221, 140)),
 }
+DANGER_COLOR = (255, 45, 45, 155)
+
+
+def classified_hazards(graph):
+    """Use the worker's actual shore classification, including local layers."""
+    from gui.mods.offline_lan_0922.prebaked_navigation import with_shore_hazards
+    return with_shore_hazards(graph)
+
+
+def hazard_at(graph, point):
+    """Show flags used by either the pose guard or the motion grid.
+
+    The motion grid can reuse an exactly coincident base node; a local pose
+    guard instead reads its local mark. Display their union rather than hide
+    a real veto when reviewing a patch boundary.
+    """
+    from gui.mods.offline_lan_0922.prebaked_navigation import local_cell_at
+    local = local_cell_at(graph, (point[0], 0., point[1]))
+    if local is not None:
+        layer, index = local
+    else:
+        layer = graph
+        x, z = cell_for(graph, point)
+        if not (0 <= x < graph['width'] and 0 <= z < graph['height']):
+            return 0
+        index = z*graph['width']+x
+    value = int(layer['hazards'][index])
+    for patch in graph.get('local_meshes', ()):
+        x = (point[0]-patch['origin'][0])/patch['cell_size']
+        z = (point[1]-patch['origin'][1])/patch['cell_size']
+        if not (0 <= x <= patch['width']-1 and 0 <= z <= patch['height']-1):
+            continue
+        i = int(math.floor(z+.5))*patch['width']+int(math.floor(x+.5))
+        motion = int(patch['hazards'][i])
+        wx = patch['origin'][0]+i % patch['width']*patch['cell_size']
+        wz = patch['origin'][1]+i//patch['width']*patch['cell_size']
+        bx, bz = cell_for(graph, (wx, wz))
+        if 0 <= bx < graph['width'] and 0 <= bz < graph['height']:
+            j = bz*graph['width']+bx
+            base_height, local_height = graph['heights_mm'][j], patch['heights_mm'][i]
+            if (local_height is not None and base_height is not None and
+                    not int(graph['hazards'][j]) & 3 and abs(base_height-local_height) < 10 and
+                    abs(graph['origin'][0]+bx*graph['cell_size']-wx) < 1e-6 and
+                    abs(graph['origin'][1]+bz*graph['cell_size']-wz) < 1e-6):
+                motion = int(graph['hazards'][j])
+        return value | motion
+    return value
+
+
+def danger_parameters(graph):
+    """Raw reviewed values; the UI translates their meanings, not the policy."""
+    bake = graph.get('bake', {})
+    return dict(water_depth=bake.get('water_depth_limit'),
+        edge_radii=bake.get('edge_clearance_radii', ()),
+        max_grade=bake.get('max_grade'),
+        half_width=bake.get('vehicle_half_width'),
+        base_cell_size=graph['cell_size'],
+        local_cell_sizes=sorted({p['cell_size'] for p in graph.get('local_meshes', ())}),
+        ford_depths=sorted({p['local_water_depth_limit'] for p in bake.get('verified_local_adapters', ())
+                           if p.get('kind') == 'ford' and p.get('local_water_depth_limit', 0) > bake.get('water_depth_limit', 0)}))
 
 
 def cell_for(graph, point):
@@ -236,4 +296,46 @@ def overlay_image(graph, bounds):
                     px=round((wx-size*.5-left)*scale);py=round((top-wz-size*.5)*scale)
                     span=max(1,round(size*scale))
                     draw.rectangle((px,py,px+span-1,py+span-1),fill=COLORS[status][1],outline=(180,200,200,45))
+    return image
+
+
+def danger_overlay_image(graph, bounds):
+    """Red hazard raster; supported local cells replace coarse marks exactly.
+
+    Missing local cells with no hazard evidence retain the parent evidence.
+    A red mark describes a policy flag, not a claim of absolute impassability:
+    bit 4 remains the original reviewed, conditional ford permission.
+    """
+    from PIL import Image, ImageDraw
+    graph = classified_hazards(graph)
+    size = graph['cell_size']
+    patches = graph.get('local_meshes', ())
+    minimum = min([size]+[p['cell_size'] for p in patches])
+    factor = max(1, int(math.ceil(size/minimum)))
+    scale = 3.*factor/size
+    image = Image.new('RGBA', (graph['width']*3*factor, graph['height']*3*factor))
+    draw = ImageDraw.Draw(image)
+    left = graph['origin'][0]-size*.5
+    top = graph['origin'][1]+(graph['height']-.5)*size
+    for layer in (graph,)+tuple(reversed(patches)):
+        cell = layer['cell_size']
+        for index, value in enumerate(layer['hazards']):
+            if layer is not graph and layer['heights_mm'][index] is None and not value:
+                continue
+            x = layer['origin'][0]+index % layer['width']*cell
+            z = layer['origin'][1]+index//layer['width']*cell
+            if not (bounds[0] <= x <= bounds[2] and bounds[1] <= z <= bounds[3]):
+                continue
+            x0, x1, z0, z1 = x-cell*.5, x+cell*.5, z-cell*.5, z+cell*.5
+            if layer is not graph:
+                # LocalMeshes.cell owns only the rectangle between its first
+                # and last centres, not the outside half of boundary cells.
+                x0, x1 = max(x0,layer['origin'][0]), min(x1,layer['origin'][0]+(layer['width']-1)*cell)
+                z0, z1 = max(z0,layer['origin'][1]), min(z1,layer['origin'][1]+(layer['height']-1)*cell)
+            px, py = round((x0-left)*scale), round((top-z1)*scale)
+            right, bottom = round((x1-left)*scale), round((top-z0)*scale)
+            flags = hazard_at(graph, (x, z)) if layer is not graph else int(value)
+            if right > px and bottom > py:
+                draw.rectangle((px, py, right-1, bottom-1),
+                               fill=DANGER_COLOR if flags & 15 else (0, 0, 0, 0))
     return image
