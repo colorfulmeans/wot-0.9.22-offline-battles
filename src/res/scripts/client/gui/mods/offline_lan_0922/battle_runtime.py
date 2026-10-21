@@ -67,7 +67,7 @@ from gui.mods.offline_lan_0922 import (
     destructibles_compat, device_damage, effective_params,
     equipment_mechanics, gun_mechanics, hull_aiming,
     lan_client as lan_protocol,
-    gc_sweep, graphics_probe, native_input_diagnostics, loadout as loadout_law,
+    gc_sweep, graphics_probe, native_input_diagnostics, physics_audit, loadout as loadout_law,
     world_census, prebaked_destructibles,
     prebaked_foliage,
     prebaked_navigation, native_mapping_mask, native_math, shot_geometry, spotting,
@@ -2507,14 +2507,18 @@ class BattleRuntime(object):
         self._replay_muzzle_count = 0
         self._replay_gun_signature = None
         self._replay_publishing = False
-        # Fine scopes perturb the measured update. Enable bounded captures
-        # only for an explicitly opted-in diagnostic process.
+        # Sparse, bounded worker samples expose the hot inner stages in normal
+        # test reports. Explicit profile entries retain their denser cadence.
         self._combat_diagnostics = (
             WorkerCombatDiagnostics.spike_test(_PROFILE_CLOCK)
             if self._worker_mode and
             os.environ.get('WOT_OFFLINE_SPIKE_PROFILE') == '1' else
             (WorkerCombatDiagnostics(_PROFILE_CLOCK, detail_stride=8)
-             if os.environ.get('WOT_OFFLINE_COMBAT_PROFILE') == '1' else None))
+             if os.environ.get('WOT_OFFLINE_COMBAT_PROFILE') == '1' else
+             (WorkerCombatDiagnostics.audit_sample(_PROFILE_CLOCK)
+              if self._worker_mode and
+              'WOT_OFFLINE_COMBAT_PROFILE' not in os.environ and
+              'WOT_OFFLINE_SPIKE_PROFILE' not in os.environ else None)))
         if self._worker_mode:
             self._config['native_remote_vehicles'] = False
             self._config['bot_track_animation'] = False
@@ -7050,6 +7054,12 @@ class BattleRuntime(object):
             return
         self._drowning_diagnostics[key] = (now, signature)
         try:
+            sample = row.get('sample') or {}
+            water = sample.get('water') or {}
+            if water.get('point') is not None:
+                row['query_environment'] = physics_audit.water_context(
+                    self._runtime.bigworld, self._avatar, water['point'], self._vector,
+                    missed=water.get('reason') == 'no_water_hit', entity_id=row.get('engine_id'))
             native_input_diagnostics.write_json_record('PLAYER WATER', row)
         except Exception:
             # Diagnostic formatting cannot withdraw the water/HP rule.
@@ -24837,6 +24847,7 @@ class BattleRuntime(object):
             self, position, yaw, probe_height=None,
             support_gradient=None, sweep_drop=0.0, params=None):
         """Sample every track/belly constraint once for this physics tick."""
+        self._local_suspension_pseudo_probe_trace = ()
         if params is None:
             params = self._local_suspension_params
         if not isinstance(params, dict):
@@ -24851,6 +24862,7 @@ class BattleRuntime(object):
         if not isinstance(memory, list) or len(memory) != len(points):
             memory = [None] * len(points)
         result = []
+        probe_trace = []
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
@@ -24886,13 +24898,22 @@ class BattleRuntime(object):
                 x, z, minimum_y, maximum_y,
                 flat_maximum_y=flat_maximum_y,
                 prepared_filter=prepared_filter)
+            direct = value
+            layers = self._suspension_ground_probe_layers
+            previous_memory = memory[index]
             if contact.get('kind') == 'rigid':
                 memory[index] = None
             else:
                 value, memory[index] = vehicle_physics.retained_ground_contact(
                     point, value, memory[index],
                     params['contact_memory_distance'], support_gradient)
+            probe_trace.append(dict(index=index, kind=contact.get('kind'),
+                point=(x, z), minimum=minimum_y, maximum=maximum_y,
+                flat_maximum=flat_maximum_y, direct=direct, selected=value,
+                layers=layers, retained=direct is None and value is not None,
+                previous_memory=previous_memory))
             result.append(value)
+        self._local_suspension_pseudo_probe_trace = tuple(probe_trace)
         self._local_pseudo_ground_memory = memory
         return tuple(result)
 
@@ -25524,6 +25545,8 @@ class BattleRuntime(object):
                 abnormal=abnormal,
                 spring_columns='x,z,minimum,maximum,direct,support,flat_maximum,layers,patch_local_offset',
                 spring_probes=self._local_suspension_probe_trace,
+                pseudo_probes=getattr(self, '_local_suspension_pseudo_probe_trace', ()),
+                current_plane=current_plane,
                 applied_springs=[(p['x'],p.get('y',0.),p['z']) for p in params['springs']]))
         values = (
             solved['height'], solved['vertical_velocity'],
@@ -25556,7 +25579,15 @@ class BattleRuntime(object):
                 native_input_diagnostics.write_json_record('LOCAL SUPPORT DECISION', dict(
                     position=position, before=physics_state, solved=solved,
                     invalid_pose=invalid_pose, raised_support=raised_support,
-                    contact_recovery=contact_recovery, previous_plane=previous_plane))
+                    contact_recovery=contact_recovery, previous_plane=previous_plane,
+                    current_plane=current_plane, motion_pose=motion_pose, tick_pose=tick_pose,
+                    terminal=('restore_tick_pose_zero_velocity' if invalid_pose or raised_support
+                              else 'accept_solver_pose'),
+                    spring_probes=self._local_suspension_probe_trace,
+                    pseudo_probes=getattr(self, '_local_suspension_pseudo_probe_trace', ()),
+                    contacts=vehicle_physics.suspension_contact_receipt(
+                        params, physics_state, ground, pseudo_ground, position, yaw,
+                        previous_plane)))
                 self._local_support_decision_log_at = now + 1.
         if invalid_pose or raised_support:
             if tick_pose is not None:

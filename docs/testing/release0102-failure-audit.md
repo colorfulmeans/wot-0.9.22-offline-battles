@@ -289,3 +289,51 @@ actual failing boundary is captured. Keep PR #113 open; do not publish 0.10.2.
   unavailable geometry/entities, failed/recovered submission, rejected/stale
   messages, countdown pause/reset, unchanged missing-proposal behavior,
   remaining-HP death display, once-only settlement, and failed log sinks.
+
+
+## Report 20261021-182526: unresolved native water and edge projection
+
+This candidate adds evidence, not a speculative drowning, support or navigation
+repair. PR #113 remains unmerged and 0.10.2 remains unpublished.
+
+- The visible client classified full submersion for 52 seconds. At essentially
+  the same body pose the worker's `wg_collideWater(..., False)` returned -1,
+  published level 0 and caused the server to keep resetting its timer. This
+  report does not reach the previously suspected ten-second terminal gate.
+  The original HP, countdown, critical-proposal and death rules are unchanged.
+- Water receipts now include avatar/engine-player space, camera position,
+  rendering settings, and complete reverse/extended-ray outcomes after a miss.
+  The two extra rays run only at the admitted two-second diagnostic cadence.
+  Neither their hits nor their exceptions replace the authoritative query.
+  Render configuration differences are observed, not a proven root cause.
+- The captured full-support input repeatedly produces about 1.57 m of contact
+  projection, then the adapter restores the earlier pose and zeroes velocity.
+  All 132 captured native/reference terminal replays agreed, including 74
+  rises over 1.5 m: agreement is not a physical-correctness test. Some offending
+  contacts are metres from the previously fitted plane. Do not relax the guard
+  or delete those contacts before their actual native layer is established.
+- Projection receipts include every iteration's selected constraint, excess,
+  gradients, denominator, before/after pose and residual heave. Player and Bot pseudo
+  contacts also carry actual ray bands, layers, retention and chosen heights.
+  Player/Bot rejection receipts identify both planes, both poses and terminal
+  rollback. No solver coefficients, support admission or 1-lost/5-restored
+  rule changed. The numeric fixture preserves the unresolved failing input;
+  its test verifies observation parity, not that the physics is repaired.
+- Bot 9 (Object 263) accumulated 13 recovery attempts in a small region while
+  sometimes meeting real native geometry, relocating and firing once. A new
+  bounded observation episode joins existing stall receipts across owner and
+  local-target changes and records when it leaves the diagnostic pocket.
+  This state is never read by navigation, retry, route selection or gunnery.
+- The slow worker window averaged 166.4 ms execution, including 151.5 ms in
+  Bot update. The old normal-entry report had no measured inner probe costs.
+  Normal workers now use three bounded 30-second capture windows, 30 seconds
+  apart, sampling one complete control callback in 32 with a rotating slot.
+  Explicit profile entries retain their original cadence and explicit disable
+  flags still disable capture. No simulation time or physical query budget is
+  discarded. Further optimization requires the measured inner-stage result.
+
+Validation includes captured-input diagnostic/non-diagnostic solver parity,
+non-mutating native water probes (including errors and diagnostic rate limits),
+normal-entry capture lifecycle, and cross-owner stall evidence. Native water
+registration, layer selection and gameplay pacing remain Windows acceptance
+items for the owner's next test; no successful fix is claimed for them here.

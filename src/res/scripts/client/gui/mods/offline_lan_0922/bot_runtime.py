@@ -6,7 +6,7 @@ from gui.mods.offline_lan_0922.worker_diagnostics import (
     observed, observed_call, current as current_combat, count as combat_count)
 
 import copy
-from gui.mods.offline_lan_0922 import tank_contact_ledger
+from gui.mods.offline_lan_0922 import tank_contact_ledger, physics_audit
 import math
 import json
 import random
@@ -6916,6 +6916,10 @@ class BotRuntime(object):
             state.get('terrain_pitch', state.get('pitch')))
         roll = _number(state.get('roll'))
         result = []
+        probe_trace = []
+        state['_pseudo_probe_trace'] = ()
+        probe = self._suspension_ground_probe or self._wreck_ground_probe
+        probe_owner = getattr(probe, '__self__', getattr(probe, 'im_self', None))
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
@@ -6949,6 +6953,9 @@ class BotRuntime(object):
                 if contact.get('kind') == 'track' else None)
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
+            direct = ground
+            layers = getattr(probe_owner, '_suspension_ground_probe_layers', None)
+            previous_memory = memory[index]
             if contact.get('kind') == 'rigid':
                 memory[index] = None
             else:
@@ -6956,7 +6963,13 @@ class BotRuntime(object):
                     vehicle_physics.retained_ground_contact(
                         point, ground, memory[index],
                         params['contact_memory_distance'], support_gradient)
+            probe_trace.append(dict(index=index, kind=contact.get('kind'),
+                point=(x, z), minimum=minimum_y, maximum=maximum_y,
+                flat_maximum=flat_maximum_y, direct=direct, selected=ground,
+                layers=layers, retained=direct is None and ground is not None,
+                previous_memory=previous_memory))
             result.append(ground)
+        state['_pseudo_probe_trace'] = tuple(probe_trace)
         state['_pseudo_ground_memory'] = memory
         return tuple(result)
 
@@ -7733,6 +7746,14 @@ class BotRuntime(object):
                 integrated=trace.get('integrated'), after_contacts=trace.get('after_contacts'),
                 settled=settled_position,
                 basis='same_physics_slice_after_contacts_and_support')
+        try:
+            episode = physics_audit.motion_episode(state.get('_audit_motion_episode'),
+                position, now, trace.get('decision') or {}, trace.get('driver') or {})
+            state['_audit_motion_episode'] = episode
+            trace['audit_episode'] = episode
+        except Exception as error:
+            trace['audit_episode'] = dict(scope='diagnostic_only',
+                error=type(error).__name__ + ': ' + str(error))
         from .native_input_diagnostics import write_json_record
         observed_call('bot.motion_diagnostic_write', write_json_record, 'BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
@@ -8839,7 +8860,8 @@ class BotRuntime(object):
                 spring_columns='local_x,local_y,local_z,height,patch_offset',
                 springs=[(p['x'],p.get('y',0.),p['z'],height,getattr(height,'offset',None))
                     for p,height in zip(params['springs'],ground)],
-                pseudo_ground=pseudo_ground))
+                pseudo_ground=pseudo_ground,
+                pseudo_probes=state.get('_pseudo_probe_trace', ())))
         values = (
             solved['height'], solved['vertical_velocity'],
             solved['pitch'], solved['pitch_velocity'],
@@ -8886,7 +8908,14 @@ class BotRuntime(object):
                 write_json_record('BOT SUPPORT REJECTION', dict(
                     round=self.round_id, bot=bot_id, before=physics_state, solved=solved,
                     invalid_pose=invalid_pose, raised_support=raised_support,
-                    contact_recovery=contact_recovery, position=position))
+                    contact_recovery=contact_recovery, position=position,
+                    previous_plane=previous_plane, current_plane=current_plane,
+                    tick_pose=tick_pose, motion_pose=motion_pose,
+                    terminal='restore_snapshot_zero_velocity',
+                    pseudo_probes=state.get('_pseudo_probe_trace', ()),
+                    contacts=vehicle_physics.suspension_contact_receipt(
+                        params, physics_state, ground, pseudo_ground, position,
+                        state.get('yaw', 0.), previous_plane)))
                 state['_support_rejection_log_at'] = moment + 1.
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)

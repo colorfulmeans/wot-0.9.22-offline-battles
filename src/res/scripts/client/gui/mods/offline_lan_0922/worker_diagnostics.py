@@ -118,6 +118,15 @@ class WorkerCombatDiagnostics(object):
     """Capture three combat windows without retaining native objects."""
 
     @classmethod
+    def audit_sample(cls, clock):
+        """Sample one complete control callback in 32, for three windows.
+
+        This changes no control budget or cadence. A normal report must carry
+        measured stage contents, including preparation/writing of diagnostics.
+        """
+        return cls(clock, detail_stride=32)
+
+    @classmethod
     def spike_test(cls, clock):
         """Observe every control callback for a bounded 32-minute test.
 

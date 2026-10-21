@@ -13116,11 +13116,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(frame_diagnostics.enabled)
         self.assertIs(battle_runtime_module.native_math.thread_cpu_seconds,
                       frame_diagnostics._cpu_clock)
-        self.assertIsNone(battle._combat_diagnostics)
-        self.assertIsNone(battle._bots._combat_diagnostics)
+        self.assertEqual(32, battle._combat_diagnostics.detail_stride)
+        self.assertIs(battle._combat_diagnostics, battle._bots._combat_diagnostics)
 
         # A developer may inject a detailed observer for a bounded experiment.
-        # Normal stop/restart must retire it and keep the next round lightweight.
+        # Normal stop/restart must retire it and start a fresh sparse capture.
         from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics
         injected = WorkerCombatDiagnostics(lambda: 0.0)
         self.assertTrue(injected.begin_frame(1, 1.0, 'test_capture'))
@@ -13146,8 +13146,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual('running', battle.state)
         self.assertIsNot(previous_bots, battle._bots)
-        self.assertIsNone(battle._combat_diagnostics)
-        self.assertIsNone(battle._bots._combat_diagnostics)
+        self.assertEqual(32, battle._combat_diagnostics.detail_stride)
+        self.assertEqual(0, battle._combat_diagnostics.capture)
+        self.assertIs(battle._combat_diagnostics, battle._bots._combat_diagnostics)
         self.assertIs(frame_diagnostics, battle._frame_diagnostics)
         self.assertTrue(frame_diagnostics.enabled)
         self.assertEqual(0, frame_diagnostics._frame_id)
