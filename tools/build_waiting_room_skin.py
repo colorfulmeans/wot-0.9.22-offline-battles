@@ -25,10 +25,10 @@ def button(name, top, bottom, border, seed):
     for y in range(48):
         blend = y/47.
         # A soft upper sheen and recessed lower edge match the game's metal.
-        sheen = 13 * math.exp(-((blend-.16)/.23)**2)
+        sheen = 7 * math.exp(-((blend-.16)/.23)**2)
         for x in range(512):
             wear = (fine.getpixel((x,y))-128)*.035
-            wear += (clouds.getpixel((x,y))-128)*1.7
+            wear += (clouds.getpixel((x,y))-128)*.30
             vignette = -7 * abs(x/511.-.5)*2
             colour = tuple(max(0, min(255, round(a+(b-a)*blend+
                 sheen+wear+vignette))) for a,b in zip(top,bottom))
@@ -48,15 +48,40 @@ def main():
     pixels = panel.load()
     for y in range(256):
         for x in range(512):
-            grain = (fine.getpixel((x,y))-128)*.012
-            grain += (clouds.getpixel((x,y))-128)*.7
-            light = 3*(1-y/255.)
-            pixels[x,y] = tuple(max(0, round(c+grain+light))
-                                for c in (12,12,8))+(214,)
-    ImageDraw.Draw(panel).rectangle((0,0,511,255), outline=(5,5,3,245), width=2)
+            grain = (fine.getpixel((x,y))-128)*.025
+            grain += (clouds.getpixel((x,y))-128)*.40
+            # Stock settings-window reference: olive metal header/footer,
+            # narrow side frame and recessed dark content. This is original
+            # artwork, not a redistributed Flash bitmap or a GUI replacement.
+            if y < 14:
+                blend = y/13.
+                base = tuple(a+(b-a)*blend for a,b in
+                             zip((105,106,83),(43,45,32)))
+                alpha = 250
+            elif y >= 228:
+                blend = (y-228)/27.
+                base = tuple(a+(b-a)*blend for a,b in
+                             zip((63,66,46),(33,36,25)))
+                alpha = 250
+            elif x < 3 or x >= 509:
+                base, alpha = (51,54,37), 250
+            else:
+                light = 3*(1-y/255.)
+                base, alpha = (18+light,19+light,12+light), 230
+            pixels[x,y] = tuple(max(0,min(255,round(c+grain)))
+                                for c in base)+(alpha,)
+    draw = ImageDraw.Draw(panel)
+    draw.rectangle((0,0,511,255), outline=(27,29,19,255), width=1)
+    draw.line((1,0,510,0), fill=(153,151,111,255))
+    draw.line((1,1,510,1), fill=(116,117,86,255))
+    draw.line((1,1,1,254), fill=(97,99,68,255))
+    draw.line((510,1,510,254), fill=(69,72,49,255))
+    draw.rectangle((3,14,508,227), outline=(82,83,56,255), width=1)
+    draw.rectangle((4,15,507,226), outline=(5,7,3,255), width=1)
     panel.save(OUTPUT/'waiting_panel.dds')
-    button('waiting_button', (126,126,96), (65,67,44), (162,157,117), 922)
-    button('waiting_start', (215,23,10), (126,9,4), (231,80,44), 102)
+    button('waiting_button', (109,110,83), (51,54,35), (151,149,115), 922)
+    button('waiting_start', (210,23,10), (126,9,4), (231,80,44), 102)
+
 
 
 if __name__ == '__main__':

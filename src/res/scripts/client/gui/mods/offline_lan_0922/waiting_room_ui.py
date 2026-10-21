@@ -15,7 +15,8 @@ Exact #1513 evidence for the native surface used here:
   ships baked RGBA panel/button textures and uses BLEND for their real alpha;
   cursor and legacy service controls retain their proven white/black textures.
 - Mod-owned Microsoft YaHei fonts provide dynamic Chinese glyphs. The waiting
-  room uses 20 px text; other native service panels keep their 16 px font.
+  room uses 14 px body/button text and a 16 px title, following the stock
+  settings-window reference. Other service panels keep their 16 px font.
 - ``GUI.addRoot`` / ``GUI.delRoot`` / ``GUI.reSort`` and an overlay at
   ``position.z = 0.1`` with ``focus`` and ``moveFocus``:
   ``scripts/client/new_year/fade_window.pyc``.
@@ -463,19 +464,19 @@ class WaitingRoomUI(object):
         make_control('skill_previous', (-0.72, 0.15, CONTROL_Z), 0.20, 0.13)
         make_control('skill', (0.0, 0.15, CONTROL_Z), 1.15, 0.13)
         make_control('skill_next', (0.72, 0.15, CONTROL_Z), 0.20, 0.13)
-        make_control('map', (-0.30, 0.0, CONTROL_Z), 1.00, 0.14)
-        make_control('random', (0.62, 0.0, CONTROL_Z), 0.56, 0.14)
-        make_control('team1_down', (-0.82, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team1_up', (-0.22, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team2_down', (0.22, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team2_up', (0.82, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team1', (-0.52, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('team2', (0.0, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('team_random', (0.52, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('start', (0.0, -0.58, CONTROL_Z), 1.20, 0.20)
-        make_control('close', (0.0, -0.90, CONTROL_Z), 0.50, 0.16)
-        make_label('title', tr('LAN WAITING ROOM'), (-0.86, 0.82, 0.0), 1.72,
-                   0.12, colour=(209, 185, 115, 255))
+        make_control('map', (-0.30, 0.0, CONTROL_Z), 1.00, 0.13)
+        make_control('random', (0.62, 0.0, CONTROL_Z), 0.56, 0.13)
+        make_control('team1_down', (-0.82, -0.18, CONTROL_Z), 0.12, 0.13)
+        make_control('team1_up', (-0.22, -0.18, CONTROL_Z), 0.12, 0.13)
+        make_control('team2_down', (0.22, -0.18, CONTROL_Z), 0.12, 0.13)
+        make_control('team2_up', (0.82, -0.18, CONTROL_Z), 0.12, 0.13)
+        make_control('team1', (-0.52, -0.38, CONTROL_Z), 0.42, 0.13)
+        make_control('team2', (0.0, -0.38, CONTROL_Z), 0.42, 0.13)
+        make_control('team_random', (0.52, -0.38, CONTROL_Z), 0.42, 0.13)
+        make_control('start', (0.0, -0.58, CONTROL_Z), 1.20, 0.14)
+        make_control('close', (0.0, -0.90, CONTROL_Z), 0.50, 0.13)
+        make_label('title', tr('LAN WAITING ROOM'), (-0.86, 0.94, 0.0), 1.72,
+                   0.10, colour=(209, 185, 115, 255))
         make_label('room', '', (-0.86, 0.62, 0.0), 1.72, 0.11,
                    colour=ROOM_TEXT_COLOUR)
         make_label('players', '', (-0.86, 0.44, 0.0), 1.72, 0.11,
@@ -519,7 +520,7 @@ class WaitingRoomUI(object):
                    anchor='CENTER', colour=self.control_text_colour)
         make_label('close', tr('LEAVE'), (0.0, -0.90, 0.0), 0.46, 0.10,
                    anchor='CENTER', colour=self.control_text_colour)
-        make_label('message', '', (-0.86, -0.75, 0.0), 1.72, 0.10,
+        make_label('message', '', (-0.86, -0.72, 0.0), 1.72, 0.10,
                    colour=ROOM_TEXT_COLOUR)
         for index, (value, caption) in enumerate(BOT_SKILL_OPTIONS):
             role = 'skill_choice_' + value
@@ -546,14 +547,17 @@ class WaitingRoomUI(object):
         except Exception:
             screen_size = None
         width, height, y = panel_geometry(screen_size, self.panel_size)
-        self._layout_font = (PANEL_FONT if self.panel_font == ROOM_FONT and width < 900
-                             else self.panel_font)
-        for label in self._labels.values():
-            label.font = self._layout_font
+        for role, label in self._labels.items():
+            label.font = self._font_for_label(role)
         self._set(panel, 'width', width)
         self._set(panel, 'height', height)
         self._set(panel, 'position', (0.0, y, OVERLAY_Z))
         return True
+
+    def _font_for_label(self, role):
+        if self.panel_font == ROOM_FONT and role == 'title':
+            return PANEL_FONT
+        return self.panel_font
 
     @staticmethod
     def _set(component, name, value):
@@ -597,7 +601,7 @@ class WaitingRoomUI(object):
         component = surface.text()
         # A missing font must reach the session's stock-window fallback,
         # not silently leave translated text in an unreviewed default font.
-        component.font = getattr(self, '_layout_font', self.panel_font)
+        component.font = self._font_for_label(role)
         for name, value in (
                 ('text', as_text(text)),
                 ('horizontalPositionMode', 'CLIP'),

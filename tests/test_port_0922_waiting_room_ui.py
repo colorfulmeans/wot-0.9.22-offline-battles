@@ -725,9 +725,13 @@ class WaitingRoomTests(unittest.TestCase):
                 if role in room._labels:
                     self.assertEqual((x, y), room._labels[role].properties['position'][:2])
             self.assertEqual(self.module.START_TEXTURE, room._controls['start'].texture)
+            self.assertEqual(self.module.ROOM_FONT, room._labels['start'].properties['font'])
+            self.assertEqual(self.module.ROOM_FONT, room._labels['room'].properties['font'])
+            self.assertLessEqual(room._controls['start'].properties['height'], .14)
+            self.assertLessEqual(room._controls['close'].properties['height'], .13)
             screen[0] = (1920, 1080)
             room.refresh()
-            self.assertEqual(self.module.ROOM_FONT, room._labels['title'].properties['font'])
+            self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
             screen[0] = (800, 600)
             room.refresh()
             self.assertEqual(self.module.PANEL_FONT, room._labels['title'].properties['font'])
@@ -762,6 +766,8 @@ class WaitingRoomTests(unittest.TestCase):
             self.assertNotIn('/', name)
             font = ET.parse(ROOT / 'src/res/system/fonts' / name).getroot()
             self.assertEqual('Microsoft YaHei', font.findtext('creation/sourceFont'))
+            self.assertEqual('14' if name == self.module.ROOM_FONT else '16',
+                             font.findtext('creation/sourceFontSize'))
             self.assertIsNone(font.find('generated'))
             self.assertIsNone(font.find('creation/startChar'))
             self.assertIsNone(font.find('creation/endChar'))

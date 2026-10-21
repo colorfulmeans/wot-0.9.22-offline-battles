@@ -9936,10 +9936,16 @@ independent service panels retain their previous size and placement.
 The missing-Chinese regression used a full `system/fonts/...` path for
 `GUI.Text.font`; the stock #1513 `ChainView.addLabel` and `GUITest.create`
 assign bare `label_small.font` and `default_smaller.font` names. The room now
-uses the same relative-name contract for both packaged YaHei sizes. Small
-screens use the existing 16 px descriptor, larger panels use 20 px. Both
+uses the same relative-name contract for packaged YaHei fonts. Match the stock
+settings-window proportions with 14 px body/button text, a 16 px room title,
+and compact controls; independent service panels retain their 16 px text. Both
 skins contain baked colour and alpha, with seeded non-repeating grain,
 soft highlights and warmer olive/red metal instead of flat gradients.
+The owner's stock settings-window reference supplies the visual direction:
+olivine metal header/footer and narrow frame around recessed dark content.
+The room title sits inside that header and status text clears the footer.
+These original RGBA skins do not redistribute stock Flash bitmaps or replace
+the native GUI interaction/cursor implementation.
 Native rendering acceptance is still a Windows owner test; layout/resource
 and lifecycle tests are engine-free and do not prove CJK rasterization.
 
