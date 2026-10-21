@@ -143,8 +143,8 @@ def vehicle_type_guns(descriptor):
         yield gun
 
 
-_DEFAULT_CONSUMABLE_NAMES = ('autoExtinguishers', 'largeMedkit',
-                             'largeRepairkit')
+_DEFAULT_CONSUMABLE_NAMES = ('largeMedkit', 'largeRepairkit',
+                             'autoExtinguishers')
 
 
 def default_consumables(vehicles):
@@ -180,7 +180,7 @@ def _turret_descriptors(vehicle_type):
 def build_record(vehicles, tankmen, item_type_indices, type_id,
                  inventory_id, next_tankman_id, settings, consumables,
                  descriptor=None, top_modules=True, role_level=None,
-                 own_researchable_modules=True, recruit_crew=True):
+                 own_researchable_modules=True, recruit_crew=True, full_crew_skills=False):
     """Return one garage vehicle record and the catalogue it implies.
 
     ``top_modules`` fits the vehicle the way the historical sandbox garage
@@ -210,10 +210,12 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
     if top_modules:
         install_top_modules(descriptor)
 
-    # Fresh crew has no secondary skills or gifted skill experience.
+    # Career recruits retain native secondary-skill defaults.
     if role_level is None:
         role_level = tankmen.MAX_SKILL_LEVEL
-    skills_mask = tankmen.getSkillsMask(())
+    from gui.mods.offline_lan_0922.default_crew import sandbox_skill_mask
+    skills_mask = (sandbox_skill_mask() if full_crew_skills else
+                   tankmen.getSkillsMask(()))
     crew_compact_descrs = (list(tankmen.generateTankmen(
         nation_id, vehicle_type_id, descriptor.type.crewRoles,
         False, role_level, skills_mask, False)) if recruit_crew else [])
@@ -255,7 +257,10 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
             owned = record_inventory_items.setdefault(item_type, {})
             owned[compact_descr] = max(1, int(owned.get(compact_descr, 0)))
 
-    shells = list(vehicles.getDefaultAmmoForGun(descriptor.gun))
+    from gui.mods.offline_lan_0922.default_loadouts import garage_ammo
+    special_ammo = garage_ammo(descriptor) if top_modules else None
+    shells = (special_ammo if special_ammo is not None else
+              list(vehicles.getDefaultAmmoForGun(descriptor.gun)))
     if not shells or len(shells) % 2:
         raise ValueError('default ammo must contain descriptor/count pairs')
     record_shell_items = record_inventory_items.setdefault(

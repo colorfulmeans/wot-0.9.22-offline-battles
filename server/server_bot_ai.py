@@ -3700,6 +3700,17 @@ class BotPlanner(object):
             available.append(shell)
         if not available:
             return max(0, _integer((state or {}).get("shell_index", 0)))
+        from gui.mods.offline_lan_0922.default_loadouts import profile_roles
+        explicit_roles = profile_roles(profile)
+        if explicit_roles is not None:
+            available = [shell for shell in available
+                         if _integer(shell.get("index")) in explicit_roles]
+            if not available:
+                return max(0, _integer((state or {}).get("shell_index", 0)))
+        if not plans_shell and explicit_roles is not None:
+            role_order = {"standard": 0, "premium": 1, "he": 2}
+            return _integer(min(available, key=lambda shell: role_order[
+                explicit_roles[_integer(shell.get("index"))]]).get("index"))
         if not plans_shell:
             return max(0, _integer(min(
                 available,
@@ -3736,6 +3747,13 @@ class BotPlanner(object):
                 _number(shell.get("damage")),
                 -_integer(shell.get("index")))) if values else None
 
+        if explicit_roles is not None:
+            standard = [shell for shell in available if explicit_roles.get(
+                _integer(shell.get("index"))) == "standard"]
+            premium = [shell for shell in available if explicit_roles.get(
+                _integer(shell.get("index"))) == "premium"]
+            high_explosive = [shell for shell in available if explicit_roles.get(
+                _integer(shell.get("index"))) == "he"]
         normal = best_penetration(standard)
         gold = best_penetration(premium)
         explosive = max(high_explosive, key=lambda shell: (

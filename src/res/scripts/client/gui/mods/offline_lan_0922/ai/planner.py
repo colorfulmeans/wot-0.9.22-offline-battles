@@ -552,6 +552,7 @@ def _shell_profiles(descriptor):
 		result.append({
 			'index': int(index),
 			'kind': str(kind),
+			'name': _attribute_or_key(shell, 'name', ''),
 			'penetration': _middle_value(
 				_attribute_or_key(shell, 'piercingPower', 0.0), 0.0),
 			'damage': _middle_value(
@@ -630,6 +631,8 @@ def build_vehicle_profile(descriptor):
 		'fire_range': fire_range,
 		'speed': speed,
 		'armor': armor,
+		'gun_name': str(_attribute_or_key(
+			_attribute_or_key(descriptor, 'gun', {}), 'name', '')),
 		'shells': _shell_profiles(descriptor),
 	}
 
@@ -662,6 +665,15 @@ def select_shell_index(profile, target, personality):
 			premium.append(shell)
 		else:
 			standard.append(shell)
+	from gui.mods.offline_lan_0922.default_loadouts import profile_roles
+	explicit_roles = profile_roles(profile)
+	if explicit_roles is not None:
+		standard = [shell for shell in shells if explicit_roles.get(
+			int(shell.get('index', 0))) == 'standard']
+		premium = [shell for shell in shells if explicit_roles.get(
+			int(shell.get('index', 0))) == 'premium']
+		high_explosive = [shell for shell in shells if explicit_roles.get(
+			int(shell.get('index', 0))) == 'he']
 	best_standard = max(standard, key=lambda value: (
 		_number(value.get('penetration', 0.0), 0.0),
 		_number(value.get('damage', 0.0), 0.0),

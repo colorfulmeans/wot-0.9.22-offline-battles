@@ -824,14 +824,14 @@ class WaitingRoomTests(unittest.TestCase):
         surface = _InstallFailureSurface()
         room = self.module.WaitingRoomUI(
             self._request_start, lambda: list(self.pool),
-            status=lambda: self.status, host=lambda: True)
+            status=lambda: self.status, host=lambda: True, surface=surface)
 
         with mock.patch.object(self.module, 'NativeSurface',
                                return_value=surface):
             with self.assertRaises(RuntimeError):
                 room.install()
 
-            self.assertIsNone(room._surface)
+            self.assertIs(surface, room._surface)
             self.assertIsNone(room._panel)
             self.assertEqual({}, room._controls)
             self.assertEqual({}, room._labels)

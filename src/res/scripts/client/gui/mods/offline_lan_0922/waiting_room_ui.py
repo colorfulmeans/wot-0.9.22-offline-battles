@@ -406,6 +406,7 @@ class WaitingRoomUI(object):
         self._open_map_picker = open_map_picker
         self._round_seconds = round_seconds or (lambda: None)
         self._surface = surface
+        self._flash = None
         self._panel = None
         self._controls = {}
         self._labels = {}
@@ -428,6 +429,13 @@ class WaitingRoomUI(object):
 
     def install(self):
         """Build the native components without showing them."""
+        if self._flash is not None:
+            return True
+        if self._surface is None and type(self) is WaitingRoomUI:
+            from gui.mods.offline_lan_0922.waiting_room_flash import RoomWindow, register
+            register()
+            self._flash = RoomWindow(self)
+            return True
         if self._panel is not None:
             return True
         surface = self._surface
@@ -649,6 +657,17 @@ class WaitingRoomUI(object):
         return True
 
     def open(self):
+        if self._surface is None and type(self) is WaitingRoomUI and self._flash is None:
+            self.install()
+        if self._flash is not None:
+            if self._open:
+                return self.refresh()
+            self._open = True
+            self._sync_selection()
+            if not self._flash.open():
+                self._open = False
+                return False
+            return True
         if self._open:
             self.refresh()
             return True
@@ -990,6 +1009,8 @@ class WaitingRoomUI(object):
         return True
 
     def refresh(self):
+        if self._flash is not None:
+            return self._flash.refresh() if self._open else False
         if not self._open:
             return False
         return self._refresh_contents()
@@ -1343,6 +1364,10 @@ class WaitingRoomUI(object):
         return True
 
     def close(self):
+        if self._flash is not None:
+            was_open, self._open = self._open, False
+            self._flash.close()
+            return was_open
         self._skill_menu_open = False
         had_resources = self._has_open_resources()
         if not self._open and not had_resources:
@@ -1356,6 +1381,10 @@ class WaitingRoomUI(object):
         return True
 
     def uninstall(self):
+        if self._flash is not None:
+            self.close()
+            self._flash = None
+            return True
         if ((self._open or self._has_open_resources()) and
                 not self.close()):
             return False

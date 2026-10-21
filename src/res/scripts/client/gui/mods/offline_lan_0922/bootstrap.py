@@ -773,7 +773,8 @@ def _selected_vehicle(config, restore_saved=True):
                                 (selected_descriptor
                                  if type_id == selected_type_id else None)),
                     top_modules=not career,
-                    own_researchable_modules=not career)
+                    own_researchable_modules=not career,
+                    full_crew_skills=not career)
             except Exception:
                 if type_id == selected_type_id:
                     raise

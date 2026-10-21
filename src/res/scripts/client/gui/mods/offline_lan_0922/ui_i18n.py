@@ -196,6 +196,7 @@ _ZH = {
     'RANDOM%s': u'随机%s',
     ' (ON)': u'（已选）',
     '  (YOU)': u'（已选）',
+    'TEAM %d SIZE': u'队伍 %d 人数',
     'TEAM %d SIZE: %d%s': u'队伍 %d 人数：%d%s',
     'TEAM %d%s': u'队伍 %d%s',
     'MAP: %s': u'地图：%s',

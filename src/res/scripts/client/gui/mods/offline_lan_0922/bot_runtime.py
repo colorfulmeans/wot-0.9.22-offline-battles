@@ -1591,6 +1591,10 @@ def _bot_ammo_categories(profile, shell_count):
     least three percent higher.  This keeps standard AP/APCR as the default
     while still recognizing the usual higher-penetration APCR/HEAT round.
     """
+    from gui.mods.offline_lan_0922.default_loadouts import profile_roles
+    roles = profile_roles(profile) if isinstance(profile, dict) else None
+    if roles is not None:
+        return roles
     shells = profile.get('shells', ()) if isinstance(profile, dict) else ()
     shells = tuple(shells or ())
     by_index = {}
@@ -1633,6 +1637,10 @@ def _bot_ammo_distribution(descriptor, profile, shell_count):
     maximum = _bot_ammo_capacity(descriptor)
     if shell_count <= 0 or maximum <= 0:
         return [0] * max(0, shell_count)
+    from gui.mods.offline_lan_0922.default_loadouts import descriptor_roles, allocate
+    roles = descriptor_roles(descriptor)
+    if roles is not None:
+        return allocate(maximum, roles, shell_count)
     categories = _bot_ammo_categories(profile, shell_count)
     class_tag = str((profile or {}).get('class_tag', ''))
     # Ordinary vehicles use the requested 3:2:1 baseline. Artillery carries a

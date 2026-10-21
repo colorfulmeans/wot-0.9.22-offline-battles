@@ -5044,6 +5044,14 @@ class BattleState:
     def _sanitize_bot_profile(raw):
         raw = raw if isinstance(raw, dict) else {}
         profile = {}
+        # Descriptor identities are protocol keys, not 24-character player names.
+        # Keep dots in native shell names such as _75mm_Sprg.18 as well.
+        def descriptor_name(value):
+            value = str(value or "")
+            return value if (len(value) <= 96 and all(
+                char.isalnum() or char in ":_-." for char in value)) else ""
+        profile["vehicle_name"] = descriptor_name(raw.get("vehicle_name"))
+        profile["gun_name"] = descriptor_name(raw.get("gun_name"))
         for key in ("class_tag", "dominant_role"):
             profile[key] = _safe_name(raw.get(key), "unknown")
         roles = raw.get("roles")
@@ -5069,6 +5077,7 @@ class BattleState:
             profile["shells"].append({
                 "index": max(0, min(int(_finite_float(shell.get("index"), 0)), 9)),
                 "kind": _safe_name(shell.get("kind"), "unknown"),
+                "name": descriptor_name(shell.get("name")),
                 "penetration": round(_clamp(_finite_float(shell.get("penetration")), 0.0, 10000.0), 3),
                 "damage": round(_clamp(_finite_float(shell.get("damage")), 0.0, 10000.0), 3),
                 "speed": round(_clamp(_finite_float(shell.get("speed")), 0.0, 10000.0), 3),
