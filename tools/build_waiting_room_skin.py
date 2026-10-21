@@ -118,7 +118,8 @@ def build(client_root, output):
                'operations':{'panel':'Native Window frame/content nine-slice at 640x330',
                     'button':'Native bitmap, shadow padding trimmed', 'start':'Native battle button bitmap',
                     'field':'Native recessed field bitmap, transparent padding trimmed'}}
-    (output/'waiting_skin_source.json').write_text(json.dumps(receipt,indent=2)+'\n',encoding='utf-8')
+    (output/'waiting_skin_source.json').write_bytes(
+        (json.dumps(receipt,indent=2)+'\n').encode('utf-8'))
     print('Built native #1513 waiting-room assets:',output)
 
 
