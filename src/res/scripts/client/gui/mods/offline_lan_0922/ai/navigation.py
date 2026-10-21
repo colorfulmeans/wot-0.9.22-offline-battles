@@ -606,13 +606,18 @@ class TerrainGrid(object):
 	def _baked_corridor(self, start, end):
 		"""Share immutable directed link/hazard answers for one grid corridor.
 
-		Baked traversal depends on the endpoint cells, not each observer's
-		sub-cell position. Keep world bounds and short-distance checks in their
+		Coarse traversal depends on endpoint cells. Mixed-resolution rays also
+		depend on exact boundary crossings. Keep bounds and short checks in their
 		callers, and never cache live failed-edge penalties or native probes.
 		"""
 		key = (self.cell_for(start), self.cell_for(end))
 		if self._local_meshes is not None and self._local_meshes.touches(start, end):
-			key = (self._local_meshes.cell(start) or key[0], self._local_meshes.cell(end) or key[1])
+			# A coarse link and fixed-stride raster can both miss a fine wet-bank
+			# corner. Use the same physical boundaries as actual motion before
+			# accepting either proof, and do not alias different sub-cell rays.
+			key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]))
+			if self.segment_has_motion_hazard(start, end, 1 | 8):
+				return False, 1 | 8
 		cached = self._baked_corridor_cache.get(key)
 		if cached is not None:
 			return cached
@@ -1513,7 +1518,12 @@ class TerrainGrid(object):
 			return 0.0
 		missing = max(0, len(self._NEIGHBOURS) -
 		              self._baked_link_count(cell))
-		return (float(missing) * self.cell_size *
+		# The retained weight is per metre. Charging a one-metre local vertex
+		# for four metres multiplies its clearance cost and exhausts the same
+		# authored-corridor search that passed before densification.
+		scale = (self._local_meshes.patches[-cell[0]-1]['cell_size']
+		         if self._local_meshes is not None and cell[0] < 0 else self.cell_size)
+		return (float(missing) * scale *
 		        BAKED_EDGE_CLEARANCE_WEIGHT)
 
 	def _baked_clearance_exposure(self, path):

@@ -337,3 +337,27 @@ non-mutating native water probes (including errors and diagnostic rate limits),
 normal-entry capture lifecycle, and cross-owner stall evidence. Native water
 registration, layer selection and gameplay pacing remain Windows acceptance
 items for the owner's next test; no successful fix is claimed for them here.
+
+
+## Report 191606 follow-up
+
+The E5 episode has a proved push/reverse ownership conflict and a 1 m versus
+4 m admission mismatch; regressions retain the exact origin/yaw and shore
+cell, terminal push release, original successful motor progress and genuine
+wreck displacement renewal. Other long stops were checked against combat,
+shots, critical mobility and final execution: SU-101 continued shooting during
+its hold, and a T34 reverse command was mechanically inhibited by a destroyed
+track. A stationary diagnostic pocket alone is not a deadlock verdict.
+
+The water replay retains every one of the 104 native hits. Tests cover rotated
+finite water rectangles, edge tolerance, rays above/below the surface, missing
+maps, explicit dry maps, worker/visible equality, native-miss diagnostics and
+the authority's unchanged level-2 publication. Geometry cannot prove native
+round-end presentation; the next test package is still acceptance work.
+
+Bridge validation includes both directions for three entrances, quarter-metre
+centre/corner sampling for 2.4/3.6/4.3 m wide, 6.4 m long hulls, water/collision
+protection, all retained Windstorm route legs, exact C++ search budget, and
+Himmelsdorf summer/winter route regressions. The initial 1 m search-budget and
+2 m full-hull failures were investigated rather than waived. No old test was
+removed to obtain a pass.

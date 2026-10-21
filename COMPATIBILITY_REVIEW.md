@@ -9817,3 +9817,49 @@ These tests supply corridor admission separately from recorded XZ coordinates;
 they do not constitute a native Windstorm replay. Final package checks and suite
 counts are recorded in the delivered manifest; the user's next battle remains
 the native acceptance test. The reported floating shrubs are not changed here.
+
+
+### 2026-10-21 report 191606: unculled water and consistent fine-grid handoffs
+
+The exact #1513 native registration at 0x5e8310 binds wg_collideWater to
+0xf629d0. Its per-water helper at 0xa302e0 checks bytes +0x2a5 and +0x2a1
+before geometric intersection. The +0x2a1 writer at 0xa2ff64 derives its value
+from the water bounding box's render clip outcode (helper 0x11bbfe0). The
+False third argument bypasses the later edge-alpha branch at 0xa305dc; it
+does not bypass visibility. Both worker ray directions and the extended ray
+missed the same water which the visible client hit; the worker camera stayed
+at approximately y=-495. Do not use that render-dependent miss as dry physics.
+
+The shared depth probe now evaluates the pinned BWWa water rectangles directly:
+record position, yaw, half extents, native 0.001 m boundary tolerance and the
+same downward forward-ray intersection. It does not use navigation heights,
+BWWa streaming coverage cells or a world-wide guessed water plane. Sixteen of
+104 captured native hits lie outside those streaming cells; all 104 are inside
+the actual rectangles and their heights agree within 0.000006 m. The generated
+catalog explicitly covers all supported maps, including maps without water.
+Visible and worker physics use the same source. Diagnostic-cadence receipts
+still compare the native ray against the selected rectangle/depth, recording
+misses, differences and exceptions. Drowning timers, hull classification,
+critical proposals, health/death semantics and server settlement are unchanged.
+The next Windows session must verify the complete drowning lifecycle.
+
+E5's captured 1 m corridor was tested as a 4 m base edge, hitting a later wet
+bank. Admission now uses the actual local cell scale. A world-denied wreck-push
+attempt publishes an explicit terminal handoff and cannot reclaim the driver
+every time its forward probe briefly clears during reverse recovery. Existing
+motor progress, corpse displacement, encounter retirement, retry and rerouting
+laws remain. No collision hull is shrunk beyond the existing planning inset.
+
+The upstream Windstorm city bridge receives an additive 1 m patch over both
+mouths and deck. Original routes, formations, coarse heights/hazards and the two
+previous patches are retained. A verified reverse shortcut exposed fixed-stride
+planning skipping a tiny wet-bank corner which realised motion rejected.
+Python and C++ now apply the same physical-boundary water/shore veto before a
+coarse link can override the fine mesh. Fine corridor caches use exact XZ rays.
+Clearance cost retains the original weight but uses each local vertex's metre
+scale; charging 1 m vertices for 4 m exhausted the unchanged 4096-node authored
+corridor budget. No slope policy, tactical priorities or navigation strategies
+are added. The discarded 2 m survey failed full-width support and was not shipped.
+
+Support activation/release remains one invalid point on/all five valid points
+off. No support solver, impact damage or ammunition-selection logic changes.

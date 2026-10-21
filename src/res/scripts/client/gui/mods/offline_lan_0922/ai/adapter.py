@@ -384,6 +384,17 @@ class BotAdapter(object):
             return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
+            # A denied push hands ownership back to checked recovery. Keeping
+            # this episode live used to interrupt each reverse as soon as the
+            # rotating forward probe briefly cleared again (E5, 2026-10-21).
+            # Retain the encounter receipt exactly like a refused world turn;
+            # only the existing departure/wreck-displacement laws renew it.
+            attempt.update(exhausted=True, exhausted_position=position)
+            attempt['terminal'] = dict(reason='world_corridor_refused',
+                at=state.get('now'), position=position, yaw=yaw,
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'])
+            evidence['terminal'] = dict(attempt['terminal'])
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             evidence['phase'] = 'world_blocked'
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]

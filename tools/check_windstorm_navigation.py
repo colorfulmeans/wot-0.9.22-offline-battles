@@ -34,7 +34,9 @@ north_cases=(((282.,250.),(216.,210.)),((282.,220.),(272.,220.)),
             ((279.912,248.157),(217.724,216.479)),
             ((280.3538467765204,219.5717056753799),(277.0672636779235,220.55617109769526)))
 shoal_cases=(((306.,189.),(264.,189.)),)
-for a,b in north_cases+shoal_cases:
+middle_cases=(((94.,-172.),(148.,-150.)),((98.,-174.),(144.,-146.)),
+              ((100.,-168.),(142.,-154.)))
+for a,b in north_cases+shoal_cases+middle_cases:
  pairs.update(((a,b),(b,a)))
 cases=sorted(pairs);out={}
 for name,g in (('baseline',old),('current',new)):
@@ -47,7 +49,7 @@ for name,g in (('baseline',old),('current',new)):
  native=json.loads(subprocess.check_output([str(args.native_executable.resolve()),str(inp.resolve()),'--paths']))
  if name=='current':
   import math
-  local_cases=set(north_cases+shoal_cases)|{(b,a)for a,b in north_cases+shoal_cases}
+  local_cases=set(north_cases+shoal_cases+middle_cases)|{(b,a)for a,b in north_cases+shoal_cases+middle_cases}
   for row in native['paths']:
    a,b=cases[row['case']]
    if (a,b)not in local_cases:continue
@@ -56,6 +58,8 @@ for name,g in (('baseline',old),('current',new)):
    assert path and length<math.hypot(b[0]-a[0],b[1]-a[1])*1.8+12.,('native_remote_detour',a,b,length)
    if (a,b) in set(shoal_cases)|{(q,p)for p,q in shoal_cases}:
     assert length<50. and all(185<=p[2]<=193 for p in path),('native_shoal_detour',a,b,path)
+   elif (a,b) in set(middle_cases)|{(q,p)for p,q in middle_cases}:
+    assert all(82<=p[0]<=164 and -188<=p[2]<=-126 for p in path),('native_left_middle_bridge',a,b)
    else:
     assert all(198<=p[0]<=314 and 186<=p[2]<=278 for p in path),('native_left_bridge_region',a,b)
    for first,last in zip(path,path[1:]):
@@ -65,7 +69,7 @@ for name,g in (('baseline',old),('current',new)):
      point=tuple(first[k]+(last[k]-first[k])*step/steps for k in range(3))
      assert pn.pose_is_safe(graph,point,hazard_mask=9),('native_final_pose_hazard',a,b,point)
  out[name]=dict(cases=len(cases),python=rows,native=native)
- new_cases=set(shoal_cases)|{(b,a)for a,b in shoal_cases}
+ new_cases=set(shoal_cases+middle_cases)|{(b,a)for a,b in shoal_cases+middle_cases}
  incomplete=native.get('incomplete_cases',())
  if name=='baseline':
   # The new shoal is intentionally blocked in the old graph. Keep those

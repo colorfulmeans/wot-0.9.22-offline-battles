@@ -1,0 +1,94 @@
+"""Densify the requested upstream city bridge and both mouths on #1513 geometry."""
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+import runpy
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT/'tools'))
+import build_local_navigation_meshes as meshes
+from build_windstorm_north_mesh import footprint_support
+
+REGION = (82, -188, 164, -126)
+
+
+def build(client):
+    path = ROOT/'navgraphs/84_winter.json'
+    raw = path.read_bytes()
+    graph = json.loads(raw)
+    assert len(graph['local_meshes']) == 2, 'Apply once to the retained two-bridge graph'
+    meshes.EXTRA_REGIONS = (REGION,)
+    terrain, obstacles, legacy = meshes.geometry(client, '84_winter')
+    original = legacy._has_safe_edge_clearance
+
+    def supported(t, o, x, z, y):
+        if o.surface_height(x, z) is not None:
+            return footprint_support(t, o, legacy, x, z, y)
+        return original(t, o, x, z, y)
+
+    try:
+        legacy._has_safe_edge_clearance = supported
+        patch = meshes.bake_patch(REGION, terrain, obstacles, legacy)
+        for i in range(patch['width']*patch['height']):
+            x, z = REGION[0]+i%patch['width'], REGION[1]+i//patch['width']
+            y = legacy._ground_height(terrain, obstacles, x, z)
+            if y is None:
+                patch['hazards'][i] = legacy.HAZARD_EDGE
+            elif terrain.water_depth(x, z, y) > legacy.WATER_DEPTH_LIMIT:
+                patch['hazards'][i] = legacy.HAZARD_WATER
+            elif not supported(terrain, obstacles, x, z, y):
+                patch['hazards'][i] = legacy.HAZARD_EDGE
+    finally:
+        legacy._has_safe_edge_clearance = original
+    graph['local_meshes'].append(patch)
+    refined = []
+    for i, mask in enumerate(graph['links']):
+        x = graph['origin'][0]+i%graph['width']*4.
+        z = graph['origin'][1]+i//graph['width']*4.
+        if not mask or not (REGION[0]-4 <= x <= REGION[2]+4 and REGION[1]-4 <= z <= REGION[3]+4):
+            continue
+        for bit, (dx, dz) in enumerate(legacy.DIRECTIONS):
+            if not mask & (1 << bit):
+                continue
+            steps = int(math.ceil(math.hypot(dx*4., dz*4.)/.25))
+            for step in range(steps+1):
+                px, pz = x+dx*4.*step/steps, z+dz*4.*step/steps
+                if not (REGION[0] <= px <= REGION[2] and REGION[1] <= pz <= REGION[3]):
+                    continue
+                index = int(math.floor(pz-REGION[1]+.5))*patch['width']+int(math.floor(px-REGION[0]+.5))
+                if patch['heights_mm'][index] is None or patch['hazards'][index]:
+                    graph['links'][i] &= ~(1 << bit)
+                    refined.append([i, bit])
+                    break
+    meta = graph['bake']['local_meshes']
+    meta['regions'].append(REGION)
+    meta['refined_coarse_links'] += refined
+    meta['middle_bridge'] = dict(region=REGION, local_cell_size=1.,
+        supported_nodes=sum(y is not None for y in patch['heights_mm']),
+        coarse_links_refined=refined, support_half_width=legacy.VEHICLE_HALF_WIDTH,
+        support_sample_metres=.25, water_depth_limit=legacy.WATER_DEPTH_LIMIT,
+        source='exact_0922_client_compiled_geometry')
+    graph['navigation_previous_sha256s'] = sorted(set(graph.get('navigation_previous_sha256s', ())) |
+                                                {hashlib.sha256(raw).hexdigest()})
+    path.write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
+    manifest_path = ROOT/'navgraphs/manifest.json'
+    manifest = json.loads(manifest_path.read_bytes())
+    for row in manifest['maps']:
+        if row['file'] == '84_winter.json':
+            row['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest_path.write_bytes((json.dumps(manifest, indent=2)+'\n').encode())
+    runpy.run_path(str(ROOT/'tools/build_bot_editor_maps.py'), run_name='__main__')
+    for name in ('bot_editor_maps.py', 'bot_tactics_default_data.py'):
+        dest = ROOT/'src/res/scripts/client/gui/mods/offline_lan_0922'/name
+        dest.write_bytes(dest.read_bytes().replace(b'\r\n', b'\n'))
+    print('Middle bridge: %d supported nodes; %d directed links; %d coarse refinements' % (
+        meta['middle_bridge']['supported_nodes'], sum(bin(v).count('1') for v in patch['links']), len(refined)))
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--client', required=True)
+    build(parser.parse_args().client)

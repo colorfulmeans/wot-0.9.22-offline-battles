@@ -206,8 +206,55 @@ struct Map : MapInput {
             if (DIRECTIONS[direction]==delta) return (links[index(a)]&(1U<<direction))!=0;
         return false;
     }
+    bool local_motion_hazard(Point start, Point end) const {
+        // Match TerrainGrid._motion_segment_cells, including zero-width
+        // boundary contacts and local/coarse seams. Fixed .42 m samples can
+        // skip a wet-bank corner which the realised motion gate must reject.
+        std::vector<double> cuts={0.,1.};
+        auto add_layer=[&](double ox,double oz,double scale,int width,int height) {
+            for(int axis: {0,2}) {
+                const double origin=axis==0?ox:oz, delta=end[axis]-start[axis];
+                if(delta==0.)continue;
+                double low=(start[axis]-origin)/scale,high=(end[axis]-origin)/scale;
+                if(low>high)std::swap(low,high);
+                int first=static_cast<int>(std::ceil(low-.5));
+                int last=static_cast<int>(std::floor(high-.5));
+                if(width>0) {
+                    const int count=axis==0?width:height;
+                    first=std::max(0,first);last=std::min(count-2,last);
+                    for(double edge: {origin,origin+(count-1)*scale}) {
+                        const double t=(edge-start[axis])/delta;
+                        if(t>0. && t<1.)cuts.push_back(t);
+                    }
+                }
+                for(int cell=first;cell<=last;++cell) {
+                    const double t=(origin+(cell+.5)*scale-start[axis])/delta;
+                    if(t>0. && t<1.)cuts.push_back(t);
+                }
+            }
+        };
+        add_layer(origin_x,origin_z,cell_size,0,0);
+        for(const auto &p:local_meshes)add_layer(p.origin_x,p.origin_z,p.cell_size,p.width,p.height);
+        std::sort(cuts.begin(),cuts.end());
+        cuts.erase(std::unique(cuts.begin(),cuts.end()),cuts.end());
+        Cell previous;bool have_previous=false;
+        auto rejected=[&](double t) {
+            Point point=start;
+            for(int axis: {0,2})point[axis]+=(end[axis]-start[axis])*t;
+            Cell cell;if(!local_cell(point,cell))cell=cell_for(point);
+            if(have_previous && cell==previous)return false;
+            const bool skip=!have_previous;
+            previous=cell;have_previous=true;
+            return !skip && (!flat(cell) || (hazards[index(cell)]&9U)!=0);
+        };
+        if(rejected(cuts.front()))return true;
+        for(size_t i=1;i<cuts.size();++i)
+            if(rejected((cuts[i-1]+cuts[i])*.5) || rejected(cuts[i]))return true;
+        return false;
+    }
     bool corridor(Point start, Point end, bool dry) const {
         if(touches(start,end)) {
+            if(local_motion_hazard(start,end))return false;
             const auto base=segment_cells(start,end,true,false);
             bool clear=!base.empty();
             for(size_t i=1;i<base.size();++i)
@@ -376,7 +423,8 @@ struct Job {
         return 1;
     }
     double terrain_penalty(Cell cell) const {
-        double value=input.prefer_clearance?(8-map->link_count(cell))*map->cell_size*.20:0.;
+        const double clearance_scale=cell[0]<0?map->local_meshes[-cell[0]-1].cell_size:map->cell_size;
+        double value=input.prefer_clearance?(8-map->link_count(cell))*clearance_scale*.20:0.;
         if (map->hazards[map->index(cell)]&4U) value+=map->cell_size*4.;
         const auto where=map->point_for(cell);
         for (Point point:input.avoid_points) {

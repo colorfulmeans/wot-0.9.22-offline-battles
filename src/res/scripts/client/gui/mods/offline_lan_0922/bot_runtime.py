@@ -8126,6 +8126,12 @@ class BotRuntime(object):
             # navigator explicitly selected that adjacent linked cell. The native
             # motion gate and per-frame hull sweep still prove realised travel.
             distance = max(1.0, _number(getattr(grid, 'cell_size', 1.0)))
+            local = prebaked_navigation.local_cell_at(graph, position)
+            if local is not None:
+                distance = max(1.0, _number(local[0]['cell_size']))
+            if evidence is not None:
+                evidence.update(corridor_cell_size=distance,
+                    corridor_resolution='local_mesh' if local is not None else 'base_grid')
             if maximum_distance is not None:
                 # A bounded recovery may stop before the next baked edge.
                 distance = min(distance, max(0.0, _number(maximum_distance)))

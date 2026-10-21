@@ -15,6 +15,7 @@ import random
 import sys
 import time
 import traceback
+from gui.mods.offline_lan_0922 import water_surfaces
 
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
@@ -7041,7 +7042,7 @@ class BattleRuntime(object):
         return False
 
     def _log_drowning(self, stage, player_id, now, reason, **fields):
-        """Trace all water boundaries without adding world queries."""
+        """Trace physics separately from diagnostic-cadence native queries."""
         row = dict(stage=stage, player=player_id, at=now, reason=reason,
                    round=getattr(self.client, 'round_id', None), role='worker' if self._worker_mode else 'visible')
         row.update(fields)
@@ -7060,16 +7061,24 @@ class BattleRuntime(object):
                 row['query_environment'] = physics_audit.water_context(
                     self._runtime.bigworld, self._avatar, water['point'], self._vector,
                     missed=water.get('reason') == 'no_water_hit', entity_id=row.get('engine_id'))
+                if water.get('source') == 'compiled_water_rectangles':
+                    row['query_environment']['compiled_comparison'] = physics_audit.water_comparison(
+                        self._runtime.bigworld, water['point'], self._vector, water)
             native_input_diagnostics.write_json_record('PLAYER WATER', row)
         except Exception:
             # Diagnostic formatting cannot withdraw the water/HP rule.
             pass
 
     def _water_depth(self, point, receipt=None):
-        collide = getattr(self._runtime.bigworld, 'wg_collideWater', None)
         if receipt is not None:
             receipt.update(point=tuple(point), start=(point[0], point[1]+20., point[2]),
                            end=(point[0], point[1]-5., point[2]))
+        config = getattr(self, '_config', None) or {}
+        map_name = prebaked_navigation._short_map_name(config.get('map'))
+        value = water_surfaces.depth(map_name, point, receipt)
+        if value is not None:
+            return value
+        collide = getattr(self._runtime.bigworld, 'wg_collideWater', None)
         if not callable(collide):
             if receipt is not None:
                 receipt['reason'] = 'native_water_unavailable'

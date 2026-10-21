@@ -4,6 +4,21 @@ from __future__ import division
 import math
 
 
+def water_comparison(bigworld, point, vector, selected):
+    """Sample the render-dependent query only at the admitted log cadence."""
+    row = dict(scope='diagnostic_only', selected_depth=selected.get('selected_depth'),
+               source=selected.get('source'), map=selected.get('map'))
+    try:
+        x, y, z = map(float, point)
+        raw = bigworld.wg_collideWater(vector((x, y+20., z)), vector((x, y-5., z)), False)
+        native = -1. if raw is None or raw < 0. else 20.-float(raw)
+        row.update(status='returned', raw_distance=raw, native_depth=native,
+                   difference=native-float(selected['selected_depth']))
+    except Exception as error:
+        row.update(status='exception', error=type(error).__name__+':'+str(error)[:160])
+    return row
+
+
 def motion_episode(previous, position, now, command, driver):
     """Join bounded stall receipts across combat/local-action owner changes.
 
