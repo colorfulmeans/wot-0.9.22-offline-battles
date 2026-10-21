@@ -45,6 +45,25 @@ class SereneCoastSpawnTests(unittest.TestCase):
                                         repair.baker.SPAWN_MINIMUM_SPACING)
                 self.assertFalse(repair.baker.spawn_obbs_overlap(first, second, hw, hl))
 
+    def test_published_editor_and_saved_profiles_keep_route_edits_after_spawn_only_update(self):
+        import copy
+        import hashlib
+        from gui.mods.offline_lan_0922 import bot_tactics as cfg
+        raw = (ROOT/'navgraphs/47_canada_a.json').read_bytes()
+        graph = json.loads(raw)
+        identity = hashlib.sha256(raw).hexdigest()
+        self.assertEqual(identity, cfg.MAPS['47_canada_a']['resource_sha256'])
+        profile = cfg.default_profile()
+        self.assertEqual(identity, profile['maps']['47_canada_a']['resource_sha256'])
+        for old in graph['navigation_previous_sha256s']:
+            saved = copy.deepcopy(profile)
+            entry = saved['maps']['47_canada_a']
+            entry['resource_sha256'] = old
+            entry['default_routes'][0]['disabled'] = True
+            expected = copy.deepcopy(entry)
+            expected['resource_sha256'] = identity
+            self.assertEqual(expected, cfg.canonical(saved)['maps']['47_canada_a'])
+
     def test_flat_centre_does_not_hide_long_hull_on_bank(self):
         def ground(x, z):
             return max(0., z-3.)
