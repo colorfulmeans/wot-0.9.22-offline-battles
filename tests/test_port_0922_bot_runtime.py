@@ -4906,7 +4906,7 @@ class BotRuntimeTests(unittest.TestCase):
                 result['fire_allowed'] = False
                 return result
 
-        def exercise(mode):
+        def exercise_unbounded(mode):
             reads = [0]
             def clock():
                 reads[0] += 1
@@ -4966,6 +4966,18 @@ class BotRuntimeTests(unittest.TestCase):
                     runtime.probe_totals(), runtime._shot_lane_work,
                     runtime._shot_los_cache), traces
 
+        def exercise(mode, exhausted=False):
+            from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
+            # This parity check compares diagnostic histories too. Give each
+            # run its own budget; otherwise an earlier run changes which
+            # histories the following run is intentionally allowed to retain.
+            with mock.patch.object(logs, '_detail_budget', dict(
+                    start=None,window=0,session=0,dropped=0,notice=False)), \
+                    mock.patch.object(logs, 'DETAIL_WINDOW_BYTES', 64*1024*1024), \
+                    mock.patch.object(logs, 'DETAIL_SESSION_BYTES',
+                                      0 if exhausted else 128*1024*1024):
+                return exercise_unbounded(mode)
+
         baseline, unused = exercise(None)
         measured, traces = exercise('active')
         sampled, sampled_traces = exercise('sampled')
@@ -4973,6 +4985,16 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(baseline, measured)
         self.assertEqual(baseline, sampled)
         self.assertEqual(baseline, failed)
+        exhausted, unused = exercise('active', exhausted=True)
+        # Byte admission may omit diagnostic histories, never gameplay, wire
+        # events, native queries, ammunition or shot-lane service order.
+        self.assertEqual(baseline[0], exhausted[0])
+        self.assertEqual(baseline[2:], exhausted[2:])
+        gameplay = ('id','x','y','z','yaw','pitch','roll','speed','health',
+                    'alive','fire_seq','reload_time','shell_index','critical')
+        for before, after in zip(baseline[1], exhausted[1]):
+            self.assertEqual({k:before.get(k) for k in gameplay},
+                             {k:after.get(k) for k in gameplay})
         detailed_frames = sum(row['detail_sampled'] for row in sampled_traces)
         self.assertGreater(detailed_frames, 0)
         self.assertLess(detailed_frames, len(sampled_traces))
