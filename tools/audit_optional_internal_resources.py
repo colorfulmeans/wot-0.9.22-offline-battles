@@ -73,4 +73,4 @@ if __name__ == '__main__':
     parser.add_argument('client_root')
     parser.add_argument('--output', required=True)
     args = parser.parse_args()
-    Path(args.output).write_text(json.dumps(scan(args.client_root), indent=2), encoding='utf-8')
+    Path(args.output).write_text(json.dumps(scan(args.client_root), indent=2)+'\n', encoding='utf-8', newline='\n')
