@@ -27,7 +27,10 @@ Use the launcher's built-in vehicle editor and error-report controls. The player
 download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
 and START_SPIKE_PROFILE.bat for optional detailed profiling. The normal EXE
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
-and 32 MiB per client process, with explicit suppression notices. Errors and
+and 32 MiB per client process, with explicit suppression notices. Exhausted
+budgets skip further JSON encoding; motion histories also skip construction
+until the budget reopens. Test captures split rotation catalog/native costs
+without changing collision queries. Errors and
 lifecycle messages remain enabled after the diagnostic budget is exhausted.
 
 Normal battles use wot-0.9.22-offline-battles.exe. START_ROOF_CRUSH_TEST.bat

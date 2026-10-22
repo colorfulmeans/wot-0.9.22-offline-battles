@@ -622,7 +622,11 @@ class AirfieldLiveEgressTests(unittest.TestCase):
         state = {'id': bot, 'x': current[0], 'y': current[1], 'z': current[2]}
         command = {'recovery_mode': 'nav_wait', 'movement_intent': True}
         output = io.StringIO()
-        with redirect_stdout(output):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
+        # This trace contract owns a fresh window; earlier scene tests may
+        # deliberately exhaust the process-wide diagnostic byte budget.
+        with redirect_stdout(output), mock.patch.object(logs, '_detail_budget',
+                dict(start=None,window=0,session=0,dropped=0,notice=False)):
             for now in (0.0, 2.9, 3.0, 3.1):
                 runtime._log_motion_stall(state, command, 0.0, 0.0, True, {}, now)
         self.assertEqual(1, output.getvalue().count('[BOT STALL]'))

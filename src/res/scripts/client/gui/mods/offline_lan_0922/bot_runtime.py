@@ -7409,6 +7409,9 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        from .native_input_diagnostics import detail_record_ready
+        if not detail_record_ready():
+            return
         self._record_execution_window(state, command, throttle, turn, now)
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and

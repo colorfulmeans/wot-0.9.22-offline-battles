@@ -56,6 +56,46 @@ class LogModeTests(unittest.TestCase):
         self.assertIn('DIAGNOSTIC LIMIT', self.output.getvalue())
         self.assertNotIn(' PART ', self.output.getvalue())
 
+    def test_closed_window_skips_encoding_and_reopens_next_minute(self):
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        with mock.patch.object(logs, 'DETAIL_WINDOW_BYTES', 1000), \
+                mock.patch.object(logs.time, 'time', return_value=1.) as clock:
+            logs.write_json_record('BOT SLOPE', dict(history='x'*600))
+            with mock.patch.object(logs.json, 'dumps', side_effect=AssertionError('closed budget encoded')):
+                for unused in range(100):
+                    logs.write_json_record('BOT SLOPE', dict(history=object()))
+            clock.return_value = 61.
+            logs.write_json_record('BOT SLOPE', dict(id=1))
+        self.assertIn('BOT SLOPE {"id":1}', self.output.getvalue())
+
+    def test_closed_session_skips_encoding_across_window_rollover(self):
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        with mock.patch.object(logs, 'DETAIL_SESSION_BYTES', 1000), \
+                mock.patch.object(logs.time, 'time', return_value=1.) as clock:
+            logs.write_json_record('BOT SLOPE', dict(history='x'*600))
+            clock.return_value = 61.
+            with mock.patch.object(logs.json, 'dumps', side_effect=AssertionError('closed session encoded')):
+                logs.write_json_record('BOT SLOPE', dict(history=object()))
+            logs.write_json_record('BOT CONSUMABLE', dict(event='repair'))
+        self.assertIn('BOT CONSUMABLE', self.output.getvalue())
+
+    def test_oversize_record_does_not_block_following_small_record(self):
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        with mock.patch.object(logs, 'DETAIL_RECORD_BYTES', 100):
+            logs.write_json_record('BOT SLOPE', dict(history='x'*200))
+            logs.write_json_record('BOT SLOPE', dict(id=1))
+        self.assertIn('BOT SLOPE {"id":1}', self.output.getvalue())
+
+    def test_closed_budget_skips_nested_runtime_history_construction(self):
+        from test_port_0922_bot_runtime import _load
+        runtime = _load().BotRuntime(1)
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        logs._detail_budget['session'] = logs.DETAIL_SESSION_BYTES
+        with mock.patch.object(runtime, '_record_execution_window',
+                side_effect=AssertionError('closed budget built history')):
+            runtime._log_motion_stall(dict(id=1,x=0.,y=0.,z=0.), {},
+                                      0.,0.,False,{},1.)
+
     def test_basic_runtime_never_builds_nested_motion_history(self):
         from test_port_0922_bot_runtime import _load
         runtime = _load().BotRuntime(1)

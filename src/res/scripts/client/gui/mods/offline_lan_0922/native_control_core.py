@@ -489,7 +489,9 @@ class NativeControl(object):
         runtime = self.runtime
         if cacheable:
             descriptor = runtime._descriptors.get(key[1])
-            profile = runtime._spotting_profiles.get(('bot', key[1]))
+            # Let the producer select its crew/fire-dependent cache key.
+            # Fitted Bots no longer use the legacy two-field dictionary key.
+            profile = runtime._spotting_profile(source, tick)
             inputs = (source.get('team', 0), source.get('slot', 0),
                       source.get('view_range', 330.0),
                       runtime._vision_ranges.get(key[1]),
@@ -504,7 +506,7 @@ class NativeControl(object):
         result = self._project_actor_config(source, tick)
         if cacheable:
             self._config_projections[key] = (
-                descriptor, runtime._spotting_profiles.get(('bot', key[1])),
+                descriptor, profile,
                 inputs, copy.deepcopy(critical), result)
         combat_count('frontier_control_projection_built')
         return result

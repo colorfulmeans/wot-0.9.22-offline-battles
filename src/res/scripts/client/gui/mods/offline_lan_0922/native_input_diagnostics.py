@@ -44,23 +44,55 @@ def detailed_enabled():
     return os.environ.get(DETAIL_ENV) == '1'
 
 
-def _detail_admitted(encoded):
+def _detail_window():
     now = time.time()
     budget = _detail_budget
     if budget['start'] is None or now < budget['start'] or now-budget['start'] >= 60.0:
         if budget['dropped']:
             sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT dropped=%s session_bytes=%s\n' %
                              (budget['dropped'], budget['session']))
-        budget.update(start=now, window=0, dropped=0, notice=False)
+        budget.update(start=now, window=0, dropped=0, notice=False,
+                      window_closed=False)
+    return budget
+
+
+def _detail_dropped(budget):
+    budget['dropped'] += 1
+    if not budget['notice']:
+        sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT detailed records suppressed; key events remain enabled\n')
+        budget['notice'] = True
+
+
+def detail_record_ready():
+    """Cheap admission before constructing or encoding diagnostic histories.
+
+    Once a byte ceiling rejects a record, close that window/session rather
+    than repeatedly encoding records to try to consume its last few bytes.
+    An individually oversized record does not close an otherwise free budget.
+    """
+    if not detailed_enabled():
+        return False
+    budget = _detail_window()
+    if (budget.get('window_closed') or budget.get('session_closed') or
+            budget['window'] >= DETAIL_WINDOW_BYTES or
+            budget['session'] >= DETAIL_SESSION_BYTES):
+        _detail_dropped(budget)
+        return False
+    return True
+
+
+def _detail_admitted(encoded):
+    budget = _detail_window()
     # Include worst-case JSON fragment escaping and framing in the bound.
     size = len(encoded) * 2 + ((len(encoded)+2999)//3000) * 240
-    if (len(encoded) > DETAIL_RECORD_BYTES or
-            budget['window']+size > DETAIL_WINDOW_BYTES or
+    if len(encoded) > DETAIL_RECORD_BYTES:
+        _detail_dropped(budget)
+        return False
+    if (budget['window']+size > DETAIL_WINDOW_BYTES or
             budget['session']+size > DETAIL_SESSION_BYTES):
-        budget['dropped'] += 1
-        if not budget['notice']:
-            sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT detailed records suppressed; key events remain enabled\n')
-            budget['notice'] = True
+        budget['window_closed'] = budget['window']+size > DETAIL_WINDOW_BYTES
+        budget['session_closed'] = budget['session']+size > DETAIL_SESSION_BYTES
+        _detail_dropped(budget)
         return False
     budget['window'] += size
     budget['session'] += size
@@ -75,7 +107,7 @@ def write_json_record(label, payload):
     """Keep every engine stdout line below its 8 KiB truncation boundary."""
     global _record_sequence
     detail = label in DETAIL_LABELS
-    if detail and not detailed_enabled():
+    if detail and not detail_record_ready():
         return
     encoded = json.dumps(payload, separators=(',', ':'))
     if detail and not _detail_admitted(encoded):

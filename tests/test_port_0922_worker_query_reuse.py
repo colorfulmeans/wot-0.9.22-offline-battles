@@ -9,6 +9,75 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def _fitted_control(self):
+        from gui.mods.offline_lan_0922.native_control_core import NativeControl
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        runtime = object.__new__(BotRuntime)
+        patch = mock.patch.dict(BotRuntime._spotting_profile.__globals__, {
+            '_bot_profile':mock.Mock(return_value={}),
+            '_base_invisibility':mock.Mock(return_value=0.),
+            '_shot_invisibility_factor':mock.Mock(return_value=1.)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        runtime._descriptors = {7: object()}
+        runtime._spotting_profiles = {}
+        runtime._vision_ranges = {}
+        runtime.bot_crew_level = lambda unused: 100
+        source = dict(id=7, kind='bot', team=1, slot=1, critical={})
+        control = object.__new__(NativeControl)
+        control.runtime = runtime
+        control._config_projections = {}
+        def project(row, tick):
+            return runtime._spotting_profile(row, tick), row['team']
+        control._project_actor_config = mock.Mock(side_effect=project)
+        return control, runtime, source
+
+    def test_fitted_bot_cache_uses_real_producer_key_for_every_tier(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value={}):
+            for tier in range(4):
+                owner, runtime, source = self._fitted_control()
+                runtime.bot_crew_level = lambda unused, tier=tier: (50,75,100,100)[tier]
+                for unused in range(1000):
+                    owner._actor_config(source, {})
+                self.assertEqual(1, owner._project_actor_config.call_count)
+                self.assertIn(('bot',7,((),False)), runtime._spotting_profiles)
+                self.assertNotIn(('bot',7), runtime._spotting_profiles)
+
+    def test_fitted_projection_invalidates_on_real_mutable_inputs(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value={}):
+            owner, runtime, source = self._fitted_control()
+            owner._actor_config(source, {})
+            mutations = [lambda:source['critical'].update(crew_ko=['driver']),
+                lambda:source['critical'].update(fire=True),
+                lambda:source['critical'].update(devices=[dict(name='surveyingDeviceHealth',hp=0)]),
+                lambda:source.update(team=2),
+                lambda:runtime._vision_ranges.update({7:450.}),
+                lambda:runtime._descriptors.update({7:object()})]
+            for expected, mutate in enumerate(mutations, 2):
+                mutate()
+                owner._actor_config(source, {})
+                owner._actor_config(source, {})
+                self.assertEqual(expected, owner._project_actor_config.call_count)
+            runtime._spotting_profiles.clear()
+            owner._actor_config(source, {})
+            self.assertEqual(8, owner._project_actor_config.call_count)
+
+    def test_legacy_bot_reuses_projection_and_human_never_uses_bot_cache(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value=None):
+            owner, runtime, source = self._fitted_control()
+            for unused in range(10):
+                owner._actor_config(source, {})
+            self.assertEqual(1, owner._project_actor_config.call_count)
+            self.assertIn(('bot',7), runtime._spotting_profiles)
+            owner._project_actor_config = mock.Mock(return_value=('human',))
+            source['kind'] = 'human'
+            for unused in range(3):
+                self.assertEqual(('human',), owner._actor_config(source, {}))
+            self.assertEqual(3, owner._project_actor_config.call_count)
+
     def test_current_baked_footprint_is_reused_only_for_one_planning_snapshot(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
         calls = []
@@ -24,6 +93,31 @@ class WorkerQueryReuseTests(unittest.TestCase):
         self.assertEqual(1, sum(row[1] == 0. for row in calls))
         BotRuntime._planning_grid_pose_pair(grid, (1., 2., 3.), 0., .25, 3., 1.5, {})
         self.assertEqual(7, len(calls))  # next decision rechecks the grid
+
+    def test_rotation_detail_only_in_test_entry_preserves_queries_and_verdict(self):
+        from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics
+        module = fixtures.battle_runtime_module
+        for detail in ('0','1'):
+            trace = WorkerCombatDiagnostics(lambda:1.)
+            trace.begin_frame(1, 1., 'test')
+            battle = object.__new__(fixtures.BattleRuntime)
+            battle._combat_diagnostics = trace
+            battle._bots = types.SimpleNamespace(states={})
+            battle._bot_motion_kinds = {}
+            calls = []
+            battle._destructible_pose_sweep = lambda *a,**k:(calls.append('catalog') or dict(status='clear'))
+            battle._native_world_rotation_is_clear = lambda *a,**k:(calls.append('native') or True)
+            battle._tree_motion_proposal = lambda *a,**k:None
+            battle._complete_bot_tree_contact = lambda *a,**k:'clear'
+            with mock.patch.dict(module.native_input_diagnostics.os.environ,
+                    {module.native_input_diagnostics.DETAIL_ENV:detail}):
+                self.assertTrue(battle._resolve_bot_rotation(
+                    1,(0.,0.,0.),0.,.1,object(),.1,1.,None))
+            row = trace.finish_frame()
+            self.assertEqual(['catalog','native'], calls)
+            self.assertEqual(detail=='1', 'rotation.catalog_probe' in row['stages'])
+            self.assertEqual(detail=='1', 'rotation.native_probe' in row['stages'])
+            self.assertEqual(int(detail), row['counts'].get('rotation.realised',0))
 
     def test_baked_reuse_does_not_cross_pose_geometry_or_grid_identity(self):
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime

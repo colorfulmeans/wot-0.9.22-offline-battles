@@ -22559,6 +22559,13 @@ class BattleRuntime(object):
             rotation_speed_cap, pivot_offset=0.0, translation=(0.0, 0.0),
             commit_enabled=True):
         """Keep a Bot's complete pivot outside live and damaged structures."""
+        # Further split the captured rotation cost only in the test entry.
+        # Admission, query order and realised contact ownership stay identical.
+        diagnostic = (getattr(self, '_combat_diagnostics', None)
+                      if native_input_diagnostics.detailed_enabled() else None)
+        if diagnostic is not None:
+            diagnostic.count('rotation.realised' if commit_enabled else
+                             'rotation.preview')
         end_position = vehicle_physics.track_pivot_position(
             position, start_yaw, end_yaw, pivot_offset)
         end_position = (end_position[0]+translation[0], end_position[1],
@@ -22572,7 +22579,8 @@ class BattleRuntime(object):
             descriptor, vehicle_physics.derive_params(descriptor), 0.0,
             self._bot_destructible_travel_descriptor(bot_id))
             if rotation_speed_cap else None)
-        detail = self._destructible_pose_sweep(
+        detail = timed_call(diagnostic, 'rotation.catalog_probe',
+            self._destructible_pose_sweep,
             position, start_yaw, end_position, end_yaw, 0.0,
             descriptor, now, dt,
             rotation_speed_cap=rotation_speed_cap,
@@ -22593,7 +22601,8 @@ class BattleRuntime(object):
             if proposal_token is None:
                 raise RuntimeError(
                     'bot rotation proposal lost its exact token')
-            detail = self._destructible_pose_sweep(
+            detail = timed_call(diagnostic, 'rotation.catalog_commit',
+                self._destructible_pose_sweep,
                 position, start_yaw, end_position, end_yaw, 0.0,
                 descriptor, now, dt, commit_enabled=True,
                 rotation_speed_cap=rotation_speed_cap,
@@ -22621,7 +22630,8 @@ class BattleRuntime(object):
                 sampled_at=now)
             return False
         contact_trace = dict(sampled_at=now,pitch=pitch,roll=roll)
-        clear = self._native_world_rotation_is_clear(
+        clear = timed_call(diagnostic, 'rotation.native_probe',
+            self._native_world_rotation_is_clear,
             position, start_yaw, end_yaw, descriptor,
             pitch=pitch, roll=roll, record_local=False,
             pivot_offset=pivot_offset, contact_trace=contact_trace,
