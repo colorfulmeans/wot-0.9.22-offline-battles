@@ -19538,16 +19538,13 @@ class BotRuntimeTests(unittest.TestCase):
         orders = planner.build_orders(
             manifest, states, [], 1.0, defense)['orders']
         defenders = [order for order in orders
-                     if order.get('defense_base_id') == '1:0']
+                     if order['combat_mode'] == 'base_defense']
 
         self.assertEqual([11, 12], sorted(
             order['id'] for order in defenders))
-        self.assertTrue(all(order['combat_mode'] == 'engage' for order in defenders))
-        self.assertTrue(all(order['throttle_override'] == 0.0 for order in defenders))
-        positions = {state['id']: {axis: state[axis] for axis in ('x', 'y', 'z')}
-                     for state in states}
-        self.assertTrue(all(order['move_position'] == positions[order['id']]
-                            for order in defenders))
+        self.assertTrue(all(
+            order['move_position'] == {'x': 0.0, 'y': 0.0, 'z': 0.0}
+            for order in defenders))
         self.assertTrue(all(order['defense_base_id'] == '1:0'
                             for order in defenders))
 
@@ -19790,16 +19787,19 @@ class BotRuntimeTests(unittest.TestCase):
         orders = planner.build_orders(
             manifest, states, enemies, 1.0, defense)['orders']
         defenders = [order for order in orders
-                     if order['combat_mode'] == 'base_defense']
+                     if order.get('defense_base_id') == '1:0']
 
         self.assertEqual([11, 12], sorted(
             order['id'] for order in defenders))
         self.assertEqual({2, 3}, set(
             order['target_id'] for order in defenders))
         self.assertTrue(all(order['fire_allowed'] for order in defenders))
-        self.assertTrue(all(
-            order['move_position'] == {'x': 0.0, 'y': 0.0, 'z': 0.0}
-            for order in defenders))
+        self.assertTrue(all(order['combat_mode'] == 'engage' for order in defenders))
+        self.assertTrue(all(order['throttle_override'] == 0.0 for order in defenders))
+        positions = {state['id']: {axis: state[axis] for axis in ('x', 'y', 'z')}
+                     for state in states}
+        self.assertTrue(all(order['move_position'] == positions[order['id']]
+                            for order in defenders))
 
     def test_json_route_anchor_is_normalized_before_terrain_navigation(self):
         # Keep the live hull inside the graph and outside the near-goal
