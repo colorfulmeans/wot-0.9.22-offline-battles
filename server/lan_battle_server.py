@@ -2414,6 +2414,7 @@ class BattleState:
         self.authority_epoch = 0
         self.bot_manifest_authority_id = None
         self.bot_manifest = []
+        self.bot_ammo_policies = {}
         self.bot_manifest_revision = 0
         self.bot_states = {}
         self.bot_unavailable_checkpoints = set()
@@ -3645,6 +3646,7 @@ class BattleState:
         self.authority_epoch = 0
         self.bot_manifest_authority_id = None
         self.bot_manifest = []
+        self.bot_ammo_policies = {}
         self.bot_manifest_revision = 0
         self.bot_states = {}
         self.bot_unavailable_checkpoints = set()
@@ -5040,6 +5042,43 @@ class BattleState:
             self.pending_events.append({"kind": "bot_manifest", "bots": list(manifest)})
             return True
 
+    def _bot_ammo_policy(self, bot_id):
+        from gui.mods.offline_lan_0922.ammo_policy import ShotPolicy
+        policy = self.bot_ammo_policies.get(bot_id)
+        if policy is None:
+            identity = next((bot for bot in self.bot_manifest if bot['id'] == bot_id), {})
+            policy = ShotPolicy(identity.get('profile') or {})
+            self.bot_ammo_policies[bot_id] = policy
+        return policy
+
+    def _refresh_bot_ammo_orders(self):
+        for order in self.bot_orders.get('orders', ()):
+            state = self.bot_states.get(order['id'])
+            if state is None:
+                continue
+            policy = self._bot_ammo_policy(order['id'])
+            target = (order.get('target_kind'), order.get('target_id')) if order.get('target_id') else None
+            policy.context(state, target)
+            selected = policy.choose(state)
+            state['ammo_policy_shell_index'] = selected
+            order['shell_index'] = selected
+
+    def _bot_ammo_terminal(self, record, known=True):
+        if record.get('shooter_kind') != 'bot':
+            return
+        policy = self._bot_ammo_policy(record['shooter_id'])
+        before = policy.desired
+        policy.resolve(record['shot_seq'], record.get('_ammo_hit', False),
+                       record.get('_ammo_damage', 0), record.get('_ammo_penetrated', False), known)
+        if before != policy.desired or not known:
+            _server_log('BOT AMMO ' + json.dumps(dict(
+                bot=record['shooter_id'], projectile=record['projectile_id'],
+                shot=record['shot_seq'], phase=policy.phase, desired=policy.desired,
+                hit=record.get('_ammo_hit', False), damage=record.get('_ammo_damage', 0),
+                penetrated=record.get('_ammo_penetrated', False), known=known,
+                epoch=policy.epoch, round=self.round_id), sort_keys=True))
+        self._refresh_bot_ammo_orders()
+
     @staticmethod
     def _sanitize_bot_profile(raw):
         raw = raw if isinstance(raw, dict) else {}
@@ -5067,6 +5106,8 @@ class BattleState:
                                       ("armor", 0.0, 10000.0),
                                       ("parking_radius", math.hypot(3.5, 1.7), 20.0)):
             profile[key] = round(_clamp(_finite_float(raw.get(key), default), 0.0, maximum), 3)
+        profile["burst_size"] = max(1, min(64, int(_finite_float(raw.get("burst_size"), 1))))
+        profile["clip_size"] = max(1, min(100, int(_finite_float(raw.get("clip_size"), 1))))
         profile["shells"] = []
         shells = raw.get("shells") or []
         if not isinstance(shells, (list, tuple)):
@@ -5152,8 +5193,8 @@ class BattleState:
         if (shell_count <= 0 or shell_count > 5 or
                 len(remaining) != shell_count):
             raise ValueError("bot ammunition inventory shape is invalid")
-        parsed = [_exact_int(value, 0, 1000) for value in remaining]
-        if sum(parsed) > 1000:
+        parsed = [_exact_int(value, 0, 1800) for value in remaining]
+        if sum(parsed) > 1800:
             raise ValueError("bot ammunition inventory exceeds capacity")
         loaded = _exact_int(raw.get("shell_index"), 0, shell_count - 1)
         planned = _exact_int(
@@ -8861,13 +8902,22 @@ class BattleState:
                 "last_progress_request_fingerprint": None,
             })
             self.projectiles[projectile_id] = record
+            if shooter_kind == 'bot':
+                policy = self._bot_ammo_policy(shooter_id)
+                state = self.bot_states.get(shooter_id, {})
+                order = next((o for o in self.bot_orders.get('orders', ()) if o['id'] == shooter_id), {})
+                target = (order.get('target_kind'), order.get('target_id')) if order.get('target_id') else None
+                policy.choose(state)
+                policy.launch(shot_seq, shell_index, record['burst_group_seq'], record['burst_count'],
+                              dict(x=range_origin[0], z=range_origin[2]), target)
+                self._refresh_bot_ammo_orders()
             # Freeze whether this was the shooter's final round while the
             # producer that owns the ammunition is still the one reporting it.
             # A shot was drawn from at least one shell, so zero is an
             # invalid report rather than an emptier rack; Fadin's medal wants
             # exactly the final round, which is a total of one.
             shells_before_shot = _optional_exact_int(
-                message.get("shells_before_shot"), 1, 1000)
+                message.get("shells_before_shot"), 1, 1800)
             if shells_before_shot is not None:
                 self.last_shell_shots[str(projectile_id)] = (
                     shells_before_shot == 1)
@@ -9680,6 +9730,11 @@ class BattleState:
 
         shooter = (str(record["shooter_kind"]), int(record["shooter_id"]))
         victim = (str(target_kind), int(target_id))
+        if was_alive and int(record['team']) != int(proposal['target_team']):
+            record['_ammo_damage'] = record.get('_ammo_damage', 0) + applied
+            if not proposal['splash']:
+                record['_ammo_hit'] = True
+                record['_ammo_penetrated'] = bool(record.get('_ammo_penetrated') or proposal['shot_result'] == 2)
         before_fire = bool(
             isinstance(critical_before, dict) and
             critical_before.get("fire", False))
@@ -10120,6 +10175,7 @@ class BattleState:
                         "PROJECTILE EFFECT failed id=%s target=%s:%s error=%s: %s" %
                         (projectile_id, proposal["target_kind"],
                          proposal["target_id"], type(error).__name__, error))
+            self._bot_ammo_terminal(record)
             self._finalize_projectile_mission_health(record)
             self._record_projectile_piercing(
                 record, bool(record.get("piercing_series_qualified")))
@@ -10146,6 +10202,7 @@ class BattleState:
                           record["max_time_ms"] + grace_ms):
                 expired.append((projectile_id, record))
         for projectile_id, record in expired:
+            self._bot_ammo_terminal(record, known=False)
             self.projectiles.pop(projectile_id, None)
             self._record_projectile_piercing(record, False)
             self.projectile_tombstones[projectile_id] = {
@@ -10202,6 +10259,7 @@ class BattleState:
             "shooter_id": record["shooter_id"],
             "shot_seq": record["shot_seq"],
         })
+        self._bot_ammo_terminal(record, known=False)
         self.projectiles.pop(projectile_id, None)
         self._record_projectile_piercing(record, False)
         self.projectile_tombstones[projectile_id] = {
@@ -15312,6 +15370,7 @@ class BattleState:
                      if p.connected and p.participating],
                     planner_now, defense_context,
                     team_orders=team_orders)
+                self._refresh_bot_ammo_orders()
                 self._log_bot_route_assignments()
                 self._log_bot_defense(defense_context, planner_now)
                 for order in self.bot_orders.get('orders', ()):

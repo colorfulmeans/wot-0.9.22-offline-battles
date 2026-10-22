@@ -2914,7 +2914,7 @@ class LANClient(object):
             # Each projectile owner reports the ammunition at its trigger edge.
             # A shot that happened was drawn from at least one shell, so
             # zero is not a smaller count, it is an invalid report.
-            parsed_shells = _projectile_int_range(shells_before_shot, 1, 1000)
+            parsed_shells = _projectile_int_range(shells_before_shot, 1, 1800)
             if parsed_shells is not None:
                 message['shells_before_shot'] = parsed_shells
             if not self._send(message):

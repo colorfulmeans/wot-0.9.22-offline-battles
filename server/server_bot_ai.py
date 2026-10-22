@@ -3777,125 +3777,13 @@ class BotPlanner(object):
     @staticmethod
     def _shell_index(profile, contact, personality, state=None,
                      plans_shell=True):
-        """Plan the next round: standard first, HE soft, premium hard.
-
-        Descriptor order supplies the standard baseline. A later non-HE round
-        is treated as premium only when it has materially higher penetration;
-        store prices are not part of the stable LAN profile. Depleted rounds
-        are never requested.
-
-        ``plans_shell`` is the competence to read a target and answer it with
-        the right round. Without it the Bot fires whatever the descriptor
-        loads first and still has in the racks, which is what not knowing
-        looks like: it neither switches to premium against armour it cannot
-        beat, nor picks HE for a soft or nearly dead target.
-        """
-        shells = profile.get("shells") if isinstance(profile.get("shells"), list) else []
-        if not shells:
-            return 0
-        remaining = ((state or {}).get("ammo_remaining")
-                     if isinstance(state, dict) else None)
-        if not isinstance(remaining, (list, tuple)):
-            remaining = None
-        available = []
-        for shell in shells:
-            index = max(0, _integer(shell.get("index")))
-            if (remaining is not None and
-                    (index >= len(remaining) or
-                     _integer(remaining[index]) <= 0)):
-                continue
-            available.append(shell)
-        if not available:
-            return max(0, _integer((state or {}).get("shell_index", 0)))
-        from gui.mods.offline_lan_0922.default_loadouts import profile_roles
-        explicit_roles = profile_roles(profile)
-        if explicit_roles is not None:
-            available = [shell for shell in available
-                         if _integer(shell.get("index")) in explicit_roles]
-            if not available:
-                return max(0, _integer((state or {}).get("shell_index", 0)))
-        if not plans_shell and explicit_roles is not None:
-            role_order = {"standard": 0, "premium": 1, "he": 2}
-            return _integer(min(available, key=lambda shell: role_order[
-                explicit_roles[_integer(shell.get("index"))]]).get("index"))
-        if not plans_shell:
-            return max(0, _integer(min(
-                available,
-                key=lambda shell: _integer(shell.get("index"))
-            ).get("index")))
-        armor = max(0.0, _number(contact.get("armor")))
-        health = max(0.0, _number(contact.get("health")))
-        non_he = []
-        high_explosive = []
-        for shell in available:
-            kind = str(shell.get("kind") or "").lower()
-            is_he = ("high_explosive" in kind or
-                     ("explosive" in kind and
-                      "armor_piercing" not in kind))
-            (high_explosive if is_he else non_he).append(shell)
-        baseline = min(
-            non_he, key=lambda shell: _integer(shell.get("index"))) \
-            if non_he else None
-        baseline_penetration = max(
-            0.0, _number((baseline or {}).get("penetration")))
-        standard = []
-        premium = []
-        for shell in non_he:
-            penetration = max(0.0, _number(shell.get("penetration")))
-            if (shell is not baseline and baseline_penetration > 0.0 and
-                    penetration >= baseline_penetration * 1.03):
-                premium.append(shell)
-            else:
-                standard.append(shell)
-
-        def best_penetration(values):
-            return max(values, key=lambda shell: (
-                _number(shell.get("penetration")),
-                _number(shell.get("damage")),
-                -_integer(shell.get("index")))) if values else None
-
-        if explicit_roles is not None:
-            standard = [shell for shell in available if explicit_roles.get(
-                _integer(shell.get("index"))) == "standard"]
-            premium = [shell for shell in available if explicit_roles.get(
-                _integer(shell.get("index"))) == "premium"]
-            high_explosive = [shell for shell in available if explicit_roles.get(
-                _integer(shell.get("index"))) == "he"]
-        normal = best_penetration(standard)
-        gold = best_penetration(premium)
-        explosive = max(high_explosive, key=lambda shell: (
-            _number(shell.get("damage")),
-            _number(shell.get("penetration")),
-            -_integer(shell.get("index")))) if high_explosive else None
-        if armor <= 0.0:
-            if normal is not None:
-                return max(0, _integer(normal.get("index")))
-            if gold is not None:
-                return max(0, _integer(gold.get("index")))
-            return max(0, _integer(explosive.get("index"))) \
-                if explosive is not None else 0
-        if explosive is not None:
-            he_penetration = max(
-                0.0, _number(explosive.get("penetration")))
-            he_damage = max(0.0, _number(explosive.get("damage")))
-            fragile = armor <= he_penetration * 0.90
-            finisher = (health > 0.0 and
-                        health <= he_damage * (
-                            0.72 + personality["aggression"] * 0.18) and
-                        armor <= he_penetration * 1.10)
-            if fragile or finisher:
-                return max(0, _integer(explosive.get("index")))
-        if normal is not None:
-            normal_penetration = max(
-                0.0, _number(normal.get("penetration")))
-            if gold is not None and normal_penetration < armor * 1.05:
-                return max(0, _integer(gold.get("index")))
-            return max(0, _integer(normal.get("index")))
-        if gold is not None:
-            return max(0, _integer(gold.get("index")))
-        if explosive is not None:
-            return max(0, _integer(explosive.get("index")))
-        return max(0, _integer(available[0].get("index")))
+        """Use the round-owned result policy, independently of difficulty."""
+        from gui.mods.offline_lan_0922.ammo_policy import ordered
+        state = state or {}
+        shells = ordered(profile, state.get('ammo_remaining'))
+        indices = [int(shell['index']) for shell in shells]
+        selected = state.get('ammo_policy_shell_index')
+        return int(selected) if selected in indices else (indices[0] if indices else 0)
 
     def _cover_candidate(self, bot, focus, personality, now, urgent=False):
         report = self._affordances.get(bot["id"])
@@ -4139,9 +4027,7 @@ class BotPlanner(object):
         # leave a Bot swapping rounds in front of the same tank.
         order["shell_index"] = BotPlanner._shell_index(
             profile, contact, personality, bot.get("state"),
-            plans_shell=self._capable(
-                bot, bot_gunnery.CAPABILITY_SHELL_CHOICE,
-                contact.get("target_kind"), contact.get("id")))
+            plans_shell=True)
 
     @staticmethod
     def _angled_face_point(bot, target, personality):

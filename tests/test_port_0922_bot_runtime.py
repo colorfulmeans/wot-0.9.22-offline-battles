@@ -211,7 +211,7 @@ def _combat_descriptor(reload_time=0.5, clip=(2, 0.2),
                        turret_speed=10.0, gun_speed=10.0,
                        dispersion=0.03, max_ammo=None):
     gun = types.SimpleNamespace(
-        shots=({'shell': {'effectsIndex': 0}, 'speed': 1000.0,
+        shots=({'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 1000.0,
                 'gravity': 10.0, 'maxDistance': 5000.0},),
         reloadTime=reload_time,
         clip=clip, turretYawLimits=turret_yaw_limits,
@@ -11338,7 +11338,7 @@ class BotRuntimeTests(unittest.TestCase):
                     controller = ArtilleryController(maximum_step=0.12)
                     descriptor = _combat_descriptor(dispersion=0.03)
                     descriptor.gun.shots = ({
-                        'shell': {'effectsIndex': 0},
+                        'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'},
                         'speed': 425.0, 'gravity': 143.0,
                         'maxDistance': 10000.0,
                     },)
@@ -11488,7 +11488,7 @@ class BotRuntimeTests(unittest.TestCase):
         # configured downhill envelope; keep this stress case tied to the
         # running physics rather than its former 1.05 multiplier.
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0},
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'},
             'speed': 440.0, 'gravity': 146.0,
             'maxDistance': 10000.0,
         },)
@@ -19880,7 +19880,7 @@ class BotRuntimeTests(unittest.TestCase):
             'visible_by_player_ids' in contact
             for contact in observation['contacts']))
 
-    def test_human_vehicle_profiles_drive_server_shell_selection_once(self):
+    def test_human_armor_profiles_do_not_override_result_based_ammunition(self):
         descriptor_calls = []
 
         def target_descriptor(vehicle_name):
@@ -19956,10 +19956,10 @@ class BotRuntimeTests(unittest.TestCase):
         weapon_profile = BattleState._sanitize_bot_profile(weapon_profile)
         personality = {'aggression': 0.5}
         remaining = {'ammo_remaining': [30, 20, 10]}
-        self.assertEqual(2, planner._shell_index(
+        self.assertEqual(0, planner._shell_index(
             weapon_profile, planner._contacts[1][('human', 2)],
             personality, remaining))
-        self.assertEqual(1, planner._shell_index(
+        self.assertEqual(0, planner._shell_index(
             weapon_profile, planner._contacts[1][('human', 3)],
             personality, remaining))
 

@@ -159,7 +159,7 @@ bool GunState::cancel() {
 void AmmoState::validate(int count) const {
     demand(int(remaining.size())==count && int(categories.size())==count);
     demand(loaded>=0 && loaded<count && next>=0 && next<count);
-    for (int value:remaining) demand(value>=0 && value<=1000);
+    for (int value:remaining) demand(value>=0 && value<=1800);
     for (int value:categories) demand(value>=0 && value<=2);
     if (std::accumulate(remaining.begin(),remaining.end(),0)>0) {
         demand(remaining[next]>0); demand(reload_pending || remaining[loaded]>0);
@@ -183,7 +183,7 @@ bool AmmoState::stage(int requested,bool ready,bool full) {
         if (full) { const int selected=available(next); if (selected!=loaded) {loaded=selected; changed=true;} }
         reload_pending=false; plan_pending=true;
     }
-    if (plan_pending) {
+    if (!reload_pending) {
         const int selected=available(requested); if (selected!=next) {next=selected; changed=true;}
         plan_pending=false;
     }

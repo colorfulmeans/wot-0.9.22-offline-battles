@@ -650,6 +650,8 @@ def build_vehicle_profile(descriptor):
 		'fire_range': fire_range,
 		'speed': speed,
 		'armor': armor,
+		'burst_size': int((_attribute_or_key(_attribute_or_key(descriptor, 'gun', {}), 'burst', (1,)) or (1,))[0]),
+		'clip_size': int((_attribute_or_key(_attribute_or_key(descriptor, 'gun', {}), 'clip', (1,)) or (1,))[0]),
 		'gun_name': str(_attribute_or_key(
 			_attribute_or_key(descriptor, 'gun', {}), 'name', '')),
 		'shells': _shell_profiles(descriptor),
@@ -657,83 +659,10 @@ def build_vehicle_profile(descriptor):
 
 
 def select_shell_index(profile, target, personality):
-	"""Plan standard AP first, HE for soft targets and premium for hard ones."""
-	shells = profile.get('shells', ()) or ()
-	if not shells:
-		return 0
-	target_armor = max(0.0, _number(target.get('armor', 0.0), 0.0))
-	target_health = max(0.0, _number(target.get('health', 0.0), 0.0))
-	non_he = []
-	high_explosive = []
-	for shell in shells:
-		kind = str(shell.get('kind', '')).lower()
-		is_he = ('high_explosive' in kind or
-		         ('explosive' in kind and 'armor_piercing' not in kind))
-		(high_explosive if is_he else non_he).append(shell)
-	baseline = min(non_he, key=lambda value: int(value.get('index', 0))) \
-		if non_he else None
-	baseline_penetration = max(0.0, _number(
-		(baseline or {}).get('penetration', 0.0), 0.0))
-	standard = []
-	premium = []
-	for shell in non_he:
-		penetration = max(0.0, _number(
-			shell.get('penetration', 0.0), 0.0))
-		if (shell is not baseline and baseline_penetration > 0.0 and
-				penetration >= baseline_penetration * 1.03):
-			premium.append(shell)
-		else:
-			standard.append(shell)
-	from gui.mods.offline_lan_0922.default_loadouts import profile_roles
-	explicit_roles = profile_roles(profile)
-	if explicit_roles is not None:
-		standard = [shell for shell in shells if explicit_roles.get(
-			int(shell.get('index', 0))) == 'standard']
-		premium = [shell for shell in shells if explicit_roles.get(
-			int(shell.get('index', 0))) == 'premium']
-		high_explosive = [shell for shell in shells if explicit_roles.get(
-			int(shell.get('index', 0))) == 'he']
-	best_standard = max(standard, key=lambda value: (
-		_number(value.get('penetration', 0.0), 0.0),
-		_number(value.get('damage', 0.0), 0.0),
-		-int(value.get('index', 0)))) if standard else None
-	best_premium = max(premium, key=lambda value: (
-		_number(value.get('penetration', 0.0), 0.0),
-		_number(value.get('damage', 0.0), 0.0),
-		-int(value.get('index', 0)))) if premium else None
-	best_he = max(high_explosive, key=lambda value: (
-		_number(value.get('damage', 0.0), 0.0),
-		_number(value.get('penetration', 0.0), 0.0),
-		-int(value.get('index', 0)))) if high_explosive else None
-	if target_armor <= 0.0:
-		if best_standard is not None:
-			return max(0, int(best_standard.get('index', 0)))
-		if best_premium is not None:
-			return max(0, int(best_premium.get('index', 0)))
-		return (max(0, int(best_he.get('index', 0)))
-			if best_he is not None else 0)
-	if best_he is not None:
-		he_penetration = max(0.0, _number(
-			best_he.get('penetration', 0.0), 0.0))
-		he_damage = max(0.0, _number(best_he.get('damage', 0.0), 0.0))
-		if (target_armor <= he_penetration * 0.90 or
-				(target_health > 0.0 and
-				 target_health <= he_damage * (
-					0.72 + personality['aggression'] * 0.18) and
-				 target_armor <= he_penetration * 1.10)):
-			return max(0, int(best_he.get('index', 0)))
-	if best_standard is not None:
-		standard_penetration = max(0.0, _number(
-			best_standard.get('penetration', 0.0), 0.0))
-		if (best_premium is not None and
-				standard_penetration < target_armor * 1.05):
-			return max(0, int(best_premium.get('index', 0)))
-		return max(0, int(best_standard.get('index', 0)))
-	if best_premium is not None:
-		return max(0, int(best_premium.get('index', 0)))
-	if best_he is not None:
-		return max(0, int(best_he.get('index', 0)))
-	return max(0, int(shells[0].get('index', 0)))
+	"""Initial logical round only; admitted shot outcomes own later choices."""
+	from gui.mods.offline_lan_0922.ammo_policy import ordered
+	shells = ordered(profile)
+	return int(shells[0]['index']) if shells else 0
 
 
 def _distance_2d(first, second):

@@ -1579,99 +1579,22 @@ def _bot_ammo_capacity(descriptor):
         maximum = int(maximum)
     except (TypeError, ValueError, OverflowError):
         maximum = 45
-    return max(0, min(maximum, 1000))
+    return max(0, min(maximum, 1800))
 
 
 def _bot_ammo_categories(profile, shell_count):
-    """Classify descriptor-order shells without relying on store prices.
-
-    The pinned descriptor does not expose a stable credits/gold price at this
-    seam.  The first non-HE shell is therefore the standard baseline; a later
-    non-HE shell is premium only when its representative penetration is at
-    least three percent higher.  This keeps standard AP/APCR as the default
-    while still recognizing the usual higher-penetration APCR/HEAT round.
-    """
-    from gui.mods.offline_lan_0922.default_loadouts import profile_roles
-    roles = profile_roles(profile) if isinstance(profile, dict) else None
-    if roles is not None:
-        return roles
-    shells = profile.get('shells', ()) if isinstance(profile, dict) else ()
-    shells = tuple(shells or ())
-    by_index = {}
-    for raw in shells:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            index = int(raw.get('index', -1))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if 0 <= index < shell_count:
-            by_index[index] = raw
-    non_he = []
-    categories = {}
-    for index in range(shell_count):
-        shell = by_index.get(index, {})
-        kind = str(shell.get('kind', '') or '').lower()
-        is_he = ('high_explosive' in kind or
-                 ('explosive' in kind and 'armor_piercing' not in kind))
-        if is_he:
-            categories[index] = 'he'
-        else:
-            non_he.append(index)
-    baseline = non_he[0] if non_he else None
-    baseline_penetration = max(0.0, _number(
-        by_index.get(baseline, {}).get('penetration', 0.0)))
-    for index in non_he:
-        penetration = max(0.0, _number(
-            by_index.get(index, {}).get('penetration', 0.0)))
-        categories[index] = (
-            'premium' if (index != baseline and
-                          baseline_penetration > 0.0 and
-                          penetration >= baseline_penetration * 1.03)
-            else 'standard')
-    return categories
+    """Logical slots only; physical kind and gold price are never inferred."""
+    from gui.mods.offline_lan_0922.ammo_policy import stages
+    return dict((int(shell['index']), ('standard', 'premium', 'he')[offset])
+                for offset, shell in enumerate(stages(profile)))
 
 
 def _bot_ammo_distribution(descriptor, profile, shell_count):
-    """Allocate one exact, fixed per-battle inventory by shell category."""
-    maximum = _bot_ammo_capacity(descriptor)
-    if shell_count <= 0 or maximum <= 0:
-        return [0] * max(0, shell_count)
-    from gui.mods.offline_lan_0922.default_loadouts import descriptor_roles, allocate
-    roles = descriptor_roles(descriptor)
-    if roles is not None:
-        return allocate(maximum, roles, shell_count)
-    categories = _bot_ammo_categories(profile, shell_count)
-    class_tag = str((profile or {}).get('class_tag', ''))
-    # Ordinary vehicles use the requested 3:2:1 baseline. Artillery carries a
-    # physically HE-led 1:1:4 load; unavailable categories are redistributed
-    # across the shells that the installed gun actually exposes.
-    category_weights = ({'standard': 1.0, 'premium': 1.0, 'he': 4.0}
-                        if class_tag == 'SPG' else
-                        {'standard': 3.0, 'premium': 2.0, 'he': 1.0})
-    active_categories = sorted(set(categories.values()))
-    total_weight = sum(category_weights[name] for name in active_categories)
-    if total_weight <= 0.0:
-        return [0] * shell_count
-    category_counts = dict((name, int(
-        maximum * category_weights[name] / total_weight))
-        for name in active_categories)
-    assigned = sum(category_counts.values())
-    remainders = sorted(
-        active_categories,
-        key=lambda name: (
-            -(maximum * category_weights[name] / total_weight -
-              category_counts[name]), name))
-    for offset in range(maximum - assigned):
-        category_counts[remainders[offset % len(remainders)]] += 1
-    result = [0] * shell_count
-    for name in active_categories:
-        indices = sorted(index for index, category in categories.items()
-                         if category == name)
-        quantity = category_counts[name]
-        for offset in range(quantity):
-            result[indices[offset % len(indices)]] += 1
-    return result
+    from gui.mods.offline_lan_0922.ammo_policy import allocation
+    profile = dict(profile)
+    clip = _value(_value(descriptor, 'gun', {}), 'clip', (1,)) or (1,)
+    profile['clip_size'] = max(1, int(clip[0]))
+    return allocation(profile, _bot_ammo_capacity(descriptor), shell_count)
 
 
 class _BotAmmoState(object):
@@ -1684,6 +1607,12 @@ class _BotAmmoState(object):
             self.shell_count = max(1, len(shots))
         except TypeError:
             self.shell_count = 1
+        # Tactical profiles may omit weapon data (for example a direct fire
+        # caller). Read the installed descriptor rather than inventing rounds.
+        if not profile.get('shells'):
+            supplied = profile
+            profile = ai_planner.build_vehicle_profile(descriptor)
+            profile.update(dict((key, val) for key, val in supplied.items() if key != 'shells'))
         self.categories = _bot_ammo_categories(profile, self.shell_count)
         self.remaining = _bot_ammo_distribution(
             descriptor, profile, self.shell_count)
@@ -1735,7 +1664,7 @@ class _BotAmmoState(object):
                 exact = int(quantity)
             except (TypeError, ValueError, OverflowError):
                 raise ValueError('bot ammunition quantity is invalid')
-            if (isinstance(quantity, bool) or exact < 0 or exact > 1000 or
+            if (isinstance(quantity, bool) or exact < 0 or exact > 1800 or
                     float(quantity) != exact):
                 raise ValueError('bot ammunition quantity is invalid')
             parsed.append(exact)
@@ -1777,7 +1706,7 @@ class _BotAmmoState(object):
                     changed = True
             self.reload_pending = False
             self.plan_pending = True
-        if self.plan_pending:
+        if not self.reload_pending:
             selected = self._available(requested)
             if selected != self.next:
                 self.next = selected

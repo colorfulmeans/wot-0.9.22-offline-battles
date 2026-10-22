@@ -10,7 +10,7 @@ from packed_xml import PackedElement, PackedValue, read_packed_xml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src/res/scripts/client'))
-from gui.mods.offline_lan_0922.default_loadouts import LOADOUTS, shell_roles
+from gui.mods.offline_lan_0922.default_loadouts import LOADOUTS, shell_roles, GUN_AMMUNITION
 
 
 def plain(value):
@@ -29,6 +29,7 @@ def audit(client):
     with zipfile.ZipFile(Path(client)/'res/packages/scripts.pkg') as archive:
         for vehicle, (gun, requested) in sorted(LOADOUTS.items()):
             nation, name = vehicle.split(':')
+            requested = GUN_AMMUNITION.get(nation+':'+gun, ())
             def read(path):
                 return plain(read_packed_xml(archive.read('scripts/item_defs/vehicles/'+path)))
             definition = read(nation+'/'+name+'.xml')
@@ -49,6 +50,16 @@ def audit(client):
                                  gold=isinstance(data.get('price'), dict) and 'gold' in data['price']))
             rows.append(dict(vehicle=vehicle, gun=gun, compatible_turrets=compatible,
                              native_shells=native_shots, roles=roles, ordered_ammo=ammo))
+    gun_rows = []
+    with zipfile.ZipFile(Path(client)/'res/packages/scripts.pkg') as archive:
+        for identity, names in sorted(GUN_AMMUNITION.items()):
+            nation, gun = identity.split(':')
+            def read(path):
+                return plain(read_packed_xml(archive.read('scripts/item_defs/vehicles/'+path)))
+            data = read(nation+'/components/guns.xml')['shared'][gun]
+            assert all(name in data['shots'] for name in names), identity
+            assert len(set(names)) == len(names), identity
+            gun_rows.append(dict(gun=identity, shells=list(names)))
     # High-risk exceptions: both HE identities and lower-penetration premium AP
     # are intentional. Currency is observed, never rewritten.
     indexed = {row['vehicle']: row for row in rows}
@@ -66,7 +77,7 @@ def audit(client):
     kv2 = indexed['ussr:R77_KV2']['ordered_ammo']
     assert kv2[0]['kind'] == 'HIGH_EXPLOSIVE' and not kv2[0]['gold']
     assert kv2[1]['kind'] == 'ARMOR_PIERCING' and kv2[1]['gold']
-    return dict(vehicles=len(rows), client='#1513', rows=rows)
+    return dict(vehicles=len(rows), client='#1513', rows=rows, gun_policies=gun_rows)
 
 
 if __name__ == '__main__':

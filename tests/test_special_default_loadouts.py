@@ -15,7 +15,8 @@ from lan_battle_server import BattleState
 
 class SpecialDefaultsTests(unittest.TestCase):
     def descriptor(self, vehicle='usa:A100_T49'):
-        gun_name, names = policy.LOADOUTS[vehicle]
+        gun_name = policy.VEHICLE_GUNS[vehicle]
+        names = policy.GUN_AMMUNITION.get(vehicle.split(':')[0]+':'+gun_name, ())
         if vehicle.startswith('usa:'):
             names = ('_152mm_HE_XM657E2', '_152mm_HEAT_XM409', '_152mm_HE_XM657E3')
             kinds = ('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE', 'HIGH_EXPLOSIVE')
@@ -35,7 +36,8 @@ class SpecialDefaultsTests(unittest.TestCase):
         roles = policy.descriptor_roles(descriptor)
         if roles is None:
             return None
-        counts = policy.allocate(descriptor.gun.maxAmmo, roles, len(descriptor.gun.shots))
+        from gui.mods.offline_lan_0922.ammo_policy import allocation
+        counts = allocation(build_vehicle_profile(descriptor), descriptor.gun.maxAmmo, len(descriptor.gun.shots))
         result = []
         for role in ('standard', 'premium', 'he'):
             for index in sorted(roles):
@@ -58,7 +60,7 @@ class SpecialDefaultsTests(unittest.TestCase):
         profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
         state = _BotAmmoState(descriptor, profile)
         self.assertEqual({1: 'standard', 0: 'premium'}, state.categories)
-        self.assertEqual([29, 43, 0], state.remaining)
+        self.assertEqual([14, 58, 0], state.remaining)
         self.assertEqual(1, state.loaded)
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, False))
 
@@ -66,7 +68,7 @@ class SpecialDefaultsTests(unittest.TestCase):
         descriptor = self.descriptor()
         roles = policy.descriptor_roles(descriptor)
         self.assertEqual({2: 'standard', 1: 'premium'}, roles)
-        self.assertEqual([102, 14, 101, 9], self.bot_ammo(descriptor))
+        self.assertEqual([102, 18, 101, 5], self.bot_ammo(descriptor))
         profile = build_vehicle_profile(descriptor)
         wire = BattleState._sanitize_bot_profile(profile)
         self.assertEqual(roles, policy.profile_roles(wire))
@@ -81,14 +83,15 @@ class SpecialDefaultsTests(unittest.TestCase):
         from gui.mods.offline_lan_0922.bot_runtime import _BotAmmoState
         descriptor = self.descriptor()
         state = _BotAmmoState(descriptor, build_vehicle_profile(descriptor))
-        self.assertEqual([0, 9, 14], state.remaining)
+        self.assertEqual([0, 5, 18], state.remaining)
         self.assertEqual((2, 2), (state.loaded, state.next))
         self.assertEqual(2, state._available(0))
 
     def test_excluded_rounds_serialize_for_native_worker_without_restoring_inventory(self):
         from gui.mods.offline_lan_0922.bot_runtime import _BotAmmoState
         from gui.mods.offline_lan_0922.native_weapons import _ammo_row
-        for vehicle, (gun, names) in policy.LOADOUTS.items():
+        for vehicle, gun in policy.VEHICLE_GUNS.items():
+            names = policy.GUN_AMMUNITION.get(vehicle.split(':')[0]+':'+gun, ())
             if not names:
                 continue
             descriptor = self.descriptor(vehicle)
@@ -113,7 +116,7 @@ class SpecialDefaultsTests(unittest.TestCase):
         self.assertEqual({1: 'standard', 0: 'premium', 2: 'he'}, policy.profile_roles(profile))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, True))
         self.assertEqual(1, BotPlanner._shell_index(profile, {'armor': 0}, {'aggression': .5}, None, False))
-        self.assertEqual([101, 11, 100, 8, 102, 4], self.bot_ammo(descriptor))
+        self.assertEqual([101, 14, 100, 7, 102, 2], self.bot_ammo(descriptor))
 
     def test_two_japanese_premium_he_only_loads_fill_capacity(self):
         for vehicle in ('japan:J25_Type_4', 'japan:J20_Type_2605'):

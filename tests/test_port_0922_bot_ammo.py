@@ -90,11 +90,11 @@ class BotAmmunitionTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.runtime_module.loadout.attribute_factors = cls._attribute_factors
 
-    def test_real_capacity_uses_fixed_three_two_one_inventory(self):
+    def test_real_capacity_uses_sixty_thirty_ten_inventory(self):
         ammo = self.runtime_module._BotAmmoState(
             _descriptor(60), _profile())
 
-        self.assertEqual([30, 20, 10], ammo.remaining)
+        self.assertEqual([36, 18, 6], ammo.remaining)
         self.assertEqual(60, sum(ammo.remaining))
         self.assertEqual((0, 0), (ammo.loaded, ammo.next))
 
@@ -102,7 +102,7 @@ class BotAmmunitionTests(unittest.TestCase):
         ammo = self.runtime_module._BotAmmoState(
             _descriptor(60), _profile('SPG'))
 
-        self.assertEqual([10, 10, 40], ammo.remaining)
+        self.assertEqual([0, 0, 60], ammo.remaining)
         self.assertEqual(60, sum(ammo.remaining))
 
     def test_loaded_round_fires_before_planned_round_is_promoted(self):
@@ -118,7 +118,7 @@ class BotAmmunitionTests(unittest.TestCase):
         }
         gun.elapsed = 10.0
         ammo.stage(1, gun.ready())
-        ammo.stage(2, gun.ready())
+        ammo.stage(1, gun.ready())
         ammo.publish(state)
 
         self.assertTrue(runtime._fire(
@@ -139,7 +139,7 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertFalse(state['ammo_reload_pending'])
 
     def test_autoloader_promotes_planned_shell_only_after_full_reload(self):
-        descriptor = _descriptor(6, clip=(3, 0.2))
+        descriptor = _descriptor(12, clip=(3, 0.2))
         ammo = self.runtime_module._BotAmmoState(descriptor, _profile())
         gun = self.runtime_module._BotGunState(descriptor)
         gun.elapsed = 10.0
@@ -230,7 +230,7 @@ class BotAmmunitionTests(unittest.TestCase):
 
         self.assertTrue(ammo.can_fire())
         ammo.stage(0, True)
-        self.assertEqual((1, 2), (ammo.loaded, ammo.next))
+        self.assertEqual((1, 0), (ammo.loaded, ammo.next))
         self.assertFalse(ammo.reload_pending)
 
     def test_restore_requires_boolean_atomic_reload_state(self):
@@ -266,25 +266,17 @@ class BotAmmunitionTests(unittest.TestCase):
             _descriptor(60), _profile(), snapshot)
         self.assertFalse(ammo.can_fire())
 
-    def test_server_plans_standard_he_and_premium_and_skips_depleted(self):
-        personality = {'aggression': 0.5}
-        profile = _profile()
-
-        self.assertEqual(0, BotPlanner._shell_index(
-            profile, {'armor': 150.0, 'health': 1000}, personality,
-            {'ammo_remaining': [30, 20, 10]}))
+    def test_server_uses_result_policy_instead_of_paper_armor(self):
+        for armor in (0, 40, 150, 210, 900):
+            for enabled in (False, True):
+                self.assertEqual(0, BotPlanner._shell_index(
+                    _profile(), {'armor': armor}, {'aggression': .5},
+                    {'ammo_remaining': [30, 20, 10]}, enabled))
+                self.assertEqual(2, BotPlanner._shell_index(
+                    _profile(), {'armor': armor}, {'aggression': .5},
+                    {'ammo_remaining': [30, 20, 10], 'ammo_policy_shell_index': 2}, enabled))
         self.assertEqual(2, BotPlanner._shell_index(
-            profile, {'armor': 40.0, 'health': 1000}, personality,
-            {'ammo_remaining': [30, 20, 10]}))
-        self.assertEqual(1, BotPlanner._shell_index(
-            profile, {'armor': 210.0, 'health': 1000}, personality,
-            {'ammo_remaining': [30, 20, 10]}))
-        self.assertEqual(0, BotPlanner._shell_index(
-            profile, {'armor': 210.0, 'health': 1000}, personality,
-            {'ammo_remaining': [30, 0, 10]}))
-        self.assertEqual(0, BotPlanner._shell_index(
-            profile, {'armor': 0.0, 'health': 1000}, personality,
-            {'ammo_remaining': [30, 20, 10]}))
+            _profile(), {}, {}, {'ammo_remaining': [0, 0, 10]}))
 
     def test_server_accepts_only_conserved_shot_decrement(self):
         identity = {

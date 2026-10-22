@@ -76,7 +76,7 @@ class SPGTrackingTests(unittest.TestCase):
             turret_speed=.3, gun_speed=.3, dispersion=.03, max_ammo=30)
         descriptor.chassis.rotationSpeed = .25
         descriptor.gun.pitchLimits = {'absolute': (-.9, .15)}
-        descriptor.gun.shots = ({'shell': {'effectsIndex': 0}, 'speed': 425.,
+        descriptor.gun.shots = ({'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.,
                                 'gravity': 143., 'maxDistance': 10000.},)
         controller = self.controller_type()
         clock = [0.]

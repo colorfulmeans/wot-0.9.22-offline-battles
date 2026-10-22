@@ -2167,7 +2167,7 @@ class ServerBotCompetenceTests(unittest.TestCase):
 
         self.assertEqual(0, order['shell_index'])
 
-    def test_a_complete_bot_answers_armour_with_the_round_that_beats_it(self):
+    def test_a_complete_bot_waits_for_shot_results_before_changing_rounds(self):
         planner = BotPlanner()
         self._rate(1.0)
         self.manifest[0]['profile']['shells'] = [
@@ -2184,7 +2184,7 @@ class ServerBotCompetenceTests(unittest.TestCase):
         order = planner.build_orders(
             self.manifest, self.states, players, 1.0)['orders'][0]
 
-        self.assertEqual(1, order['shell_index'])
+        self.assertEqual(0, order['shell_index'])
 
     def test_a_hopeless_bot_presents_its_flat_front(self):
         planner = BotPlanner()
