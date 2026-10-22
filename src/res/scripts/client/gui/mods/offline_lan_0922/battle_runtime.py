@@ -4130,6 +4130,7 @@ class BattleRuntime(object):
             self._bots = BotRuntime(
                 self.client.player_id,
                 descriptor_resolver=self._resolve_descriptor,
+                bot_descriptor_resolver=self._resolve_bot_fitted_descriptor,
                 player_descriptor_resolver=self._resolve_player_descriptor,
                 direction_probe=self._direction_probe,
                 vehicle_selector=self._select_bot_vehicle,
@@ -5250,6 +5251,32 @@ class BattleRuntime(object):
         raise RuntimeError(
             '#1513 vehicle %r has no loadable substitute: %s' %
             (vehicle_name, failure))
+
+    def _resolve_bot_fitted_descriptor(self, vehicle, tier, crew_level=None,
+                                       restored=None):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        level = bot_fittings.crew_level(tier) if crew_level is None else crew_level
+        key = ('bot_fitting', vehicle, tier, level)
+        cached = self._descriptor_cache.get(key)
+        if cached is not None:
+            if restored is not None and bot_fittings.canonical(restored) != bot_fittings.context(cached)['wire']:
+                raise ValueError('cached Bot fitting changed during restore')
+            return cached
+        descriptor = bot_fittings.build(
+            self._runtime.vehicles, vehicle, tier, level, restored)
+        if self._remote_factory is None:
+            raise RuntimeError('Bot fitting geometry owner is unavailable')
+        prepared = self._remote_factory.prepare_descriptor(descriptor)
+        context = bot_fittings.context(descriptor)
+        context['season'] = str(self._arena_outfit_season())
+        bot_fittings.register(prepared, context)
+        self._descriptor_cache[key] = prepared
+        sys.stdout.write('BOT FITTING vehicle=%s tier=%s crew=%s modules=%s devices=%s directive=%s style=%s\n' % (
+            vehicle, tier, level, bot_fittings.plan(vehicle, tier)['modules'],
+            bot_fittings.context(prepared)['wire']['devices'],
+            bot_fittings.context(prepared)['wire']['directive'],
+            bot_fittings.context(prepared)['wire']['style']))
+        return prepared
 
     def _resolve_player_descriptor(self, state):
         """Prepare the exact mounted human descriptor donated at join time."""
@@ -9411,10 +9438,18 @@ class BattleRuntime(object):
 
     def _remote_outfit(self, state, kind):
         """Decode only this remote human's server-published seasonal outfit."""
-        if kind != 'player':
-            return ''
         season = self._arena_outfit_season()
         outfits = state.get('outfits')
+        if kind == 'bot' and state.get('fitting'):
+            from gui.mods.offline_lan_0922 import bot_fittings
+            fitting = state['fitting']
+            descriptor = self._resolve_bot_fitted_descriptor(
+                state['vehicle'], fitting['tier'], fitting['crew_level'], fitting)
+            context = bot_fittings.context(descriptor)
+            outfits = context['outfits']
+            context['season'] = str(season)
+        elif kind != 'player':
+            return ''
         if season is None or not isinstance(outfits, dict):
             return ''
         encoded = outfits.get(str(season))
@@ -9832,6 +9867,10 @@ class BattleRuntime(object):
             else None)
         battle_factors = crew_battle.for_critical(
             snapshot, crew_battle.critical_from_vehicle(entity))
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(getattr(entity, 'typeDescriptor', None)) is not None:
+            battle_factors = bot_fittings.battle_factors(
+                entity.typeDescriptor, crew_battle.critical_from_vehicle(entity))
         entity._fire_starting_chance_factor = (
             max(0.0, _number(passives.get('fireStartingChanceFactor'), 1.0)) *
             battle_factors['engine_fire_factor'])
@@ -17038,6 +17077,17 @@ class BattleRuntime(object):
     def _projectile_source_descriptor(self, meta):
         descriptor = meta.get('source_descriptor')
         if descriptor is not None:
+            return descriptor
+        if meta.get('shooter_kind') == 'bot':
+            bot_id = meta.get('shooter_id')
+            descriptor = getattr(getattr(self, '_bots', None), '_descriptors', {}).get(bot_id)
+            if descriptor is None:
+                record = self._records.get('bot:%s' % bot_id) or {}
+                engine_id = record.get('engine_id')
+                entity = self._server_entity(engine_id) if engine_id is not None else None
+                descriptor = getattr(entity, 'typeDescriptor', None)
+            if descriptor is not None:
+                meta['source_descriptor'] = descriptor
             return descriptor
         vehicle = meta.get('source_vehicle')
         if not vehicle:
@@ -28417,6 +28467,10 @@ class BattleRuntime(object):
         if event.get('kind') == 'player' and (
                 self._worker_mode or state.get('vehicle_compact_descr')):
             descriptor = self._resolve_player_descriptor(state)
+        elif event.get('kind') == 'bot' and state.get('fitting'):
+            fitting = state['fitting']
+            descriptor = self._resolve_bot_fitted_descriptor(
+                state['vehicle'], fitting['tier'], fitting['crew_level'], fitting)
         else:
             descriptor = self._resolve_descriptor(
                 state.get('vehicle', self._config['vehicle']))
@@ -31904,6 +31958,8 @@ class BattleRuntime(object):
                 cleanup_error = error
         self._report_skill_diagnostic_drops()
         self._descriptor_cache = {}
+        from gui.mods.offline_lan_0922 import bot_fittings
+        bot_fittings.clear()
         self._prepared_vehicle_names = []
         self._unusable_vehicles_reported = set()
         self._records = {}

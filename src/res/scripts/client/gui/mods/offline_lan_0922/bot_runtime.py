@@ -573,8 +573,13 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     whose gunner tier is a little stronger than intended is recoverable, and
     a round that refuses to start is not.
     """
+    from gui.mods.offline_lan_0922 import bot_fittings
+    if bot_fittings.context(descriptor) is not None:
+        return bot_fittings.native_factors(descriptor)
     factors = loadout.attribute_factors(
         descriptor, crew=None, crew_level=crew_level)
+    if factors is None and bot_fittings.context(descriptor) is not None:
+        raise RuntimeError('native Bot fitting crew factors were rejected')
     if factors is None and crew_level is not None:
         if crew_level not in _LOGGED_CREW_LEVEL_REJECTIONS:
             _LOGGED_CREW_LEVEL_REJECTIONS.add(crew_level)
@@ -588,11 +593,13 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     return factors
 
 
-def _bot_profile(descriptor, crew_level=None):
+def _bot_profile(descriptor, crew_level=None, critical=None):
     """Spotting inputs for a vehicle whose crew is the #1513 default crew."""
-    return loadout.spotting_profile(
-        descriptor, None,
-        factors=_bot_default_crew_factors(descriptor, crew_level))
+    from gui.mods.offline_lan_0922 import bot_fittings
+    factors = (bot_fittings.native_factors(descriptor, critical)
+               if bot_fittings.context(descriptor) is not None else
+               _bot_default_crew_factors(descriptor, crew_level))
+    return loadout.spotting_profile(descriptor, None, factors=factors)
 
 
 def _bot_physics_params(descriptor, crew_level=None):
@@ -643,6 +650,10 @@ def _base_invisibility(descriptor, profile=None, camouflage_id=None):
     if profile is None:
         profile = _bot_profile(descriptor)
     crew_factor = profile['camouflage_factor']
+    from gui.mods.offline_lan_0922 import bot_fittings
+    fitting = bot_fittings.context(descriptor)
+    if fitting is not None and camouflage_id is None:
+        camouflage_id = fitting['camouflages'].get(fitting.get('season'))
     calculator = getattr(descriptor, 'computeBaseInvisibility', None)
     if callable(calculator):
         try:
@@ -946,9 +957,27 @@ def _copy_runtime_state(state):
 @observed('bot.critical_factor')
 def _critical_factor(state, descriptor, stat):
     devices, destroyed, crew_ko, yellow = _critical_parts(state)
-    return (device_damage.crew_stat_factor(crew_ko, stat) *
-            device_damage.module_stat_factor(
-                devices, destroyed, descriptor, stat, yellow))
+    module_factor = device_damage.module_stat_factor(
+        devices, destroyed, descriptor, stat, yellow)
+    from gui.mods.offline_lan_0922 import bot_fittings, crew_battle
+    if bot_fittings.context(descriptor) is None:
+        return device_damage.crew_stat_factor(crew_ko, stat) * module_factor
+    base = bot_fittings.native_factors(descriptor)
+    current = bot_fittings.native_factors(descriptor, state.get('critical'))
+    keys = {'reload': 'gun/reloadTime', 'aim_time': 'gun/aimingTime',
+            'turret_speed': 'turret/rotationSpeed', 'vision': 'circularVisionRadius',
+            'signal': 'radio/distance'}
+    if stat == 'dispersion':
+        crew_factor = float(current['shotDispersion'][0]) / float(base['shotDispersion'][0])
+    elif stat == 'mobility':
+        crew_factor = float(base['chassis/terrainResistance'][0]) / float(current['chassis/terrainResistance'][0])
+    elif stat in keys:
+        crew_factor = float(current[keys[stat]]) / float(base[keys[stat]])
+    else:
+        crew_factor = 1.0
+    return crew_factor * module_factor * crew_battle.stat_multiplier(
+        crew_battle.from_native(current), stat, state.get('health', 0),
+        state.get('max_health', 1), module_factor)
 
 
 def _critical_signature(payload):
@@ -1140,6 +1169,10 @@ class _BotCriticalVehicle(object):
             equipment_passives.get('fireStartingChanceFactor'), 1.0))
         self._medkit_bonus_value = max(0.0, _number(
             equipment_passives.get('medkitBonusValue'), 0.0))
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(descriptor) is not None:
+            self._fire_starting_chance_factor *= bot_fittings.battle_factors(
+                descriptor, payload)['engine_fire_factor']
         self.is_tracked = False
         self.is_engine_dead = False
         self.is_gun_destroyed = False
@@ -2038,7 +2071,8 @@ class BotRuntime(object):
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
                  impact_contacts_resolver=None, navigation_surface_probe=None,
-                 navigation_height_columns=None, local_sweep_probe=None):
+                 navigation_height_columns=None, local_sweep_probe=None,
+                 bot_descriptor_resolver=None):
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -2049,6 +2083,7 @@ class BotRuntime(object):
         self._wreck_rotation_probe = wreck_rotation_probe
         self._wreck_ground_probe = wreck_ground_probe
         self.local_sweep_probe = local_sweep_probe
+        self.bot_descriptor_resolver = bot_descriptor_resolver
         self._local_sweep_cache = {}
         self._local_sweep_step = 0.0
         self.rotation_resolver = rotation_resolver
@@ -3617,6 +3652,9 @@ class BotRuntime(object):
         values = getattr(self, '_bot_behavior', {}).get(int(bot_id), {})
         if 'crew_level' in values:
             return int(values['crew_level'])
+        if getattr(self, 'bot_descriptor_resolver', None) is not None:
+            from gui.mods.offline_lan_0922 import bot_fittings
+            return bot_fittings.crew_level(self.bot_skill(bot_id))
         return int(bot_gunnery.rating_crew_level(self.bot_rating(bot_id)))
 
     def bot_aim_selection_allowed(self, state, target):
@@ -3909,7 +3947,21 @@ class BotRuntime(object):
             bot_id = int(raw['id'])
             vehicle_name = self.vehicle_selector(raw)
             try:
-                resolved_descriptor = self.descriptor_resolver(vehicle_name)
+                if self.bot_descriptor_resolver is None:
+                    resolved_descriptor = self.descriptor_resolver(vehicle_name)
+                else:
+                    from gui.mods.offline_lan_0922 import bot_fittings
+                    class_tag = bot_fittings.CLASSES[vehicle_name]
+                    values = bot_tactics.effective(
+                        self._bot_tactics, int(raw.get('team', 1)),
+                        class_tag, int(raw.get('slot', 0)))
+                    rating = self._resolve_bot_rating(raw)
+                    if not restoring_authority and 'skill' in values:
+                        rating = bot_gunnery.rating_for_skill(values['skill'])
+                    tier = bot_gunnery.skill_for_rating(rating)
+                    level = values.get('crew_level', bot_fittings.crew_level(tier))
+                    resolved_descriptor = self.bot_descriptor_resolver(
+                        vehicle_name, tier, level, raw.get('fitting'))
                 descriptor_pair = siege_mechanics.descriptor_pair(
                     resolved_descriptor)
             except Exception as error:
@@ -3983,7 +4035,8 @@ class BotRuntime(object):
             self._physics_params[bot_id] = _bot_physics_params(
                 descriptor, crew_level)
             self._turn_speeds[bot_id] = 0.0
-            if isinstance(raw.get('profile'), dict):
+            if (self.bot_descriptor_resolver is None and
+                    isinstance(raw.get('profile'), dict)):
                 self.adapter.director.register_profile(bot_id, raw.get('team', 1),
                                                        raw['profile'], raw.get('name', 'Bot'))
             else:
@@ -4078,6 +4131,9 @@ class BotRuntime(object):
             state.setdefault('_overturn_check', 0.0)
             state.setdefault('_overturn_time', 0.0)
             state.setdefault('_overturn_level', 0)
+            if self.bot_descriptor_resolver is not None:
+                from gui.mods.offline_lan_0922 import bot_fittings
+                state['fitting'] = bot_fittings.context(descriptor)['wire']
             state.setdefault('_overturned', False)
             self._observe_bot_stun(
                 state, raw, max(0, int(_number(
@@ -5066,6 +5122,9 @@ class BotRuntime(object):
                 'siege_time_left_ms', 'siege_transition_total_ms',
                 'equipment_states', 'stun_end_server_time_ms')
         result = dict((key, state[key]) for key in keys)
+        if state.get('fitting') is not None:
+            from gui.mods.offline_lan_0922 import bot_fittings
+            result['fitting'] = bot_fittings.canonical(state['fitting'])
         if state.get('mass') is not None:
             result['stack_mass'] = float(state['mass'])
         result['profile'] = dict(result['profile'], parking_radius=math.hypot(
@@ -5190,7 +5249,15 @@ class BotRuntime(object):
             snapshot = _player_effective_params(target, tick_cache)
             dynamic_key, unused_row = _player_dynamic_spotting(
                 snapshot, target)
-        key = ((kind, int(target_id)) if kind == 'bot' else
+        if kind == 'bot':
+            from gui.mods.offline_lan_0922 import bot_fittings
+            descriptor = self._descriptors.get(int(target_id))
+            if bot_fittings.context(descriptor) is not None:
+                critical = target.get('critical') or {}
+                dynamic_key = (tuple(sorted(critical.get('crew_ko') or ())),
+                               bool(critical.get('fire', False)))
+        key = ((kind, int(target_id), dynamic_key) if kind == 'bot' and dynamic_key is not None else
+               (kind, int(target_id)) if kind == 'bot' else
                (kind, int(target_id), dynamic_key))
         cached = self._spotting_profiles.get(key)
         if cached is not None:
@@ -5198,7 +5265,7 @@ class BotRuntime(object):
         if kind == 'bot':
             descriptor = self._descriptors.get(int(target_id), {})
             profile = _bot_profile(
-                descriptor, self.bot_crew_level(target_id))
+                descriptor, self.bot_crew_level(target_id), target.get('critical'))
             cached = (_base_invisibility(descriptor, profile),
                       _shot_invisibility_factor(descriptor), profile)
         else:
@@ -5221,6 +5288,13 @@ class BotRuntime(object):
 
     def _bot_repair_factor(self, bot_id, descriptor):
         """A bot repairs at #1513's default-crew repair speed, like the player."""
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(descriptor) is not None:
+            factors = bot_fittings.native_factors(
+                descriptor, (self.states.get(bot_id) or {}).get('critical'))
+            passive = self._equipment_passives.get(int(bot_id), {})
+            return loadout.modifiers(descriptor, factors=factors)['repair_factor'] * (
+                1.0 + max(0.0, passive.get('repairkitBonusValue', 0.0)))
         cached = self._repair_factors.get(bot_id)
         if cached is None:
             cached = loadout.modifiers(

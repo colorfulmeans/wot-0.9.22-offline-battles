@@ -10130,8 +10130,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.battle_start(dict(self.start, bot_skill_mode='easy'))
 
         self.assertEqual('rookie', self.runtime.bot_skill(11))
-        self.assertEqual(75, self.runtime.bot_crew_level(11))
-        self.assertIn(75, self.crew_levels)
+        self.assertEqual(50, self.runtime.bot_crew_level(11))
+        self.assertIn(50, self.crew_levels)
         self.assertNotIn(None, self.crew_levels)
 
     def test_a_weaker_crew_aims_more_slowly_and_scatters_further(self):
@@ -10166,6 +10166,43 @@ class BotRuntimeTests(unittest.TestCase):
             bot_lineup=[{'team': 1, 'slot': 4, 'skill': 'rookie'}]))
 
         self.assertEqual('elite', self.runtime.bot_skill(11))
+
+    def test_fitted_manifest_is_immutable_and_survives_server_projection(self):
+        import base64
+        from gui.mods.offline_lan_0922 import bot_fittings
+        manifest = self.runtime.battle_start(dict(self.start, bot_skill_mode='brutal'))[0]
+        raw = bot_state_rows.bots(manifest)[0]
+        plan = bot_fittings.plan(raw['vehicle'], raw['skill'])
+        raw['fitting'] = bot_fittings.canonical(dict(schema=1, vehicle=raw['vehicle'],
+            tier=raw['skill'], crew_level=plan['crew'], descriptor=base64.b64encode(b'native fitting').decode(),
+            devices=plan['devices'], directive=plan['directive'], style=plan['style']))
+        server = BattleState(map_name='01_karelia')
+        server.client_build = CLIENT_BUILD_0922
+        server.phase = 'battle'
+        server.players[1] = Player(1, _CaptureSocket(), ('127.0.0.1', 1), team=1, slot=0)
+        server.bot_authority_id = 1
+        server.bot_roster = [dict(id=raw['id'],team=raw['team'],slot=raw['slot'],name='Bot')]
+        message = dict(round_id=server.round_id,bots=[raw])
+        self.assertTrue(server.update_bot_manifest(1,message))
+        self.assertEqual(server.bot_manifest[0]['fitting'],raw['fitting'])
+        self.assertEqual(server.bot_states[raw['id']]['fitting'],raw['fitting'])
+        self.assertEqual(server.current_battle_message()['bot_manifest'][0]['fitting'],raw['fitting'])
+        changed = copy.deepcopy(message)
+        changed['bots'][0]['fitting']['crew_level'] = 75
+        self.assertFalse(server.update_bot_manifest(1,changed))
+        replacement = copy.deepcopy(message)
+        vehicle = 'ussr:R04_T-34' if raw['vehicle'] != 'ussr:R04_T-34' else 'ussr:R11_MS-1'
+        plan = bot_fittings.plan(vehicle,raw['skill'])
+        replacement['bots'][0]['vehicle'] = vehicle
+        replacement['bots'][0]['fitting'].update(vehicle=vehicle,devices=plan['devices'],
+            directive=plan['directive'],style=plan['style'])
+        self.assertFalse(server.update_bot_manifest(1,replacement))
+        del changed['bots'][0]['fitting']
+        self.assertFalse(server.update_bot_manifest(1,changed))
+        changed = copy.deepcopy(raw)
+        changed['fitting']['crew_level'] = 50
+        projected = server._sanitize_bot_state(changed,server.bot_manifest[0],server.bot_states[raw['id']])
+        self.assertEqual(projected['fitting'],raw['fitting'])
 
     def test_the_manifest_publishes_each_bot_gunnery_tier(self):
         messages = self.runtime.battle_start(

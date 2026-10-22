@@ -5016,6 +5016,20 @@ class BattleState:
                     # canonical identity beside the tier name so a takeover
                     # reinstalls the same Bot rather than re-drawing one.
                     entry['skill_rating'] = rating
+                if 'fitting' in raw:
+                    from gui.mods.offline_lan_0922 import bot_fittings
+                    try:
+                        entry['fitting'] = bot_fittings.canonical(raw['fitting'])
+                        previous_identity = next((item for item in self.bot_manifest
+                            if item['id'] == bot_id), None)
+                        if (entry['fitting']['vehicle'] != entry['vehicle'] or
+                                entry['fitting']['tier'] != entry.get('skill') or
+                                (previous_identity is not None and previous_identity.get('fitting') != entry['fitting'])):
+                            return False
+                    except (ValueError, TypeError, KeyError):
+                        return False
+                elif previous is not None and previous.get('fitting'):
+                    return False
                 manifest.append(entry)
                 states[bot_id] = self._sanitize_bot_state(
                     raw, entry, self.bot_states.get(bot_id))
@@ -6652,6 +6666,8 @@ class BattleState:
             result['stun_factors'] = {}
             result["stun_attacker_kind"] = ""
             result["stun_attacker_id"] = 0
+        if identity.get('fitting') is not None:
+            result['fitting'] = copy.deepcopy(identity['fitting'])
         return result
 
     @staticmethod

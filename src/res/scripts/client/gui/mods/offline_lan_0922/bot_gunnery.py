@@ -64,11 +64,9 @@ DEFAULT_SKILL = SKILL_REGULAR
 RATING_ANCHORS = (0.00, 0.34, 0.67, 1.00)
 DEFAULT_RATING = RATING_ANCHORS[SKILL_TIERS.index(DEFAULT_SKILL)]
 
-# Crew levels this project has actually seen #1513 train.  A level the client
-# refuses makes ``_bot_default_crew_factors`` fall back to the full default
-# crew, which moves a weak Bot the wrong way, so the interpolated level snaps
-# to a proven one instead of trusting an unverified value.
-PROVEN_CREW_LEVELS = (75, 90, 100)
+# Discrete fitting tiers use native crew training at 50/75/100 percent.
+# Aim and tactical competence still interpolate independently.
+PROVEN_CREW_LEVELS = (50, 75, 100)
 
 # Tactical capabilities the rating gates.  The rating is the probability that
 # a Bot does the right thing on one occasion; the caller decides how wide an
@@ -171,7 +169,7 @@ _PARAMETERS = {
         # shortens view range and slows reload, so only the two weaker tiers
         # spend it at all and the top two share a full crew: this is a
         # gunnery setting, not a spotting setting.
-        'crew_level': 75,
+        'crew_level': 50,
         # Seconds of holding a firing solution on one target before the
         # trigger is available at all.
         'reaction_seconds': 1.20,
@@ -189,7 +187,7 @@ _PARAMETERS = {
         'lead_error': 0.45,
     },
     SKILL_REGULAR: {
-        'crew_level': 90,
+        'crew_level': 75,
         'reaction_seconds': 0.75,
         'patience_seconds': 1.10,
         'converged_factor': 1.80,
@@ -348,18 +346,14 @@ def _anchor_value(points, rating):
 
 
 def _crew_level_at_rating(rating):
-    level = _anchor_value(
-        [_PARAMETERS[skill]['crew_level'] for skill in SKILL_TIERS], rating)
-    return min(PROVEN_CREW_LEVELS,
-               key=lambda proven: (abs(proven - level), proven))
+    return _PARAMETERS[skill_for_rating(rating)]['crew_level']
 
 
 def rating_parameters(rating, overrides=None):
     """Return one Bot's gunner bundle, interpolated between the anchors.
 
     The bundle is built per call, so a caller may not rely on identity and
-    cannot mutate a shared row.  ``crew_level`` is snapped to a level #1513
-    is known to train instead of trusting an interpolated one.
+    cannot mutate a shared row.  ``crew_level`` follows the discrete fitting tier; aiming stays continuous.
     """
     rating = normalize_rating(rating)
     rows = [_PARAMETERS[skill] for skill in SKILL_TIERS]

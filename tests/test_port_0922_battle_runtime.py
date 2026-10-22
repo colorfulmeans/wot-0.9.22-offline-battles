@@ -20,7 +20,7 @@ CLIENT_SCRIPTS = ROOT / 'src' / 'res' / 'scripts' / 'client'
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
 from gui.mods.offline_lan_0922.battle_runtime import (
-    BattleRuntime, ENGINE_MODE_IDLE, ENGINE_MODE_OFF, ENGINE_MODE_RUNNING,
+    BattleRuntime as NativeBattleRuntime, ENGINE_MODE_IDLE, ENGINE_MODE_OFF, ENGINE_MODE_RUNNING,
     FRAME_SECONDS, _FrameDiagnostics, _LANInputSender,
     _MOVEMENT_BACKWARD, _MOVEMENT_FORWARD, _MOVEMENT_ROTATE_LEFT,
     _MOVEMENT_ROTATE_RIGHT, _engine_rotation)
@@ -29,6 +29,41 @@ from gui.mods.offline_lan_0922 import battle_runtime as \
 from gui.mods.offline_lan_0922 import battle_feedback, bot_runtime, \
     combat_rules, critical_damage, equipment_mechanics, gun_mechanics, \
     lan_session, loadout, tank_collision, vehicle_physics
+
+
+class BattleRuntime(NativeBattleRuntime):
+    """Presentation fixtures use synthetic modules, not the native item cache.
+
+    Native fitting installation/serialization is exercised separately by
+    test_bot_fittings. Keep these rendering/lifecycle fixtures independent of
+    the 576-vehicle cache while retaining the new immutable fitting envelope.
+    """
+    def _resolve_bot_fitted_descriptor(self, vehicle, tier, crew_level=None,
+                                       restored=None):
+        import base64
+        from gui.mods.offline_lan_0922 import bot_fittings
+        descriptor = self._resolve_descriptor(vehicle)
+        plan = bot_fittings.plan(vehicle, tier)
+        raw = descriptor.makeCompactDescr()
+        if isinstance(raw, str):
+            raw = raw.encode('ascii')
+        wire = bot_fittings.canonical(dict(schema=1, vehicle=vehicle, tier=tier,
+            crew_level=plan['crew'] if crew_level is None else crew_level,
+            descriptor=base64.b64encode(raw).decode('ascii'),
+            devices=plan['devices'], directive=plan['directive'], style=plan['style']))
+        if restored is not None and bot_fittings.canonical(restored) != wire:
+            raise ValueError('fixture fitting changed')
+        bot_fittings.register(descriptor, dict(wire=wire, crew=(), directives=(),
+            crew_skills=(), camouflages={}, outfits={}, crew_roster=(),
+            factors={}))
+        context = bot_fittings.context(descriptor)
+        plain = _plain_bot_factors(descriptor, crew_level=wire['crew_level'])
+        context['factors'][(id(descriptor), (), False)] = plain
+        context['factors'][(id(descriptor), (), True)] = plain
+        return descriptor
+
+
+BattleRuntime.__module__ = NativeBattleRuntime.__module__
 from gui.mods.offline_lan_0922.entities.remote_vehicle import \
     RemoteVehicle, RemoteVehicleFactory, _RemoteFilter, \
     collide_vehicle_at_matrix
