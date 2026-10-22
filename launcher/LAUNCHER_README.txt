@@ -24,7 +24,11 @@ controls and native .wotreplay export are not available. Retain the recording's
 original vehicle profile. Playback does not award battle rewards.
 
 Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_SPIKE_PROFILE.bat for optional detailed profiling.
+download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
+and START_SPIKE_PROFILE.bat for optional detailed profiling. The normal EXE
+uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
+and 32 MiB per client process, with explicit suppression notices. Errors and
+lifecycle messages remain enabled after the diagnostic budget is exhausted.
 
 Normal battles use wot-0.9.22-offline-battles.exe. START_ROOF_CRUSH_TEST.bat
 and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.

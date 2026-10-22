@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sys
+import time
 
 try:
     _NUMBERS = (int, long, bool, float)
@@ -20,6 +21,51 @@ _MAX_DICT_ITEMS, _MAX_ITEMS, _MAX_NODES, _MAX_TEXT = 64, 8, 96, 80
 _counts, _reported = {}, set()
 _reports_by_method, _record_sequence = {}, 0
 
+# Detailed geometry histories are opt-in and bounded independently of errors
+# and lifecycle messages. Never use this budget for gameplay or wire events.
+DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
+DETAIL_LABELS = frozenset(('BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
+    'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
+    'BOT ROUTE CONNECTION', 'STACK CONTACT DECISION', 'BOT SEARCH JOB',
+    'PROJECTILE INTERFACE', 'BOT NAV CHOICE', 'BOT EDGE DYNAMICS',
+    'BOT LOCAL HANDOFF', 'BOT MOTION PRESENT', 'BOT RECOVERY COMMIT',
+    'BOT SUPPORT RECOVERY', 'BOT SUPPORT REJECTION', 'BOT VERTICAL SUPPORT',
+    'LOCAL ATTITUDE CHART', 'LOCAL EDGE SUPPORT', 'LOCAL SUPPORT DECISION',
+    'RAM CONTACT GEOMETRY', 'RAM TRACK CONTACT', 'RICOCHET SURFACE EVIDENCE',
+    'VEHICLE STACK', 'WRECK POSE'))
+DETAIL_WINDOW_BYTES = 2 * 1024 * 1024
+DETAIL_SESSION_BYTES = 32 * 1024 * 1024
+DETAIL_RECORD_BYTES = 256 * 1024
+_detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
+                  'notice': False}
+
+
+def detailed_enabled():
+    return os.environ.get(DETAIL_ENV) == '1'
+
+
+def _detail_admitted(encoded):
+    now = time.time()
+    budget = _detail_budget
+    if budget['start'] is None or now < budget['start'] or now-budget['start'] >= 60.0:
+        if budget['dropped']:
+            sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT dropped=%s session_bytes=%s\n' %
+                             (budget['dropped'], budget['session']))
+        budget.update(start=now, window=0, dropped=0, notice=False)
+    # Include worst-case JSON fragment escaping and framing in the bound.
+    size = len(encoded) * 2 + ((len(encoded)+2999)//3000) * 240
+    if (len(encoded) > DETAIL_RECORD_BYTES or
+            budget['window']+size > DETAIL_WINDOW_BYTES or
+            budget['session']+size > DETAIL_SESSION_BYTES):
+        budget['dropped'] += 1
+        if not budget['notice']:
+            sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT detailed records suppressed; key events remain enabled\n')
+            budget['notice'] = True
+        return False
+    budget['window'] += size
+    budget['session'] += size
+    return True
+
 
 def _write_record(payload):
     write_json_record('NATIVE INPUT FALLBACK', payload)
@@ -28,7 +74,12 @@ def _write_record(payload):
 def write_json_record(label, payload):
     """Keep every engine stdout line below its 8 KiB truncation boundary."""
     global _record_sequence
+    detail = label in DETAIL_LABELS
+    if detail and not detailed_enabled():
+        return
     encoded = json.dumps(payload, separators=(',', ':'))
+    if detail and not _detail_admitted(encoded):
+        return
     if len(encoded) <= 6000:
         sys.stdout.write('[Offline LAN 0.9.22] %s %s\n' % (label, encoded))
         return

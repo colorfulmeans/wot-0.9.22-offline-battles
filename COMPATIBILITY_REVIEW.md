@@ -10005,3 +10005,40 @@ bake width and grid resolutions, plus still-active reviewed ford limits.
 Hover identifies the hazard type. A red conditional ford is not presented
 as an absolute barrier, and missing routing height is not labelled water.
 Owner testing on the native client remains the gameplay acceptance boundary.
+
+
+### House-corner local refusals and diagnostic entrances
+
+The 2026-10-23 032606 report records Strv 81 travelling 20.535 m with only
+1.473 m net displacement in one eight-second window. Its later blocked
+connector has nine hard pivot refusals and one clear pivot whose forward
+translation hits the house. A clear rotation is not a complete usable action.
+`BotRuntime._report_blocked_planner` now recognizes that mixed exhaustion only
+when every pivot is refused or paired with a same-decision, same-time native
+translation collision. Unknown, deferred, other-heading and traffic-only
+receipts do not qualify. The existing per-Bot finite retry/retirement owner
+handles it; no collision threshold, global obstacle, navigation scoring, route
+strategy or recovery duration is changed. Focused feedback tests prove this
+handoff, not Windows driving acceptance or the absence of every recovery loop.
+
+Normal launcher entry selects basic logging; `START_DIAGNOSTIC_TEST.bat`
+selects `--diagnostics` for that process and its children. Basic mode records
+small stationary-movement summaries without constructing nested motion
+histories. Bulk geometry traces use the opt-in mode and independent 2 MiB
+per-minute / 32 MiB process budgets, including conservative fragment overhead.
+Oversized records are explicitly suppressed rather than silently truncated;
+key events and errors do not share this diagnostic budget. Reference trace
+checks explicitly opt in; basic-mode, budget and launcher-entry regressions
+exercise the production defaults separately.
+
+`tools/audit_optional_internal_resources.py` inspects the six unavailable
+vehicle identities in the optional official ASIA 2.4.1 #980 resource directory.
+`tools/evidence/internal_mesh_0922/optional-pc241-inventory.json` records all 45
+script/vehicle packages checked, including HD packages, resource counts and
+exact named-surface leads. All six contain modern Havok TAG0 collision assets;
+the only matched module name is `surveyingDevice`. The existing indexed
+interior decoder accepts old packfiles, not these tagfiles, and the inventory
+finds no named ammo bay, fuel tank, engine/transmission or crew geometry to
+register. This is not proof that every possible external source is empty.
+No interior coordinates or same-tank aliases are fabricated, and the supported
+runtime remains PC Chinese HD 0.9.22.0.1 #1513.

@@ -1,0 +1,181 @@
+{
+  "version_xml": "<version.xml>\n\t<appname>\t#menu:login/version\t</appname>\n\t<version> v.2.4.1.0 #980 </version>\n\t<showLicense> 42 </showLicense>\n\t<ingameHelpVersion>\t1\t</ingameHelpVersion>\n\t<meta>\n\t\t<client> 2644673 </client>\n\t\t<overrides> 2644831 </overrides>\n\t\t<localization> 1252854 RU </localization>\n\t\t<realm> ASIA </realm>\n\t\t<branch> v2.4.1 </branch>\n\t\t<buildScriptsRevision> 0 </buildScriptsRevision>\n\t</meta>\n</version.xml>",
+  "packages_scanned": 45,
+  "vehicles": {
+    "G136_Tiger_131": {
+      "members": 180,
+      "geometry_files": 130,
+      "collision_files": [
+        "vehicles_level_06-part1.pkg:vehicles/german/G136_Tiger_131/collision_client/Hull.havok",
+        "vehicles_level_06-part2.pkg:vehicles/german/G136_Tiger_131/collision_client/Chassis.havok",
+        "vehicles_level_06-part2.pkg:vehicles/german/G136_Tiger_131/collision_client/Gun_01.havok",
+        "vehicles_level_06-part2.pkg:vehicles/german/G136_Tiger_131/collision_client/Turret_01.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_06-part1.pkg",
+          "member": "vehicles/german/G136_Tiger_131/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_06-part2.pkg",
+          "member": "vehicles/german/G136_Tiger_131/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    },
+    "A104_M4A3E8A": {
+      "members": 173,
+      "geometry_files": 130,
+      "collision_files": [
+        "vehicles_level_06-part1.pkg:vehicles/american/A104_M4A3E8A/collision_client/Gun_01.havok",
+        "vehicles_level_06-part1.pkg:vehicles/american/A104_M4A3E8A/collision_client/Hull.havok",
+        "vehicles_level_06-part1.pkg:vehicles/american/A104_M4A3E8A/collision_client/Turret_01.havok",
+        "vehicles_level_06-part2.pkg:vehicles/american/A104_M4A3E8A/collision_client/Chassis.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_06-part1.pkg",
+          "member": "vehicles/american/A104_M4A3E8A/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_06-part1.pkg",
+          "member": "vehicles/american/A104_M4A3E8A/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    },
+    "A106_M48A2_120": {
+      "members": 173,
+      "geometry_files": 130,
+      "collision_files": [
+        "vehicles_level_10-part1.pkg:vehicles/american/A106_M48A2_120/collision_client/Hull.havok",
+        "vehicles_level_10-part1.pkg:vehicles/american/A106_M48A2_120/collision_client/Turret_01.havok",
+        "vehicles_level_10-part3.pkg:vehicles/american/A106_M48A2_120/collision_client/Chassis.havok",
+        "vehicles_level_10-part3.pkg:vehicles/american/A106_M48A2_120/collision_client/Gun_01.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_10-part1.pkg",
+          "member": "vehicles/american/A106_M48A2_120/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_10-part1.pkg",
+          "member": "vehicles/american/A106_M48A2_120/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    },
+    "A86_T23E3": {
+      "members": 170,
+      "geometry_files": 127,
+      "collision_files": [
+        "vehicles_level_07-part1.pkg:vehicles/american/A86_T23E3/collision_client/Chassis.havok",
+        "vehicles_level_07-part2.pkg:vehicles/american/A86_T23E3/collision_client/Gun_01.havok",
+        "vehicles_level_07-part2.pkg:vehicles/american/A86_T23E3/collision_client/Hull.havok",
+        "vehicles_level_07-part2.pkg:vehicles/american/A86_T23E3/collision_client/Turret_01.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_07-part2.pkg",
+          "member": "vehicles/american/A86_T23E3/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_07-part2.pkg",
+          "member": "vehicles/american/A86_T23E3/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    },
+    "R121_KV4_KTT": {
+      "members": 178,
+      "geometry_files": 127,
+      "collision_files": [
+        "vehicles_level_08-part1.pkg:vehicles/russian/R121_KV4_KTT/collision_client/Gun_01.havok",
+        "vehicles_level_08-part1.pkg:vehicles/russian/R121_KV4_KTT/collision_client/Turret_01.havok",
+        "vehicles_level_08-part2.pkg:vehicles/russian/R121_KV4_KTT/collision_client/Hull.havok",
+        "vehicles_level_08-part4.pkg:vehicles/russian/R121_KV4_KTT/collision_client/Chassis.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_08-part1.pkg",
+          "member": "vehicles/russian/R121_KV4_KTT/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_08-part2.pkg",
+          "member": "vehicles/russian/R121_KV4_KTT/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    },
+    "R126_Object_730_5": {
+      "members": 170,
+      "geometry_files": 127,
+      "collision_files": [
+        "vehicles_level_10-part1.pkg:vehicles/russian/R126_Object_730_5/collision_client/Chassis.havok",
+        "vehicles_level_10-part1.pkg:vehicles/russian/R126_Object_730_5/collision_client/Turret_01.havok",
+        "vehicles_level_10-part2.pkg:vehicles/russian/R126_Object_730_5/collision_client/Gun_01.havok",
+        "vehicles_level_10-part3.pkg:vehicles/russian/R126_Object_730_5/collision_client/Hull.havok"
+      ],
+      "named_interior_candidates": [
+        {
+          "package": "vehicles_level_10-part1.pkg",
+          "member": "vehicles/russian/R126_Object_730_5/collision_client/Turret_01.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        },
+        {
+          "package": "vehicles_level_10-part3.pkg",
+          "member": "vehicles/russian/R126_Object_730_5/collision_client/Hull.havok",
+          "markers": [
+            "surveyingDevice"
+          ]
+        }
+      ],
+      "modern_tagfiles": 4,
+      "read_errors": [],
+      "conclusion": "only_observation_device_named_no_complete_interior"
+    }
+  },
+  "scope": "named geometry source inventory only; no runtime acceptance or inferred interiors"
+}

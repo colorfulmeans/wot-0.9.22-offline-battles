@@ -45,6 +45,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922 import native_simulation
 from gui.mods.offline_lan_0922.worker_diagnostics import timed, call as timed_call
+from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
 
 
 try:
@@ -7341,6 +7342,8 @@ class BotRuntime(object):
 
     def _log_route_connection(self, state, command, now):
         """Observe moving route joins as well as stationary failures; no probes."""
+        if not detailed_enabled():
+            return
         order = self._server_orders.get(state['id']) or {}
         assignment = order.get('route_assignment') or {}
         if not (order.get('route_join') or assignment.get('entry_selection')):
@@ -7389,6 +7392,23 @@ class BotRuntime(object):
         Emit at most once per three seconds per hull; movement resets the timer.
         """
         position = _position(state)
+        if not detailed_enabled():
+            # Keep a small, useful failure receipt without constructing nested
+            # histories on every control slice in ordinary play.
+            if (command.get('movement_intent') and abs(state.get('speed', 0.0)) < 0.1 and
+                    now-state.get('_basic_motion_log_at', now-30.0) >= 30.0):
+                state['_basic_motion_log_at'] = now
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT MOTION BASIC', dict(
+                    round=self.round_id, id=state['id'], at=now,
+                    vehicle=state.get('vehicle'), position=position,
+                    mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
+                    target=command.get('move_position'), throttle=throttle, turn=turn,
+                    path_clear=path_clear,
+                    probe={key:motion_probe.get(key) for key in (
+                        'clear', 'collision', 'reason')}
+                        if isinstance(motion_probe, dict) else None))
+            return
         self._record_execution_window(state, command, throttle, turn, now)
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and
@@ -8116,6 +8136,31 @@ class BotRuntime(object):
             for row in rotation_rows) and (all_hard or any(
                 row.get('reason') == 'realized_rotation_rejection'
                 for row in rotation_rows)))
+        # A usable pivot is not a usable drive action. At the Strv 81's
+        # house corner one pivot was clear but its translation hit the wall;
+        # all other pivots were hard-refused. That mixed failure previously
+        # kept the short connector alive forever. Match each admitted pivot
+        # to its same-decision direction proof; unknown/traffic-only results
+        # cannot retire a point or publish a global map wall.
+        directions = [row for row in (verdicts or ())
+                      if row.get('kind') == 'direction']
+        mixed_exhausted = bool(rotation_rows and all(
+            (row.get('clear') is False and row.get('reason') in (
+                'realized_rotation_rejection', 'local_sweep_blocked')) or
+            (row.get('clear') is True and row.get('reason') == 'local_sweep_clear' and
+                row.get('yaw') is not None and any(
+                step.get('yaw') is not None and
+                abs(_angle_delta(step['yaw'], row['yaw'])) < 0.0001 and
+                step.get('clear') is False and
+                step.get('reason') == 'planning_collision' and
+                step.get('decision_id') == row.get('decision_id') and
+                step.get('sampled_at') == row.get('sampled_at') and
+                (step.get('native_probe') or {}).get('collision') is True and
+                not (step.get('native_probe') or {}).get('deferred') and
+                not (step.get('native_probe') or {}).get('probe_failed')
+                for step in directions))
+            for row in rotation_rows) and all_hard)
+        exhausted = exhausted or mixed_exhausted
         if (hard or remembered_rotation or exhausted) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):

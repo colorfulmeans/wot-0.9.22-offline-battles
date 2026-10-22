@@ -21,6 +21,9 @@ root=Path(sys.argv[1]); directory=sys.argv[2]; pattern=sys.argv[3]
 sys.path[:0]=[str(root), str(root/directory), str(root/'tests'), str(root/'server'),
               str(root/'launcher'), str(root/'src/res/scripts/client')]
 os.environ['PYTHONDONTWRITEBYTECODE']='1'
+# Trace-contract tests explicitly exercise the opt-in diagnostic entrance.
+# Basic-mode and budget regressions override this in their own fixtures.
+os.environ['WOT_OFFLINE_DIAGNOSTICS']='1'
 unittest.main(module=None, argv=['unittest','discover','-s',str(root/directory),
                                '-p',pattern,'-v'])
 """

@@ -71,6 +71,8 @@ jobs:
           set -euo pipefail
           patterns=(
             'test_port_0922_ai.py'
+            'test_port_0922_house_corner_feedback.py'
+            'test_diagnostic_log_modes.py'
             'test_port_0922_three_round_handoffs.py'
             'test_port_0922_crush_progress_handoffs.py'
             'test_port_0922_motion_052854.py'

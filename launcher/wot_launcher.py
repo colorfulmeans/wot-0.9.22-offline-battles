@@ -3802,6 +3802,11 @@ def _serve(argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Choose once per launcher process; child environments inherit this mode.
+    # A normal entry must not inherit a stale diagnostic setting from a shell.
+    if core.SERVE_FLAG not in argv:
+        os.environ['WOT_OFFLINE_DIAGNOSTICS'] = ('1' if '--diagnostics' in argv or
+            os.environ.get('WOT_OFFLINE_SPIKE_PROFILE') == '1' else '0')
     if '--verify-style-editor' in argv:
         index = argv.index('--verify-style-editor')
         if index + 2 >= len(argv):

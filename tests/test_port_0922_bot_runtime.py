@@ -1720,6 +1720,12 @@ class BotRuntimeTests(unittest.TestCase):
         self._modules = dict((key, value) for key, value in sys.modules.items()
                              if key == 'gui' or key.startswith('gui.'))
         self.module = _load(); self.adapters = []
+        # Each case is an independent diagnostic session. A preceding long
+        # motion test must not consume the next case's trace evidence budget.
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
+        budget = mock.patch.object(diagnostics, '_detail_budget', dict(
+            start=None, window=0, session=0, dropped=0, notice=False))
+        budget.start(); self.addCleanup(budget.stop)
         # Detailed support is an explicitly disabled experiment in production.
         if self._testMethodName in frozenset((
                 'test_bot_drive_uses_contacted_plane_instead_of_corridor_grade',

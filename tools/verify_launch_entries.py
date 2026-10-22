@@ -1,8 +1,8 @@
-"""Verify the three reviewed opt-in entries across Git checkout line endings."""
+"""Verify reviewed opt-in entries across Git checkout line endings."""
 from pathlib import Path
 
 ENTRIES = ('START_SPIKE_PROFILE.bat', 'START_ROOF_CRUSH_TEST.bat',
-           'START_ROOF_SHOT_DROP_TEST.bat')
+           'START_ROOF_SHOT_DROP_TEST.bat', 'START_DIAGNOSTIC_TEST.bat')
 
 
 def verify_archive(archive, source_dir=None):
