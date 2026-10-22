@@ -739,6 +739,18 @@ def _validate_waiting_room_ui(repo_root):
             digest = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
         if proof.get(key) != digest:
             raise ValueError('Rebuild waiting-room movie after changing ' + source)
+    with open(os.path.join(root, 'offlineMapPicker.swf'), 'rb') as stream:
+        picker = stream.read()
+    with open(os.path.join(root, 'offlineMapPicker.swf.json'), 'r') as stream:
+        picker_proof = json.load(stream)
+    with open(os.path.join(repo_root, 'tools', 'actionscript', 'OfflineMapPicker.as'), 'rb') as stream:
+        source_hash = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
+    if (picker[:3] not in (b'FWS', b'CWS') or
+            picker_proof.get('output_sha256') != hashlib.sha256(picker).hexdigest() or
+            picker_proof.get('actionscript_sha256') != source_hash or
+            picker_proof.get('source_sha256') != proof.get('source_sha256') or
+            picker_proof.get('builder_sha256') != proof.get('builder_sha256')):
+        raise ValueError('Rebuild scoped native map picker')
 
 
 def build():

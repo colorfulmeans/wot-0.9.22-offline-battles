@@ -56,7 +56,7 @@ def symbol_classes(raw):
 def validate_control_linkages(source, available):
     # Runtime strings evade the AS3 type checker. Verify them against actual
     # stock SymbolClass definitions, not inferred authoring instance names.
-    names = re.findall(r'item\.(?:dropdown|itemRenderer) = "([^"]+)"', source)
+    names = re.findall(r'item\.(?:dropdown|itemRenderer|scrollBar) = "([^"]+)"', source)
     names += re.findall(r'button\("[^"]+", "([^"]+)"', source)
     names += re.findall(r'component\(key, "([^"]+)"', source)
     missing = sorted(set(names) - set(available))
@@ -90,7 +90,7 @@ def u30(value):
     return bytes(result)
 
 
-def rename_abc(body):
+def rename_abc(body, class_name=b'OfflineWaitingRoomUI', namespace=b'offlineWaitingRoom_fla'):
     start = body.index(b'\0', 4) + 1
     abc = body[start:]
     offset = 4
@@ -108,8 +108,105 @@ def rename_abc(body):
         length, offset = read_u30(abc, offset)
         value = abc[offset:offset + length]
         offset += length
-        if value == b'TrainingWindow': value = b'OfflineWaitingRoomUI'
-        if value == b'trainingWindow_fla': value = b'offlineWaitingRoom_fla'
+        if value == b'TrainingWindow': value = class_name
+        if value == b'trainingWindow_fla': value = namespace
+        output += u30(len(value)) + value
+    return body[:start] + output + abc[offset:]
+
+
+def rename_picker_abc(body):
+    """Rename the document class while retaining its same-named native base.
+
+    Both QNames share the TrainingWindow string-pool entry. A global string
+    replacement would also rename net.wg.gui.lobby.training.TrainingWindow.
+    Split that one QName before performing the normal document rename.
+    """
+    start = body.index(b'\0', 4) + 1
+    abc = body[start:]
+    offset = 4
+    for size in (None, None, 8):
+        count, offset = read_u30(abc, offset)
+        for unused in range(max(0, count - 1)):
+            if size:
+                offset += size
+            else:
+                unused_value, offset = read_u30(abc, offset)
+    string_start = offset
+    count, offset = read_u30(abc, offset)
+    strings = [b'']
+    for unused in range(count - 1):
+        length, offset = read_u30(abc, offset)
+        strings.append(abc[offset:offset + length])
+        offset += length
+    # This distinct pool entry is deliberately not a TrainingWindow string
+    # until after rename_abc has processed the document class.
+    sentinel = b'OfflineNativePickerBase'
+    output = abc[:string_start] + u30(count + 1)
+    output += b''.join(u30(len(s)) + s for s in strings[1:] + [sentinel])
+    namespace_start = offset
+    namespace_count, offset = read_u30(abc, offset)
+    namespaces = [b'']
+    for unused in range(namespace_count - 1):
+        offset += 1
+        name, offset = read_u30(abc, offset)
+        namespaces.append(strings[name])
+    set_count, offset = read_u30(abc, offset)
+    for unused in range(set_count - 1):
+        length, offset = read_u30(abc, offset)
+        for ignored in range(length):
+            value, offset = read_u30(abc, offset)
+    multiname_count, offset = read_u30(abc, offset)
+    output += abc[namespace_start:offset]
+    for unused in range(multiname_count - 1):
+        kind = abc[offset]
+        offset += 1
+        output += bytes([kind])
+        if kind in (7, 13):
+            ns, offset = read_u30(abc, offset)
+            name, offset = read_u30(abc, offset)
+            if namespaces[ns] == b'net.wg.gui.lobby.training' and strings[name] == b'TrainingWindow':
+                name = count
+            output += u30(ns) + u30(name)
+        else:
+            widths = {15: 1, 16: 1, 17: 0, 18: 0, 9: 2, 14: 2, 27: 1, 28: 1}
+            if kind == 29:
+                base, offset = read_u30(abc, offset)
+                length, offset = read_u30(abc, offset)
+                output += u30(base) + u30(length)
+                width = length
+            elif kind in widths:
+                width = widths[kind]
+            else:
+                raise ValueError('Unknown ABC multiname kind: %s' % kind)
+            for ignored in range(width):
+                value, offset = read_u30(abc, offset)
+                output += u30(value)
+    renamed = rename_abc(body[:start] + output + abc[offset:],
+                         b'OfflineMapPickerUI', b'offlineMapPicker_fla')
+    # Replace the sentinel through the string-pool-aware rewriter, since the
+    # native class and document class names have different encoded lengths.
+    return replace_abc_string(renamed, sentinel, b'TrainingWindow')
+
+
+def replace_abc_string(body, old, new):
+    start = body.index(b'\0', 4) + 1
+    abc = body[start:]
+    offset = 4
+    for size in (None, None, 8):
+        count, offset = read_u30(abc, offset)
+        for unused in range(max(0, count - 1)):
+            if size:
+                offset += size
+            else:
+                value, offset = read_u30(abc, offset)
+    count, offset = read_u30(abc, offset)
+    output = abc[:offset]
+    for unused in range(max(0, count - 1)):
+        length, offset = read_u30(abc, offset)
+        value = abc[offset:offset + length]
+        offset += length
+        if value == old:
+            value = new
         output += u30(len(value)) + value
     return body[:start] + output + abc[offset:]
 
@@ -199,6 +296,60 @@ def build(client, java, ffdec, output):
                  shared_movies_unchanged=True, native_control_linkages=control_linkages)
     output.with_suffix('.swf.json').write_bytes((json.dumps(proof, indent=2)+'\n').encode('utf8'))
     print('Built stock-component room:', output)
+    build_picker(original, lobby, java, ffdec, output.parent / 'offlineMapPicker.swf')
+
+
+def build_picker(original, lobby, java, ffdec, output):
+    """Retain the complete native picker authoring; scope cosmetics to our copy."""
+    header, parts = tags(original)
+    dependencies = [(c, b) for c, b in tags(lobby)[1] if c == 82]
+    dependency_bodies = set(b for c, b in dependencies)
+    compile_parts = []
+    inserted = False
+    for code, body in parts:
+        if code == 82 and not inserted:
+            compile_parts.extend(dependencies)
+            inserted = True
+        compile_parts.append((code, body))
+    source_path = ROOT / 'tools/actionscript/OfflineMapPicker.as'
+    command = [str(java), '-Djava.awt.headless=true', '-jar', str(ffdec)]
+    with tempfile.TemporaryDirectory(prefix='wot-stock-picker-') as directory:
+        temp = Path(directory)
+        source = temp / 'input.swf'
+        compiled = temp / 'compiled.swf'
+        source.write_bytes(pack(header, compile_parts))
+        subprocess.run(command + ['-replace', str(source), str(compiled),
+            'TrainingWindow', str(source_path)], check=True)
+        compiled_header, compiled_parts = tags(compiled.read_bytes())
+        result = []
+        for code, body in compiled_parts:
+            if code == 82 and body in dependency_bodies:
+                continue
+            if code == 82:
+                body = rename_picker_abc(body)
+            if code == 76:
+                body = body.replace(b'TrainingWindow\0', b'OfflineMapPickerUI\0')
+                body = body.replace(b'trainingWindow_fla.', b'offlineMapPicker_fla.')
+            result.append((code, body))
+        if sum(c == 82 for c, b in result) != sum(c == 82 for c, b in parts):
+            raise ValueError('Compile-time lobby definitions leaked into picker')
+        output.write_bytes(pack(compiled_header, result))
+        subprocess.run(command + ['-selectclass', 'OfflineMapPickerUI', '-export',
+            'script', str(temp / 'verify'), str(output.resolve())], check=True)
+        verified = (temp / 'verify/scripts/OfflineMapPickerUI.as').read_text(encoding='utf8')
+        for token in ('as_setOfflineOptions', 'super.draw()', 'teamSizes', 'isPrivate.visible = false'):
+            if token not in verified:
+                raise ValueError('Missing compiled picker contract: ' + token)
+        if ('net.wg.gui.lobby.training.TrainingWindow' not in verified or
+                'net.wg.gui.lobby.training.OfflineMapPickerUI' in verified):
+            raise ValueError('Scoped picker lost its native TrainingWindow base')
+    proof = dict(actionscript_sha256=hashlib.sha256(source_path.read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
+                 builder_sha256=hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
+                 source_sha256=hashlib.sha256(original).hexdigest(),
+                 output_sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
+                 shared_movies_unchanged=True)
+    output.with_suffix('.swf.json').write_bytes((json.dumps(proof, indent=2)+'\n').encode('utf8'))
+    print('Built scoped native map picker:', output)
 
 
 if __name__ == '__main__':

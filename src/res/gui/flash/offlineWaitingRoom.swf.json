@@ -1,10 +1,10 @@
 {
-  "actionscript_sha256": "6c44d0744a8876b6d709d135d238b03cb475a12d5494c580e0bcabcb5b50c70d",
-  "builder_sha256": "1651bd012d8f7e19b66639078119a889ec31d4b0e5458175ef7b75189c0d7057",
+  "actionscript_sha256": "b9165b8eb23e94e4256a45d204bade464f12c9dfa2d9910c030d30df1b34ef21",
+  "builder_sha256": "8c8f3abf25c2fb0590a01c7a7d58a95a9af9538dd42085a4cdde06351f33eddf",
   "client": "Chinese HD 0.9.22.0.1 #1513",
   "source_sha256": "aeaf9efe4ef1180ed8c65cd7d1c2d9d2e7ddfa8297e5cf1e0819c34c7281a019",
   "lobby_sha256": "3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55",
-  "output_sha256": "10a1cd33e36b69087aeade47a0ca2c2a8cc41de2ddf79d1ca519f4103c9e9953",
+  "output_sha256": "d6521d5c6973b37dd1566464d091cbedddce6fba71c5aa035efd19ab06935e01",
   "shared_movies_unchanged": true,
   "native_control_linkages": [
     "ButtonBlack",
@@ -12,6 +12,7 @@
     "ButtonRed",
     "DropDownListItemRendererSound",
     "DropdownMenuUI",
-    "DropdownMenu_ScrollingList"
+    "DropdownMenu_ScrollingList",
+    "ScrollBar"
   ]
 }

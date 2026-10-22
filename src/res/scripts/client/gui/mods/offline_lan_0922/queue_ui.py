@@ -1,10 +1,13 @@
 from __future__ import print_function
 
 from gui.mods.offline_lan_0922 import map_catalog
+from gui.mods.offline_lan_0922.ui_i18n import tr
 
 
 OFFLINE_PICKER_FLAG = 'isOfflineLanPicker'
 _PICKER_MARKER = '_offline_lan_0922_picker'
+PICKER_ALIAS = 'offlineLanMapPicker'
+_picker_type = None
 
 # Hook shape adapted from the public 0.9.22 observer implementation:
 # https://github.com/the-tuxedo-cat/wot-offline-server/blob/c0bc550c46deac980194b7b860ee8781d53ec97b/sources/scripts/client/gui/mods/mod_observer.py#L73-L80,L138-L139,L231-L244
@@ -43,10 +46,17 @@ def round_seconds(round_length):
 
 
 def _load_runtime():
+    global _picker_type
     import ArenaType
     from gui.Scaleform.daapi.view.lobby.trainings.TrainingSettingsWindow import \
         TrainingSettingsWindow
-    return (ArenaType, TrainingSettingsWindow)
+    if _picker_type is None:
+        class OfflineMapPicker(TrainingSettingsWindow):
+            def _populate(self):
+                super(OfflineMapPicker, self)._populate()
+                self.flashObject.as_setOfflineOptions(self._offline_picker_options)
+        _picker_type = OfflineMapPicker
+    return (ArenaType, _picker_type)
 
 
 def _load_join_runtime():
@@ -78,10 +88,16 @@ def _refresh_join_button():
 def open_picker():
     """Open the stock training settings view, following the observer hook."""
     from gui.Scaleform.framework.managers.loaders import ViewLoadParams
-    from gui.Scaleform.genConsts.PREBATTLE_ALIASES import PREBATTLE_ALIASES
+    from gui.Scaleform.framework import (g_entitiesFactories, ViewSettings,
+                                        ViewTypes, ScopeTemplates)
     from gui.app_loader import g_appLoader
 
-    alias = PREBATTLE_ALIASES.TRAINING_SETTINGS_WINDOW_PY
+    alias = PICKER_ALIAS
+    if g_entitiesFactories.getSettings(alias) is None:
+        unused_arena, view_type = _load_runtime()
+        g_entitiesFactories.addSettings(ViewSettings(
+            alias, view_type, 'offlineMapPicker.swf', ViewTypes.WINDOW,
+            alias, ScopeTemplates.DEFAULT_SCOPE))
     app = g_appLoader.getDefLobbyApp()
     if app is None:
         return False
@@ -254,7 +270,7 @@ class QueueUI(object):
     """A reversible, chain-safe adapter for the stock map picker."""
 
     def __init__(self, request_start, map_pool, endpoint=None, runtime=None,
-                 on_close=None, on_select=None, selection=None):
+                 on_close=None, on_select=None, selection=None, team_sizes=None):
         self._request_start = request_start
         self._map_pool = map_pool
         self._endpoint = endpoint or (lambda: '')
@@ -263,6 +279,7 @@ class QueueUI(object):
         # the choice returns to the room instead of starting the battle.
         self._on_select = on_select
         self._selection = selection or (lambda: (None, None))
+        self._team_sizes = team_sizes or (lambda: {})
         self._runtime = runtime
         self._installed = False
         self._window_type = None
@@ -337,6 +354,11 @@ class QueueUI(object):
                 result['arena'] = arena
             if selected_round_seconds:
                 result['timeout'] = int(selected_round_seconds) // 60
+            sizes = adapter._team_sizes() or {}
+            window._offline_picker_options = dict(
+                title=tr('Select map'), confirm=tr('Confirm'),
+                teamSizes='%d/%d' % (int(sizes.get(1, sizes.get('1', 15))),
+                                     int(sizes.get(2, sizes.get('2', 15)))))
             return result
 
         def wrapped_update(window, arena, round_length, is_private, comment):
@@ -449,6 +471,8 @@ class QueueUI(object):
             # This is the exact #1513 _populate data contract.  Updating the
             # existing native view avoids a destroy/reopen cursor race.
             window.as_setDataS(window.getInfo(), window.getMapsData())
+            if hasattr(window, '_offline_picker_options') and window._isDAAPIInited():
+                window.flashObject.as_setOfflineOptions(window._offline_picker_options)
         except ReferenceError:
             self._picker_window = None
             return False

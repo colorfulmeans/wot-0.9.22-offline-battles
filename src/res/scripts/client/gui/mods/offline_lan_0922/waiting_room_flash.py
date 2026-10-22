@@ -62,6 +62,7 @@ def register():
 
 
 class RoomWindow(object):
+    training = False
     def __init__(self, room):
         self.room = room
         self.view = None
@@ -154,7 +155,7 @@ def model(room):
     lines = as_text(room._status() or '').splitlines()
     labels = dict(room=lines[0] if lines else '',
                   players=lines[1] if len(lines) > 1 else '',
-                  tierLabel=tr('BOT TIER: %s%s') % ('', ''),
+                  tierLabel=tr('Training bots') if training else tr('BOT TIER: %s%s') % ('', ''),
                   skillLabel=tr('BOT SKILL: %s%s') % ('', ''),
                   size1Label=tr('TEAM %d SIZE') % 1,
                   size2Label=tr('TEAM %d SIZE') % 2,
@@ -184,7 +185,7 @@ def model(room):
         menu('tier', [(v, tr(c)) for v, c in BOT_TIER_OPTIONS], room._pending_bot_tier_mode or tier_mode,
              host and tier.get('supported'))
     menu('skill', [(v, tr(c)) for v, c in BOT_SKILL_OPTIONS], room._pending_bot_skill_mode or skill_mode,
-         host and skill.get('supported'))
+         host and skill.get('supported') and (not training or bots))
     for team in (1, 2):
         sizes = teams.get('sizes') or {}
         current = int(sizes.get(team, sizes.get(str(team), 15)))
@@ -198,6 +199,6 @@ def model(room):
         caption = (tr('TEAM %d%s') % (team, tr('  (YOU)') if preferred == team else '')
                    if team else tr('RANDOM%s') % (tr(' (ON)') if preferred == 0 else ''))
         button(key, caption, teams.get('supported'), selected=preferred == team)
-    button('start', tr('START BATTLE') + friendly_round_length(room._round_seconds()), host)
+    button('start', tr('Start training' if training else 'START BATTLE') + friendly_round_length(room._round_seconds()), host)
     button('close', tr('LEAVE'))
     return dict(title=tr('TRAINING ROOM') if training else tr('LAN WAITING ROOM'), labels=labels, controls=controls)

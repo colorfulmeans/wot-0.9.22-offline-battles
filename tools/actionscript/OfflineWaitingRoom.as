@@ -114,7 +114,7 @@ package {
             item.rowCount = 8;
             item.menuWidth = -1;
             item.menuWrapping = "normal";
-            item.scrollBar = "";
+            item.scrollBar = "ScrollBar";
             item.thumbOffsetTop = 0;
             item.thumbOffsetBottom = 0;
             item.showEmptyItems = false;

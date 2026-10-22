@@ -381,7 +381,9 @@ class WaitingRoomUI(object):
                  request_bot_tier_mode=None, open_map_picker=None,
                  round_seconds=None, bot_skill_status=None,
                  request_bot_skill_mode=None, training_status=None,
-                 toggle_training_bots=None):
+                 toggle_training_bots=None, player_roster=None, local_player_id=None):
+        self._player_roster = player_roster or (lambda: [])
+        self._local_player_id = local_player_id or (lambda: None)
         self._training_status = training_status or (lambda: (False, False))
         self._toggle_training_bots = toggle_training_bots
         self._request_start = request_start
@@ -432,9 +434,14 @@ class WaitingRoomUI(object):
         if self._flash is not None:
             return True
         if self._surface is None and type(self) is WaitingRoomUI:
-            from gui.mods.offline_lan_0922.waiting_room_flash import RoomWindow, register
-            register()
-            self._flash = RoomWindow(self)
+            if self._training_status()[0]:
+                from gui.mods.offline_lan_0922.training_room import TrainingRoomWindow, register
+                register()
+                self._flash = TrainingRoomWindow(self)
+            else:
+                from gui.mods.offline_lan_0922.waiting_room_flash import RoomWindow, register
+                register()
+                self._flash = RoomWindow(self)
             return True
         if self._panel is not None:
             return True
@@ -657,6 +664,11 @@ class WaitingRoomUI(object):
         return True
 
     def open(self):
+        if (self._surface is None and self._flash is not None and
+                bool(getattr(self._flash, 'training', False)) != bool(self._training_status()[0])):
+            self._flash.close()
+            self._flash = None
+            self._open = False
         if self._surface is None and type(self) is WaitingRoomUI and self._flash is None:
             self.install()
         if self._flash is not None:

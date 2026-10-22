@@ -122,6 +122,8 @@ class StockRoomTests(unittest.TestCase):
                                       {'DropDownListItemRendererSound'})
         self.assertEqual(['DropDownListItemRendererSound'], validate_control_linkages(
             'item.itemRenderer = "DropDownListItemRendererSound";', {'DropDownListItemRendererSound'}))
+        with self.assertRaisesRegex(ValueError, 'ScrollBarTypo'):
+            validate_control_linkages('item.scrollBar = "ScrollBarTypo";', {'ScrollBar'})
 
     def test_stock_sizing_and_dropdown_contract(self):
         source = (ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_text(encoding='utf8')
@@ -137,6 +139,7 @@ class StockRoomTests(unittest.TestCase):
         self.assertNotIn('item.height = 22;\n            item.width', component.split('if (linkage == "ButtonRed")')[0])
         dropdown = source.split('private function dropdown(')[1].split('private function clicked(')[0]
         self.assertIn('item.rowCount = 8', dropdown)
+        self.assertIn('item.scrollBar = \"ScrollBar\"', dropdown)
         self.assertIn('item.menuRowsFixed = false', dropdown)
         self.assertIn('item.thumbOffsetTop = 0', dropdown)
         self.assertIn('item.thumbOffsetBottom = 0', dropdown)
@@ -152,6 +155,9 @@ class StockRoomTests(unittest.TestCase):
             for name in ('src/res/gui/flash/offlineWaitingRoom.swf',
                          'src/res/gui/flash/offlineWaitingRoom.swf.json',
                          'tools/actionscript/OfflineWaitingRoom.as',
+                         'src/res/gui/flash/offlineMapPicker.swf',
+                         'src/res/gui/flash/offlineMapPicker.swf.json',
+                         'tools/actionscript/OfflineMapPicker.as',
                          'tools/build_waiting_room_swf.py'):
                 target = root/name
                 target.parent.mkdir(parents=True, exist_ok=True)

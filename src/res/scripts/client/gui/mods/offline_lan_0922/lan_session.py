@@ -1176,6 +1176,9 @@ class LANSession(object):
         nor a message is what makes the button look dead after a round.
         """
         self._postbattle_return = None
+        if self._training_mode != (unused_action_name == 'training'):
+            self._close_picker()
+            self._leave_queue_screen()
         self._training_mode = unused_action_name == 'training'
         if self._stopped or self.state in ('error', 'stopped'):
             sys.stdout.write(
@@ -1632,6 +1635,7 @@ class LANSession(object):
                 on_close=self._on_map_window_closed,
                 on_select=self._on_map_window_selected,
                 selection=self._map_window_selection)
+            window._team_sizes = lambda: self._team_status().get('sizes', {})
             window.install()
         except Exception as error:
             self._map_window_unavailable = True
@@ -1794,6 +1798,9 @@ class LANSession(object):
         return self._queue_screen
 
     def _ensure_queue_background(self):
+        if self._training_mode:
+            # The native TrainingRoom is the lobby page, not a random queue.
+            return True
         # Account and Scaleform views are recreated across every battle.
         # An earlier successful action is not proof of the current room.
         screen = self._ensure_queue_screen()
@@ -1802,6 +1809,9 @@ class LANSession(object):
         return bool(screen.is_ready())
 
     def _leave_queue_screen(self):
+        if self._training_mode:
+            background = getattr(getattr(self._queue, '_flash', None), 'leave_background', None)
+            return bool(background()) if callable(background) else False
         if self._queue_screen is None:
             return False
         return bool(self._queue_screen.leave())
@@ -1841,6 +1851,8 @@ class LANSession(object):
                     'round_seconds': self._round_seconds_value,
                     'training_status': lambda: (self._training_mode, self._training_bots),
                     'toggle_training_bots': self._toggle_training_bots,
+                    'player_roster': lambda: list(getattr(self.client, 'roster', ()) or ()),
+                    'local_player_id': lambda: getattr(self.client, 'player_id', None),
                 })
             room = self._room_factory(
                 self.request_start, self._map_pool_value, **options)
@@ -2017,8 +2029,8 @@ class LANSession(object):
         if not self._is_local_host() and not self._guest_surface():
             # The stock map window can only present the elected room host.
             return False
-        # As in 0.8.2, the stock queue screen loads under the room.
-        # Training changes LAN rules, not the visible pre-queue background.
+        # Only regular battles enter the random queue background. Training
+        # loads the native TrainingRoom lobby page through its own adapter.
         if not self._ensure_queue_background():
             self._schedule_picker_when_lobby_ready()
             return False

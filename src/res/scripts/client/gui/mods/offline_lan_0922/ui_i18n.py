@@ -31,6 +31,15 @@ def tr(source):
 
 
 _ZH = {
+    'Back': u'返回',
+    'Select map': u'选择地图',
+    'Confirm': u'确定',
+    'Training bots': u'训练电脑',
+    'Training settings': u'训练设置',
+    'Training mode': u'训练模式',
+    'Start training': u'开始训练',
+    '%d minutes': u'%d 分钟',
+
     'Purchase style': u'购买风格',
     'Buy %s for %d %s?': u'是否购买 %s？价格为 %d %s。',
     'Style purchased.': u'风格购买成功。',
