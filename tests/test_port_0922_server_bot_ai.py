@@ -898,6 +898,10 @@ class ServerBotTacticsTests(unittest.TestCase):
         self.assertNotIn('capture_base_id', approach)
 
         self.states[0]['z'] = 100.0
+        intermediate = planner.build_orders(
+            self.manifest, self.states, [], 1.5, defense)['orders'][0]
+        self.assertEqual('route', intermediate['combat_mode'])
+        self.states[0]['z'] = 500.0
         order = planner.build_orders(
             self.manifest, self.states, [], 2.0, defense)['orders'][0]
 
@@ -927,7 +931,7 @@ class ServerBotTacticsTests(unittest.TestCase):
                              for order in approach))
 
         for state in states:
-            state['z'] = 100.0
+            state['z'] = 500.0 if state['id'] in selected_ids else 100.0
         orders = planner.build_orders(
             manifest, states, [], 2.0, _capture_defense())['orders']
         capture = [order for order in orders
@@ -2669,27 +2673,27 @@ class ServerBotArtilleryTests(unittest.TestCase):
         first = planner.build_orders(
             manifest, states, [], 1.0, defense)['orders']
         first_ids = {order['id'] for order in first
-                     if order['combat_mode'] == 'base_defense'}
+                     if order.get('defense_base_id') is not None}
         self.assertEqual(3, len(first_ids))
 
         defense['states']['1']['invaders'] = 1
         delayed = planner.build_orders(
             manifest, states, [], 2.0, defense)['orders']
         delayed_ids = {order['id'] for order in delayed
-                       if order['combat_mode'] == 'base_defense'}
+                       if order.get('defense_base_id') is not None}
         self.assertEqual(first_ids, delayed_ids)
 
         reduced_once = planner.build_orders(
             manifest, states, [], 5.1, defense)['orders']
         reduced_once_ids = {order['id'] for order in reduced_once
-                            if order['combat_mode'] == 'base_defense'}
+                            if order.get('defense_base_id') is not None}
         self.assertEqual(2, len(reduced_once_ids))
         self.assertTrue(reduced_once_ids < first_ids)
 
         reduced_twice = planner.build_orders(
             manifest, states, [], 8.2, defense)['orders']
         reduced_twice_ids = {order['id'] for order in reduced_twice
-                             if order['combat_mode'] == 'base_defense'}
+                             if order.get('defense_base_id') is not None}
         self.assertEqual(1, len(reduced_twice_ids))
         self.assertTrue(reduced_twice_ids < reduced_once_ids)
 
@@ -2723,7 +2727,7 @@ class ServerBotArtilleryTests(unittest.TestCase):
         initial = planner.build_orders(
             manifest, states, [], 1.0, defense)['orders']
         initial_ids = {order['id'] for order in initial
-                       if order['combat_mode'] == 'base_defense'}
+                       if order.get('defense_base_id') is not None}
         self.assertEqual({11, 12}, initial_ids)
 
         player = {'id': 2, 'team': 2, 'alive': True}
@@ -2735,7 +2739,7 @@ class ServerBotArtilleryTests(unittest.TestCase):
         reduced = planner.build_orders(
             manifest, states, [player], 5.1, defense)['orders']
         retained_ids = {order['id'] for order in reduced
-                        if order['combat_mode'] == 'base_defense'}
+                        if order.get('defense_base_id') is not None}
 
         self.assertEqual({11}, retained_ids)
         retained = next(order for order in reduced if order['id'] == 11)

@@ -379,7 +379,7 @@ class FrameOwnedNavigationTests(unittest.TestCase):
 
 
 class AdvancedCaptureTests(unittest.TestCase):
-    def test_contact_loss_after_staging_hands_over_to_actual_circle(self):
+    def test_contact_loss_finishes_outside_terminal_before_actual_circle(self):
         route = _route('lane', [(0, -100, False), (0, 100, False),
                                (0, 300, False)])
         manifest = [_bot(11, 1, 0, route, 'mediumTank')]
@@ -387,6 +387,11 @@ class AdvancedCaptureTests(unittest.TestCase):
         planner = BotPlanner()
         order = planner.build_orders(
             manifest, states, [], 1.0, _capture_defense())['orders'][0]
+        self.assertEqual('route', order['combat_mode'])
+        self.assertEqual(300., order['move_position']['z'])
+        states[0]['z'] = 300.
+        order = planner.build_orders(
+            manifest, states, [], 2.0, _capture_defense())['orders'][0]
         self.assertEqual('base_capture', order['combat_mode'])
         self.assertEqual((123.5, 456.25),
                          (order['move_position']['x'], order['move_position']['z']))

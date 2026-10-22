@@ -15028,6 +15028,7 @@ class BattleState:
                         "id": "%d:%d" % (base_team, index),
                         "x": round(bx, 3), "y": 0.0,
                         "z": round(bz, 3),
+                        "radius": radius,
                     })
             self.capture_threat_bases[base_team] = threatened
             invader_keys = sorted(set(
@@ -15127,6 +15128,8 @@ class BattleState:
                 values.append({
                     "id": "%d:%d" % (team, index),
                     "x": round(x, 3), "y": 0.0, "z": round(z, 3),
+                    "radius": max(1.0, float(point.get('radius', 50.0)))
+                        if isinstance(point, dict) else 50.0,
                 })
             capture_bases[str(team)] = values
         arena_bounds = None
@@ -15192,6 +15195,7 @@ class BattleState:
                 position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})
                 for bot in bots],
             incidents=planner._base_defense,
+            capture_squads=planner._base_capture,
             final_orders=[dict(id=order['id'], mode=order.get('combat_mode'),
                 defense_base_id=order.get('defense_base_id'), goal=order.get('move_position'))
                 for order in self.bot_orders.get('orders', ())]), separators=(',', ':')))
