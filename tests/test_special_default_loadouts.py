@@ -56,6 +56,7 @@ class SpecialDefaultsTests(unittest.TestCase):
         descriptor.gun.shots.append(types.SimpleNamespace(shell=types.SimpleNamespace(
             name=names[2], compactDescr=102, kind='HIGH_EXPLOSIVE',
             piercingPower=(105,105), damage=(480,480)), speed=1173))
+        descriptor.gun.shots[0].shell.kind = 'ARMOR_PIERCING_CR'
         descriptor.gun.maxAmmo = 72
         profile = BattleState._sanitize_bot_profile(build_vehicle_profile(descriptor))
         state = _BotAmmoState(descriptor, profile)

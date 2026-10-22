@@ -147,7 +147,7 @@ _BOT_TARGET_STATIC_FIELDS = (
 # the nested critical payload after _mark_combat_publication has run.
 _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'id', 'fire_seq', 'shell_index', 'next_shell_index',
-    'ammo_reload_pending', 'reload_duration', 'clip', 'clip_size',
+    'ammo_reload_pending', 'ammo_magazine_started', 'reload_duration', 'clip', 'clip_size',
     'burst_active', 'burst_group_seq', 'burst_count', 'burst_next_index',
     'burst_interval', 'burst_shell_index',
     'siege_state', 'siege_transition_total_ms',
@@ -1694,23 +1694,15 @@ class _BotAmmoState(object):
         return True
 
     def stage(self, requested, ready, full_reload=True):
-        """Commit loaded/next choices only at one completed reload edge."""
-        if not ready:
-            return False
-        changed = False
-        if self.reload_pending:
-            if full_reload:
-                selected = self._available(self.next)
-                if selected != self.loaded:
-                    self.loaded = selected
-                    changed = True
-            self.reload_pending = False
-            self.plan_pending = True
-        if not self.reload_pending:
-            selected = self._available(requested)
-            if selected != self.next:
-                self.next = selected
+        """Update an unstarted round/magazine without restarting its clock."""
+        selected = self._available(requested)
+        changed = selected != self.next
+        self.next = selected
+        if ready:
+            if full_reload and selected != self.loaded:
+                self.loaded = selected
                 changed = True
+            self.reload_pending = False
             self.plan_pending = False
         return changed
 
@@ -4141,6 +4133,7 @@ class BotRuntime(object):
                 sync['authority_handoff_pending'] = True
             reload_factor = _critical_factor(state, descriptor, 'reload')
             state['clip_size'] = gun_state.clip_size
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
@@ -4939,6 +4932,7 @@ class BotRuntime(object):
                         raw.get('clip'), raw.get('clip_size'))
                     reload_factor = _critical_factor(
                         state, descriptor, 'reload')
+                    state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
                     state['clip'] = gun_state.clip
                     state['reload_time'] = gun_state.remaining(reload_factor)
                     state['reload_duration'] = gun_state.duration(
@@ -15663,6 +15657,7 @@ class BotRuntime(object):
         gun_state.commit_shot_bloom(
             _critical_factor(state, descriptor, 'dispersion'),
             final_round=final_round)
+        state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
         state['clip'] = gun_state.clip
         state['reload_time'] = gun_state.remaining(reload_factor)
         state['reload_duration'] = gun_state.duration(reload_factor)
@@ -15757,6 +15752,7 @@ class BotRuntime(object):
         if gun_state is not None:
             reload_factor = _critical_factor(
                 state, self._descriptors.get(bot_id, {}), 'reload')
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
@@ -16837,11 +16833,15 @@ class BotRuntime(object):
             elif not burst_state.active:
                 gun_state.rescale_reload(reload_factor)
                 gun_state.tick(step)
+                selected = gun_state.shell_index(command.get('shell_index', 0))
+                ammo_state.stage(selected, False)
                 reload_kind = gun_state.complete_reload(
                     reload_factor, ammo_state.planned_rounds())
-                ammo_state.stage(
-                    gun_state.shell_index(command.get('shell_index', 0)),
-                    reload_kind is not None, reload_kind == 'full')
+                ammo_state.stage(selected, reload_kind is not None,
+                                 reload_kind == 'full')
+                if reload_kind == 'full':
+                    gun_state.clip = min(gun_state.clip_size,
+                                         ammo_state.planned_rounds())
             ammo_state.publish(state)
             is_spg = str(profile.get('class_tag') or '') == 'SPG'
             pending_intent = None
@@ -17842,6 +17842,7 @@ class BotRuntime(object):
                     _critical_factor(state, descriptor, 'dispersion'),
                     _critical_factor(state, descriptor, 'aim_time'))
             state['clip_size'] = gun_state.clip_size
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)

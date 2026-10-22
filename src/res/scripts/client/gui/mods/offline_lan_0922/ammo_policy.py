@@ -3,7 +3,7 @@ from __future__ import division
 """Bot ammunition ordering, whole-magazine allocation and admitted-shot policy.
 
 This module is shared by the Python 2 worker and Python 3 server. No policy
-decision mutates the native loaded round, magazine or reload timer.
+decision consumes ammunition or restarts a reload timer.
 """
 
 from gui.mods.offline_lan_0922.default_loadouts import GOLD_SHELLS, profile_roles
@@ -28,6 +28,9 @@ def ordered(profile, remaining=None):
             kinds.get(str(s.get('kind', '')).upper(), 4), int(s['index'])))
     if profile.get('class_tag') == 'SPG':
         shells = [s for s in shells if is_he(s)]
+    elif shells and is_he(shells[0]):
+        # HE-primary guns have one explicit non-HE probe, never two backups.
+        shells = shells[:1] + [s for s in shells[1:] if not is_he(s)][:1]
     if remaining is not None:
         shells = [s for s in shells if int(s['index']) < len(remaining)
                   and remaining[int(s['index'])] > 0]
@@ -37,8 +40,7 @@ def ordered(profile, remaining=None):
 def stages(profile, remaining=None):
     shells = ordered(profile)
     if shells and profile.get('class_tag') != 'SPG' and is_he(shells[0]):
-        shells = [s for s in shells if is_he(s)] + sorted(
-            [s for s in shells if not is_he(s)], key=lambda s: float(s.get('penetration', 0)))
+        shells = shells[:1] + [s for s in shells[1:] if not is_he(s)][:1]
     elif profile.get('class_tag') != 'SPG':
         shells = [s for s in shells if not is_he(s)] + [s for s in shells if is_he(s)]
     if remaining is not None:
@@ -57,7 +59,7 @@ def weights(profile, shells):
     if profile.get('class_tag') == 'SPG':
         return (75, 25) if clip_size(profile) > 1 else (80, 20)
     if is_he(shells[0]):
-        return (70, 20, 10) if len(shells) == 3 else (80, 20)
+        return (80, 20)
     if len(shells) == 3:
         return (60, 30, 10)
     return (80, 20) if any(is_he(s) for s in shells) else (60, 40)
@@ -145,27 +147,8 @@ class ShotPolicy(object):
         indices = [int(s['index']) for s in available]
         if self.desired not in indices:
             self.desired = indices[0]
-        loaded = int(state.get('shell_index', self.phase))
-        if not state.get('ammo_reload_pending') and loaded in indices and loaded != self.phase:
-            old = self.phase
-            self.phase = loaded
-            self.phase_id += 1
-            self.failures.clear()
-            self.phase_fired = 0
-            self.used = 0
-            if self.desired == old:
-                self.desired = loaded
         main = indices[0]
         if self.desired != self.phase:
-            # A whole magazine may be one trigger (MTLS). Prequeue its normal
-            # return while the incoming backup reload is frozen. Later real
-            # failures may still latch an upgrade before the next boundary.
-            automatic_backup = (clip_size(self.profile) > 1 or
-                                (is_he(available[0]) and self.profile.get('class_tag') != 'SPG'))
-            if (automatic_backup and self.desired != main and
-                    state.get('ammo_reload_pending') and
-                    state.get('next_shell_index') == self.desired):
-                return main
             return self.desired
         loaded = self.phase
         if loaded not in indices:
@@ -177,11 +160,11 @@ class ShotPolicy(object):
         if automatic:
             size = clip_size(self.profile)
             if size > 1:
-                returning = self.used >= size - max(1, int(self.profile.get('burst_size', 1)))
+                returning = self.used >= size
             else:
                 limit = 1 if first_he and not arty else 2
                 fired = self.phase_fired if loaded == self.phase else 0
-                returning = fired >= limit - 1
+                returning = fired >= limit
             if returning:
                 return main
         return self.desired

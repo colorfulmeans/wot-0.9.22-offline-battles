@@ -5060,6 +5060,16 @@ class BattleState:
             target = (order.get('target_kind'), order.get('target_id')) if order.get('target_id') else None
             policy.context(state, target)
             selected = policy.choose(state)
+            if getattr(policy, 'last_plan', None) != selected:
+                policy.last_plan = selected
+                _server_log('BOT AMMO PLAN ' + json.dumps(dict(
+                    bot=order['id'], round=self.round_id, epoch=policy.epoch,
+                    phase=policy.phase, phase_id=policy.phase_id, desired=policy.desired,
+                    selected=selected, loaded=state.get('shell_index'),
+                    next=state.get('next_shell_index'), clip=state.get('clip'),
+                    pending=state.get('ammo_reload_pending'), reload=state.get('reload_time'),
+                    fire_seq=state.get('fire_seq'), inventory=state.get('ammo_remaining')),
+                    sort_keys=True))
             state['ammo_policy_shell_index'] = selected
             order['shell_index'] = selected
 
@@ -5067,16 +5077,18 @@ class BattleState:
         if record.get('shooter_kind') != 'bot':
             return
         policy = self._bot_ammo_policy(record['shooter_id'])
-        before = policy.desired
+        launch = policy.by_seq.get(record['shot_seq']) or {}
         policy.resolve(record['shot_seq'], record.get('_ammo_hit', False),
                        record.get('_ammo_damage', 0), record.get('_ammo_penetrated', False), known)
-        if before != policy.desired or not known:
-            _server_log('BOT AMMO ' + json.dumps(dict(
-                bot=record['shooter_id'], projectile=record['projectile_id'],
-                shot=record['shot_seq'], phase=policy.phase, desired=policy.desired,
-                hit=record.get('_ammo_hit', False), damage=record.get('_ammo_damage', 0),
-                penetrated=record.get('_ammo_penetrated', False), known=known,
-                epoch=policy.epoch, round=self.round_id), sort_keys=True))
+        _server_log('BOT AMMO ' + json.dumps(dict(
+            bot=record['shooter_id'], projectile=record['projectile_id'],
+            shot=record['shot_seq'], phase=policy.phase, desired=policy.desired,
+            hit=record.get('_ammo_hit', False), damage=record.get('_ammo_damage', 0),
+            penetrated=record.get('_ammo_penetrated', False), known=known,
+            epoch=policy.epoch, phase_id=policy.phase_id, magazine=policy.magazine,
+            launch_phase_id=launch.get('phase_id'), launch_epoch=launch.get('epoch'),
+            launch_magazine=launch.get('magazine'), shell=launch.get('shell'),
+            pending_results=len(policy.pending), round=self.round_id), sort_keys=True))
         self._refresh_bot_ammo_orders()
 
     @staticmethod
@@ -6506,6 +6518,8 @@ class BattleState:
             "next_shell_index": ammunition["next"],
             "ammo_remaining": ammunition["remaining"],
             "ammo_reload_pending": ammunition["pending"],
+            "ammo_magazine_started": bool(raw.get("ammo_magazine_started",
+                gun_clip["clip"] > 0 and gun_clip["clip"] < gun_clip["clip_size"])),
             "clip": gun_clip["clip"],
             "clip_size": gun_clip["clip_size"],
             "health": reported_health,
@@ -6658,13 +6672,10 @@ class BattleState:
             raise ValueError("bot ammunition fire delta is invalid")
         loaded = int(current.get("shell_index", 0))
         previous_loaded = int(previous.get("shell_index", 0))
-        previous_next = int(previous.get(
-            "next_shell_index", previous_loaded))
         next_shell = int(current.get("next_shell_index", loaded))
         previous_pending = bool(previous.get(
             "ammo_reload_pending", False))
         pending = bool(current.get("ammo_reload_pending", False))
-        previous_reload_time = float(previous.get("reload_time", 0.0))
         reload_time = float(current.get("reload_time", 0.0))
         clip_size = int(current.get("clip_size", 1))
         previous_clip_size = int(previous.get("clip_size", 1))
@@ -6676,21 +6687,25 @@ class BattleState:
         if not 0 <= previous_clip <= clip_size or not 0 <= clip <= clip_size:
             raise ValueError("bot clip checkpoint is invalid")
         expected = list(before)
+        planned_is_usable = (
+            (sum(after) == 0 and next_shell == 0) or
+            (0 <= next_shell < len(after) and after[next_shell] > 0))
+        if not planned_is_usable:
+            raise ValueError("bot planned ammunition is exhausted")
+        # A full, unstarted magazine may change type before its first shot.
+        # A partial magazine or an active trigger keeps its physical shell.
+        fresh = (not previous_pending and not previous.get('burst_active', False)
+                 and not previous.get('ammo_magazine_started', previous_clip < clip_size))
+        full_boundary = clip_size == 1 or (previous_pending and previous_clip == 0) or fresh
         if fire_delta:
             previous_active = bool((previous or {}).get(
                 "burst_active", False))
             if previous_active:
                 expected_loaded = previous_loaded
                 expected_clip = previous_clip - fire_delta
-            elif previous_pending and (
-                    previous_clip == 0 or clip_size == 1):
-                expected_loaded = previous_next
-                # A full reload is capped by the planned shell's remaining
-                # inventory.  If that reload completes and fires in this same
-                # worker publication, consume one round from the partial
-                # refill rather than inventing a full magazine first.
-                expected_clip = min(
-                    clip_size, before[previous_next]) - fire_delta
+            elif full_boundary:
+                expected_loaded = int(current.get("burst_shell_index", loaded))
+                expected_clip = min(clip_size, before[expected_loaded]) - fire_delta
             else:
                 expected_loaded = previous_loaded
                 expected_clip = previous_clip - fire_delta
@@ -6732,64 +6747,28 @@ class BattleState:
                     "bot clip did not consume one round (%d -> %d, "
                     "expected %d)" % (
                         previous_clip, clip, expected_clip))
-            if next_shell != previous_next:
-                # The worker must keep ``next`` usable in every atomic ammo
-                # snapshot.  Consuming the last round of the planned shell
-                # therefore selects its fallback in the same fire update,
-                # before the reload edge.  That is the only legal planned
-                # selection change outside a completed reload.
-                planned_was_consumed = (
-                    previous_next == loaded and
-                    expected[previous_next] == 0)
-                fallback_is_usable = (
-                    (sum(expected) == 0 and next_shell == 0) or
-                    (0 <= next_shell < len(expected) and
-                     expected[next_shell] > 0))
-                initial_reload_completed = (
-                    not previous_active and previous_reload_time > 0.0)
-                if (not fallback_is_usable or not (
-                        planned_was_consumed or
-                        initial_reload_completed)):
-                    raise ValueError(
-                        "bot planned shell changed outside reload")
         elif not previous_pending:
             if pending:
                 raise ValueError("bot reload started without a shot")
-            if loaded != previous_loaded:
-                raise ValueError("bot loaded shell changed outside reload")
-            if clip_size > 1 and clip != previous_clip:
+            if loaded != previous_loaded and not fresh and clip_size > 1:
+                raise ValueError("bot loaded shell changed inside magazine")
+            expected_ready_clip = min(clip_size, after[loaded]) if full_boundary else previous_clip
+            if clip_size > 1 and clip != expected_ready_clip:
                 raise ValueError("bot clip changed outside reload")
-            if next_shell != previous_next:
-                planned_is_usable = (
-                    (sum(expected) == 0 and next_shell == 0) or
-                    (0 <= next_shell < len(expected) and
-                     expected[next_shell] > 0))
-                initial_reload_completed = (
-                    previous_reload_time > 0.0 and reload_time == 0.0)
-                if not initial_reload_completed or not planned_is_usable:
-                    raise ValueError(
-                        "bot planned shell changed outside reload")
         elif pending:
             if loaded != previous_loaded:
                 raise ValueError("bot loaded shell changed before reload")
-            if next_shell != previous_next:
-                raise ValueError("bot planned shell changed before reload")
             if clip_size > 1 and clip != previous_clip:
                 raise ValueError("bot clip changed before reload")
-        elif previous_clip == 0 or clip_size == 1:
-            if loaded != previous_next:
-                raise ValueError(
-                    "bot loaded shell skipped its planned boundary")
+        elif full_boundary:
             refill = min(clip_size, after[loaded])
             if clip_size > 1 and clip != refill:
                 raise ValueError("bot full reload did not refill its clip")
         else:
             if loaded != previous_loaded:
-                raise ValueError(
-                    "bot intra-clip reload changed its loaded shell")
+                raise ValueError("bot intra-clip reload changed its loaded shell")
             if clip_size > 1 and clip != previous_clip:
-                raise ValueError(
-                    "bot intra-clip reload changed its clip")
+                raise ValueError("bot intra-clip reload changed its clip")
         if list(after) != expected:
             raise ValueError("bot ammunition inventory is not conserved")
         return True

@@ -91,13 +91,11 @@ class AmmoPolicyTests(unittest.TestCase):
         self.shot(); self.shot(damage=10, pen=True); self.shot(hit=False); self.shot()
         self.assertEqual(0, p.desired)
 
-    def test_he_default_backup_prequeues_return_before_its_only_shot(self):
+    def test_he_default_returns_after_actual_probe(self):
         p = self.setup_policy(profile(('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE')))
         self.shot(); self.shot()
-        self.state['shell_index'] = 1
-        self.assertEqual(0, p.choose(self.state))
+        self.assertEqual(1, p.choose(self.state))
         self.shot(shell=1, hit=False)
-        self.state['shell_index'] = 0
         self.assertEqual(0, p.choose(self.state))
 
     def test_ordinary_he_phase_returns_after_two_physical_shots(self):
@@ -109,8 +107,9 @@ class AmmoPolicyTests(unittest.TestCase):
         self.state['shell_index'] = 2
         self.assertEqual(2, p.choose(self.state))
         self.shot(shell=2, hit=False)
-        self.assertEqual(0, p.choose(self.state))  # Locked for reload after shot two.
+        self.assertEqual(2, p.choose(self.state))
         self.shot(shell=2, hit=False)
+        self.assertEqual(0, p.choose(self.state))
         self.state['shell_index'] = 0
         self.assertEqual(0, p.choose(self.state))
 
@@ -145,14 +144,11 @@ class AmmoPolicyTests(unittest.TestCase):
         self.shot(group=3, count=2, hit=False); self.shot(group=3, count=2, hit=False)
         self.assertEqual(0, p.desired)
 
-    def test_magazine_backup_without_upgrade_returns_at_last_round(self):
-        p = self.setup_policy(profile(clip=4))
-        self.shot(); self.shot()
-        self.state.update(shell_index=1, clip=4)
-        self.assertEqual(1, p.choose(self.state))
-        self.shot(shell=1, damage=100)
-        self.state['clip'] = 1
-        p.used = 3
+    def test_magazine_backup_returns_only_after_last_physical_round(self):
+        p = self.setup_policy(profile(clip=4)); self.shot(); self.shot()
+        for i in range(4):
+            self.assertEqual(1, p.choose(self.state))
+            self.shot(shell=1, damage=100)
         self.assertEqual(0, p.choose(self.state))
 
     def test_magazine_backup_failure_overrides_automatic_return(self):
@@ -166,10 +162,8 @@ class AmmoPolicyTests(unittest.TestCase):
     def test_batchat_artillery_backup_returns_only_at_magazine_end(self):
         p = self.setup_policy(profile(('HIGH_EXPLOSIVE',)*2, clip=3, arty=True))
         self.shot(hit=False); self.shot(hit=False)
-        self.state.update(shell_index=1, clip=3)
-        self.assertEqual(1, p.choose(self.state))
-        self.state['clip'] = 1
-        p.used = 2
+        for i in range(3):
+            self.assertEqual(1, p.choose(self.state)); self.shot(shell=1, hit=True)
         self.assertEqual(0, p.choose(self.state))
 
     def test_exhausted_backup_skipped_and_single_or_empty_inventory(self):
@@ -213,14 +207,13 @@ class AmmoPolicyTests(unittest.TestCase):
             dict(index=1, name='silver_he', kind='HIGH_EXPLOSIVE')])
         self.assertEqual([1, 0], [s['index'] for s in ordered(p)])
 
-    def test_burst_return_prequeues_at_last_trigger_not_last_pellet(self):
-        config = profile(clip=12)
-        config['burst_size'] = 3
+    def test_burst_return_waits_for_all_actual_pellets(self):
+        config = profile(clip=3); config['burst_size'] = 3
         p = self.setup_policy(config)
-        self.shot(); self.shot()
-        self.state.update(shell_index=1, clip=3)
-        p.choose(self.state)
-        p.used = 9
+        self.shot(group=1, count=3); self.shot(group=1, count=3); self.shot(group=1, count=3)
+        for i in range(3):
+            self.assertEqual(1, p.choose(self.state))
+            self.shot(shell=1, group=4, count=3, damage=10)
         self.assertEqual(0, p.choose(self.state))
 
     def test_ammunition_capacity_above_one_thousand_is_not_truncated(self):
@@ -237,28 +230,30 @@ class AmmoPolicyTests(unittest.TestCase):
         self.state.update(burst_active=False, burst_group_seq=1, burst_next_index=1)
         self.assertEqual(1, p.choose(self.state))
 
-    def test_single_trigger_magazine_prequeues_backup_return_during_reload(self):
-        config = profile(clip=2)
-        config['burst_size'] = 2
+    def test_single_trigger_magazine_keeps_backup_until_it_fires(self):
+        config = profile(clip=2); config['burst_size'] = 2
         p = self.setup_policy(config)
         self.shot(group=1, count=2); self.shot(group=1, count=2)
-        self.assertEqual(1, p.desired)
         self.state.update(ammo_reload_pending=True, next_shell_index=1, clip=0)
+        self.assertEqual(1, p.choose(self.state))
+        self.shot(shell=1, group=3, count=2, damage=100)
+        self.assertEqual(1, p.choose(self.state))
+        self.shot(shell=1, group=3, count=2, damage=100)
         self.assertEqual(0, p.choose(self.state))
-        self.assertEqual(1, p.desired)  # The incoming backup magazine stays locked.
 
-    def test_late_choice_never_replaces_locked_or_loaded_round(self):
+    def test_late_choice_retargets_pending_and_ready_single_round(self):
         from test_port_0922_bot_ammo import _load_bot_runtime, _descriptor, _profile
-        runtime = _load_bot_runtime()
-        ammo = runtime._BotAmmoState(_descriptor(), _profile())
-        ammo.stage(1, True)
-        ammo.stage(2, True)  # Editable while waiting to fire.
-        self.assertEqual((0, 2), (ammo.loaded, ammo.next))
+        ammo = _load_bot_runtime()._BotAmmoState(_descriptor(), _profile())
+        original = list(ammo.remaining)
+        ammo.stage(1, True); ammo.stage(2, True)
+        self.assertEqual((2, 2), (ammo.loaded, ammo.next))
+        self.assertEqual(original, ammo.remaining)
         self.assertTrue(ammo.consume_loaded())
-        ammo.stage(1, False)  # The next round is already reloading.
-        self.assertEqual((0, 2), (ammo.loaded, ammo.next))
-        ammo.stage(1, True)
+        ammo.stage(1, False)
         self.assertEqual((2, 1), (ammo.loaded, ammo.next))
+        ammo.stage(1, True)
+        self.assertEqual((1, 1), (ammo.loaded, ammo.next))
+        self.assertEqual(original[2]-1, ammo.remaining[2])
 
     def _fire_without_observing_a_ready_frame(self, config, rounds):
         import types
@@ -285,11 +280,11 @@ class AmmoPolicyTests(unittest.TestCase):
     def test_he_probe_returns_after_one_shot_without_a_ready_snapshot(self):
         fired = self._fire_without_observing_a_ready_frame(
             profile(('HIGH_EXPLOSIVE', 'HOLLOW_CHARGE')), 7)
-        self.assertEqual([0, 0, 0, 1, 0, 0, 0], fired)
+        self.assertEqual([0, 0, 1, 0, 0, 1, 0], fired)
 
     def test_ordinary_he_returns_after_two_shots_without_a_ready_snapshot(self):
         fired = self._fire_without_observing_a_ready_frame(profile(), 10)
-        self.assertEqual([0, 0, 0, 1, 1, 1, 2, 2, 0, 0], fired)
+        self.assertEqual([0, 0, 1, 1, 2, 2, 0, 0, 1, 1], fired)
 
     def test_empty_primary_keeps_backup_nonhe_before_he(self):
         config = profile(('ARMOR_PIERCING', 'HOLLOW_CHARGE', 'HIGH_EXPLOSIVE'))
@@ -298,21 +293,13 @@ class AmmoPolicyTests(unittest.TestCase):
         self.assertEqual([0, 2, 1], [s['index'] for s in ordered(config)])
         self.assertEqual([1, 2], [s['index'] for s in stages(config, [0, 10, 10])])
 
-    def test_empty_he_primary_leaves_a_closed_nonhe_cycle(self):
-        from unittest import mock
-        config = profile(('HIGH_EXPLOSIVE', 'ARMOR_PIERCING', 'ARMOR_PIERCING_CR'))
-        config.update(vehicle_name='ussr:test', gun_name='test_he_three_types')
-        for shell, name in zip(config['shells'], ('he', 'low', 'high')):
-            shell['name'] = name
-        with mock.patch.dict(GUN_AMMUNITION, {'ussr:test_he_three_types': ('he', 'low', 'high')}):
-            p = self.setup_policy(config)
-            self.state.update(ammo_remaining=[0, 10, 10], shell_index=1)
-            self.assertEqual(1, p.choose(self.state))
-            self.shot(shell=1); self.shot(shell=1)
-            self.assertEqual(2, p.desired)
+    def test_reviewed_he_guns_have_at_most_one_nonhe_backup(self):
+        self.assertEqual(('_152mm_53-OF-530', '_152mm_MPB_1915'), GUN_AMMUNITION['ussr:_152mm_M-10'])
+        self.assertEqual(('_152mm_53-OF-530', '_152mm_53BP540'), GUN_AMMUNITION['ussr:_152mm_ML-20_mod_1937'])
+        for key, names in GUN_AMMUNITION.items():
+            if key not in ('ussr:_130mm_B-13-S2', 'ussr:_130mm_S-26A'):
+                self.assertLessEqual(len(names), 2, key)
 
-
-class CanonicalAmmoResultTests(unittest.TestCase):
     def test_two_admitted_zero_hp_hits_drive_the_actual_room_order(self):
         import test_port_0922_server_projectiles as ledger
         room = ledger._state()

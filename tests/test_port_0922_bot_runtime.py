@@ -7271,7 +7271,7 @@ class BotRuntimeTests(unittest.TestCase):
         codec = self.module.bot_state_codec
         carried = set(name for name, unused in codec.SCALARS
                       if not name.startswith('_'))
-        carried |= set(('alive', 'world_pose', 'ammo_reload_pending',
+        carried |= set(('alive', 'world_pose', 'ammo_reload_pending', 'ammo_magazine_started',
                         'burst_active', 'movement_dir', 'rotation_dir',
                         'route_wreck_blocked', 'local_combat_manoeuvre', 'push_x', 'push_z'))
         carried |= represented
@@ -10686,6 +10686,7 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_spg_final_proof_pending_does_not_consume_fire_sequence(self):
         descriptor = _combat_descriptor(dispersion=0.03)
+        descriptor.type = types.SimpleNamespace(tags={'SPG'})
         descriptor.gun.shots = descriptor.gun.shots * 2
         descriptor.gun.maxAmmo = 60
         command = {
@@ -10775,20 +10776,20 @@ class BotRuntimeTests(unittest.TestCase):
         pending = bot_state_rows.bots(runtime.update(
             0.40, 1.40, players=[player])[0])[0]
         self.assertEqual(0, pending['fire_seq'])
-        self.assertEqual((0, 1), (
+        self.assertEqual((1, 1), (
             pending['shell_index'], pending['next_shell_index']))
         self.assertNotIn('shot_origin', pending)
         self.assertEqual(1, calls[0][3])
-        self.assertEqual(0, calls[0][2])
+        self.assertEqual(1, calls[0][2])
 
         fired_message = runtime.update(0.04, 1.44, players=[player])[0]
         fired = bot_state_rows.bots(fired_message)[0]
         launch = fired_message['launches'][0]
         self.assertEqual(1, fired['fire_seq'])
-        self.assertEqual((0, 1), (
+        self.assertEqual((1, 1), (
             fired['shell_index'], fired['next_shell_index']))
         self.assertEqual(1, calls[1][3])
-        self.assertEqual(0, calls[1][2])
+        self.assertEqual(1, calls[1][2])
         self.assertNotEqual(0.0, fired['shot_yaw'])
         self.assertNotEqual(0.1, fired['shot_pitch'])
         self.assertEqual(proofs[0]['origin'], launch['shot_origin'])

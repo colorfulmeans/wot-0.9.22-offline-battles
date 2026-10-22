@@ -85,6 +85,8 @@ jobs:
             'test_port_0922_driver*.py'
             'test_port_0922_traffic*.py'
             'test_port_0922_bot*.py'
+            'test_bot_shot_ammo_policy.py'
+            'test_bot_ammo_late_results.py'
             'test_port_0922_contact*.py'
             'test_port_0922_capture_contact_launch.py'
             'test_port_0922_magazine_followup.py'

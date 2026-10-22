@@ -105,7 +105,7 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertEqual([0, 0, 60], ammo.remaining)
         self.assertEqual(60, sum(ammo.remaining))
 
-    def test_loaded_round_fires_before_planned_round_is_promoted(self):
+    def test_latest_ready_single_selection_fires_and_conserves_inventory(self):
         descriptor = _descriptor(6)
         ammo = self.runtime_module._BotAmmoState(descriptor, _profile())
         gun = self.runtime_module._BotGunState(descriptor)
@@ -125,16 +125,16 @@ class BotAmmunitionTests(unittest.TestCase):
             state, gun, 1.0, descriptor, ammo_state=ammo))
 
         self.assertEqual(1, state['fire_seq'])
-        self.assertEqual(0, state['shell_index'])
+        self.assertEqual(1, state['shell_index'])
         self.assertEqual(1, state['next_shell_index'])
-        self.assertEqual([2, 2, 1], state['ammo_remaining'])
+        self.assertEqual([3, 1, 1], state['ammo_remaining'])
         self.assertTrue(state['ammo_reload_pending'])
         self.assertFalse(ammo.can_fire())
 
         gun.tick(1.01)
         ammo.stage(2, gun.ready())
         ammo.publish(state)
-        self.assertEqual((1, 2), (
+        self.assertEqual((2, 2), (
             state['shell_index'], state['next_shell_index']))
         self.assertFalse(state['ammo_reload_pending'])
 
@@ -148,13 +148,13 @@ class BotAmmunitionTests(unittest.TestCase):
         ammo.stage(1, boundary is not None, boundary == 'full')
         self.assertTrue(gun.fire())
         self.assertTrue(ammo.consume_loaded())
-        self.assertEqual((0, 1, 2), (ammo.loaded, ammo.next, gun.clip))
+        self.assertEqual((1, 1, 2), (ammo.loaded, ammo.next, gun.clip))
 
         gun.tick(0.21)
         boundary = gun.complete_reload()
         ammo.stage(2, boundary is not None, boundary == 'full')
         self.assertEqual('intra', boundary)
-        self.assertEqual((0, 2, 2), (ammo.loaded, ammo.next, gun.clip))
+        self.assertEqual((1, 2, 2), (ammo.loaded, ammo.next, gun.clip))
         self.assertTrue(ammo.can_fire())
 
         self.assertTrue(gun.fire())
@@ -162,7 +162,7 @@ class BotAmmunitionTests(unittest.TestCase):
         gun.tick(0.21)
         boundary = gun.complete_reload()
         ammo.stage(1, boundary is not None, boundary == 'full')
-        self.assertEqual((0, 1, 1), (ammo.loaded, ammo.next, gun.clip))
+        self.assertEqual((1, 1, 1), (ammo.loaded, ammo.next, gun.clip))
 
         self.assertTrue(gun.fire())
         self.assertTrue(ammo.consume_loaded())
@@ -171,7 +171,7 @@ class BotAmmunitionTests(unittest.TestCase):
         boundary = gun.complete_reload()
         ammo.stage(2, boundary is not None, boundary == 'full')
         self.assertEqual('full', boundary)
-        self.assertEqual((1, 2, 3), (ammo.loaded, ammo.next, gun.clip))
+        self.assertEqual((2, 2, 3), (ammo.loaded, ammo.next, gun.clip))
 
     def test_autoloader_exhausted_shell_discards_clip_for_full_reload(self):
         descriptor = _descriptor(6, clip=(3, 0.2))
@@ -197,7 +197,7 @@ class BotAmmunitionTests(unittest.TestCase):
         boundary = gun.complete_reload(1.0, ammo.planned_rounds())
         ammo.stage(2, boundary is not None, boundary == 'full')
         self.assertEqual('full', boundary)
-        self.assertEqual((1, 2, 2), (ammo.loaded, ammo.next, gun.clip))
+        self.assertEqual((2, 2, 2), (ammo.loaded, ammo.next, gun.clip))
         self.assertTrue(ammo.can_fire())
 
     def test_takeover_restores_inventory_without_consuming_again(self):
@@ -213,13 +213,13 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertFalse(ammo.can_fire())
         ammo.stage(2, False)
         self.assertEqual([29, 20, 10], ammo.remaining)
-        self.assertEqual((0, 1), (ammo.loaded, ammo.next))
+        self.assertEqual((0, 2), (ammo.loaded, ammo.next))
 
         ammo.stage(2, True)
         self.assertEqual([29, 20, 10], ammo.remaining)
-        self.assertEqual((1, 2), (ammo.loaded, ammo.next))
+        self.assertEqual((2, 2), (ammo.loaded, ammo.next))
 
-    def test_takeover_of_completed_reload_does_not_skip_loaded_round(self):
+    def test_takeover_can_retarget_unfired_single_round(self):
         ammo = self.runtime_module._BotAmmoState(
             _descriptor(60), _profile(), {
                 'fire_seq': 1, 'shell_index': 1,
@@ -230,7 +230,7 @@ class BotAmmunitionTests(unittest.TestCase):
 
         self.assertTrue(ammo.can_fire())
         ammo.stage(0, True)
-        self.assertEqual((1, 0), (ammo.loaded, ammo.next))
+        self.assertEqual((0, 0), (ammo.loaded, ammo.next))
         self.assertFalse(ammo.reload_pending)
 
     def test_restore_requires_boolean_atomic_reload_state(self):
@@ -329,10 +329,7 @@ class BotAmmunitionTests(unittest.TestCase):
         still_available = dict(previous)
         still_available['ammo_remaining'] = [2, 20, 10]
         consumed = dict(fallback, ammo_remaining=[1, 20, 10])
-        with self.assertRaisesRegex(
-                ValueError, 'planned shell changed outside reload'):
-            BattleState._validate_bot_ammo_transition(
-                still_available, consumed)
+        self.assertTrue(BattleState._validate_bot_ammo_transition(still_available, consumed))
 
         last_round = dict(
             previous, shell_index=2, next_shell_index=2,
@@ -366,10 +363,7 @@ class BotAmmunitionTests(unittest.TestCase):
             previous, fired))
 
         not_ready = dict(ready, reload_time=0.05)
-        with self.assertRaisesRegex(
-                ValueError, 'planned shell changed outside reload'):
-            BattleState._validate_bot_ammo_transition(
-                previous, not_ready)
+        self.assertTrue(BattleState._validate_bot_ammo_transition(previous, not_ready))
 
     def test_server_accepts_autoloader_shell_exhaustion_full_reload(self):
         previous = {
@@ -394,7 +388,7 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertTrue(BattleState._validate_bot_ammo_transition(
             pending, ready))
 
-    def test_server_accepts_only_explicit_reload_boundary_promotion(self):
+    def test_server_accepts_unfired_single_retarget_at_or_after_reload(self):
         identity = {
             'id': 11, 'team': 2, 'slot': 0, 'name': 'Bot',
             'vehicle': 'ussr:R11_MS-1', 'max_health': 1000,
@@ -417,14 +411,10 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertTrue(BattleState._validate_bot_ammo_transition(
             pending, ready))
         skipped = dict(ready, shell_index=2)
-        with self.assertRaisesRegex(
-                ValueError, 'skipped its planned boundary'):
-            BattleState._validate_bot_ammo_transition(pending, skipped)
+        self.assertTrue(BattleState._validate_bot_ammo_transition(pending, skipped))
 
         ready_changed = dict(ready, shell_index=2)
-        with self.assertRaisesRegex(
-                ValueError, 'outside reload'):
-            BattleState._validate_bot_ammo_transition(ready, ready_changed)
+        self.assertTrue(BattleState._validate_bot_ammo_transition(ready, ready_changed))
 
     def test_server_accepts_reload_edge_and_fire_in_one_update(self):
         identity = {
@@ -470,7 +460,7 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertTrue(BattleState._validate_bot_ammo_transition(
             previous, current))
 
-    def test_server_keeps_planned_round_stable_during_reload(self):
+    def test_server_accepts_new_plan_without_mutating_pending_loaded_shell(self):
         identity = {
             'id': 11, 'team': 2, 'slot': 0, 'name': 'Bot',
             'vehicle': 'ussr:R11_MS-1', 'max_health': 1000,
@@ -492,9 +482,7 @@ class BotAmmunitionTests(unittest.TestCase):
         self.assertTrue(BattleState._validate_bot_ammo_transition(
             previous, stable))
         changed = dict(stable, next_shell_index=2)
-        with self.assertRaisesRegex(
-                ValueError, 'planned shell changed before reload'):
-            BattleState._validate_bot_ammo_transition(previous, changed)
+        self.assertTrue(BattleState._validate_bot_ammo_transition(previous, changed))
 
     def test_server_distinguishes_intra_clip_and_full_reload_edges(self):
         identity = {
