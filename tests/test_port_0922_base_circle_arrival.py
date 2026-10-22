@@ -176,6 +176,20 @@ class BaseCircleArrivalTests(unittest.TestCase):
         self.assertEqual(0., order['throttle_override'])
         self.assertTrue(order['tactical_evidence']['route_terminal']['inside_capture'])
 
+    def test_capture_does_not_consume_explicit_terminal_parking(self):
+        from test_port_0922_authored_route_waits import AuthoredRouteWaitTests
+        for tag in ('heavyTank', 'SPG'):
+            with self.subTest(tag=tag):
+                planner, bots = AuthoredRouteWaitTests().setup_route(tag, 0)
+                defense = {'capture_bases': {'2': [dict(id='2:0', x=300., z=0., radius=50.)]}}
+                planner.build_orders(bots, [_state(11,1,0.,0.)], [], 1., defense)
+                for now in (2., 50.):
+                    order = planner.build_orders(bots, [_state(11,1,100.,0.)], [], now, defense)['orders'][0]
+                    self.assertEqual('waiting', order['parking_phase'])
+                    self.assertEqual('hold', order['combat_mode'])
+                    self.assertEqual(0., order['throttle_override'])
+                    self.assertEqual(100., order['move_position']['x'])
+
     def test_contact_stall_records_evidence_without_changing_retry_policy(self):
         scene = self.helper.scene((60., -220.))
         self.helper.order(scene)

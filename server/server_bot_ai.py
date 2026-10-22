@@ -4308,10 +4308,13 @@ class BotPlanner(object):
         artillery_only = (str(profile.get('class_tag') or '') == 'SPG' and
             team_bots and all(str(b.get('profile', {}).get('class_tag') or '') == 'SPG'
                               for b in team_bots))
+        route_state = self._route_states.get(bot['id']) or {}
+        capture_wait = (route_state.get('holding') or
+                        route_state.get('parking_phase') in ('approach', 'waiting', 'queue'))
         # Artillery already qualifies for the existing capture squad when no
         # regulars remain. Its stationary parking anchor cannot consume a
         # front-line staging gate, so do not wait for that impossible cursor.
-        if (no_known_enemies and capture_target is not None and
+        if (no_known_enemies and capture_target is not None and not capture_wait and
                 (self._capture_staged(bot, route_index, capture_target) or artillery_only)):
             self._apply_base_capture_order(order, bot, capture_target)
             self._firing_holds.pop(bot["id"], None)
