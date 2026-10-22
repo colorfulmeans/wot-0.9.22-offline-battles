@@ -9170,7 +9170,7 @@ class BattleRuntime(object):
             result.append(equipment_mechanics.EquipmentState(contract))
         return result
 
-    def _default_bot_equipment_contracts(self):
+    def _default_bot_equipment_contracts(self, skill):
         """Resolve the fixed bot loadout from this exact #1513 item cache."""
         cache = self._runtime.vehicles.g_cache
         # Engine-free tests expose only the cache surfaces they exercise.
@@ -9179,7 +9179,7 @@ class BattleRuntime(object):
                 not callable(getattr(cache, 'equipments', None))):
             return ()
         return tuple(equipment_mechanics.default_bot_consumables(
-            cache))
+            cache, skill))
 
     def _restore_local_equipment_snapshot(self, snapshot, present=False):
         """Restore the visible replica from one complete canonical ledger."""

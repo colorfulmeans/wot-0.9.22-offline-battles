@@ -2144,7 +2144,7 @@ class BotRuntime(object):
             ram_contact_probe if callable(ram_contact_probe) else None)
         self.bot_equipment_resolver = (
             bot_equipment_resolver if callable(bot_equipment_resolver) else
-            (lambda: ()))
+            (lambda unused_skill: ()))
         self.destructible_body_scan = (
             destructible_body_scan
             if callable(destructible_body_scan) else None)
@@ -3259,8 +3259,8 @@ class BotRuntime(object):
             motion.descriptor_patch(bot_id)
         return True
 
-    def _bot_equipment_contracts(self, snapshots=None):
-        raw = tuple(self.bot_equipment_resolver() or ())
+    def _bot_equipment_contracts(self, bot_id, snapshots=None):
+        raw = tuple(self.bot_equipment_resolver(self.bot_skill(bot_id)) or ())
         contracts = ()
         if raw:
             contracts = equipment_mechanics.bot_consumable_contracts({
@@ -3269,7 +3269,8 @@ class BotRuntime(object):
             restored_contracts = \
                 equipment_mechanics.bot_consumable_contracts(
                     None, snapshot=snapshots)
-            if contracts and restored_contracts != contracts:
+            if ((contracts or self.bot_skill(bot_id) == 'rookie') and
+                    restored_contracts != contracts):
                 raise ValueError('bot equipment contracts changed')
             if not contracts:
                 contracts = restored_contracts
@@ -3279,7 +3280,7 @@ class BotRuntime(object):
                                 canonical_restore=False):
         """Create one independent exact consumable ledger for each bot."""
         bot_id = int(bot_id)
-        contracts = self._bot_equipment_contracts(snapshots)
+        contracts = self._bot_equipment_contracts(bot_id, snapshots)
         existing = self._equipment_states.get(bot_id)
         if existing is not None:
             existing_contracts = tuple(
@@ -4636,7 +4637,8 @@ class BotRuntime(object):
         elif action == 'repair_devices':
             payload = critical_damage.repair_device(
                 shadow, effect.get('selected'),
-                bool(effect.get('repairAll', False)))
+                bool(effect.get('repairAll', False)),
+                excluded_devices=effect.get('excludedDevices', ()))
         elif action == 'restore_crew':
             payload = critical_damage.restore_crew(
                 shadow, effect.get('selected'),
@@ -4667,7 +4669,7 @@ class BotRuntime(object):
         for equipment in self._equipment_states.get(int(state['id']), ()):
             effect = equipment.poll_bot(
                 self._equipment_now, state.get('critical'),
-                stunned=self._bot_stunned(state))
+                stunned=self._bot_stunned(state), skill=self.bot_skill(state['id']))
             if effect is None:
                 continue
             effect = dict(effect)
@@ -4677,6 +4679,11 @@ class BotRuntime(object):
             self._apply_bot_equipment_effect(
                 state, descriptor, effect, strict=True)
             effects.append(dict(effect))
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT CONSUMABLE', dict(round=self.round_id,
+                bot=state['id'], skill=self.bot_skill(state['id']), at=self._equipment_now,
+                item=equipment.contract['name'], uses_left=equipment.uses_left,
+                cooldown=equipment.contract['cooldownSeconds'], effect=effect))
         if effects:
             self._refresh_equipment_passives(state['id'])
         self._publish_equipment_state(state)
@@ -12591,6 +12598,7 @@ class BotRuntime(object):
             intent_created=intent.get('created'), fire_seq=intent.get('fire_seq'),
             source_pose=intent.get('source_pose'), target=intent.get('target_identity'),
             target_position=intent.get('target_position'), solution=intent.get('solution'),
+            target_motion_reference=intent.get('target_motion_reference'),
             reproof=dict((key, reproof.get(key)) for key in (
                 'created', 'deadline', 'absolute_deadline', 'attempts',
                 'proof_latency', 'last_proof_latency', 'last_aim_staleness',
@@ -12775,6 +12783,9 @@ class BotRuntime(object):
             'solution': solution,
             'target_position': _point(
                 target.get('position'), _position(target)),
+            'target_motion_reference': dict(solution.get('target_motion_reference') or
+                dict(position=_point(target.get('position'), _position(target)),
+                     velocity=self._target_velocity(target), prediction_seconds=0.0)),
             'shot_yaw': shot_yaw,
             'shot_pitch': shot_pitch,
             'created': _number(now),
@@ -12828,6 +12839,7 @@ class BotRuntime(object):
                  if self._native_simulation is not None else
                  ballistics.ballistic_intercept)
         for unused in range(8 if adaptive else 1):
+            predicted_latency = proof_latency
             predicted = tuple(target_position[index] +
                               target_velocity[index] * proof_latency
                               for index in range(3))
@@ -12857,6 +12869,10 @@ class BotRuntime(object):
             'aim_position': aim_position,
             'yaw': yaw,
             'pitch': pitch, 'flight_time': flight_time, 'arc': arc,
+            'target_motion_reference': dict(target.get('_canonical_motion') or
+                dict(position=_point(target.get('position'), _position(target)),
+                     velocity=self._target_velocity(target)),
+                prediction_seconds=predicted_latency),
         }
 
     def _track_gunnery_hold(self, state, target, now):
@@ -12942,6 +12958,7 @@ class BotRuntime(object):
             position[2] - (dx / horizontal) * lateral)
         aimed['velocity'] = (velocity[0] * scale, velocity[1] * scale,
                              velocity[2] * scale)
+        aimed['_canonical_motion'] = dict(position=position, velocity=velocity)
         return aimed
 
     def _gunner_ready(self, state, gun_state, target, now):
@@ -14028,6 +14045,10 @@ class BotRuntime(object):
         try:
             intended_impact = _point(intent_solution['aim_position'])
             flight_time = float(receipt['flight_time'])
+            reference = intent['target_motion_reference']
+            reference_position = _point(reference['position'])
+            reference_velocity = _point(reference['velocity'])
+            prediction_seconds = float(reference.get('prediction_seconds', 0.0))
         except (KeyError, TypeError, ValueError, OverflowError):
             self._cancel_artillery_intent(state.get('id'), reason='invalid_aim_receipt', now=now)
             return True
@@ -14039,16 +14060,29 @@ class BotRuntime(object):
             target_position[1] + 1.0 + target_velocity[1] * flight_time,
             target_position[2] + target_velocity[2] * flight_time,
         )
-        error = tuple(target_at_impact[index] - intended_impact[index]
+        reference_at_impact = tuple(reference_position[index] +
+            (1.0 if index == 1 else 0.0) +
+            reference_velocity[index] * (flight_time + prediction_seconds)
+            for index in range(3))
+        # Aim bias and imperfect lead are deliberate gunner behaviour. Only
+        # canonical target-motion changes may invalidate an immutable proof.
+        error = tuple(target_at_impact[index] - reference_at_impact[index]
                       for index in range(3))
+        frozen_offset = tuple(intended_impact[index] - reference_at_impact[index]
+                              for index in range(3))
+        raw_error = math.sqrt(sum((target_at_impact[index] - intended_impact[index])**2
+                                  for index in range(3)))
         if any(math.isnan(value) or math.isinf(value)
-               for value in target_at_impact + intended_impact + error):
+               for value in target_at_impact + intended_impact + error + reference_at_impact + frozen_offset):
             self._cancel_artillery_intent(state.get('id'), reason='nonfinite_aim_receipt', now=now)
             return True
         distance = math.sqrt(sum(value * value for value in error))
         if distance <= ARTILLERY_AIM_STALENESS_METRES + 1e-9:
             self._record_artillery_transition(state['id'], 'aim_receipt_current', now,
-                dict(error_metres=distance, target_velocity=target_velocity,
+                dict(error_metres=distance, raw_aim_error_metres=raw_error,
+                    frozen_aim_offset=frozen_offset, prediction_seconds=prediction_seconds,
+                    target_velocity=target_velocity, reference_at_impact=reference_at_impact,
+                    proof_latency=max(0.0, now-_number(intent.get('created'))),
                     target_at_impact=target_at_impact, intended_impact=intended_impact))
             return False
         reproof = self._active_artillery_reproof(
@@ -14082,7 +14116,10 @@ class BotRuntime(object):
         reproof['arc'] = str(intent_solution.get('arc') or '')
         self._cancel_artillery_intent(
             state.get('id'), preserve_reproof=True, reason='aim_receipt_stale', now=now,
-            evidence=dict(error_metres=distance, allowed_error=ARTILLERY_AIM_STALENESS_METRES,
+            evidence=dict(error_metres=distance, raw_aim_error_metres=raw_error,
+                frozen_aim_offset=frozen_offset, reference_at_impact=reference_at_impact,
+                prediction_seconds=prediction_seconds,
+                allowed_error=ARTILLERY_AIM_STALENESS_METRES,
                 target_velocity=target_velocity, target_at_impact=target_at_impact,
                 intended_impact=intended_impact, flight_time=flight_time,
                 proof_chords=receipt.get('proof_chords'),

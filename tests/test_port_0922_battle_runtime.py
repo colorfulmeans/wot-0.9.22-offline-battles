@@ -10145,7 +10145,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             equipments=lambda: descriptors)
         battle = BattleRuntime(runtime)
 
-        contracts = battle._default_bot_equipment_contracts()
+        contracts = battle._default_bot_equipment_contracts('elite')
 
         self.assertEqual(
             equipment_mechanics.DEFAULT_BOT_CONSUMABLE_NAMES,

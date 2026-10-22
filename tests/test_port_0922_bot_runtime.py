@@ -7153,8 +7153,9 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts,
+            bot_equipment_resolver=lambda skill: contracts,
             control_seconds=self.module.WORKER_CONTROL_SECONDS)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         repair = runtime._equipment_states[11][2]
@@ -11178,6 +11179,7 @@ class BotRuntimeTests(unittest.TestCase):
             'yaw': math.pi * 0.5, 'speed': 8.0,
         }
         stale = {
+            'target_motion_reference': dict(position=(0.0, 0.0, 100.0), velocity=(0.0, 0.0, 0.0)),
             'aim_position': (0.0, 1.0, 100.0),
             'yaw': 0.0, 'pitch': -0.1,
             'flight_time': 0.5, 'arc': 'low',
@@ -11262,6 +11264,8 @@ class BotRuntimeTests(unittest.TestCase):
                 }
                 intent = {
                     'source': {'id': 11}, 'created': 1.0,
+                    'target_motion_reference': dict(position=(0.0, 0.0, 100.0),
+                        velocity=(8.0, 0.0, 0.0) if name != 'height_changed' else (0.0, 0.0, 0.0)),
                     'solution': {
                         'arc': 'low', 'aim_position': intended_impact,
                     },
@@ -11306,6 +11310,7 @@ class BotRuntimeTests(unittest.TestCase):
                 }
                 intent = {
                     'source': {'id': 11}, 'created': 1.0,
+                    'target_motion_reference': dict(position=(0.0, 0.0, 100.0), velocity=(0.0, 0.0, 0.0)),
                     'solution': {
                         'arc': 'low', 'aim_position': (0.0, 1.0, 100.0),
                     },
@@ -13241,7 +13246,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, bots=[
             {'id': 11, 'team': 2, 'slot': 0, 'name': 'First'},
             {'id': 12, 'team': 2, 'slot': 1, 'name': 'Second'},
@@ -13305,7 +13311,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         runtime._advance_equipment_clock(10.0)
@@ -13363,7 +13370,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         initial_wire = state['equipment_states']
@@ -13387,7 +13395,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         initial_wire = state['equipment_states']
@@ -13415,7 +13424,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         equipment = self.module.equipment_mechanics.EquipmentState(limiter)
@@ -13441,7 +13451,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         repair = runtime._equipment_states[11][2]
@@ -13482,7 +13493,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
 
@@ -13551,7 +13563,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, server_time_ms=1000))
         runtime.apply_snapshot({
             'server_tick': 1, 'server_time_ms': 1000,
@@ -13587,7 +13600,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, server_time_ms=1000))
         runtime.apply_snapshot({
             'server_tick': 1, 'server_time_ms': 1000,
@@ -13617,7 +13631,7 @@ class BotRuntimeTests(unittest.TestCase):
                 ground_probe=lambda *unused: 0.0,
                 physics_ground_probe=lambda *unused: 0.0,
                 spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-                bot_equipment_resolver=lambda: contracts)
+                bot_equipment_resolver=lambda skill: contracts)
 
         first = new_runtime()
         first.battle_start(self.start)
@@ -13657,7 +13671,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
 
         factor = runtime._bot_repair_factor(11, descriptor)

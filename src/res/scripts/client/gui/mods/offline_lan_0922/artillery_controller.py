@@ -317,6 +317,9 @@ class ArtilleryController(object):
             row['reason']='candidate'
             candidates.append({
                 'aim_position': aim_position,
+                'target_motion_reference': dict(target.get('_canonical_motion') or
+                    dict(position=_position(target), velocity=_target_velocity(target)),
+                    prediction_seconds=0.0),
                 'yaw': yaw,
                 'pitch': pitch,
                 'flight_time': flight_time,
