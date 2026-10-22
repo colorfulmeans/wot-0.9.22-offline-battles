@@ -9,6 +9,7 @@ import gettext
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -19,6 +20,34 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.bot_fitting_data import PLANS, CLASSES
 from gui.mods.offline_lan_0922 import ammo_policy, vehicle_configuration
+from gui.mods.offline_lan_0922 import bot_fittings
+
+
+def audit_rented_outfits(packed):
+    """Preserve repeated style/outfit/item nodes, including empty EVENT rows."""
+    def children(node, name):
+        return [v.value for k,v in node.children if k.decode()==name] if isinstance(node,PackedElement) else []
+    rows = []
+    for group in children(packed,'itemGroup'):
+        for style in children(group,'style'):
+            style_id = int(plain(style)['id'])
+            for outfits in children(style,'outfits'):
+                for outfit in children(outfits,'outfit'):
+                    season = plain(outfit)['season']
+                    items = []
+                    for camouflages in children(outfit,'camouflages'):
+                        for item in children(camouflages,'item'):
+                            value = plain(item)
+                            items.append(SimpleNamespace(id=int(value['id']),appliedTo=int(value['appliedTo'])))
+                    camouflage = bot_fittings.hull_camouflage(SimpleNamespace(camouflages=items),16)
+                    rows.append(dict(style=style_id,season=season,camouflage=camouflage))
+    assert {r['style'] for r in rows} == set(range(1,10))
+    for style in range(1,10):
+        indexed = {r['season']:r['camouflage'] for r in rows if r['style']==style}
+        assert set(indexed)=={'winter','summer','desert','event'}, (style,indexed)
+        assert indexed['event'] is None, (style,'native EVENT outfit is empty')
+        assert all(indexed[s] is not None for s in ('winter','summer','desert')),style
+    return rows
 
 
 def merge(shared, local):
@@ -45,6 +74,8 @@ def audit(client):
     def children(node, key):
         return [v.value for k,v in node.children if k.decode() == key] if isinstance(node, PackedElement) else []
     with zipfile.ZipFile(client/'res/packages/scripts.pkg') as archive:
+        rented_outfits = audit_rented_outfits(read_packed_xml(archive.read(
+            'scripts/item_defs/customization/styles/rented_styles.xml')))
         def packed(path):
             if path not in cache:
                 cache[path] = read_packed_xml(archive.read('scripts/item_defs/vehicles/'+path))
@@ -140,7 +171,8 @@ def audit(client):
                     max_health=float(definition['hull'].get('maxHealth',0))+float(turret.get('maxHealth',0)),
                     reload_seconds=gun['reloadTime'],capacity=capacity,clip_size=clip,allocation=allocation))
     return dict(client='0.9.22.0.1 CN #1513', vehicles=len(PLANS), fittings=len(rows),
-                evidence='static resources; native install/rendering not asserted', records=rows)
+                evidence='static resources; native install/rendering not asserted',
+                rented_outfits=rented_outfits, records=rows)
 
 
 if __name__ == '__main__':

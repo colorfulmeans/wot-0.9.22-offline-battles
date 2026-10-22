@@ -93,6 +93,15 @@ def _named(values, name):
     return next(value for value in values if value.name == name)
 
 
+def hull_camouflage(outfit, hull_area):
+    """Native outfits may have no camouflage (notably rented EVENT outfits)."""
+    hull = [item.id for item in outfit.camouflages
+            if item.appliedTo & hull_area]
+    if len(hull) > 1:
+        raise ValueError('native Bot seasonal hull camouflage is ambiguous')
+    return hull[0] if hull else None
+
+
 def build(vehicles, vehicle, tier, crew_level=None, restored=None):
     """Install exact native modules/devices and retain native install guards."""
     from items import tankmen, customizations
@@ -161,11 +170,7 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None):
         from items.components.c11n_constants import ApplyArea
         for season, outfit in style.outfits.items():
             outfits[str(season)] = base64.b64encode(customizations.makeCompDescr(outfit)).decode('ascii')
-            hull = [item.id for item in outfit.camouflages
-                    if item.appliedTo & ApplyArea.HULL]
-            if len(hull) != 1:
-                raise ValueError('native Bot seasonal hull camouflage is ambiguous')
-            camouflages[str(season)] = hull[0]
+            camouflages[str(season)] = hull_camouflage(outfit, ApplyArea.HULL)
     value = dict(wire=wire, crew=crew, directives=directives, skills=skills,
                  crew_skills=crew_skills, camouflages=camouflages,
                  outfits=outfits, native_style=selected['style'])

@@ -113,11 +113,12 @@ class FittingContracts(unittest.TestCase):
                 return json.dumps(dict(modules=parts, devices=[d.name for d in self.optionalDevices if d]),
                                   sort_keys=True).encode()
         native.VehicleDescr = Descriptor
-        outfit = NS(camouflages=[NS(id=17, appliedTo=1)])
+        outfit = NS(camouflages=[NS(id=17, appliedTo=4368)])
         native.g_cache = NS(optionalDevices=lambda: devices, optionalDeviceIDs=lambda: {n:n for n in devices},
             equipments=lambda: {chosen['directive']: NS(name=chosen['directive'])},
             equipmentIDs=lambda: {chosen['directive']:chosen['directive']},
-            customization20=lambda: NS(styles={chosen['style']:NS(outfits={0:outfit,1:outfit,2:outfit,3:outfit})}))
+            customization20=lambda: NS(styles={chosen['style']:NS(outfits={
+                1:outfit,2:outfit,4:outfit,8:NS(camouflages=[])})}))
         return native
 
     def _items(self):
@@ -127,7 +128,39 @@ class FittingContracts(unittest.TestCase):
                   TankmanDescr=lambda raw: NS(skills=raw[1] if isinstance(raw[1],tuple) else ('repair','camouflage'))),
                   customizations=NS(makeCompDescr=lambda outfit: b'native outfit')),
                 'items.components': NS(),
-                'items.components.c11n_constants': NS(ApplyArea=NS(HULL=1))}
+                'items.components.c11n_constants': NS(ApplyArea=NS(HULL=16))}
+
+    def test_report_023439_elite_t71_accepts_native_empty_event_outfit(self):
+        with patch.dict(sys.modules, self._items()):
+            native = self._native('usa:A103_T71E1','elite')
+            descriptor = fitting.build(native,'usa:A103_T71E1','elite')
+            context = fitting.context(descriptor)
+            self.assertEqual(context['wire']['style'],8)
+            self.assertEqual(set(context['outfits']),{'1','2','4','8'})
+            self.assertIsNone(context['camouflages']['8'])
+            for season in ('1','2','4'):
+                self.assertEqual(context['camouflages'][season],17)
+            restored = fitting.build(native,'usa:A103_T71E1','elite',restored=context['wire'])
+            self.assertEqual(fitting.context(restored)['wire'],context['wire'])
+
+    def test_absent_hull_camouflage_has_no_invisibility_bonus(self):
+        from gui.mods.offline_lan_0922 import bot_runtime
+        calls = []
+        descriptor = NS(type=NS(name='usa:A103_T71E1'),
+                        computeBaseInvisibility=lambda factor,camo: calls.append((factor,camo)) or (0.1,0.2))
+        fitting.register(descriptor,dict(season='8',camouflages={'1':15202,'8':None}))
+        profile = {'camouflage_factor':1.0}
+        self.assertEqual(bot_runtime._base_invisibility(descriptor,profile),(0.1,0.2))
+        self.assertEqual(calls[-1],(1.0,None))
+        fitting.context(descriptor)['season']='1'
+        bot_runtime._base_invisibility(descriptor,profile)
+        self.assertEqual(calls[-1],(1.0,15202))
+
+    def test_only_hull_regions_select_camouflage(self):
+        self.assertIsNone(fitting.hull_camouflage(NS(camouflages=[]),16))
+        self.assertIsNone(fitting.hull_camouflage(NS(camouflages=[NS(id=17,appliedTo=4096)]),16))
+        with self.assertRaisesRegex(ValueError,'ambiguous'):
+            fitting.hull_camouflage(NS(camouflages=[NS(id=17,appliedTo=16),NS(id=18,appliedTo=16)]),16)
 
     def test_all_four_tiers_build_and_restore_through_native_contract(self):
         for tier in fitting.TIERS:

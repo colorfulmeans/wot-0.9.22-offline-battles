@@ -112,6 +112,10 @@ there are no invented purple multipliers. Seasonal hull camouflage is passed
 to the native base-invisibility calculation once. Native item/crew rejection
 is logged and surfaced, rather than silently becoming a 100% default crew.
 Round teardown clears descriptor contexts after native presentation cleanup.
+Native rented styles contain empty EVENT outfits. Preserve their serialized
+empty appearance and use no hull camouflage ID/bonus; an absent camouflage
+is not an ambiguous fitting. All nine national styles / 36 seasonal outfits
+are included in the exact-client resource audit.
 
 ## Validation
 
