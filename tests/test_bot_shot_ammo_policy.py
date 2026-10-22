@@ -237,6 +237,16 @@ class AmmoPolicyTests(unittest.TestCase):
         self.state.update(burst_active=False, burst_group_seq=1, burst_next_index=1)
         self.assertEqual(1, p.choose(self.state))
 
+    def test_single_trigger_magazine_prequeues_backup_return_during_reload(self):
+        config = profile(clip=2)
+        config['burst_size'] = 2
+        p = self.setup_policy(config)
+        self.shot(group=1, count=2); self.shot(group=1, count=2)
+        self.assertEqual(1, p.desired)
+        self.state.update(ammo_reload_pending=True, next_shell_index=1, clip=0)
+        self.assertEqual(0, p.choose(self.state))
+        self.assertEqual(1, p.desired)  # The incoming backup magazine stays locked.
+
     def test_late_choice_never_replaces_locked_or_loaded_round(self):
         from test_port_0922_bot_ammo import _load_bot_runtime, _descriptor, _profile
         runtime = _load_bot_runtime()

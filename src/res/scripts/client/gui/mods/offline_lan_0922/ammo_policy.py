@@ -157,10 +157,12 @@ class ShotPolicy(object):
                 self.desired = loaded
         main = indices[0]
         if self.desired != self.phase:
-            # The native reload already froze the one-shot HE-default probe.
-            # Queue its return before it fires, without replacing that reload.
-            if (clip_size(self.profile) == 1 and is_he(available[0]) and
-                    self.profile.get('class_tag') != 'SPG' and
+            # A whole magazine may be one trigger (MTLS). Prequeue its normal
+            # return while the incoming backup reload is frozen. Later real
+            # failures may still latch an upgrade before the next boundary.
+            automatic_backup = (clip_size(self.profile) > 1 or
+                                (is_he(available[0]) and self.profile.get('class_tag') != 'SPG'))
+            if (automatic_backup and self.desired != main and
                     state.get('ammo_reload_pending') and
                     state.get('next_shell_index') == self.desired):
                 return main
