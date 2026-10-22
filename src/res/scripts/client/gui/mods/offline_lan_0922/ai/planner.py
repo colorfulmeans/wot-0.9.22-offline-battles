@@ -56,13 +56,21 @@ def vehicle_in_battle_tier_band(player_tier, candidate_tier):
 		return False
 
 
-def select_bot_lineup(pool, count, spg_limit=3, fallback_candidates=()):
+def team_artillery_limit(team_size):
+	"""Cap automatic artillery by total team size, including human slots."""
+	team_size = max(0, int(team_size))
+	return 0 if team_size <= 6 else min(3, (team_size - 4) // 3)
+
+
+def select_bot_lineup(pool, count, spg_limit=None, fallback_candidates=()):
 	"""Fill a team while enforcing an exact SPG cap.
 
-	Automatic bots allow at most three artillery per team, including humans. ``AT-SPG`` is a tank destroyer
+	The caller subtracts human artillery from the total-team limit. ``AT-SPG`` is a tank destroyer
 	in the legacy tags and does not consume the artillery quota.
 	"""
 	count = max(0, int(count))
+	if spg_limit is None:
+		spg_limit = team_artillery_limit(count)
 	spg_limit = max(0, min(3, int(spg_limit)))
 	pool = list(pool or ())
 	if not pool or count <= 0:
@@ -306,7 +314,7 @@ def match_tier_slots(allowed_tiers, team_size):
 
 def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 		rng=None, required_profiles=()):
-	"""Share tier/class slots and a feasible 0..3 SPG quota between teams.
+	"""Share tier/class slots and a size-bounded SPG quota between teams.
 
 	Reserve SPGs against tiers that actually contain artillery. Picking an
 	arbitrary tier first and silently replacing a missing SPG with a medium
@@ -315,6 +323,7 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 	"""
 	rng = rng or random
 	team_size = max(1, int(team_size))
+	artillery_limit = team_artillery_limit(team_size)
 	allowed = tuple(sorted(set(int(value) for value in allowed_tiers)))
 	if not allowed:
 		allowed = (int(player_candidate.get('level', 1) or 1),)
@@ -342,14 +351,24 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 			tier_slots.pop()
 
 	for profile in required:
+		if (vehicle_match_class(profile) == 'SPG' and
+				sum(vehicle_match_class(value) == 'SPG' for value in result) >= artillery_limit):
+			# A human's chosen SPG remains theirs; it must not force an
+			# automatic mirrored SPG into a small opposing team.
+			choices = [candidate for candidate in usable
+				if vehicle_match_class(candidate) != 'SPG']
+			if choices:
+				same_tier = [value for value in choices if int(value['level']) == int(profile['level'])]
+				take(same_tier or choices)
+			continue
 		choices = [candidate for candidate in usable
 			if int(candidate.get('level', 0) or 0) == int(profile['level'])
 			and vehicle_match_class(candidate) == vehicle_match_class(profile)]
 		take(choices or [profile])
 
 	spg_count = sum(vehicle_match_class(value) == 'SPG' for value in result)
-	spg_max = min(3, spg_count + team_size - len(result))
-	# Uniform 0..3 is a synthetic-room choice, not an official spawn rate.
+	spg_max = min(artillery_limit, spg_count + team_size - len(result))
+	# Uniform within the size limit is a room choice, not a retail spawn rate.
 	quota = spg_count + int(rng.random() * (max(0, spg_max-spg_count) + 1))
 	quota = min(spg_max, quota)
 	while spg_count < quota:
@@ -374,7 +393,7 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 		choices = preferred or choices or regular
 		if not choices:
 			# Do not fill an impossible catalogue with 15 SPGs.
-			if spg_count >= 3:
+			if spg_count >= artillery_limit:
 				break
 			choices = usable
 			spg_count += 1

@@ -5658,6 +5658,23 @@ class BattleRuntime(object):
                 candidate['name'] in validated_names and
                 candidate['level'] in match_tiers]
 
+            bot_slots = set((team, int(raw.get('slot', 0)))
+                            for team in (1, 2) for raw in bots_by_team[team])
+            # Explicit vehicle overrides are authoritative and applied below.
+            # Reserve their artillery first so automatic fill cannot add a
+            # second quota beside the host's already pinned SPGs.
+            pinned_vehicles = {}
+            for raw in self._start_message.get('bot_lineup') or ():
+                if not isinstance(raw, dict) or raw.get('vehicle') is None:
+                    continue
+                try:
+                    key = (int(raw.get('team')), int(raw.get('slot')))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if key in bot_slots:
+                    pinned_vehicles[key] = raw['vehicle']
+            artillery_names = set(candidate['name'] for candidate in all_candidates
+                                  if bot_planner.vehicle_match_class(candidate) == 'SPG')
             assignments = {}
             for team in (1, 2):
                 team_bots = bots_by_team[team]
@@ -5672,9 +5689,13 @@ class BattleRuntime(object):
                 # the per-team quota. Explicit host overrides remain intact.
                 human_spgs = sum(bot_planner.vehicle_match_class(entry) == 'SPG'
                                  for entry in humans_by_team[team])
+                artillery_limit = bot_planner.team_artillery_limit(
+                    len(humans_by_team[team]) + len(team_bots))
+                pinned_spgs = sum(side == team and name in artillery_names
+                                  for (side, slot), name in pinned_vehicles.items())
                 picked = bot_planner.select_bot_lineup(
                     picked or automatic_candidates, len(team_bots),
-                    spg_limit=max(0, 3 - human_spgs),
+                    spg_limit=max(0, artillery_limit - human_spgs - pinned_spgs),
                     fallback_candidates=automatic_candidates)
                 picked = list(picked[:len(team_bots)])
                 # The template balances roles and tiers, not vehicle names.
@@ -5696,8 +5717,6 @@ class BattleRuntime(object):
                         entry['name']
             allowed_names = set(
                 candidate['name'] for candidate in all_candidates)
-            bot_slots = set((team, int(raw.get('slot', 0)))
-                            for team in (1, 2) for raw in bots_by_team[team])
             for raw in self._start_message.get('bot_lineup') or ():
                 if not isinstance(raw, dict):
                     self._bot_vehicle_assignments = {}
