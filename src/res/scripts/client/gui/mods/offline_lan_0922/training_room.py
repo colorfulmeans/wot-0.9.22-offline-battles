@@ -29,24 +29,43 @@ def _view_type():
     class TrainingView(TrainingRoomMeta):
         def __init__(self, ctx=None):
             super(TrainingView, self).__init__()
-            self.token = (ctx or {}).get('token')
-            self.owner = _rooms.get(self.token)
+            # #1513's script binder binds every matching public AS member;
+            # its owner slot is a UserNameField, not our Python room owner.
+            self._offline_token = (ctx or {}).get('token')
+            self._offline_owner = _rooms.get(self._offline_token)
+
+        def turnDAAPIon(self, setScript=True, movieClip=None):
+            from gui.mods.offline_lan_0922.waiting_room_ui import _log
+            try:
+                result = super(TrainingView, self).turnDAAPIon(setScript, movieClip)
+            except Exception as error:
+                # BaseDAAPIModule.setFlashObject replaces this exception with
+                # a generic message. Preserve the binding reason first.
+                _log('native training bind_failed token=%s error=%s: %s' % (
+                    self._offline_token, type(error).__name__, as_text(error)[:300]))
+                import traceback
+                traceback.print_exc()
+                raise
+            _log('native training bound token=%s' % self._offline_token)
+            return result
 
         def _populate(self):
             super(TrainingView, self)._populate()
             if not self._owned():
-                self.owner = None
+                self._offline_owner = None
                 BigWorld.callback(0.0, self.destroy)
                 return
-            self.owner.view = self
-            self.owner.refresh()
+            self._offline_owner.view = self
+            self._offline_owner.refresh()
+            from gui.mods.offline_lan_0922.waiting_room_ui import _log
+            _log('native training populated token=%s' % self._offline_token)
 
         def _owned(self):
-            return (self.owner is not None and self.owner.room._open and
-                    _rooms.get(self.token) is self.owner)
+            return (self._offline_owner is not None and self._offline_owner.room._open and
+                    _rooms.get(self._offline_token) is self._offline_owner)
 
         def _action(self, role, value=''):
-            owner, token = self.owner, self.token
+            owner, token = self._offline_owner, self._offline_token
             def invoke():
                 if (owner is not None and _rooms.get(token) is owner and
                         owner.view is self and owner.room._open):
@@ -63,7 +82,7 @@ def _view_type():
             self._action('close')
 
         def onEscape(self):
-            child_open = self._owned() and self.owner.settings.token is not None
+            child_open = self._owned() and self._offline_owner.settings.token is not None
             self._action('settings_close' if child_open else 'close')
 
         def showPrebattleInvitationsForm(self):
@@ -71,13 +90,13 @@ def _view_type():
             self._action('settings')
 
         def changeTeam(self, accID, slot):
-            if self._owned() and int(accID) == self.owner.room._local_player_id():
+            if self._owned() and int(accID) == self._offline_owner.room._local_player_id():
                 if int(slot) in (0, 1, 2):
                     self._action('team', int(slot))
 
         def getPlayerTeam(self, accID):
             if self._owned():
-                for row in self.owner.room._player_roster():
+                for row in self._offline_owner.room._player_roster():
                     if row.get('id') == int(accID):
                         return int(row.get('team', 0))
             return 0
@@ -86,7 +105,7 @@ def _view_type():
             return self._owned()
 
         def canChangeSetting(self):
-            return self._owned() and bool(self.owner.room._host())
+            return self._owned() and bool(self._offline_owner.room._host())
 
         def canStartBattle(self):
             return self.canChangeSetting()
@@ -112,7 +131,7 @@ def _view_type():
             return None
 
         def _dispose(self):
-            owner, self.owner = self.owner, None
+            owner, self._offline_owner = self._offline_owner, None
             if owner is not None and owner.view is self:
                 owner.view = None
             super(TrainingView, self)._dispose()
@@ -181,7 +200,7 @@ class TrainingRoomWindow(object):
         self.settings.close()
         view, self.view = self.view, None
         if view is not None:
-            view.owner = None
+            view._offline_owner = None
             view.destroy()
         self.token = None
         return True

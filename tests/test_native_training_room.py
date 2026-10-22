@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 import unittest
@@ -9,6 +10,26 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import training_room as training
 from gui.mods.offline_lan_0922.waiting_room_ui import WaitingRoomUI
+
+NATIVE_MEMBERS = json.loads((ROOT / 'tests/fixtures/0922_training_room_members.json').read_text())
+
+
+class NativeClip(object):
+    """The #1513 binder enumerates AS members and probes matching Python names.
+
+    It does not require the Python attribute to be callable before attempting
+    to install a callback. A UserNameField slot cannot accept that function.
+    """
+    @property
+    def script(self):
+        return self._script
+
+    @script.setter
+    def script(self, value):
+        for name, kind in NATIVE_MEMBERS['data_members'].items():
+            if hasattr(value, name):
+                raise TypeError('native %s:%s cannot accept script callback' % (name, kind))
+        self._script = value
 
 
 class NativeTrainingTests(unittest.TestCase):
@@ -42,6 +63,14 @@ class NativeTrainingTests(unittest.TestCase):
         class NativeMeta(object):
             def __init__(self):
                 self.destroy = mock.Mock()
+            def turnDAAPIon(self, setScript=True, movieClip=None):
+                if setScript:
+                    movieClip.script = self
+            def setFlashObject(self, movieClip, autoPopulate=False):
+                try:
+                    self.turnDAAPIon(True, movieClip)
+                except Exception:
+                    raise Exception('Can not initialize daapi')
             def _populate(self):
                 # Native onPopulate asks these synchronously before Python
                 # _populate has published the roster; owner must exist already.
@@ -59,8 +88,29 @@ class NativeTrainingTests(unittest.TestCase):
                    'BigWorld': types.SimpleNamespace(callback=lambda delay, fn: pending.append(fn))}
         with mock.patch.dict(sys.modules, modules):
             view = training._view_type()({'token': 11})
+            view.setFlashObject(NativeClip(), autoPopulate=False)
             view._populate()
         return adapter, view, modules
+
+    def test_private_context_does_not_collide_with_any_native_control(self):
+        adapter, view, modules = self.native_view(self.room(), [])
+        self.assertEqual('UserNameField', NATIVE_MEMBERS['data_members']['owner'])
+        self.assertIs(adapter, view._offline_owner)
+        self.assertEqual([], [name for name in NATIVE_MEMBERS['data_members'] if hasattr(view, name)])
+
+    def test_old_owner_attribute_reproduces_binding_failure_before_population(self):
+        adapter, view, modules = self.native_view(self.room(), [])
+        clip = NativeClip()
+        view.owner = adapter  # The exact public attribute shipped in package 455.
+        with mock.patch('gui.mods.offline_lan_0922.waiting_room_ui._log') as log, \
+                mock.patch('traceback.print_exc'):
+            with self.assertRaisesRegex(Exception, 'Can not initialize daapi'):
+                view.setFlashObject(clip, autoPopulate=False)
+        self.assertIn('owner:UserNameField', log.call_args[0][0])
+        self.assertFalse(hasattr(clip, '_script'))
+        del view.owner
+        view.setFlashObject(clip, autoPopulate=False)
+        self.assertIs(view, clip.script)
 
     def test_native_callbacks_defer_teardown_and_reject_stale_room(self):
         pending = []
@@ -104,7 +154,7 @@ class NativeTrainingTests(unittest.TestCase):
         pending.pop()()
         adapter.action.assert_not_called()
         view.destroy.assert_called_once_with()
-        self.assertIsNone(view.owner)
+        self.assertIsNone(view._offline_owner)
         adapter.close()
         view.destroy.assert_called_once_with()
 

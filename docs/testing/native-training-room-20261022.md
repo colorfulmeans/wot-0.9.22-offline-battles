@@ -69,3 +69,39 @@ check_native_world_pipeline.py at wreck/2 (ordered engine query trace). Its
 state/report comparisons precede that failure. This UI change does not change
 worker/native geometry or suppress that gate; it is not claimed resolved by
 these local reference tests. The Windows package build is a separate workflow.
+
+## Package 455 native binding regression (14:13 report)
+
+Report wot-error-report-20261022-141311-a025163f2bf8.zip confirms package
+colorfulmeans-39731209031-1. At 14:13:05.155, TrainingView fails inside
+BaseDAAPIModule.setFlashObject -> DAAPIEntity.turnDAAPIon, before _populate.
+At 14:13:05.432 the captured client raises 0xC0000005 writing address zero at
+WorldOfTanks.exe+0x008AC38C. The minidump module timestamp 1517214884 and checksum
+26890793 match the inspected installed executable (SHA-256
+7fab583e04579dd3e1bffb3abede622acb7b65d6190087952833a22c456fffb3).
+
+The Python TrainingView used a public owner attribute for its LAN adapter;
+the original AS TrainingRoom declares owner:UserNameField. The exact binary's
+script setter at VA 0x00AB2FB9 calls binding at 0x00AB11E0. That code collects
+child names (0x00AB1650; its collector visit at 0x00AB0C80 retains names without
+checking value types), probes Python attributes at 0x00AB12C0 (0x00FB3C90), and
+attempts callback installation for matching names. It does not first check
+that the Python attribute is callable. Thus the public owner context collides
+with a typed, non-function AS slot. The failure is then replaced by the generic
+Can not initialize daapi exception. The later minidump shows a damaged native
+allocator list; it does not independently reconstruct the complete corruption
+history, and no allocator patch or crash-containment guess is introduced.
+
+Rename binding context to _offline_owner and _offline_token, including teardown
+and all delayed action ownership checks. Preserve raw binding failure details
+before the native Python wrapper replaces the exception, and log successful
+binding and completion of population separately.
+
+The updated fixture contains all public data-member names and types from the
+pinned native TrainingRoom, with the movie hash. Tests now execute a strict
+script-binding boundary before _populate, reproduce failure with the exact
+old owner attribute, and pass after removing the collision. They also check
+that the new view has no matching attribute for any authored control, retain
+permission and delayed-callback checks, and verify raw error logging. Previous
+fixtures skipped this binding boundary and could not detect this regression.
+Successful contract tests are not a claim of a new live Windows acceptance.
