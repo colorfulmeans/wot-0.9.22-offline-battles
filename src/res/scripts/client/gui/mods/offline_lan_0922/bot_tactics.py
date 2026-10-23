@@ -28,6 +28,7 @@ PRESETS = {
     'development': ('stock', 'intermediate', 'full'),
     'equipment': ('none', 'single', 'standard', 'improved'),
     'consumables': ('none', 'once', 'repeat', 'large'),
+    'outfit': ('off', 'on'),
     'crew_preset': ('50', '75', 'repair', 'all'),
 }
 PARAMETERS = {

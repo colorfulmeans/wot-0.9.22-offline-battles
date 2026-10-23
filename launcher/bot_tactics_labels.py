@@ -133,6 +133,7 @@ for _key, _choices in {
     'equipment': [('none','无配件'),('single','1 配件'),('standard','3 普通配件'),('improved','3 紫色配件＋对应指令')],
     'consumables': [('none','无给养'),('once','小急救包＋小修理箱＋手动灭火器·一次'),('repeat','小急救包＋小修理箱＋手动灭火器·重复'),('large','大急救包＋大修理箱＋自动灭火器·重复')],
     'crew_preset': [('50','50%'),('75','75%'),('repair','100% 满修理满隐蔽'),('all','100% 全部满技能')],
+    'outfit': [('off','不使用涂装'),('on','使用现有涂装')],
 }.items():
     ENUM_NAMES[_key] = dict([('', ('继承上级设置','Inherit'))] + [(v,(z,v)) for v,z in _choices])
 
@@ -146,6 +147,7 @@ PARAM_NAMES = {
     'development': ('研发配置','Development'), 'equipment': ('配件','Equipment'),
     'consumables': ('给养','Consumables'), 'crew_preset': ('成员配置','Crew preset'),
     'ammo_ratios': ('弹药比例','Ammunition ratios'),
+    'outfit': ('BOT 使用涂装','Bot outfit'),
     'reaction_seconds': ('反应时间（秒）', 'Reaction delay (s)'),
     'patience_seconds': ('首次开火缩圈等待上限（秒）', 'Opening aim patience (s)'),
     'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),

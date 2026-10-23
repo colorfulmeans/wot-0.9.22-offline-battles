@@ -39,10 +39,30 @@ def run(destination):
             report['baseline_route_restore']=True
             ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())
-            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all').items():ui.rule_vars[key].set(value)
+            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all',outfit='off').items():ui.rule_vars[key].set(value)
             for var in ui.ammo_vars:var.set('0')
             ui.save_rule()
             report['independent_presets_and_empty_ammo']=True
+            assert storage.contract.effective(ui.document,1,'heavyTank',0)['outfit']=='off'
+            from types import SimpleNamespace
+            from tkinter import ttk
+            import crew_ui
+            owner=SimpleNamespace(_tk=tk,_ttk=ttk,_t=lambda value:value,
+                game_root=tk.StringVar(value='smoke fixture'),_save_slot_id='smoke',_busy=False,_maintenance_busy=False)
+            panel=crew_ui.CrewPanel(owner,ttk.Frame(root))
+            panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'))]
+            panel.filter();assert panel.by_label
+            panel.variables['female'].set('Female');panel.variables['skills'].set('2')
+            original_add=crew_ui.store.add;calls=[]
+            try:
+                crew_ui.store.add=lambda *args:calls.append(args)
+                assert panel.add()
+                assert calls==[('smoke','smoke fixture','ussr:R11_MS-1','commander',True,2)]
+            finally:
+                crew_ui.store.add=original_add
+            panel.variables['role'].set('Loader');panel.filter();assert not panel.by_label
+            assert str(panel.button.cget('state'))=='disabled'
+            report['crew_controls_and_outfit_override']=True
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()
             ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()

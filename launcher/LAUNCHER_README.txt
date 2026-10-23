@@ -39,6 +39,15 @@ Exit both the game and launcher before switching entrances. The fixtures do
 not change saved room presets; the contact fixes also apply in normal battles.
 
 Customize save -> Coatings edits preset-style inventory, including hidden styles.
+Customize save -> Members adds 100% recruits by nation, role, gender, complete
+skill count and trained vehicle. Skills remain unassigned for the client to
+choose; zero gives no secondary-skill XP. Close the game before adding. The next
+startup delivers each recruit to this save's barracks with a system notice.
+Full barracks leave requests pending. Saved retry identities prevent duplicate
+delivery after an interrupted inbox cleanup. The Members tab follows Coatings.
+Bot tactics also has an independent outfit checkbox below consumables: inherit,
+enable or disable the existing seasonal rented styles, keeping locked-outfit
+exceptions. It does not select a style or add a battle-count expiry.
 Select one vehicle or all compatible vehicles, add copies or fill missing styles,
 then Save with the game closed. One rental copy grants its original battle count.
 Fully unlocked saves receive one copy per compatible vehicle on their first style

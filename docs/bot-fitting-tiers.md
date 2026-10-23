@@ -140,13 +140,18 @@ make any native admission or fitted-model discrepancy identifiable.
 
 ## Independent launcher presets and validation
 
-Development, equipment, consumables, crew and ammunition ratios are separate
+Development, equipment, consumables, outfit, crew and ammunition ratios are separate
 optional overrides at the existing global/team/class/slot scopes. A difficulty
 change does not clear explicit overrides. The equipment choices are none, one
 regular device, three regular devices, or three improved devices plus the
 first device's directive. Consumables are whole presets: none, small kits and
 manual extinguisher once, the same reusable, or reusable large kits and automatic
 extinguisher. Their use policy follows that preset, independently of aim skill.
+The outfit checkbox inherits when mixed; checked and cleared explicitly enable
+or disable the existing native seasonal rented styles. It never selects an
+arbitrary style or changes modules/equipment/crew. Enabling uses the reviewed
+elite style for that hull, preserving all locked-outfit exceptions and the
+existing no-expiry behavior. Unspecified rules retain the difficulty defaults.
 Crew choices couple 50/75 with no additional skills, 100 with repair/camouflage,
 or 100 with all role-legal skills. Legacy crew-level-only imports retain their
 original skills until explicitly replaced.

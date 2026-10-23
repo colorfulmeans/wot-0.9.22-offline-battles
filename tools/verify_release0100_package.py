@@ -39,6 +39,8 @@ assert 'wot_launcher.py' in verified
 assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
 assert 'bot_tactics_labels.py' in verified
+assert 'crew_ui.py' in verified
+assert 'crew_store.py' in verified
 
 sys.path.insert(0, str(ROOT / 'launcher'))
 import stage_payload
@@ -85,6 +87,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert process.returncode == 0 and editor.get('ok'), editor or process.stderr
     assert editor.get('default_readonly') and editor.get('independent_presets_and_empty_ammo'), editor
     assert editor.get('isolated_profile') and editor.get('map_count') == 41, editor
+    assert editor.get('crew_controls_and_outfit_override'), editor
     assert editor.get('native_gameplay_tested') is False, editor
 
 print(json.dumps({'frozen_source_modules_verified': len(verified),

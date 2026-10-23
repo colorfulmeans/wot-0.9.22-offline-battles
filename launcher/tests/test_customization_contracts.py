@@ -67,6 +67,21 @@ class EditorProtectionTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
+    def test_outfit_checkbox_inherits_then_roundtrips_an_independent_override(self):
+        e=self.editor
+        self.assertIn('disabled',e.outfit_check.state())
+        e.adopt(storage.contract.default_profile('Custom'))
+        self.assertEqual('',e.rule_vars['outfit'].get())
+        self.assertIn('alternate',e.outfit_check.state())
+        self.assertEqual(int(e.rule_boxes['consumables'].grid_info()['row'])+1,
+                         int(e.outfit_check.grid_info()['row']))
+        e.outfit_check.invoke();self.assertEqual('on',e.rule_vars['outfit'].get())
+        e.save_rule();e.save()
+        self.assertEqual('on',storage.contract.effective(e.store.read('Custom'),1,'heavyTank',0)['outfit'])
+        e.rule_vars['skill'].set('regular');e.save_rule()
+        self.assertEqual('on',storage.contract.effective(e.document,1,'heavyTank',0)['outfit'])
+        e.outfit_check.invoke();self.assertEqual('off',e.rule_vars['outfit'].get())
+        e.save_rule();self.assertEqual('off',storage.contract.effective(e.document,1,'heavyTank',0)['outfit'])
     def test_name_text_and_undo_do_not_unlock_default(self):
         e=self.editor;before=copy.deepcopy(e.document)
         e.profile_name.set('Edited');e.rule_vars['skill'].set('elite');e.save_rule();e.new_route();e.undo();e.redo();e.save()

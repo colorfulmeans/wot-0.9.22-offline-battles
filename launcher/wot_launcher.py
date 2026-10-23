@@ -26,13 +26,14 @@ if __package__ in (None, ""):
     import save_personal_missions
     import personal_missions_ui
     import customizations_ui
+    import crew_ui
     import replay_launch
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
     import window_diagnostics
 else:
-    from . import customizations_ui
+    from . import customizations_ui, crew_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -57,6 +58,18 @@ LAUNCHER_VERSION = "0.10.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    'Crew members': '成员', 'Crew role': '类型', 'Gender': '性别',
+    'Complete skills': '技能数', 'Trained vehicle': '受训车辆',
+    'Commander': '车长', 'Gunner': '炮手', 'Driver': '驾驶员',
+    'Loader': '装填手', 'Radio operator': '通信兵',
+    'Male': '男性', 'Female': '女性', 'Add to barracks': '添加到兵营',
+    'Close World of Tanks before adding crew.': '添加成员前请关闭游戏。',
+    'Select a trained vehicle with the requested crew role.': '请选择具备该岗位的受训车辆。',
+    'Start the game to receive pending crew first.': '请先启动游戏领取已添加的成员。',
+    'Crew member queued for this save. It arrives in the barracks on the next game startup.':
+        '成员已添加到当前存档的待领取列表，下次启动游戏时进入兵营，并显示系统消息。',
+    'Adds one 100% crew member, with experience for the selected number of complete skills. Choose the skills in the client. No zero-skill perk is added. Close the game before adding; the next startup delivers the recruit and a system message. Insufficient barracks space leaves the request pending.':
+        '每次添加一名 100% 成员，附带所选数量的完整技能经验，具体技能在客户端自行选择，不额外附赠零技能。技能数 0 表示只有 100% 基础熟练度。添加前请关闭游戏，下次启动时进入兵营并显示系统消息；兵营空间不足时保留待领取。',
     'Coatings': '涂装',
     'Edit preset style inventory...': '编辑预设风格库存…',
     'All compatible vehicles': '全部适用车辆',
@@ -856,8 +869,11 @@ class LauncherWindow(object):
         self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
-        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.personal_missions_panel):
+        self.crew_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
             self.save_tabs.add(panel)
+        self.crew_editor = crew_ui.CrewPanel(self, self.crew_panel)
+        self.save_tabs.bind('<<NotebookTabChanged>>', self._save_tab_changed)
         self.edit_customizations_button = tk.Button(self.customizations_panel, command=self._open_customizations)
         self.edit_customizations_button.pack(fill='x')
         self.edit_personal_missions_button = tk.Button(
@@ -1198,8 +1214,9 @@ class LauncherWindow(object):
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
         for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
-                             (self.customizations_panel, 'Coatings'), (self.personal_missions_panel, 'Personal missions')):
+                             (self.customizations_panel, 'Coatings'), (self.crew_panel, 'Crew members'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))
+        self.crew_editor.translate()
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
@@ -1574,6 +1591,7 @@ class LauncherWindow(object):
         self._refresh_save_slots()
         self.save_dialog.title(self._t("Customize save: %s") % self.save_slot.get())
         self.save_dialog_feedback.config(text="")
+        self._save_tab_changed()
         self.save_dialog.deiconify()
         self.save_dialog.grab_set()
         self.save_dialog.lift()
@@ -1597,6 +1615,10 @@ class LauncherWindow(object):
 
     def _open_customizations(self):
         return self._open_personal_editor(customizations_ui.CustomizationsDialog)
+
+    def _save_tab_changed(self, unused=None):
+        if self.save_tabs.select() == str(self.crew_panel):
+            self.crew_editor.refresh()
 
     def _open_account_badges(self):
         return self._open_personal_editor(personal_missions_ui.BadgesDialog)

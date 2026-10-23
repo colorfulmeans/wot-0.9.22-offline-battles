@@ -41,9 +41,23 @@ class FittingContracts(unittest.TestCase):
                         'china:Ch01_Type59_Gold', 'poland:Pl03_PzV_Poland'):
             self.assertIn(vehicle, excluded)
 
+    def test_outfit_switch_is_independent_and_preserves_every_locked_exception(self):
+        for vehicle, tiers in PLANS.items():
+            for tier in fitting.TIERS:
+                original = fitting.plan(vehicle, tier)
+                enabled = fitting.plan(vehicle, tier, {'outfit': 'on'})
+                disabled = fitting.plan(vehicle, tier, {'outfit': 'off'})
+                self.assertEqual(tiers['elite']['style'], enabled.pop('style'), vehicle)
+                self.assertIsNone(disabled.pop('style'), vehicle)
+                original.pop('style')
+                self.assertEqual(original, enabled)
+                self.assertEqual(original, disabled)
+        with self.assertRaises(ValueError):
+            fitting.plan('ussr:R04_T-34', 'elite', {'outfit': 'arbitrary style'})
+
     def test_independent_native_build_restores_the_same_override_identity(self):
         vehicle='ussr:R04_T-34'
-        overrides=dict(development='full',equipment='none',crew_preset='50')
+        overrides=dict(development='full',equipment='none',crew_preset='50',outfit='off')
         with patch.dict(sys.modules,self._items()):
             native=self._native(vehicle,'elite')
             descriptor=fitting.build(native,vehicle,'regular',overrides=overrides)

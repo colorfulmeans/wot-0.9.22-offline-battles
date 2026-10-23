@@ -3969,7 +3969,7 @@ class BotRuntime(object):
                     tier = bot_gunnery.skill_for_rating(rating)
                     level = ({'50':50, '75':75, 'repair':100, 'all':100}.get(values.get('crew_preset'))
                              if 'crew_preset' in values else values.get('crew_level', bot_fittings.crew_level(tier)))
-                    overrides = dict((k, values[k]) for k in ('development', 'equipment', 'crew_preset') if k in values)
+                    overrides = dict((k, values[k]) for k in ('development', 'equipment', 'crew_preset', 'outfit') if k in values)
                     args = (vehicle_name, tier, level, raw.get('fitting'))
                     resolved_descriptor = self.bot_descriptor_resolver(*(args + (overrides,) if overrides else args))
                 descriptor_pair = siege_mechanics.descriptor_pair(

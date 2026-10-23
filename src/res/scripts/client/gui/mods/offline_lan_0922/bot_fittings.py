@@ -36,6 +36,9 @@ def plan(vehicle, tier, overrides=None):
     preset = overrides.get('crew_preset')
     if preset:
         result['crew'] = {'50':50, '75':75, 'repair':100, 'all':100}[preset]
+    if 'outfit' in overrides:
+        # The reviewed elite plan already excludes vehicles with locked outfits.
+        result['style'] = PLANS[vehicle]['elite']['style'] if overrides['outfit'] == 'on' else None
     development = development or {'rookie':'stock','regular':'intermediate','veteran':'full','elite':'full'}[tier]
     equipment = equipment or {'rookie':'none','regular':'single','veteran':'standard','elite':'improved'}[tier]
     if development=='stock' and equipment!='none':

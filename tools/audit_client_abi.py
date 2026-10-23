@@ -105,6 +105,8 @@ EXPECTED_ABI = {
             'roleLevel', 'skillsMask', 'isPreview'),
         'TankmanDescr.__init__': ('self', 'compactDescr', 'battleOnly'),
         'TankmanDescr.skillLevel': ('self', 'skillName'),
+        'TankmanDescr.levelUpXpCost': ('fromSkillLevel', 'skillSeqNum'),
+        'makeTmanDescrByTmanData': ('tmanData',),
     },
     'scripts/common/items/__init__.pyc': {
         'ItemsPrices.__init__': ('self', 'prices'),
@@ -1172,6 +1174,8 @@ EXPECTED_CODE_NAMES = {
     'scripts/common/items/tankmen.pyc': {
         'TankmanDescr.skillLevel': (
             'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),
+        'makeTmanDescrByTmanData': ('getNationConfig', 'isFemales', 'generateCompactDescr', 'addXP', 'makeCompactDescr'),
+        'TankmanDescr.levelUpXpCost': ('_g_levelXpCosts',),
     },
     'scripts/client/gui/shared/gui_items/Tankman.pyc': {
         'Tankman.getSkillsToLearn': (
@@ -2290,6 +2294,10 @@ EXPECTED_PACKED_XML_PATH_VALUES = {
 
 
 EXPECTED_GLOBALS = {
+    'scripts/common/items/tankmen.pyc': {
+        'MAX_SKILL_LEVEL': 100, '_MAX_FREE_XP': 2000000000,
+        '_LEVELUP_K1': 50.0, '_LEVELUP_K2': 100.0,
+    },
     'scripts/common/physics_shared.pyc': {
         'WEIGHT_SCALE': 0.001,
         'CMY_MIN': -0.15, 'CMY_MID': -0.2, 'CMY_MAX': -0.3,
@@ -2548,6 +2556,18 @@ EXPECTED_SUBSCRIPT_MUTATIONS = {
 # arithmetic between steps, but bounds each gap so dead or distant code cannot
 # accidentally satisfy a contract.
 EXPECTED_ORDERED_INSTRUCTION_PATTERNS = {
+    'scripts/common/items/tankmen.pyc': {
+        'TankmanDescr.levelUpXpCost': (
+            'native secondary skill XP doubles by skill sequence', 0, (
+                ('LOAD_CONST', 'value', 2), ('LOAD_FAST', 'value', 'skillSeqNum'),
+                ('BINARY_POWER', None, None), ('LOAD_FAST', 'value', 'costs'),
+                ('LOAD_FAST', 'value', 'fromSkillLevel'), ('LOAD_CONST', 'value', 1),
+                ('BINARY_ADD', None, None), ('BINARY_SUBSCR', None, None),
+                ('LOAD_FAST', 'value', 'costs'), ('LOAD_FAST', 'value', 'fromSkillLevel'),
+                ('BINARY_SUBSCR', None, None), ('BINARY_SUBTRACT', None, None),
+                ('BINARY_MULTIPLY', None, None), ('RETURN_VALUE', None, None),
+            )),
+    },
     'scripts/common/items/vehicles.pyc': {
         '_readGunClipBurst': (
             'native clip and burst interval is sixty divided by rate',0,(

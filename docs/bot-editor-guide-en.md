@@ -102,7 +102,11 @@ Configuration storage: `%LOCALAPPDATA%\WoTOfflineBattles\bot_tactics`. `active.j
 ## v0.10.2 customization verification
 
 The behavior form uses independent whole presets and readonly ratio digits;
-stock development only allows no equipment. Numeric route and parking controls
+stock development only allows no equipment. The outfit checkbox appears below
+consumables. The mixed checkbox
+inherits; checking or clearing it independently enables or disables the existing
+native seasonal rented style, without a style picker or a 100-battle expiry.
+Locked outfits keep their reviewed exceptions. Numeric route and parking controls
 are dropdowns too, including a dropdown checklist for multiple slot bindings.
 The vehicle editor displays clip and trigger intervals in seconds while keeping
 legacy native-rate profiles intact. It materializes missing native burst nodes
@@ -111,6 +115,18 @@ clip capacity is bounded by the existing 255-round wire contract. Partial
 triggers never borrow from the next clip. Newly created unlocked garages mount
 three legal improved devices and a directive with auto-resupply checked. This
 initialization does not run for the hidden worker; saved removals/settings win.
+
+The save customization window has a Members tab immediately after Coatings.
+It queues one 100% recruit at a time, selected by nation, primary crew role,
+gender, complete skill count and trained vehicle. Vehicle choices follow nation
+and primary role; ownership is not required. Skills are unassigned native XP,
+without a zero-skill perk: zero means only 100% basic proficiency. Counts 0..13
+fit the exact client's free-XP cap; fourteen complete skills do not. Each click
+creates a distinct person. The game must be closed while queuing. The next
+startup generates a native passport and adds the person to that save's barracks,
+with a durable system notice. Full barracks or native refusals remain pending.
+The recruit, notice and retry identity are saved together, so interrupted inbox
+cleanup cannot duplicate a member. Neither the wallet nor existing crew change.
 
 Verification covers real Tk selection/reset/undo/import behavior, inherited
 presets, empty inventory, ratio rounding across digit combinations, host-only

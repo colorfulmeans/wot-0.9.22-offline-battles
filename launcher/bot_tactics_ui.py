@@ -217,15 +217,24 @@ class BotTacticsEditor:
                 ('class_tag',self.tr('车型','Class'),('all',)+contract.CLASSES),
                 ('slot',self.tr('槽位','Slot'),('',)+tuple(str(i) for i in range(1,16))),
                 ('skill',self.tr('难度','Difficulty'),('',)+contract.SKILLS)]
-        for name in ('development','equipment','consumables','crew_preset'):
+        for name in ('development','equipment','consumables','outfit','crew_preset'):
             fields.append((name,labels.parameter_label(name,self.language),('',)+contract.PRESETS[name]))
         for row,(name,label,values) in enumerate(fields):
-            actual=row+1 if name in ('consumables','crew_preset') else row
+            actual=row+1 if name in ('consumables','outfit','crew_preset') else row
             ttk.Label(form,text=label).grid(row=actual,column=0,sticky='w',pady=3)
             var=tk.StringVar(value='0' if name=='team' else 'all' if name=='class_tag' else '')
             self.rule_vars[name]=var
+            if name=='outfit':
+                self.outfit_check=ttk.Checkbutton(form,variable=var,onvalue='on',offvalue='off',
+                    text=self.tr('使用现有涂装','Use existing outfit'),
+                    command=lambda:self._behavior_help('outfit'))
+                self.outfit_check.grid(row=actual,column=1,sticky='w')
+                self.outfit_check.bind('<FocusIn>',lambda e:self._behavior_help('outfit'),add='+')
+                var.trace_add('write',lambda *unused:self._sync_outfit())
+                self._sync_outfit()
+                continue
             box=LocalizedCombobox(form,variable=var,kind=name,values=values,language=self.language,width=35)
-            actual=row+1 if name in ('consumables','crew_preset') else row
+            actual=row+1 if name in ('consumables','outfit','crew_preset') else row
             box.grid(row=actual,column=1,sticky='ew');self.rule_boxes[name]=box
             box.bind('<FocusIn>',lambda e,k=name:self._behavior_help(k),add='+')
             box.bind('<<ComboboxSelected>>',lambda e,k=name:(self._refresh_equipment_choices(),self._refresh_ammunition(),self._behavior_help(k)),add='+')
@@ -262,6 +271,9 @@ class BotTacticsEditor:
             self.help_text.configure(state='normal');self.help_text.delete('1.0','end');self.help_text.insert('1.0',self.behavior_help.get());self.help_text.configure(state='disabled')
         self.behavior_help.trace_add('write',show_help)
         self._behavior_help('equipment')
+
+    def _sync_outfit(self):
+        self.outfit_check.state(('alternate',) if not self.rule_vars['outfit'].get() else ('!alternate',))
 
     def _refresh_equipment_choices(self):
         stock=self.rule_vars['development'].get()=='stock' or (not self.rule_vars['development'].get() and self.rule_vars['skill'].get()=='rookie')
@@ -311,11 +323,14 @@ class BotTacticsEditor:
             'equipment': '配件优先顺序：垂稳 → 输弹机 → 炮控 → 通风 → 高级观察镜 → 工具箱；3 紫色配件包含对应指令。选择白板研发时只允许无配件；切回中间／完全体才开放其他配件选项。导入与开战同样校验。',
             'development': '白板／中间／完全体沿用现有主炮白名单与炮塔兼容规则。白板仅允许无配件，避免超重；金币车为固定研发配置。',
             'crew_preset': '50%、75% 不附加技能；100% 满修理满隐蔽，或 100% 全部满技能。等级与技能是一套配置。',
+            'outfit': '勾选使用现有原生各季节租用风格（F 系／M 系等），不选择具体花色，不受原生 100 场租用期限限制。锁定涂装的车辆仍保持原外观。灰色方框表示继承上级／难度；勾选或取消后独立覆盖，切换难度不会改写。',
             'consumables': '一次档每种仅用一次，不解除眩晕、不修履带；重复档遵循原生冷却，可解除眩晕、修复断履带。手动灭火比自动灭火延迟 5 秒。小修理箱顺序：红火炮 → 红发动机 → 红炮塔 → 黄弹药架 → 黄火炮 → 黄发动机 → 黄炮塔 → 红观察孔 → 黄观察孔 → 黄油箱 → 红电台 → 黄电台 → 红履带；红油箱和黄履带跳过。治疗：装填手 → 炮手 → 驾驶员 → 车长 → 通信兵 → 眩晕；同职成员按座位顺序。大给养沿用现有群体效果与过滤规则。',
             'ammo_ratios': '0—9 为相对比例，不是发数。全部继承采用默认配比；全 0 为不携弹。正比例按容量近似装满；弹夹车按弹夹数量分配，不改变每夹数量。正比例至少一发／一夹（容量许可），同等条件优先主弹。0 不补回。比例框按该炮的银币 AP／APCR／HEAT／HE、金币 AP／APCR／HEAT／HE 顺序对应；手动比例可以选择该炮的原生弹种，覆盖默认炮弹白名单。例如 7 夹的 6:3:1 近似为 4:2:1。',
         }
         fallback=labels.parameter_label(key,self.language)+'：'+self.tr('继承上级设置不覆盖上级；0 是有效值。','Inherit does not override; zero is a value.')
         text=explanations.get(key,fallback) if self.zh else fallback
+        if key=='outfit' and not self.zh:
+            text='Use the existing native seasonal rented styles (F/M series), without a 100-battle expiry or a style picker. Locked outfits remain unchanged. A mixed checkbox inherits the parent/difficulty; checking or clearing it overrides independently.'
         if key=='development':
             preview=self._refresh_ammunition()
             if preview and preview.get('fixed'):text+='\n'+self.tr('当前金币车：固定配置，各研发档位不改变模块。','Current premium vehicle: fixed module configuration at every development tier.')
@@ -511,6 +526,7 @@ class BotTacticsEditor:
         locked=self.document['name']=='Default'
         self.save_button.configure(state='disabled' if locked else 'normal')
         self.restore_button.configure(state='disabled' if locked else 'normal')
+        self._sync_outfit()
         if not locked:return
         allowed={self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
         view_labels={self.tr('检查本图','Check map'),self.tr('适应窗口','Fit view'),

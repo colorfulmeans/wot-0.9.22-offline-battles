@@ -111,7 +111,7 @@ class _Notebook(_Widget):
 
 
 class _StringVar(object):
-    def __init__(self, value=""):
+    def __init__(self, value="", master=None):
         self._value = value
         self._callbacks = []
 
@@ -1295,6 +1295,10 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.save_tabs, self.window.account_panel.master)
         self.assertEqual(self.window.save_dialog, self.window.save_tabs.master)
         self.assertIn(self.window.customizations_panel, self.window.save_tabs.tabs)
+        tabs = self.window.save_tabs.tabs
+        self.assertEqual(tabs.index(self.window.customizations_panel) + 1,
+                         tabs.index(self.window.crew_panel))
+        self.assertEqual(self.window.crew_panel, self.window.crew_editor.frame)
         self.assertEqual(self.window._open_customizations,
                          self.window.edit_customizations_button.options['command'])
         self.assertTrue(self.window._open_save_dialog())
