@@ -6,6 +6,49 @@ from pathlib import Path
 import traceback
 
 
+def _verify_vehicle_editor_language(root, tk, ttk):
+    """Exercise shipped widgets with an isolated, read-only numeric fixture."""
+    from types import SimpleNamespace
+    import vehicle_editor_ui as editor_ui
+    member = editor_ui.DEFAULT_MEMBER
+    path = 'turrets0/Turret/guns/Gun/burst/count'
+    field = dict(member=member, fieldPath=path, categoryLabel='Gun', category='guns',
+                 fieldLabel='Gun / Magazine / Rounds per trigger', shared=False,
+                 affectedVehicles=['R11_MS-1'], displayVehicle='MS-1', scope='Affects this vehicle only.')
+    result = dict(member=member, fieldPath=path, originalValue=1, currentValue=1,
+                  packedType='integer', constraint='magazine capacity must be a positive integer',
+                  overlayPath='isolated smoke fixture')
+    calls = []
+    def inspect(*unused):
+        calls.append('inspect')
+        return result
+    service = SimpleNamespace(VehicleOverlayError=ValueError,
+        list_vehicle_choices=lambda *a: [dict(nation='ussr', vehicle='R11_MS-1',
+            label='MS-1', vehicleClass='lightTank', level=1, member=member)],
+        get_vehicle_profile_options=lambda *a: dict(excludeEditedVehiclesFromBots=False),
+        list_vehicle_profile_field_choices=lambda *a: [field], inspect_profile_field=inspect)
+    editor = editor_ui.VehicleEditorWindow(root, 'isolated fixture', 'Smoke', tk, ttk,
+        SimpleNamespace(), service=service, language='en',
+        armor_viewer_factory=editor_ui.vehicle_armor_viewer.NullArmorViewerPanel)
+    try:
+        editor.replacement.set('unfinished.12')
+        editor._show_error('This field uses the Packed integer type; enter a whole number.')
+        before = list(calls)
+        for language in ('zh', 'en', 'zh', 'en'):
+            editor.set_language(language)
+            root.update()
+            assert editor._selection() == (member, path)
+            assert editor.replacement.get() == 'unfinished.12'
+            assert str(editor.apply_button.cget('state')) == 'disabled'
+            assert calls == before
+            if language == 'zh':
+                assert '1—64' in editor.constraint.get() and '请输入整数' in editor.status.get()
+            else:
+                assert 'whole number' in editor.status.get()
+    finally:
+        editor.root.destroy()
+
+
 def run(destination):
     report = {'ok': False, 'native_gameplay_tested': False}
     root = None
@@ -75,6 +118,8 @@ def run(destination):
             panel.variables['training'].set('100%');panel.update_skills()
             assert min(panel.maps['skills'].values())==1
             report['seat_aware_recruits']=True
+            _verify_vehicle_editor_language(root, tk, ttk)
+            report['vehicle_editor_language_preserved']=True
 
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()

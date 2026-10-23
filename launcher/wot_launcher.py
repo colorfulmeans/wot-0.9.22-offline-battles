@@ -1271,6 +1271,12 @@ class LauncherWindow(object):
                 editor.set_language(self.language)
                 editors.append(editor)
         self._bot_tactics_editors = editors
+        vehicle_editors = []
+        for editor in getattr(self, '_vehicle_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                vehicle_editors.append(editor)
+        self._vehicle_editors = vehicle_editors
 
     def _sync_mode_tab(self):
         if getattr(self, '_replay_tab', False):
@@ -2748,9 +2754,12 @@ class LauncherWindow(object):
             self._log("Create or select a vehicle profile before editing.")
             return False
         self._remember_folder()
-        vehicle_editor_ui.open_vehicle_editor(
+        editor = vehicle_editor_ui.open_vehicle_editor(
             self.root, status["path"], profile_name, log=self._log,
             language=self.language)
+        if not hasattr(self, '_vehicle_editors'):
+            self._vehicle_editors = []
+        self._vehicle_editors.append(editor)
         return True
 
     def _delete_vehicle_profile(self):

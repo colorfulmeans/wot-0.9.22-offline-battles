@@ -89,6 +89,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert editor.get('isolated_profile') and editor.get('map_count') == 41, editor
     assert editor.get('crew_controls_and_outfit_override'), editor
     assert editor.get('seat_aware_recruits'), editor
+    assert editor.get('vehicle_editor_language_preserved'), editor
     assert editor.get('native_gameplay_tested') is False, editor
 
 print(json.dumps({'frozen_source_modules_verified': len(verified),

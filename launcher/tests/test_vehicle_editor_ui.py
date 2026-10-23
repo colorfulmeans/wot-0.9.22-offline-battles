@@ -95,6 +95,9 @@ class _ArmorViewer(object):
         self.reset_count = 0
         self.__class__.instances.append(self)
 
+    def set_language(self, language):
+        self.language = language
+
     def grid(self, *args, **options):
         self.grid_call = (args, options)
 
@@ -269,6 +272,81 @@ class VehicleEditorWindowTest(unittest.TestCase):
             self.parent, "C:/WoT", "Fast MS-1", _FakeTk, _FakeTtk,
             self.messagebox,
             log=self.log.append, service=self.service)
+
+    def test_live_language_preserves_selection_input_errors_and_service_state(self):
+        member = 'scripts/item_defs/vehicles/ussr/components/guns.xml'
+        path = 'shared/Gun-A/burst/count'
+        self.service.extra_fields = [self.service._field(
+            member, path, 'Gun', 'Gun-A / Magazine / Rounds per trigger',
+            True, ('R11_MS-1',))]
+        self.window.refresh_vehicle_fields()
+        self.window.select_field_from_viewer((member, path))
+        self.window.replacement.set('unfinished.123')
+        self.service.apply_error = 'Trigger count must be 1..64 and trigger interval must be positive and at most 10 seconds'
+        self.assertFalse(self.window.apply())
+        selected = self.window._selection()
+        before = (list(self.service.inspect_calls), list(self.service.apply_calls),
+                  list(self.service.option_calls), list(self.service.catalog_calls),
+                  list(self.window.armor_viewer.loaded))
+        english_error = self.window.status.get()
+        for language in ('zh', 'en', 'zh', 'en'):
+            self.window.set_language(language)
+            self.assertEqual(selected, self.window._selection())
+            self.assertEqual('unfinished.123', self.window.replacement.get())
+            self.assertEqual('disabled', self.window.apply_button.cget('state'))
+            self.assertEqual(before, (self.service.inspect_calls, self.service.apply_calls,
+                self.service.option_calls, self.service.catalog_calls, self.window.armor_viewer.loaded))
+            if self.window._language == vehicle_editor_ui.i18n.LANGUAGE_CHINESE:
+                self.assertIn('必须为 1—64 的整数', self.window.constraint.get())
+                self.assertIn('每扳机发射炮弹数量必须', self.window.status.get())
+                self.assertIn('每扳机发射炮弹', self.window.field.get())
+                self.assertIn('保存到方案', _texts(self.window.root))
+            else:
+                self.assertEqual(english_error, self.window.status.get())
+                self.assertIn('Rounds per trigger', self.window.field.get())
+
+    def test_live_language_keeps_filters_and_uncommitted_vehicle_search(self):
+        self.window.vehicle_class.set('Light tank')
+        self.window.tier.set('1')
+        self.window.refresh_vehicles()
+        self.window.vehicle.set('unfinished vehicle search')
+        self.window.filter_vehicles()
+        self.window.replacement.set('0.123 unfinished')
+        for language in ('zh', 'en'):
+            self.window.set_language(language)
+            self.assertEqual('lightTank', self.window._selected_vehicle_class())
+            self.assertEqual(1, self.window._selected_tier())
+            self.assertEqual('unfinished vehicle search', self.window.vehicle.get())
+            self.assertEqual('0.123 unfinished', self.window.replacement.get())
+            self.assertEqual('disabled', self.window.apply_button.cget('state'))
+
+    def test_trigger_limits_and_numeric_errors_translate_both_directions(self):
+        errors = (
+            'Enter a replacement value.', 'Enter one numeric scalar.',
+            'The replacement must be finite.',
+            'This field uses the Packed integer type; enter a whole number.',
+            'Packed integers must fit signed 64-bit storage.',
+            'Reload time must be a positive finite number of seconds',
+            'magazine capacity must be a positive integer.',
+            'turrets0/Test/guns/Gun clip/count must be at least burst/count (6).',
+        )
+        for error in errors:
+            self.window._show_error(error)
+            self.window.set_language('zh')
+            self.assertIn('验证错误', self.window.status.get())
+            self.assertNotIn('must', self.window.status.get())
+            self.assertNotIn('Enter ', self.window.status.get())
+            self.window.set_language('en')
+            self.assertEqual('Validation error: '+error, self.window.status.get())
+        for suffix, expected in (('/burst/count', '1—64'), ('/burst/rate', '10 秒'),
+                                 ('/clip/rate', '有效秒数')):
+            self.window.set_language('zh')
+            result=self.service._result(member=vehicle_editor_ui.DEFAULT_MEMBER,
+                                        field_path='test'+suffix)
+            self.window._show_result(result)
+            self.assertIn(expected, self.window.constraint.get())
+            self.window.set_language('en')
+            self.assertNotIn(expected, self.window.constraint.get())
 
     def test_magazine_rates_display_seconds_and_save_inverse_native_rate(self):
         path='shared/Gun-A/clip/rate';member='scripts/item_defs/vehicles/ussr/components/guns.xml'

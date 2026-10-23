@@ -96,6 +96,9 @@ stock. The vehicle editor displays magazine/trigger reload intervals in seconds;
 underlying old rate edits keep their native meaning. Trigger count is limited by
 magazine capacity and the existing runtime limit (64), with within-trigger time
 at most ten seconds. A partial trigger fires only real remaining rounds.
+The open vehicle editor follows the main language selector, including numeric
+limits and validation errors. Switching languages preserves filters, selected
+fields, unsaved input and viewer position without reloading or saving the profile.
 
 CPython 3.11.9 license
 ======================
