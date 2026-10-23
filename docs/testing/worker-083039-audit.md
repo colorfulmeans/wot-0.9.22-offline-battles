@@ -60,6 +60,10 @@ changing driving/route/catch-up rules.
   production arm then verifies full states, reports and effects, plus ordered
   query omissions limited to previously seen identical unfiltered rays. The
   separate scope/invalidation tests continue to enforce where reuse is legal.
+* Once the pipeline audit proceeds past `wreck/2`, a later crew-cache fixture
+  exposes an implicit default: its purported crew change could assign 75 to
+  an already-75 crew. Pin its initial value to 100 and assert the later 75
+  value, so the invalidation audit exercises an actual change.
 
 No native ABI, collision coverage, collision tolerance, physics budget,
 decision cadence, route policy or ammunition behavior changes in this patch.
