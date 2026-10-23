@@ -10127,10 +10127,11 @@ The Lakeville 2026-10-23 23:07 report shows Bot 2 (110) remaining near
 eventually passed; that is not proof of reliable recovery. Contact escapes
 now retain failed world headings through pivots. A shared adapter travel
 receipt survives route/waypoint changes and measures realised horizontal
-forward progress, rather than planned distance or track travel. Recovery
+forward progress, rather than planned distance or track travel. Wreck recovery
 backtracking can spend at most half that forward high-water mark. Returning
 to an old endpoint earns no new credit. Initial independent reverse exits
-and tactical withdrawal remain legal. Departure beyond the existing hull
+and tactical withdrawal remain legal. Live-vehicle traffic does not start a
+wreck-return budget. Departure beyond the existing hull
 clearance distance or Bot retirement releases the local receipt.
 
 Limited reverses use the existing short-escape runtime endpoint contract,

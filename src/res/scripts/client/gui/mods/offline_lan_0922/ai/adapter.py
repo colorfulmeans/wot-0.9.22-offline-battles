@@ -130,10 +130,11 @@ class BotAdapter(object):
             self._contact_attempts[bot_id] = memory
         # Signs are local to the current hull heading. Preserve world-space
         # failed exits when pivoting instead of clearing the whole encounter.
-        memory['failed'] = set(sign for sign in (-1., 1.)
-            if any(abs((yaw+(math.pi if sign < 0 else 0.)-heading+math.pi) %
-                       (2.*math.pi)-math.pi) <= .30
-                   for heading in memory.get('failed_headings', ())))
+        if not contact.get('peer_alive', True):
+            memory['failed'] = set(sign for sign in (-1., 1.)
+                if any(abs((yaw+(math.pi if sign < 0 else 0.)-heading+math.pi) %
+                           (2.*math.pi)-math.pi) <= .30
+                       for heading in memory.get('failed_headings', ())))
         return memory
 
     @staticmethod
@@ -185,7 +186,8 @@ class BotAdapter(object):
                 reason = 'vehicle_withdrawn'
         if reason is not None:
             self._contact_escapes.pop(bot_id, None)
-            if reason not in ('completed', 'peer_changed'):
+            if (reason not in ('completed', 'peer_changed') and
+                    (reason != 'heading_changed' or not escape['peer_alive'])):
                 memory = self._contact_attempts.get(bot_id)
                 if memory is not None and memory['peer'] == escape['peer']:
                     memory['failed'].add(escape['sign'])
@@ -646,9 +648,18 @@ class BotAdapter(object):
         mode = command.get('recovery_mode')
         if (not memory.get('active') and command.get('throttle', 0.) > 0. and
                 mode in ('wreck_push', 'contact_escape', 'short_forward_escape', 'forward_escape')):
-            memory = recovery_travel.observe(None, position, yaw, 0.)
-            memory['active'] = True
-            self._recovery_travel[bot_id] = memory
+            escape = self._contact_escapes.get(bot_id)
+            wreck_encounter = (mode == 'wreck_push' or
+                (escape is not None and not escape['peer_alive']) or
+                any(not peer.get('alive', True) and
+                    math.hypot(_position(peer.get('position'))[0]-position[0],
+                               _position(peer.get('position'))[2]-position[2]) <=
+                    2.*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS
+                    for peer in state.get('neighbours', ())))
+            if wreck_encounter:
+                memory = recovery_travel.observe(None, position, yaw, 0.)
+                memory['active'] = True
+                self._recovery_travel[bot_id] = memory
         budget = recovery_travel.remaining(memory)
         returning = math.cos(yaw-memory['yaw']) > .5
         if (budget is not None and returning and command.get('throttle', 0.) < 0. and

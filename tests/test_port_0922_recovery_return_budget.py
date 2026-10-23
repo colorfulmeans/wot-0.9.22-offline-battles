@@ -62,6 +62,20 @@ class RecoveryReturnBudgetTests(unittest.TestCase):
         self.command.update(throttle=-1., recovery_mode='reverse_turn')
         self.assertNotIn('backtrack_budget',self.sample(4.))
 
+    def test_live_traffic_does_not_start_a_wreck_return_budget(self):
+        for change in ('moved', 'pivot', 'gone'):
+            self.adapter._recovery_travel.clear()
+            self.state.update(yaw=0., neighbours=[dict(id=8,alive=True,position=(2.,0.,0.))])
+            self.adapter._contact_escapes[7] = dict(peer=8,peer_alive=True)
+            self.command.update(throttle=1.,recovery_mode='contact_escape')
+            self.sample(0.)
+            self.command.update(throttle=-1.,recovery_mode='reverse_turn')
+            self.assertNotIn('backtrack_budget',self.sample(4.))
+            if change == 'moved':self.state['neighbours'][0]['position']=(4.,0.,0.)
+            elif change == 'pivot':self.state['yaw']=.5
+            else:self.state['neighbours']=[]
+            self.assertNotIn('backtrack_budget',self.sample(4.),change)
+
     def test_rotation_and_no_forward_motion_do_not_invent_credit(self):
         self.sample(0.)
         self.state['yaw'] = 1.

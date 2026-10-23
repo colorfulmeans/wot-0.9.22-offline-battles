@@ -7409,6 +7409,7 @@ class BotRuntime(object):
             return
         state['_recovery_pocket_log'] = (previous[0], previous[1], now)
         order = self._server_orders.get(state['id']) or {}
+        attempt = order.get('route_attempt') or {}
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
@@ -7416,7 +7417,9 @@ class BotRuntime(object):
             mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
             target=command.get('move_position'),
             route=order.get('route_id'), route_index=order.get('route_index'),
-            attempt=order.get('route_attempt'), backtrack=command.get('backtrack_budget'),
+            attempt={key:attempt.get(key) for key in
+                ('action', 'elapsed', 'physical_block', 'next_route', 'next_index', 'retry_after')},
+            backtrack=command.get('backtrack_budget'),
             water_depth=state.get('_water_depth'),
             probe={key:probe.get(key) for key in
                 ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
