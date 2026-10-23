@@ -72,8 +72,23 @@ with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
         with zipfile.ZipFile(path) as mod:
             assert all(i.compress_type == zipfile.ZIP_STORED for i in mod.infolist())
             assert mod.read('res/offline_replay/replay_reader_process.py') == (ROOT / 'tools/replay/replay_reader_process.py').read_bytes()
+# Source equality alone cannot reveal windowed stdio/lifecycle failures.
+# Exercise the downloaded executable's real editor in its own temporary store.
+with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
+    receipt = Path(temp) / 'editor.json'
+    process = subprocess.run(
+        [str(app / 'wot-0.9.22-offline-battles.exe'),
+         '--verify-bot-editor', str(receipt)],
+        cwd=str(app), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=120, creationflags=0x08000000)
+    editor = json.loads(receipt.read_text(encoding='utf8')) if receipt.exists() else {}
+    assert process.returncode == 0 and editor.get('ok'), editor or process.stderr
+    assert editor.get('default_readonly') and editor.get('independent_presets_and_empty_ammo'), editor
+    assert editor.get('isolated_profile') and editor.get('map_count') == 41, editor
+    assert editor.get('native_gameplay_tested') is False, editor
+
 print(json.dumps({'frozen_source_modules_verified': len(verified),
                   'bundled_server_sources_verified': len(server_sources),
                   'native_math_matches_current_sources': True,
-                  'replay_entry_bundled': True, 'recorder_runtime_executed': True,
+                  'replay_entry_bundled': True, 'recorder_runtime_executed': True, 'packaged_editor_smoke': True,
                   'native_starter_matches_source_tree': True}))
