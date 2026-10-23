@@ -517,3 +517,24 @@ class InitializeSaveTests(unittest.TestCase):
         save_slots.initialize_slot('default',root=self.root,is_running=lambda:False)
         self.assertEqual(str(root/'default/garage_state.json'),save_ledger.ledger_path('default',root=self.root))
         self.assertEqual('legacy',legacy.read_text())
+
+
+    def test_locked_partial_metadata_still_attempts_to_restore_old_files(self):
+        from unittest.mock import patch
+        from pathlib import Path
+        record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        folder=Path(record['path']);(folder/'garage_state.json').write_text('original')
+        before=(folder/'save.json').read_bytes()
+        def broken_write(path,value):
+            Path(path).write_text('partial')
+            raise OSError('interrupted write')
+        unlink=save_slots.os.unlink
+        def locked(path,*args,**kwargs):
+            if str(path)==str(folder/'save.json'):raise PermissionError('locked partial file')
+            return unlink(path,*args,**kwargs)
+        with patch.object(save_slots,'_write_metadata',side_effect=broken_write), \
+             patch.object(save_slots.os,'unlink',side_effect=locked):
+            with self.assertRaises(save_slots.SaveSlotError):
+                save_slots.initialize_slot(record['id'],root=self.root,is_running=lambda:False)
+        self.assertEqual(before,(folder/'save.json').read_bytes())
+        self.assertEqual('original',(folder/'garage_state.json').read_text())

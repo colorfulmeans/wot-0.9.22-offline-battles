@@ -733,10 +733,13 @@ def initialize_slot(slot_id, game_root=None, environment=None, root=None, is_run
             created=int(time.time()),skip_legacy_import=True))
     except Exception as error:
         # Do not remove the old metadata if failure occurred before it moved.
+        rollback_failed = False
         if writing_metadata:
             for path in (metadata,metadata+'.tmp'):
-                if os.path.isfile(path):os.unlink(path)
-        rollback_failed = False
+                try:
+                    if os.path.isfile(path):os.unlink(path)
+                except OSError:
+                    rollback_failed = True
         for name in reversed(moved):
             try:
                 os.replace(os.path.join(recovery,name),os.path.join(directory,name))
