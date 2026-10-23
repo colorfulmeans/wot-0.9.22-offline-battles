@@ -1,11 +1,13 @@
 import importlib.util
 import itertools
 import threading
+import sys
 from pathlib import Path
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'src/res/scripts/client'))
 PATH = (ROOT / 'src/res/scripts/client/gui/mods/offline_lan_0922' /
         'worker_diagnostics.py')
 spec = importlib.util.spec_from_file_location('worker_diagnostic_test', PATH)
