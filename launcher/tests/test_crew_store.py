@@ -45,6 +45,7 @@ class CrewStoreTests(unittest.TestCase):
         self.assertFalse(Path(store.inbox_path('one',root=self.root)).exists())
 
     def test_virtual_default_slot_can_queue_before_its_first_client_start(self):
+        self.assertEqual(store.contract.FILE_NAME,store.save_slots.LAUNCHER_CREW_INBOX_NAME)
         self.add(slot='default')
         self.assertEqual(1,len(store.contract.read(store.inbox_path('default',root=self.root))))
 

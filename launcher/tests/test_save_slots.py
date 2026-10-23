@@ -315,6 +315,23 @@ class SaveBackupTests(unittest.TestCase):
         self.assertEqual(record["id"], described["id"])
         self.assertEqual("Career", described["name"])
 
+    def test_pending_crew_travels_with_backup_and_restore_replaces_foreign_requests(self):
+        inbox = save_slots.LAUNCHER_CREW_INBOX_NAME
+        original = {'schema': 1, 'crew': [{'id': 'original request'}]}
+        source = self._slot_with_state('Source', **{inbox: original})
+        backup = save_slots.backup_slot(source['id'], self._archive(), root=self.root)
+        self.assertIn(inbox, backup['files'])
+        target = self._slot_with_state('Target', **{inbox: {'schema': 1, 'crew': [{'id':'foreign'}]}})
+        save_slots.restore_slot(target['id'], self._archive(), root=self.root,is_running=lambda:False)
+        with open(os.path.join(target['path'],inbox),encoding='utf8') as stream:
+            self.assertEqual(original,json.load(stream))
+        clean = self._slot_with_state('Clean')
+        clean_backup = self._archive('clean.zip')
+        save_slots.backup_slot(clean['id'],clean_backup,root=self.root)
+        leftover = self._slot_with_state('Leftover', **{inbox: original})
+        save_slots.restore_slot(leftover['id'],clean_backup,root=self.root,is_running=lambda:False)
+        self.assertFalse(os.path.exists(os.path.join(leftover['path'],inbox)))
+
     def test_a_backup_keeps_the_copies_the_client_left_behind(self):
         """The evidence is part of the save a player wants back.
 

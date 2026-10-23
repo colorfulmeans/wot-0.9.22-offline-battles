@@ -58,6 +58,7 @@ STATE_FILE_NAMES = (
 # The client deletes what it has delivered from this one, so a restore that
 # left it behind would hand the player vehicles a different save paid for.
 LAUNCHER_INBOX_NAME = "launcher_inbox.json"
+LAUNCHER_CREW_INBOX_NAME = "launcher_crew_inbox.json"
 APPDATA_PARTS = ("Wargaming.net", "WorldOfTanks", "offline_lan_0922")
 LEGACY_RELATIVE = "mods/configs/offline_lan_0922"
 
@@ -457,7 +458,7 @@ def _belongs_to_state(name):
         # A half-written replacement is not state; it is what the atomic
         # write left behind when it was interrupted.
         return False
-    for state_name in STATE_FILE_NAMES + (LAUNCHER_INBOX_NAME,):
+    for state_name in STATE_FILE_NAMES + (LAUNCHER_INBOX_NAME, LAUNCHER_CREW_INBOX_NAME):
         stem = os.path.splitext(state_name)[0]
         if name == state_name or name.startswith(stem + "."):
             return True

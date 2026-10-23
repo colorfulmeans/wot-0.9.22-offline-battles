@@ -127,6 +127,8 @@ startup generates a native passport and adds the person to that save's barracks,
 with a durable system notice. Full barracks or native refusals remain pending.
 The recruit, notice and retry identity are saved together, so interrupted inbox
 cleanup cannot duplicate a member. Neither the wallet nor existing crew change.
+Pending recruits are included in save backups. Restoring a different save
+replaces or removes the old pending inbox together with its matching ledger.
 
 Verification covers real Tk selection/reset/undo/import behavior, inherited
 presets, empty inventory, ratio rounding across digit combinations, host-only
