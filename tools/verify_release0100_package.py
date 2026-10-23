@@ -90,6 +90,8 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert editor.get('isolated_profile') and editor.get('map_count') == 41, editor
     assert editor.get('crew_controls_and_outfit_override'), editor
     assert editor.get('seat_aware_recruits'), editor
+    assert editor.get('nation_order_and_barracks_capacity'), editor
+    assert 'nation_choices.py' in verified
     assert editor.get('vehicle_editor_language_preserved'), editor
     assert editor.get('scoped_effective_preview') and editor.get('save_initialization_and_backup') and editor.get('save_actions_two_by_four'), editor
     assert editor.get('native_gameplay_tested') is False, editor

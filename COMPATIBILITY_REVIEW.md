@@ -10093,3 +10093,29 @@ legacy migration tests, and actual frozen editor smoke receipts for the preview,
 initialization/backup and two-by-four button layout. Worker behavior and difficulty
 sampling are unchanged in this revision. No user save was initialized during
 verification; all reset tests use temporary directories.
+
+
+## Launcher recruitment capacity and nation presentation
+
+Crew choices now use the existing player-standard vehicle predicate, preserving
+supported retired vehicles while excluding missing-resource entries and clones.
+The pinned catalogue has 581 usable choices from 614 definitions. Submission
+revalidates that catalogue. Nation display captions/order are shared by Members
+and Garage; serialization continues to use the unchanged native nation indices.
+
+Recruit capacity is authoritative from the saved garage ledger: berths minus
+encoded barracks passports minus pending requests without a durable delivery receipt. Empty
+new saves use the existing economy defaults and an explicit initial_berths
+metadata override. The first garage reads that override before restoring any
+saved ledger. Serving and dismissed crew are not counted as barracks occupants.
+
+Free blocks add exactly 16, do not change balances, and queue the existing
+account-change notification. Crew/capacity edits share an OS-released per-save
+lock and atomic writes. Full, malformed, unreadable or overflowing data refuses
+an edit. Client delivery retains its independent berth check and pending retry.
+Backup restore now restores initial metadata state while preserving destination
+identity/name and an explicit legacy-import block, so pre-start grants restore
+correctly. Initialization removes the override through existing metadata reset.
+Regression coverage includes receipt retries, repeated/concurrent edits, slot
+isolation, running-game refusal, write failures, first start, restore/reset,
+language round trips and mandatory frozen-editor capacity/nation receipts.

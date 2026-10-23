@@ -640,6 +640,19 @@ def save_slot_initial_wallet(slot=None, user_data_dir=None):
     return result
 
 
+def save_slot_initial_berths(slot=None, user_data_dir=None):
+    """Launcher-selected initial capacity; a saved garage ledger wins later."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            value = json.load(stream).get('initial_berths')
+        if type(value) not in (int, type(2 ** 32)) or not 0 <= value <= 2 ** 31 - 1:
+            return None
+        return value
+    except (IOError, OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def save_slot_initial_customizations(slot=None, user_data_dir=None):
     """Launcher-edited initial inventory; a persisted garage takes priority."""
     path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)

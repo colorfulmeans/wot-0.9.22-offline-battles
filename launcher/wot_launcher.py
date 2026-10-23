@@ -27,13 +27,14 @@ if __package__ in (None, ""):
     import personal_missions_ui
     import customizations_ui
     import crew_ui
+    import nation_choices
     import replay_launch
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
     import window_diagnostics
 else:
-    from . import customizations_ui, crew_ui
+    from . import customizations_ui, crew_ui, nation_choices
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -58,6 +59,18 @@ LAUNCHER_VERSION = "0.10.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    'Each click adds 16 free berths. Pending recruits reserve space; crew serving in vehicles do not.':'每次免费增加16个床位。待领取成员预留床位；车上服役成员不占兵营床位。',
+    'Add 16 barracks berths': '添加16个兵营床位',
+    'Added 16 barracks berths to this save.': '已为当前存档增加16个兵营床位。',
+    'Total berths: %d | In barracks: %d | Pending: %d | Can recruit: %d': '总床位：%d｜兵营成员：%d｜待领取：%d｜可招募：%d',
+    'Barracks information is unavailable.': '无法读取兵营床位信息。',
+    'The barracks data could not be read.': '无法读取兵营床位数据，请先检查存档。',
+    'Not enough barracks berths': '兵营床位不足',
+    'Not enough barracks berths. Click Add 16 barracks berths first.': '兵营床位不足，请先点击“添加16个兵营床位”扩充兵营。',
+    'Close World of Tanks before changing crew or barracks berths.': '添加成员或扩充兵营床位前，请先关闭游戏。',
+    'Another crew or barracks edit is in progress. Try again.': '成员或兵营床位正在修改，请稍后重试。',
+    'The barracks berth limit has been reached.': '兵营床位数量已达到上限。',
+
     'Self-propelled gun': '自行火炮',
     'Tank type': '坦克类型', 'Profession': '专业', 'Training level': '训练水平',
     'Skills and perks': '技能和特长', 'Also': '兼',
@@ -1750,6 +1763,8 @@ class LauncherWindow(object):
         return catalogue
 
     def _refresh_gold_shop(self, status=None):
+        old_nation=getattr(self,'_gold_nation_by_label',{}).get(self.gold_nation.get())
+        old_class=getattr(self,'_gold_class_by_label',{}).get(self.gold_class.get())
         game_root = (status or {}).get("path") or self.game_root.get().strip()
         try:
             offers = gold_shop.list_offers(
@@ -1765,18 +1780,17 @@ class LauncherWindow(object):
         self.gold_class_label.config(text=self._t("Vehicle type"))
         self._gold_nation_by_label = {self._t("All"): None}
         self._gold_nation_by_label.update(
-            (self._t(nation), nation)
-            for nation in sorted(set(row["nation"] for row in offers)))
+            (nation_choices.caption(nation,self._t), nation)
+            for nation in nation_choices.ordered(row["nation"] for row in offers))
         self._gold_class_by_label = {self._t("All"): None}
         self._gold_class_by_label.update(
             (self._t(label), name)
             for name, label in vehicle_editor_ui.VEHICLE_CLASS_LABELS)
-        for box, variable, choices in (
-                (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label),
-                (self.gold_class_box, self.gold_class, self._gold_class_by_label)):
+        for box, variable, choices, selected in (
+                (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label,old_nation),
+                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class)):
             box.config(values=tuple(choices))
-            if variable.get() not in choices:
-                variable.set(self._t("All"))
+            variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
         return self._filter_gold_shop()
 

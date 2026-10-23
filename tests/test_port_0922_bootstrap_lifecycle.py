@@ -264,7 +264,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
     }
 
     def _load(self, save_mode=None, starters=None, earnings_percent=None,
-              initial_wallet=None):
+              initial_wallet=None, initial_berths=None):
         events = []
         callbacks = _Callbacks()
         spaces = types.SimpleNamespace(
@@ -309,6 +309,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         # beside the mode, and the client reads both once at startup.
         config_module.save_slot_earnings_percent = lambda: (
             100 if earnings_percent is None else earnings_percent)
+        config_module.save_slot_initial_berths = lambda: initial_berths
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
         config_module.save_slot_initial_personal_progress = lambda: {}
         config_module.save_slot_initial_customizations = lambda: {}
@@ -1523,6 +1524,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
             starters=self.STARTER_NAMES)
 
         self._assert_depot_covers_the_garage(snapshot)
+
+    def test_first_garage_preserves_launcher_added_berths(self):
+        snapshot=self._with_saved_garage((),initial_berths=46)
+        self.assertEqual(46,snapshot['accountBerths'])
 
     def test_the_first_garage_uses_the_launchers_initial_wallet(self):
         snapshot = self._with_saved_garage(

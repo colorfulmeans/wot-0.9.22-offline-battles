@@ -399,3 +399,18 @@ progress and pending rewards return to the current new-save defaults. An
 ordinary ZIP backup is kept inside its pre-initialize recovery folder and can
 be selected with Restore save. Default-save legacy migration is blocked after
 initialization so old progress cannot return automatically.
+
+Member recruitment uses the same standard, loadable vehicle filter as player
+vehicles, including supported retired vehicles. Garage and Members share full
+nation captions in this display order: China, USSR, USA, Germany, Czech,
+France, UK, Japan, Poland, Sweden. This never changes native nation IDs.
+
+Members shows total berths, current barracks occupants, undelivered pending
+recruits and remaining recruit capacity. Crew already serving in vehicles and
+dismissed crew do not occupy barracks berths. Add 16 barracks berths grants one
+free block to the selected save; it requires the game to be closed. Existing
+client purchases retain their normal price. Pending recruits reserve space,
+excluding requests whose durable delivery receipt already exists. A full
+barracks refuses new recruits with a warning; old pending requests are kept.
+Initial berth grants survive the first game startup, backup and restore.
+Initialize save returns capacity to the save type's original default.

@@ -621,10 +621,6 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                     written.append(name)
         with zipfile.ZipFile(archive_path) as archive:
             for name in backup["files"]:
-                if keep_name and name == METADATA_NAME:
-                    # The archive's own name would rename the save it is put
-                    # into, which is not what restoring one file of it means.
-                    continue
                 target = _contained(
                     directory, os.path.join(directory, name),
                     "The restored file")
@@ -633,9 +629,21 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                 if len(payload) > MAX_BACKUP_MEMBER_BYTES:
                     raise SaveSlotError(
                         "This file holds a member that is too large.")
-                with open(target, "wb") as destination:
-                    destination.write(payload)
-                written.append(name)
+                if keep_name and name == METADATA_NAME:
+                    # Initial berth grants and other initial save state belong
+                    # to the backup too; preserve only destination identity.
+                    metadata = json.loads(payload.decode('utf8'))
+                    if not isinstance(metadata,dict):
+                        raise SaveSlotError("The save is not in the expected format.")
+                    previous = _read_metadata(target) or {}
+                    metadata.update(id=record['id'],name=record['name'])
+                    if previous.get('skip_legacy_import') is True:
+                        metadata['skip_legacy_import'] = True
+                    _write_metadata(target,metadata)
+                else:
+                    with open(target, "wb") as destination:
+                        destination.write(payload)
+                if name not in written:written.append(name)
     except Exception as error:
         for name in written:
             try:

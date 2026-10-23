@@ -132,15 +132,19 @@ def run(destination):
                 game_root=tk.StringVar(value='smoke fixture'),_save_slot_id='smoke',_busy=False,_maintenance_busy=False)
             panel=crew_ui.CrewPanel(owner,ttk.Frame(root))
             panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'),vehicleClass='lightTank',seats=crew_ui.store.crew_skills.seats('ussr:R11_MS-1'))]
+            panel.capacity_state=dict(total=2000,occupied=0,pending=0,available=2000)
             panel.filter();assert panel.by_label
             panel.variables['female'].set('Female');panel.variables['skills'].set('2')
             original_add=crew_ui.store.add;calls=[]
             try:
                 crew_ui.store.add=lambda *args,**kwargs:calls.append((args,kwargs))
+                original_capacity=crew_ui.store.capacity
+                crew_ui.store.capacity=lambda *a,**k:dict(total=2000,occupied=0,pending=1,available=1999)
                 assert panel.add()
                 assert calls==[(('smoke','smoke fixture','ussr:R11_MS-1',0,True,2),{'training':100})]
             finally:
                 crew_ui.store.add=original_add
+                crew_ui.store.capacity=original_capacity
             panel.variables['class'].set('Heavy tank');panel.filter();assert not panel.by_label
             assert str(panel.button.cget('state'))=='disabled'
             report['crew_controls_and_outfit_override']=True
@@ -156,6 +160,19 @@ def run(destination):
             panel.variables['training'].set('100%');panel.update_skills()
             assert min(panel.maps['skills'].values())==1
             report['seat_aware_recruits']=True
+            import nation_choices
+            assert list(panel.maps['nation'].values())==list(nation_choices.ORDER)
+            assert panel.boxes['nation'].cget('values')[0]=='China'
+            assert panel.expand_button.cget('text')=='Add 16 barracks berths'
+            with tempfile.TemporaryDirectory(prefix='barracks-smoke-') as beds:
+                record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=beds)
+                identity=record['id']
+                assert crew_ui.store.capacity(identity,root=beds)['total']==30
+                for total in (46,62):
+                    assert crew_ui.store.expand_berths(identity,root=beds,is_running=lambda:False)['total']==total
+                assert json.loads((Path(record['path'])/'save.json').read_text())['initial_berths']==62
+            report['nation_order_and_barracks_capacity']=True
+
             _verify_vehicle_editor_language(root, tk, ttk)
             report['vehicle_editor_language_preserved']=True
 
