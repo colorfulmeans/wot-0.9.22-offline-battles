@@ -16,7 +16,7 @@ import math
 from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import tank_collision, arena_boundary
 from gui.mods.offline_lan_0922.prebaked_navigation import MOTION_FATAL_HAZARDS
 from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 
@@ -2058,6 +2058,9 @@ class TerrainNavigator(object):
 			cell_size=18.0, baked_graph=None):
 		self.grid = TerrainGrid(ground_probe, obstacle_probe, bounds, cell_size,
 		                        baked_graph=baked_graph)
+		self._boundary_actor = None
+		self.boundary_bodies = {}
+		self.boundary_edge_cache = {}
 		self.paths = {}
 		self.path_times = {}
 		self.path_hull_revisions = {}
@@ -2095,6 +2098,8 @@ class TerrainNavigator(object):
 
 	def close(self):
 		"""Cancel background work before this map or round loses ownership."""
+		self.boundary_bodies.clear()
+		self.boundary_edge_cache.clear()
 		if self._native_navigation is not None:
 			self._native_navigation.close()
 		self.searches.clear()
@@ -3338,18 +3343,87 @@ class TerrainNavigator(object):
 			self.bot_macro_edges.pop(int(bot_id), None)
 		return result or None
 
+	def set_boundary_body(self, bot_id, position, yaw, half_length, half_width):
+		"""Publish actual actor dimensions; do not erode the shared terrain grid."""
+		grid = self.grid
+		bounds = grid.bounds
+		if not grid.prebaked or not arena_boundary.valid(bounds):
+			return
+		shape = (float(half_length),float(half_width))
+		key = (tuple(bounds),shape)
+		if key not in self.boundary_edge_cache:
+			if len(self.boundary_edge_cache)>=64:
+				self.boundary_edge_cache.clear()
+			# Only a boundary strip can fail. Build once per mounted chassis,
+			# never scan the complete map for each Bot or direction probe.
+			radius = math.hypot(*shape)+grid.cell_size
+			band = int(math.ceil(radius/grid.cell_size))+1
+			width,height = grid._baked_width,grid._baked_height
+			left,bottom=grid.cell_for((bounds[0],0.,bounds[1]))
+			right,top=grid.cell_for((bounds[2],0.,bounds[3]))
+			xlo,xhi=max(0,left-band),min(width,right+band+1)
+			zlo,zhi=max(0,bottom-band),min(height,top+band+1)
+			xedge=set(range(xlo,min(xhi,left+band+1))) | set(range(max(xlo,right-band),xhi))
+			zedge=set(range(zlo,min(zhi,bottom+band+1))) | set(range(max(zlo,top-band),zhi))
+			cells=set((x,z) for z in range(zlo,zhi) for x in xedge)
+			cells.update((x,z) for x in range(xlo,xhi) for z in zedge)
+			edges = {}
+			for cell in cells:
+				if grid._baked_index(cell) is None:continue
+				a=grid.point_for(cell,0.)
+				for dx,dz,unused in grid._NEIGHBOURS:
+					peer=(cell[0]+dx,cell[1]+dz)
+					if grid._baked_index(peer) is None:continue
+					b=grid.point_for(peer,0.)
+					heading=math.atan2(b[0]-a[0],b[2]-a[2])
+					if (any(arena_boundary.overflow(bounds,a,heading,*shape)) or
+							any(arena_boundary.overflow(bounds,b,heading,*shape))):
+						edges[tuple(sorted((cell,peer)))]=1.e12
+			self.boundary_edge_cache[key]=edges
+		cell=grid.cell_for(position)
+		previous=self.boundary_bodies.get(int(bot_id))
+		if previous is not None and previous['key']==key and previous['cell']==cell:
+			previous.update(position=tuple(position),yaw=float(yaw))
+			return
+		edges=self.boundary_edge_cache[key]
+		# Permit an inward first edge out of a coarse boundary cell. All
+		# later edges remain fenced; local/native proofs still own motion.
+		inward=[]
+		a=grid.point_for(cell,0.)
+		for dx,dz,unused in grid._NEIGHBOURS:
+			peer=(cell[0]+dx,cell[1]+dz);edge=tuple(sorted((cell,peer)))
+			if edge not in edges:continue
+			b=grid.point_for(peer,0.);heading=math.atan2(b[0]-a[0],b[2]-a[2])
+			if not any(arena_boundary.overflow(bounds,b,heading,*shape)):
+				inward.append(edge)
+		if inward:
+			edges=dict(edges)
+			for edge in inward:edges.pop(edge,None)
+		self.boundary_bodies[int(bot_id)]=dict(key=key,shape=shape,cell=cell,
+			position=tuple(position),yaw=float(yaw),edges=edges,scope=(shape,cell if inward else None))
+
 	def _active_planning_edge_penalties(self, bot_id, now):
 		result = dict(self._active_bot_edge_penalties(bot_id, now) or {})
 		result.update(self._active_macro_edge_penalties(bot_id, now) or {})
+		body=self.boundary_bodies.get(bot_id)
+		if body is not None:
+			if not result:return body['edges'] or None
+			result.update(body['edges'])
 		return result or None
 
 	def _bot_edges_penalized(self, bot_id, start, end, now):
 		"""True when this bot's own escalation covers any edge of the segment."""
+		body=self.boundary_bodies.get(int(bot_id))
+		if body is not None and not arena_boundary.segment_clear(self.grid.bounds,start,end,*body['shape']):
+			return True
 		retired = self.bot_states.get(int(bot_id), {}).get('local_target_retired')
 		if (retired is not None and float(now) < retired[1] and
 				_distance_2d(end, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS):
 			return True
-		penalties = self._active_planning_edge_penalties(bot_id, now)
+		# Coarse boundary masks guide A*, but must not reject a physically
+		# legal sub-cell leg. Its exact chassis test above owns that answer.
+		penalties=dict(self._active_bot_edge_penalties(bot_id,now) or {})
+		penalties.update(self._active_macro_edge_penalties(bot_id,now) or {})
 		return bool(penalties and any(
 			edge in penalties
 			for edge in self.grid._edge_keys_for_segment(start, end)))
@@ -3439,7 +3513,9 @@ class TerrainNavigator(object):
 		return True
 
 	def _cache_key(self, path_key, goal):
-		return (tuple(path_key), self.grid.cell_for(goal))
+		key=(tuple(path_key),self.grid.cell_for(goal))
+		body=self.boundary_bodies.get(self._boundary_actor)
+		return key+(body['scope'],) if body is not None else key
 
 	@staticmethod
 	def _prefers_baked_clearance(path_key):
@@ -3785,6 +3861,8 @@ class TerrainNavigator(object):
 	def _path(self, path_key, start, goal, now, avoid_points, native_capability=None):
 		key = self._cache_key(path_key, goal)
 		owner = self._path_owner(path_key)
+		if owner is None and self._boundary_actor in self.boundary_bodies:
+			owner=self._boundary_actor
 		if native_capability is not None and native_capability[0] != ('ignore_destructibles', 1):
 			raise ValueError('unsupported navigation collision policy')
 		if owner is not None:
@@ -3801,8 +3879,11 @@ class TerrainNavigator(object):
 				owner, keep_key=key, kind=path_key[0])
 		if key in self.paths:
 			path = self.paths[key]
-			hard_edge_penalties = self._active_planning_edge_penalties(
-				owner, now)
+			hard_edge_penalties=dict(self._active_bot_edge_penalties(owner,now) or {})
+			hard_edge_penalties.update(self._active_macro_edge_penalties(owner,now) or {})
+			body=self.boundary_bodies.get(owner)
+			boundary_bad=bool(body and any(not arena_boundary.segment_clear(
+				self.grid.bounds,a,b,*body['shape']) for a,b in zip(path or (), (path or ())[1:])))
 			# A probe can fail while distant chunks are still streaming. Successful
 			# paths are permanent for the battle; failed ones get another chance.
 			#
@@ -3816,7 +3897,7 @@ class TerrainNavigator(object):
 				self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path))
 			partial = bool(path and _distance_2d(path[-1], goal) > WAYPOINT_ARRIVAL_RADIUS)
-			if (path and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
+			if (path and not boundary_bad and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
 					not self.grid.path_has_penalty(path, now) and
 					not self.grid.path_has_edge_penalty(
 						path, hard_edge_penalties)):
@@ -3847,10 +3928,9 @@ class TerrainNavigator(object):
 			# otherwise A* can admit the expensive edge, smooth it back into a
 			# shortcut, then restart the same rejected search on the next frame.
 			hard_edge_penalties = edge_penalties
-			penalized_direct = bool(
-				edge_penalties and any(
-					edge in edge_penalties
-					for edge in self.grid._edge_keys_for_segment(start, goal)))
+			penalized_direct = (self._bot_edges_penalized(owner,start,goal,now) if owner is not None
+				else bool(edge_penalties and any(edge in edge_penalties
+					for edge in self.grid._edge_keys_for_segment(start,goal))))
 			# Most annotated segments are already open roads. Avoid invoking A*
 			# when one continuous support/collision check proves the direct link.
 			if (not penalized_direct and
@@ -4050,7 +4130,15 @@ class TerrainNavigator(object):
 		return None
 
 	@observed('nav.next_target')
-	def next_target(self, bot_id, current, goal, path_key, now,
+	def next_target(self, bot_id, *args, **kwargs):
+		previous=self._boundary_actor
+		self._boundary_actor=bot_id
+		try:
+			return self._next_target_with_boundary(bot_id,*args,**kwargs)
+		finally:
+			self._boundary_actor=previous
+
+	def _next_target_with_boundary(self, bot_id, current, goal, path_key, now,
 			anchor=None, avoid_points=None, lookahead_distance=None,
 			movement_intent=True, native_capability=None):
 		"""Return a terrain-safe local target, holding if no safe path is ready."""

@@ -1,5 +1,66 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24 report 011258: chassis boundary parity and remote Bot module pools
+
+Candidate 490 / source 3d10dba0 reproduces Conqueror GC 15 changing firing
+positions after repeated native world_blocked ballistic proofs. It then steers
+toward a local vertex at (-62, 398), remaining near Z 394..396 for over 30 s.
+The navigation rectangle admitted cell centres while the final authority guard
+constrained chassis corners. Generic native geometry is not proof that a
+vehicle fits the official arena rectangle. No complete GC motion record was
+captured, so individual final refusals are not inferred from a clear ground ray.
+
+Use arena_boundary for the same oriented chassis extents in local-player and
+Bot boundary checks. Apply it before steering/recovery candidate selection,
+non-committing forward/reverse sweeps and stationary turn previews. Legal
+stationary turns check intermediate corner extrema, not just both endpoints.
+Preserve inward recovery of an already stale outside pose without teleporting.
+Keep the final post-contact guard, and replan a rejected outward navigation
+leg once; an external shove must not blacklist an otherwise legal drive leg.
+
+A* receives footprint-specific hard edges in the official boundary strip, not
+a shared terrain erosion or a fabricated world collision. Masks are cached per
+mounted chassis and prewarmed before combat, with at most 64 shape entries.
+Use official clipped bounds even when the baked arrays extend beyond them.
+Direct, cached, fallback and shortcut admission retain each Bot's boundary
+refusal; cached route/search keys include the footprint scope. The first inward
+edge can leave a coarse boundary cell. Native movement, water, occupancy and
+collision checks still own the resulting travel. A local Python 2 Lakeville
+sample measured 34 ms for the first shape mask (521 edges) and 26 ms for 10,000
+cache-hit updates. These are local costs, not a native frame-rate claim.
+
+At 01:11:22 a human hit on Bot 1 proposed ammoBayHealth maximum 210 while the
+server's accepted fitted pool was 236. Remote Bot critical projections looked
+for player effective_params, although Bots publish fitted pools directly in
+their accepted critical ledger. Bind that ledger to the existing critical-only
+descriptor view for both live and frozen collision targets. Preserve native
+geometry/descriptors, target-owned regen pools, and strict server maximum checks;
+do not rescale a rejected delta or relax validation. Tests preserve raw 210
+while the accepted view reads max 236 / regen 118, including frozen targets.
+
+The exact pinned CompoundAppearance.__onModelsRefresh bytecode at line 838
+asserts callback modelState equals currentDamageState.modelState. The report
+lacks the vehicle and state-transition identity needed to retire an async
+callback safely. Keep the assertion/exception cleanup behavior and add at most
+eight diagnostic-entry records with vehicle ID/type and both model states.
+Do not silence it or replace native resources without ownership evidence.
+
+Worker full-live windows still include 154.75 ms Python execution at 6.31 FPS.
+Captured 30 s self costs include bot.slice 6.3..7.1 s, world rotation 1.8..2.9 s,
+ground probes 2.3..2.9 s and translation 1.3..3.1 s. No further cache, collision
+budget or decision-cadence change is justified by these samples. Add bounded
+existing-capture timings for neighbour collection, deadline preparation and
+motion diagnostic construction only in the diagnostic entrance; basic-mode
+calls retain their original results and do not create those timing records.
+
+Regression coverage includes full-body edge vertices, middle-of-turn overflow,
+forward/reverse preview refusal before native calls, inward recovery, official
+bounds inside wider arrays, actor isolation, mask reuse/retirement, cached A*
+path rejection, accepted Bot critical pools, basic/detail logging gates and
+original model-refresh exception restoration. Full source/Windows CI and exact
+candidate inspection complement these reference checks. Native recovery feel,
+model callback identity and worker frame cost still need the supplied package.
+
 ## October 24 report 002139: exhausted return handoff and Lakeville baseline
 
 The 6442c2779d47 report runs candidate 489 / source 3246693e. Across three

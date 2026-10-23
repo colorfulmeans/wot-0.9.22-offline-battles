@@ -6708,22 +6708,8 @@ class BattleRuntime(object):
             return (0.0, 0.0, 0.0, 0.0)
         half_width, half_length = self._collision_shape(
             entity.typeDescriptor)[:2]
-        sine = abs(math.sin(float(yaw)))
-        cosine = abs(math.cos(float(yaw)))
-        # These are the axis projections of all four chassis OBB corners.
-        extent_x = cosine * half_width + sine * half_length
-        extent_z = sine * half_width + cosine * half_length
-        minimum_x = float(bounds[0]) + extent_x
-        minimum_z = float(bounds[1]) + extent_z
-        maximum_x = float(bounds[2]) - extent_x
-        maximum_z = float(bounds[3]) - extent_z
-        x, unused_y, z = _xyz(position)
-        return (
-            max(0.0, minimum_x - x),
-            max(0.0, x - maximum_x),
-            max(0.0, minimum_z - z),
-            max(0.0, z - maximum_z),
-        )
+        from . import arena_boundary
+        return arena_boundary.overflow(bounds,_xyz(position),float(yaw),half_length,half_width)
 
     def _arena_pose_is_outside(self, entity, position, yaw):
         return any(value > 0.00001 for value in
@@ -6757,6 +6743,11 @@ class BattleRuntime(object):
         """Apply the same no-worsening rule to the complete turning pose."""
         if self._arena_bounds is None:
             return True
+        from . import arena_boundary
+        shape = self._collision_shape(entity.typeDescriptor)
+        if not arena_boundary.rotation_clear(self._arena_bounds,_xyz(position),
+                yaw,candidate_yaw,shape[1],shape[0]):
+            return False
         before = self._arena_pose_violations(entity, position, yaw)
         after = self._arena_pose_violations(
             entity, end_position or position, candidate_yaw)
@@ -9896,9 +9887,14 @@ class BattleRuntime(object):
         from gui.mods.offline_lan_0922 import crew_battle
         snapshot = (self._local_effective_params if record.get('local') else
                     state.get('effective_params'))
-        critical_damage.bind_device_profile(
-            entity, snapshot.get('critical') if isinstance(snapshot, dict)
-            else None)
+        device_profile = snapshot.get('critical') if isinstance(snapshot,dict) else None
+        if device_profile is None and record.get('kind') == 'bot':
+            # Bot snapshots have their accepted fitted pools directly in the
+            # critical ledger, not the player-only effective_params envelope.
+            accepted = state.get('critical')
+            if isinstance(accepted,dict) and accepted.get('devices'):
+                device_profile = accepted
+        critical_damage.bind_device_profile(entity,device_profile)
         battle_factors = crew_battle.for_critical(
             snapshot, crew_battle.critical_from_vehicle(entity))
         from gui.mods.offline_lan_0922 import bot_fittings
@@ -22520,6 +22516,18 @@ class BattleRuntime(object):
                 at=now, origin=tuple(position), body_yaw=body_yaw,
                 requested_yaw=travel_yaw, distance=distance, commit_enabled=False,
                 source='authoritative_body_sweep')
+        from . import arena_boundary
+        bounds = self._arena_bounds
+        length, width = state.get('half_length',3.5),state.get('half_width',1.7)
+        end = position if distance is None else (position[0]+math.sin(travel_yaw)*distance,
+            position[1],position[2]+math.cos(travel_yaw)*distance)
+        boundary_clear = (arena_boundary.rotation_clear(bounds,position,body_yaw,travel_yaw,length,width)
+            if distance is None else arena_boundary.progress_clear(bounds,position,body_yaw,
+                                                                  end,body_yaw,length,width))
+        if not boundary_clear:
+            return dict(clear=False,proved=True,reason='arena_boundary',at=now,
+                origin=tuple(position),requested_yaw=travel_yaw,distance=distance,
+                source='authoritative_body_sweep',commit_enabled=False)
         missing = object()
         fields = ('_rotation_contact_trace', '_world_contact_trace', 'movement_dir', 'rotation_dir')
         saved = dict((k,state.get(k,missing)) for k in fields)

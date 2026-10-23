@@ -3,6 +3,7 @@ from __future__ import print_function
 """Authority-side, engine-free bridge from v5 bots to the local AI package."""
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
+    detailed_observed,
     observed, observed_call, current as current_combat, count as combat_count)
 
 import copy
@@ -4206,6 +4207,11 @@ class BotRuntime(object):
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
+        configure_boundary=getattr(self.navigator,'set_boundary_body',None)
+        if callable(configure_boundary):
+            for state in self._ordered_states():
+                configure_boundary(state['id'],_position(state),state['yaw'],
+                    state['half_length'],state['half_width'])
         self._prepare_user_routes(message, restoring_authority)
         self._prepare_initial_spg_positions(message, restoring_authority)
         self._ensure_native_simulation()
@@ -6741,6 +6747,7 @@ class BotRuntime(object):
             cached, position, travel_yaw, speed, now, False, dt,
             ignore_deadline=True)
 
+    @detailed_observed('bot.neighbour_collection')
     def _neighbours_for(self, source, supplied, spatial_index=None,
                         traffic_bodies=None):
         if spatial_index is not None and traffic_bodies is not None:
@@ -7424,6 +7431,7 @@ class BotRuntime(object):
             probe={key:probe.get(key) for key in
                 ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
 
+    @detailed_observed('bot.motion_diagnostics')
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
                           traffic_input=None, traffic_output=None):
@@ -8074,6 +8082,7 @@ class BotRuntime(object):
         """Preserve 0.10.0 camera-based cadence and worker full-rate decisions."""
         return self._detail_tier(state)
 
+    @detailed_observed('bot.deadline_preparation')
     def _prepare_planning_deadlines(self, now):
         """Promote nearer observers before the native visibility cohort."""
         if not self._fixed_control:
@@ -9700,7 +9709,23 @@ class BotRuntime(object):
             # The contact batch belongs to the rejected realised pose. Drop
             # it with the angular solver history before restoring tick_pose.
             self._reset_bot_suspension_state(state)
-        self._invalidate_realised_motion(state['id'], attempted_yaw, 'baked_pose_guard')
+        self._invalidate_realised_motion(state['id'], attempted_yaw,
+            'arena_boundary' if moved_farther_outside else 'baked_pose_guard')
+        if moved_farther_outside:
+            from . import arena_boundary
+            target=(state.get('_navigation_target_receipt') or {}).get('final_target')
+            bounds=(self.baked_graph or {}).get('bounds')
+            if (target is not None and not arena_boundary.segment_clear(bounds,tick_pose,target,
+                    state.get('half_length',3.5),state.get('half_width',1.7)) and
+                    state.get('_boundary_replan_target') != tuple(target)):
+                # An external shove must not poison a legal drive leg. Retire
+                # only a leg whose own complete chassis footprint is outside.
+                state['_boundary_replan_target']=tuple(target)
+                now=float(getattr(self,'_contact_now',0.) or 0.)
+                report=getattr(self.navigator,'report_blocked_step',None)
+                replan=getattr(self.navigator,'request_replan',None)
+                if callable(report):report(state['id'],tick_pose,target,now)
+                if callable(replan):replan(state['id'],tick_pose,now)
         return True
 
     def _baked_boundary_overflow(self, state, position, yaw):
@@ -9729,16 +9754,13 @@ class BotRuntime(object):
                 return None
         except (KeyError, TypeError, ValueError, IndexError, OverflowError):
             return None
-        sine = abs(math.sin(hull_yaw))
-        cosine = abs(math.cos(hull_yaw))
-        extent_x = cosine * half_width + sine * half_length
-        extent_z = sine * half_width + cosine * half_length
-        return (
-            max(0.0, minimum_x + extent_x - x),
-            max(0.0, x + extent_x - maximum_x),
-            max(0.0, minimum_z + extent_z - z),
-            max(0.0, z + extent_z - maximum_z),
-        )
+        from . import arena_boundary
+        return arena_boundary.overflow(bounds,position,hull_yaw,half_length,half_width)
+
+    def _boundary_rotation_clear(self, state, position, yaw, candidate):
+        from . import arena_boundary
+        return arena_boundary.rotation_clear((self.baked_graph or {}).get('bounds'),
+            position,yaw,candidate,state.get('half_length',3.5),state.get('half_width',1.7))
 
     @observed('bot.boundary')
     def _baked_pose_progress_clear(self, state, before_position, before_yaw,
@@ -10576,6 +10598,11 @@ class BotRuntime(object):
             final_target=tuple(goal))
         if authority_state is not None:
             authority_state['_navigation_target_receipt'] = target_receipt
+        configure_boundary = getattr(self.navigator, 'set_boundary_body', None)
+        if (authority_state is not None and callable(configure_boundary) and
+                'half_length' in authority_state and 'half_width' in authority_state):
+            configure_boundary(bot_id, position, authority_state.get('yaw',0.),
+                authority_state.get('half_length',3.5), authority_state.get('half_width',1.7))
         local_height = None
         if grid is not None and callable(getattr(self,'_navigation_height_columns',None)):
             from .ai.local_height import LocalHeightLinks
@@ -16566,6 +16593,9 @@ class BotRuntime(object):
                 self.navigator, 'controlled_shallow_committed', None)
 
             def sample_pose_clear_impl(sample_yaw, allow_wreck_push=False):
+                if not self._boundary_rotation_clear(state,position,state['yaw'],sample_yaw):
+                    planning_reason[0] = 'arena_boundary_rotation'
+                    return False
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
                 # shipped graph the navigator already owns.
@@ -16665,6 +16695,16 @@ class BotRuntime(object):
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
+                boundary_distance = (maximum_distance if maximum_distance is not None else
+                    decision_state.get('navigation_probe_distance') if decision_state is not None else None)
+                if boundary_distance is None:
+                    boundary_distance = max(1., float(getattr(grid,'cell_size',4.)))
+                boundary_end = (position[0]+math.sin(sample_yaw)*float(boundary_distance),
+                    position[1],position[2]+math.cos(sample_yaw)*float(boundary_distance))
+                if not self._baked_pose_progress_clear(state,position,state['yaw'],
+                                                        boundary_end,state['yaw']):
+                    planning_reason[0] = 'arena_boundary_translation'
+                    return False
                 bounded_recovery = maximum_distance is not None
                 if maximum_distance is None:
                     maximum_distance = decision_state.get(
@@ -17669,9 +17709,8 @@ class BotRuntime(object):
                                 fraction=allowed)
                         state['_contact_motor_turn'] = steer_dir
                         state['rotation_dir'] = 0
-                rotation_blocked = (not self._baked_pose_progress_clear(
-                        state, position, old_hull_yaw,
-                        position, candidate_hull_yaw) or
+                rotation_blocked = (not self._boundary_rotation_clear(
+                        state, position, old_hull_yaw,candidate_hull_yaw) or
                         (abs(_angle_delta(candidate_hull_yaw,
                                           old_hull_yaw)) > 1.0e-8 and
                          not self._turret_pose_is_clear(

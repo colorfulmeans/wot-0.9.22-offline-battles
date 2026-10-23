@@ -14,6 +14,29 @@ from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     set_ground_decal_visibility, stop_ground_effects, stop_bound_visual_effects)
 
 
+def _report_model_refresh_failure(compatibility, appearance, model_state, resources):
+    """Observe a stock async refusal; do not hide or reinterpret its assertion."""
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled, write_json_record
+        count = getattr(compatibility, '_model_refresh_failure_reports', 0)
+        if not detailed_enabled() or count >= 8:
+            return
+        compatibility._model_refresh_failure_reports = count+1
+        vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
+        damage = getattr(appearance, '_CompoundAppearance__currentDamageState', None)
+        write_json_record('MODEL REFRESH REFUSAL', dict(
+            report=count+1,vehicle=getattr(vehicle,'id',None),
+            vehicle_type=getattr(getattr(vehicle,'typeDescriptor',None),'name',None),
+            callback_state=str(model_state), current_state=str(getattr(damage,'modelState',None)),
+            is_current_model_damaged=getattr(getattr(appearance,'damageState',None),
+                                           'isCurrentModelDamaged',None),
+            appearance_type=type(appearance).__name__,
+            resource_count=len(resources) if resources is not None else None,
+            battle_active=compatibility._battle_active))
+    except Exception:
+        pass  # A failed diagnostic must never replace the original assertion.
+
+
 OFFLINE_SERVER_ADDRESS = 'offline-lan.local:0'
 _OFFLINE_ACCOUNT_NAME = 'offline_account'
 _OFFLINE_INIT_COMPLETE = '_offlineLANInitComplete'
@@ -2528,6 +2551,9 @@ class OfflineCompatibility(object):
             compatibility._compound_refreshing_models = appearance
             try:
                 return original(appearance, model_state, resource_list)
+            except AssertionError:
+                _report_model_refresh_failure(compatibility,appearance,model_state,resource_list)
+                raise
             finally:
                 compatibility._compound_refreshing_models = outer_appearance
 

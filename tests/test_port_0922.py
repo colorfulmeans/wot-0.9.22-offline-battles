@@ -3670,6 +3670,8 @@ class OfflineCompatibilityTests(unittest.TestCase):
                     self._CompoundAppearance__filter = replacement
                 self.nested_filter = self._readFilterDuringRefresh()
                 self._CompoundAppearance__filter.syncGunAngles(0.5, -0.1)
+                if getattr(self, 'fail_models_refresh', False) == 'assertion':
+                    raise AssertionError('stale native model state')
                 if getattr(self, 'fail_models_refresh', False):
                     raise RuntimeError('models refresh failed')
                 operations.append(('compound_refresh_after',))
@@ -5171,6 +5173,11 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertIs(
             replacement,
             appearance._CompoundAppearance__filter)
+
+        appearance.fail_models_refresh = 'assertion'
+        with self.assertRaisesRegex(AssertionError, 'stale native model state'):
+            getattr(appearance, method_name)('stale', {})
+        self.assertIsNone(compatibility._compound_refreshing_models)
 
         appearance.fail_models_refresh = True
         with self.assertRaisesRegex(RuntimeError, 'models refresh failed'):

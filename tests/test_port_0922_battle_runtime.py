@@ -10417,6 +10417,23 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(battle._install_critical_equipment_effects(record, entity))
         self.assertIs(descriptor, critical_damage._device_td(entity))
 
+    def test_remote_bot_critical_pools_survive_missing_native_crew_context(self):
+        from gui.mods.offline_lan_0922 import critical_damage, device_damage
+        battle=BattleRuntime(_runtime())
+        descriptor=types.SimpleNamespace(hull={'ammoBayHealth':{'maxHealth':210,'maxRegenHealth':105}},miscAttrs={})
+        entity=types.SimpleNamespace(typeDescriptor=descriptor)
+        record={'kind':'bot','state':{'critical':{'devices':[
+            {'name':'ammoBayHealth','hp':236.,'max_hp':236.,'regen_hp':118.}]}}}
+        battle._install_critical_equipment_effects(record,entity)
+        self.assertEqual(236.,device_damage.device_max_hp(critical_damage._device_td(entity),'ammoBayHealth'))
+        self.assertEqual(118.,device_damage.device_regen_hp(critical_damage._device_td(entity),'ammoBayHealth'))
+        self.assertEqual(210,descriptor.hull['ammoBayHealth']['maxHealth'])
+        # Frozen collision views must inherit the accepted device table too.
+        from gui.mods.offline_lan_0922.battle_runtime import _ProjectileCollisionTarget
+        frozen=_ProjectileCollisionTarget(entity,descriptor,None,None,None,None)
+        battle._install_critical_equipment_effects(record,frozen)
+        self.assertEqual(236.,device_damage.device_max_hp(critical_damage._device_td(frozen),'ammoBayHealth'))
+
     def test_removed_rpm_limiter_toggles_stock_trigger_stage(self):
         runtime = _runtime()
         battle = BattleRuntime(runtime)
