@@ -13,7 +13,8 @@ import math
 import random
 
 from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
-from gui.mods.offline_lan_0922.bot_tactics import DEFAULT_ROUTE_PRIORITY
+from gui.mods.offline_lan_0922.bot_tactics import (
+	DEFAULT_ROUTE_PRIORITY, ROUTE_ARRIVAL_RADIUS, route_disk_reached)
 
 
 CONTACT_MEMORY_SECONDS = 7.0
@@ -1055,7 +1056,7 @@ class BattleDirector(object):
 			# sit behind the hull. Let A* join the first meaningful route anchor.
 			while (nearest + 1 < len(waypoints) and
 					_distance_2d(position, (float(waypoints[nearest][0]),
-					position[1], float(waypoints[nearest][1]))) < 30.0):
+					position[1], float(waypoints[nearest][1]))) <= ROUTE_ARRIVAL_RADIUS):
 				nearest += 1
 			# A deployed formation can be closer to a connector that it has already
 			# passed than to the next lane point. Once a hull is moving forward its
@@ -1076,14 +1077,18 @@ class BattleDirector(object):
 			agent['route_started'] = True
 			agent['route_join_anchor'] = tuple(position)
 			agent['route_join_index'] = nearest
+		observation = agent.get('route_arrival_observation') or {}
+		previous = (observation.get('position') if observation.get('route') == route.get('id') and
+			0. < now-observation.get('at', now-3.) <= 2. else None)
+		agent['route_arrival_observation'] = dict(route=route.get('id'), at=now,
+			position=(position[0], position[2]))
 		index = min(int(agent.get('waypoint_index', 0)), len(waypoints) - 1)
+		while index + 1 < len(waypoints) and route_disk_reached(
+				(position[0], position[2]), waypoints[index][:2], waypoints[index+1][:2], previous):
+			index += 1
+		agent['waypoint_index'] = index
 		waypoint = waypoints[index]
 		world = (float(waypoint[0]), float(position[1]), float(waypoint[1]))
-		if _distance_2d(position, world) <= 13.0:
-			if index + 1 < len(waypoints):
-				agent['waypoint_index'] = index + 1
-				waypoint = waypoints[index + 1]
-				world = (float(waypoint[0]), float(position[1]), float(waypoint[1]))
 		return world
 
 	def _fallback_position(self, agent, position):

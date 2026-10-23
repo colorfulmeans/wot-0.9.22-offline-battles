@@ -130,33 +130,13 @@ def _point(raw):
 
 
 def _route_point_reached(bx, bz, waypoints, index, route_limit, previous=None):
-    """Enter the route disk, including crossing it between tactical ticks."""
+    """Use the same disk/crossing contract as the client tactical owner."""
     point = waypoints[index]
-    px, pz = _number(point.get('x')), _number(point.get('z'))
-    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
-        return True
-    if previous is not None:
-        ax, az = previous
-        dx, dz = bx-ax, bz-az
-        length = dx*dx + dz*dz
-        if length > 0.000001:
-            fraction = _clamp(((px-ax)*dx+(pz-az)*dz)/length, 0., 1.)
-            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
-                return True
-    # Preserve the bounded forward-lane handoff after a convoy shove. This
-    # consumes an overshot gate, never a side bypass or a terminal destination.
-    if index >= route_limit:
-        return False
-    following = waypoints[index+1]
-    dx, dz = _number(following.get('x'))-px, _number(following.get('z'))-pz
-    length = dx*dx + dz*dz
-    if length <= 0.000001:
-        return False
-    fraction = ((bx-px)*dx+(bz-pz)*dz)/length
-    if fraction <= 0.0:
-        return False
-    fraction = min(1., fraction)
-    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
+    following = waypoints[index+1] if index < route_limit else None
+    return bot_tactics.route_disk_reached((bx, bz),
+        (_number(point.get('x')), _number(point.get('z'))),
+        (_number(following.get('x')), _number(following.get('z'))) if following else None,
+        previous)
 
 
 def _bot_rating(raw):

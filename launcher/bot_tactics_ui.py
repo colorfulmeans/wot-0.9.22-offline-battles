@@ -1530,7 +1530,7 @@ class BotTacticsEditor:
         if editing:self.canvas.create_text(x+radius+3,y-radius-3,text=str(index+1),fill='white',anchor='w')
         if editing and index==self.selected_point:
             ring=contract.ROUTE_ARRIVAL_RADIUS*self.view.frame()[2]
-            self.canvas.create_oval(x-ring,y-ring,x+ring,y+ring,outline=color,width=2,
+            self.canvas.create_oval(x-ring,y-ring,x+ring,y+ring,outline='white',width=2,dash=(3,2),
                 tags=('route_arrival',))
             for slot,place in enumerate(places):
                 px,py=self.view.screen(place);size=6 if self.selected_wait==slot else 4

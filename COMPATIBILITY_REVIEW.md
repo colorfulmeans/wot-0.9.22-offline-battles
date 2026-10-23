@@ -16,7 +16,9 @@ The selected editor node now draws that actual disk, including nodes with
 waiting places; unselected rendering is unchanged. Preserve bounded forward
 lane passage after a convoy shove, and detect a disk crossed between adjacent
 (twice the existing one-second tactics interval) position observations. Remove
-the initial 30 m gate shortcut. Authored single-point destinations use the
+the initial 30 m gate shortcut. Both server and local tactical route owners
+consume the same shared disk/crossing helper; a full-roster spawn parity
+regression verifies they cannot retain different initial gate rules. Authored single-point destinations use the
 same radius, while automatic one-point tactical goals retain 1.5 m. Waiting
 clocks start only on actual entry, preserve displaced-vehicle timing and
 vertical checks, and pass the same radius to the local stop owner. Capture

@@ -175,10 +175,16 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 self.assertEqual(
                     (server_anchor['x'], server_anchor['y'],
                      server_anchor['z']),
-                    spawn)
-                self.assertEqual(spawn, local_order['route_anchor'])
-                self.assertTrue(server_join)
-                self.assertTrue(local_order['route_join'])
+                    local_order['route_anchor'])
+                self.assertEqual(server_join, local_order['route_join'])
+                if server_join:
+                    self.assertEqual(spawn, local_order['route_anchor'])
+                else:
+                    # A spawn already inside the finite outgoing corridor
+                    # consumes that gate under the shared arrival contract.
+                    previous = route['waypoints'][server_index-1]
+                    self.assertEqual((previous['x'], previous['y'], previous['z']),
+                                     local_order['route_anchor'])
 
                 if team == 1 and route_id == 'hill':
                     dx = local_order['move_position'][0] - spawn[0]

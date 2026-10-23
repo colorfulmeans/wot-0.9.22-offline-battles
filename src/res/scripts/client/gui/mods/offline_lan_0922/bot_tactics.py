@@ -131,6 +131,34 @@ ROUTE_ARRIVAL_RADIUS = 6.0
 WAIT_AVOIDANCE_RADIUS = ROUTE_ARRIVAL_RADIUS
 
 
+def route_disk_reached(position, point, following=None, previous=None):
+    """Shared two-dimensional macro disk/crossing/forward-passage contract."""
+    bx, bz = position
+    px, pz = point
+    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
+        return True
+    if previous is not None:
+        ax, az = previous
+        dx, dz = bx-ax, bz-az
+        length = dx*dx + dz*dz
+        if length > 0.000001:
+            fraction = max(0., min(1., ((px-ax)*dx+(pz-az)*dz)/length))
+            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
+                return True
+    # A convoy can shove a hull past the gate along its finite outgoing lane.
+    if following is None:
+        return False
+    dx, dz = following[0]-px, following[1]-pz
+    length = dx*dx + dz*dz
+    if length <= 0.000001:
+        return False
+    fraction = ((bx-px)*dx+(bz-pz)*dz)/length
+    if fraction <= 0.0:
+        return False
+    fraction = min(1., fraction)
+    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
+
+
 def waiting_heading(place, following=None):
     """Preferred arrival heading; absent explicit heading faces the next gate."""
     if len(place)>3:return place[3]
