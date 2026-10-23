@@ -6829,21 +6829,32 @@ class BotRuntime(object):
         selected = current_samples[selected_key]
         return current, selected
 
+    @detailed_observed('bot.planning_rotation_membership')
     def _planning_rotation_fraction_for(self, state, position, yaw, candidate,
-                                        supplied, allow_wreck_push=False):
-        """Keep traffic policy while projecting fresh numeric poses in C++."""
+                                        supplied, allow_wreck_push=False, rosters=None):
+        """Project current poses, reusing membership only inside one decision."""
         def admitted(peer):
             return ((not peer.get('alive', True) and not allow_wreck_push) or
                     (peer.get('alive', True) and peer.get('team') == state.get('team')))
-        supplied = tuple(peer for peer in (supplied or ()) if admitted(peer))
-        current = tuple((actor, raw) for actor, raw in self.states.items()
-                        if actor != state.get('id') and admitted(raw))
+        roster_key = (state.get('id'), bool(allow_wreck_push))
+        roster = rosters.get(roster_key) if rosters is not None else None
+        if roster is None:
+            supplied = tuple(peer for peer in (supplied or ()) if admitted(peer))
+            current = tuple((actor, raw) for actor, raw in self.states.items()
+                            if actor != state.get('id') and admitted(raw))
+            fitted = all(raw.get('collision_shape') is not None for actor, raw in current)
+            if rosters is not None:
+                rosters[roster_key] = (supplied, current, fitted)
+            combat_count('planning_rotation_roster_built')
+        else:
+            supplied, current, fitted = roster
+            combat_count('planning_rotation_roster_reused')
         shape = state.get('collision_shape') or tank_collision.DEFAULT_SHAPE
         from . import native_math
         # Legacy/missing shapes retain their original half-size projection.
         # Real current-release actors carry fitted shapes and x/y/z poses.
         if (callable(getattr(native_math._load(), 'rotation_current', None)) and
-                all(raw.get('collision_shape') is not None for actor, raw in current)):
+                fitted):
             result = native_math.call('rotation_current', position, yaw, candidate,
                                      shape, supplied, current, state.get('id'))
             if result is not None:
@@ -16614,6 +16625,7 @@ class BotRuntime(object):
             raw_command = None
             planner_probe_samples = {}
             current_footprint_samples = {}
+            planning_rotation_rosters = {}
             planning_verdicts = []
             planning_receipt = dict(
                 id=[self.round_id, int(state['id']),
@@ -16669,7 +16681,7 @@ class BotRuntime(object):
                         return False
                 if self._planning_rotation_fraction_for(
                         state, position, state['yaw'], sample_yaw,
-                        neighbours, allow_wreck_push) < 1.0:
+                        neighbours, allow_wreck_push, planning_rotation_rosters) < 1.0:
                     planning_reason[0] = 'friendly_or_wreck_rotation'
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)

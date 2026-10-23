@@ -16,7 +16,7 @@ import math
 from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
-from gui.mods.offline_lan_0922 import tank_collision, arena_boundary
+from gui.mods.offline_lan_0922 import tank_collision, arena_boundary, bot_tactics
 from gui.mods.offline_lan_0922.prebaked_navigation import MOTION_FATAL_HAZARDS
 from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 
@@ -3224,6 +3224,7 @@ class TerrainNavigator(object):
 			'reached_path_corner': state.get('reached_path_corner'),
 			'corner_selection_receipt': state.get('corner_selection_receipt'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
+			'near_corner_handoff': state.get('near_corner_handoff'),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
@@ -4001,6 +4002,35 @@ class TerrainNavigator(object):
 		else:
 			receipt['dropped'] += 1
 
+	def _handoff_blocked_corner(self, bot_id, state, current, path, index, now):
+		"""A known blocked outgoing leg must not keep steering at its setup."""
+		if (index + 1 >= len(path) or not (WAYPOINT_ARRIVAL_RADIUS <
+				_distance_2d(current, path[index]) <= bot_tactics.ROUTE_ARRIVAL_RADIUS)):
+			return False
+		receipt = state.get('corner_selection_receipt') or {}
+		if receipt.get('at') != float(now) or tuple(receipt.get('origin', ())) != tuple(current):
+			return False
+		known = any(row.get('index') == index and row.get('candidate') == index + 1 and
+			row.get('clear') is False and not row.get('proof_deferred') and
+			row.get('native_revision') == self.grid._native_proof_revision and
+			row.get('reason') in ('segment_blocked', 'dry_segment_blocked') and
+			(row.get('corridor') or {}).get('static_hull_crossing') is True and
+			(row.get('corridor') or {}).get('static_hull_revision') == self.grid.static_hull_revision
+			for row in receipt.get('checks', ()))
+		if not known or self.grid._proof_deferred:
+			return False
+		# These are existing checked refusals, not an inferred collision from yaw.
+		# Retire only this actor's outgoing connector for the normal retry lifetime.
+		edge = self.grid._edge_cells_for_segment(current, path[index + 1])
+		if edge is None:
+			return False
+		self.bot_failed_edges.setdefault(int(bot_id), {})[edge] = (
+			float(now) + BLOCKED_STEP_EDGE_TTL, BLOCKED_STEP_EDGE_PENALTY)
+		self.request_replan(bot_id, current, now)
+		state['near_corner_handoff'] = dict(at=float(now), corner=tuple(path[index]),
+			target=tuple(path[index + 1]), reason='blocked_outgoing_connector')
+		return True
+
 	def _planned_next_segment_clear(self, current, path, index, now,
 			bot_id=None):
 		"""Keep an adjacent A* ford without inventing a shallow shortcut."""
@@ -4466,6 +4496,9 @@ class TerrainNavigator(object):
 		lookahead = self._lookahead_index(
 			current, path, index, effective_key, now, lookahead_distance,
 			bot_id)
+		if (movement_intent and lookahead == index and
+				self._handoff_blocked_corner(bot_id, state, current, path, index, now)):
+			return tuple(current)
 		if (lookahead == len(path) - 1 and
 				_distance_2d(current, path[lookahead]) < reach_radius and
 				_distance_2d(path[lookahead], goal) > reach_radius):

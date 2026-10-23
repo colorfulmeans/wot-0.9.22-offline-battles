@@ -49,7 +49,7 @@ RETREAT_ARRIVAL_RADIUS = 6.0
 RETREAT_PROGRESS_TIMEOUT_SECONDS = 10.0
 RETREAT_DEFENSIVE_PAUSE_SECONDS = 15.0
 RETREAT_PROGRESS_EPSILON = 2.0
-ROUTE_ARRIVAL_RADIUS = 13.0
+ROUTE_ARRIVAL_RADIUS = bot_tactics.ROUTE_ARRIVAL_RADIUS
 CLOSE_THREAT_DISTANCE = 50.0
 CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
@@ -129,36 +129,34 @@ def _point(raw):
     }
 
 
-def _route_point_reached(bx, bz, waypoints, index, route_limit):
-    """Accept an exact waypoint or its bounded forward route corridor."""
+def _route_point_reached(bx, bz, waypoints, index, route_limit, previous=None):
+    """Enter the route disk, including crossing it between tactical ticks."""
     point = waypoints[index]
-    px = _number(point.get("x"))
-    pz = _number(point.get("z"))
-    if math.hypot(px - bx, pz - bz) <= ROUTE_ARRIVAL_RADIUS:
+    px, pz = _number(point.get('x')), _number(point.get('z'))
+    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
         return True
+    if previous is not None:
+        ax, az = previous
+        dx, dz = bx-ax, bz-az
+        length = dx*dx + dz*dz
+        if length > 0.000001:
+            fraction = _clamp(((px-ax)*dx+(pz-az)*dz)/length, 0., 1.)
+            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
+                return True
+    # Preserve the bounded forward-lane handoff after a convoy shove. This
+    # consumes an overshot gate, never a side bypass or a terminal destination.
     if index >= route_limit:
         return False
-
-    following = waypoints[index + 1]
-    segment_x = _number(following.get("x")) - px
-    segment_z = _number(following.get("z")) - pz
-    length_squared = segment_x * segment_x + segment_z * segment_z
-    if length_squared <= 0.000001:
+    following = waypoints[index+1]
+    dx, dz = _number(following.get('x'))-px, _number(following.get('z'))-pz
+    length = dx*dx + dz*dz
+    if length <= 0.000001:
         return False
-    offset_x = bx - px
-    offset_z = bz - pz
-    progress = (offset_x * segment_x + offset_z * segment_z) / length_squared
-    if progress <= 0.0:
+    fraction = ((bx-px)*dx+(bz-pz)*dz)/length
+    if fraction <= 0.0:
         return False
-    # Macro points are lane gates, not parking spots. A convoy can push a hull
-    # just beyond a shared gate without ever putting its centre inside the
-    # arrival circle. Accept only the finite capsule leading to the next gate;
-    # lateral or distant bypasses still retain the current target and A* keeps
-    # ownership of every following segment and hazard decision.
-    progress = min(1.0, progress)
-    closest_x = px + segment_x * progress
-    closest_z = pz + segment_z * progress
-    return math.hypot(closest_x - bx, closest_z - bz) <= ROUTE_ARRIVAL_RADIUS
+    fraction = min(1., fraction)
+    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
 
 
 def _bot_rating(raw):
@@ -1612,6 +1610,12 @@ class BotPlanner(object):
                 progress[bot_id] = dict(best=distance, since=now)
         return set(selected)
 
+    def _route_arrival_radius(self, route, team):
+        # A one-point automatic tactical goal is distinct from an authored disk.
+        authored = bot_tactics.route_config(self.tactics, self.tactics_map,
+                                            route.get('id'), team)
+        return ROUTE_ARRIVAL_RADIUS if authored is not None or len(route.get('waypoints') or ()) > 1 else 1.5
+
     def _capture_staged(self, bot, route_index, target=None):
         """Separate the existing screen gate from capture route completion."""
         assignment = self._route_assignments.get(bot["id"])
@@ -1637,9 +1641,10 @@ class BotPlanner(object):
             if final_inside:
                 return self._inside_base(bot, target)
             state = self._route_states.get(bot['id'], {})
-            if state.get('completed_terminal') == final:
+            if (state.get('completed_terminal') == final or
+                    (state.get('terminal_crossing') or {}).get('point') == final):
                 return True
-            radius = 1.5 if len(waypoints) == 1 else ROUTE_ARRIVAL_RADIUS
+            radius = self._route_arrival_radius(route, bot['team'])
             arrived = math.hypot(final['x']-_number(bot['state'].get('x')),
                                  final['z']-_number(bot['state'].get('z'))) <= radius
             if arrived:
@@ -3322,8 +3327,8 @@ class BotPlanner(object):
             index = min(index, route_limit)
             while (index < route_limit and
                    math.hypot(_number(waypoints[index].get("x")) - bx,
-                              _number(waypoints[index].get("z")) - bz) < 30.0):
-                entry['skipped'].append(dict(index=index, reason='within_30m'))
+                              _number(waypoints[index].get("z")) - bz) <= ROUTE_ARRIVAL_RADIUS):
+                entry['skipped'].append(dict(index=index, reason='inside_arrival_disk'))
                 index += 1
             # Bot snapshots carry hull yaw in the same shared frame as uploaded
             # routes. Skip only a truly rear-facing connector; a side road remains a
@@ -3378,6 +3383,10 @@ class BotPlanner(object):
         point = _point(waypoints[index])
         bx = _number(bot["state"].get("x"))
         bz = _number(bot["state"].get("z"))
+        previous_pose = (state.get('arrival_previous_pose') if
+                         0.0 < now-state.get('arrival_previous_at', now-3.0) <= 2.0 else None)
+        state['arrival_previous_pose'] = (bx, bz)
+        state['arrival_previous_at'] = now
         # Macro points describe the lane, not parking places.  Tanks keep
         # advancing until combat, safety or the final destination stops them.
         # Consume every already-reached adjacent gate in this one 1 Hz global
@@ -3395,11 +3404,13 @@ class BotPlanner(object):
                     point = parking
                     break
                 if (index in state.get('parking_skipped', ()) and
-                        not _route_point_reached(bx, bz, waypoints, index, route_limit)):
+                        not _route_point_reached(bx, bz, waypoints, index, route_limit, previous_pose)):
                     break
-            elif not _route_point_reached(bx, bz, waypoints, index, route_limit):
+            elif not _route_point_reached(bx, bz, waypoints, index, route_limit, previous_pose):
                 break
             if index >= route_limit:
+                if index == len(waypoints)-1 and (authored is not None or len(waypoints)>1):
+                    state['terminal_crossing'] = dict(point=_point(waypoints[index]), at=now)
                 break
             index += 1
             state['index'] = index
@@ -3447,9 +3458,9 @@ class BotPlanner(object):
         pose = bot['state']
         position = _point(pose)
         distance = math.hypot(goal['x']-position['x'], goal['z']-position['z'])
-        # Match the existing macro arrival, including the precise automatic
-        # one-point goal. No LocalDriver or intermediate-waypoint radii change.
-        arrival = 1.5 if len(points) <= 1 else ROUTE_ARRIVAL_RADIUS
+        # Authored route disks share the editor's six-metre radius. Keep the
+        # precise automatic one-point goal and native local corners separate.
+        arrival = self._route_arrival_radius(route, bot['team'])
         inside_capture = bool(capture_target and math.hypot(
             capture_target['point']['x']-position['x'],
             capture_target['point']['z']-position['z']) <= capture_target['radius'])
@@ -3458,7 +3469,8 @@ class BotPlanner(object):
             final['x']-capture_target['point']['x'],
             final['z']-capture_target['point']['z']) <= capture_target['radius'])
         circle_arrival = capture or final_inside
-        arrived = inside_capture if circle_arrival else distance <= arrival
+        arrived = inside_capture if circle_arrival else (distance <= arrival or
+            (route_state.get('terminal_crossing') or {}).get('point') == final)
         evidence.update(goal=goal, distance=distance, arrival_radius=arrival,
                         inside_capture=inside_capture, final_inside_capture=final_inside,
                         arrival_kind='circle' if circle_arrival else 'point',
@@ -3556,7 +3568,7 @@ class BotPlanner(object):
         arrived = state.setdefault('parking_arrived', {}).get(index)
         arrival = state.get('parking_pose', {}).get(index)
         if arrived is not None and arrival is not None:
-            # One metre admits the initial arrival only. A small external shove
+            # The six-metre disk admits the initial arrival. A small external shove
             # must not restart the clock or demand an exact coordinate return.
             displaced = math.hypot(_number(pose.get('x'))-arrival['x'],
                                    _number(pose.get('z'))-arrival['z'])
@@ -3606,7 +3618,9 @@ class BotPlanner(object):
         goal = dict(x=place[0], y=_number(bot['state'].get('y')), z=place[1])
         distance = math.hypot(goal['x']-_number(bot['state'].get('x')),
                               goal['z']-_number(bot['state'].get('z')))
-        if distance > 1.0:return False, goal
+        if (pose.get('airborne') or distance > ROUTE_ARRIVAL_RADIUS or
+                (arrival is not None and abs(_number(pose.get('y'))-arrival['y']) >
+                 1.0 + distance * math.tan(math.radians(27.5)))):return False, goal
         arrived = state.setdefault('parking_arrived', {}).setdefault(index, now)
         state.setdefault('parking_pose', {})[index] = _point(pose)
         duration = state.setdefault('parking_duration', {}).setdefault(index, place[2])
@@ -3666,7 +3680,7 @@ class BotPlanner(object):
                         order['parking_heading']=heading
                         order['face_position']=dict(x=_number(pose.get('x'))+math.sin(angle)*20,
                             y=_number(pose.get('y')),z=_number(pose.get('z'))+math.cos(angle)*20)
-        order['arrival_radius'] = 1.0 if phase == 'approach' else None
+        order['arrival_radius'] = ROUTE_ARRIVAL_RADIUS if phase == 'approach' else None
         order['combat_mode'] = 'hold' if holding else 'parking_approach' if phase == 'approach' else 'route'
         order['throttle_override'] = 0.0 if holding else None
 

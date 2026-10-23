@@ -221,6 +221,21 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('-90.0°',e.wait_heading_preview.get())
         e.selected_point=None;e.redraw();self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
 
+    def test_selected_route_node_draws_actual_arrival_disk_only_when_selected(self):
+        e=self.editor
+        for point in ([0.,0.,0], [0.,0.,1,0,[[12.,0.,60.]]]):
+            e.selected_point=0;e.canvas.delete('all')
+            e._draw_route_node(point,0,'red',True,5)
+            rings=e.canvas.find_withtag('route_arrival')
+            self.assertEqual(1,len(rings))
+            bounds=e.canvas.coords(rings[0])
+            self.assertAlmostEqual(12.*e.view.frame()[2],bounds[2]-bounds[0])
+            self.assertEqual(bool(len(point)>3),bool(e.canvas.find_withtag('wait_avoidance')))
+            e.selected_point=None;e.canvas.delete('all')
+            e._draw_route_node(point,0,'red',True,5)
+            self.assertFalse(e.canvas.find_withtag('route_arrival'))
+            self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         # Exercise the historical source-graph fixture independently of the adopted baseline.
@@ -460,10 +475,10 @@ class NavigationUITests(unittest.TestCase):
         self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
-        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：大车参考半径6米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
+        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：抵达半径6米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
         self.assertEqual('Node legend',e.node_legend.cget('text'))
-        self.assertIn('Square: wait place; ring: 6 m radius large-hull guide',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
+        self.assertIn('Square: wait place; ring: 6 m arrival radius',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
         self.assertTrue(radii());self.assertTrue(all(r==7. for r in radii()))
         self.assertFalse(e.canvas.find_withtag('route_node'))

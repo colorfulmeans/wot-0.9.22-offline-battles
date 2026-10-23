@@ -1,0 +1,121 @@
+{
+  "source_report": "wot-error-report-20261024-041538-4b9924d990d0.zip",
+  "vehicle": "usa:A85_T110E3",
+  "bot": 23,
+  "round": 2,
+  "corner_receipt": {
+    "origin": [
+      -188.47204070389284,
+      0.40677767992019653,
+      -22.017482663448884
+    ],
+    "goal": [
+      -35.013,
+      0.0,
+      -104.376
+    ],
+    "dropped": 0,
+    "checks": [
+      {
+        "corner_distance": 1.528059309739495,
+        "index": 1,
+        "target": [
+          -190.0,
+          0.78,
+          -42.0
+        ],
+        "candidate": 2,
+        "proof_deferred": false,
+        "clear": false,
+        "reason": "segment_penalty",
+        "driver_arrival_radius": 1.5,
+        "corner": [
+          -190.0,
+          0.437,
+          -22.0
+        ],
+        "native_revision": 0
+      },
+      {
+        "corner_distance": 1.528059309739495,
+        "index": 1,
+        "target": [
+          -190.0,
+          0.78,
+          -42.0
+        ],
+        "candidate": 2,
+        "proof_deferred": false,
+        "clear": false,
+        "reason": "dry_segment_blocked",
+        "driver_arrival_radius": 1.5,
+        "corridor": {
+          "static_hull_planning_inset": 0.15,
+          "timed_failure": false,
+          "end": [
+            -190.0,
+            0.78,
+            -42.0
+          ],
+          "static_hull_centreline_clearance": 2.174,
+          "static_hull_crossing": true,
+          "static_hull_revision": 21,
+          "start": [
+            -188.47204070389284,
+            0.40677767992019653,
+            -22.017482663448884
+          ],
+          "at": 491.27301025390625,
+          "egress_reason": "static_hull_path"
+        },
+        "corner": [
+          -190.0,
+          0.437,
+          -22.0
+        ],
+        "native_revision": 0
+      }
+    ],
+    "query_policy": "existing_checks_only",
+    "at": 491.27301025390625
+  },
+  "path": [
+    [
+      -186.0,
+      0.321,
+      -22.0
+    ],
+    [
+      -190.0,
+      0.437,
+      -22.0
+    ],
+    [
+      -190.0,
+      0.78,
+      -42.0
+    ],
+    [
+      -178.0,
+      0.458,
+      -54.0
+    ],
+    [
+      -178.0,
+      0.905,
+      -78.0
+    ],
+    [
+      -154.0,
+      0.259,
+      -78.0
+    ],
+    [
+      -146.0,
+      0.25,
+      -78.0
+    ]
+  ],
+  "local_distance_at_464_243": 2.046922435678078,
+  "strategic_distance_at_464_243": 173.53807257681945
+}

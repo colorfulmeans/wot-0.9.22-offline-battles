@@ -127,7 +127,8 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
-WAIT_AVOIDANCE_RADIUS = 6.0
+ROUTE_ARRIVAL_RADIUS = 6.0
+WAIT_AVOIDANCE_RADIUS = ROUTE_ARRIVAL_RADIUS
 
 
 def waiting_heading(place, following=None):

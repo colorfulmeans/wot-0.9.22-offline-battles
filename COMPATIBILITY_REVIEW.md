@@ -1,5 +1,50 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24 report 041538: route disks and blocked outgoing connectors
+
+Candidate 494's T110E3 (Bot 23, round 2, The Pit) repeatedly aligned with a
+near A* setup while its outgoing edge was refused by the static-hull corridor
+check. The captured receipt at simulation time 491.273 records a 1.528 m
+setup distance, `segment_penalty` and `dry_segment_blocked` /
+`static_hull_path`. A prior execution window records a 2.047 m local target
+and 173.538 m strategic distance with brake-and-align gates. This is not a
+proof that all editor waypoints were exact-coordinate goals: server macro
+arrival was 13 m, local driver arrival 1.5 m, and initial waiting arrival 1 m.
+
+Use the shared 6 m authoring radius for macro arrival and waiting-place entry.
+The selected editor node now draws that actual disk, including nodes with
+waiting places; unselected rendering is unchanged. Preserve bounded forward
+lane passage after a convoy shove, and detect a disk crossed between adjacent
+(twice the existing one-second tactics interval) position observations. Remove
+the initial 30 m gate shortcut. Authored single-point destinations use the
+same radius, while automatic one-point tactical goals retain 1.5 m. Waiting
+clocks start only on actual entry, preserve displaced-vehicle timing and
+vertical checks, and pass the same radius to the local stop owner. Capture
+and defense still use the actual base circle, independently of route disks.
+
+Do not enlarge local driver corner tolerances or skip an unproved bend.
+Instead, a fresh known static-hull refusal of the adjacent outgoing corridor
+within 6 m retires only that actor's connector for the existing private edge
+lifetime and starts its ordinary replan. Reuse existing short-circuit receipts;
+no added geometry query, global obstacle or inferred collision from yaw.
+Stale, changed-revision, deferred, unproved and distant receipts cannot do so.
+The captured fixture and boundary regressions cover these distinctions.
+
+Worker optimization reuses allied/wreck roster membership across rotation
+candidates inside one synchronous decision. Every native rotation query still
+runs against live state references and its exact candidate yaw. Separate
+wreck-push policy and new decision dictionaries rebuild membership. No shared
+cross-frame collision receipt, cadence, probe budget or native motion law is
+changed. Diagnostic-only timing/counters expose membership construction/reuse.
+This removes repeated Python roster preparation; it does not prove a whole
+frame-rate improvement. Report measurements show 7.02 FPS / 138.648 ms Python
+per frame in one heavy window, with 124.079 ms in Bot update and ordinary
+server RTT mostly 8–24 ms. Exact Windows gameplay remains the acceptance
+boundary for escape success and frame pacing. The damage-panel Flash animation
+error after player death and missing interior layouts remain unproved/unfixed
+resource or lifecycle issues; neither is silently classified as repaired.
+
+
 ## October 24 reports 030753 / 031525: complete pivot failure handoff
 
 Both sessions use candidate 492 (fcc7b942). The HUD deliberately displays the
