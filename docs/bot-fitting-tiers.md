@@ -147,8 +147,8 @@ regular device, three regular devices, or three improved devices plus the
 first device's directive. Consumables are whole presets: none, small kits and
 manual extinguisher once, the same reusable, or reusable large kits and automatic
 extinguisher. Their use policy follows that preset, independently of aim skill.
-The outfit checkbox inherits when mixed; checked and cleared explicitly enable
-or disable the existing native seasonal rented styles. It never selects an
+The outfit dropdown offers Inherit, Off and On. These follow the parent or
+explicitly disable/enable the existing native seasonal rented styles. It never selects an
 arbitrary style or changes modules/equipment/crew. Enabling uses the reviewed
 elite style for that hull, preserving all locked-outfit exceptions and the
 existing no-expiry behavior. Unspecified rules retain the difficulty defaults.

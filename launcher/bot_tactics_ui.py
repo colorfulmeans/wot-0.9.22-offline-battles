@@ -98,7 +98,10 @@ class BotTacticsEditor:
         self.store = store or storage.Store(); self.log = log or (lambda message: None)
         self.document = self.store.active()
         self.original = copy.deepcopy(self.document)
-        self.undo_stack = []; self.redo_stack = []
+        self.histories = {key: ([], []) for key in ('behavior', 'maps')}
+        self.saved_name = self.document['name']; self.unsaved_new = False
+        self.builtin = self.document['name'] == 'Default'
+        self.history_buttons = []
         self.selection = None; self.selected_point = None; self.drag = None
         self.wait_edit = False; self.selected_wait = None
         self._wait_add_at_parent = False
@@ -177,15 +180,20 @@ class BotTacticsEditor:
         head = ttk.Frame(self.root, padding=10); head.pack(fill='x')
         ttk.Label(head, text=self.tr('方案名称', 'Profile')).pack(side='left')
         self.profile_name = tk.StringVar(value=self.document['name'])
-        self.profile_box = ttk.Combobox(head, textvariable=self.profile_name, width=28)
+        self.profile_box = ttk.Combobox(head, textvariable=self.profile_name, width=28, state='readonly')
         self.profile_box.pack(side='left', padx=6)
-        for zh, en, command in (
-            ('打开', 'Open', self.open_profile), ('新建', 'New', self.new_profile),
-            ('导入', 'Import', self.import_profile), ('导出', 'Export', self.export_profile),
-            ('恢复默认草稿', 'Default draft', self.default_profile)):
-            button=ttk.Button(head, text=self.tr(zh,en), command=command);button.pack(side='left', padx=2)
-            if zh=='恢复默认草稿':self.restore_button=button
+        self.profile_box.bind('<<ComboboxSelected>>', self.open_profile)
+        for key, zh, en, command in (
+            ('new', '新建', 'New', self.new_profile),
+            ('rename', '重命名', 'Rename', self.rename_profile),
+            ('delete', '删除', 'Delete', self.delete_profile),
+            ('import', '导入', 'Import', self.import_profile),
+            ('export', '导出', 'Export', self.export_profile)):
+            button=ttk.Button(head, text=self.tr(zh,en), command=command)
+            button.pack(side='left', padx=2)
+            setattr(self, key+'_button', button)
         self.book = ttk.Notebook(self.root)
+        self.book.bind('<<NotebookTabChanged>>', lambda event: self._refresh_history())
         behavior = ttk.Frame(self.book, padding=12); maps = ttk.Frame(self.book, padding=6)
         self.book.add(behavior, text=self.tr('行为参数', 'Behavior'))
         self.book.add(maps, text=self.tr('进攻路线 / 火炮炮位', 'Routes / SPG positions'))
@@ -195,7 +203,7 @@ class BotTacticsEditor:
                                                'Loaded active profile. Editing does not change an ongoing battle.'))
         ttk.Label(foot, textvariable=self.status, wraplength=670).pack(side='left', fill='x', expand=True)
         self.save_button=ttk.Button(foot, text=self.tr('保存草稿', 'Save draft'), command=lambda:self.save(False));self.save_button.pack(side='left', padx=5)
-        ttk.Button(foot, text=self.tr('保存并应用（下一局）', 'Apply next battle'), command=lambda:self.save(True)).pack(side='left')
+        self.apply_button=ttk.Button(foot, text=self.tr('保存并应用（下一局）', 'Apply next battle'), command=lambda:self.save(True));self.apply_button.pack(side='left')
         ttk.Button(foot, text=self.tr('关闭', 'Close'), command=self.close).pack(side='left', padx=5)
         self.book.pack(fill='both', expand=True, padx=10)
 
@@ -224,15 +232,6 @@ class BotTacticsEditor:
             ttk.Label(form,text=label).grid(row=actual,column=0,sticky='w',pady=3)
             var=tk.StringVar(value='0' if name=='team' else 'all' if name=='class_tag' else '')
             self.rule_vars[name]=var
-            if name=='outfit':
-                self.outfit_check=ttk.Checkbutton(form,variable=var,onvalue='on',offvalue='off',
-                    text=self.tr('使用现有涂装','Use existing outfit'),
-                    command=lambda:self._behavior_help('outfit'))
-                self.outfit_check.grid(row=actual,column=1,sticky='w')
-                self.outfit_check.bind('<FocusIn>',lambda e:self._behavior_help('outfit'),add='+')
-                var.trace_add('write',lambda *unused:self._sync_outfit())
-                self._sync_outfit()
-                continue
             box=LocalizedCombobox(form,variable=var,kind=name,values=values,language=self.language,width=35)
             actual=row+1 if name in ('consumables','outfit','crew_preset') else row
             box.grid(row=actual,column=1,sticky='ew');self.rule_boxes[name]=box
@@ -257,11 +256,18 @@ class BotTacticsEditor:
             box=LocalizedCombobox(form,variable=var,kind='number',values=values,language=self.language,width=35)
             box.grid(row=row,column=1,sticky='ew');self.rule_boxes[key]=box
             box.bind('<FocusIn>',lambda e,k=key:self._behavior_help(k),add='+')
-        for offset,(zh,en,command) in enumerate([
+        actions=ttk.Frame(form);actions.grid(row=row+1,column=0,columnspan=2,sticky='ew',pady=3)
+        actions.columnconfigure((0,1),weight=1,uniform='actions')
+        for index,(zh,en,command) in enumerate([
                 ('新增／更新规则','Add / update rule',self.save_rule),
                 ('删除选中规则','Delete selected rule',self.delete_rule),
-                ('显示所选范围生效参数','Effective values',self.preview_rule)],1):
-            ttk.Button(form,text=self.tr(zh,en),command=command).grid(row=row+offset,column=0,columnspan=2,sticky='ew',pady=3)
+                ('撤销','Undo',lambda:self.undo('behavior')),
+                ('重做','Redo',lambda:self.redo('behavior')),
+                ('显示所选范围生效参数','Effective values',self.preview_rule)]):
+            button=ttk.Button(actions,text=self.tr(zh,en),command=command)
+            button.grid(row=index//2,column=index%2,columnspan=2 if index==4 else 1,
+                        sticky='ew',padx=2,pady=3)
+            if index in (2,3):self.history_buttons.append(('behavior',index==3,button))
         self.behavior_help=tk.StringVar()
         help_frame=ttk.Frame(form);help_frame.grid(row=row+4,column=0,columnspan=2,sticky='sew',pady=8)
         self.help_text=tk.Text(help_frame,height=7,width=53,wrap='word',state='disabled',background=self.root.cget('background'),relief='flat')
@@ -271,9 +277,6 @@ class BotTacticsEditor:
             self.help_text.configure(state='normal');self.help_text.delete('1.0','end');self.help_text.insert('1.0',self.behavior_help.get());self.help_text.configure(state='disabled')
         self.behavior_help.trace_add('write',show_help)
         self._behavior_help('equipment')
-
-    def _sync_outfit(self):
-        self.outfit_check.state(('alternate',) if not self.rule_vars['outfit'].get() else ('!alternate',))
 
     def _refresh_equipment_choices(self):
         stock=self.rule_vars['development'].get()=='stock' or (not self.rule_vars['development'].get() and self.rule_vars['skill'].get()=='rookie')
@@ -303,7 +306,7 @@ class BotTacticsEditor:
             self._ammo_preview=None;self._ammo_identity=()
             # A previous one/two-shell pinned gun must not leave generic
             # scopes with disabled ratio controls.
-            state='disabled' if self.document['name']=='Default' else 'readonly'
+            state='disabled' if self.builtin else 'readonly'
             for box in self.ammo_boxes:box.configure(state=state)
             return None
         identities=tuple(s['name'] for s in preview['shells'])
@@ -315,7 +318,7 @@ class BotTacticsEditor:
             self._ammo_updating=False
         self._ammo_identity=identities;self._ammo_preview=preview
         for i,box in enumerate(self.ammo_boxes):
-            box.configure(state='readonly' if i<len(identities) and self.document['name']!='Default' else 'disabled')
+            box.configure(state='readonly' if i<len(identities) and not self.builtin else 'disabled')
         return preview
 
     def _behavior_help(self, key):
@@ -323,14 +326,14 @@ class BotTacticsEditor:
             'equipment': '配件优先顺序：垂稳 → 输弹机 → 炮控 → 通风 → 高级观察镜 → 工具箱；3 紫色配件包含对应指令。选择白板研发时只允许无配件；切回中间／完全体才开放其他配件选项。导入与开战同样校验。',
             'development': '白板／中间／完全体沿用现有主炮白名单与炮塔兼容规则。白板仅允许无配件，避免超重；金币车为固定研发配置。',
             'crew_preset': '50%、75% 不附加技能；100% 满修理满隐蔽，或 100% 全部满技能。等级与技能是一套配置。',
-            'outfit': '勾选使用现有原生各季节租用风格（F 系／M 系等），不选择具体花色，不受原生 100 场租用期限限制。锁定涂装的车辆仍保持原外观。灰色方框表示继承上级／难度；勾选或取消后独立覆盖，切换难度不会改写。',
+            'outfit': '使用现有原生各季节租用风格（F 系／M 系等），不选择具体花色，不受原生 100 场租用期限限制。锁定涂装的车辆仍保持原外观。继承上级设置跟随上级／难度；不使用涂装和使用现有涂装分别独立覆盖，切换难度不会改写。',
             'consumables': '一次档每种仅用一次，不解除眩晕、不修履带；重复档遵循原生冷却，可解除眩晕、修复断履带。手动灭火比自动灭火延迟 5 秒。小修理箱顺序：红火炮 → 红发动机 → 红炮塔 → 黄弹药架 → 黄火炮 → 黄发动机 → 黄炮塔 → 红观察孔 → 黄观察孔 → 黄油箱 → 红电台 → 黄电台 → 红履带；红油箱和黄履带跳过。治疗：装填手 → 炮手 → 驾驶员 → 车长 → 通信兵 → 眩晕；同职成员按座位顺序。大给养沿用现有群体效果与过滤规则。',
             'ammo_ratios': '0—9 为相对比例，不是发数。全部继承采用默认配比；全 0 为不携弹。正比例按容量近似装满；弹夹车按弹夹数量分配，不改变每夹数量。正比例至少一发／一夹（容量许可），同等条件优先主弹。0 不补回。比例框按该炮的银币 AP／APCR／HEAT／HE、金币 AP／APCR／HEAT／HE 顺序对应；手动比例可以选择该炮的原生弹种，覆盖默认炮弹白名单。例如 7 夹的 6:3:1 近似为 4:2:1。',
         }
         fallback=labels.parameter_label(key,self.language)+'：'+self.tr('继承上级设置不覆盖上级；0 是有效值。','Inherit does not override; zero is a value.')
         text=explanations.get(key,fallback) if self.zh else fallback
         if key=='outfit' and not self.zh:
-            text='Use the existing native seasonal rented styles (F/M series), without a 100-battle expiry or a style picker. Locked outfits remain unchanged. A mixed checkbox inherits the parent/difficulty; checking or clearing it overrides independently.'
+            text='Use the existing native seasonal rented styles (F/M series), without a 100-battle expiry or a style picker. Locked outfits remain unchanged. Inherit follows the parent/difficulty; off and on override it independently.'
         if key=='development':
             preview=self._refresh_ammunition()
             if preview and preview.get('fixed'):text+='\n'+self.tr('当前金币车：固定配置，各研发档位不改变模块。','Current premium vehicle: fixed module configuration at every development tier.')
@@ -398,10 +401,11 @@ class BotTacticsEditor:
         for zh,en,command in [('新建路线','New route',self.new_route),('新建炮位','New SPG',self.new_position),
                               ('复制','Duplicate',self.duplicate_item),('删除','Delete',self.delete_item),
                               ('恢复本路线','Reset route',self.reset_builtin),
-                              ('撤销','Undo',self.undo),('重做','Redo',self.redo),
+                              ('撤销','Undo',lambda:self.undo('maps')),('重做','Redo',lambda:self.redo('maps')),
                               ('检查本图','Check map',self.check_map),('适应窗口','Fit view',self.fit_view),
                               ('导入底图','Load image',self.load_background)]:
-            ttk.Button(tools,text=self.tr(zh,en),command=command).pack(side='left',padx=1,pady=5)
+            button=ttk.Button(tools,text=self.tr(zh,en),command=command);button.pack(side='left',padx=1,pady=5)
+            if en in ('Undo','Redo'):self.history_buttons.append(('maps',en=='Redo',button))
         body=ttk.Panedwindow(parent,orient='horizontal');body.pack(fill='both',expand=True)
         left=ttk.Frame(body,width=185);centre=ttk.Frame(body);right=ttk.Frame(body,width=280)
         body.add(left,weight=0);body.add(centre,weight=1);body.add(right,weight=0)
@@ -516,17 +520,34 @@ class BotTacticsEditor:
             'Red cells carry hazard flags; not all are absolute barriers.\nDeep water exceeds the depth limit. Edges protect support/falls. Reviewed fords remain conditional.\nLocal meshes use their actual flags. Hover the map to inspect them.'),
             justify='left',wraplength=245).pack(anchor='w',padx=4,pady=4)
 
-    def checkpoint(self):
-        self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
+    def _history_scope(self):
+        return 'behavior' if self.book.index(self.book.select()) == 0 else 'maps'
+
+    @property
+    def undo_stack(self):
+        return self.histories[self._history_scope()][0]
+
+    @property
+    def redo_stack(self):
+        return self.histories[self._history_scope()][1]
+
+    def checkpoint(self, scope='maps'):
+        undo,redo=self.histories[scope]
+        undo.append(copy.deepcopy(self.document[scope]));del undo[:-50];redo.clear()
+
+    def _refresh_history(self):
+        for scope,redo,button in self.history_buttons:
+            button.configure(state='normal' if not self.builtin and self.histories[scope][int(redo)] else 'disabled')
 
     def _refresh_lock(self):
         for widget,state in getattr(self,'_default_disabled',[]):
             if widget.winfo_exists():widget.configure(state=state)
         self._default_disabled=[]
-        locked=self.document['name']=='Default'
+        locked=self.builtin
         self.save_button.configure(state='disabled' if locked else 'normal')
-        self.restore_button.configure(state='disabled' if locked else 'normal')
-        self._sync_outfit()
+        self.rename_button.configure(state='disabled' if locked else 'normal')
+        self.delete_button.configure(state='disabled' if locked else 'normal')
+        self._refresh_history()
         if not locked:return
         allowed={self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
         view_labels={self.tr('检查本图','Check map'),self.tr('适应窗口','Fit view'),
@@ -539,23 +560,33 @@ class BotTacticsEditor:
                         self._default_disabled.append((widget,str(widget.cget('state'))));widget.configure(state='disabled')
                 walk(widget)
         walk(self.book)
+        self._refresh_history()
 
     def dirty(self):
-        return self.document!=self.original or self.profile_name.get()!=self.document['name']
+        return self.unsaved_new or self.document!=self.original
 
     def mark(self):
-        self.status.set(self.tr('草稿已修改，尚未应用。','Draft changed; not applied.'));self.redraw()
+        self.status.set(self.tr('尚未保存。','Unsaved changes.') if self.dirty() else self.tr('已保存。','Saved.'))
+        self._refresh_history();self.redraw()
 
-    def undo(self):
-        if self.undo_stack:
-            self.redo_stack.append(copy.deepcopy(self.document));self.document=self.undo_stack.pop();self._refresh_items();self._refresh_rules();self.mark()
+    def _restore_history(self, scope, redo):
+        source=self.histories[scope][int(redo)];target=self.histories[scope][int(not redo)]
+        if not source:return
+        target.append(copy.deepcopy(self.document[scope]));self.document[scope]=source.pop()
+        if scope=='maps':
+            self.drag=None
+            self._refresh_items()
+        else:self._refresh_rules()
+        self.mark()
 
-    def redo(self):
-        if self.redo_stack:
-            self.undo_stack.append(copy.deepcopy(self.document));self.document=self.redo_stack.pop();self._refresh_items();self._refresh_rules();self.mark()
+    def undo(self, scope=None):
+        self._restore_history(scope or self._history_scope(),False)
+
+    def redo(self, scope=None):
+        self._restore_history(scope or self._history_scope(),True)
 
     def _refresh_profiles(self):
-        self.profile_box.configure(values=self.store.names())
+        self.profile_box.configure(values=list(dict.fromkeys(self.store.names()+[self.document['name']])))
 
     def _refresh_rules(self):
         keep = {str(i) for i in range(len(self.document['behavior']))}
@@ -608,12 +639,12 @@ class BotTacticsEditor:
             doc['behavior'].append(r)
             # A new map draft may not yet have points; validate this rule alone.
             test=contract.empty();test['behavior']=doc['behavior'];clean=contract.canonical(test)
-            self.checkpoint();self.document['behavior']=clean['behavior'];self._refresh_rules();self.mark()
+            self.checkpoint('behavior');self.document['behavior']=clean['behavior'];self._refresh_rules();self.mark()
         except (ValueError,contract.TacticsError) as e:self.error(e)
 
     def delete_rule(self):
         selected=self.rules.selection()
-        if selected:self.checkpoint();del self.document['behavior'][int(selected[0])];self._refresh_rules();self.mark()
+        if selected:self.checkpoint('behavior');del self.document['behavior'][int(selected[0])];self._refresh_rules();self.mark()
 
     def preview_rule(self):
         from gui.mods.offline_lan_0922 import bot_gunnery
@@ -1126,7 +1157,7 @@ class BotTacticsEditor:
                     new.setdefault('class_priorities',{})[self._route_scope()]=priority
             else:
                 new.update(radius=float(self.item_vars['radius'].get()),heading=float(self.item_vars['heading'].get()),priority=int(self.item_vars['priority'].get()) if self.route_class_var.get() in ('SPG','total') else item['priority'])
-            if self.selection[0]=='builtin_positions' and new==item:return True
+            if new==item:return True
             # Validate atomically; malformed properties never mutate the draft.
             test=contract.empty();test['maps'][self.map_name]=copy.deepcopy(self.entry())
             test['maps'][self.map_name][kind]=[new]
@@ -1617,32 +1648,33 @@ class BotTacticsEditor:
         except Exception as e:self.error(e)
 
     def save(self,apply=False):
-        if self.document['name']=='Default':
+        if self.builtin:
             if apply:
-                self.store.save(contract.default_profile(),True)
-                self.status.set(self.tr('已应用默认配置，下一局生效。','Default applied for the next battle.'))
+                try:
+                    self.store.save(contract.default_profile(),True)
+                    self.status.set(self.tr('已应用默认配置，下一局生效。','Default applied for the next battle.'))
+                except Exception as e:self.error(e)
             return
         if self.wait_edit and self.selected_wait is not None and self.update_wait_time() is False:return
-        if self._selected() is not None and not self.update_properties():
-            return
+        if self._selected() is not None and not self.update_properties():return
         try:
-            doc=copy.deepcopy(self.document);name=self.profile_name.get().strip()
-            doc['name']=self.store.unique_name(name) if name!=self.document['name'] else name
-            doc=contract.canonical(doc)
-            self.document=self.store.save(doc,apply);self.original=copy.deepcopy(self.document);self.profile_name.set(self.document['name'])
-            self._refresh_profiles();self._refresh_items()
-            short=contract.digest(self.document)[:12]
-            self.status.set((self.tr('已应用，下次房主开始战斗生效。当前战斗不变。','Applied for the next host-started battle. Current battle unchanged.')
-                             if apply else self.tr('草稿已保存，当前应用方案未改变。','Draft saved; active profile unchanged.'))+'  '+short)
-            if apply:self.log('BOT TACTICS applied '+short)
+            doc=self.store.save(self.document,apply,previous_name=self.saved_name)
+            self.document=doc;self.original=copy.deepcopy(doc)
+            self.saved_name=doc['name'];self.unsaved_new=False;self.profile_name.set(doc['name'])
+            self._refresh_profiles();self._refresh_items();self._refresh_lock()
+            self.status.set(self.tr('已保存，下一局读取当前应用方案的最新文件。','Saved. Next battle reads the latest applied profile file.'))
+            if apply:self.log('BOT TACTICS applied '+contract.digest(doc)[:12])
         except Exception as e:self.error(e)
 
     def discard_prompt(self):
         return not self.dirty() or messagebox.askyesno(self.tr('未保存','Unsaved changes'),self.tr('放弃未保存的草稿？','Discard unsaved draft?'),parent=self.root)
 
-    def adopt(self,doc):
+    def adopt(self,doc,*,unsaved=False,imported=False):
         self.document=copy.deepcopy(doc);self.original=copy.deepcopy(doc);self.profile_name.set(doc['name'])
-        self.undo_stack=[];self.redo_stack=[];self.selection=None;self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self.drag=None
+        self.saved_name=None if unsaved else doc['name'];self.unsaved_new=unsaved
+        self.builtin=doc['name']=='Default' and not imported
+        self.histories={key:([],[]) for key in ('behavior','maps')}
+        self.selection=None;self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self.drag=None
         self.wait_edit_var.set(False);self.wait_seconds.set('60');self.wait_heading.set('')
         self._ammo_identity=();self._ammo_preview=None
         self._wait_add_at_parent=False;self._wait_parent_cleared=False
@@ -1650,42 +1682,81 @@ class BotTacticsEditor:
         for var in self.ammo_vars:var.set('')
         for var in self.item_vars.values():var.set('')
         self._refresh_equipment_choices();self._refresh_rules();self._refresh_items();self._refresh_lock()
-        self.status.set(self.tr('已打开草稿；点击应用才会更新下一局配置。','Draft opened. Apply to change the next battle configuration.'))
+        self._refresh_profiles()
+        self.status.set(self.tr('尚未保存。','Unsaved changes.') if unsaved else self.tr('已打开方案，当前应用方案未改变。','Profile opened; applied selection unchanged.'))
 
-    def open_profile(self):
-        if self.discard_prompt():
-            try:self.adopt(self.store.read(self.profile_name.get()))
-            except Exception as e:self.error(e)
+    def open_profile(self,event=None):
+        name=self.profile_name.get()
+        if name==self.document['name']:return
+        self.profile_name.set(self.document['name'])
+        if not self.discard_prompt():return
+        try:
+            doc=self.store.read(name)
+            self.adopt(doc)
+        except Exception as e:self.error(e)
 
     def new_profile(self):
-        if self.discard_prompt():self.adopt(contract.default_profile(self.store.unique_name(self.tr('新方案','New profile'))))
+        if not self.discard_prompt():return
+        name=simpledialog.askstring(self.tr('新建方案','New profile'),self.tr('方案名称','Profile name'),
+                                    initialvalue=self.tr('新方案','New profile'),parent=self.root)
+        if name is None:return
+        try:
+            name=self.store.check_name(name.strip())
+            self.adopt(contract.default_profile(name),unsaved=True)
+        except Exception as e:self.error(e)
 
-    def default_profile(self):
-        if self.document['name'] == 'Default':return
-        if self.discard_prompt():
-            name = self.document['name']
-            original = self.original
-            self.adopt(contract.default_profile(name))
-            self.original = original
-            self.mark()
+    def rename_profile(self):
+        if self.builtin:return
+        name=simpledialog.askstring(self.tr('重命名','Rename'),self.tr('方案名称','Profile name'),
+                                    initialvalue=self.document['name'],parent=self.root)
+        if name is None:return
+        try:
+            name=contract._text(name.strip(),48)
+            self.store.check_name(name,self.saved_name)
+            if name!=self.document['name']:
+                self.document['name']=name;self.profile_name.set(name);self._refresh_profiles();self.mark()
+        except Exception as e:self.error(e)
+
+    def delete_profile(self):
+        if self.builtin:return
+        try:
+            active=self.store.active()['name']==self.saved_name
+            text=self.tr('删除当前方案并丢弃未保存修改？','Delete this profile and discard unsaved changes?')
+            if active:text+='\n'+self.tr('下一局将恢复 Default，当前战斗不变。','Next battle will use Default. The current battle is unchanged.')
+            if not messagebox.askyesno(self.tr('删除方案','Delete profile'),text,parent=self.root):return
+            if self.saved_name is not None:self.store.delete(self.saved_name)
+            self.adopt(contract.default_profile())
+        except Exception as e:self.error(e)
 
     def import_profile(self):
         filename=filedialog.askopenfilename(parent=self.root,filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])
         if filename and self.discard_prompt():
             try:
-                doc=self.store.import_file(filename);doc['name']=self.store.unique_name(doc['name']);self.adopt(doc)
+                doc=self.store.import_file(filename)
+                if any(n.casefold()==doc['name'].casefold() for n in self.store.names()):
+                    name=simpledialog.askstring(self.tr('名称已存在','Name already exists'),
+                        self.tr('导入方案名称已存在，请输入其他名称。','Choose another name for the imported profile.'),
+                        initialvalue=doc['name'],parent=self.root)
+                    if name is None:return
+                    doc['name']=name.strip()
+                self.store.check_name(doc['name'])
+                self.adopt(doc,unsaved=True,imported=True)
             except Exception as e:self.error(e)
 
     def export_profile(self):
+        if self.dirty():
+            messagebox.showinfo(self.tr('需要保存','Save required'),self.tr('请先保存后再导出。','Save the profile before exporting.'),parent=self.root)
+            return
         filename=filedialog.asksaveasfilename(parent=self.root,defaultextension='.json',filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])
         if filename:
             try:
-                doc=copy.deepcopy(self.document);doc['name']=self.profile_name.get();self.store.export(doc,filename)
+                self.store.export(self.document,filename)
                 self.status.set(self.tr('方案已导出，不包含游戏资源或账户数据。','Exported configuration; no game artwork or account data.'))
             except Exception as e:self.error(e)
 
     def error(self,error):
         text=str(error)
+        if text.startswith('Name already exists: '):text=self.tr('方案名称已存在，请使用其他名称：','Profile name already exists; choose another name: ')+text.split(': ',1)[1]
         if text=='Stock development only allows no equipment':text=self.tr('白板研发仅允许无配件；请明确选择无配件，或改用中间／完全体研发。','Stock development only allows no equipment. Select none or intermediate/full development.')
         messagebox.showerror(self.tr('Bot 配置','Bot configuration'),text,parent=self.root)
 
@@ -1697,7 +1768,7 @@ def _editable_handler(function):
     import functools
     @functools.wraps(function)
     def invoke(self,*args,**kwargs):
-        if self.document.get('name')=='Default':return False
+        if self.builtin:return False
         return function(self,*args,**kwargs)
     return invoke
 

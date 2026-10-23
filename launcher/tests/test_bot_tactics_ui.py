@@ -236,7 +236,7 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual('heavyTank',own['class_tag'])
         self.assertEqual(list(reversed(own['points'])),peer['points'])
         self.assertTrue(all(r['class_tag']=='heavyTank' for r in edits))
-        self.ui.profile_name.set('Base endpoints');self.ui.save(True)
+        self.ui.document['name']='Base endpoints';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(True)
         saved=self.ui.store.active()['maps']['08_ruinberg']['default_routes']
         expected=storage.contract.canonical(self.ui.document)['maps']['08_ruinberg']['default_routes']
         self.assertEqual(expected,saved)
@@ -341,7 +341,7 @@ class EditorUITests(unittest.TestCase):
         self.assertNotEqual(original[0][:2],self.ui._selected()['points'][0][:2])
         self.ui.selected_point=0;self.click(original[1],shift=True)
         self.assertEqual(len(original),len(self.ui._selected()['points']))
-        self.ui.profile_name.set('Default adjustments');self.ui.save(True);self.root.update()
+        self.ui.document['name']='Default adjustments';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(True);self.root.update()
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
         saved=self.ui.store.active();entry=saved['maps']['08_ruinberg']
         self.assertEqual([],entry['routes']);self.assertEqual(2,len(entry['default_routes']))
@@ -367,9 +367,9 @@ class EditorUITests(unittest.TestCase):
         self.ui.selected_point=0;self.click((-90,270),shift=True)
         self.assertEqual(4,len(self.ui._selected()['points']))
         self.ui.item_vars['label'].set('Test road');self.ui.item_vars['policy'].set('fixed')
-        self.ui.profile_name.set('UI test');self.ui.save(False);self.root.update()
+        self.ui.document['name']='UI test';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False);self.root.update()
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
-        self.assertEqual({},self.ui.store.active()['maps'])
+        self.assertEqual(self.ui.document['maps'],self.ui.store.active()['maps'])
         draft=self.ui.store.read('UI test');self.assertEqual('fixed',draft['maps']['08_ruinberg']['routes'][0]['policy'])
         self.ui.adopt(draft);self.ui.save(True)
         self.assertEqual(draft,self.ui.store.active());self.assertFalse(self.ui.dirty())
@@ -394,7 +394,7 @@ class EditorUITests(unittest.TestCase):
         self.click((-76,306));self.click((-136,246))
         medium=copy.deepcopy(self.ui._selected())
         self.assertEqual(['mediumTank'],medium['classes'])
-        self.ui.profile_name.set('Separate classes');self.ui.save(False)
+        self.ui.document['name']='Separate classes';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False)
         saved=self.ui.store.read('Separate classes')
         self.assertEqual(2,len(saved['maps']['08_ruinberg']['routes']))
         self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
@@ -410,7 +410,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.edit_point_condition(event)
         self.ui.edit_point_condition()  # Explicit Add; selecting a parent never creates parking.
         self.click(point[:2]);self.ui.wait_seconds.set('25');self.ui.update_wait_time()
-        self.ui.profile_name.set('Timed route');self.ui.save(False)
+        self.ui.document['name']='Timed route';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False)
         saved=self.ui.store.read('Timed route')
         self.assertEqual(25,saved['maps']['08_ruinberg']['routes'][0]['points'][0][4][0][2])
         self.ui.adopt(saved)

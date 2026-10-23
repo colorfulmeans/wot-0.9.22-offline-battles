@@ -114,11 +114,10 @@ class BaselineEditorTests(unittest.TestCase):
         self.assertEqual(original,e._selected())
         e.save(True);self.errors.assert_not_called()
 
-    def test_whole_default_restore_and_new_profile_use_adopted_baseline(self):
+    def test_new_profile_uses_adopted_baseline_and_remains_unsaved(self):
         e=self.editor;e.document['maps'].clear()
-        with mock.patch.object(e,'discard_prompt',return_value=True):e.default_profile()
-        self.assertEqual(storage.contract.default_profile('Editable fixture'),e.document)
-        with mock.patch.object(e,'discard_prompt',return_value=True):e.new_profile()
+        with mock.patch.object(e,'discard_prompt',return_value=True),mock.patch.object(ui.simpledialog,'askstring',return_value='New'):e.new_profile()
         self.assertEqual(storage.contract.default_profile()['maps'],e.document['maps'])
+        self.assertTrue(e.unsaved_new);self.assertTrue(e.dirty())
         e.set_language('en');self.root.update()
         self.assertTrue(all(ord(c)<128 for i in e.items.get_children() for c in e.items.item(i,'text')))

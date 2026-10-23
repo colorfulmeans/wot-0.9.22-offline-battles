@@ -51,13 +51,13 @@ class ProfileProtectionTests(unittest.TestCase):
         overlays.create_vehicle_profile(f.game,'Burst')
         fields=overlays.list_vehicle_profile_field_choices(f.game,'Burst',f.VEHICLE)
         self.assertTrue(any(row['fieldPath']=='shared/Gun-A/burst/count' for row in fields))
-        result=overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/count','2')
+        result=overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/count','2',is_running=lambda:False)
         self.assertEqual('2',result['currentValue'])
-        result=overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate','600')
+        result=overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate','600',is_running=lambda:False)
         self.assertEqual('600',result['currentValue'])
         for raw in ('0','65','2.5'):
-            with self.assertRaises(overlays.VehicleOverlayError):overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/count',raw)
-        with self.assertRaises(overlays.VehicleOverlayError):overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate','1')
+            with self.assertRaises(overlays.VehicleOverlayError):overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/count',raw,is_running=lambda:False)
+        with self.assertRaises(overlays.VehicleOverlayError):overlays.apply_profile_edit(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate','1',is_running=lambda:False)
         current=overlays.inspect_profile_field(f.game,'Burst',f.GUNS,'shared/Gun-A/burst/rate')
         self.assertEqual('600',current['currentValue'])
 
@@ -67,43 +67,42 @@ class EditorProtectionTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
-    def test_outfit_checkbox_inherits_then_roundtrips_an_independent_override(self):
+    def test_outfit_dropdown_inherits_then_roundtrips_an_independent_override(self):
         e=self.editor
-        self.assertIn('disabled',e.outfit_check.state())
+        self.assertEqual('disabled',str(e.rule_boxes['outfit'].cget('state')))
         e.adopt(storage.contract.default_profile('Custom'))
         self.assertEqual('',e.rule_vars['outfit'].get())
-        self.assertIn('alternate',e.outfit_check.state())
+        self.assertEqual(('', 'off', 'on'),e.rule_boxes['outfit'].keys)
         self.assertEqual(int(e.rule_boxes['consumables'].grid_info()['row'])+1,
-                         int(e.outfit_check.grid_info()['row']))
-        e.outfit_check.invoke();self.assertEqual('on',e.rule_vars['outfit'].get())
+                         int(e.rule_boxes['outfit'].grid_info()['row']))
+        e.rule_boxes['outfit'].current(2);e.rule_boxes['outfit'].event_generate('<<ComboboxSelected>>');self.assertEqual('on',e.rule_vars['outfit'].get())
         e.save_rule();e.save()
         self.assertEqual('on',storage.contract.effective(e.store.read('Custom'),1,'heavyTank',0)['outfit'])
         e.rule_vars['skill'].set('regular');e.save_rule()
         self.assertEqual('on',storage.contract.effective(e.document,1,'heavyTank',0)['outfit'])
-        e.outfit_check.invoke();self.assertEqual('off',e.rule_vars['outfit'].get())
+        e.rule_boxes['outfit'].current(1);e.rule_boxes['outfit'].event_generate('<<ComboboxSelected>>');self.assertEqual('off',e.rule_vars['outfit'].get())
         e.save_rule();self.assertEqual('off',storage.contract.effective(e.document,1,'heavyTank',0)['outfit'])
     def test_name_text_and_undo_do_not_unlock_default(self):
         e=self.editor;before=copy.deepcopy(e.document)
         e.profile_name.set('Edited');e.rule_vars['skill'].set('elite');e.save_rule();e.new_route();e.undo();e.redo();e.save()
         self.assertEqual(before,e.document)
         self.assertEqual('disabled',str(e.save_button.cget('state')))
-        self.assertEqual('disabled',str(e.restore_button.cget('state')))
+        self.assertEqual('disabled',str(e.rename_button.cget('state')))
+        self.assertEqual('normal',str(e.apply_button.cget('state')))
         self.assertEqual(['Default'],e.store.names())
-    def test_restore_keeps_custom_name_resets_pending_fields_and_history(self):
+    def test_adopt_resets_pending_fields_and_both_histories(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
         e.rule_vars['reaction_seconds'].set('0.125');e.ammo_vars[0].set('9');e.wait_seconds.set('123')
-        e.document['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'skill':'elite'})]
-        e.checkpoint()
-        with mock.patch.object(e,'discard_prompt',return_value=True):e.default_profile()
-        self.assertEqual(storage.contract.default_profile('Custom'),e.document)
+        e.checkpoint('behavior');e.checkpoint('maps')
+        e.adopt(storage.contract.default_profile('Other'))
         self.assertEqual('',e.rule_vars['reaction_seconds'].get());self.assertEqual(['','',''],[v.get() for v in e.ammo_vars])
-        self.assertEqual('60',e.wait_seconds.get());self.assertEqual([],e.undo_stack);self.assertEqual([],e.redo_stack)
-        e.undo();self.assertEqual('Custom',e.document['name'])
-    def test_import_name_collision_is_renamed_without_replacing_default(self):
+        self.assertEqual('60',e.wait_seconds.get());self.assertEqual({'behavior':([],[]),'maps':([],[])},e.histories)
+    def test_import_collision_is_rejected_without_replacing_default(self):
         e=self.editor;source=Path(self.temp.name)/'import.json';storage._atomic(source,storage.contract.default_profile())
-        for expected in ('Default1','Default2'):
-            with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(e,'discard_prompt',return_value=True):e.import_profile()
-            self.assertEqual(expected,e.document['name']);e.save()
+        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.simpledialog,'askstring',return_value='Default'),mock.patch.object(e,'error') as errors:
+            e.import_profile()
+        errors.assert_called_once()
+        self.assertTrue(e.builtin)
         self.assertEqual(storage.contract.default_profile(),e.store.read('Default'))
     def test_leaving_a_two_shell_pinned_vehicle_reenables_generic_ratios(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))

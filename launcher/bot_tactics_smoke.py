@@ -83,7 +83,8 @@ def run(destination):
             ui.canvas.event_generate('<ButtonPress-1>', x=int(x), y=int(y))
             ui.canvas.event_generate('<ButtonRelease-1>', x=int(x), y=int(y)); root.update()
             ui.item_vars['radius'].set('34')
-            ui.profile_name.set('Packaged editor smoke')
+            ui.document['name']='Packaged editor smoke'
+            ui.profile_name.set(ui.document['name'])
             ui.save(True); root.update()
             active = ui.store.active()
             assert active['maps']['08_ruinberg']['routes'][0]['policy'] == 'fixed'

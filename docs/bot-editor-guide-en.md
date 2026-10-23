@@ -4,19 +4,34 @@
 
 Open **Bot configuration and map tactics** in the launcher. Select the attack-route/artillery-position tab, then choose a map, spawn team and vehicle-class view.
 
-**Default is immutable** in both tabs. Create a custom profile before editing.
-Opening Default remains a read-only preview, and applying it selects the built-in
-profile for the next battle. Old debug overrides of Default are reset. New and
-imported names are suffixed on conflict (Default1, Default2, ...); they never
-replace Default. Renaming the visible field does not unlock the built-in.
+**Default is immutable** in both tabs. Its Save draft, Rename and Delete controls
+are disabled, but Save and apply remains available to return to Default.
+The readonly profile dropdown opens a selection immediately without saving or
+applying it. Selecting the current profile does nothing. Switching or closing
+prompts before discarding saved-document edits or an unsaved new/imported draft.
+Unsubmitted behavior forms are discarded without a separate prompt.
 
-**Restore default draft** resets the current custom profile's entire draft to
-the built-in content while keeping its custom name. It clears unsubmitted forms,
-selection and undo/redo history. It does not save, activate or change a current
-battle. All numeric behavior controls use readonly dropdowns, with separate
-inherit entries. Imported legal fractional behavior values are retained.
+The header actions are **New, Rename, Delete, Import, Export**. New profiles
+start from the built-in baseline. Rename changes the draft only: explicitly
+save to move the old file and follow its applied identity. Conflicting names,
+including Default, are rejected rather than automatically suffixed. An import with a conflicting name asks for a different name; cancelling keeps
+the current draft. Repeating a conflict is rejected without replacing a file.
+Delete requires confirmation and returns the editor to Default; deleting the
+applied profile also selects Default for the next battle. Export requires a
+saved draft with no unsaved changes. Failed operations retain the current draft.
 
-**Save draft** stores the profile without activating it. **Save and apply (next battle)** saves and activates it for subsequent battles; a running battle is unchanged. Use Open to load a profile and Import/Export to share or back it up.
+**Save draft** does not select a different applied profile. If the saved file is
+already selected for use, its updated contents are used next battle.
+**Save and apply (next battle)** saves and selects that file. The applied profile
+tracks the latest saved file, not a historical revision. A running battle is
+unchanged. Old debug overrides of Default are reset.
+
+Both tabs have independent Undo and Redo buttons and histories; Ctrl+Z/Ctrl+Y
+operate on the current tab. Undo only changes that tab's contents, never the
+profile name. Saving updates the clean baseline while retaining content history;
+undoing away from it marks the draft unsaved. Opening another profile clears
+both histories, forms and selections. Numeric behavior controls are readonly
+dropdowns with separate inherit entries; imported legal fractions are retained.
 
 ## Views and shared editing
 
@@ -37,7 +52,7 @@ The shared template is a shortcut for editing common travel geometry. Editing a 
 
 Select a route, then drag its waypoints. The point list helps select a particular node. **Delete point** removes the selected node; **Insert point** inserts a node immediately after it. After creating a route, click the map in travel order to add up to 16 points. Edit its name and apply the properties to the draft.
 
-You may delete complete routes, including default routes. Deleted routes are no longer allocated to that team/class. Undo and Redo operate on draft edits.
+You may delete complete routes, including default routes. Deleted routes are no longer allocated to that team/class. Undo and Redo operate on draft edits within this tab only.
 
 Waypoints are navigation goals. Vehicles still avoid terrain, buildings, other vehicles and wrecks; they do not necessarily follow every connecting line exactly.
 
@@ -91,20 +106,23 @@ Check a draft, then test representative vehicle classes in game. Export an error
 
 ## Defaults, language and behavior parameters
 
-**Restore default draft** loads the complete revised 41-map baseline, including routes, waiting places and artillery positions. Save and apply it to activate it. Individual restoration commands restore the selected baseline item; restoring a shared route also restores its baseline class settings. New profiles start from this baseline. Upgrading does not automatically overwrite saved profiles.
+New profiles load the complete revised 41-map baseline, including routes,
+waiting places and artillery positions. Individual restoration commands restore
+the selected baseline item; restoring a shared route also restores its baseline
+class settings. Upgrading does not automatically overwrite saved profiles.
 
 Built-in route and position names follow the launcher language. Newly entered custom names retain their original text and are not automatically translated.
 
 Behavior rules can override global, team, vehicle-class and slot settings. Blank values inherit. Difficulty and crew level are separate. Reaction time, first-shot aiming patience, convergence factor, aiming bias and moving-target prediction error affect Bot decisions; they do not directly rewrite armor, penetration, reload speed or the physical dispersion rules.
 
-Configuration storage: `%LOCALAPPDATA%\WoTOfflineBattles\bot_tactics`. `active.json` is the applied profile; `profiles` contains named profiles. Prefer Export for backups instead of editing these files manually.
+Configuration storage: `%LOCALAPPDATA%\WoTOfflineBattles\bot_tactics`. `active.json` materializes the applied named file for the battle reader; saving, renaming and deleting its owner keep it synchronized. `profiles` contains named profiles. Prefer Export for backups instead of editing these files manually.
 
 ## v0.10.2 customization verification
 
 The behavior form uses independent whole presets and readonly ratio digits;
-stock development only allows no equipment. The outfit checkbox appears below
-consumables. The mixed checkbox
-inherits; checking or clearing it independently enables or disables the existing
+stock development only allows no equipment. The outfit dropdown appears below
+consumables with Inherit, Off and On choices. These inherit or independently
+disable/enable the existing
 native seasonal rented style, without a style picker or a 100-battle expiry.
 Locked outfits keep their reviewed exceptions. Numeric route and parking controls
 are dropdowns too, including a dropdown checklist for multiple slot bindings.

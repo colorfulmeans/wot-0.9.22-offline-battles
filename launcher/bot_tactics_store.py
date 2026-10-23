@@ -104,6 +104,52 @@ def _atomic(path, document):
             os.unlink(temp)
 
 
+def _commit_files(changes):
+    """Stage all writes before mutation and restore originals on an I/O failure."""
+    originals={path:path.read_bytes() if path.exists() else None for path in changes}
+    staged={}
+    def stage(path,data):
+        path.parent.mkdir(parents=True,exist_ok=True)
+        fd,name=tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=str(path.parent))
+        try:
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(data);stream.flush();os.fsync(stream.fileno())
+        except BaseException:
+            os.unlink(name);raise
+        return name
+    done=[]
+    try:
+        for path,data in changes.items():
+            if data is not None:staged[path]=stage(path,data)
+        try:
+            for path,data in changes.items():
+                if data is None:path.unlink(missing_ok=True)
+                else:os.replace(staged[path],path)
+                done.append(path)
+        except BaseException:
+            for path in reversed(done):
+                data=originals[path]
+                if data is None:path.unlink(missing_ok=True)
+                else:
+                    temp=stage(path,data)
+                    try:os.replace(temp,path)
+                    finally:
+                        if os.path.exists(temp):os.unlink(temp)
+            raise
+    finally:
+        for name in staged.values():
+            if os.path.exists(name):os.unlink(name)
+
+
+def _encoded(document):
+    data=(contract.dumps(document)+'\n').encode('ascii')
+    if len(data)>contract.MAX_BYTES:raise contract.TacticsError('Document is too large')
+    return data
+
+
+_UNSPECIFIED=object()
+
+
 class Store:
     def __init__(self, directory=None):
         self.root = Path(directory) if directory else root_path()
@@ -116,6 +162,15 @@ class Store:
         document = contract.load(str(self.active_path))
         if document['name'].casefold() == 'default' and document != contract.default_profile():
             _atomic(self.active_path, contract.default_profile())
+        # Keep the runtime materialization synchronized with its named owner.
+        if document['name'].casefold() != 'default':
+            path=self.profile_path(document['name'])
+            if path.exists():
+                latest=contract.load(str(path))
+                if latest!=document:_atomic(self.active_path,latest)
+            else:
+                # Migrate an older applied snapshot into a named profile once.
+                _atomic(path,document)
         return str(self.active_path.resolve())
 
     def active(self):
@@ -157,21 +212,46 @@ class Store:
             return contract.default_profile()
         return contract.load(str(self.profile_path(name)))
 
-    def save(self, document, apply=False):
+    def check_name(self,name,previous_name=None):
+        name=contract._text(name,48)
+        if name.casefold()=='default':raise contract.TacticsError('Name already exists: Default')
+        for existing in self.names():
+            if existing.casefold()==name.casefold() and existing!=previous_name:
+                raise contract.TacticsError('Name already exists: '+existing)
+        return name
+
+    def save(self, document, apply=False, previous_name=_UNSPECIFIED):
         document = contract.canonical(document)
         from gui.mods.offline_lan_0922.bot_fittings import validate_profile
         validate_profile(document)
-        if document['name'].casefold() == 'default':
-            default = contract.canonical(contract.default_profile())
-            if document != default:
-                raise contract.TacticsError('Default is read only; create a custom profile first')
-            if apply:
-                _atomic(self.active_path, default)
+        name=document['name']
+        if name.casefold()=='default':
+            if previous_name is not _UNSPECIFIED:
+                raise contract.TacticsError('Name already exists: Default')
+            default=contract.canonical(contract.default_profile())
+            if document!=default:raise contract.TacticsError('Default is read only; create a custom profile first')
+            if apply:_commit_files({self.active_path:_encoded(default)})
             return copy.deepcopy(default)
-        _atomic(self.profile_path(document['name']), document)
-        if apply:
-            _atomic(self.active_path, document)
+        if previous_name is _UNSPECIFIED:previous_name=name
+        self.check_name(name,previous_name)
+        if previous_name is not None and previous_name.casefold()=='default':
+            raise contract.TacticsError('Default is read only')
+        active=self.active()
+        changes={self.profile_path(name):_encoded(document)}
+        if previous_name is not None and previous_name!=name:
+            for path in (self.profile_path(previous_name),Path(str(self.profile_path(previous_name))+'.bak')):
+                changes[path]=None
+        if apply or active['name']==previous_name:changes[self.active_path]=_encoded(document)
+        _commit_files(changes)
         return copy.deepcopy(document)
+
+    def delete(self,name):
+        if name.casefold()=='default':raise contract.TacticsError('Default is read only')
+        path=self.profile_path(name)
+        if not path.exists():raise contract.TacticsError('Profile does not exist: '+name)
+        changes={path:None,Path(str(path)+'.bak'):None}
+        if self.active()['name']==name:changes[self.active_path]=_encoded(contract.default_profile())
+        _commit_files(changes)
 
     def export(self, document, filename):
         _atomic(filename, contract.canonical(document))

@@ -137,6 +137,8 @@ for _key, _choices in {
 }.items():
     ENUM_NAMES[_key] = dict([('', ('继承上级设置','Inherit'))] + [(v,(z,v)) for v,z in _choices])
 
+ENUM_NAMES['outfit'].update(off=('不使用涂装','Do not use an outfit'),on=('使用现有涂装','Use existing outfit'))
+
 for _level in (75,90,100):
     ENUM_NAMES['crew_preset']['legacy'+str(_level)] = (str(_level)+'%（旧方案，原技能）',str(_level)+'% (legacy skills)')
 
