@@ -1670,7 +1670,11 @@ class BattleProjectileTests(unittest.TestCase):
                     target.is_on_fire = False
                     target.getComponents = lambda: ()
                     battle._records[target_key]['state'].update(
-                        combat_base_revision=0, combat_ack_seq=0)
+                        combat_base_revision=0, combat_ack_seq=0,
+                        critical={'devices': [{'name': 'engineHealth',
+                            'hp': 100., 'max_hp': 100., 'state': 'normal'}]})
+                    # Repaired damage rows persist without regen_hp. A later
+                    # player or Bot hit must still resolve hull and module HP.
                     meta = battle._projectile_meta[state['key']]
                     meta['source_shot']['shell']['damage'] = [nominal, 150.0]
                     track = types.SimpleNamespace(

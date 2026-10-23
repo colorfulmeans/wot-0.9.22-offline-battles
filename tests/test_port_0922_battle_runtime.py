@@ -10419,20 +10419,50 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
     def test_remote_bot_critical_pools_survive_missing_native_crew_context(self):
         from gui.mods.offline_lan_0922 import critical_damage, device_damage
-        battle=BattleRuntime(_runtime())
-        descriptor=types.SimpleNamespace(hull={'ammoBayHealth':{'maxHealth':210,'maxRegenHealth':105}},miscAttrs={})
-        entity=types.SimpleNamespace(typeDescriptor=descriptor)
-        record={'kind':'bot','state':{'critical':{'devices':[
-            {'name':'ammoBayHealth','hp':236.,'max_hp':236.,'regen_hp':118.}]}}}
-        battle._install_critical_equipment_effects(record,entity)
-        self.assertEqual(236.,device_damage.device_max_hp(critical_damage._device_td(entity),'ammoBayHealth'))
-        self.assertEqual(118.,device_damage.device_regen_hp(critical_damage._device_td(entity),'ammoBayHealth'))
-        self.assertEqual(210,descriptor.hull['ammoBayHealth']['maxHealth'])
-        # Frozen collision views must inherit the accepted device table too.
+        from gui.mods.offline_lan_0922 import bot_fittings
         from gui.mods.offline_lan_0922.battle_runtime import _ProjectileCollisionTarget
-        frozen=_ProjectileCollisionTarget(entity,descriptor,None,None,None,None)
-        battle._install_critical_equipment_effects(record,frozen)
-        self.assertEqual(236.,device_damage.device_max_hp(critical_damage._device_td(frozen),'ammoBayHealth'))
+        battle = BattleRuntime(_runtime())
+        raw = types.SimpleNamespace(
+            hull={'ammoBayHealth': {'maxHealth': 210, 'maxRegenHealth': 105}},
+            engine={'maxHealth': 360, 'maxRegenHealth': 180}, miscAttrs={})
+        fitted = types.SimpleNamespace(**vars(raw))
+        entity = types.SimpleNamespace(typeDescriptor=raw)
+        context = {}
+        fitting = {'tier': 'elite', 'crew_level': 100}
+        record = {'kind': 'bot', 'state': {
+            'vehicle': 'china:Ch19_121', 'fitting': fitting}}
+        # Real wire rows are sparse damage state, never a loadout profile.
+        states = ({}, {'devices': [
+            {'name': 'engineHealth', 'hp': 165.7, 'max_hp': 360.,
+             'state': 'critical'}]}, {'devices': [
+            {'name': 'engineHealth', 'hp': 360., 'max_hp': 360.,
+             'state': 'normal'}]})
+        def fitting_context(descriptor):
+            return context if descriptor is fitted else None
+        with mock.patch.object(battle, '_resolve_bot_fitted_descriptor',
+                               return_value=fitted) as resolve, \
+                mock.patch.object(bot_fittings, 'context',
+                                  side_effect=fitting_context), \
+                mock.patch.object(bot_fittings, 'native_factors', return_value={
+                    'offline/ammoBayHealth': 1.125}):
+            for state in states:
+                record['state']['critical'] = state
+                # Both live targets and frozen views use the accepted fitting,
+                # including untouched devices absent from the damage ledger.
+                for target in (entity, _ProjectileCollisionTarget(
+                        entity, raw, None, None, None, None)):
+                    battle._install_critical_equipment_effects(record, target)
+                    view = critical_damage._device_td(target)
+                    self.assertEqual(236., device_damage.device_max_hp(
+                        view, 'ammoBayHealth'))
+                    self.assertEqual(118., device_damage.device_regen_hp(
+                        view, 'ammoBayHealth'))
+                    self.assertEqual(360., device_damage.device_max_hp(
+                        view, 'engineHealth'))
+                    self.assertIs(raw, target.typeDescriptor)
+            resolve.assert_called_with('china:Ch19_121', 'elite', 100, fitting)
+            self.assertEqual(2, len(context['critical_device_profile']['devices']))
+        self.assertEqual(210, raw.hull['ammoBayHealth']['maxHealth'])
 
     def test_removed_rpm_limiter_toggles_stock_trigger_stage(self):
         runtime = _runtime()

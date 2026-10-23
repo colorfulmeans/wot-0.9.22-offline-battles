@@ -1,5 +1,40 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24 report 022654: repeated incoming and outgoing shot loss
+
+Candidate 491 / runtime source 973d035d records 253 Bot and two player
+PROJECTILE FAILURE events with KeyError('regen_hp') at impact effects. Bot 20
+(china:Ch19_121) fired 16 shots; 13 failed this way. The first and seventh
+resolved impacts, while the sixth missed. Failed effects became explicit
+expired terminals without a direct hit. This is actual lost settlement, not
+merely a missing tracer. It affects incoming and outgoing shots whenever the
+victim already owns any device-state rows, including repaired normal rows.
+
+The previous fix passed state.critical to bind_device_profile. The server and
+critical_damage._device_record deliberately produce sparse mutable rows with
+name/hp/max_hp/state, without regen_hp. A full immutable profile instead has
+all fitted device maximum/regen pools. The old test fabricated regen_hp in a
+damage row and therefore missed the real producer-consumer mismatch.
+
+Resolve the victim's accepted fitting with the existing native descriptor
+cache and project every device pool from that descriptor and its registered
+crew context. Cache this immutable profile in the fitting context; bind it to
+live and frozen critical views, including before any device was damaged.
+Never use damage-state rows as configuration, invent a regen fraction, or
+relax server validation. Preserve the native geometry descriptor and the
+existing player effective_params path. This also fixes omitted untouched
+modules and the pre-damage fitted ammo-rack maximum mismatch.
+
+Regression coverage uses real sparse wire rows (empty, damaged and repaired),
+separate raw/fitted descriptors (ammo rack 210 versus 236/118), frozen targets,
+and both player and Bot direct-hit paths with real armour/module resolution.
+The report also has zero water query-environment errors, no native exception
+records and no model-refresh assertion. Worker stage timings remain high;
+these do not establish an additional navigation or physical-law defect. Keep
+existing diagnostic-entry timing/model-state records without speculative
+physics changes. Local tests/package inspection do not prove native gameplay;
+repeat incoming/outgoing hits on #1513 with the candidate package.
+
 ## October 24 report 011258: chassis boundary parity and remote Bot module pools
 
 Candidate 490 / source 3d10dba0 reproduces Conqueror GC 15 changing firing
@@ -31,12 +66,10 @@ cache-hit updates. These are local costs, not a native frame-rate claim.
 
 At 01:11:22 a human hit on Bot 1 proposed ammoBayHealth maximum 210 while the
 server's accepted fitted pool was 236. Remote Bot critical projections looked
-for player effective_params, although Bots publish fitted pools directly in
-their accepted critical ledger. Bind that ledger to the existing critical-only
-descriptor view for both live and frozen collision targets. Preserve native
-geometry/descriptors, target-owned regen pools, and strict server maximum checks;
-do not rescale a rejected delta or relax validation. Tests preserve raw 210
-while the accepted view reads max 236 / regen 118, including frozen targets.
+for player effective_params. The first attempted ledger-based fix was invalid:
+the sparse damage ledger is not the immutable fitted device profile. See the
+022654 regression below. Preserve native geometry/descriptors, target-owned
+regen pools and strict server maximum checks.
 
 The exact pinned CompoundAppearance.__onModelsRefresh bytecode at line 838
 asserts callback modelState equals currentDamageState.modelState. The report

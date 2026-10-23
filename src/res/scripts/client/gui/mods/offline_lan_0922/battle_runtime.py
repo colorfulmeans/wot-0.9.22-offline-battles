@@ -9889,11 +9889,25 @@ class BattleRuntime(object):
                     state.get('effective_params'))
         device_profile = snapshot.get('critical') if isinstance(snapshot,dict) else None
         if device_profile is None and record.get('kind') == 'bot':
-            # Bot snapshots have their accepted fitted pools directly in the
-            # critical ledger, not the player-only effective_params envelope.
-            accepted = state.get('critical')
-            if isinstance(accepted,dict) and accepted.get('devices'):
-                device_profile = accepted
+            from gui.mods.offline_lan_0922 import bot_fittings
+            from gui.mods.offline_lan_0922 import player_critical_mechanics
+            descriptor = getattr(entity, 'typeDescriptor', None)
+            fitting = state.get('fitting')
+            if fitting:
+                descriptor = self._resolve_bot_fitted_descriptor(
+                    state['vehicle'], fitting['tier'], fitting['crew_level'],
+                    fitting)
+            context = bot_fittings.context(descriptor)
+            if context is not None:
+                # The damage ledger is sparse mutable state, not a profile:
+                # its device rows deliberately have no regen_hp. Read every
+                # pool from the accepted fitting, even before its first hit.
+                # Frozen/native entity descriptors may lack this crew context.
+                device_profile = context.get('critical_device_profile')
+                if device_profile is None:
+                    device_profile = player_critical_mechanics.project_profile(
+                        descriptor)
+                    context['critical_device_profile'] = device_profile
         critical_damage.bind_device_profile(entity,device_profile)
         battle_factors = crew_battle.for_critical(
             snapshot, crew_battle.critical_from_vehicle(entity))
