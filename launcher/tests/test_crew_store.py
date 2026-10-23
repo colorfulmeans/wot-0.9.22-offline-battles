@@ -121,6 +121,18 @@ class BerthTests(CrewStoreTests):
         store.save_slots.initialize_slot(identity,root=self.root,is_running=lambda:False)
         self.assertEqual(30,store.capacity(identity,'game',self.root)['total'])
 
+    def test_restore_pre_start_capacity_into_default_does_not_reimport_legacy_progress(self):
+        root=str(Path(self.root)/'saves')
+        record=store.save_slots.create_slot('Prestart',store.save_slots.MODE_NEW_ACCOUNT,root=root)
+        store.expand_berths(record['id'],'game',root,is_running=lambda:False)
+        backup=Path(self.root)/'prestart.zip';store.save_slots.backup_slot(record['id'],str(backup),root=root)
+        legacy=Path(self.root)/'garage_state.json';legacy.write_text('{"old":"legacy progress"}')
+        store.save_slots.restore_slot('default',str(backup),root=root,is_running=lambda:False)
+        self.assertEqual(46,store.capacity('default','game',root)['total'])
+        metadata=json.loads(Path(root,'default','save.json').read_text())
+        self.assertTrue(metadata['skip_legacy_import'])
+        self.assertEqual(str(Path(root,'default','garage_state.json')),store.save_ledger.ledger_path('default',root=root))
+
     def test_corrupt_state_and_pending_inbox_refuse_edits(self):
         path=self.state();before=path.read_bytes()
         inbox=Path(store.inbox_path('one',root=self.root));inbox.write_text('not json')

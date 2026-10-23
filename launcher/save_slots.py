@@ -637,7 +637,7 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                         raise SaveSlotError("The save is not in the expected format.")
                     previous = _read_metadata(target) or {}
                     metadata.update(id=record['id'],name=record['name'])
-                    if previous.get('skip_legacy_import') is True:
+                    if slot_id == DEFAULT_SLOT_ID or previous.get('skip_legacy_import') is True:
                         metadata['skip_legacy_import'] = True
                     _write_metadata(target,metadata)
                 else:
