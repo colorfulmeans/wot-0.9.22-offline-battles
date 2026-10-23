@@ -237,6 +237,17 @@ class WreckRouteSwitchTests(unittest.TestCase):
             self.assertNotIn(17, self.planner._wreck_route_progress)
             self.assertEqual('banana', held['route_id'])
 
+    def test_advance_contact_pauses_instead_of_erasing_unfinished_attempt(self):
+        self.orders(0)
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        held=dict(route_id='banana',route_index=1,combat_mode='advance_contact')
+        self.planner._reroute_wreck_stall(held,bot,self.manifest,10)
+        self.assertEqual('pause_advance_contact',held['route_attempt']['action'])
+        self.assertIn(17,self.planner._wreck_route_progress)
+        self.orders(15)
+        self.assertEqual('blocked_timeout',self.orders(25)[17]['route_point_skip_reason'])
+        self.assertEqual('rail',self.orders(45)[17]['route_id'])
+
     def test_round_reset_clears_stall_and_rejected_routes(self):
         self.orders(0)
         self.orders(20)

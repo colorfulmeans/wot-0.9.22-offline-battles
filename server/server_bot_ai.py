@@ -3011,7 +3011,7 @@ class BotPlanner(object):
         bot_id = bot['id']
         state = bot['state']
         route_id = str(order.get('route_id') or '')
-        if ((order.get('combat_mode') in ('support_hold', 'base_defense') or
+        if ((order.get('combat_mode') in ('support_hold', 'base_defense', 'advance_contact') or
                 order.get('defense_base_id')) and
                 not order.get('team_command') and self._route_donor_eligible(bot)):
             # An intermittent tactical hold pauses the same gate attempt;

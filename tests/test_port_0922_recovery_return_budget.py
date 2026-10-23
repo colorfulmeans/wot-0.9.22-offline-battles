@@ -98,6 +98,48 @@ class RecoveryReturnBudgetTests(unittest.TestCase):
         memory = recovery_travel.observe(memory, (9., 0., 4.), 0., 8.5)
         self.assertIsNone(recovery_travel.remaining(memory))
 
+    def test_spent_return_selects_checked_forward_exit_and_replans_once(self):
+        self.sample(0.)
+        self.command.update(throttle=-1., recovery_mode='reverse_turn')
+        self.sample(4.)
+        driver_state = self.adapter.driver._state(7, 0, (0., 0., 2.))
+        self.assertEqual(1., self.sample(2.)['throttle'])
+        self.assertEqual(1., driver_state['short_translation_escape']['sign'])
+        self.assertTrue(self.adapter._recovery_travel[7]['replan_requested'])
+        self.assertNotIn('navigation_replan', self.sample(2.))
+        self.assertEqual('recovery_return_budget_spent',
+            driver_state['short_escape_probes'][0]['reason'])
+
+    def test_spent_return_never_invents_an_exit_when_all_checks_reject(self):
+        self.sample(0.)
+        self.command.update(throttle=-1., recovery_mode='reverse_turn')
+        self.sample(4.)
+        self.adapter.driver._state(7, 0, (0., 0., 2.))
+        result = self.adapter._drive_order_controls(7, self.state, (0., 0., 2.), {},
+                                                     lambda *args: False)
+        self.assertEqual(0., result['throttle'])
+        self.assertTrue(result['brake'])
+        self.assertTrue(result['navigation_replan'])
+
+    def test_spent_selection_that_already_waits_still_requests_one_replan(self):
+        self.sample(0.)
+        self.command.update(throttle=-1., recovery_mode='reverse_turn')
+        self.sample(4.)
+        self.command.update(throttle=0., recovery_mode='navigation_wait')
+        self.assertTrue(self.sample(2.)['navigation_replan'])
+        self.assertNotIn('navigation_replan', self.sample(2.))
+
+    def test_tactical_withdrawal_keeps_original_direction_callback(self):
+        self.sample(0.)
+        self.command.update(throttle=-1., recovery_mode='reverse_turn')
+        self.sample(4.); self.sample(2.)
+        callback = mock.Mock(return_value=True)
+        with mock.patch.object(self.adapter, '_unbounded_drive_order_controls',
+                               return_value=dict(throttle=-1., recovery_mode='reverse_withdraw')) as core:
+            self.adapter._drive_order_controls(7, self.state, (0.,0.,2.),
+                                                dict(combat_mode='withdraw'), callback)
+        self.assertIs(callback, core.call_args.args[-1])
+
     def test_forget_retires_budget_with_the_bot(self):
         self.sample(0.)
         self.adapter.forget(7)

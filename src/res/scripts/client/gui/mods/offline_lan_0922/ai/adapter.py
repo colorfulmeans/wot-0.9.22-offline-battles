@@ -643,9 +643,31 @@ class BotAdapter(object):
         memory = recovery_travel.observe(self._recovery_travel.get(bot_id),
             position, yaw, 2.*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS)
         self._recovery_travel[bot_id] = memory
+        budget_before = recovery_travel.remaining(memory)
+        original_clear = direction_clear
+        spent_return = (budget_before is not None and budget_before <= .05 and
+                strategic.get('combat_mode') not in ('withdraw', 'low_health_retreat',
+                    'magazine_reload_retreat', 'under_fire_withdraw', 'crossfire_withdraw'))
+        if spent_return:
+            def return_checked_clear(heading, maximum_distance=None, drive_direction=1.):
+                # This is a spent recovery action, not a fabricated wall.
+                # Reject it during selection so the same decision can choose
+                # a checked forward exit or pivot instead of braking forever.
+                if (maximum_distance is not None and
+                        math.cos(heading-memory['yaw']) < -.5):
+                    return_checked_clear.last_receipt = dict(clear=False,
+                        reason='recovery_return_budget_spent', distance=maximum_distance)
+                    return False
+                result = self.driver._clear(original_clear, heading, maximum_distance, drive_direction)
+                return_checked_clear.last_receipt = dict(self.driver._last_direction_receipt)
+                return result
+            direction_clear = return_checked_clear
         command = self._unbounded_drive_order_controls(bot_id, state, position,
                                                        strategic, direction_clear)
         mode = command.get('recovery_mode')
+        if spent_return and not memory.get('replan_requested'):
+            command['navigation_replan'] = True
+            memory['replan_requested'] = True
         if (not memory.get('active') and command.get('throttle', 0.) > 0. and
                 mode in ('wreck_push', 'contact_escape', 'short_forward_escape', 'forward_escape')):
             escape = self._contact_escapes.get(bot_id)
@@ -679,11 +701,24 @@ class BotAdapter(object):
                     recovery_probe_origin=tuple(position), recovery_probe_yaw=yaw+math.pi,
                     recovery_probe_length=0.)
                 driver_state = self.driver.states.get(bot_id)
-                if driver_state is not None:
+                if driver_state is not None and recovery_travel.remaining(memory) <= .05:
                     heading = yaw+math.pi
                     driver_state['failed_yaws'][self.driver._yaw_key(heading)] = (
                         driver_state['clock']+self.driver.failure_ttl)
                     driver_state.pop('short_translation_escape', None)
+                    driver_state.pop('translation_escape', None)
+                    # Retire the old backing lease, then seek another proved
+                    # straight exit without allowing the spent return heading.
+                    alternative = self.driver._short_escape(driver_state,
+                        position, yaw, state.get('speed', 0.), state.get('dt', .1),
+                        state.get('decision_horizon', 0.), state.get('stopping_distance', 0.),
+                        state.get('neighbours', ()),
+                        direction_clear, state.get('half_length', 3.5), state.get('half_width', 1.7))
+                    if alternative is not None:
+                        command.update(alternative, brake=False)
+                    if not memory.get('replan_requested'):
+                        command['navigation_replan'] = True
+                        memory['replan_requested'] = True
                 escape = self._contact_escapes.pop(bot_id, None)
                 attempt = self._contact_attempts.get(bot_id)
                 if escape is not None and attempt is not None:

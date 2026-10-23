@@ -1,5 +1,58 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24 report 002139: exhausted return handoff and Lakeville baseline
+
+The 6442c2779d47 report runs candidate 489 / source 3246693e. Across three
+completed Lakeville rounds it contains no fatal traceback, but T-100 LT 12
+remains at (-105.8567, 10.2590, 17.9733) from 00:11:57 to 00:13:42 after
+1.9799 m forward / 0.9943 m returned, with zero return allowance. Switching
+macro routes does not prove that this physical pocket has been exited.
+
+Reject a spent bounded return during local action selection with a distinct
+policy receipt, retire its old translation lease, and choose another short
+exit only after the existing direction, braking-distance and vehicle checks.
+Request one navigation replan per exhausted pocket, including when selection
+already changes to waiting. Keep the final native collision veto, independent
+rear exits, live traffic and tactical withdrawal intact. Genuine departure
+retires the pocket; route changes and motion back to a previous endpoint do not
+buy more return distance. Preserve the unfinished macro gate clock across
+advance_contact, just as across other temporary tactical holds. Intentional
+holds pause elapsed time; they do not consume a new gate/route attempt.
+
+The 295 worker sample_entity AttributeErrors come from diagnostic sampling of
+partially exposed client entities. Read spaceID and position independently,
+retain available coordinates, and list unavailable fields without borrowing
+Avatar space as Vehicle evidence. Native water results and drowning remain
+unchanged; these secondary receipts are confined to the diagnostic entrance.
+
+Worker samples identify bot update / translation / ground / rotation as the
+main cost. Ground samples are mostly distinct, so no coarse height cache or
+reduced query/decision cadence is introduced. Two powered-contact admission
+paths only consume speed limits but derived a full chassis parameter set.
+Read live descriptor gearing there, preserving the incomplete-descriptor
+fallback; leave all full-physics consumers untouched. A local Python 2 test of
+100,000 representative descriptor reads measured 0.673 s full derivation vs
+0.108 s narrow reads. This is a microbenchmark, not a measured game FPS gain.
+Existing bounded stage/probe/pocket receipts remain diagnostic-only. Physical
+passability of the other captured pockets is still unproved; do not force a
+collision bypass or invent a terrain result.
+
+Adopt only saved owner profile 1's 07_lakeville default_routes into the immutable
+shipped Default. The other 40 maps and Lakeville SPG positions are unchanged.
+The independent fixture checks all 24 class/team edits: 20 connected active
+routes and four deliberate deletions, with exact authored points preserved.
+Fresh stores, new profiles and restored Default use this baseline. Archive the
+owner's live tactics directory externally before clearing profile 1 and its
+local history, and activate the new Default; unrelated saves remain intact.
+
+Regression coverage includes checked forward handoff, no available exit,
+one-shot replanning, withdrawal compatibility, contact pause/resume, partial
+water entities, live speed-limit changes and baseline runtime expansion.
+Full reference-model, Windows editor, Python 2 compile and packaged-source
+checks complement CI. Native #1513 gameplay recovery and actual worker frame
+cost still require a run of the supplied candidate; no universal jam-free or
+frame-rate claim follows from engine-free tests.
+
 ## October 20 report 135041: wreck-edge and friendly-lane avoidance
 
 The captured f64ad975 run reproduces blocked advisory wreck edges for T28,

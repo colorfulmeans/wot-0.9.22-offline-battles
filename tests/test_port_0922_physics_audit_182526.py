@@ -57,6 +57,18 @@ class NativeWaterContextTests(water_fixture.DrowningReceiptTests):
         self.assertEqual(4,row['sample_entity']['space'])
         json.dumps(row)
 
+    def test_worker_vehicle_without_space_keeps_position_and_names_missing_field(self):
+        entity=types.SimpleNamespace(position=(11,12,13))
+        world=types.SimpleNamespace(player=lambda:None,camera=lambda:None,
+            graphicsSettings=lambda:[],entity=lambda ident:entity)
+        row=physics_audit.water_context(world,types.SimpleNamespace(spaceID=3),
+                                        (1,2,3),tuple,entity_id=1000)
+        self.assertEqual((11.,12.,13.),row['sample_entity']['position'])
+        self.assertEqual(['spaceID'],row['sample_entity']['unavailable'])
+        self.assertNotIn('space',row['sample_entity'])
+        self.assertFalse(any(e.startswith('sample_entity:') for e in row['errors']))
+        json.dumps(row)
+
     def test_missing_worker_sample_entity_is_an_expected_diagnostic_status(self):
         world=types.SimpleNamespace(player=lambda:types.SimpleNamespace(id=-1,spaceID=3,position=(5,6,7)),
             camera=lambda:types.SimpleNamespace(position=(8,9,10)),graphicsSettings=lambda:[],

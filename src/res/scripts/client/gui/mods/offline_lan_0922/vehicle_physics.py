@@ -463,6 +463,18 @@ def destructible_drive_speed_cap(descriptor, physics, speed,
 	return -value if reverse else value
 
 
+@observed('physics.drive_limits')
+def descriptor_drive_limits(td):
+	'''Read only live gearing for powered-contact admission, without chassis math.'''
+	try:
+		physics = getattr(td, 'physics', None) or {}
+		limits = physics['speedLimits']
+		return dict(speedFwd=float(limits[0]), speedBwd=float(limits[1]))
+	except (AttributeError, KeyError, IndexError, TypeError, ValueError):
+		# Preserve the established incomplete-descriptor boundary.
+		return derive_params(td)
+
+
 @observed('physics.derive_params')
 def derive_params(td, factors=None):
 	'''Real per-vehicle parameter set from a VehicleDescr. Every consumer

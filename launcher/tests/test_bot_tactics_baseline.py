@@ -14,6 +14,23 @@ import bot_tactics_labels as labels
 
 
 class BaselineDataTests(unittest.TestCase):
+    def test_owner_lakeville_routes_are_shipped_and_first_run_baseline(self):
+        fixture=Path(__file__).resolve().parents[2]/'tests/fixtures/lakeville_owner_routes_20261024.json'
+        expected=json.loads(fixture.read_text(encoding='utf8'))['default_routes']
+        with tempfile.TemporaryDirectory() as temp:
+            actual=storage.Store(temp).active()
+            self.assertEqual(expected,actual['maps']['07_lakeville']['default_routes'])
+        routes,outcomes=storage.runtime.default_routes(actual,'07_lakeville',storage.graph_data('07_lakeville'))
+        for edit in expected:
+            identity=storage.contract.default_route_id(edit)
+            key='%s:%s'%(edit['team'],identity)
+            row=next((r for r in routes[str(edit['team'])] if r['id']==identity),None)
+            if edit.get('disabled'):
+                self.assertEqual('route_deleted',outcomes[key]);self.assertIsNone(row)
+            else:
+                self.assertEqual('baked_route_connected',outcomes[key])
+                self.assertEqual([p[:3] for p in edit['points']],row['waypoints'])
+
     def test_owner_windstorm_routes_are_the_first_run_baseline(self):
         fixture = Path(__file__).resolve().parents[2] / 'tests/fixtures/windstorm_owner_routes_20261021.json'
         routes = json.loads(fixture.read_text(encoding='utf8'))['default_routes']

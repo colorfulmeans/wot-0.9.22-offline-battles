@@ -80,9 +80,19 @@ def water_context(bigworld, avatar, point, vector, missed=False, entity_id=None)
             if entity is None:
                 row['sample_entity'] = dict(id=int(entity_id), status='not_present')
             else:
-                row['sample_entity'] = dict(id=int(entity_id), status='present',
-                    space=int(entity.spaceID),
-                    position=tuple(float(entity.position[i]) for i in range(3)))
+                sampled = dict(id=int(entity_id), status='present', unavailable=[])
+                # A #1513 client-side Vehicle need not expose Avatar's
+                # spaceID property. Do not discard its valid position too.
+                for field in ('spaceID', 'position'):
+                    try:
+                        value = getattr(entity, field)
+                        sampled['space' if field == 'spaceID' else field] = (
+                            int(value) if field == 'spaceID' else tuple(float(value[i]) for i in range(3)))
+                    except AttributeError:
+                        sampled['unavailable'].append(field)
+                    except Exception as error:
+                        sampled['unavailable'].append(field+':'+type(error).__name__)
+                row['sample_entity'] = sampled
         except Exception as error:
             row['errors'].append('sample_entity:' + type(error).__name__)
     try:

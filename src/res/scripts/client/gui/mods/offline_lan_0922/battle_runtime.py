@@ -22611,7 +22611,7 @@ class BattleRuntime(object):
             'terrain_pitch', bot_state.get('pitch')))
         roll = _number(bot_state.get('roll'))
         drive_speed_cap = (self._destructible_drive_speed_cap(
-            descriptor, vehicle_physics.derive_params(descriptor), 0.0,
+            descriptor, vehicle_physics.descriptor_drive_limits(descriptor), 0.0,
             self._bot_destructible_travel_descriptor(bot_id))
             if rotation_speed_cap else None)
         detail = timed_call(diagnostic, 'rotation.catalog_probe',
@@ -22769,7 +22769,7 @@ class BattleRuntime(object):
             movement_dir * float(speed) > 0.0)
         kinetic_speed = None
         if allow_crush_drive:
-            params = vehicle_physics.derive_params(descriptor)
+            params = vehicle_physics.descriptor_drive_limits(descriptor)
             kinetic_speed = self._destructible_drive_speed_cap(
                 descriptor, params, speed,
                 self._bot_destructible_travel_descriptor(bot_id))
