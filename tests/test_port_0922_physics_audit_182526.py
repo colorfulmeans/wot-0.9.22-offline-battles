@@ -57,6 +57,16 @@ class NativeWaterContextTests(water_fixture.DrowningReceiptTests):
         self.assertEqual(4,row['sample_entity']['space'])
         json.dumps(row)
 
+    def test_missing_worker_sample_entity_is_an_expected_diagnostic_status(self):
+        world=types.SimpleNamespace(player=lambda:types.SimpleNamespace(id=-1,spaceID=3,position=(5,6,7)),
+            camera=lambda:types.SimpleNamespace(position=(8,9,10)),graphicsSettings=lambda:[],
+            entity=lambda ident:None)
+        row=physics_audit.water_context(world,types.SimpleNamespace(spaceID=3),(1,2,3),tuple,entity_id=1000)
+        self.assertEqual(dict(id=1000,status='not_present'),row['sample_entity'])
+        self.assertEqual([],row['errors'])
+        self.assertEqual(3,row['avatar_space'])
+        json.dumps(row)
+
 
 class SupportProjectionAuditTests(unittest.TestCase):
     def setUp(self):

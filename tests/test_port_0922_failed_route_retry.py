@@ -47,7 +47,7 @@ class FailedRouteRetryTests(unittest.TestCase):
         planner._reroute_wreck_stall(order,bot,manifest,24.)
         self.assertEqual('west_pass',order['route_id'])
 
-    def test_report_24_all_routes_tried_can_retry_old_route_before_120_seconds(self):
+    def test_report_24_all_routes_tried_respects_failed_route_cooldown(self):
         planner, bot, manifest, order = self.scene()
         for now in (0, 20, 40):
             planner._reroute_wreck_stall(order, bot, manifest, now)
@@ -56,6 +56,9 @@ class FailedRouteRetryTests(unittest.TestCase):
             planner._reroute_wreck_stall(order, bot, manifest, now)
             self.assertEqual('west_pass', order['route_id'])
         planner._reroute_wreck_stall(order, bot, manifest, 81)
+        self.assertEqual('west_pass', order['route_id'])
+        self.assertEqual(160., order['route_attempt']['retry_after'])
+        planner._reroute_wreck_stall(order, bot, manifest, 160)
         self.assertEqual('center_line', order['route_id'])
 
     def test_real_single_goal_arrival_and_explicit_holds_still_do_not_switch(self):
@@ -80,14 +83,14 @@ class FailedRouteRetryTests(unittest.TestCase):
         planner, bot, manifest, order = self.scene()
         changes = []
         previous = order['route_id']
-        for now in range(201):
+        for now in range(501):
             planner._reroute_wreck_stall(order, bot, manifest, now)
             if order['route_id'] != previous:
                 changes.append((now, order['route_id']))
                 previous = order['route_id']
         self.assertEqual(['west_pass', 'center_line', 'west_pass', 'center_line'],
                          [route for now, route in changes[:4]])
-        self.assertTrue(all(b[0]-a[0] >= 40 for a,b in zip(changes, changes[1:])))
+        self.assertTrue(all(b[0]-a[0] >= 120 for a,b in zip(changes, changes[1:])))
 
     def test_untried_suitable_route_is_preferred_to_old_failed_route(self):
         planner, bot, manifest, order = self.scene()
@@ -103,9 +106,10 @@ class FailedRouteRetryTests(unittest.TestCase):
         for now in (0,20,40,41,61,81):
             planner._reroute_wreck_stall(order, bot, manifest, now)
         trace = order['route_attempt']
-        self.assertEqual(('west_pass', 'center_line', 'switch_route'),
-                         (trace['route_id'], trace['next_route'], trace['action']))
-        self.assertTrue(trace['retry_previous_route'])
+        self.assertEqual(('west_pass', 'no_alternative'),
+                         (trace['route_id'], trace['action']))
+        self.assertEqual(160., trace['retry_after'])
+        self.assertNotIn('retry_previous_route', trace)
         self.assertEqual(20, trace['elapsed'])
 
     def test_attempt_telemetry_cannot_advance_strategic_order_revision(self):

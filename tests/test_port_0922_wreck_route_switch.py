@@ -25,6 +25,14 @@ class WreckRouteSwitchTests(unittest.TestCase):
         return {o['id']: o for o in self.planner.build_orders(
             self.manifest, self.states, [], now)['orders']}
 
+    def test_exhausted_route_catalogue_does_not_bypass_failed_route_lease(self):
+        self.orders(0); self.orders(20)
+        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+        self.planner._wreck_route_avoid[17]['banana'] = 160.
+        for now in (60, 80, 100, 120, 140):
+            self.assertEqual('rail',self.orders(now)[17]['route_id'])
+        self.assertEqual('banana',self.orders(160)[17]['route_id'])
+
     def test_skip_blocked_gate_then_change_route_after_next_attempt(self):
         first=self.orders(0)
         self.orders(19.9)

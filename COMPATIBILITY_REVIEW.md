@@ -10119,3 +10119,34 @@ correctly. Initialization removes the override through existing metadata reset.
 Regression coverage includes receipt retries, repeated/concurrent edits, slot
 isolation, running-game refusal, write failures, first start, restore/reset,
 language round trips and mandatory frozen-editor capacity/nation receipts.
+
+## Recovery return budget and blocked-route retries
+
+The Lakeville 2026-10-23 23:07 report shows Bot 2 (110) remaining near
+(-281, -88) after switching from west valley to town and back. Bot 9 (268)
+eventually passed; that is not proof of reliable recovery. Contact escapes
+now retain failed world headings through pivots. A shared adapter travel
+receipt survives route/waypoint changes and measures realised horizontal
+forward progress, rather than planned distance or track travel. Recovery
+backtracking can spend at most half that forward high-water mark. Returning
+to an old endpoint earns no new credit. Initial independent reverse exits
+and tactical withdrawal remain legal. Departure beyond the existing hull
+clearance distance or Bot retirement releases the local receipt.
+
+Limited reverses use the existing short-escape runtime endpoint contract,
+including cached decision retirement and final native collision vetoes.
+The macro planner still skips a gate after the existing bounded attempt;
+it now respects failed-route cooldowns when every alternative is exhausted,
+instead of immediately alternating between failed lanes. Local checked
+recovery continues while those cooldowns expire.
+
+The diagnostic entrance additionally emits a compact pocket receipt at most
+once per 15 seconds per trapped Bot, even when the bulk history budget is
+exhausted. Basic entry does not construct this record. Water diagnostics
+report an absent engine entity as not_present instead of dereferencing None;
+the actual water classification and movement rules are unchanged. Regression
+tests cover realised/blocked travel, repeated endpoint oscillation, route
+changes, cached endpoints, initial reverse, withdrawal, contact pivots,
+route cooldown exhaustion, diagnostic gating and missing entities. These
+tests do not prove native clearance or gameplay timing in the reported jam;
+the rebuilt Windows package still requires the player's scene acceptance.

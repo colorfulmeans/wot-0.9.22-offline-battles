@@ -7393,6 +7393,34 @@ class BotRuntime(object):
             query_policy='existing_receipts_only'))
 
     @observed('bot.motion_diagnostic_prepare')
+    def _log_recovery_pocket(self, state, command, probe, now):
+        """A compact diagnostic-only receipt survives bulk-history exhaustion."""
+        if not detailed_enabled():
+            return
+        position = _position(state)
+        previous = state.get('_recovery_pocket_log')
+        if not command.get('movement_intent'):
+            state.pop('_recovery_pocket_log', None)
+            return
+        if previous is None or _distance(position, previous[0]) > 8.:
+            state['_recovery_pocket_log'] = (position, now, now)
+            return
+        if now-previous[2] < 15.:
+            return
+        state['_recovery_pocket_log'] = (previous[0], previous[1], now)
+        order = self._server_orders.get(state['id']) or {}
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT RECOVERY POCKET', dict(
+            round=self.round_id, bot=state['id'], at=now,
+            position=position, origin=previous[0], age=now-previous[1],
+            mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
+            target=command.get('move_position'),
+            route=order.get('route_id'), route_index=order.get('route_index'),
+            attempt=order.get('route_attempt'), backtrack=command.get('backtrack_budget'),
+            water_depth=state.get('_water_depth'),
+            probe={key:probe.get(key) for key in
+                ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
+
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
                           traffic_input=None, traffic_output=None):
@@ -7420,6 +7448,7 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        self._log_recovery_pocket(state, command, motion_probe, now)
         from .native_input_diagnostics import detail_record_ready
         if not detail_record_ready():
             return
@@ -7604,6 +7633,7 @@ class BotRuntime(object):
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'baked_pose_guards': list(state.get('_baked_pose_guards') or ()),
             'contact_escape': command.get('contact_escape'),
+            'backtrack_budget': command.get('backtrack_budget'),
             'wreck_push': command.get('wreck_push'),
             'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
             'withdrawal': command.get('withdrawal'),

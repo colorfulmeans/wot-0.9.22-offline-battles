@@ -3221,14 +3221,13 @@ class BotPlanner(object):
                 retry_candidates.append((_number(avoided[candidate_id]), candidate))
             else:
                 candidates.append(candidate)
-        # The delay prefers untried routes; it must not turn an exhausted
-        # catalogue into a parked tank. After the current bounded attempt,
-        # allow the oldest failed alternative to be tried again.
+        # Changing route names does not clear the physical pocket. Respect
+        # failed-route leases even when every alternative has been tried;
+        # local checked recovery continues while the earliest lease expires.
         trace['entry_selection'] = dict(sampled_at=_number(now), origin=dict(point),
             policy='existing_affinity_then_nearest_route_point', candidates=entry_receipts)
         if not candidates and retry_candidates:
-            candidates = [min(retry_candidates, key=lambda value: (value[0], value[1][:3]))[1]]
-            trace['retry_previous_route'] = True
+            trace['retry_after'] = min(value[0] for value in retry_candidates)
         if not candidates:
             trace['action'] = 'no_alternative'
             # No suitable alternative: keep the physical hold, never force

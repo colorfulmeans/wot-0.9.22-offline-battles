@@ -77,8 +77,12 @@ def water_context(bigworld, avatar, point, vector, missed=False, entity_id=None)
     if entity_id is not None:
         try:
             entity = bigworld.entity(int(entity_id))
-            row['sample_entity'] = dict(id=int(entity_id), space=int(entity.spaceID),
-                position=tuple(float(entity.position[i]) for i in range(3)))
+            if entity is None:
+                row['sample_entity'] = dict(id=int(entity_id), status='not_present')
+            else:
+                row['sample_entity'] = dict(id=int(entity_id), status='present',
+                    space=int(entity.spaceID),
+                    position=tuple(float(entity.position[i]) for i in range(3)))
         except Exception as error:
             row['errors'].append('sample_entity:' + type(error).__name__)
     try:
