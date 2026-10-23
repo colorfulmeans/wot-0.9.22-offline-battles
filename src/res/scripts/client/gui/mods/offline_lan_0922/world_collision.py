@@ -19,13 +19,34 @@ _MIN_DRIVABLE_HEIGHT_CHANGE = 0.15
 _GROUND_HIT_EPSILON = 1.0e-3
 _WORLD_SOFT_RECAST_BUDGET = 4
 _UNPREPARED_COLLISION_FILTER = object()
+
+
+class PreparedBodySweep(dict):
+	"""Private, synchronous snapshot of an analytically enclosed body.
+
+	Only synthetic rotation envelopes use this type. Live vehicle descriptors
+	still read their current hull/chassis and mount on every call.
+	"""
+
+	def __init__(self, descriptor):
+		dict.__init__(self, descriptor)
+		self.motion_geometry = _read_vehicle_motion_geometry(self)
+
+
 @observed('motion.geometry_prepare')
 def _vehicle_motion_geometry(descriptor):
 	"""Read the live hull/chassis once for both horizontal and vertical bounds.
 
 	This shares descriptor preparation, never a collision or support answer.
-	Every call reads the current bbox and mount, including Siege transitions.
+	Live descriptors read current bbox and mount, including Siege transitions;
+	synthetic rotation snapshots already own the complete fixed geometry.
 	"""
+	if isinstance(descriptor, PreparedBodySweep):
+		return descriptor.motion_geometry
+	return _read_vehicle_motion_geometry(descriptor)
+
+
+def _read_vehicle_motion_geometry(descriptor):
 	hull = _vehicle_hull_bbox(descriptor)
 	if hull is None:
 		return None, (0.6, 1.6)
@@ -52,7 +73,9 @@ def _trace_collision_filter(collision_filter, trace):
     Candidates are not asserted to be the nearest returned hit: the native
     callback supplies identity but no position or ordering guarantee.
     """
-    if collision_filter is None or trace is None:
+    from . import native_input_diagnostics
+    if (collision_filter is None or trace is None or
+            not native_input_diagnostics.detailed_enabled()):
         return collision_filter
     candidates = []
     trace['native_surface_candidates'] = candidates

@@ -9,6 +9,73 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def test_normal_entry_keeps_filter_identity_and_no_candidate_collection(self):
+        from gui.mods.offline_lan_0922 import world_collision as world
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        callback = mock.Mock(side_effect=lambda material,*args: material != 73)
+        for detail in ('0', '1'):
+            trace = {}
+            with mock.patch.dict(diagnostic.os.environ, {diagnostic.DETAIL_ENV:detail}):
+                selected = world._trace_collision_filter(callback, trace)
+            self.assertEqual(False, selected(73,80,1,2))
+            self.assertEqual(True, selected(87,80,1,2))
+            if detail == '0':
+                self.assertIs(selected, callback)
+                self.assertEqual({}, trace)
+            else:
+                self.assertEqual([(73,80,1,2,False),(87,80,1,2,True)],
+                                 trace['native_surface_candidates'])
+
+    def test_prepared_rotation_geometry_is_exact_without_repeated_live_reads(self):
+        import random
+        import struct
+        from gui.mods.offline_lan_0922 import world_collision as world
+        module = fixtures.battle_runtime_module
+        rng = random.Random(461)
+        for unused in range(200):
+            bbox = (tuple(rng.uniform(-8,0) for i in range(3)),
+                    tuple(rng.uniform(0,8) for i in range(3)))
+            descriptor = module._destructible_world_sweep_descriptor({}, bbox)
+            expected = world._read_vehicle_motion_geometry(dict(descriptor))
+            with mock.patch.object(world, '_vehicle_hull_bbox', side_effect=AssertionError('reread')):
+                actual = world._vehicle_motion_geometry(descriptor)
+                self.assertIs(actual, world._vehicle_motion_geometry(descriptor))
+            self.assertEqual(struct.pack('6d', *(expected[0]+expected[1])),
+                             struct.pack('6d', *(actual[0]+actual[1])))
+
+    def test_rotation_reuses_preparation_but_preserves_every_posed_query(self):
+        import math
+        module = fixtures.battle_runtime_module
+        battle = fixtures.BattleRuntime(fixtures._runtime())
+        bbox = ((-1.,-.2,-3.),(2.,2.,4.))
+        battle._destructibles = types.SimpleNamespace(_vehicle_body_bbox=lambda d:bbox)
+        battle._avatar = types.SimpleNamespace(spaceID=1)
+        descriptor = {'physics':{}}
+        for pivot, travel, grounded in ((0.,(0.,0.),False),(.7,(.3,-.4),True)):
+            calls = []
+            def query(*args, **kwargs):
+                calls.append((args,kwargs))
+                return 'clear'
+            with mock.patch.object(module.world_collision, 'check_horizontal_collision', side_effect=query), \
+                    mock.patch.object(module, '_destructible_rotation_interval_bbox', wraps=module._destructible_rotation_interval_bbox) as prepare:
+                self.assertTrue(battle._native_world_rotation_is_clear(
+                    (1.,2.,3.),.1,.7,descriptor,pitch=.2,roll=-.1,
+                    pivot_offset=pivot,translation=travel,follow_ground=grounded))
+            steps = int(math.ceil(.6/module.DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
+            self.assertEqual(1,prepare.call_count)
+            self.assertEqual(steps*(1 if any(travel) else 2),len(calls))
+            self.assertEqual(1,len(set(id(args[6]) for args,kw in calls)))
+            for index,(args,kw) in enumerate(calls):
+                step = index if any(travel) else index//2
+                lower, upper = float(step)/steps, float(step+1)/steps
+                yaw = .1 + module._angle_delta(.1,.7)*(lower+upper)*.5
+                point = module.vehicle_physics.track_pivot_position((1.,2.,3.),.1,yaw,pivot)
+                self.assertEqual(yaw,args[4])
+                self.assertEqual((point[0]+travel[0]*lower,point[1],point[2]+travel[1]*lower),
+                                 tuple(args[3]))
+                self.assertFalse(kw['commit_enabled'])
+                self.assertEqual(not any(travel),kw['exact_footprint'])
+
     def _fitted_control(self):
         from gui.mods.offline_lan_0922.native_control_core import NativeControl
         from gui.mods.offline_lan_0922.bot_runtime import BotRuntime

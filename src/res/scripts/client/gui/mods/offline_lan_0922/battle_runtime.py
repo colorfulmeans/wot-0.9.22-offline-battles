@@ -1686,14 +1686,14 @@ def _destructible_world_sweep_descriptor(descriptor, bbox):
     physics = (descriptor.get('physics') if isinstance(descriptor, dict) else
                getattr(descriptor, 'physics', None))
     hit_tester = _DestructibleSweepHitTester(bbox)
-    return {
+    return world_collision.PreparedBodySweep({
         'physics': physics,
         'hull': {'hitTester': hit_tester},
         'chassis': {
             'hitTester': hit_tester,
             'hullPosition': (0.0, 0.0, 0.0),
         },
-    }
+    })
 
 
 class _ProjectileCollisionAppearance(object):
@@ -22116,9 +22116,16 @@ class BattleRuntime(object):
         # pose their fixed 0.6/1.1/1.6 m heights themselves. Baking Y into the
         # box and zeroing pitch/roll discards that pose entirely, putting a
         # raised track's collision rays through the slope below its body.
-        sweep_bbox = bbox
         sweep_pitch = pitch
         sweep_roll = roll
+        # All equal-angle slices share this exact local envelope. Only their
+        # world pose changes; never retain a native collision answer here.
+        interval_bbox = _destructible_rotation_interval_bbox(
+            bbox, abs(yaw_delta) * 0.5 / float(steps), pivot_offset)
+        sweep_descriptor = _destructible_world_sweep_descriptor(
+            descriptor, interval_bbox)
+        slice_travel = (translation[0]/steps, translation[1]/steps)
+        travel_length = math.hypot(*slice_travel)
         previous_contacts = []
         previous_checked = [False]
 
@@ -22149,16 +22156,10 @@ class BattleRuntime(object):
             if follow_ground:
                 sweep_pitch, sweep_roll = ground_pose_for_yaw(
                     pitch, roll, start_yaw, slice_yaw)
-            interval_bbox = _destructible_rotation_interval_bbox(
-                sweep_bbox, abs(yaw_delta) * 0.5 / float(steps), pivot_offset)
             slice_position = vehicle_physics.track_pivot_position(
                 position, start_yaw, slice_yaw, pivot_offset)
             slice_position = (slice_position[0]+translation[0]*lower,
                               slice_position[1], slice_position[2]+translation[1]*lower)
-            slice_travel = (translation[0]/steps, translation[1]/steps)
-            travel_length = math.hypot(*slice_travel)
-            sweep_descriptor = _destructible_world_sweep_descriptor(
-                descriptor, interval_bbox)
             slice_start_yaw = float(start_yaw) + yaw_delta * lower
             slice_end_yaw = float(start_yaw) + yaw_delta * upper
             slice_start_position = vehicle_physics.track_pivot_position(
