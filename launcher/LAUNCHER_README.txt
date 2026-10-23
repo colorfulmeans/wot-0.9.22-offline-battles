@@ -384,3 +384,18 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+Female recruits use native passport name/icon groups matching their gender.
+Previously pending female requests retry automatically; do not add duplicates.
+
+Effective settings preview is a read-only table of settings, values and rule
+sources. It includes rules already added to the current draft, not unsubmitted
+form fields. All selected scopes are resolved; inherited difficulty retains
+room rating sampling. Opening this window does not save or apply the profile.
+
+Saves -> Initialize save resets only the selected save after confirmation and
+requires a closed game. Name, save type and earnings multiplier are kept;
+progress and pending rewards return to the current new-save defaults. An
+ordinary ZIP backup is kept inside its pre-initialize recovery folder and can
+be selected with Restore save. Default-save legacy migration is blocked after
+initialization so old progress cannot return automatically.
