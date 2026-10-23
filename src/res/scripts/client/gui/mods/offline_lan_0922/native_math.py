@@ -113,8 +113,15 @@ def _report_failure(error):
     global _reported_failure
     if not _reported_failure:
         _reported_failure = True
-        sys.stdout.write('[Offline LAN 0.9.22] native computation unavailable '
-                         'for an operation; using Python: %s\n' % error)
+        # Frozen windowed launchers have no stdio. An optional-backend
+        # diagnostic must not turn the supported fallback into an exception.
+        stream = getattr(sys, 'stdout', None) or getattr(sys, 'stderr', None)
+        if stream is not None:
+            try:
+                stream.write('[Offline LAN 0.9.22] native computation unavailable '
+                             'for an operation; using Python: %s\n' % error)
+            except Exception:
+                pass
 
 
 def call(method, *args):

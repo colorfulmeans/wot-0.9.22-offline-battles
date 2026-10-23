@@ -133,3 +133,8 @@ These checks do not establish BigWorld rendering, mouse hit testing or gameplay
 feel. Both class-filter rows in the real #1513 standard/training interfaces and
 battle entry remain real-client acceptance cases. No release or merge is part
 of the test-package workflow.
+
+The final frozen-editor probe also exercises windowed execution without a
+console. Optional native-backend diagnostics tolerate absent/closed stdio and
+cannot abort the supported Python-side editor fallback. Client backend admission
+and mandatory native worker operations are unchanged.
