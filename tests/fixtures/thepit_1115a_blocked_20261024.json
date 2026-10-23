@@ -1,0 +1,390 @@
+{
+  "source_report": "wot-error-report-20261024-031525-59c0c8ecbbcc",
+  "source_line": 6027,
+  "vehicle": "china:Ch41_WZ_111_5A",
+  "position": [
+    -20.80241543708569,
+    0.2568645477294922,
+    -22.283262650852823
+  ],
+  "yaw": -2.692324886348954,
+  "recovery_side": 1.0,
+  "target": [
+    -18.8045249160646,
+    0.26,
+    -14.040556573513998
+  ],
+  "at": 361.7330017089844,
+  "verdicts": [
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.479824886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": null,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.479824886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "friendly_or_wreck_rotation",
+      "yaw": -2.904824886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 2.0,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": 2.0,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "direction",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 2.0,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 1.0,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": 1.0,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "direction",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 1.0,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 0.5,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": 0.5,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "direction",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.692324886348954,
+      "distance": 0.5,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.5860748863489538,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": null,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.5860748863489538,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "friendly_or_wreck_rotation",
+      "yaw": -2.798574886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.639199886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": null,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.639199886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "friendly_or_wreck_rotation",
+      "yaw": -2.745449886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.665762386348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": null,
+        "clear": false,
+        "proved": true,
+        "status": "hard",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "local_sweep_blocked",
+      "yaw": -2.665762386348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "local_sweep",
+      "clear": true,
+      "reason": "local_sweep_clear",
+      "yaw": -2.7188873863489538,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844,
+      "native_sweep": {
+        "at": 361.7330017089844,
+        "distance": null,
+        "clear": true,
+        "proved": true,
+        "status": "clear",
+        "source": "authoritative_body_sweep",
+        "origin": [
+          -20.80241543708569,
+          0.2568645477294922,
+          -22.283262650852823
+        ]
+      }
+    },
+    {
+      "kind": "rotation",
+      "clear": true,
+      "reason": "local_sweep_clear",
+      "yaw": -2.7188873863489538,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    },
+    {
+      "kind": "rotation",
+      "clear": false,
+      "reason": "friendly_or_wreck_rotation",
+      "yaw": -2.745449886348954,
+      "decision_id": [
+        1,
+        19,
+        36,
+        361.7330017089844
+      ],
+      "sampled_at": 361.7330017089844
+    }
+  ]
+}

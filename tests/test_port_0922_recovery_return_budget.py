@@ -153,8 +153,12 @@ class RecoveryPocketLogTests(unittest.TestCase):
         harness.setUp()
         self.addCleanup(harness.doCleanups)
         runtime = harness.runtime
-        state = dict(id=7, x=0., y=0., z=0.)
-        command = dict(movement_intent=True, recovery_mode='reverse_turn')
+        state = dict(id=7, x=0., y=0., z=0., yaw=1., speed=2.,
+            _execution_window={'actions': [{'outcome': {
+                'at': 29., 'yaw': 0.5, 'final': [0., 0., 1.],
+                'unbounded_history': list(range(10000))}}]})
+        command = dict(movement_intent=True, recovery_mode='reverse_turn',
+                       throttle=-1., turn=1., forward_blocked_by=19)
         from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
         with mock.patch.object(harness.module, 'detailed_enabled', return_value=False), \
                 mock.patch.object(logs, 'write_json_record') as writer:
@@ -164,8 +168,14 @@ class RecoveryPocketLogTests(unittest.TestCase):
         with mock.patch.object(harness.module, 'detailed_enabled', return_value=True), \
                 mock.patch.object(logs, 'write_json_record') as writer:
             for now in (0., 14., 15., 16., 29., 30.):
-                runtime._log_recovery_pocket(state, command, dict(water=False), now)
+                runtime._log_recovery_pocket(state, command, dict(water=False), now, [0., 0.])
             self.assertEqual(2, writer.call_count)
             self.assertEqual('BOT RECOVERY POCKET', writer.call_args.args[0])
             self.assertEqual(30., writer.call_args.args[1]['age'])
+            row = writer.call_args.args[1]
+            self.assertEqual([-1., 1.], row['requested_controls'])
+            self.assertEqual([0., 0.], row['applied_controls'])
+            self.assertEqual([19, None], row['blockers'])
+            self.assertEqual(0.5, row['last_execution']['yaw'])
+            self.assertNotIn('unbounded_history', row['last_execution'])
 

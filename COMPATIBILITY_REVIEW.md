@@ -1,5 +1,56 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24 reports 030753 / 031525: complete pivot failure handoff
+
+Both sessions use candidate 492 (fcc7b942). The HUD deliberately displays the
+worker's recent mean render-callback interval, not socket RTT. Heavy Lakeville
+and The Pit windows record 5.99 / 6.72 worker FPS and 162.871 / 145.286 ms mean
+Python execution respectively. Critical-equipment binding takes at most 0.613
+ms per observed call and 4.539 ms per 30 s capture; it does not explain this
+movement workload. Do not infer a particular performance regression from
+unmatched battles. Add diagnostic-entry-only timings for radio configuration,
+human observer lifecycle, player-neighbour projection and static-hull
+publication. A bounded WORKER LATENCY receipt separates server RTT, worker
+relay RTT, worker frame time and receive-to-dispatch delay without changing
+the HUD, poll cadence or simulation work.
+
+The Pit Bot 19 (Ch41_WZ_111_5A) did attempt the corpse push: its own motor
+receipt exhausted after 14.166 s and the corpse moved 0.564 m. Server route
+attempts skipped gate 4 at 03:11:53, switched to class_ht_rim_west at 03:12:13,
+and switched back at 03:14:21. The near escape remained blocked. At authority
+time 361.733 it had 95 recovery selections, hard native sweep refusals, a
+spent reverse-return budget and no complete pivot. One individually clear
+rotation sample prevented the runtime from recognizing exhausted local
+actions. Replaying the captured samples makes _partial_pivot return None,
+while the previous _report_blocked_planner returns no_hard_evidence with zero
+local-action feedback calls.
+
+Keep the exact existing candidate arcs, query order and short-circuiting.
+Publish each complete partial-pivot candidate outcome with its checked sample
+prefix through BotAdapter. The runtime admits exhaustion only with six failed
+arcs, matching live yaw/time/decision refusal receipts and a hard translation
+sweep. Unknown, deferred, exception, stale and traffic-only evidence cannot
+retire a connector. Use the existing finite per-Bot blocked-step retry gate,
+retire only its near connector, preserve that refusal across a route replan,
+and never publish the rotation/traffic obstruction as a global terrain wall.
+The captured fixture and tests cover a clear intermediate sample, no added
+probes, real private connector retirement, replan retention/expiry, usable
+complete arcs and invalid evidence fences.
+
+Bot 17 (R151_Object_257_2) also changes yaw and repeatedly moves near Bot 19;
+reverse_turn/avoid and route changes are present, so absent steering commands
+are not established. Extend the diagnostic-entry 15-second compact recovery
+receipt with requested/applied controls, blockers, previous actual pose/yaw
+outcome and the local handoff result. Keep it independent of bulk geometry
+history budgets and retain basic-mode silence for these added records.
+
+No projectile effects failure, critical-profile rejection, water diagnostic
+error or native exception is present in these sessions. Four missing internal
+layout identities remain resource limitations: R120_T22SR_A22, R129_Object_257,
+GB88_T95_Chieftain_turret and Ch40_WZ120G_FT. Do not invent interiors or change
+collision/steering laws for unproved symptoms. Gameplay escape success and
+worker frame pacing still require candidate testing on the exact #1513 client.
+
 ## October 24 report 022654: repeated incoming and outgoing shot loss
 
 Candidate 491 / runtime source 973d035d records 253 Bot and two player

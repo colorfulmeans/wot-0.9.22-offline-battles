@@ -963,16 +963,28 @@ class LocalDriver(object):
 
 	def _partial_pivot(self, pose_clear, yaw, direction, rate, horizon):
 		"""Prove a shorter arc and limit the command to its admitted angle."""
+		search = dict(yaw=yaw, candidates=[], reason='unavailable')
+		self._last_partial_pivot_search = search
 		if pose_clear is None or rate is None or float(rate) <= 0.0:
 			return None
 		for fraction in (0.5, 0.25, 0.125):
 			extent = RECOVERY_YAW_OFFSET * fraction
 			for side in (direction, -direction):
-				if all(self._pose_fits(pose_clear, float(yaw) + side * extent * f)
-						for f in RECOVERY_SWEEP_FRACTIONS):
+				candidate = dict(extent=extent, side=side, samples=[], clear=True)
+				search['candidates'].append(candidate)
+				for f in RECOVERY_SWEEP_FRACTIONS:
+					angle = float(yaw) + side * extent * f
+					clear = self._pose_fits(pose_clear, angle)
+					candidate['samples'].append(dict(yaw=angle, clear=clear))
+					if not clear:
+						candidate['clear'] = False
+						break
+				if candidate['clear']:
+					search['reason'] = 'selected'
 					turn = side * min(1.0, extent / (float(rate) * max(0.001, float(horizon))))
 					return dict(throttle=0.0, turn=turn, target_yaw=float(yaw) + side * extent,
 						recovery_mode='partial_pivot_recovery', recovery_pivot_extent=extent)
+		search['reason'] = 'all_arcs_refused'
 		return None
 
 	# Pin the current law without executing descriptors during admission.
@@ -1729,6 +1741,7 @@ class LocalDriver(object):
 							'turn': 0.0,
 							'target_yaw': float(yaw),
 							'recovery_mode': 'blocked',
+							'partial_pivot_search': self._last_partial_pivot_search,
 				'brake': True,
 						}
 						if reverse_blocker is not None:

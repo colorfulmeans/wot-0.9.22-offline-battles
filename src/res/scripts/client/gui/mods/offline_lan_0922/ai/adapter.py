@@ -1005,7 +1005,7 @@ class BotAdapter(object):
                 strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
                      'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
-                     'navigation_recovery', 'navigation_replan'):
+                     'navigation_recovery', 'navigation_replan', 'partial_pivot_search'):
             if name in local:
                 result[name] = local[name]
         if state.get('_contact_escape_evidence') is not None:

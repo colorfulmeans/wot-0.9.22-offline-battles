@@ -13,6 +13,38 @@ class TransportPerformanceTests(unittest.TestCase):
         return lan_client.LANClient(
             '127.0.0.1', 28782, 'P', 'ussr:MS-1', bigworld=mock.Mock())
 
+    def test_worker_latency_diagnostic_is_opt_in_bounded_and_observational(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
+        client = self.client()
+        client.connected = True
+        client.round_id, client.authority_epoch = 1, 1
+        client.rtt_ms = 5.0
+        pong = dict(type='worker_pong', round_id=1, authority_epoch=1,
+                    client_time=99.8, _client_received_time=100.0, frame_ms=200.0)
+        with mock.patch.object(logs, 'detailed_enabled', return_value=False), \
+                mock.patch.object(logs, 'write_json_record') as writer:
+            client._handle_message(pong)
+            writer.assert_not_called()
+            self.assertFalse(hasattr(client, '_worker_latency_log'))
+        with mock.patch.object(logs, 'detailed_enabled', return_value=True), \
+                mock.patch.object(logs, 'write_json_record') as writer, \
+                mock.patch.object(lan_client, '_monotonic_time', return_value=100.05):
+            client._handle_message(pong)
+            client._handle_message(pong)
+            self.assertEqual(1, writer.call_count)
+            row = writer.call_args.args[1]
+            self.assertEqual('WORKER LATENCY', writer.call_args.args[0])
+            self.assertEqual(5., row['server_rtt_ms'])
+            self.assertAlmostEqual(200., row['worker_relay_rtt_ms'])
+            self.assertAlmostEqual(50., row['dispatch_delay_ms'])
+            self.assertEqual(200, row['displayed_ping_ms'])
+        with mock.patch.object(logs, 'detailed_enabled', return_value=True), \
+                mock.patch.object(logs, 'write_json_record', side_effect=RuntimeError('log unavailable')), \
+                mock.patch.object(lan_client, '_monotonic_time', return_value=116.):
+            client._handle_message(dict(pong, client_time=115.9,
+                                       _client_received_time=116., frame_ms=150.))
+        self.assertEqual(150., client.worker_frame_ms)
+
     def test_nested_poll_costs_do_not_change_dispatch_or_expose_partial_totals(self):
         client = self.client()
         now = [100.0]

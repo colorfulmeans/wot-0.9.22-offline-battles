@@ -5417,6 +5417,7 @@ class BotRuntime(object):
         base = _number(_value(_value(descriptor, 'radio', {}), 'distance', 0.0))
         return max(0.0, base * factor)
 
+    @detailed_observed('bot.radio_configuration')
     def _configure_radio(self, players, now, tick_cache=None):
         actors = {}
         for source in self.states.values():
@@ -6103,6 +6104,7 @@ class BotRuntime(object):
             return 0.0
         return min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS, remaining)
 
+    @detailed_observed('bot.observer_lifecycle')
     def _track_human_observer_lifecycle(
             self, players, now, visibility_tick=None):
         """Open Last Effort only on one observed alive-to-dead edge."""
@@ -7400,7 +7402,7 @@ class BotRuntime(object):
             query_policy='existing_receipts_only'))
 
     @observed('bot.motion_diagnostic_prepare')
-    def _log_recovery_pocket(self, state, command, probe, now):
+    def _log_recovery_pocket(self, state, command, probe, now, applied=None):
         """A compact diagnostic-only receipt survives bulk-history exhaustion."""
         if not detailed_enabled():
             return
@@ -7417,10 +7419,27 @@ class BotRuntime(object):
         state['_recovery_pocket_log'] = (previous[0], previous[1], now)
         order = self._server_orders.get(state['id']) or {}
         attempt = order.get('route_attempt') or {}
+        driver = getattr(self.adapter, 'driver', None)
+        driver = getattr(driver, 'states', {}).get(state['id']) or {}
+        actions = (state.get('_execution_window') or {}).get('actions') or ()
+        outcome = actions[-1].get('outcome', {}) if actions else {}
+        handoff = state.get('_planner_blocked_handoff') or {}
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
             position=position, origin=previous[0], age=now-previous[1],
+            yaw=state.get('yaw'), speed=state.get('speed'),
+            requested_controls=[command.get('throttle'), command.get('turn')],
+            driver_controls=[(command.get('control_trace') or {}).get('driver_throttle'),
+                             (command.get('control_trace') or {}).get('driver_turn')],
+            applied_controls=applied,
+            blockers=[command.get('forward_blocked_by'), command.get('reverse_blocked_by')],
+            last_execution={key:outcome.get(key) for key in (
+                'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
+            recovery_count=driver.get('recovery_count'),
+            blocked_handoff={key:handoff.get(key) for key in (
+                'reason', 'all_hard_body_refusals', 'local_actions_exhausted',
+                'complete_pivot_arcs_exhausted', 'private_replan', 'retired')},
             mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
             target=command.get('move_position'),
             route=order.get('route_id'), route_index=order.get('route_index'),
@@ -7459,7 +7478,7 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
-        self._log_recovery_pocket(state, command, motion_probe, now)
+        self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
         from .native_input_diagnostics import detail_record_ready
         if not detail_record_ready():
             return
@@ -8216,7 +8235,35 @@ class BotRuntime(object):
                 not (step.get('native_probe') or {}).get('probe_failed')
                 for step in directions))
             for row in rotation_rows) and all_hard)
-        exhausted = exhausted or mixed_exhausted
+        # One clear intermediate sample does not admit the whole pivot arc.
+        # The driver records its six complete candidate outcomes, keeping the
+        # same probes/cadence. Match every failed arc to this decision's known
+        # refusal before retiring only this Bot's connector. Exceptions,
+        # deferred probes and traffic without a hard body sweep stay unknown.
+        pivot_search = command.get('partial_pivot_search') or {}
+        arcs = pivot_search.get('candidates') or ()
+        arc_exhausted = bool(
+            pivot_search.get('reason') == 'all_arcs_refused' and len(arcs) == 6 and
+            state is not None and state.get('yaw') is not None and
+            abs(_angle_delta(pivot_search.get('yaw', 1e9), state['yaw'])) < 0.000001 and
+            any(proof.get('distance') is not None and proof.get('at') == now
+                for proof in all_hard) and
+            all(arc.get('clear') is False and any(
+                sample.get('clear') is False and any(
+                    row.get('clear') is False and
+                    row.get('reason') in ('local_sweep_blocked',
+                        'realized_rotation_rejection', 'friendly_or_wreck_rotation') and
+                    row.get('sampled_at') == now and
+                    row.get('decision_id') is not None and any(
+                        sweep.get('decision_id') == row.get('decision_id') and
+                        (sweep.get('native_sweep') or {}).get('at') == now and
+                        (sweep.get('native_sweep') or {}).get('proved') is True
+                        for sweep in verdicts or () if sweep.get('kind') == 'local_sweep') and
+                    row.get('yaw') is not None and sample.get('yaw') is not None and
+                    abs(_angle_delta(row['yaw'], sample['yaw'])) < 0.000001
+                    for row in rotation_rows)
+                for sample in arc.get('samples', ())) for arc in arcs))
+        exhausted = exhausted or mixed_exhausted or arc_exhausted
         if (hard or remembered_rotation or exhausted) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):
@@ -8233,6 +8280,7 @@ class BotRuntime(object):
                 remembered_rotation_refusals=(len(rotation_rows)
                     if remembered_rotation else 0),
                 local_actions_exhausted=exhausted,
+                complete_pivot_arcs_exhausted=arc_exhausted,
                 all_hard_body_refusals=len(all_hard),
                 refusal_counts=refusal_counts,
                 realized_rotation_contact={key: value for key, value in
@@ -8253,6 +8301,7 @@ class BotRuntime(object):
                     retired=nav_state.get('local_target_retired'),
                     replan_count=nav_state.get('blocked_step_replans'),
                     source=(hard[0].get('source') if hard else
+                            'complete_pivot_arcs_exhausted' if arc_exhausted else
                             'realized_rotation_rejection'),
                     witness={key:trace.get(key) for key in (
                         'reason', 'hit', 'normal', 'ray_start', 'ray_end')})
@@ -10905,6 +10954,7 @@ class BotRuntime(object):
                     receipt=dict(target_receipt),decision_input=False))
         return target
 
+    @detailed_observed('bot.player_neighbour_projection')
     def _player_neighbours(self, players):
         result = []
         for raw in players or ():
@@ -12298,6 +12348,7 @@ class BotRuntime(object):
         after = self._turret_state_pose(state, end, end_yaw)
         return bool(probe(before, after, descriptor))
 
+    @detailed_observed('bot.static_hull_publication')
     def _publish_static_hulls(self, players):
         """Give the navigator wrecks and landed turrets as static geometry.
 

@@ -4462,6 +4462,29 @@ class LANClient(object):
             sample = 0.0
         return int(round(max(0.0, min(sample, 999.0)))), stale
 
+    def _log_worker_latency(self, received_time):
+        """Separate displayed worker frame time from relay/dispatch latency."""
+        try:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import (
+                detailed_enabled, write_json_record)
+            if not detailed_enabled():
+                return
+            now = _monotonic_time()
+            scope = (self.round_id, self.authority_epoch)
+            previous = getattr(self, '_worker_latency_log', None)
+            if previous is not None and previous[0] == scope and now - previous[1] < 15.0:
+                return
+            self._worker_latency_log = (scope, now)
+            write_json_record('WORKER LATENCY', dict(
+                round=self.round_id, epoch=self.authority_epoch,
+                server_rtt_ms=self.rtt_ms, worker_relay_rtt_ms=self.worker_rtt_ms,
+                worker_frame_ms=self.worker_frame_ms,
+                dispatch_delay_ms=max(0.0, now - received_time) * 1000.0,
+                displayed_ping_ms=self.worker_ping_display(now)[0]))
+        except Exception:
+            # Observation failure must never interrupt pong or battle dispatch.
+            return
+
     def _report_snapshot_stall(self, now):
         """Say out loud that the replica is drawing a frozen world.
 
@@ -5678,6 +5701,7 @@ class LANClient(object):
             frame_ms = _finite_float(message.get('frame_ms'), -1.0)
             self.worker_frame_ms = frame_ms if frame_ms > 0.0 else None
             self._worker_pong_time = received_time
+            self._log_worker_latency(received_time)
         elif kind == 'pong':
             client_time = _finite_float(message.get('client_time'), 0.0)
             if client_time > 0.0:
