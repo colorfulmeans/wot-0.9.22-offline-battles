@@ -393,10 +393,10 @@ _CHINESE = {
         "每个存档有独立的车库、乘员、账号设置和战斗记录。启动游戏时使用当前选中的"
         "存档。可以把存档备份成 ZIP 文件，也可以打开存档文件夹自行复制文件。",
     "Repair": "修复",
-    "Repair startup (keep saved data)": "修复启动问题（保留存档）",
+    "Repair startup (keep saved data)": "修复启动问题（保留存档和方案）",
     "Normal client stuck loading? Clean preferences...":
-        "正式客户端卡在加载界面？点击清理配置…",
-    "Reset all offline data...": "重置全部离线数据…",
+        "备份并重置正式客户端设置…",
+    "Reset all offline data...": "重置离线存档与设置…",
     "Create error report...": "一键汇报错误…",
     "Collect full-memory crash dumps (very large files)":
         "疑难闪退：收集完整内存（文件很大）",
@@ -415,8 +415,8 @@ _CHINESE = {
     "Delete vehicle profile?": "删除车辆属性方案？",
     "Delete profile '%s' and all of its saved vehicle edits?":
         "删除方案“%s”及其中保存的全部车辆修改？",
-    "Reset all offline data?": "重置全部离线数据？",
-    "Clean normal client preferences?": "清理正式客户端配置？",
+    "Reset all offline data?": "重置离线存档与设置？",
+    "Clean normal client preferences?": "备份并重置正式客户端设置？",
     "This moves the normal World of Tanks preferences.xml aside as a backup. "
     "Graphics, window, and input settings will reset the next time the normal "
     "client starts. Offline saved data is not changed. Continue?":
@@ -424,7 +424,7 @@ _CHINESE = {
     "This deletes this mod's saved address, account settings, garage fittings, "
     "post-battle results, configuration, and isolated client graphics/input "
     "preferences. Other mods and the normal World of Tanks profile are kept. "
-    "Continue?": "这会删除本 Mod 保存的地址、账号设置、车库配件、战后结果、配置，以及独立的客户端画面/输入偏好。其他 Mod 和正常的 World of Tanks 配置会保留。是否继续？",
+    "Continue?": "这会删除本 Mod 保存的地址、账号设置、车库配件、战后结果、配置，以及独立的客户端画面/输入偏好。自定义 BOT 战术、车辆属性方案、其他 Mod 和正式客户端配置会保留。是否继续？",
     "No launcher game session is available to report yet.":
         "还没有可汇报的启动器游戏场次。",
     "The latest game session has not produced any diagnostic logs yet. No "
@@ -2619,7 +2619,8 @@ class LauncherWindow(object):
                 from . import bot_tactics_ui
             status = self._refresh_client()
             editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
-                                               language=self.language, log=self._log)
+                                               language=self.language, log=self._log,
+                                                lineup=lambda:bot_lineup_profiles.assignments_for(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
             editors = [value for value in getattr(self, '_bot_tactics_editors', ())
                        if value.root.winfo_exists()]
             editors.append(editor)

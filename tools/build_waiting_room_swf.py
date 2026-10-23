@@ -59,6 +59,7 @@ def validate_control_linkages(source, available):
     names = re.findall(r'item\.(?:dropdown|itemRenderer|scrollBar) = "([^"]+)"', source)
     names += re.findall(r'button\("[^"]+", "([^"]+)"', source)
     names += re.findall(r'component\(key, "([^"]+)"', source)
+    names += re.findall(r'classFactory.getComponent\("([^"]+)"', source)
     missing = sorted(set(names) - set(available))
     if missing:
         raise ValueError('Unknown native control linkage: ' + ', '.join(missing))

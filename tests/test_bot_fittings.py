@@ -41,6 +41,18 @@ class FittingContracts(unittest.TestCase):
                         'china:Ch01_Type59_Gold', 'poland:Pl03_PzV_Poland'):
             self.assertIn(vehicle, excluded)
 
+    def test_independent_native_build_restores_the_same_override_identity(self):
+        vehicle='ussr:R04_T-34'
+        overrides=dict(development='full',equipment='none',crew_preset='50')
+        with patch.dict(sys.modules,self._items()):
+            native=self._native(vehicle,'elite')
+            descriptor=fitting.build(native,vehicle,'regular',overrides=overrides)
+            context=fitting.context(descriptor)
+            self.assertEqual(50,context['wire']['crew_level'])
+            self.assertEqual([],context['wire']['devices']);self.assertIsNone(context['wire']['directive'])
+            self.assertEqual((),context['skills']);self.assertEqual(overrides,context['wire']['overrides'])
+            self.assertEqual(context['wire'],fitting.canonical(context['wire']))
+
     def test_wire_rejects_policy_tampering_and_bad_descriptors(self):
         vehicle = 'ussr:R04_T-34'
         expected = fitting.plan(vehicle, 'elite')
@@ -214,7 +226,7 @@ class FittingContracts(unittest.TestCase):
         battle._runtime = NS(vehicles=None)
         battle._remote_factory = NS(prepare_descriptor=lambda descriptor:descriptor)
         original = fitting.build
-        def native_builder(unused,vehicle,tier,level,restored):
+        def native_builder(unused,vehicle,tier,level,restored,overrides=None):
             return original(self._native(vehicle,tier),vehicle,tier,level,restored)
         with patch.dict(sys.modules,self._items()), patch.object(fitting,'build',side_effect=native_builder) as build:
             regular = battle._resolve_bot_fitted_descriptor('ussr:R04_T-34','regular')

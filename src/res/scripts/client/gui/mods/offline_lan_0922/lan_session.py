@@ -1409,6 +1409,8 @@ class LANSession(object):
             'team': current_team,
             'preferred': self._room_preferences.get('team', 0),
             'sizes': sizes,
+            'classes': getattr(self.client, 'team_classes', {}),
+            'class_supported': callable(getattr(self.client,'set_team_class',None)),
             'counts': counts,
             'supported': self._server_supports_team_selection(),
             'size_supported': self._server_supports_team_size_selection(),
@@ -1448,6 +1450,12 @@ class LANSession(object):
             tr('Requesting a random team...')
             if team == 0 else tr('Requesting Team %d...') % team)
         return True
+
+    def set_team_class(self, team, tag, allowed):
+        if (self._stopped or self.client is None or self.state != 'waiting' or not self._is_local_host()):
+            return False
+        setter = getattr(self.client, 'set_team_class', None)
+        return bool(callable(setter) and setter(team, tag, allowed))
 
     def set_team_size(self, team, size):
         """Ask the server to change one capacity without restarting."""
@@ -1841,6 +1849,7 @@ class LANSession(object):
                     'request_team': self.select_team,
                     'team_status': self._team_status,
                     'request_team_size': self.set_team_size,
+                    'request_team_class': self.set_team_class,
                     'bot_tier_status': self._bot_tier_status,
                     'request_bot_tier_mode': self.set_bot_tier_mode,
                     'bot_skill_status': self._bot_skill_status,
@@ -2819,7 +2828,9 @@ class LANSession(object):
                 message, 'host_player_id',
                 getattr(self.client, 'host_player_id',
                         self._host_player_id))
-            if _message_value(message, 'code') == 'host_only':
+            if _message_value(message, 'code') == 'bot_class_pool_empty':
+                self._status_notifier(tr('Allowed Bot classes cannot fill the team. Enable a non-artillery class or reduce team size.'))
+            elif _message_value(message, 'code') == 'host_only':
                 self._status_notifier(
                     tr('Only the LAN room host can choose the map and start.'))
             else:

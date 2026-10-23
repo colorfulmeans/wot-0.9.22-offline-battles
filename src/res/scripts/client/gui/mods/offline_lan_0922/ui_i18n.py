@@ -176,6 +176,8 @@ _ZH = {
     'The stock map window is unavailable.': u'原版地图窗口不可用。',
     'The stock map window could not open.': u'无法打开原版地图窗口。',
     'This LAN server does not offer a random map.': u'此服务器不支持随机地图。',
+    'Allowed Bot classes cannot fill the team. Enable a non-artillery class or reduce team size.': u'允许的 BOT 车型无法补满队伍，请勾选一种非火炮车型，或减少人数。',
+    'Artillery needs at least 7 players per team. Automatic limits: 1-6: 0; 7-9: 0-1; 10-12: 0-2; 13-15: 0-3. Players and fixed Bots keep their vehicles.': u'每队至少 7 人才允许自动分配火炮。1–6 人：0 辆；7–9 人：0–1 辆；10–12 人：0–2 辆；13–15 人：0–3 辆。玩家和固定 BOT 保留车型，并占用火炮名额。',
     'LAN WAITING ROOM': u'局域网等待房间',
     'TEAM 1': u'队伍 1',
     'TEAM 2': u'队伍 2',

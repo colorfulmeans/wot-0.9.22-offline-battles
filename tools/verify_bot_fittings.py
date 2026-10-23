@@ -60,7 +60,7 @@ def merge(shared, local):
 
 def audit(client):
     client = Path(client)
-    cache, translations, rows = {}, {}, []
+    cache, translations, rows, invalid = {}, {}, [], []
     def gui_key(name, value):
         label = value.get('userString', name)
         if label.startswith('#') and ':' in label:
@@ -125,7 +125,12 @@ def audit(client):
                     if any(clause_ok(x) for x in excludes): return False
                 return True
             fixed = isinstance(listed.get('price'),dict) and 'gold' in listed['price']
-            for tier, fitting in tiers.items():
+            combinations=list(tiers.items())
+            for development, d in (('stock','rookie'),('intermediate','regular'),('full','elite')):
+                for equipment, e in (('none','rookie'),('single','regular'),('standard','veteran'),('improved','elite')):
+                    value=dict(tiers[e]);value['modules']=tiers[d]['modules']
+                    combinations.append((development+'_'+equipment,value))
+            for tier, fitting in combinations:
                 modules = fitting['modules']
                 for kind, options in components.items():
                     assert modules[kind] in options, (vehicle,tier,kind)
@@ -135,7 +140,9 @@ def audit(client):
                 mass = float(definition['hull']['weight']) + float(turret['weight']) + float(gun['weight'])
                 mass += sum(float(options[modules[kind]]['weight']) for kind,options in components.items())
                 mass += sum(float(device_data[n].get('script',{}).get('weight',0)) for n in fitting['devices'])
-                assert mass <= float(components['chassis'][modules['chassis']]['maxLoad']), (vehicle,tier,mass)
+                if mass > float(components['chassis'][modules['chassis']]['maxLoad']):
+                    if '_' not in tier:raise AssertionError((vehicle,tier,mass))
+                    invalid.append((vehicle,tier))
                 assert all(allowed(n) for n in fitting['devices']), (vehicle,tier,'device compatibility')
                 if fixed:
                     assert modules == tiers['elite']['modules'], (vehicle,tier,'premium fixed')
@@ -170,9 +177,10 @@ def audit(client):
                 rows.append(dict(vehicle=vehicle,tier=tier,modules=modules,weight=mass,
                     max_health=float(definition['hull'].get('maxHealth',0))+float(turret.get('maxHealth',0)),
                     reload_seconds=gun['reloadTime'],capacity=capacity,clip_size=clip,allocation=allocation))
+    assert all(t.startswith('stock_') for v,t in invalid), 'An allowed fitting exceeds load'
     return dict(client='0.9.22.0.1 CN #1513', vehicles=len(PLANS), fittings=len(rows),
                 evidence='static resources; native install/rendering not asserted',
-                rented_outfits=rented_outfits, records=rows)
+                rented_outfits=rented_outfits, invalid_combinations=invalid, allowed_combinations=sum(r['tier'] not in ('stock_single','stock_standard','stock_improved') for r in rows), records=rows)
 
 
 if __name__ == '__main__':

@@ -10,11 +10,14 @@ import argparse
 import array
 import base64
 import collections
+import contextlib
+import functools
 import copy
 import ctypes
 import dataclasses
 import hashlib
 import heapq
+import io
 import json
 import math
 import os
@@ -39,11 +42,14 @@ SERVER_STDLIB_MODULES = (
     array.__name__,
     base64.__name__,
     collections.__name__,
+    contextlib.__name__,
+    functools.__name__,
     copy.__name__,
     ctypes.__name__,
     dataclasses.__name__,
     hashlib.__name__,
     heapq.__name__,
+    io.__name__,
     json.__name__,
     math.__name__,
     os.__name__,

@@ -82,6 +82,7 @@ class BaselineEditorTests(unittest.TestCase):
         patch=mock.patch.object(ui.messagebox,'showerror')
         self.errors=patch.start();self.addCleanup(patch.stop)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
+        self.editor.adopt(storage.contract.default_profile('Editable fixture'))
         self.editor.map_var.set(storage.MAP_LABELS['29_el_hallouf']);self.editor.change_map()
         self.editor.route_class_var.set('AT-SPG');self.editor.change_route_class()
 
@@ -116,7 +117,7 @@ class BaselineEditorTests(unittest.TestCase):
     def test_whole_default_restore_and_new_profile_use_adopted_baseline(self):
         e=self.editor;e.document['maps'].clear()
         with mock.patch.object(e,'discard_prompt',return_value=True):e.default_profile()
-        self.assertEqual(storage.contract.default_profile(),e.document)
+        self.assertEqual(storage.contract.default_profile('Editable fixture'),e.document)
         with mock.patch.object(e,'discard_prompt',return_value=True):e.new_profile()
         self.assertEqual(storage.contract.default_profile()['maps'],e.document['maps'])
         e.set_language('en');self.root.update()

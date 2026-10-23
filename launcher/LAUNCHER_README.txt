@@ -53,6 +53,29 @@ See LICENSE, THIRD_PARTY_NOTICES.md and licenses for license terms. The optional
 crash recorder downloads Microsoft ProcDump only with the launcher's consent
 setting. The bundled replay runtime is CPython 3.11.9 from python.org.
 
+Configuration updates
+---------------------
+Bot tactics Default is read-only in both tabs. Create a custom profile to edit.
+Restore default draft resets that custom draft, including pending forms and
+undo history, without applying it. Import/name conflicts receive numeric suffixes.
+Independent development, equipment, ammunition, consumables and coupled crew
+presets inherit from the existing scope hierarchy. Ammunition uses digit ratios;
+all zero carries no ammunition. Magazine ratios count magazines, not rounds.
+Stock development only allows no equipment, in the dropdown and validation.
+
+Both room interfaces have per-team native class filters for automatic Bots.
+Manual vehicles and players keep their vehicles and consume artillery quota.
+Artillery permits 0 / 0-1 / 0-2 / 0-3 at team sizes 1-6 / 7-9 / 10-12 / 13-15.
+Reducing below seven clears its checkbox; raising size leaves it unchecked.
+
+New unlocked saves mount three legal improved devices and the corresponding
+battle directive, with directive auto-resupply checked. Users may change or
+remove them; saved choices are never reapplied as defaults. Career saves remain
+stock. The vehicle editor displays magazine/trigger reload intervals in seconds;
+underlying old rate edits keep their native meaning. Trigger count is limited by
+magazine capacity and the existing runtime limit (64), with within-trigger time
+at most ten seconds. A partial trigger fires only real remaining rounds.
+
 CPython 3.11.9 license
 ======================
 

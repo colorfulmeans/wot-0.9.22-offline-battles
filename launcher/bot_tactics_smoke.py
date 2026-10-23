@@ -1,4 +1,5 @@
 """Opt-in verification of the actual packaged editor; writes only a temp store."""
+import copy
 import json
 import tempfile
 from pathlib import Path
@@ -23,6 +24,11 @@ def run(destination):
             report['adopted_baseline_maps']=len(ui.document['maps'])
             report['baseline_wait_places']=sum(len(storage.contract.waiting_positions(p))
                 for e in ui.document['maps'].values() for r in e.get('default_routes',()) for p in r['points'])
+            readonly=copy.deepcopy(ui.document)
+            ui.new_route();ui.rule_vars['skill'].set('elite');ui.save_rule();ui.undo()
+            assert ui.document==readonly and str(ui.save_button.cget('state'))=='disabled'
+            report['default_readonly']=True
+            ui.adopt(storage.contract.default_profile('Baseline verification'))
             ui.map_var.set('Ruinberg');ui.change_map()
             ui.route_class_var.set('AT-SPG');ui.change_route_class()
             original=next(r for r in storage.contract.default_map('08_ruinberg')['default_routes']
@@ -31,8 +37,12 @@ def run(destination):
             ui._editable_item()['points'][1][0]+=8;ui.reset_builtin()
             assert ui._editable_item()==original
             report['baseline_route_restore']=True
-            ui.store.save(storage.contract.empty(),apply=True)
+            ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())
+            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all').items():ui.rule_vars[key].set(value)
+            for var in ui.ammo_vars:var.set('0')
+            ui.save_rule()
+            report['independent_presets_and_empty_ammo']=True
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()
             ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()
@@ -59,6 +69,8 @@ def run(destination):
             assert active['maps']['08_ruinberg']['routes'][0]['policy'] == 'fixed'
             assert active['maps']['08_ruinberg']['positions'][0]['radius'] == 34.
             assert not ui.dirty()
+            values=storage.contract.effective(active,1,'heavyTank',0)
+            assert values['development']=='full' and values['equipment']=='improved' and values['ammo_ratios']==[0,0,0]
             # Prove that the runtime plan reader, not just the form, sees it.
             spawn = graph['spawn_formations']['1'][0]
             state = dict(id=11, team=1, slot=0, vehicle='smoke:SPG', profile={'class_tag':'SPG'},

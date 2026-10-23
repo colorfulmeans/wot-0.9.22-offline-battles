@@ -1,6 +1,7 @@
 """Tk window for named 0.9.22 vehicle-data profiles."""
 
 from __future__ import annotations
+import math
 
 try:
     from . import i18n, vehicle_armor_viewer, vehicle_overlays
@@ -132,7 +133,12 @@ _FIELD_CHINESE = {
     "Maximum pitch": "最大俯仰角", "Travel mode": "行驶模式",
     "Siege mode": "攻城模式", "Reload time": "装填时间",
     "Magazine firing rate (higher is a shorter reload)":
-        "弹夹短装填射速（越高越短）",
+        "弹夹短装填时间（秒）",
+    "Positive seconds; trigger count is a positive integer, at most 64 and no greater than clip capacity. Within-trigger time is at most 10 seconds. A single round ignores within-trigger time.":
+        "时间为正秒数；每扳机发数为 1—64 的整数，且不超过弹夹容量。扳机内间隔不超过 10 秒；每扳机仅一发时忽略该间隔。",
+    "Short reload time (seconds)": "弹夹短装填时间（秒）",
+    "Rounds per trigger": "每扳机发射炮弹（发）",
+    "Within-trigger reload time (seconds)": "每扳机内装填时间（秒）",
     "Magazine": "弹夹", "Rounds per magazine": "弹夹容量（发）",
     "Aiming time": "瞄准时间", "Ammunition capacity": "弹药容量",
     "Base accuracy": "基础精度", "Dispersion factors": "扩圈系数",
@@ -473,15 +479,23 @@ class VehicleEditorWindow(object):
                 self._t("Choose one listed vehicle field."))
         return (record["member"], record["fieldPath"])
 
+    def _display_value(self, value, path=None):
+        path = path or self.field_path.get()
+        if path.endswith(('/clip/rate','/burst/rate')):
+            return format(60.0/float(value),'.9g')
+        return value
+
     def _show_result(self, result, success_message=None):
-        self.original.set(result["originalValue"])
-        self.current.set(result["currentValue"])
+        self.original.set(self._display_value(result["originalValue"],result.get("fieldPath")))
+        self.current.set(self._display_value(result["currentValue"],result.get("fieldPath")))
         packed_type = result["packedType"]
         if self._language == i18n.LANGUAGE_CHINESE:
             packed_type = _PACKED_TYPE_CHINESE.get(packed_type, packed_type)
         self.packed_type.set(packed_type)
         self.constraint.set(self._constraint_text(result["constraint"]))
         self.overlay_path.set(result["overlayPath"])
+        if result.get('fieldPath','').endswith(('/clip/rate','/burst/rate','/burst/count')):
+            self.constraint.set(self._t('Positive seconds; trigger count is a positive integer, at most 64 and no greater than clip capacity. Within-trigger time is at most 10 seconds. A single round ignores within-trigger time.'))
         conflict = result.get("conflict", "")
         self.apply_button.config(
             state="disabled" if conflict.startswith("Conflict:") else "normal")
@@ -489,7 +503,7 @@ class VehicleEditorWindow(object):
             self.status.set(self._error_text(conflict))
         else:
             self.status.set(
-                success_message or self._t("Field is safe to edit."))
+                success_message or self._t("Field is safe to edit.") + (" 扳机按实际余弹发射，不借用下一弹夹；时间按秒填写。" if self._language == i18n.LANGUAGE_CHINESE and "/burst/" in result.get("fieldPath","") else ""))
 
     def _show_error(self, error, clear_contract=False):
         message = self._error_text(str(error))
@@ -822,7 +836,7 @@ class VehicleEditorWindow(object):
         self.field_path.set(field_path)
         self.scope.set(self._scope_text(record))
         self.source.set("%s :: %s" % (member, field_path))
-        self.replacement.set(result["currentValue"])
+        self.replacement.set(self._display_value(result["currentValue"],field_path))
         self._show_result(result)
         record["currentValue"] = result["currentValue"]
         self.armor_viewer.focus_field(record)
@@ -831,9 +845,16 @@ class VehicleEditorWindow(object):
     def apply(self):
         try:
             member, field_path = self._selection()
+            replacement=self.replacement.get()
+            if field_path.endswith(('/clip/rate','/burst/rate')):
+                try:
+                    seconds=float(replacement)
+                    if not math.isfinite(seconds) or seconds<=0:raise ValueError()
+                    replacement=format(60.0/seconds,'.15g')
+                except (ValueError,ZeroDivisionError):
+                    raise self._service.VehicleOverlayError('Reload time must be a positive finite number of seconds')
             result = self._service.apply_profile_edit(
-                self._game_root, self._profile_name, member, field_path,
-                self.replacement.get())
+                self._game_root, self._profile_name, member, field_path, replacement)
         except self._service.VehicleOverlayError as error:
             return self._show_error(error)
         message = "Profile edit saved and reparsed successfully."

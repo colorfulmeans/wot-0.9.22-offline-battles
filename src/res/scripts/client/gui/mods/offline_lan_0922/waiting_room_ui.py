@@ -381,7 +381,7 @@ class WaitingRoomUI(object):
                  request_bot_tier_mode=None, open_map_picker=None,
                  round_seconds=None, bot_skill_status=None,
                  request_bot_skill_mode=None, training_status=None,
-                 toggle_training_bots=None, player_roster=None, local_player_id=None):
+                 toggle_training_bots=None, player_roster=None, local_player_id=None, request_team_class=None):
         self._player_roster = player_roster or (lambda: [])
         self._local_player_id = local_player_id or (lambda: None)
         self._training_status = training_status or (lambda: (False, False))
@@ -394,6 +394,7 @@ class WaitingRoomUI(object):
         self._random_supported = random_supported or (lambda: True)
         self._request_team = request_team
         self._request_team_size = request_team_size
+        self._request_team_class = request_team_class
         self._team_status = team_status or (lambda: {})
         self._bot_tier_status = bot_tier_status or (lambda: {})
         self._request_bot_tier_mode = request_bot_tier_mode

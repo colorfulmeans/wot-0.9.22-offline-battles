@@ -16,10 +16,48 @@ def crew_level(tier):
     return dict(rookie=50, regular=75, veteran=100, elite=100)[tier]
 
 
-def plan(vehicle, tier):
+def plan(vehicle, tier, overrides=None):
     if tier not in TIERS or vehicle not in PLANS:
         raise ValueError('unsupported Bot fitting: %s/%s' % (vehicle, tier))
-    return copy.deepcopy(PLANS[vehicle][tier])
+    result = copy.deepcopy(PLANS[vehicle][tier])
+    overrides = overrides or {}
+    from gui.mods.offline_lan_0922.bot_tactics import normalize_values
+    overrides = normalize_values(overrides)
+    development = overrides.get('development')
+    if development:
+        result['modules'] = copy.deepcopy(PLANS[vehicle][dict(
+            stock='rookie', intermediate='regular', full='elite')[development]]['modules'])
+    equipment = overrides.get('equipment')
+    if equipment:
+        donor = PLANS[vehicle][dict(none='rookie', single='regular',
+            standard='veteran', improved='elite')[equipment]]
+        result['devices'] = list(donor['devices'])
+        result['directive'] = donor['directive']
+    preset = overrides.get('crew_preset')
+    if preset:
+        result['crew'] = {'50':50, '75':75, 'repair':100, 'all':100}[preset]
+    development = development or {'rookie':'stock','regular':'intermediate','veteran':'full','elite':'full'}[tier]
+    equipment = equipment or {'rookie':'none','regular':'single','veteran':'standard','elite':'improved'}[tier]
+    if development=='stock' and equipment!='none':
+        raise ValueError('Stock development only allows no equipment')
+    return result
+
+
+def validate_profile(profile):
+    from gui.mods.offline_lan_0922 import bot_tactics
+    if not any(any(k in r['values'] for k in ('development','equipment')) for r in profile.get('behavior',())):
+        return
+    for team in (1,2):
+        for tag in bot_tactics.CLASSES:
+            for slot in range(15):
+                values=bot_tactics.effective(profile,team,tag,slot)
+                if not any(k in values for k in ('development','equipment')):continue
+                tiers=(values['skill'],) if 'skill' in values else TIERS
+                for tier in tiers:
+                    development=values.get('development',{'rookie':'stock','regular':'intermediate','veteran':'full','elite':'full'}[tier])
+                    equipment=values.get('equipment',{'rookie':'none','regular':'single','veteran':'standard','elite':'improved'}[tier])
+                    if development=='stock' and equipment!='none':
+                        raise bot_tactics.TacticsError('Stock development only allows no equipment')
 
 
 def context(descriptor):
@@ -69,7 +107,8 @@ def canonical(value):
     if not isinstance(value, dict) or value.get('schema') != 1:
         raise ValueError('invalid Bot fitting schema')
     vehicle, tier = value.get('vehicle'), value.get('tier')
-    expected = plan(vehicle, tier)
+    overrides = value.get('overrides') or {}
+    expected = plan(vehicle, tier, overrides)
     if value.get('devices') != expected['devices'] or value.get('directive') != expected['directive'] or value.get('style') != expected['style']:
         raise ValueError('Bot fitting equipment policy changed')
     level = value.get('crew_level')
@@ -84,9 +123,13 @@ def canonical(value):
         raise ValueError('unreadable Bot fitting descriptor')
     if base64.b64encode(raw).decode('ascii') != encoded:
         raise ValueError('noncanonical Bot fitting descriptor')
-    return dict(schema=1, vehicle=vehicle, tier=tier, crew_level=int(level),
+    result = dict(schema=1, vehicle=vehicle, tier=tier, crew_level=int(level),
                 descriptor=encoded, devices=list(expected['devices']),
                 directive=expected['directive'], style=expected['style'])
+    if overrides:
+        from gui.mods.offline_lan_0922.bot_tactics import normalize_values
+        result['overrides'] = normalize_values(overrides)
+    return result
 
 
 def _named(values, name):
@@ -102,11 +145,12 @@ def hull_camouflage(outfit, hull_area):
     return hull[0] if hull else None
 
 
-def build(vehicles, vehicle, tier, crew_level=None, restored=None):
+def build(vehicles, vehicle, tier, crew_level=None, restored=None, overrides=None):
     """Install exact native modules/devices and retain native install guards."""
     from items import tankmen, customizations
     from gui.mods.offline_lan_0922.vehicle_configuration import _installation_accepted
-    selected = plan(vehicle, tier)
+    overrides = overrides or (restored or {}).get('overrides') or {}
+    selected = plan(vehicle, tier, overrides)
     level = selected['crew'] if crew_level is None else crew_level
     if isinstance(level, bool) or not isinstance(level, (int, float)) or int(level) != level:
         raise ValueError('invalid Bot crew level')
@@ -148,12 +192,15 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None):
         raise ValueError('native Bot fitting module postcondition failed')
     if [d.name for d in descriptor.optionalDevices if d is not None] != selected['devices']:
         raise ValueError('native Bot fitting device postcondition failed')
-    wire = canonical(dict(schema=1, vehicle=vehicle, tier=tier, crew_level=level,
-        descriptor=encoded, devices=selected['devices'], directive=selected['directive'], style=selected['style']))
+    raw_wire = dict(schema=1, vehicle=vehicle, tier=tier, crew_level=level,
+        descriptor=encoded, devices=selected['devices'], directive=selected['directive'], style=selected['style'])
+    if overrides:raw_wire['overrides'] = overrides
+    wire = canonical(raw_wire)
     if restored is not None and canonical(restored) != wire:
         raise ValueError('restored Bot fitting changed')
-    skills = (() if tier in ('rookie', 'regular') else ('repair', 'camouflage'))
-    mask = default_crew.sandbox_skill_mask() if tier == 'elite' else tankmen.getSkillsMask(skills)
+    crew_tier = {'50':'rookie','75':'regular','repair':'veteran','all':'elite'}.get(overrides.get('crew_preset'), tier)
+    skills = (() if crew_tier in ('rookie', 'regular') else ('repair', 'camouflage'))
+    mask = default_crew.sandbox_skill_mask() if crew_tier == 'elite' else tankmen.getSkillsMask(skills)
     crew = tuple(tankmen.generateTankmen(descriptor.type.id[0], descriptor.type.id[1],
         descriptor.type.crewRoles, False, level, mask, False))
     if len(crew) != len(descriptor.type.crewRoles):

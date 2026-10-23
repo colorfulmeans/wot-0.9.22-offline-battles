@@ -20,6 +20,7 @@ package {
         public var offlineAction:Function;
         private var fields:Object = {};
         private var widgets:Object = {};
+        private var icons:Object = {};
         private var updating:Boolean = false;
         private var queue:Object;
         private var bodyFormat:TextFormat;
@@ -32,8 +33,8 @@ package {
             super.initialize();
             // The retained authoring prototype is not the content's geometry.
             // Window constraints capture scale before configUI runs.
-            _originalWidth = 620;
-            _originalHeight = 244;
+            _originalWidth = 660;
+            _originalHeight = 282;
             setActualScale(1, 1);
         }
 
@@ -44,28 +45,45 @@ package {
             bodyFormat.color = 11711136;
             while (numChildren) removeChildAt(0);
             graphics.beginFill(0, 0);
-            graphics.drawRect(0, 0, 620, 244);
+            graphics.drawRect(0, 0, 660, 282);
             graphics.endFill();
-            setSize(620, 244);
+            setSize(660, 282);
             super.configUI();
-            text("room", 0, 2, 620);
-            text("players", 0, 24, 620);
-            text("tierLabel", 0, 47, 292);
-            text("skillLabel", 316, 47, 304);
-            dropdown("tier", 0, 65, 292);
-            dropdown("skill", 316, 65, 304);
-            button("map", "ButtonNormal", 0, 97, 464);
-            button("random", "ButtonNormal", 476, 97, 144);
-            text("size1Label", 0, 126, 292);
-            text("size2Label", 316, 126, 304);
-            dropdown("size1", 0, 144, 292);
-            dropdown("size2", 316, 144, 304);
-            button("team1", "ButtonNormal", 0, 177, 196);
-            button("team_random", "ButtonNormal", 212, 177, 196);
-            button("team2", "ButtonNormal", 424, 177, 196);
-            text("message", 0, 202, 620);
-            button("start", "ButtonRed", 338, 222, 180);
-            button("close", "ButtonBlack", 526, 222, 94);
+            text("room", 0, 2, 660);
+            text("players", 0, 24, 660);
+            text("tierLabel", 0, 47, 312);
+            text("skillLabel", 336, 47, 324);
+            dropdown("tier", 0, 65, 312);
+            dropdown("skill", 336, 65, 324);
+            button("map", "ButtonNormal", 0, 97, 504);
+            button("random", "ButtonNormal", 516, 97, 144);
+            text("size1Label", 0, 126, 312);
+            text("size2Label", 336, 126, 324);
+            dropdown("size1", 0, 144, 312);
+            dropdown("size2", 336, 144, 324);
+            var classes:Array = ["lightTank", "mediumTank", "heavyTank", "AT-SPG", "SPG"];
+            for (var side:int = 1; side <= 2; ++side) {
+                for (var index:int = 0; index < classes.length; ++index) {
+                    var xPos:Number = (side == 1 ? 0 : 336) + index * 62;
+                    var key:String = "class_" + side + "_" + classes[index];
+                    var check:Object = component(key, "CheckBox", xPos, 177, 52);
+                    check.label = "";
+                    check.addEventListener(ButtonEvent.CLICK, clicked);
+                    var icon:Object = App.utils.classFactory.getComponent("Image", UIComponent, null, loaderInfo);
+                    icon.x = 24; icon.y = 1;
+                    icon.source = "img://gui/maps/icons/vehicleTypes/" + classes[index] + ".png";
+                    icon.enableInitCallback = false;
+                    icon.mouseEnabled = false;
+                    icons[key] = icon;
+                    DisplayObjectContainer(check).addChild(icon as DisplayObject);
+                }
+            }
+            button("team1", "ButtonNormal", 0, 215, 208);
+            button("team_random", "ButtonNormal", 226, 215, 208);
+            button("team2", "ButtonNormal", 452, 215, 208);
+            text("message", 0, 240, 660);
+            button("start", "ButtonRed", 378, 260, 180);
+            button("close", "ButtonBlack", 566, 260, 94);
         }
 
         private function text(key:String, xPos:Number, yPos:Number, w:Number):void {
@@ -232,6 +250,8 @@ package {
         }
 
         override protected function onDispose():void {
+            for each (var icon:Object in icons) icon.dispose();
+            icons = {};
             for (var key:String in widgets) {
                 var widget:Object = widgets[key];
                 widget.removeEventListener(ButtonEvent.CLICK, clicked);

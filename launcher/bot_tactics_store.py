@@ -113,7 +113,9 @@ class Store:
     def ensure_active(self):
         if not self.active_path.exists():
             _atomic(self.active_path, contract.default_profile())
-        contract.load(str(self.active_path))  # a corrupt file never becomes defaults
+        document = contract.load(str(self.active_path))
+        if document['name'].casefold() == 'default' and document != contract.default_profile():
+            _atomic(self.active_path, contract.default_profile())
         return str(self.active_path.resolve())
 
     def active(self):
@@ -124,10 +126,26 @@ class Store:
         if self.profiles.exists():
             for path in sorted(self.profiles.glob('*.json')):
                 try:
-                    result.append(contract.load(str(path))['name'])
+                    document=contract.load(str(path))
+                    if document['name'].casefold()=='default' and document!=contract.default_profile():
+                        _atomic(path,contract.default_profile())
+                    result.append(document['name'])
                 except contract.TacticsError:
                     continue  # not deleted; importing it still reports the error
-        return sorted(set(result))
+        return ['Default'] + sorted(set(n for n in result if n.casefold() != 'default'))
+
+    def unique_name(self, name):
+        name = contract._text(name, 48)
+        occupied = {n.casefold() for n in self.names()}
+        if name.casefold() not in occupied:
+            return name
+        index = 1
+        while True:
+            suffix = str(index)
+            candidate = name[:48-len(suffix)] + suffix
+            if candidate.casefold() not in occupied:
+                return candidate
+            index += 1
 
     def profile_path(self, name):
         # Labels need not be safe path components; never use a label as a path.
@@ -135,10 +153,21 @@ class Store:
         return self.profiles / (hashlib.sha256(name.encode('utf8')).hexdigest() + '.json')
 
     def read(self, name):
+        if name.casefold() == 'default':
+            return contract.default_profile()
         return contract.load(str(self.profile_path(name)))
 
     def save(self, document, apply=False):
         document = contract.canonical(document)
+        from gui.mods.offline_lan_0922.bot_fittings import validate_profile
+        validate_profile(document)
+        if document['name'].casefold() == 'default':
+            default = contract.canonical(contract.default_profile())
+            if document != default:
+                raise contract.TacticsError('Default is read only; create a custom profile first')
+            if apply:
+                _atomic(self.active_path, default)
+            return copy.deepcopy(default)
         _atomic(self.profile_path(document['name']), document)
         if apply:
             _atomic(self.active_path, document)
@@ -149,7 +178,46 @@ class Store:
 
     @staticmethod
     def import_file(filename):
-        return contract.load(str(filename))
+        document=contract.load(str(filename))
+        from gui.mods.offline_lan_0922.bot_fittings import validate_profile
+        validate_profile(document)
+        return document
+
+
+def ammunition_preview(game_root, vehicle, values, ratios=None):
+    """Resolve the actual selected research gun from pinned source resources."""
+    try:
+        from . import vehicle_overlays as overlays
+    except ImportError:
+        import vehicle_overlays as overlays
+    from gui.mods.offline_lan_0922 import bot_fittings, ammo_policy
+    def plain(value):
+        if isinstance(value, overlays.packed_xml.PackedValue):return plain(value.value)
+        if isinstance(value, overlays.packed_xml.PackedElement):return dict((k.decode(),plain(v)) for k,v in value.children)
+        return value.decode('utf8',errors='replace') if isinstance(value,bytes) else value
+    package=Path(game_root)/'res/packages/scripts.pkg'
+    nation,name=vehicle.split(':')
+    def read(path):return plain(overlays._read_source_member(str(package),'scripts/item_defs/vehicles/'+path)[1])
+    selected=bot_fittings.plan(vehicle,values.get('skill','regular'),dict((k,values[k]) for k in ('development',) if k in values))
+    modules=selected['modules'];definition=read(nation+'/'+name+'.xml')
+    local=definition['turrets0'][modules['turret']]['guns'][modules['gun']] or {}
+    gun=read(nation+'/components/guns.xml')['shared'][modules['gun']]
+    gun.update(local)
+    shell_data=read(nation+'/components/shells.xml')
+    translations=overlays._vehicle_translations(game_root,nation)
+    def caption(name):
+        text=shell_data[name].get('userString',name)
+        key=text.split(':',1)[-1] if text.startswith('#') else text
+        return translations.gettext(key) if translations else name
+    shells=[dict(index=i,name=n,label=caption(n),kind=shell_data[n]['kind']) for i,n in enumerate(gun['shots'])]
+    profile=dict(vehicle_name=vehicle,gun_name=modules['gun'],shells=shells,class_tag=bot_fittings.CLASSES[vehicle],
+                 clip_size=int(float((gun.get('clip') or {}).get('count',1))),ammo_ratios=[1]*len(shells))
+    ordered=ammo_policy.ordered(profile)
+    if ratios is None:profile.pop('ammo_ratios')
+    else:profile['ammo_ratios']=list(ratios)
+    counts=ammo_policy.allocation(profile,int(float(gun['maxAmmo'])),len(shells))
+    listed=read(nation+'/list.xml')[name]
+    return dict(vehicle=vehicle,gun=modules['gun'],shells=ordered,counts=counts,clip_size=profile['clip_size'],fixed=isinstance(listed.get('price'),dict) and 'gold' in listed['price'])
 
 
 def graph_data(name):

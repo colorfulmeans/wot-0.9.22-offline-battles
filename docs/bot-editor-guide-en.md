@@ -1,8 +1,20 @@
-# Bot Map Tactics Editor — v0.10.0
+# Bot Map Tactics Editor — v0.10.2
 
 ## Opening and saving
 
 Open **Bot configuration and map tactics** in the launcher. Select the attack-route/artillery-position tab, then choose a map, spawn team and vehicle-class view.
+
+**Default is immutable** in both tabs. Create a custom profile before editing.
+Opening Default remains a read-only preview, and applying it selects the built-in
+profile for the next battle. Old debug overrides of Default are reset. New and
+imported names are suffixed on conflict (Default1, Default2, ...); they never
+replace Default. Renaming the visible field does not unlock the built-in.
+
+**Restore default draft** resets the current custom profile's entire draft to
+the built-in content while keeping its custom name. It clears unsubmitted forms,
+selection and undo/redo history. It does not save, activate or change a current
+battle. All numeric behavior controls use readonly dropdowns, with separate
+inherit entries. Imported legal fractional behavior values are retained.
 
 **Save draft** stores the profile without activating it. **Save and apply (next battle)** saves and activates it for subsequent battles; a running battle is unchanged. Use Open to load a profile and Import/Export to share or back it up.
 
@@ -86,3 +98,38 @@ Built-in route and position names follow the launcher language. Newly entered cu
 Behavior rules can override global, team, vehicle-class and slot settings. Blank values inherit. Difficulty and crew level are separate. Reaction time, first-shot aiming patience, convergence factor, aiming bias and moving-target prediction error affect Bot decisions; they do not directly rewrite armor, penetration, reload speed or the physical dispersion rules.
 
 Configuration storage: `%LOCALAPPDATA%\WoTOfflineBattles\bot_tactics`. `active.json` is the applied profile; `profiles` contains named profiles. Prefer Export for backups instead of editing these files manually.
+
+## v0.10.2 customization verification
+
+The behavior form uses independent whole presets and readonly ratio digits;
+stock development only allows no equipment. Numeric route and parking controls
+are dropdowns too, including a dropdown checklist for multiple slot bindings.
+The vehicle editor displays clip and trigger intervals in seconds while keeping
+legacy native-rate profiles intact. It materializes missing native burst nodes
+only when explicitly edited. Trigger count is 1..64 and cannot exceed the clip;
+clip capacity is bounded by the existing 255-round wire contract. Partial
+triggers never borrow from the next clip. Newly created unlocked garages mount
+three legal improved devices and a directive with auto-resupply checked. This
+initialization does not run for the hidden worker; saved removals/settings win.
+
+Verification covers real Tk selection/reset/undo/import behavior, inherited
+presets, empty inventory, ratio rounding across digit combinations, host-only
+class changes, shrinking/re-expanding artillery controls, full human teams,
+malformed profile containment, packed XML round trips and native fitting
+identity. `tools/verify_bot_fittings.py` checks all 576 supported hulls against
+#1513 modules, load, native device filters and ammunition (9,216 combinations
+examined, 7,488 permitted by the stock/no-equipment rule). The Python 2 ABI
+auditor checks the exact native `60 / rate` clip/burst reader.
+
+Run the isolated reference suite on Linux with
+`python tools/run_test_suite.py --directory tests`; run the launcher suite with
+`python tools/run_test_suite.py --directory launcher/tests` and a real Tk
+display. The packaged `--verify-bot-editor` entrance now first proves Default
+is immutable, forks a custom baseline, exercises independent presets and empty
+ammunition, then verifies canvas editing and both UI languages. Packaging also
+checks actual bytecode, frozen source and native payload identities.
+
+These checks do not establish BigWorld rendering, mouse hit testing or gameplay
+feel. Both class-filter rows in the real #1513 standard/training interfaces and
+battle entry remain real-client acceptance cases. No release or merge is part
+of the test-package workflow.

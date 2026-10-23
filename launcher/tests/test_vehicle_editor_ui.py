@@ -270,6 +270,18 @@ class VehicleEditorWindowTest(unittest.TestCase):
             self.messagebox,
             log=self.log.append, service=self.service)
 
+    def test_magazine_rates_display_seconds_and_save_inverse_native_rate(self):
+        path='shared/Gun-A/clip/rate';member='scripts/item_defs/vehicles/ussr/components/guns.xml'
+        self.service.extra_fields=[self.service._field(member,path,'Gun','Gun-A / Magazine / Short reload time (seconds)',True,('R11_MS-1',))]
+        self.window.refresh_vehicle_fields()
+        self.assertTrue(self.window.select_field_from_viewer((member,path)))
+        self.assertAlmostEqual(60.0/32.0,float(self.window.current.get()))
+        self.window.replacement.set('0.1');self.assertTrue(self.window.apply())
+        self.assertEqual('600',self.service.apply_calls[-1][-1])
+        self.assertAlmostEqual(0.1,float(self.window.current.get()))
+        for bad in ('0','-1','nan','inf'):
+            self.window.replacement.set(bad);self.assertFalse(self.window.apply())
+
     def test_bot_exclusion_option_saves_and_reloads_this_profile(self):
         self.assertFalse(self.window.exclude_edited_vehicles_from_bots.get())
         self.window.exclude_edited_vehicles_from_bots.set(True)
@@ -681,7 +693,7 @@ class VehicleEditorWindowTest(unittest.TestCase):
             "Shell-A / Damage / Module damage",
             self.window._field_label("Shell-A / Damage / Module damage"))
         self.assertEqual(
-            "弹夹短装填射速（越高越短）",
+            "弹夹短装填时间（秒）",
             window._field_label(
                 "Magazine firing rate (higher is a shorter reload)"))
         self.assertEqual(

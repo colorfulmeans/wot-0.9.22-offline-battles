@@ -774,7 +774,9 @@ def _selected_vehicle(config, restore_saved=True):
                                  if type_id == selected_type_id else None)),
                     top_modules=not career,
                     own_researchable_modules=not career,
-                    full_crew_skills=not career)
+                    full_crew_skills=not career,
+                    default_elite_equipment=(not career and
+                        _client_mode != port_config.SIMULATION_WORKER_MODE))
             except Exception:
                 if type_id == selected_type_id:
                     raise

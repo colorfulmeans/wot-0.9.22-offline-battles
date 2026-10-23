@@ -113,6 +113,7 @@ EXPECTED_ABI = {
             'itemTypeName', 'nationID', 'itemID'),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('xmlCtx','section','type'),
         '_readSiegeModeParams': ('xmlCtx', 'section', 'vehType'),
         'VehicleDescr': ('compactDescr', 'typeID', 'typeName'),
         'getDefaultAmmoForGun': ('gunDescr',),
@@ -1078,6 +1079,7 @@ EXPECTED_CODE_LITERALS = {
         'NoLegacyStuff.items': ('Operation is not supported',),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('/count','/rate'),
         '_readSiegeModeParams': (
             'siege_mode', 'switchOnTime', 'switchOffTime',
             'switchCancelEnabled', 'engineDamageCoeff', 'normal',
@@ -1196,6 +1198,7 @@ EXPECTED_CODE_NAMES = {
         'ModelHitTester.releaseBspModel': ('bbox',),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('readInt','readPositiveFloat'),
         '_readSiegeModeParams': (
             'readNonNegativeFloat', 'readBool', 'False', 'IS_CLIENT',
             'VEHICLE_SIEGE_STATE', 'SWITCHING_ON', 'SWITCHING_OFF'),
@@ -2545,6 +2548,22 @@ EXPECTED_SUBSCRIPT_MUTATIONS = {
 # arithmetic between steps, but bounds each gap so dead or distant code cannot
 # accidentally satisfy a contract.
 EXPECTED_ORDERED_INSTRUCTION_PATTERNS = {
+    'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': (
+            'native clip and burst interval is sixty divided by rate',0,(
+                ('LOAD_CONST','value',60.0),
+                ('LOAD_GLOBAL','value','_xml'),
+                ('LOAD_ATTR','value','readPositiveFloat'),
+                ('LOAD_FAST','value','xmlCtx'),
+                ('LOAD_FAST','value','section'),
+                ('LOAD_FAST','value','type'),
+                ('LOAD_CONST','value','/rate'),
+                ('BINARY_ADD',None,None),
+                ('CALL_FUNCTION','argument',3),
+                ('BINARY_DIVIDE',None,None),
+                ('STORE_FAST','value','interval'),
+            )),
+    },
     'scripts/common/DestructiblesCache.pyc': {
         'encodeDestructibleModule': (
             'module material occupies one seven-bit field', 4, (

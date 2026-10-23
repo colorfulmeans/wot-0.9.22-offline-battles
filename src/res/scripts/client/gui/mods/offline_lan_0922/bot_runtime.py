@@ -1619,7 +1619,7 @@ def _bot_ammo_capacity(descriptor):
 def _bot_ammo_categories(profile, shell_count):
     """Logical slots only; physical kind and gold price are never inferred."""
     from gui.mods.offline_lan_0922.ammo_policy import stages
-    return dict((int(shell['index']), ('standard', 'premium', 'he')[offset])
+    return dict((int(shell['index']), ('standard', 'premium', 'he')[min(offset, 2)])
                 for offset, shell in enumerate(stages(profile)))
 
 
@@ -3296,7 +3296,7 @@ class BotRuntime(object):
         return True
 
     def _bot_equipment_contracts(self, bot_id, snapshots=None):
-        raw = tuple(self.bot_equipment_resolver(self.bot_skill(bot_id)) or ())
+        raw = tuple(self.bot_equipment_resolver(self.bot_consumable_skill(bot_id)) or ())
         contracts = ()
         if raw:
             contracts = equipment_mechanics.bot_consumable_contracts({
@@ -3305,7 +3305,7 @@ class BotRuntime(object):
             restored_contracts = \
                 equipment_mechanics.bot_consumable_contracts(
                     None, snapshot=snapshots)
-            if ((contracts or self.bot_skill(bot_id) == 'rookie') and
+            if ((contracts or self.bot_consumable_skill(bot_id) == 'rookie') and
                     restored_contracts != contracts):
                 raise ValueError('bot equipment contracts changed')
             if not contracts:
@@ -3651,12 +3651,19 @@ class BotRuntime(object):
     def bot_crew_level(self, bot_id):
         """Return the #1513 crew level this Bot's rating trains it to."""
         values = getattr(self, '_bot_behavior', {}).get(int(bot_id), {})
+        if 'crew_preset' in values:
+            return {'50':50, '75':75, 'repair':100, 'all':100}[values['crew_preset']]
         if 'crew_level' in values:
             return int(values['crew_level'])
         if getattr(self, 'bot_descriptor_resolver', None) is not None:
             from gui.mods.offline_lan_0922 import bot_fittings
             return bot_fittings.crew_level(self.bot_skill(bot_id))
         return int(bot_gunnery.rating_crew_level(self.bot_rating(bot_id)))
+
+    def bot_consumable_skill(self, bot_id):
+        value = getattr(self, '_bot_behavior', {}).get(int(bot_id), {}).get('consumables')
+        return {'none':'rookie', 'once':'regular', 'repeat':'veteran',
+                'large':'elite'}.get(value, self.bot_skill(bot_id))
 
     def bot_aim_selection_allowed(self, state, target):
         """Return whether this Bot's gunner picks the part it can hurt most.
@@ -3960,9 +3967,11 @@ class BotRuntime(object):
                     if not restoring_authority and 'skill' in values:
                         rating = bot_gunnery.rating_for_skill(values['skill'])
                     tier = bot_gunnery.skill_for_rating(rating)
-                    level = values.get('crew_level', bot_fittings.crew_level(tier))
-                    resolved_descriptor = self.bot_descriptor_resolver(
-                        vehicle_name, tier, level, raw.get('fitting'))
+                    level = ({'50':50, '75':75, 'repair':100, 'all':100}.get(values.get('crew_preset'))
+                             if 'crew_preset' in values else values.get('crew_level', bot_fittings.crew_level(tier)))
+                    overrides = dict((k, values[k]) for k in ('development', 'equipment', 'crew_preset') if k in values)
+                    args = (vehicle_name, tier, level, raw.get('fitting'))
+                    resolved_descriptor = self.bot_descriptor_resolver(*(args + (overrides,) if overrides else args))
                 descriptor_pair = siege_mechanics.descriptor_pair(
                     resolved_descriptor)
             except Exception as error:
@@ -4048,6 +4057,8 @@ class BotRuntime(object):
             agents = getattr(self.adapter.director, 'agents', {})
             agent = agents.get(bot_id, {})
             profile = agent.get('profile', {})
+            if 'ammo_ratios' in values:
+                profile['ammo_ratios'] = list(values['ammo_ratios'])
             route = agent.get('route') or {}
             max_health = max(1, int(getattr(descriptor, 'maxHealth',
                                             raw.get('max_health', 1000))))
@@ -4726,7 +4737,7 @@ class BotRuntime(object):
         for equipment in self._equipment_states.get(int(state['id']), ()):
             effect = equipment.poll_bot(
                 self._equipment_now, state.get('critical'),
-                stunned=self._bot_stunned(state), skill=self.bot_skill(state['id']))
+                stunned=self._bot_stunned(state), skill=self.bot_consumable_skill(state['id']))
             if effect is None:
                 continue
             effect = dict(effect)

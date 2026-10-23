@@ -15,7 +15,8 @@ def is_he(shell):
 
 def ordered(profile, remaining=None):
     shells = list(profile.get('shells') or ())
-    roles = profile_roles(profile)
+    manual = 'ammo_ratios' in profile
+    roles = None if manual else profile_roles(profile)
     if roles is not None:
         shells = [s for s in shells if int(s['index']) in roles]
         shells.sort(key=lambda s: ('standard', 'premium', 'he').index(roles[int(s['index'])]))
@@ -26,7 +27,10 @@ def ordered(profile, remaining=None):
         shells.sort(key=lambda s: (
             4 * int(nation + ':' + s.get('name', '') in GOLD_SHELLS) +
             kinds.get(str(s.get('kind', '')).upper(), 4), int(s['index'])))
-    if profile.get('class_tag') == 'SPG':
+    if manual:
+        proportions = profile['ammo_ratios']
+        shells = [s for i,s in enumerate(shells) if i < len(proportions) and proportions[i] > 0]
+    elif profile.get('class_tag') == 'SPG':
         shells = [s for s in shells if is_he(s)]
     elif shells and is_he(shells[0]):
         # HE-primary guns have one explicit non-HE probe, never two backups.
@@ -39,7 +43,9 @@ def ordered(profile, remaining=None):
 
 def stages(profile, remaining=None):
     shells = ordered(profile)
-    if shells and profile.get('class_tag') != 'SPG' and is_he(shells[0]):
+    if 'ammo_ratios' in profile:
+        pass
+    elif shells and profile.get('class_tag') != 'SPG' and is_he(shells[0]):
         shells = shells[:1] + [s for s in shells[1:] if not is_he(s)][:1]
     elif profile.get('class_tag') != 'SPG':
         shells = [s for s in shells if not is_he(s)] + [s for s in shells if is_he(s)]
@@ -54,6 +60,14 @@ def clip_size(profile):
 
 
 def weights(profile, shells):
+    if 'ammo_ratios' in profile:
+        raw = dict(profile)
+        raw.pop('ammo_ratios')
+        # Reconstruct the full native price/kind order without the default
+        # gun whitelist. Zero weights never receive a rounding minimum.
+        raw['ammo_ratios'] = [1] * len(profile.get('shells', ()))
+        indices = [int(s['index']) for s in ordered(raw)]
+        return tuple(profile['ammo_ratios'][indices.index(int(s['index']))] for s in shells)
     if len(shells) <= 1:
         return (100,)
     if profile.get('class_tag') == 'SPG':

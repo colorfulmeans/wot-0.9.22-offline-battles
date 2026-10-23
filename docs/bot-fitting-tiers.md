@@ -1,9 +1,11 @@
 # Bot fitting tiers (#1513)
 
 The resolved Bot skill label selects a discrete native fitting. Continuous
-reaction, aim and tactical ratings remain unchanged. An explicit tactics
-crew-level override wins over the tier default. Player garage fittings and
-ammunition defaults are unchanged.
+reaction, aim and tactical ratings remain unchanged. Each tactics field can independently override its inherited difficulty preset.
+A coupled crew preset owns both level and skills. Player ammunition keeps its
+native defaults; newly created unlocked garages initialize elite devices and
+their directive, with directive auto-resupply enabled. Existing saved fittings
+and user changes win on restore. Career starters remain stock and unequipped.
 
 | Tier | Modules | Crew | Skills | Devices | Directive | Outfit |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -135,3 +137,41 @@ Static resource and adapter checks do not establish BigWorld rendering,
 installation lifetime, performance or gameplay acceptance on the real client.
 The test package records one `BOT FITTING` line per unique configuration to
 make any native admission or fitted-model discrepancy identifiable.
+
+## Independent launcher presets and validation
+
+Development, equipment, consumables, crew and ammunition ratios are separate
+optional overrides at the existing global/team/class/slot scopes. A difficulty
+change does not clear explicit overrides. The equipment choices are none, one
+regular device, three regular devices, or three improved devices plus the
+first device's directive. Consumables are whole presets: none, small kits and
+manual extinguisher once, the same reusable, or reusable large kits and automatic
+extinguisher. Their use policy follows that preset, independently of aim skill.
+Crew choices couple 50/75 with no additional skills, 100 with repair/camouflage,
+or 100 with all role-legal skills. Legacy crew-level-only imports retain their
+original skills until explicitly replaced.
+
+The expanded exact-resource audit evaluates 9,216 fittings: 2,304 original
+presets plus 6,912 development/equipment combinations. All overloaded cases
+are in stock-chassis/device combinations. Stock development therefore only
+allows no equipment: selecting stock sets that choice and restricts the menu;
+imports, storage and battle start enforce the same rule. Intermediate/full
+module presets with any of the four equipment choices remain within native
+load in the resource audit (7,488 allowed fitting records in total). Native
+installation admission remains mandatory.
+
+Manual ammunition ratios are readonly digits 0..9. Positive weights use the
+existing nearest, full-capacity allocation; zero-weight shells are excluded.
+All zero is a legal unarmed Bot. Magazine vehicles allocate magazine units,
+retaining rounds per magazine; any remainder stays with the primary shell.
+Manual ratios use all native shells in silver AP/APCR/HEAT/HE then gold
+AP/APCR/HEAT/HE order, bypassing only the default gun ammunition whitelist.
+Price, shell kind and physical identities do not change. Pinned slots preview
+the resolved development gun; generic scopes apply to the eventual gun.
+
+Every team has five native class checkboxes for automatic fill. Humans and
+pinned vehicles remain; they consume artillery quota. Up to six total team
+members allow no automatic artillery; 7..9 allow 0..1, 10..12 allow 0..2,
+and 13..15 allow 0..3. Shrinking below seven clears artillery and increasing
+again does not restore the check. An empty/unfillable allowed pool refuses
+start. Training without Bots keeps these preferences without using them.

@@ -2253,7 +2253,7 @@ class SimulationWorkerSocketTests(unittest.TestCase):
                 'map_pool', 'host_player_id', 'phase', 'round_id',
                 'state_revision', 'spawn', 'bot_authority_id', 'team_size',
                 'authority_epoch', 'capabilities', 'server_capabilities',
-                'team_sizes', 'requested_team', 'bot_tier_mode',
+                'team_sizes', 'team_classes', 'requested_team', 'bot_tier_mode',
                 'bot_skill_mode',
                 'worker_status', 'vehicle_compact_descr',
                 'effective_params',

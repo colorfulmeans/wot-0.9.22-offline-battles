@@ -1,4 +1,5 @@
 from __future__ import print_function
+from gui.mods.offline_lan_0922 import bot_tactics
 
 """Playable #1513 battle runtime built on stock Avatar and Vehicle entities."""
 
@@ -5253,17 +5254,18 @@ class BattleRuntime(object):
             (vehicle_name, failure))
 
     def _resolve_bot_fitted_descriptor(self, vehicle, tier, crew_level=None,
-                                       restored=None):
+                                       restored=None, overrides=None):
         from gui.mods.offline_lan_0922 import bot_fittings
         level = bot_fittings.crew_level(tier) if crew_level is None else crew_level
-        key = ('bot_fitting', vehicle, tier, level)
+        overrides = overrides or (restored or {}).get('overrides') or {}
+        key = ('bot_fitting', vehicle, tier, level, tuple(sorted(overrides.items())))
         cached = self._descriptor_cache.get(key)
         if cached is not None:
             if restored is not None and bot_fittings.canonical(restored) != bot_fittings.context(cached)['wire']:
                 raise ValueError('cached Bot fitting changed during restore')
             return cached
         descriptor = bot_fittings.build(
-            self._runtime.vehicles, vehicle, tier, level, restored)
+            self._runtime.vehicles, vehicle, tier, level, restored, overrides)
         if self._remote_factory is None:
             raise RuntimeError('Bot fitting geometry owner is unavailable')
         prepared = self._remote_factory.prepare_descriptor(descriptor)
@@ -5272,7 +5274,7 @@ class BattleRuntime(object):
         bot_fittings.register(prepared, context)
         self._descriptor_cache[key] = prepared
         sys.stdout.write('BOT FITTING vehicle=%s tier=%s crew=%s modules=%s devices=%s directive=%s style=%s\n' % (
-            vehicle, tier, level, bot_fittings.plan(vehicle, tier)['modules'],
+            vehicle, tier, level, bot_fittings.plan(vehicle, tier, overrides)['modules'],
             bot_fittings.context(prepared)['wire']['devices'],
             bot_fittings.context(prepared)['wire']['directive'],
             bot_fittings.context(prepared)['wire']['style']))
@@ -5720,17 +5722,21 @@ class BattleRuntime(object):
                     len(humans_by_team[team]) + len(team_bots))
                 pinned_spgs = sum(side == team and name in artillery_names
                                   for (side, slot), name in pinned_vehicles.items())
+                choices = bot_tactics.team_class_choices(self._start_message.get('team_classes'), self._start_message.get('team_sizes'))[str(team)]
+                team_candidates = [v for v in automatic_candidates if choices[bot_planner.vehicle_match_class(v)]]
+                picked = [v for v in picked if choices[bot_planner.vehicle_match_class(v)]]
+                auto_bots=[raw for raw in team_bots if (team,int(raw.get('slot',0))) not in pinned_vehicles]
                 picked = bot_planner.select_bot_lineup(
-                    picked or automatic_candidates, len(team_bots),
+                    picked or team_candidates, len(auto_bots),
                     spg_limit=max(0, artillery_limit - human_spgs - pinned_spgs),
-                    fallback_candidates=automatic_candidates)
-                picked = list(picked[:len(team_bots)])
+                    fallback_candidates=team_candidates)
+                picked = list(picked[:len(auto_bots)])
                 # The template balances roles and tiers, not vehicle names.
                 # Draw only from the validated, non-excluded automatic pool;
                 # the shared seed keeps replicas and the worker in agreement.
                 randomized = []
                 for entry in picked:
-                    pool = [candidate for candidate in automatic_candidates
+                    pool = [candidate for candidate in team_candidates
                             if candidate['level'] == entry['level'] and
                             bot_planner.vehicle_match_class(candidate) ==
                             bot_planner.vehicle_match_class(entry)]
@@ -5739,7 +5745,10 @@ class BattleRuntime(object):
                 picked = randomized
                 lineup_random.shuffle(picked)
                 picked.sort(key=self._vehicle_class_order)
-                for raw, entry in zip(team_bots, picked):
+                missing=auto_bots[len(picked):]
+                if missing:
+                    raise ValueError('Allowed Bot classes cannot fill team %d; enable a non-artillery class or reduce team size' % team)
+                for raw, entry in zip(auto_bots, picked):
                     assignments[(team, int(raw.get('slot', 0)))] = \
                         entry['name']
             allowed_names = set(

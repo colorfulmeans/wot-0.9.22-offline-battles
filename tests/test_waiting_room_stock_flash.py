@@ -129,8 +129,8 @@ class StockRoomTests(unittest.TestCase):
         source = (ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_text(encoding='utf8')
         initialize = source.split('override protected function initialize():void {')[1].split(
             'override protected function configUI():void {')[0]
-        self.assertIn('_originalWidth = 620', initialize)
-        self.assertIn('_originalHeight = 244', initialize)
+        self.assertIn('_originalWidth = 660', initialize)
+        self.assertIn('_originalHeight = 282', initialize)
         self.assertIn('setActualScale(1, 1)', initialize)
         component = source.split('private function component(')[1].split('private function button(')[0]
         self.assertIn('App.utils.classFactory.getComponent', component)

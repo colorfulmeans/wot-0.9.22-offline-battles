@@ -1,4 +1,5 @@
 from __future__ import print_function
+from gui.mods.offline_lan_0922 import bot_tactics
 
 import base64
 import json
@@ -1697,6 +1698,7 @@ class LANClient(object):
         self.player_id = None
         self.team = None
         self.team_sizes = {1: 15, 2: 15}
+        self.team_classes = bot_tactics.team_class_choices()
         self.bot_tier_mode = 'random'
         self.bot_skill_mode = bot_gunnery.DEFAULT_SKILL_MODE
         self.slot = 0
@@ -2027,6 +2029,12 @@ class LANClient(object):
         if team in (1, 2) and team == self.team:
             return True
         return self._send({'type': 'select_team', 'team': team})
+
+    def set_team_class(self, team, tag, allowed):
+        if (not self.ready or self.phase!='waiting' or self.player_id!=self.host_player_id or
+                team not in (1, 2) or tag not in bot_tactics.CLASSES or type(allowed) is not bool):
+            return False
+        return self._send({'type':'set_team_class','team':team,'class_tag':tag,'allowed':allowed})
 
     def set_team_size(self, team, size):
         """Request one live waiting-room capacity as the elected host."""
@@ -4780,6 +4788,10 @@ class LANClient(object):
             self.vehicle = _safe_text(message.get('vehicle'), self.vehicle)
             self.team = team
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self.bot_tier_mode = bot_tier_mode
             self.bot_skill_mode = bot_skill_mode
             self.slot = slot
@@ -4921,6 +4933,10 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self.bot_tier_mode = bot_tier_mode
             self.bot_skill_mode = bot_skill_mode
             self._adopt_published_vehicle(players)
@@ -5046,6 +5062,10 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self._adopt_published_vehicle(players)
             self.host_player_id = host_player_id
             self._battle_start_round_id = round_id
@@ -5113,6 +5133,10 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
         elif kind == 'team_size_denied':
             round_id = _exact_int(message.get('round_id'))
             team = _team_choice(message.get('team'), None)
@@ -5131,6 +5155,10 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
         elif kind == 'bot_tier_mode_denied':
             round_id = _exact_int(message.get('round_id'))
             mode = _safe_text(message.get('bot_tier_mode'), '', 32)

@@ -56,7 +56,7 @@ class CatalogTests(unittest.TestCase):
     def test_behavior_and_policy_catalogs_cover_runtime_identifiers(self):
         self.assertEqual({'total', 'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
         self.assertEqual({''} | set(storage.contract.SKILLS), set(labels.ENUM_NAMES['skill']))
-        self.assertEqual(set(storage.contract.PARAMETERS) | {'skill', 'crew_level'}, set(labels.PARAM_NAMES))
+        self.assertEqual(set(storage.contract.PARAMETERS) | set(storage.contract.PRESETS) | {'skill','crew_level','ammo_ratios'}, set(labels.PARAM_NAMES))
         self.assertEqual({'preferred', 'fixed'}, set(labels.ENUM_NAMES['policy']))
 
 
@@ -67,7 +67,7 @@ class LanguageUITests(unittest.TestCase):
         # Exercise the historical source-graph fixture independently of the adopted baseline.
         patcher=mock.patch.object(storage.contract,'default_map',return_value={})
         patcher.start();self.addCleanup(patcher.stop)
-        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
+        storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root = tk.Tk(); self.root.withdraw(); self.addCleanup(self.root.destroy)
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
@@ -103,7 +103,7 @@ class LanguageUITests(unittest.TestCase):
 
     def test_programmatic_canonical_values_remain_supported(self):
         self.ui.rule_vars['class_tag'].set('AT-SPG')
-        self.assertEqual('坦克歼击车', self.ui.rule_boxes['class_tag'].get())
+        self.assertEqual('自行反坦克炮', self.ui.rule_boxes['class_tag'].get())
         self.ui.set_language('en'); self.root.update()
         self.assertEqual('Tank destroyer', self.ui.rule_boxes['class_tag'].get())
         self.assertEqual('AT-SPG', self.ui.rule_vars['class_tag'].get())

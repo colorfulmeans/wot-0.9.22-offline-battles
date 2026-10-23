@@ -60,12 +60,38 @@ class LocalizedCombobox(ttk.Combobox):
 
 
 
+class SlotsDropdown(ttk.Menubutton):
+    """Native dropdown checklist; no free-form comma-separated numeric input."""
+    def __init__(self,parent,variable,language,**options):
+        self.canonical=variable;self.display=tk.StringVar(master=parent)
+        super().__init__(parent,textvariable=self.display,**options)
+        self.menu=tk.Menu(self,tearoff=False);self.configure(menu=self.menu)
+        self.choices=[tk.BooleanVar(master=parent) for unused in range(15)]
+        self.language=language;self.set_language(language)
+        self._trace=variable.trace_add('write',self._sync);self._sync()
+    def set_language(self,language):
+        self.language=language;self.menu.delete(0,'end')
+        self.menu.add_command(label='全部槽位' if language=='zh' else 'All slots',command=lambda:self.canonical.set(''))
+        for i,var in enumerate(self.choices):self.menu.add_checkbutton(label=str(i+1),variable=var,command=self._choose)
+        self._sync()
+    def _choose(self):
+        self.canonical.set(','.join(str(i+1) for i,v in enumerate(self.choices) if v.get()))
+    def _sync(self,*unused):
+        chosen=set(self.canonical.get().split(','))
+        for i,v in enumerate(self.choices):v.set(str(i+1) in chosen)
+        self.display.set(self.canonical.get() or ('全部槽位' if self.language=='zh' else 'All slots'))
+    def destroy(self):
+        self.canonical.trace_remove('write',self._trace);super().destroy()
+
+
 CLASS_COLORS = dict(zip(contract.CLASSES, ('#25a627', '#b1962d', '#a5a5a5', '#2c62aa', '#c83346')))
 CLASS_COLORS['all'] = '#000000'
 
 
 class BotTacticsEditor:
-    def __init__(self, parent, game_root='', store=None, language='zh', log=None):
+    def __init__(self, parent, game_root='', store=None, language='zh', log=None, lineup=None):
+        self.lineup = lineup or (lambda:[])
+        self._ammo_identity=();self._ammo_updating=False
         self.language = i18n.resolve_language(language)
         self.zh = self.language == 'zh'; self.game_root = game_root
         self._translations = {}
@@ -87,7 +113,7 @@ class BotTacticsEditor:
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self._build()
         self.map_name = '33_fjord'; self.team = 1
-        self._load_map(); self._refresh_rules(); self._refresh_profiles()
+        self._load_map(); self._refresh_rules(); self._refresh_profiles(); self._refresh_lock()
         self.root.bind('<Control-z>', lambda e: self.undo())
         self.root.bind('<Control-y>', lambda e: self.redo())
         self.root.bind('<Control-s>', lambda e: self.save(False))
@@ -114,7 +140,7 @@ class BotTacticsEditor:
             return
         self.language = language; self.zh = language == 'zh'
         def refresh(widget):
-            if isinstance(widget, LocalizedCombobox):
+            if isinstance(widget, (LocalizedCombobox,SlotsDropdown)):
                 widget.set_language(language)
             if isinstance(widget, (ttk.Label, ttk.Button, ttk.Checkbutton, ttk.LabelFrame)):
                 text = str(widget.cget('text'))
@@ -157,7 +183,8 @@ class BotTacticsEditor:
             ('打开', 'Open', self.open_profile), ('新建', 'New', self.new_profile),
             ('导入', 'Import', self.import_profile), ('导出', 'Export', self.export_profile),
             ('恢复默认草稿', 'Default draft', self.default_profile)):
-            ttk.Button(head, text=self.tr(zh,en), command=command).pack(side='left', padx=2)
+            button=ttk.Button(head, text=self.tr(zh,en), command=command);button.pack(side='left', padx=2)
+            if zh=='恢复默认草稿':self.restore_button=button
         self.book = ttk.Notebook(self.root)
         behavior = ttk.Frame(self.book, padding=12); maps = ttk.Frame(self.book, padding=6)
         self.book.add(behavior, text=self.tr('行为参数', 'Behavior'))
@@ -167,18 +194,16 @@ class BotTacticsEditor:
         self.status = tk.StringVar(value=self.tr('已载入当前配置。修改先作为草稿，不影响进行中的战斗。',
                                                'Loaded active profile. Editing does not change an ongoing battle.'))
         ttk.Label(foot, textvariable=self.status, wraplength=670).pack(side='left', fill='x', expand=True)
-        ttk.Button(foot, text=self.tr('保存草稿', 'Save draft'), command=lambda:self.save(False)).pack(side='left', padx=5)
+        self.save_button=ttk.Button(foot, text=self.tr('保存草稿', 'Save draft'), command=lambda:self.save(False));self.save_button.pack(side='left', padx=5)
         ttk.Button(foot, text=self.tr('保存并应用（下一局）', 'Apply next battle'), command=lambda:self.save(True)).pack(side='left')
         ttk.Button(foot, text=self.tr('关闭', 'Close'), command=self.close).pack(side='left', padx=5)
         self.book.pack(fill='both', expand=True, padx=10)
 
     def _build_behavior(self, parent):
         ttk.Label(parent, text=self.tr(
-            '留空表示继承。覆盖顺序：全局 → 队伍 → 车型 → 指定槽位。只调整 Bot 决策；乘员等级另列。\n'
-            '射速、装甲、穿深、炮弹散布规律和碰撞规则不在此处修改。明确设置难度时优先于阵容难度。',
-            'Blank values inherit. Global → team → class → slot. Crew level is independent.\n'
-            'No armour, penetration, reload-law, dispersion-law or collision cheats. Explicit skill overrides lineup skill.'),
-                  justify='left').pack(anchor='w', pady=(0,12))
+            'Default 为只读。修改请新建方案。继承顺序：全局 → 队伍 → 车型 → 指定槽位；每项独立覆盖，下一局生效。',
+            'Default is read only. Create a profile to edit. Global → team → class → slot; independent overrides apply next battle.'),
+            wraplength=1080).pack(anchor='w', pady=(0,8))
         main = ttk.Frame(parent); main.pack(fill='both', expand=True)
         self.rules = ttk.Treeview(main, columns=('team','class','slot','values'), show='headings', height=14)
         for key,label,width in [('team',self.tr('队伍','Team'),60),('class',self.tr('车型','Class'),90),
@@ -188,27 +213,117 @@ class BotTacticsEditor:
         self.rules.bind('<<TreeviewSelect>>',self._select_rule)
         form=ttk.Frame(main,padding=(14,0));form.pack(side='left',fill='y')
         self.rule_vars={}; self.rule_boxes={}
-        for row,(name,label,values) in enumerate([
-            ('team',self.tr('队伍','Team'),('0','1','2')),
-            ('class_tag',self.tr('车型','Class'),('all',)+contract.CLASSES),
-            ('slot',self.tr('槽位','Slot'),('',)+tuple(str(i) for i in range(1,16))),
-            ('skill',self.tr('难度','Difficulty'),('',)+contract.SKILLS),
-            ('crew_level',self.tr('乘员等级','Crew level'),('','75','90','100'))]):
-            ttk.Label(form,text=label).grid(row=row,column=0,sticky='w',pady=5)
+        fields=[('team',self.tr('队伍','Team'),('0','1','2')),
+                ('class_tag',self.tr('车型','Class'),('all',)+contract.CLASSES),
+                ('slot',self.tr('槽位','Slot'),('',)+tuple(str(i) for i in range(1,16))),
+                ('skill',self.tr('难度','Difficulty'),('',)+contract.SKILLS)]
+        for name in ('development','equipment','consumables','crew_preset'):
+            fields.append((name,labels.parameter_label(name,self.language),('',)+contract.PRESETS[name]))
+        for row,(name,label,values) in enumerate(fields):
+            actual=row+1 if name in ('consumables','crew_preset') else row
+            ttk.Label(form,text=label).grid(row=actual,column=0,sticky='w',pady=3)
             var=tk.StringVar(value='0' if name=='team' else 'all' if name=='class_tag' else '')
             self.rule_vars[name]=var
-            box=LocalizedCombobox(form,variable=var,kind=name,values=values,language=self.language,width=21)
-            box.grid(row=row,column=1,sticky='ew');self.rule_boxes[name]=box
-        for row,key in enumerate(contract.PARAMETERS,5):
-            lo,hi=contract.PARAMETERS[key]
-            label=self.tr(*PARAM_LABELS[key])
-            ttk.Label(form,text='%s [%g–%g]'%(label,lo,hi)).grid(row=row,column=0,sticky='w',pady=5)
+            box=LocalizedCombobox(form,variable=var,kind=name,values=values,language=self.language,width=35)
+            actual=row+1 if name in ('consumables','crew_preset') else row
+            box.grid(row=actual,column=1,sticky='ew');self.rule_boxes[name]=box
+            box.bind('<FocusIn>',lambda e,k=name:self._behavior_help(k),add='+')
+            box.bind('<<ComboboxSelected>>',lambda e,k=name:(self._refresh_equipment_choices(),self._refresh_ammunition(),self._behavior_help(k)),add='+')
+        row=6
+        ttk.Label(form,text=self.tr('弹药比例','Ammunition ratios')).grid(row=row,column=0,sticky='w')
+        ammo=ttk.Frame(form);ammo.grid(row=row,column=1,sticky='ew')
+        self.ammo_vars=[tk.StringVar(value='') for unused in range(3)]
+        self.ammo_boxes=[]
+        for i,var in enumerate(self.ammo_vars):
+            if i:ttk.Label(ammo,text=' : ').pack(side='left')
+            box=LocalizedCombobox(ammo,variable=var,kind='ratio',values=('',)+tuple(str(i) for i in range(10)),language=self.language,width=14)
+            box.pack(side='left');self.ammo_boxes.append(box)
+            box.bind('<FocusIn>',lambda e:self._behavior_help('ammo_ratios'),add='+')
+            box.bind('<<ComboboxSelected>>',lambda e:self._behavior_help('ammo_ratios'),add='+')
+        for row,key in enumerate(contract.PARAMETERS,len(fields)+1):
+            ttk.Label(form,text=labels.parameter_label(key,self.language)).grid(row=row,column=0,sticky='w',pady=3)
+            lo,hi=contract.PARAMETERS[key];scale=100 if key=='lead_error' else 10
+            values=('',)+tuple(format(i/scale,'.6g') for i in range(round(lo*scale),round(hi*scale)+1))
             var=tk.StringVar();self.rule_vars[key]=var
-            ttk.Entry(form,textvariable=var,width=15).grid(row=row,column=1,sticky='ew')
-        row=11
-        ttk.Button(form,text=self.tr('新增 / 更新规则','Add / update rule'),command=self.save_rule).grid(row=row,column=0,columnspan=2,sticky='ew',pady=12)
-        ttk.Button(form,text=self.tr('删除选中规则','Delete selected rule'),command=self.delete_rule).grid(row=row+1,column=0,columnspan=2,sticky='ew')
-        ttk.Button(form,text=self.tr('显示所选范围生效参数','Preview effective values'),command=self.preview_rule).grid(row=row+2,column=0,columnspan=2,sticky='ew',pady=12)
+            box=LocalizedCombobox(form,variable=var,kind='number',values=values,language=self.language,width=35)
+            box.grid(row=row,column=1,sticky='ew');self.rule_boxes[key]=box
+            box.bind('<FocusIn>',lambda e,k=key:self._behavior_help(k),add='+')
+        for offset,(zh,en,command) in enumerate([
+                ('新增／更新规则','Add / update rule',self.save_rule),
+                ('删除选中规则','Delete selected rule',self.delete_rule),
+                ('显示所选范围生效参数','Effective values',self.preview_rule)],1):
+            ttk.Button(form,text=self.tr(zh,en),command=command).grid(row=row+offset,column=0,columnspan=2,sticky='ew',pady=3)
+        self.behavior_help=tk.StringVar()
+        help_frame=ttk.Frame(form);help_frame.grid(row=row+4,column=0,columnspan=2,sticky='sew',pady=8)
+        self.help_text=tk.Text(help_frame,height=7,width=53,wrap='word',state='disabled',background=self.root.cget('background'),relief='flat')
+        scroll=ttk.Scrollbar(help_frame,orient='vertical',command=self.help_text.yview)
+        self.help_text.configure(yscrollcommand=scroll.set);scroll.pack(side='right',fill='y');self.help_text.pack(side='left',fill='both',expand=True)
+        def show_help(*unused):
+            self.help_text.configure(state='normal');self.help_text.delete('1.0','end');self.help_text.insert('1.0',self.behavior_help.get());self.help_text.configure(state='disabled')
+        self.behavior_help.trace_add('write',show_help)
+        self._behavior_help('equipment')
+
+    def _refresh_equipment_choices(self):
+        stock=self.rule_vars['development'].get()=='stock' or (not self.rule_vars['development'].get() and self.rule_vars['skill'].get()=='rookie')
+        box=self.rule_boxes['equipment']
+        box.keys=('none',) if stock else ('',)+contract.PRESETS['equipment']
+        if stock:self.rule_vars['equipment'].set('none')
+        box.set_language(self.language)
+
+    def _preview_values(self, vehicle):
+        from gui.mods.offline_lan_0922.bot_fittings import CLASSES
+        team=int(self.rule_vars['team'].get());slot=int(self.rule_vars['slot'].get())-1
+        tag=self.rule_vars['class_tag'].get()
+        document=copy.deepcopy(self.document)
+        document['behavior']=[r for r in document['behavior'] if (r['team'],r['class_tag'],r['slot'])!=(team,tag,slot)]
+        pending=dict((k,v.get()) for k,v in self.rule_vars.items() if k in ('skill','development') and v.get())
+        document['behavior'].append(dict(team=team,class_tag=tag,slot=slot,values=pending))
+        return contract.effective(document,team,CLASSES[vehicle],slot)
+
+    def _refresh_ammunition(self):
+        if self._ammo_updating:return None
+        try:
+            team=int(self.rule_vars['team'].get());slot=int(self.rule_vars['slot'].get())-1
+            vehicle=next(row['vehicle'] for row in self.lineup() if row.get('team')==team and row.get('slot')==slot and row.get('vehicle'))
+            values=self._preview_values(vehicle)
+            preview=storage.ammunition_preview(self.game_root,vehicle,values)
+        except (ValueError,KeyError,StopIteration,OSError,contract.TacticsError):
+            self._ammo_preview=None;return None
+        identities=tuple(s['name'] for s in preview['shells'])
+        old=dict(zip(self._ammo_identity,(v.get() for v in self.ammo_vars)))
+        if self._ammo_identity and self._ammo_identity!=identities:
+            self._ammo_updating=True
+            carry=any(old.get(name,'')!='' for name in identities)
+            for i,var in enumerate(self.ammo_vars):var.set(old.get(identities[i],'0') if i<len(identities) and carry else '')
+            self._ammo_updating=False
+        self._ammo_identity=identities;self._ammo_preview=preview
+        for i,box in enumerate(self.ammo_boxes):
+            box.configure(state='readonly' if i<len(identities) and self.document['name']!='Default' else 'disabled')
+        return preview
+
+    def _behavior_help(self, key):
+        explanations={
+            'equipment': '配件优先顺序：垂稳 → 输弹机 → 炮控 → 通风 → 高级观察镜 → 工具箱；3 紫色配件包含对应指令。选择白板研发时只允许无配件；切回中间／完全体才开放其他配件选项。导入与开战同样校验。',
+            'development': '白板／中间／完全体沿用现有主炮白名单与炮塔兼容规则。白板仅允许无配件，避免超重；金币车为固定研发配置。',
+            'crew_preset': '50%、75% 不附加技能；100% 满修理满隐蔽，或 100% 全部满技能。等级与技能是一套配置。',
+            'consumables': '一次档每种仅用一次，不解除眩晕、不修履带；重复档遵循原生冷却，可解除眩晕、修复断履带。手动灭火比自动灭火延迟 5 秒。小修理箱顺序：红火炮 → 红发动机 → 红炮塔 → 黄弹药架 → 黄火炮 → 黄发动机 → 黄炮塔 → 红观察孔 → 黄观察孔 → 黄油箱 → 红电台 → 黄电台 → 红履带；红油箱和黄履带跳过。治疗：装填手 → 炮手 → 驾驶员 → 车长 → 通信兵 → 眩晕；同职成员按座位顺序。大给养沿用现有群体效果与过滤规则。',
+            'ammo_ratios': '0—9 为相对比例，不是发数。全部继承采用默认配比；全 0 为不携弹。正比例按容量近似装满；弹夹车按弹夹数量分配，不改变每夹数量。正比例至少一发／一夹（容量许可），同等条件优先主弹。0 不补回。比例框按该炮的银币 AP／APCR／HEAT／HE、金币 AP／APCR／HEAT／HE 顺序对应；手动比例可以选择该炮的原生弹种，覆盖默认炮弹白名单。例如 7 夹的 6:3:1 近似为 4:2:1。',
+        }
+        fallback=labels.parameter_label(key,self.language)+'：'+self.tr('继承上级设置不覆盖上级；0 是有效值。','Inherit does not override; zero is a value.')
+        text=explanations.get(key,fallback) if self.zh else fallback
+        if key=='development':
+            preview=self._refresh_ammunition()
+            if preview and preview.get('fixed'):text+='\n'+self.tr('当前金币车：固定配置，各研发档位不改变模块。','Current premium vehicle: fixed module configuration at every development tier.')
+        if key=='ammo_ratios':
+            preview=self._refresh_ammunition()
+            if preview:
+                choices=[v.get() for v in self.ammo_vars[:len(preview['shells'])]]
+                try:shown=storage.ammunition_preview(self.game_root,preview['vehicle'],self._preview_values(preview['vehicle']),[int(v) for v in choices])
+                except (ValueError,OSError):shown=preview
+                kinds={'ARMOR_PIERCING':'AP','ARMOR_PIERCING_CR':'APCR','HOLLOW_CHARGE':'HEAT','HIGH_EXPLOSIVE':'HE'}
+                text=preview['vehicle']+' / '+preview['gun']+'\n'+' : '.join(s.get('label',s['name'])+' ('+kinds.get(s['kind'],s['kind'])+') = '+str(shown['counts'][int(s['index'])]) for s in shown['shells'])+'\n\n'+text
+            else:text+='\n'+self.tr('全局／未固定车辆：按最终主炮的弹种顺序应用；指定队伍与固定槽位可预览弹种及近似数量。','Global or automatic slots use the final gun. Select a pinned team and slot for a preview.')
+        self.behavior_help.set(text)
 
     def _build_maps(self,parent):
         bar=ttk.Frame(parent);bar.pack(fill='x',pady=4)
@@ -221,13 +336,14 @@ class BotTacticsEditor:
         self.team_var=tk.StringVar(value='1')
         t=LocalizedCombobox(bar,variable=self.team_var,kind='team',values=('1','2'),language=self.language,width=9)
         ttk.Label(bar,text=self.tr('出生队伍','Spawn team')).pack(side='left',padx=6);t.pack(side='left')
+        self.team_box=t
         t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
         self.route_class_var = tk.StringVar(value='total')
         ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
         scope = LocalizedCombobox(bar,variable=self.route_class_var,
             kind='class_tag',values=('total','all')+contract.CLASSES,
             language=self.language,width=13)
-        scope.pack(side='left')
+        scope.pack(side='left');self.route_class_box=scope
         scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
         base_bar=ttk.Frame(parent);base_bar.pack(fill='x',pady=3)
         self.base_label=ttk.Label(base_bar,text='');self.base_label.pack(side='left',padx=8)
@@ -299,15 +415,19 @@ class BotTacticsEditor:
         self.map_status=ttk.Label(centre,text='',wraplength=520);self.map_status.pack(anchor='w')
         self.item_vars={};self.item_fields={}
         for row,(key,zh,en) in enumerate([
-            ('label','名称','Label'),('policy','路线模式','Route policy'),('capacity','本车型容量（最多3辆）','Class capacity (up to 3)'),
-            ('weight','路线分配权重','Route weight'),('slots','指定槽位，逗号分隔','Slots, comma-separated'),
+            ('label','名称','Label'),('policy','路线模式','Route policy'),('capacity','本车型容量','Class capacity (up to 3)'),
+            ('weight','路线分配权重','Route weight'),('slots','指定槽位','Slots'),
             ('radius','炮位区域半径（米）','SPG zone radius (m)'),
-            ('heading','炮位朝向（度，0=北）','SPG heading (deg, 0=N)'),('priority','炮位优先级（0–9）','SPG priority (0–9)'),
-            ('route_priority','本车型路线优先级（0–9，越大越优先）','Class route priority (0–9, higher first)')]):
+            ('heading','炮位朝向（度，0=北）','SPG heading (deg, 0=N)'),('priority','炮位优先级','SPG priority (0–9)'),
+            ('route_priority','本车型路线优先级','Class route priority (0–9, higher first)')]):
             label=ttk.Label(right,text=self.tr(zh,en));label.grid(row=row*2,column=0,sticky='w')
             var=tk.StringVar();self.item_vars[key]=var
             if key=='policy':
                 widget=LocalizedCombobox(right,variable=var,kind='policy',values=('preferred','fixed'),language=self.language,width=26)
+            elif key=='slots':widget=SlotsDropdown(right,var,self.language,width=28)
+            elif key in ('capacity','weight','radius','heading','priority','route_priority'):
+                limits={'capacity':range(1,4),'weight':tuple(format(i/100,'.6g') for i in range(1,1001)),'radius':range(3,81),'heading':range(-180,181),'priority':range(10),'route_priority':range(10)}
+                widget=ttk.Combobox(right,textvariable=var,values=tuple(map(str,limits[key])),state='readonly',width=28)
             else: widget=ttk.Entry(right,textvariable=var,width=28)
             widget.grid(row=row*2+1,column=0,sticky='ew',pady=(0,4));self.item_fields[key]=(label,widget)
         types=ttk.Frame(right);types.grid(row=18,column=0,sticky='ew');self.classes_frame=types
@@ -337,11 +457,11 @@ class BotTacticsEditor:
         self.wait_list.bind('<Delete>',lambda event:self.delete_wait_point())
         ttk.Label(self.wait_panel,text=self.tr('本等待点停留秒数（-1一直停留）','Wait seconds for this place (-1 stays)')).pack(anchor='w')
         self.wait_seconds=tk.StringVar(value='60')
-        self.wait_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_seconds,width=12)
+        self.wait_entry=ttk.Combobox(self.wait_panel,textvariable=self.wait_seconds,values=('-1',)+tuple(map(str,range(3601))),state='readonly',width=12)
         self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
         ttk.Label(self.wait_panel,text=self.tr('就位偏好朝向（度，0=北；留空朝向下一点）','Arrival heading (deg, 0=N; blank=next waypoint)')).pack(anchor='w')
         self.wait_heading=tk.StringVar(value='')
-        self.wait_heading_entry=ttk.Entry(self.wait_panel,textvariable=self.wait_heading,width=12)
+        self.wait_heading_entry=ttk.Combobox(self.wait_panel,textvariable=self.wait_heading,values=('',)+tuple(map(str,range(-180,181))),state='readonly',width=12)
         self.wait_heading_entry.pack(fill='x');self.wait_heading_entry.bind('<Return>',self.update_wait_time)
         self.wait_heading_preview=tk.StringVar(value='')
         ttk.Label(self.wait_panel,textvariable=self.wait_heading_preview).pack(anchor='w')
@@ -379,6 +499,26 @@ class BotTacticsEditor:
     def checkpoint(self):
         self.undo_stack.append(copy.deepcopy(self.document));self.undo_stack=self.undo_stack[-50:];self.redo_stack=[]
 
+    def _refresh_lock(self):
+        for widget,state in getattr(self,'_default_disabled',[]):
+            if widget.winfo_exists():widget.configure(state=state)
+        self._default_disabled=[]
+        locked=self.document['name']=='Default'
+        self.save_button.configure(state='disabled' if locked else 'normal')
+        self.restore_button.configure(state='disabled' if locked else 'normal')
+        if not locked:return
+        allowed={self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
+        view_labels={self.tr('检查本图','Check map'),self.tr('适应窗口','Fit view'),
+                     self.tr('导入底图','Load image'),self.tr('显示所选范围生效参数','Effective values'),
+                     self.tr('显示导航网格','Show navigation grid'),self.tr('显示危险区网格','Show danger grid')}
+        def walk(parent):
+            for widget in parent.winfo_children():
+                if widget not in allowed and isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button,SlotsDropdown)):
+                    if str(widget.cget('text')) not in view_labels if 'text' in widget.configure() else True:
+                        self._default_disabled.append((widget,str(widget.cget('state'))));widget.configure(state='disabled')
+                walk(widget)
+        walk(self.book)
+
     def dirty(self):
         return self.document!=self.original or self.profile_name.get()!=self.document['name']
 
@@ -412,17 +552,33 @@ class BotTacticsEditor:
         selected=self.rules.selection()
         if not selected:return
         r=self.document['behavior'][int(selected[0])]
+        self._ammo_identity=();self._ammo_preview=None
         for key,var in self.rule_vars.items():
             value=r.get(key,r['values'].get(key,''))
             if key=='slot':value='' if value<0 else value+1
+            if key=='crew_preset' and not value and 'crew_level' in r['values']:value='legacy'+str(r['values']['crew_level'])
             var.set(str(value))
+            box=self.rule_boxes.get(key)
+            if box is not None and str(value) not in box.keys:
+                box.keys=tuple(box.keys)+(str(value),);box.set_language(self.language)
+        for i,var in enumerate(self.ammo_vars):
+            ratios=r['values'].get('ammo_ratios',[])
+            var.set(str(ratios[i]) if i<len(ratios) else '')
+        self._refresh_equipment_choices()
 
     def save_rule(self):
         try:
             values={}
-            for key in ('skill','crew_level')+tuple(contract.PARAMETERS):
+            for key in ('skill',)+tuple(contract.PRESETS)+tuple(contract.PARAMETERS):
                 value=self.rule_vars[key].get().strip()
-                if value:values[key]=value if key=='skill' else int(value) if key=='crew_level' else float(value)
+                if value:
+                    if key=='crew_preset' and value.startswith('legacy'):values['crew_level']=int(value[6:])
+                    else:values[key]=value if key=='skill' or key in contract.PRESETS else float(value)
+            preview=self._refresh_ammunition()
+            ratios=[v.get() for v in self.ammo_vars[:len(preview['shells']) if preview else 3]]
+            if any(v!='' for v in ratios):
+                if any(v=='' for v in ratios):raise ValueError('Select all ammunition ratios or inherit all three')
+                values['ammo_ratios']=[int(v) for v in ratios]
             slot=self.rule_vars['slot'].get()
             r=dict(team=int(self.rule_vars['team'].get()),class_tag=self.rule_vars['class_tag'].get(),
                    slot=int(slot)-1 if slot else -1,values=values)
@@ -760,8 +916,8 @@ class BotTacticsEditor:
         for key, widgets in self.item_fields.items():
             for widget in widgets:
                 widget.grid() if key in allowed else widget.grid_remove()
-        self.item_fields['route_priority'][1].config(state='normal')
-        self.item_fields['priority'][1].config(state='normal')
+        self.item_fields['route_priority'][1].config(state='readonly')
+        self.item_fields['priority'][1].config(state='readonly')
         self.classes_frame.grid() if route and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
@@ -789,6 +945,8 @@ class BotTacticsEditor:
         elif parking and pts:self.points.current(0);self.selected_point=0
         else:self.points.set('')
         self._refresh_wait_panel()
+
+        self._refresh_lock()
 
     def new_route(self):
         if self.route_class_var.get()=='total':
@@ -1030,7 +1188,8 @@ class BotTacticsEditor:
             angle=contract.waiting_heading(places[self.selected_wait],following)
         self.wait_heading_preview.set(self.tr('自动朝向下一个路线点：%.1f°','Automatic next-waypoint heading: %.1f°')%angle if angle is not None and self.selected_wait is not None and len(places[self.selected_wait])==3 else self.tr('已到末端：保持当前朝向','End of route: keep current heading') if self.selected_wait is not None and angle is None else '')
         enabled=self.wait_edit and self.selected_wait is not None
-        for widget in (self.wait_entry,self.wait_heading_entry,self.wait_apply,self.wait_delete):widget.config(state='normal' if enabled else 'disabled')
+        for widget in (self.wait_entry,self.wait_heading_entry,self.wait_apply,self.wait_delete):
+            widget.config(state=('readonly' if isinstance(widget,ttk.Combobox) else 'normal') if enabled else 'disabled')
         self.wait_list.config(state='readonly' if self.wait_edit else 'disabled')
 
     def change_wait_edit(self):
@@ -1437,13 +1596,19 @@ class BotTacticsEditor:
         except Exception as e:self.error(e)
 
     def save(self,apply=False):
+        if self.document['name']=='Default':
+            if apply:
+                self.store.save(contract.default_profile(),True)
+                self.status.set(self.tr('已应用默认配置，下一局生效。','Default applied for the next battle.'))
+            return
         if self.wait_edit and self.selected_wait is not None and self.update_wait_time() is False:return
         if self._selected() is not None and not self.update_properties():
             return
         try:
-            doc=copy.deepcopy(self.document);doc['name']=self.profile_name.get()
+            doc=copy.deepcopy(self.document);name=self.profile_name.get().strip()
+            doc['name']=self.store.unique_name(name) if name!=self.document['name'] else name
             doc=contract.canonical(doc)
-            self.document=self.store.save(doc,apply);self.original=copy.deepcopy(self.document)
+            self.document=self.store.save(doc,apply);self.original=copy.deepcopy(self.document);self.profile_name.set(self.document['name'])
             self._refresh_profiles();self._refresh_items()
             short=contract.digest(self.document)[:12]
             self.status.set((self.tr('已应用，下次房主开始战斗生效。当前战斗不变。','Applied for the next host-started battle. Current battle unchanged.')
@@ -1456,7 +1621,14 @@ class BotTacticsEditor:
 
     def adopt(self,doc):
         self.document=copy.deepcopy(doc);self.original=copy.deepcopy(doc);self.profile_name.set(doc['name'])
-        self.undo_stack=[];self.redo_stack=[];self.selection=None;self._refresh_rules();self._refresh_items()
+        self.undo_stack=[];self.redo_stack=[];self.selection=None;self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self.drag=None
+        self.wait_edit_var.set(False);self.wait_seconds.set('60');self.wait_heading.set('')
+        self._ammo_identity=();self._ammo_preview=None
+        self._wait_add_at_parent=False;self._wait_parent_cleared=False
+        for key,var in self.rule_vars.items():var.set('0' if key=='team' else 'all' if key=='class_tag' else '')
+        for var in self.ammo_vars:var.set('')
+        for var in self.item_vars.values():var.set('')
+        self._refresh_equipment_choices();self._refresh_rules();self._refresh_items();self._refresh_lock()
         self.status.set(self.tr('已打开草稿；点击应用才会更新下一局配置。','Draft opened. Apply to change the next battle configuration.'))
 
     def open_profile(self):
@@ -1465,15 +1637,22 @@ class BotTacticsEditor:
             except Exception as e:self.error(e)
 
     def new_profile(self):
-        if self.discard_prompt():self.adopt(contract.default_profile(self.tr('新方案','New profile')))
+        if self.discard_prompt():self.adopt(contract.default_profile(self.store.unique_name(self.tr('新方案','New profile'))))
 
     def default_profile(self):
-        if self.discard_prompt():self.adopt(contract.default_profile('Default'))
+        if self.document['name'] == 'Default':return
+        if self.discard_prompt():
+            name = self.document['name']
+            original = self.original
+            self.adopt(contract.default_profile(name))
+            self.original = original
+            self.mark()
 
     def import_profile(self):
         filename=filedialog.askopenfilename(parent=self.root,filetypes=[(self.tr('Bot 战术配置','Bot tactics'),'*.json')])
         if filename and self.discard_prompt():
-            try:self.adopt(self.store.import_file(filename))
+            try:
+                doc=self.store.import_file(filename);doc['name']=self.store.unique_name(doc['name']);self.adopt(doc)
             except Exception as e:self.error(e)
 
     def export_profile(self):
@@ -1485,11 +1664,29 @@ class BotTacticsEditor:
             except Exception as e:self.error(e)
 
     def error(self,error):
-        messagebox.showerror(self.tr('Bot 配置','Bot configuration'),str(error),parent=self.root)
+        text=str(error)
+        if text=='Stock development only allows no equipment':text=self.tr('白板研发仅允许无配件；请明确选择无配件，或改用中间／完全体研发。','Stock development only allows no equipment. Select none or intermediate/full development.')
+        messagebox.showerror(self.tr('Bot 配置','Bot configuration'),text,parent=self.root)
 
     def close(self):
         if self.discard_prompt():self.root.destroy()
 
 
-def open_editor(parent,game_root='',language='zh',log=None):
-    return BotTacticsEditor(parent,game_root,language=language,log=log)
+def _editable_handler(function):
+    import functools
+    @functools.wraps(function)
+    def invoke(self,*args,**kwargs):
+        if self.document.get('name')=='Default':return False
+        return function(self,*args,**kwargs)
+    return invoke
+
+for _method in ('undo','redo','save_rule','delete_rule','change_symmetry',
+        'move_route_endpoints_to_bases','new_route','new_position','duplicate_item',
+        'delete_item','reset_builtin','update_properties','delete_point','insert_point',
+        'toggle_hold','change_wait_edit','edit_point_condition','update_wait_time',
+        'delete_wait_point','delete_selected_point','_press_wait','press','motion','release'):
+    setattr(BotTacticsEditor,_method,_editable_handler(getattr(BotTacticsEditor,_method)))
+
+
+def open_editor(parent,game_root='',language='zh',log=None,lineup=None):
+    return BotTacticsEditor(parent,game_root,language=language,log=log,lineup=lineup)

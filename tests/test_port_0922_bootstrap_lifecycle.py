@@ -430,6 +430,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 return [previous_turret.compactDescr,
                         previous_gun.compactDescr]
 
+            def install_optional(cd,slot):
+                descriptor.optionalDevices[slot]=types.SimpleNamespace(compactDescr=cd)
+            descriptor.mayInstallOptionalDevice=lambda cd,slot:(True,None)
+            descriptor.installOptionalDevice=install_optional
             descriptor.installComponent = install_component
             descriptor.installTurret = install_turret
             return descriptor
@@ -520,7 +524,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             compactDescr=11200, tags=frozenset(('notForSale',)),
             equipmentType=1)
         equipment_ids = {'autoExtinguishers': 11000, 'largeMedkit': 11001,
-                         'largeRepairkit': 11002}
+                         'largeRepairkit': 11002,'aimingStabilizerBattleBooster':11200}
         crew_type_ids = []
         crew_skill_masks = []
         vehicles = types.SimpleNamespace(
@@ -542,7 +546,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             g_cache=types.SimpleNamespace(
                 customization20=lambda: customization,
                 optionalDevices=lambda: optional_devices,
-                optionalDeviceIDs=lambda: {},
+                optionalDeviceIDs=lambda: {'deluxAimingStabilizer':9000,'deluxRammer':9001,'deluxEnhancedAimDrives':9002},
                 equipmentIDs=lambda: equipment_ids,
                 equipments=lambda: equipments,
                 # The exact #1513 name-to-id maps the price index walks. This
@@ -1660,6 +1664,13 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertIn('role=hidden-worker', payload)
         self.assertIn('launcher_build=launcher-build', payload)
 
+    def test_hidden_worker_does_not_initialize_player_default_devices(self):
+        bootstrap,callbacks,compatibility,loader,spaces,events,modules=self._load()
+        bootstrap._client_mode=bootstrap.port_config.SIMULATION_WORKER_MODE
+        with mock.patch.dict(sys.modules,modules),mock.patch.object(VEHICLE_RECORDS,'initialize_elite_devices') as initialize:
+            bootstrap._selected_vehicle({'vehicle':'ussr:R11_MS-1'},restore_saved=False)
+        initialize.assert_not_called()
+
     def test_a_fresh_garage_vehicle_starts_with_the_refill_switches_on(self):
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events, modules) = self._load()
@@ -1668,9 +1679,9 @@ class BootstrapLifecycleTests(unittest.TestCase):
             selected = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
 
         # AUTO_REPAIR | AUTO_LOAD | AUTO_EQUIP
-        self.assertEqual(14, selected['settings'])
+        self.assertEqual(14 | 128, selected['settings'])
         for record in selected['vehicles']:
-            self.assertEqual(14, record['settings'])
+            self.assertEqual(14 | 128, record['settings'])
 
     def test_player_factory_ammunition_keeps_the_native_gun_default(self):
         (bootstrap, callbacks, compatibility, app_loader, spaces, events, modules) = self._load()
@@ -1878,8 +1889,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual((0, 111), selected['repair'])
         self.assertEqual((0, 0), selected['lock'])
         # Sandbox slots are large medkit, large repair kit, then extinguisher.
-        self.assertEqual([11001, 11002, 11000], selected['eqs'])
-        self.assertEqual([11001, 11002, 11000], selected['eqsLayout'])
+        self.assertEqual([11001, 11002, 11000, 11200], selected['eqs'])
+        self.assertEqual([11001, 11002, 11000, 11200], selected['eqsLayout'])
         # The top modules are mounted, not the stock ones: base 2000 gives
         # the stock parts 2002-2007 and the top parts 2012-2017.
         self.assertEqual((2013, 2014), selected['shellsLayoutIdx'])

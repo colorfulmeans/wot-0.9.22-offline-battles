@@ -24,6 +24,12 @@ DEFAULT_ROUTE_PRIORITY = 5
 MAX_ENTRIES = sum(128 + sum(len(routes) for routes in meta['route_ids'].values()) *
                   (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
+PRESETS = {
+    'development': ('stock', 'intermediate', 'full'),
+    'equipment': ('none', 'single', 'standard', 'improved'),
+    'consumables': ('none', 'once', 'repeat', 'large'),
+    'crew_preset': ('50', '75', 'repair', 'all'),
+}
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
     'converged_factor': (1.0, 5.0), 'aim_bias_factor': (0.0, 4.0),
@@ -89,10 +95,18 @@ def default_map(name):
 
 
 def normalize_values(raw):
-    _keys(raw, tuple(PARAMETERS) + ('skill', 'crew_level'))
+    _keys(raw, tuple(PARAMETERS) + tuple(PRESETS) + ('skill', 'crew_level', 'ammo_ratios'))
     out = {}
     for key, value in raw.items():
-        if key == 'skill':
+        if key in PRESETS:
+            if value not in PRESETS[key]:
+                raise TacticsError('Unsupported %s preset' % key)
+            out[key] = value
+        elif key == 'ammo_ratios':
+            if not isinstance(value, (tuple, list)) or not 1 <= len(value) <= 8:
+                raise TacticsError('Ammunition ratios require 1..8 digits')
+            out[key] = [integer(v, 0, 9) for v in value]
+        elif key == 'skill':
             if value not in SKILLS:
                 raise TacticsError('Unsupported Bot skill')
             out[key] = value
@@ -446,3 +460,19 @@ def for_round(profile, map_name):
     if len(dumps(selected).encode('ascii')) > 64 * 1024:
         raise TacticsError('This round tactics payload exceeds 64 KiB')
     return selected
+
+
+def team_class_choices(value=None, sizes=None):
+    """Canonical room filter; only automatic fill is constrained."""
+    if value is not None and (not isinstance(value, dict) or set(map(str,value)) != set(('1','2'))):
+        raise TacticsError('invalid team class choices')
+    result = {}
+    for team in (1, 2):
+        row = (value.get(str(team), value.get(team)) if value is not None else dict((tag, True) for tag in CLASSES))
+        if not isinstance(row, dict) or set(row) != set(CLASSES) or any(type(v) is not bool for v in row.values()):
+            raise TacticsError('invalid team class choices')
+        row = dict(row)
+        size = (sizes or {}).get(team, (sizes or {}).get(str(team),15))
+        if int(size) <= 6: row['SPG'] = False
+        result[str(team)] = row
+    return result
