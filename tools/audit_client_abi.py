@@ -109,6 +109,10 @@ EXPECTED_ABI = {
         'TankmanDescr.makeCompactDescr': ('self',),
         'TankmanDescr.levelUpXpCost': ('fromSkillLevel', 'skillSeqNum'),
         'makeTmanDescrByTmanData': ('tmanData',),
+        'getNationConfig': ('nationID',),
+    },
+    'scripts/common/items/components/tankmen_components.pyc': {
+        'NationConfig.getGroups': ('self', 'isPremium'),
     },
     'scripts/client/gui/shared/gui_items/Tankman.pyc': {
         'Tankman.newSkillCount': ('self',),
@@ -1183,7 +1187,7 @@ EXPECTED_CODE_NAMES = {
         'TankmanDescr.makeCompactDescr': ('freeXP','_TankmanDescr__lastSkillLevel'),
         'TankmanDescr.skillLevel': (
             'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),
-        'makeTmanDescrByTmanData': ('getNationConfig', 'isFemales', 'generateCompactDescr', 'addXP', 'makeCompactDescr'),
+        'makeTmanDescrByTmanData': ('getNationConfig', 'getGroups', 'isFemales', 'firstNamesList', 'lastNamesList', 'iconsList', 'generateCompactDescr', 'addXP', 'makeCompactDescr'),
         'TankmanDescr.levelUpXpCost': ('_g_levelXpCosts',),
     },
     'scripts/client/gui/shared/gui_items/Tankman.pyc': {

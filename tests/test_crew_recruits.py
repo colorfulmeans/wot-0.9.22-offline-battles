@@ -103,10 +103,14 @@ class CrewDeliveryTests(unittest.TestCase):
             levelUpXpCost = staticmethod(lambda level, sequence: (level + 1) * 2 ** sequence)
             def __init__(self, raw): self.__dict__.update(raw)
         def factory(data):
+            self.assertEqual(data['isFemale'], data['isPremium'])
+            self.assertEqual((0,0,0), tuple(data[k] for k in ('fnGroupID','lnGroupID','iGroupID')))
             calls.append(data)
             value=dict(data);value['skills']=data['freeSkills']+data['skills']
             return value
-        tankmen = NS(TankmanDescr=Descriptor, makeTmanDescrByTmanData=factory)
+        tankmen = NS(TankmanDescr=Descriptor, makeTmanDescrByTmanData=factory,
+            getNationConfig=lambda nation: NS(getGroups=lambda premium: [NS(
+                isFemales=premium, firstNamesList=[1], lastNamesList=[2], iconsList=[3])]))
         value = crew.build(row(female=True), NS(VehicleDescr=lambda **kwargs: vehicle), tankmen)
         self.assertEqual(0, value['freeXP'])
         self.assertEqual(['brotherhood'], value['skills']); self.assertEqual(['brotherhood'], value['freeSkills'])
@@ -116,3 +120,14 @@ class CrewDeliveryTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class PassportTests(unittest.TestCase):
+    def test_gender_pool_index_and_complete_group_are_required(self):
+        male=NS(isFemales=False,firstNamesList=[1],lastNamesList=[2],iconsList=[3])
+        female=NS(isFemales=True,firstNamesList=[4],lastNamesList=[5],iconsList=[6])
+        empty=NS(isFemales=True,firstNamesList=[],lastNamesList=[5],iconsList=[6])
+        config=NS(getGroups=lambda premium: [male,empty,female] if premium else [male])
+        self.assertEqual((False,0),crew.passport_group(config,False))
+        self.assertEqual((True,2),crew.passport_group(config,True))
+        with self.assertRaises(ValueError):crew.passport_group(NS(getGroups=lambda premium:[male]),True)

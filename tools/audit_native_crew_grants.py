@@ -1,6 +1,6 @@
 """Execute pinned Python crew serialization/XP methods with isolated resource fixtures."""
 from __future__ import print_function
-import sys,os,zipfile,marshal,types,struct,math,json
+import sys,os,zipfile,marshal,types,struct,math,json,random
 ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
 sys.path[:0]=['tools','src/res/scripts/client']
@@ -22,6 +22,7 @@ scope.update(__name__='native_crew_audit',struct=struct,math=math,skills_constan
 for name in ('_makeLevelXpCosts','generateCompactDescr'):
  code=next(v for v in c.co_consts if isinstance(v,types.CodeType) and v.co_name==name)
  scope[name]=types.FunctionType(code,scope)
+scope['generateCompactDescr'].func_defaults=((),scope['MAX_SKILL_LEVEL'],'',())
 scope['_g_levelXpCosts']=scope['_makeLevelXpCosts']()
 body=next(v for v in c.co_consts if isinstance(v,types.CodeType) and v.co_name=='TankmanDescr')
 ns=types.FunctionType(body,scope)()
@@ -51,3 +52,41 @@ for training in (50,75,100):
   assert female.skills==['brotherhood'] and restored['remaining']==19 and female.freeXP==0
 print('NATIVE FEMALE CODEC: 50/75/100 training, zero perk and 19 selectable grants round trip')
 print('Scope: pinned Python bytecode and codec with resource fixtures; native gameplay not tested.')
+
+# Run the exact native factory as well as its codec: previously the audit
+# skipped this layer and could not detect an invalid female passport group.
+if len(sys.argv)>2:
+ from gui.mods.offline_lan_0922 import crew_recruits
+ pools=json.load(open(sys.argv[2]))
+ names=crew_recruits.NATIONS
+ scope['nations']=NS(NAMES=names,AVAILABLE_NAMES=names)
+ scope['random']=random
+ code=next(v for v in c.co_consts if isinstance(v,types.CodeType) and v.co_name=='makeTmanDescrByTmanData')
+ for helper in ('__validateSkills',):
+  helper_code=next(v for v in c.co_consts if isinstance(v,types.CodeType) and v.co_name==helper)
+  scope[helper]=types.FunctionType(helper_code,scope)
+ factory=types.FunctionType(code,scope)
+ configs=[]
+ for pair in pools:
+  groups=[[NS(**group) for group in pool] for pool in pair]
+  configs.append(NS(getGroups=lambda premium,g=groups:g[int(premium)],
+   getRoleRanks=config.getRoleRanks,hasFirstName=config.hasFirstName,
+   hasLastName=config.hasLastName,hasIcon=config.hasIcon))
+ scope['getNationConfig']=lambda nation:configs[nation]
+ tankmen.getNationConfig=scope['getNationConfig'];tankmen.makeTmanDescrByTmanData=factory
+ checked=0
+ for nation,name in enumerate(names):
+  vehicle=next(key for key in sorted(crew_skills.data.SEATS) if key.startswith(name+':'))
+  seats=crew_skills.seats(vehicle)
+  for female in (False,True):
+   for training in (50,75,100):
+    for seat,roles in enumerate(seats):
+     low,high=crew_skills.bounds(vehicle,seat,female,training)
+     row=dict(id='a'*32,nation=name,vehicle=vehicle,role=roles[0],seat=seat,
+              female=female,training=training,skills=high)
+     vehicles=NS(VehicleDescr=lambda **kw:NS(type=NS(id=(nation,1),crewRoles=seats)))
+     actual=cls(crew_recruits.build(row,vehicles,tankmen))
+     assert bool(actual.isFemale)==female and actual.roleLevel==training
+     assert actual.freeSkills==(['brotherhood'] if female else [])
+     checked+=1
+ print('NATIVE FACTORY:',checked,'gender/training/seat presets across',len(configs),'nations; exact factory and codec, resource-backed groups')

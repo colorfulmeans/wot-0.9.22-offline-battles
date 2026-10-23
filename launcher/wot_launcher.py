@@ -196,6 +196,14 @@ _CHINESE = {
     "Open save folder": "打开存档文件夹",
     "Back up save...": "备份存档…",
     "Restore save...": "恢复存档…",
+    "Initialize save...": "初始化存档…",
+    "Initialize save?": "初始化存档？",
+    "Close World of Tanks before initializing a save.": "初始化存档前请先关闭游戏。",
+    "The save could not be initialized: %s": "初始化存档失败：%s",
+    "Initialized save '%s'. Recovery folder: %s": "已初始化存档“%s”。恢复备份目录：%s",
+    "Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.":
+        "确定初始化存档“%s”（%s）吗？全部进度、成员和待领取奖励将被重置。保留名称、存档类型和收益倍率。操作前自动备份，可通过“恢复存档”恢复。",
+
     "Back up save": "备份存档",
     "Restore save": "恢复存档",
     "Save backup": "存档备份",
@@ -920,39 +928,7 @@ class LauncherWindow(object):
         self.save_slot_box.grid(row=0, column=1, sticky="we", padx=(6, 0))
         self.save_slot_box.bind(
             "<<ComboboxSelected>>", self._save_slot_selected)
-        save_actions = tk.Frame(self.save_panel)
-        save_actions.grid(
-            row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
-        self.customize_save_button = tk.Button(
-            save_actions, text="", command=self._open_save_dialog)
-        self.customize_save_button.pack(side="left", fill="x", expand=True)
-        self.new_save_slot_button = tk.Button(
-            save_actions, text="", command=self._new_save_slot)
-        self.new_save_slot_button.pack(side="left", fill="x", expand=True)
-        self.rename_save_slot_button = tk.Button(
-            save_actions, text="", command=self._rename_save_slot)
-        self.rename_save_slot_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        self.delete_save_slot_button = tk.Button(
-            save_actions, text="", command=self._delete_save_slot)
-        self.delete_save_slot_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        # A save is a few small JSON files, so the recovery a player can
-        # always perform is copying them out and putting them back.
-        save_backup_actions = tk.Frame(self.save_panel)
-        save_backup_actions.grid(
-            row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
-        self.open_save_folder_button = tk.Button(
-            save_backup_actions, text="", command=self._open_save_folder)
-        self.open_save_folder_button.pack(side="left", fill="x", expand=True)
-        self.backup_save_button = tk.Button(
-            save_backup_actions, text="", command=self._backup_save_slot)
-        self.backup_save_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        self.restore_save_button = tk.Button(
-            save_backup_actions, text="", command=self._restore_save_slot)
-        self.restore_save_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
+        self._build_save_actions()
         self.save_help_label = tk.Label(
             self.save_panel, text="", anchor="w", justify="left",
             wraplength=620)
@@ -1202,6 +1178,7 @@ class LauncherWindow(object):
             text=self._t("Open save folder"))
         self.backup_save_button.config(text=self._t("Back up save..."))
         self.restore_save_button.config(text=self._t("Restore save..."))
+        self.initialize_save_button.config(text=self._t("Initialize save..."))
         self.save_help_label.config(text=self._t(
             "Each save keeps its own garage, crew, account settings and "
             "battle results. The selected save is the one the game starts "
@@ -1448,6 +1425,7 @@ class LauncherWindow(object):
             "normal" if self._selected_client == core.PORT_0_9_22 and
             not self._busy and not self._maintenance_busy and
             not server_running else "disabled")
+        self.initialize_save_button.config(state='disabled' if self._busy or self._maintenance_busy else 'normal')
         self.repair_button.config(state=maintenance_state)
         self.normal_preferences_button.config(state=maintenance_state)
         self.reset_button.config(state=maintenance_state)
@@ -2041,6 +2019,48 @@ class LauncherWindow(object):
             self._log(self._t("The files that were replaced were kept in %s.")
                       % result["replaced"])
         self._refresh_save_slots()
+        return True
+
+    def _build_save_actions(self):
+        tk=self._tk
+        save_actions = tk.Frame(self.save_panel)
+        save_actions.grid(row=1,column=0,columnspan=2,sticky="we",pady=(6,0))
+        for column in range(4):
+            save_actions.grid_columnconfigure(column,weight=1,uniform="save_actions")
+        for index,(attribute,command) in enumerate((
+                ('customize_save_button',self._open_save_dialog),
+                ('new_save_slot_button',self._new_save_slot),
+                ('rename_save_slot_button',self._rename_save_slot),
+                ('delete_save_slot_button',self._delete_save_slot),
+                ('open_save_folder_button',self._open_save_folder),
+                ('backup_save_button',self._backup_save_slot),
+                ('restore_save_button',self._restore_save_slot),
+                ('initialize_save_button',self._initialize_save_slot))):
+            button=tk.Button(save_actions,text="",command=command)
+            button.grid(row=index//4,column=index%4,sticky="we",padx=3,pady=3)
+            setattr(self,attribute,button)
+
+    def _initialize_save_slot(self):
+        if self._busy or self._maintenance_busy:
+            self._log("Wait for the current launcher operation to finish.")
+            return False
+        if core.game_is_running():
+            self._log(self._t('Close World of Tanks before initializing a save.'))
+            return False
+        record=self._selected_save_slot_record()
+        if record is None:return False
+        from tkinter import messagebox
+        if not messagebox.askyesno(self._t('Initialize save?'),
+                self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')),
+                icon='warning',default='no',parent=self.root):
+            return False
+        try:
+            result=save_slots.initialize_slot(record['id'],self.game_root.get().strip() or None)
+        except save_slots.SaveSlotError as error:
+            self._log(self._t('The save could not be initialized: %s') % error)
+            return False
+        self._refresh_save_slots()
+        self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):

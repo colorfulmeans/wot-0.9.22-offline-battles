@@ -689,3 +689,60 @@ def open_slot_folder(slot_id, game_root=None, environment=None, root=None,
     except (IOError, OSError) as error:
         raise SaveSlotError("The save folder could not be opened: %s" % error)
     return directory
+
+
+def initialize_slot(slot_id, game_root=None, environment=None, root=None, is_running=None):
+    """Reset one save transactionally; preserve identity, mode and earnings rate."""
+    if is_running is None:
+        try:
+            from . import core
+        except ImportError:
+            import core
+        is_running = core.game_is_running
+    if is_running():
+        raise SaveSlotError('Close World of Tanks before initializing a save.')
+    record = read_slot(slot_id, game_root, environment, root)
+    directory = record['path']
+    # A unique recovery directory also holds the ordinary, restorable ZIP.
+    import tempfile
+    try:
+        os.makedirs(directory, exist_ok=True)
+        recovery = tempfile.mkdtemp(prefix='pre-initialize-', dir=directory)
+    except OSError as error:
+        raise SaveSlotError('The save could not be initialized: %s' % error)
+    backup = os.path.join(recovery, 'save-backup.zip')
+    moved = []
+    names = []
+    writing_metadata = False
+    metadata = os.path.join(directory, METADATA_NAME)
+    try:
+        names = _state_file_names(directory)
+        if names:
+            backup_slot(slot_id, backup, game_root, environment, root)
+        else:
+            backup = None
+        # Include interrupted writes, which must never survive a fresh start.
+        names += [name for name in os.listdir(directory) if name.endswith('.tmp')
+                  and _belongs_to_state(name[:-4]) and os.path.isfile(os.path.join(directory,name))]
+        for name in names:
+            os.replace(os.path.join(directory,name),os.path.join(recovery,name))
+            moved.append(name)
+        writing_metadata = True
+        _write_metadata(metadata,dict(schema=METADATA_SCHEMA,id=record['id'],
+            name=record['name'],mode=record['mode'],earnings_percent=record[EARNINGS_KEY],
+            created=int(time.time()),skip_legacy_import=True))
+    except Exception as error:
+        # Do not remove the old metadata if failure occurred before it moved.
+        if writing_metadata:
+            for path in (metadata,metadata+'.tmp'):
+                if os.path.isfile(path):os.unlink(path)
+        rollback_failed = False
+        for name in reversed(moved):
+            try:
+                os.replace(os.path.join(recovery,name),os.path.join(directory,name))
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise SaveSlotError('The save could not be initialized: %s; recovery files: %s' % (error,recovery))
+        raise SaveSlotError('The save could not be initialized: %s' % error)
+    return dict(record=read_slot(slot_id,game_root,environment,root),backup=backup,recovery=recovery)

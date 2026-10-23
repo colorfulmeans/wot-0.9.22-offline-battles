@@ -733,6 +733,13 @@ def save_slot_state_path(file_name, slot=None, user_data_dir=None):
         save_slot_dir(slot, user_data_dir), str(file_name))
     if (active_save_slot() if slot is None else slot) != DEFAULT_SAVE_SLOT:
         return path
+    try:
+        with open(os.path.join(os.path.dirname(path), SAVE_METADATA_FILE_NAME), 'rb') as stream:
+            metadata = json.load(stream)
+        if isinstance(metadata, dict) and metadata.get('skip_legacy_import') is True:
+            return path
+    except (IOError, OSError, TypeError, ValueError):
+        pass
     if user_data_dir is not None:
         legacy_dirs = (user_data_dir,)
     else:

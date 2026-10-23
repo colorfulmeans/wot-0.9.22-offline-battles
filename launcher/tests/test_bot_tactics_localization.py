@@ -158,10 +158,12 @@ class LanguageUITests(unittest.TestCase):
         row=' '.join(self.ui.rules.item('0','values'))
         self.assertIn('重型坦克',row);self.assertIn('反应时间',row);self.assertIn('普通',row)
         self.assertNotIn('reaction_seconds',row);self.assertNotIn('heavyTank',row)
-        with mock.patch.object(ui_module.messagebox,'showinfo') as show:
-            self.ui.preview_rule()
-            self.assertIn('反应时间',show.call_args.args[1])
-            self.assertNotIn('regular',show.call_args.args[1])
+        preview=self.ui.preview_rule();self.root.update()
+        text=str([preview.table.item(i,'values') for i in preview.table.get_children()])
+        self.assertIn('反应时间',text);self.assertNotIn('reaction_seconds',text)
+        self.assertNotIn('regular',text)
+        self.ui.set_language('en');self.root.update()
+        self.assertEqual('Effective settings preview',preview.root.title())
 
     def test_language_switch_preserves_pending_selected_rule(self):
         self.ui.rule_vars['skill'].set('elite');self.ui.save_rule()

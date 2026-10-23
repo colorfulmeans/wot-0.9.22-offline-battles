@@ -175,6 +175,8 @@ class BotTacticsEditor:
                 text = self._custom_caption(kind,item,identity.partition('@')[2] or None)
             self.items.item(iid, text=text)
         self.redraw()
+        for preview in getattr(self,'previews',[]):
+            if preview.root.winfo_exists():preview.set_language(language)
 
     def _build(self):
         head = ttk.Frame(self.root, padding=10); head.pack(fill='x')
@@ -647,15 +649,13 @@ class BotTacticsEditor:
         if selected:self.checkpoint('behavior');del self.document['behavior'][int(selected[0])];self._refresh_rules();self.mark()
 
     def preview_rule(self):
-        from gui.mods.offline_lan_0922 import bot_gunnery
-        team=int(self.rule_vars['team'].get()) or 1;tag=self.rule_vars['class_tag'].get();slot=self.rule_vars['slot'].get()
-        tag=tag if tag!='all' else 'heavyTank';slot=int(slot)-1 if slot else 0
-        values=contract.effective(self.document,team,tag,slot)
-        rating=bot_gunnery.rating_for_skill(values.get('skill','regular'))
-        params=bot_gunnery.rating_parameters(rating,values)
-        messagebox.showinfo(self.tr('生效值预览','Effective values'),
-            self.tr('示例：队伍%d / %s / 槽位%d；未指定难度按普通演示。\n','Example: Team %d / %s / slot %d. Unpinned skill uses Regular for this preview.\n')%(team,labels.enum_label('class_tag',tag,self.language),slot+1)+
-            '\n'.join('%s = %s'%(labels.parameter_label(k,self.language),labels.parameter_value(k,v,self.language)) for k,v in params.items()),parent=self.root)
+        from bot_tactics_preview import PreviewWindow
+        preview=PreviewWindow(self.root,self.document,self.rule_vars['team'].get(),
+            self.rule_vars['class_tag'].get(),self.rule_vars['slot'].get(),self.language,
+            self.lineup(),self.game_root)
+        self.previews=[p for p in getattr(self,'previews',[]) if p.root.winfo_exists()]
+        self.previews.append(preview)
+        return preview
 
     def entry(self):
         return self.document['maps'].get(self.map_name,dict(mode='regular',resource_sha256=contract.MAPS[self.map_name]['resource_sha256'],routes=[],positions=[]))

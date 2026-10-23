@@ -68,6 +68,16 @@ def read(path):
     return rows
 
 
+def passport_group(config, female):
+    """Select a complete native passport group without inventing name IDs."""
+    for premium in (False, True):
+        for index, group in enumerate(config.getGroups(premium)):
+            if (bool(group.isFemales) == female and group.firstNamesList and
+                    group.lastNamesList and group.iconsList):
+                return premium, index
+    raise ValueError('No native passport group matches the requested gender')
+
+
 def build(row, vehicles, tankmen):
     row = request(row)
     vehicle = vehicles.VehicleDescr(typeName=row['vehicle']).type
@@ -76,8 +86,10 @@ def build(row, vehicles, tankmen):
         raise ValueError('The trained vehicle has no requested primary crew role')
     if tuple(vehicle.crewRoles[row['seat']])!=tuple(crew_skills.seats(row['vehicle'])[row['seat']]):
         raise ValueError('The native crew seat differs from the pinned table')
+    passport = passport_group(tankmen.getNationConfig(nation), row['female'])
     raw = tankmen.makeTmanDescrByTmanData(dict(nationID=nation, vehicleTypeID=vehicle_id,
-        role=row['role'], roleLevel=row['training'], isFemale=row['female'], isPremium=False,
+        role=row['role'], roleLevel=row['training'], isFemale=row['female'], isPremium=passport[0],
+        fnGroupID=passport[1], lnGroupID=passport[1], iGroupID=passport[1],
         skills=[], freeSkills=['brotherhood'] if row['female'] else [], freeXP=0))
     actual = tankmen.TankmanDescr(raw)
     if (actual.roleLevel != row['training'] or actual.skills != (['brotherhood'] if row['female'] else []) or

@@ -38,6 +38,7 @@ assert 'replay_launch.py' in verified
 assert 'wot_launcher.py' in verified
 assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
+assert 'bot_tactics_preview.py' in verified
 assert 'bot_tactics_labels.py' in verified
 assert 'crew_ui.py' in verified
 assert 'crew_store.py' in verified
@@ -90,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert editor.get('crew_controls_and_outfit_override'), editor
     assert editor.get('seat_aware_recruits'), editor
     assert editor.get('vehicle_editor_language_preserved'), editor
+    assert editor.get('scoped_effective_preview') and editor.get('save_initialization_and_backup') and editor.get('save_actions_two_by_four'), editor
     assert editor.get('native_gameplay_tested') is False, editor
 
 print(json.dumps({'frozen_source_modules_verified': len(verified),

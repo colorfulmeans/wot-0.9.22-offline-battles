@@ -1288,6 +1288,26 @@ class WindowTest(unittest.TestCase):
             }, stream)
         return path
 
+    def test_initialize_save_requires_confirmation_defaults_to_no_and_keeps_selection(self):
+        self._saves_root();self.window._refresh_save_slots()
+        record=self.window._selected_save_slot_record()
+        with mock.patch('tkinter.messagebox.askyesno',return_value=False) as confirm, \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False), \
+                mock.patch.object(wot_launcher.save_slots,'initialize_slot') as reset:
+            self.assertFalse(self.window._initialize_save_slot())
+            reset.assert_not_called();self.assertEqual('no',confirm.call_args.kwargs['default'])
+            self.assertIn(record['name'],confirm.call_args.args[1])
+        with mock.patch('tkinter.messagebox.askyesno',return_value=True), \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False):
+            self.assertTrue(self.window._initialize_save_slot())
+        self.assertEqual(record['id'],self.window._save_slot_id)
+        self.assertFalse(self.window._selected_save_slot_record()['has_state'])
+
+    def test_initialize_button_refuses_running_game_without_prompt(self):
+        with mock.patch.object(wot_launcher.core,'game_is_running',return_value=True), \
+                mock.patch('tkinter.messagebox.askyesno') as confirm:
+            self.assertFalse(self.window._initialize_save_slot());confirm.assert_not_called()
+
     def test_customize_opens_a_modal_for_the_selected_save(self):
         self._saves_root()
         self.assertNotIn(self.window.account_panel, self.window.tools_tabs.tabs)

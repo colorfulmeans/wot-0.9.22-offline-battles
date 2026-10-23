@@ -86,6 +86,44 @@ def run(destination):
             for var in ui.ammo_vars:var.set('0')
             ui.save_rule()
             report['independent_presets_and_empty_ammo']=True
+            preview=ui.preview_rule();root.update()
+            rendered=[preview.table.item(i,'values') for i in preview.table.get_children()]
+            assert len(rendered)==12 and any('0 : 0 : 0' in str(row) for row in rendered)
+            assert sum(row[0]=='Crew preset' for row in rendered)==1
+            ui.set_language('zh');root.update()
+            assert preview.root.title()=='生效值预览'
+            assert any('成员配置' in str(preview.table.item(i,'values')) for i in preview.table.get_children())
+            ui.set_language('en');root.update();preview.root.destroy()
+            report['scoped_effective_preview']=True
+            import save_slots
+            slots_root=Path(temp)/'isolated-saves'
+            record=save_slots.create_slot('Full unlock smoke',save_slots.MODE_UNLOCKED,root=str(slots_root))
+            slot=Path(record['path']);(slot/'garage_state.json').write_text('{}')
+            (slot/'launcher_crew_inbox.json').write_text('{"pending":"old"}')
+            reset=save_slots.initialize_slot(record['id'],root=str(slots_root),is_running=lambda:False)
+            assert not reset['record']['has_state'] and not (slot/'launcher_crew_inbox.json').exists()
+            assert Path(reset['backup']).is_file()
+            assert json.loads((slot/'save.json').read_text())['skip_legacy_import'] is True
+            report['save_initialization_and_backup']=True
+            import wot_launcher
+            owner=type('SaveActionsFixture',(),{})()
+            owner._tk=tk;owner.save_panel=tk.Frame(root);owner.save_panel.pack(fill='x')
+            for method in ('_open_save_dialog','_new_save_slot','_rename_save_slot','_delete_save_slot',
+                           '_open_save_folder','_backup_save_slot','_restore_save_slot','_initialize_save_slot'):
+                setattr(owner,method,lambda:None)
+            wot_launcher.LauncherWindow._build_save_actions(owner)
+            buttons=[owner.customize_save_button,owner.new_save_slot_button,owner.rename_save_slot_button,
+                owner.delete_save_slot_button,owner.open_save_folder_button,owner.backup_save_button,
+                owner.restore_save_button,owner.initialize_save_button]
+            for i,button in enumerate(buttons):button.configure(text='Button %d'%i)
+            root.geometry('1000x300');root.deiconify();root.update()
+            assert len({button.winfo_width() for button in buttons})<=2
+            assert [int(button.grid_info()['row']) for button in buttons]==[0]*4+[1]*4
+            assert [int(button.grid_info()['column']) for button in buttons]==list(range(4))*2
+            owner.save_panel.destroy();root.withdraw()
+            report['save_actions_two_by_four']=True
+
+
             assert storage.contract.effective(ui.document,1,'heavyTank',0)['outfit']=='off'
             from types import SimpleNamespace
             from tkinter import ttk

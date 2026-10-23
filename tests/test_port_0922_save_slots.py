@@ -66,6 +66,16 @@ class SaveSlotConfigTests(unittest.TestCase):
                              'garage_state.json'),
                 second)
 
+    def test_initialized_default_does_not_adopt_old_progress_or_pending_recruits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            slot=Path(self.config.save_slot_dir('default',directory));slot.mkdir(parents=True)
+            (slot/'save.json').write_text(json.dumps(dict(skip_legacy_import=True)))
+            for name in ('garage_state.json','account_state.json','postbattle_state.json','launcher_crew_inbox.json','launcher_inbox.json'):
+                (Path(directory)/name).write_text('legacy')
+                path=self.config.save_slot_state_path(name,'default',directory)
+                self.assertEqual(str(slot/name),path)
+                self.assertFalse(os.path.exists(path))
+
     def test_the_default_slot_adopts_state_written_before_save_slots(self):
         with tempfile.TemporaryDirectory() as directory:
             legacy = os.path.join(directory, 'garage_state.json')
