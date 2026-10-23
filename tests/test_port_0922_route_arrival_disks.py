@@ -67,6 +67,20 @@ class RouteArrivalDiskTests(unittest.TestCase):
             planner._route(bot, second_time)
             self.assertEqual(crossed, 'terminal_crossing' in planner._route_states[23])
 
+    def test_airborne_crossing_cannot_complete_after_landing_outside_disk(self):
+        for flight_tick in (1, 2):
+            planner = BotPlanner()
+            route = _route('terminal', [(-100., 0., False), (0., 0., False)])
+            bot = _bot(23, 1, 0, route, 'AT-SPG')
+            bot['state'] = _state(23, 1, -10., 0.)
+            bot['state']['airborne'] = flight_tick == 1
+            planner._route(bot, 1.)
+            bot['state'].update(x=10., airborne=flight_tick == 2)
+            planner._route(bot, 2.)
+            bot['state'].update(x=11., airborne=False)
+            planner._route(bot, 3.)
+            self.assertNotIn('terminal_crossing', planner._route_states[23])
+
     def test_every_shipped_route_uses_closed_six_metre_disk(self):
         root = Path(__file__).resolve().parents[1]
         checked = 0

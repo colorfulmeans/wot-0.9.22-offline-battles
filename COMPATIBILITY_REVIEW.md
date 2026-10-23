@@ -15,7 +15,8 @@ Use the shared 6 m authoring radius for macro arrival and waiting-place entry.
 The selected editor node now draws that actual disk, including nodes with
 waiting places; unselected rendering is unchanged. Preserve bounded forward
 lane passage after a convoy shove, and detect a disk crossed between adjacent
-(twice the existing one-second tactics interval) position observations. Remove
+(twice the existing one-second tactics interval) grounded position observations. Airborne, stale or duplicate observations
+cannot create a retained terminal crossing after landing outside the disk. Remove
 the initial 30 m gate shortcut: an unvisited forward gate at 20 m must not be
 mistaken for disk entry. Server and local tactical owners consume the same
 shared disk/crossing helper. Only the server retains its existing convoy

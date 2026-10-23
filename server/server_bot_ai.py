@@ -3363,10 +3363,14 @@ class BotPlanner(object):
         point = _point(waypoints[index])
         bx = _number(bot["state"].get("x"))
         bz = _number(bot["state"].get("z"))
+        grounded_observation = bool(bot['state'].get('world_pose') and
+                                    not bot['state'].get('airborne'))
         previous_pose = (state.get('arrival_previous_pose') if
+                         grounded_observation and state.get('arrival_previous_grounded') and
                          0.0 < now-state.get('arrival_previous_at', now-3.0) <= 2.0 else None)
         state['arrival_previous_pose'] = (bx, bz)
         state['arrival_previous_at'] = now
+        state['arrival_previous_grounded'] = grounded_observation
         # Macro points describe the lane, not parking places.  Tanks keep
         # advancing until combat, safety or the final destination stops them.
         # Consume every already-reached adjacent gate in this one 1 Hz global
@@ -3389,7 +3393,9 @@ class BotPlanner(object):
             elif not _route_point_reached(bx, bz, waypoints, index, route_limit, previous_pose):
                 break
             if index >= route_limit:
-                if index == len(waypoints)-1 and (authored is not None or len(waypoints)>1):
+                if (index == len(waypoints)-1 and grounded_observation and
+                        not bot['state'].get('route_wreck_blocked') and
+                        (authored is not None or len(waypoints)>1)):
                     state['terminal_crossing'] = dict(point=_point(waypoints[index]), at=now)
                 break
             index += 1
