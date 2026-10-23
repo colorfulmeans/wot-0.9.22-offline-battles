@@ -37,12 +37,23 @@ The captured fixture and tests cover a clear intermediate sample, no added
 probes, real private connector retirement, replan retention/expiry, usable
 complete arcs and invalid evidence fences.
 
+A second continuity defect was reproduced independently: five fresh blocked
+local-action reports at the normal far-camera 0.6-second cadence never passed
+the fixed 0.5-second tracker window (the final count stayed one). Pass the
+current decision horizon through local-action feedback and use the greater of
+0.5 seconds or twice that interval for continuity. Preserve the existing
+verdict-count/time threshold, stationary origin/edge identity and stale-gap
+reset. Other physical-contact callers retain the previous default. Tests
+cover both near/far cadences and a genuinely interrupted episode.
+
 Bot 17 (R151_Object_257_2) also changes yaw and repeatedly moves near Bot 19;
 reverse_turn/avoid and route changes are present, so absent steering commands
 are not established. Extend the diagnostic-entry 15-second compact recovery
 receipt with requested/applied controls, blockers, previous actual pose/yaw
 outcome and the local handoff result. Keep it independent of bulk geometry
-history budgets and retain basic-mode silence for these added records.
+history budgets and retain basic-mode silence for these added records. Include
+the return-budget memory and at most six short-escape denial summaries from
+existing receipts; do not issue diagnostic world probes.
 
 No projectile effects failure, critical-profile rejection, water diagnostic
 error or native exception is present in these sessions. Four missing internal

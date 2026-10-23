@@ -98,6 +98,21 @@ class CompletePivotHandoffTests(unittest.TestCase):
                 self.assertFalse(self.state['_planner_blocked_handoff'].get('complete_pivot_arcs_exhausted', False))
                 self.assertFalse(self.nav.bot_failed_edges)
 
+    def test_far_camera_cadence_accumulates_fresh_failures_and_stale_gap_resets(self):
+        unused, proof, unused_calls = self.search(self.capture['verdicts'])
+        command = dict(self.command, partial_pivot_search=proof)
+        for now in (10., 10.6, 11.2, 11.8, 12.4):
+            self.runtime._report_blocked_planner(self.position, command,
+                {}, self.state, now, self.rows_at(now), observation_interval=0.6)
+        self.assertEqual(1, self.nav.bot_states[19]['blocked_step_replans'])
+        self.nav.clear_blocked_contact(19)
+        self.nav.bot_states[19]['blocked_step_escalated_until'] = 0.
+        for now in (30., 32., 34., 36.):
+            self.runtime._report_blocked_planner(self.position, command,
+                {}, self.state, now, self.rows_at(now), observation_interval=0.6)
+        self.assertEqual(1, self.nav.bot_states[19]['blocked_step_tracker']['count'])
+        self.assertEqual(1, self.nav.bot_states[19]['blocked_step_replans'])
+
     def test_usable_complete_arc_is_preserved_without_extra_probes(self):
         driver = LocalDriver()
         calls = []

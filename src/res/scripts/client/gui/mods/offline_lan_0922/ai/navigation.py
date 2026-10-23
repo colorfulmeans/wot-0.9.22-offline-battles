@@ -3438,7 +3438,7 @@ class TerrainNavigator(object):
 		return ((retired[0],) if state.get('local_target_retired_source') == 'hard_body'
 			and retired is not None and float(now) < retired[1] else ())
 
-	def report_blocked_step(self, bot_id, current, target, now):
+	def report_blocked_step(self, bot_id, current, target, now, observation_interval=0.0):
 		"""Escalate a repeated contact or planner veto into a bot-local replan."""
 		bot_id = int(bot_id)
 		state = self.bot_states.get(bot_id)
@@ -3459,7 +3459,7 @@ class TerrainNavigator(object):
 		tracker = state.get('blocked_step_tracker')
 		same_edge = bool(
 			isinstance(tracker, dict) and tracker.get('key') == key and
-			now - float(tracker.get('last_at', now)) <= 0.5 and
+			now - float(tracker.get('last_at', now)) <= max(0.5, 2.0 * observation_interval) and
 			_distance_2d(current, tracker.get('origin', current)) <=
 			max(1.5, self.grid.cell_size * 0.5))
 		if same_edge:
@@ -3590,7 +3590,7 @@ class TerrainNavigator(object):
 		return changed
 
 	def report_hard_contact(self, bot_id, current, target,
-			realised_yaw, now):
+			realised_yaw, now, observation_interval=0.0):
 		"""Report a physical blocker against stable navigation intent.
 
 		The driver deliberately remembers the realised hull heading so its
@@ -3651,10 +3651,10 @@ class TerrainNavigator(object):
 			state['hard_contact_episode'] = episode
 			state['blocked_step_tracker'] = None
 		return self.report_blocked_step(
-			bot_id, current, episode['report_target'], now)
+			bot_id, current, episode['report_target'], now, observation_interval)
 
 	def report_blocked_corridor(self, bot_id, current, target,
-			realised_yaw, now):
+			realised_yaw, now, observation_interval=0.0):
 		"""Accumulate a terrain veto on one stable semantic route edge.
 
 		A steep/world probe is sampled along the driver's realised heading,
@@ -3666,9 +3666,10 @@ class TerrainNavigator(object):
 		from restarting one another's verdict count.
 		"""
 		return self.report_hard_contact(
-			bot_id, current, target, realised_yaw, now)
+			bot_id, current, target, realised_yaw, now, observation_interval)
 
-	def report_blocked_local_action(self, bot_id, current, target, heading, now):
+	def report_blocked_local_action(self, bot_id, current, target, heading, now,
+			observation_interval=0.0):
 		"""Retire a proved unreachable short point through the existing retry gate.
 
 		A three-metre connector may remain inside one coarse cell. Its synthetic
@@ -3676,7 +3677,11 @@ class TerrainNavigator(object):
 		Retain the existing point-level refusal for the same finite edge lifetime;
 		never turn a rotation refusal into a global map obstacle.
 		"""
-		if not self.report_blocked_corridor(bot_id, current, target, heading, now):
+		# A far-camera control decision normally arrives every 0.6 seconds.
+		# Each receipt is fresh; the old fixed 0.5-second continuity window
+		# discarded every previous verdict before the next decision arrived.
+		if not self.report_blocked_corridor(bot_id, current, target, heading, now,
+				observation_interval):
 			return False
 		self.bot_states[int(bot_id)]['local_target_retired'] = (
 			tuple(target), float(now) + BLOCKED_STEP_EDGE_TTL)

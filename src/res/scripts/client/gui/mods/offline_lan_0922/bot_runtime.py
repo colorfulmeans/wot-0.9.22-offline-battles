@@ -7424,6 +7424,7 @@ class BotRuntime(object):
         actions = (state.get('_execution_window') or {}).get('actions') or ()
         outcome = actions[-1].get('outcome', {}) if actions else {}
         handoff = state.get('_planner_blocked_handoff') or {}
+        return_memory = getattr(self.adapter, '_recovery_travel', {}).get(state['id']) or {}
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
@@ -7437,6 +7438,11 @@ class BotRuntime(object):
             last_execution={key:outcome.get(key) for key in (
                 'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
             recovery_count=driver.get('recovery_count'),
+            return_memory={key:return_memory.get(key) for key in (
+                'active', 'origin', 'yaw', 'forward', 'returned', 'replan_requested')},
+            short_escape_denials=[{key:row.get(key) for key in (
+                'sign', 'distance', 'clear', 'reason', 'blocker')}
+                for row in (driver.get('short_escape_probes') or ())[:6]],
             blocked_handoff={key:handoff.get(key) for key in (
                 'reason', 'all_hard_body_refusals', 'local_actions_exhausted',
                 'complete_pivot_arcs_exhausted', 'private_replan', 'retired')},
@@ -8150,7 +8156,7 @@ class BotRuntime(object):
         return 2
 
     def _report_blocked_planner(self, position, command, samples, state=None, now=None,
-                                verdicts=None):
+                                verdicts=None, observation_interval=0.0):
         """Do not wait for movement when the driver already proved a wall."""
         report = getattr(self.navigator, 'report_blocked_plan', None)
         target = command.get('move_position')
@@ -8267,7 +8273,8 @@ class BotRuntime(object):
         if (hard or remembered_rotation or exhausted) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):
-                private = bool(feedback(state['id'], position, target, heading, now))
+                private = bool(feedback(state['id'], position, target, heading, now,
+                                        observation_interval))
         if state is not None:
             nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
             refusal_counts = {}
@@ -8281,6 +8288,7 @@ class BotRuntime(object):
                     if remembered_rotation else 0),
                 local_actions_exhausted=exhausted,
                 complete_pivot_arcs_exhausted=arc_exhausted,
+                observation_interval=observation_interval,
                 all_hard_body_refusals=len(all_hard),
                 refusal_counts=refusal_counts,
                 realized_rotation_contact={key: value for key, value in
@@ -16970,7 +16978,8 @@ class BotRuntime(object):
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
-                    position, command, planner_probe_samples, state, now, planning_verdicts)
+                    position, command, planner_probe_samples, state, now, planning_verdicts,
+                    observation_interval=decision_horizon)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
