@@ -164,6 +164,9 @@ class LanguageUITests(unittest.TestCase):
         self.assertNotIn('regular',text)
         self.ui.set_language('en');self.root.update()
         self.assertEqual('Effective settings preview',preview.root.title())
+        self.assertEqual('disabled',str(preview.ammo_note.cget('state')))
+        self.assertEqual(3,int(preview.ammo_note.cget('height')))
+        self.assertGreater(preview.table.winfo_height(),200)
 
     def test_language_switch_preserves_pending_selected_rule(self):
         self.ui.rule_vars['skill'].set('elite');self.ui.save_rule()
