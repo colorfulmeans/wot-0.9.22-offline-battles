@@ -61,14 +61,15 @@ package {
             text("size2Label", 336, 126, 324);
             dropdown("size1", 0, 144, 312);
             dropdown("size2", 336, 144, 324);
-            var classes:Array = ["lightTank", "mediumTank", "heavyTank", "AT-SPG", "SPG"];
+            var classes:Array = ["random", "lightTank", "mediumTank", "heavyTank", "AT-SPG", "SPG"];
             for (var side:int = 1; side <= 2; ++side) {
                 for (var index:int = 0; index < classes.length; ++index) {
-                    var xPos:Number = (side == 1 ? 0 : 336) + index * 62;
+                    var xPos:Number = (side == 1 ? 0 : 336) + index * 52;
                     var key:String = "class_" + side + "_" + classes[index];
                     var check:Object = component(key, "CheckBox", xPos, 177, 52);
                     check.label = "";
                     check.addEventListener(ButtonEvent.CLICK, clicked);
+                    if (classes[index] == "random") continue;
                     var icon:Object = App.utils.classFactory.getComponent("Image", UIComponent, null, loaderInfo);
                     icon.x = 24; icon.y = 1;
                     icon.source = "img://gui/maps/icons/vehicleTypes/" + classes[index] + ".png";
@@ -166,6 +167,7 @@ package {
                 var state:Object = data.controls[key];
                 widget.visible = state != null && state.visible;
                 widget.enabled = state != null && state.enabled;
+                if (icons[key] != null) icons[key].alpha = widget.enabled ? 1 : 0.45;
                 if (state == null) continue;
                 if (state.options != null) {
                     // Do not close an open native menu on each room-status tick.

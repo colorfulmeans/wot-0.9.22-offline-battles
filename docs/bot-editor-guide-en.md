@@ -135,22 +135,35 @@ three legal improved devices and a directive with auto-resupply checked. This
 initialization does not run for the hidden worker; saved removals/settings win.
 
 The save customization window has a Members tab immediately after Coatings.
-It queues one 100% recruit at a time, selected by nation, primary crew role,
-gender, complete skill count and trained vehicle. Vehicle choices follow nation
-and primary role; ownership is not required. Skills are unassigned native XP,
-without a zero-skill perk: zero means only 100% basic proficiency. Counts 0..13
-fit the exact client's free-XP cap; fourteen complete skills do not. Each click
-creates a distinct person. The game must be closed while queuing. The next
-startup generates a native passport and adds the person to that save's barracks,
-with a durable system notice. Full barracks or native refusals remain pending.
-The recruit, notice and retry identity are saved together, so interrupted inbox
-cleanup cannot duplicate a member. Neither the wallet nor existing crew change.
-Pending recruits are included in save backups. Restoring a different save
-replaces or removes the old pending inbox together with its matching ledger.
+Its readonly controls are Nation, Tank type, Vehicle, Profession, Gender,
+Training level and Skills/perks. The generated exact-client table covers 614
+selectable vehicles and 2,676 seats. Duplicate primary roles have separate seat
+indices, numbered captions and combined-role labels. Each seat's limit is the
+union of its active primary/secondary skills, with common skills counted once.
+Changing seats clamps an out-of-range count and explains the adjustment.
+
+Training choices are 50%, 75% and 100%. Below 100%, ordinary skills cannot be
+selected: men have zero; women retain one zero-XP Brothers in Arms perk. At
+100%, men choose 0..seat maximum and women 1..seat maximum, including that perk.
+The remaining full-skill choices are member-owned durable credits, not an
+unbounded free-XP balance. Choose skills in the stock client; each grant runs
+the pinned Python descriptor's native XP/rank loop before bounded serialization.
+The stock skill counter shows remaining available grants. Moving seats, entering
+the barracks, retraining, dismissal/recovery and restart do not issue new credits.
+Resets return granted choices as credits and apply XP losses only to earned XP.
+The pinned-code audit exercises 20 full skills and a reset with no duplicated XP;
+this is codec/logic evidence, not Windows gameplay acceptance.
+
+Each click queues a distinct person. Close the game before queuing. Next startup
+generates a native passport, delivers to that save's barracks and queues a system
+notice. Full barracks/native refusals remain pending. Recruit, skill credits,
+notice and retry identity commit together. Inbox cleanup retries cannot duplicate
+a member. Credits travel with the save ledger and pending requests with backups;
+restoring another save cannot carry over the previous save's pending inbox.
 
 Verification covers real Tk selection/reset/undo/import behavior, inherited
 presets, empty inventory, ratio rounding across digit combinations, host-only
-class changes, shrinking/re-expanding artillery controls, full human teams,
+class changes, shrinking/re-expanding positive class selections, full human teams,
 malformed profile containment, packed XML round trips and native fitting
 identity. `tools/verify_bot_fittings.py` checks all 576 supported hulls against
 #1513 modules, load, native device filters and ammunition (9,216 combinations

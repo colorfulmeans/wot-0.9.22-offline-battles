@@ -2032,7 +2032,7 @@ class LANClient(object):
 
     def set_team_class(self, team, tag, allowed):
         if (not self.ready or self.phase!='waiting' or self.player_id!=self.host_player_id or
-                team not in (1, 2) or tag not in bot_tactics.CLASSES or type(allowed) is not bool):
+                team not in (1, 2) or tag not in bot_tactics.CLASSES+('random',) or type(allowed) is not bool):
             return False
         return self._send({'type':'set_team_class','team':team,'class_tag':tag,'allowed':allowed})
 

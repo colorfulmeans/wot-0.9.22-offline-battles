@@ -46,15 +46,17 @@ class CustomizationTests(unittest.TestCase):
     def test_bad_digits_and_booleans_are_not_ratios(self):
         for raw in ([10,1,0],[-1,1,0],[True,0,0],[1.5,0,0]):
             with self.assertRaises(tactics.TacticsError):tactics.normalize_values(dict(ammo_ratios=raw))
-    def test_host_filter_and_spg_resize_remain_off(self):
+    def test_host_only_and_resize_preserves_manual_choices(self):
         state=BattleState(team_size=15)
         host,error=state.add_player(_Connection(),('127.0.0.1',1001),_hello(1))
         other,error=state.add_player(_Connection(),('127.0.0.1',1002),_hello(2))
-        self.assertFalse(state.set_team_class(other.player_id,1,'heavyTank',False))
+        self.assertFalse(state.set_team_class(other.player_id,1,'random',False))
+        self.assertTrue(state.set_team_class(host.player_id,1,'random',False))
         self.assertTrue(state.set_team_class(host.player_id,1,'heavyTank',False))
-        self.assertTrue(state.set_team_size(host.player_id,1,6)[0]);self.assertFalse(state.team_classes['1']['SPG'])
-        self.assertFalse(state.set_team_class(host.player_id,1,'SPG',True))
-        self.assertTrue(state.set_team_size(host.player_id,1,15)[0]);self.assertFalse(state.team_classes['1']['SPG'])
+        self.assertTrue(state.set_team_size(host.player_id,1,2)[0])
+        chosen=copy.deepcopy(state.team_classes['1'])
+        self.assertTrue(state.set_team_size(host.player_id,1,15)[0])
+        self.assertEqual(chosen,state.team_classes['1'])
         state.phase='loading';self.assertFalse(state.set_team_class(host.player_id,1,'SPG',True))
     def test_full_human_teams_need_no_automatic_classes(self):
         state=BattleState(team_size=1);_attach_worker(state)
@@ -68,13 +70,13 @@ class CustomizationTests(unittest.TestCase):
         state=BattleState(team_size=1)
         self.assertEqual(200,state._sanitize_bot_profile({'clip_size':200})['clip_size'])
 
-    def test_empty_allowed_classes_refuse_standard_but_not_training_without_bots(self):
+    def test_empty_manual_selection_returns_to_random_and_training_bots_off_starts(self):
         state=BattleState(team_size=2);_attach_worker(state)
         host,error=state.add_player(_Connection(),('127.0.0.1',1001),_hello(1))
         for team in (1,2):
+            state.set_team_class(host.player_id,team,'random',False)
             for tag in tactics.CLASSES:state.set_team_class(host.player_id,team,tag,False)
-        start,error=state.request_start(host.player_id)
-        self.assertEqual('bot_class_pool_empty',error);self.assertEqual('waiting',state.phase)
+            self.assertTrue(state.team_classes[str(team)]['random'])
         start,error=state.request_start(host.player_id,battle_mode='training')
         self.assertIsNone(error);self.assertEqual([],start['bots'])
 

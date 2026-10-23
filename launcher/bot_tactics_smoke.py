@@ -50,19 +50,32 @@ def run(destination):
             owner=SimpleNamespace(_tk=tk,_ttk=ttk,_t=lambda value:value,
                 game_root=tk.StringVar(value='smoke fixture'),_save_slot_id='smoke',_busy=False,_maintenance_busy=False)
             panel=crew_ui.CrewPanel(owner,ttk.Frame(root))
-            panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'))]
+            panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'),vehicleClass='lightTank',seats=crew_ui.store.crew_skills.seats('ussr:R11_MS-1'))]
             panel.filter();assert panel.by_label
             panel.variables['female'].set('Female');panel.variables['skills'].set('2')
             original_add=crew_ui.store.add;calls=[]
             try:
-                crew_ui.store.add=lambda *args:calls.append(args)
+                crew_ui.store.add=lambda *args,**kwargs:calls.append((args,kwargs))
                 assert panel.add()
-                assert calls==[('smoke','smoke fixture','ussr:R11_MS-1','commander',True,2)]
+                assert calls==[(('smoke','smoke fixture','ussr:R11_MS-1',0,True,2),{'training':100})]
             finally:
                 crew_ui.store.add=original_add
-            panel.variables['role'].set('Loader');panel.filter();assert not panel.by_label
+            panel.variables['class'].set('Heavy tank');panel.filter();assert not panel.by_label
             assert str(panel.button.cget('state'))=='disabled'
             report['crew_controls_and_outfit_override']=True
+            name='ussr:R45_IS-7'
+            panel.vehicles=[dict(name=name,nation='ussr',label='IS-7',vehicleClass='heavyTank',
+                seats=crew_ui.store.crew_skills.seats(name))]
+            panel.filter();panel.variables['seat'].set('Loader2 (Also Radio operator)');panel.update_skills()
+            assert max(panel.maps['skills'].values())==11
+            panel.variables['skills'].set('11');panel.variables['seat'].set('Loader1');panel.update_skills()
+            assert panel.variables['skills'].get()=='7'
+            panel.variables['training'].set('50%');panel.update_skills()
+            assert panel.variables['skills'].get()=='1' and str(panel.boxes['skills'].cget('state'))=='disabled'
+            panel.variables['training'].set('100%');panel.update_skills()
+            assert min(panel.maps['skills'].values())==1
+            report['seat_aware_recruits']=True
+
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()
             ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()

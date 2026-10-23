@@ -2382,6 +2382,8 @@ class BattleState:
                       _team_capacity(team2_size, "team2_size"))
         self.team_sizes = {1: team1_size, 2: team2_size}
         self.team_classes = bot_tactics.team_class_choices(sizes=self.team_sizes)
+        self.team_class_notice = None
+        self.last_bot_class_error = None
         self.bot_tier_mode = bot_planner.normalize_bot_tier_mode(
             bot_tier_mode)
         self.bot_skill_mode = bot_gunnery.normalize_skill_mode(
@@ -3138,6 +3140,7 @@ class BattleState:
                 effective_params=effective_params,
             )
             self.players[player_id] = player
+            for side in (1,2):self._trim_team_classes(side)
             if self.host_player_id is None:
                 self.host_player_id = player_id
             self.state_revision += 1
@@ -3190,24 +3193,55 @@ class BattleState:
                 player.slot, player.team)
             player.y = 0.0
             player.aim_yaw = player.yaw
+            for side in (1,2):self._trim_team_classes(side)
             self.state_revision += 1
             return True, None
 
+    def _class_context(self, team, plan=None):
+        from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+        if plan is None:
+            occupied={(p.team,p.slot) for p in self.players.values() if p.connected and p.team in (1,2)}
+            humans=[p for p in self.players.values() if p.connected and p.team==team]
+        else:
+            occupied={(side,slot) for p,side,slot in plan}
+            humans=[p for p,side,slot in plan if side==team]
+        pinned=[r for r in self.bot_lineup if r.get('team')==team and 'vehicle' in r
+                and (team,r.get('slot')) not in occupied and 0<=r.get('slot',-1)<self.team_sizes[team]]
+        tags=[CLASSES.get(r['vehicle']) for r in pinned]
+        return max(0,self.team_sizes[team]-len(humans)-len(pinned)),tags,sum(CLASSES.get(p.vehicle)=='SPG' for p in humans)
+
+    def _trim_team_classes(self, team, keep=None, plan=None):
+        from gui.mods.offline_lan_0922 import team_class_policy as policy
+        automatic,pinned,unused=self._class_context(team,plan)
+        was_random=self.team_classes[str(team)]['random']
+        removed=policy.trim(self.team_classes[str(team)],automatic,pinned,keep)
+        if removed and not was_random:
+            previous=self.team_class_notice
+            changes=list(previous.get('changes',[])) if previous and previous.get('revision')==self.state_revision+1 else []
+            changes.append(dict(team=team,removed=removed))
+            self.team_class_notice=dict(revision=self.state_revision+1,team=team,removed=removed,changes=changes)
+        return removed
+
     def set_team_class(self, player_id, team, tag, allowed):
         with self.lock:
-            player = self.players.get(player_id)
-            if player is None or not player.connected or self.phase != 'waiting':
-                return False
-            if player_id != self.host_player_id:
-                return False
-            try: team = _exact_int(team, 1, 2)
-            except ValueError: return False
-            if tag not in bot_tactics.CLASSES or type(allowed) is not bool:
-                return False
-            if tag == 'SPG' and self.team_sizes[team] <= 6 and allowed:
-                return False
-            self.team_classes[str(team)][tag] = allowed
-            self.state_revision += 1
+            player=self.players.get(player_id)
+            if player is None or not player.connected or self.phase!='waiting' or player_id!=self.host_player_id:return False
+            try:team=_exact_int(team,1,2)
+            except ValueError:return False
+            if tag not in bot_tactics.CLASSES+('random',) or type(allowed) is not bool:return False
+            row=self.team_classes[str(team)]
+            if tag=='random':
+                row['random']=allowed
+                if not allowed and not row['order']:
+                    row.update(dict((t,True) for t in bot_tactics.CLASSES));row['order']=list(bot_tactics.CLASSES)
+            else:
+                if row['random']:return False
+                row[tag]=allowed
+                if tag in row['order']:row['order'].remove(tag)
+                if allowed:row['order'].append(tag)
+                if not row['order']:row['random']=True
+            self._trim_team_classes(team,tag if tag!='random' and allowed else None)
+            self.state_revision+=1
             return True
 
     def set_team_size(self, player_id, requested_team, requested_size):
@@ -3257,7 +3291,7 @@ class BattleState:
                 participant.y = 0.0
                 participant.aim_yaw = participant.yaw
             self.team_sizes[team] = size
-            self.team_classes = bot_tactics.team_class_choices(self.team_classes, self.team_sizes)
+            self._trim_team_classes(team)
             self.team_size = max(self.team_sizes.values())
             occupied_slots = {
                 (participant.team, participant.slot)
@@ -3787,6 +3821,7 @@ class BattleState:
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
                 "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "players": [self._public_player(p)
@@ -3902,21 +3937,64 @@ class BattleState:
             assignment_plan = self._waiting_assignment_plan(connected)
             if assignment_plan is None:
                 return None, 'team_full'
-            if battle_mode == 'regular' or training_bots:
+            self.last_bot_class_error=None
+            if any([self._trim_team_classes(side,plan=assignment_plan) for side in (1,2)]):
+                self.state_revision+=1
+            if battle_mode=='regular' or training_bots:
+                from gui.mods.offline_lan_0922 import team_class_policy as policy
                 from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
-                occupied={(team,slot) for player,team,slot in assignment_plan}
+                catalog=self.vehicle_catalogs.get(self.host_player_id) or ()
+                allowed_names=_bot_lineup_allowed_names(catalog)-set(self.bot_excluded_vehicles)
+                host=self.players[self.host_player_id]
+                host_tier=next((r['level'] for r in catalog if r.get('name')==host.vehicle),1)
+                pool=[r for r in catalog if r.get('name') in allowed_names and
+                      bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
+                # The worker reserves every connected human's tier/class, even
+                # in a mixed-tier room outside the host's ordinary tier band.
+                pool_names=set(r['name'] for r in pool)
+                for participant,side,slot in assignment_plan:
+                    if participant.vehicle in allowed_names and participant.vehicle not in pool_names:
+                        entry=next((r for r in catalog if r['name']==participant.vehicle),None)
+                        if entry is not None:pool.append(entry);pool_names.add(entry['name'])
+                needed=set();groups=[]
+                for side in (1,2):
+                    automatic,pinned,unused=self._class_context(side,assignment_plan)
+                    row=self.team_classes[str(side)]
+                    needed.update(policy.required(row,pinned))
+                    if automatic and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
+                human_tiers=[next((r['level'] for r in catalog if r.get('name')==p.vehicle),host_tier)
+                             for p,side,slot in assignment_plan]
+                proposed=bot_planner.bot_match_tiers(host_tier,self.bot_tier_mode,
+                    available_tiers=[r.get('level',1) for r in pool],required_tiers=human_tiers)
+                proposed=tuple(sorted(set(proposed)|set(human_tiers)))
+                tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r)) for r in pool],
+                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups)
+                if tiers is None:
+                    available=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool)
+                    for team in (1,2):
+                        row=self.team_classes[str(team)]
+                        if row['random']:continue
+                        unused,pinned,unused=self._class_context(team,assignment_plan)
+                        missing=[tag for tag in policy.required(row,pinned) if tag not in available]
+                        if missing:
+                            self.last_bot_class_error=dict(team=team,reason='missing_class',classes=missing)
+                            return None,'bot_class_pool_empty'
+                    self.last_bot_class_error=dict(team=next(t for t in (1,2) if not self.team_classes[str(t)]['random']),
+                        reason='tier_window',classes=sorted(needed))
+                    return None,'bot_class_pool_empty'
                 for team in (1,2):
-                    humans=[player for player,side,slot in assignment_plan if side==team]
-                    pinned=[row for row in self.bot_lineup if row.get('team')==team and 'vehicle' in row
-                            and (team,row.get('slot')) not in occupied and 0<=row.get('slot',-1)<self.team_sizes[team]]
-                    automatic=max(0,self.team_sizes[team]-len(humans)-len(pinned))
-                    quota=max(0,bot_planner.team_artillery_limit(self.team_sizes[team])-
-                              sum(CLASSES.get(player.vehicle)=='SPG' for player in humans)-
-                              sum(CLASSES.get(row['vehicle'])=='SPG' for row in pinned))
-                    choices=self.team_classes[str(team)]
-                    if automatic and (not any(choices.values()) or
-                            (not any(choices[t] for t in bot_tactics.CLASSES if t!='SPG') and automatic>quota)):
-                        return None, 'bot_class_pool_empty'
+                    row=self.team_classes[str(team)]
+                    automatic,pinned,human_spgs=self._class_context(team,assignment_plan)
+                    quota=policy.artillery_limit(self.team_sizes[team],human_spgs,pinned.count('SPG'),row)
+                    classes=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool if r.get('level',1) in (tiers or ()))
+                    # Legacy probes without a native catalog can still use the
+                    # default random mode; explicit guarantees require evidence.
+                    if row['random'] and not catalog:continue
+                    reason=policy.validate(row,automatic,pinned,classes,quota)
+                    if reason:
+                        self.last_bot_class_error=dict(team=team,reason=reason,
+                            classes=policy.required(row,pinned))
+                        return None,'bot_class_pool_empty'
             try:
                 proposed_tactics = bot_tactics.load(self.bot_tactics_path)
                 from gui.mods.offline_lan_0922.bot_fittings import validate_profile
@@ -3982,6 +4060,7 @@ class BattleState:
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
                 "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
@@ -4791,6 +4870,7 @@ class BattleState:
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
                 "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
@@ -5078,7 +5158,8 @@ class BattleState:
                 from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
                 tag=CLASSES.get(entry['vehicle'],entry['profile'].get('class_tag','mediumTank'))
                 pinned=any(row.get('team')==raw_team and row.get('slot')==raw_slot and row.get('vehicle')==entry['vehicle'] for row in self.bot_lineup)
-                if not pinned and not self.team_classes[str(raw_team)].get(tag,False):
+                from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+                if not pinned and not class_policy.allows(self.team_classes[str(raw_team)],tag):
                     self.last_bot_manifest_reject_code='bot_class_excluded'
                     return False
                 manifest.append(entry)
@@ -5091,8 +5172,14 @@ class BattleState:
                 artillery=[row for row in manifest if row['team']==team and CLASSES.get(row['vehicle'],row['profile'].get('class_tag'))=='SPG']
                 pinned=sum(any(p.get('team')==team and p.get('slot')==row['slot'] and p.get('vehicle')==row['vehicle'] for p in self.bot_lineup) for row in artillery)
                 humans=sum(p.connected and p.team==team and CLASSES.get(p.vehicle)=='SPG' for p in self.players.values())
-                if len(artillery)-pinned>max(0,bot_planner.team_artillery_limit(self.team_sizes[team])-pinned-humans):
+                from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+                row=self.team_classes[str(team)]
+                if len(artillery)-pinned>class_policy.artillery_limit(self.team_sizes[team],humans,pinned,row):
                     self.last_bot_manifest_reject_code='bot_artillery_limit'
+                    return False
+                actual=set(CLASSES.get(r['vehicle'],r['profile'].get('class_tag')) for r in manifest if r['team']==team)
+                if class_policy.required(row,actual):
+                    self.last_bot_manifest_reject_code='bot_class_missing'
                     return False
             manifest.sort(key=lambda value: value["id"])
             self.bot_manifest = manifest
@@ -16114,6 +16201,7 @@ class BattleState:
                     "team_size": self.team_size,
                     "team_sizes": self._team_sizes_wire(),
                     "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                     "bot_tier_mode": self.bot_tier_mode,
                     "bot_skill_mode": self.bot_skill_mode,
                     "bot_lineup": list(self.bot_lineup),
@@ -16183,6 +16271,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
             "team_size": state.team_size,
             "team_sizes": state._team_sizes_wire(),
             "team_classes": copy.deepcopy(state.team_classes),
+            "team_class_notice": copy.deepcopy(state.team_class_notice),
             "bot_tier_mode": state.bot_tier_mode,
             "bot_skill_mode": state.bot_skill_mode,
         }
@@ -16619,6 +16708,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         "team_size": server.state.team_size,
                         "team_sizes": server.state._team_sizes_wire(),
                         "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                         "bot_tier_mode": server.state.bot_tier_mode,
                         "bot_skill_mode": server.state.bot_skill_mode,
                     }
@@ -16836,6 +16926,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "round_id": server.state.round_id,
                                     "state_revision": server.state.state_revision,
                                     "code": start_error,
+                                    "class_error": copy.deepcopy(server.state.last_bot_class_error),
                                     "players": len(server.state.players),
                                 })
                                 _server_log("START denied for id=%d: %s" % (player.player_id, start_error))
@@ -16875,6 +16966,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "team": message.get("team"),
                                     "team_sizes": server.state._team_sizes_wire(),
                                     "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
                         elif message_type == "set_team_class":
                             if server.state.set_team_class(player.player_id,
@@ -16901,6 +16993,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "size": message.get("size"),
                                     "team_sizes": server.state._team_sizes_wire(),
                                     "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
                         elif message_type == "set_bot_skill_mode":
                             accepted, mode_error = \

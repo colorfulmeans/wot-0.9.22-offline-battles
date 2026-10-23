@@ -174,9 +174,25 @@ AP/APCR/HEAT/HE order, bypassing only the default gun ammunition whitelist.
 Price, shell kind and physical identities do not change. Pinned slots preview
 the resolved development gun; generic scopes apply to the eventual gun.
 
-Every team has five native class checkboxes for automatic fill. Humans and
-pinned vehicles remain; they consume artillery quota. Up to six total team
-members allow no automatic artillery; 7..9 allow 0..1, 10..12 allow 0..2,
-and 13..15 allow 0..3. Shrinking below seven clears artillery and increasing
-again does not restore the check. An empty/unfillable allowed pool refuses
-start. Training without Bots keeps these preferences without using them.
+Each team has a native Random checkbox followed by five class icons. Random
+is the default and displays all five class checks disabled/selected without
+replacing the remembered manual mask. Manual selection guarantees at least one
+BOT per checked class; unchecked classes cannot fill automatically. Fixed
+launcher vehicles remain and can satisfy the minimum; human tanks never do.
+Remaining automatic slots draw only from checked types. With no manual checks,
+Random is selected again. Both teams remember their own selections.
+
+Shrinking capacity drops the newest unsatisfied selections first and sends a
+system notice. Growing never restores checks. When explicitly choosing a new
+class with all automatic slots already reserved, keep the clicked class and
+remove later old selections; this makes changing the only class in a one-Bot
+team possible. Fixed Bots remain authoritative even outside the manual mask.
+
+Random artillery limits remain 0 for 1..6 total team members, 0..1 for 7..9,
+0..2 for 10..12 and 0..3 for 13..15. A manual SPG check guarantees one BOT SPG
+even below seven or when a human already drives artillery. Further automatic
+SPGs use the remaining normal quota; fixed SPGs are never replaced. SPG-only
+selections that cannot fill the team within the quota refuse start, rather
+than admitting unchecked classes. Preflight also refuses missing classes and
+impossible shared tier windows before loading. Training without Bots ignores
+these preferences. Standard and training Bots share the same selection policy.

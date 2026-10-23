@@ -2260,7 +2260,24 @@ class LANSession(object):
             self.snapshot = None
             self._start_requested = False
 
+    def _show_class_adjustment(self, message):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        notice=_message_value(message,'team_class_notice')
+        if isinstance(notice,dict) and notice.get('revision')!=getattr(self,'_class_notice_revision',None):
+            self._class_notice_revision=notice.get('revision')
+            changes=notice.get('changes')
+            if not isinstance(changes,list):changes=[notice]
+            for change in changes[:2]:
+                if not isinstance(change,dict) or change.get('team') not in (1,2):continue
+                removed=change.get('removed')
+                if not isinstance(removed,list):continue
+                removed=[tag for tag in removed[:5] if tag in bot_tactics.CLASSES]
+                if removed:
+                    self._status_notifier(tr('Team %d: insufficient Bot slots; unchecked %s. Increasing team size will not restore these selections.') %
+                        (change.get('team',0),u', '.join(tr(tag) for tag in removed)))
+
     def _waiting_event(self, message):
+        self._show_class_adjustment(message)
         self._cancel_retry_callback()
         self._cancel_round_end_watchdog()
         recovered_connection = self._connection_error_notified
@@ -2791,6 +2808,7 @@ class LANSession(object):
         return True
 
     def _on_event(self, kind, message):
+        self._show_class_adjustment(message)
         if self._stopped or getattr(self, '_replay_exit_requested', False):
             return
         if getattr(self.client, 'is_offline_replay', False):
@@ -2829,7 +2847,15 @@ class LANSession(object):
                 getattr(self.client, 'host_player_id',
                         self._host_player_id))
             if _message_value(message, 'code') == 'bot_class_pool_empty':
-                self._status_notifier(tr('Allowed Bot classes cannot fill the team. Enable a non-artillery class or reduce team size.'))
+                detail=_message_value(message,'class_error')
+                if not isinstance(detail,dict):detail={}
+                reasons={'tier_window':tr('no shared battle-tier window can supply the selected classes'),
+                         'slots':tr('not enough automatic Bot slots'),
+                         'missing_class':tr('a selected class has no available vehicle at the current tier and exclusion settings'),
+                         'pool':tr('the selected classes and artillery limit cannot fill the team')}
+                self._status_notifier(tr('Team %d cannot start: %s. Adjust the class selection or team size.') %
+                    (detail.get('team',0),reasons.get(detail.get('reason'),tr('invalid Bot class selection'))+
+                     (u' ('+u', '.join(tr(tag) for tag in detail.get('classes',[]))+u')' if detail.get('classes') else u'')))
             elif _message_value(message, 'code') == 'host_only':
                 self._status_notifier(
                     tr('Only the LAN room host can choose the map and start.'))

@@ -113,18 +113,13 @@ class RoomWindow(object):
         if role.startswith('class_'):
             from gui.mods.offline_lan_0922 import bot_tactics
             parts = role.split('_',2)
-            if len(parts)!=3 or parts[1] not in ('1','2') or parts[2] not in bot_tactics.CLASSES:return
+            if len(parts)!=3 or parts[1] not in ('1','2') or parts[2] not in bot_tactics.CLASSES+('random',):return
             team, tag = int(parts[1]), parts[2]
             status = room._team_status() or {}
             if not room._host() or not status.get('class_supported'):return
             if room._training_status()[0] and not room._training_status()[1]:return
-            sizes=status.get('sizes') or {}
-            size=int(sizes.get(team,sizes.get(str(team),15)))
-            if tag=='SPG' and size<=6:
-                from gui import SystemMessages
-                SystemMessages.pushMessage(tr('Artillery needs at least 7 players per team. Automatic limits: 1-6: 0; 7-9: 0-1; 10-12: 0-2; 13-15: 0-3. Players and fixed Bots keep their vehicles.'))
-                return
-            choices=bot_tactics.team_class_choices(status.get('classes') or None,sizes)
+            choices=bot_tactics.team_class_choices(status.get('classes') or None)
+            if tag!='random' and choices[str(team)]['random']:return
             if callable(room._request_team_class):room._request_team_class(team,tag,not choices[str(team)][tag])
             return
         if role == 'tier':
@@ -210,10 +205,12 @@ def model(room):
         menu('size%d' % team, [(str(i), str(i)) for i in range(1, 16)], room._pending_team_sizes.get(team, current),
              host and teams.get('size_supported'))
     from gui.mods.offline_lan_0922 import bot_tactics
-    choices=bot_tactics.team_class_choices(teams.get('classes') or None,teams.get('sizes'))
+    choices=bot_tactics.team_class_choices(teams.get('classes') or None)
     for team in (1,2):
+        row=choices[str(team)];enabled=host and teams.get('class_supported') and (not training or bots)
+        button('class_%d_random'%team,tr('RANDOM'),enabled,selected=row['random'])
         for tag in bot_tactics.CLASSES:
-            button('class_%d_%s'%(team,tag), '', host and teams.get('class_supported') and (not training or bots), selected=choices[str(team)][tag])
+            button('class_%d_%s'%(team,tag),'',enabled and not row['random'],selected=row['random'] or row[tag])
     button('map', tr('MAP: %s') % friendly_map_name(room._selected_map), host and bool(options))
     button('random', tr('RANDOM MAP'), host and room._random_supported())
     preferred = teams.get('preferred', 0)

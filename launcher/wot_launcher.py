@@ -58,6 +58,12 @@ LAUNCHER_VERSION = "0.10.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    'Self-propelled gun': '自行火炮',
+    'Tank type': '坦克类型', 'Profession': '专业', 'Training level': '训练水平',
+    'Skills and perks': '技能和特长', 'Also': '兼',
+    'Skill count reduced to the current seat limit: ': '技能数量已降低至当前席位上限：',
+    'Choose a vehicle and its actual crew seat. The skill limit includes its combined roles, with shared skills counted once. Below 100% training, ordinary skills are unavailable. Female crew always have zero-skill Brothers in Arms; it counts as one selected skill. At 100%, choose the other skills in the client. Grants belong to the member and are not renewed by moving seats. Close the game before adding; delivery and a system message occur next startup. Insufficient barracks space leaves the request pending.':
+        '按车辆和实际成员席位添加，共同技能去重后计算上限。训练不足100%时不能选择普通技能；女性始终具有零历练兄弟连，计入技能总数。100%成员的其他技能进入客户端后自行选择。技能额度属于成员，换座不重复授予。添加前请关闭游戏，下次启动进入兵营并显示系统消息；兵营不足时保留待领取。',
     'Crew members': '成员', 'Crew role': '类型', 'Gender': '性别',
     'Complete skills': '技能数', 'Trained vehicle': '受训车辆',
     'Commander': '车长', 'Gunner': '炮手', 'Driver': '驾驶员',
@@ -254,7 +260,7 @@ _CHINESE = {
     "japan": "日本", "czech": "捷克", "sweden": "瑞典",
     "poland": "波兰", "italy": "意大利",
     "Light tank": "轻型坦克", "Medium tank": "中型坦克",
-    "Heavy tank": "重型坦克", "Tank destroyer": "坦克歼击车",
+    "Heavy tank": "重型坦克", "Tank destroyer": "自行反坦克炮",
     "SPG": "自行火炮",
     "Personal missions": "个人任务",
     "Edit mission progress...": "调整完成进度…",

@@ -106,6 +106,11 @@ def _atomic(path, document):
 
 def _commit_files(changes):
     """Stage all writes before mutation and restore originals on an I/O failure."""
+    changes=dict(changes)
+    for path,data in list(changes.items()):
+        backup=Path(str(path)+'.bak')
+        if data is not None and path.exists() and path.suffix!='.bak' and backup not in changes:
+            changes[backup]=path.read_bytes()
     originals={path:path.read_bytes() if path.exists() else None for path in changes}
     staged={}
     def stage(path,data):

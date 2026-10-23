@@ -14,7 +14,7 @@ from gui.mods.offline_lan_0922.account_rpc import garage_store
 
 
 def row(identifier='a' * 32, **changes):
-    value = dict(id=identifier, nation='ussr', vehicle='ussr:R11_MS-1', role='commander', female=False, skills=2)
+    value = dict(id=identifier, nation='ussr', vehicle='ussr:R11_MS-1', role='commander', female=False, skills=2, seat=0, training=100)
     value.update(changes)
     return value
 
@@ -92,23 +92,24 @@ class CrewDeliveryTests(unittest.TestCase):
         self.assertEqual(['a' * 32], restored[crew.RECEIPTS])
 
     def test_unexpected_requests_do_not_reach_native_factory(self):
-        for changes in (dict(skills=True), dict(skills=14), dict(skills=-1), dict(female=1),
+        for changes in (dict(skills=True), dict(skills=21), dict(skills=-1), dict(female=1),
                         dict(nation='usa'), dict(vehicle='ussr:R11_MS-1\n'), dict(id='a' * 32 + '\n')):
             with self.assertRaises(ValueError): crew.request(row(**changes))
 
-    def test_native_factory_receives_gender_and_unassigned_exact_skill_xp(self):
-        vehicle = NS(type=NS(id=(0, 1), crewRoles=(('commander', 'gunner'), ('driver',))))
+    def test_native_factory_receives_training_zero_perk_and_no_unbounded_xp(self):
+        vehicle = NS(type=NS(id=(0, 1), crewRoles=crew.crew_skills.seats('ussr:R11_MS-1')))
         calls = []
         class Descriptor:
             levelUpXpCost = staticmethod(lambda level, sequence: (level + 1) * 2 ** sequence)
             def __init__(self, raw): self.__dict__.update(raw)
         def factory(data):
             calls.append(data)
-            return data
+            value=dict(data);value['skills']=data['freeSkills']+data['skills']
+            return value
         tankmen = NS(TankmanDescr=Descriptor, makeTmanDescrByTmanData=factory)
         value = crew.build(row(female=True), NS(VehicleDescr=lambda **kwargs: vehicle), tankmen)
-        self.assertEqual(30300, value['freeXP'])
-        self.assertEqual([], value['skills']); self.assertEqual([], value['freeSkills'])
+        self.assertEqual(0, value['freeXP'])
+        self.assertEqual(['brotherhood'], value['skills']); self.assertEqual(['brotherhood'], value['freeSkills'])
         self.assertTrue(value['isFemale']); self.assertEqual(100, value['roleLevel'])
         with self.assertRaises(ValueError):
             crew.build(row(role='loader'), NS(VehicleDescr=lambda **kwargs: vehicle), tankmen)

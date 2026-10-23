@@ -105,8 +105,15 @@ EXPECTED_ABI = {
             'roleLevel', 'skillsMask', 'isPreview'),
         'TankmanDescr.__init__': ('self', 'compactDescr', 'battleOnly'),
         'TankmanDescr.skillLevel': ('self', 'skillName'),
+        'TankmanDescr.addSkill': ('self','skillName'),
+        'TankmanDescr.makeCompactDescr': ('self',),
         'TankmanDescr.levelUpXpCost': ('fromSkillLevel', 'skillSeqNum'),
         'makeTmanDescrByTmanData': ('tmanData',),
+    },
+    'scripts/client/gui/shared/gui_items/Tankman.pyc': {
+        'Tankman.newSkillCount': ('self',),
+        'Tankman.hasNewSkill': ('self','useCombinedRoles'),
+        'Tankman.availableSkills': ('self','useCombinedRoles'),
     },
     'scripts/common/items/__init__.pyc': {
         'ItemsPrices.__init__': ('self', 'prices'),
@@ -1172,12 +1179,16 @@ EXPECTED_CODE_NAMES = {
         'EffectsPlayer.stopAll': ('_effects', 'itervalues', 'stop'),
     },
     'scripts/common/items/tankmen.pyc': {
+        'TankmanDescr.addSkill': ('_TankmanDescr__levelUpLastSkill','_TankmanDescr__skills'),
+        'TankmanDescr.makeCompactDescr': ('freeXP','_TankmanDescr__lastSkillLevel'),
         'TankmanDescr.skillLevel': (
             'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),
         'makeTmanDescrByTmanData': ('getNationConfig', 'isFemales', 'generateCompactDescr', 'addXP', 'makeCompactDescr'),
         'TankmanDescr.levelUpXpCost': ('_g_levelXpCosts',),
     },
     'scripts/client/gui/shared/gui_items/Tankman.pyc': {
+        'Tankman.newSkillCount': ('hasNewSkill','TankmanDescr','addSkill','lastSkillLevel'),
+        'Tankman.hasNewSkill': ('availableSkills','roleLevel','lastSkillLevel'),
         'Tankman.getSkillsToLearn': (
             'COMMON_SKILLS', 'SKILLS_BY_ROLES', 'combinedRoles'),
     },

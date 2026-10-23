@@ -62,6 +62,8 @@ def _economy_modules(package_stubs):
                         'gui.mods.offline_lan_0922.account_rpc.economy'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.launcher_inbox'] = (
                 _real_module('launcher_inbox'))
+            for name in ('crew_seat_data','crew_skills'):
+                _ECONOMY_MODULES['gui.mods.offline_lan_0922.'+name]=_real_module(name)
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.crew_recruits'] = (
                 _real_module('crew_recruits'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (

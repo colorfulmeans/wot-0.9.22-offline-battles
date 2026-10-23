@@ -5672,6 +5672,22 @@ class BattleRuntime(object):
                             for candidate in candidates):
                         candidates.append(profile)
             match_tiers = tuple(sorted(set(match_tiers)))
+            from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+            room_choices=bot_tactics.team_class_choices(self._start_message.get('team_classes'))
+            needed=set();groups=[]
+            for side in (1,2):
+                slots=set(int(r.get('slot',0)) for r in bots_by_team[side])
+                pinned_names=[r['vehicle'] for r in self._start_message.get('bot_lineup') or ()
+                              if r.get('team')==side and r.get('slot') in slots and r.get('vehicle')]
+                pinned_tags=[bot_planner.vehicle_match_class(v) for v in all_candidates if v['name'] in pinned_names]
+                row=room_choices[str(side)]
+                needed.update(class_policy.required(row,pinned_tags))
+                if len(slots)>len(pinned_names) and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
+            resolved=class_policy.matching_tiers([(v['level'],bot_planner.vehicle_match_class(v)) for v in candidates
+                                                  if v['name'] not in excluded_names],needed,
+                [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups)
+            if resolved is None:raise ValueError('No legal battle-tier window can supply the selected Bot classes')
+            match_tiers=resolved
             team_size = max(
                 len(humans_by_team[team]) + len(bots_by_team[team])
                 for team in (1, 2))
@@ -5718,17 +5734,26 @@ class BattleRuntime(object):
                 # the per-team quota. Explicit host overrides remain intact.
                 human_spgs = sum(bot_planner.vehicle_match_class(entry) == 'SPG'
                                  for entry in humans_by_team[team])
-                artillery_limit = bot_planner.team_artillery_limit(
-                    len(humans_by_team[team]) + len(team_bots))
-                pinned_spgs = sum(side == team and name in artillery_names
-                                  for (side, slot), name in pinned_vehicles.items())
-                choices = bot_tactics.team_class_choices(self._start_message.get('team_classes'), self._start_message.get('team_sizes'))[str(team)]
-                team_candidates = [v for v in automatic_candidates if choices[bot_planner.vehicle_match_class(v)]]
-                picked = [v for v in picked if choices[bot_planner.vehicle_match_class(v)]]
+                from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+                pinned_tags=[bot_planner.vehicle_match_class(v) for (side,slot),name in pinned_vehicles.items()
+                             if side==team for v in all_candidates if v['name']==name]
+                pinned_spgs=pinned_tags.count('SPG')
+                choices=bot_tactics.team_class_choices(self._start_message.get('team_classes'))[str(team)]
+                team_candidates=[v for v in automatic_candidates if class_policy.allows(choices,bot_planner.vehicle_match_class(v))]
+                picked=[v for v in picked if class_policy.allows(choices,bot_planner.vehicle_match_class(v))]
                 auto_bots=[raw for raw in team_bots if (team,int(raw.get('slot',0))) not in pinned_vehicles]
-                picked = bot_planner.select_bot_lineup(
-                    picked or team_candidates, len(auto_bots),
-                    spg_limit=max(0, artillery_limit - human_spgs - pinned_spgs),
+                limit=class_policy.artillery_limit(len(humans_by_team[team])+len(team_bots),human_spgs,pinned_spgs,choices)
+                required=class_policy.required(choices,pinned_tags)
+                reason=class_policy.validate(choices,len(auto_bots),pinned_tags,
+                    set(bot_planner.vehicle_match_class(v) for v in team_candidates),limit)
+                if reason:raise ValueError('Invalid class selection for team %d: %s'%(team,reason))
+                reserved=[]
+                for tag in required:
+                    pool=[v for v in team_candidates if bot_planner.vehicle_match_class(v)==tag]
+                    reserved.append(lineup_random.choice(pool))
+                picked=reserved+bot_planner.select_bot_lineup(
+                    picked or team_candidates,len(auto_bots)-len(reserved),
+                    spg_limit=max(0,limit-sum(bot_planner.vehicle_match_class(v)=='SPG' for v in reserved)),
                     fallback_candidates=team_candidates)
                 picked = list(picked[:len(auto_bots)])
                 # The template balances roles and tiers, not vehicle names.

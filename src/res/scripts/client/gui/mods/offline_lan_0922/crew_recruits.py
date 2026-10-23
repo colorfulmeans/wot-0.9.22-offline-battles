@@ -4,10 +4,11 @@ import io
 import json
 import os
 import re
+from gui.mods.offline_lan_0922 import crew_skills
 
 NATIONS = ('ussr', 'germany', 'usa', 'china', 'france', 'uk', 'japan', 'czech', 'sweden', 'poland')
 ROLES = ('commander', 'gunner', 'driver', 'loader', 'radioman')
-MAX_SKILLS = 13  # Fourteen complete skills exceed #1513's 2,000,000,000 free XP cap.
+MAX_SKILLS = max(len(crew_skills.skills_for(roles)) for rows in crew_skills.data.SEATS.values() for roles in rows)
 MAX_PENDING = 512
 FILE_NAME = 'launcher_crew_inbox.json'
 RECEIPTS = 'launcherCrewReceipts'
@@ -15,7 +16,7 @@ RECEIPTS = 'launcherCrewReceipts'
 
 def request(value):
     fields = ('id', 'nation', 'vehicle', 'role', 'female', 'skills')
-    if not isinstance(value, dict) or set(value) != set(fields):
+    if not isinstance(value, dict) or set(value) not in (set(fields),set(fields+('seat','training'))):
         raise ValueError('Invalid crew request fields')
     if not isinstance(value['id'], type(u'')) and not isinstance(value['id'], str):
         raise ValueError('Invalid crew request identity')
@@ -27,7 +28,19 @@ def request(value):
         raise ValueError('The trained vehicle belongs to another nation')
     if isinstance(value['skills'], bool) or not isinstance(value['skills'], int) or not 0 <= value['skills'] <= MAX_SKILLS:
         raise ValueError('Invalid complete skill count')
-    return dict(value)
+    result=dict(value)
+    if 'seat' not in result:
+        rows=crew_skills.seats(result['vehicle'])
+        result['seat']=next((i for i,r in enumerate(rows) if r[0]==result['role']),-1)
+        result['training']=100
+        if result['seat']>=0:
+            low,high=crew_skills.bounds(result['vehicle'],result['seat'],result['female'],100)
+            result['skills']=max(low,min(high,result['skills']))
+    low,high=crew_skills.bounds(result['vehicle'],result['seat'],result['female'],result['training'])
+    if not low<=result['skills']<=high:raise ValueError('Skill count does not match this crew seat and training level.')
+    if crew_skills.seats(result['vehicle'])[result['seat']][0]!=result['role']:
+        raise ValueError('The primary role does not match the chosen seat.')
+    return result
 
 
 def identities(value):
@@ -61,15 +74,14 @@ def build(row, vehicles, tankmen):
     nation, vehicle_id = vehicle.id
     if NATIONS[nation] != row['nation'] or row['role'] not in [seat[0] for seat in vehicle.crewRoles]:
         raise ValueError('The trained vehicle has no requested primary crew role')
-    xp = sum(tankmen.TankmanDescr.levelUpXpCost(level, sequence)
-             for sequence in range(1, row['skills'] + 1) for level in range(100))
-    if not 0 <= xp <= 2000000000:
-        raise ValueError('Complete skills exceed the native free XP cap')
+    if tuple(vehicle.crewRoles[row['seat']])!=tuple(crew_skills.seats(row['vehicle'])[row['seat']]):
+        raise ValueError('The native crew seat differs from the pinned table')
     raw = tankmen.makeTmanDescrByTmanData(dict(nationID=nation, vehicleTypeID=vehicle_id,
-        role=row['role'], roleLevel=100, isFemale=row['female'], isPremium=False,
-        skills=[], freeSkills=[], freeXP=xp))
+        role=row['role'], roleLevel=row['training'], isFemale=row['female'], isPremium=False,
+        skills=[], freeSkills=['brotherhood'] if row['female'] else [], freeXP=0))
     actual = tankmen.TankmanDescr(raw)
-    if (actual.roleLevel != 100 or actual.skills or actual.freeSkills or actual.freeXP != xp or
+    if (actual.roleLevel != row['training'] or actual.skills != (['brotherhood'] if row['female'] else []) or
+            actual.freeSkills != (['brotherhood'] if row['female'] else []) or actual.freeXP != 0 or
             bool(actual.isFemale) != row['female'] or actual.nationID != nation or
             actual.vehicleTypeID != vehicle_id or actual.role != row['role']):
         raise ValueError('Native crew generation changed the requested preset')
@@ -94,8 +106,10 @@ def deliver(snapshot, vehicles, tankmen, store, path, write_pending, report):
             raw = build(row, vehicles, tankmen)
             state = GarageState(staged, vehicles_module=vehicles, tankmen_module=tankmen)
             state._require_berths(1)
-            state._to_barracks(state._next_tankman_id(), raw)
+            identity=state._next_tankman_id()
+            state._to_barracks(identity, raw)
             staged = state.snapshot()
+            staged.setdefault(crew_skills.CREDITS,{})[str(identity)]=dict(remaining=row['skills']-int(row['female']),learned=[])
             queue_notification(staged, {'account_changes': [
                 {'phase': 'granted', 'rewards': [{'kind': 'crew', 'count': 1}]}]})
         except Exception as error:

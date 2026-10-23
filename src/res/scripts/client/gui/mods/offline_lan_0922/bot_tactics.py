@@ -464,16 +464,7 @@ def for_round(profile, map_name):
 
 
 def team_class_choices(value=None, sizes=None):
-    """Canonical room filter; only automatic fill is constrained."""
-    if value is not None and (not isinstance(value, dict) or set(map(str,value)) != set(('1','2'))):
-        raise TacticsError('invalid team class choices')
-    result = {}
-    for team in (1, 2):
-        row = (value.get(str(team), value.get(team)) if value is not None else dict((tag, True) for tag in CLASSES))
-        if not isinstance(row, dict) or set(row) != set(CLASSES) or any(type(v) is not bool for v in row.values()):
-            raise TacticsError('invalid team class choices')
-        row = dict(row)
-        size = (sizes or {}).get(team, (sizes or {}).get(str(team),15))
-        if int(size) <= 6: row['SPG'] = False
-        result[str(team)] = row
-    return result
+    """Canonical room selection; low-size artillery is a manual-only exception."""
+    from gui.mods.offline_lan_0922 import team_class_policy
+    try:return team_class_policy.canonical(value)
+    except ValueError as error:raise TacticsError(str(error))

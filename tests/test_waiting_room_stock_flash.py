@@ -78,6 +78,26 @@ class StockRoomTests(unittest.TestCase):
             adapter.action('tier', 'off')
             room._toggle_training_bots.assert_called_once_with()
 
+    def test_random_class_mode_disables_checked_icons_and_manual_low_spg_stays_available(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        room=self.room();teams=room._team_status();teams['class_supported']=True
+        teams['classes']=bot_tactics.team_class_choices();teams['sizes'][1]=1
+        room._request_team_class=mock.Mock()
+        controls=flash.model(room)['controls']
+        self.assertTrue(controls['class_1_random']['selected'])
+        for tag in bot_tactics.CLASSES:
+            self.assertTrue(controls['class_1_'+tag]['selected']);self.assertFalse(controls['class_1_'+tag]['enabled'])
+        adapter=flash.RoomWindow(room);adapter.token=1
+        with mock.patch.dict(flash._rooms,{1:adapter},clear=True):
+            adapter.action('class_1_SPG','');room._request_team_class.assert_not_called()
+            adapter.action('class_1_random','');room._request_team_class.assert_called_once_with(1,'random',False)
+            room._request_team_class.reset_mock()
+            teams['classes']['1']['random']=False;teams['classes']['1']['SPG']=False
+            controls=flash.model(room)['controls'];self.assertTrue(controls['class_1_SPG']['enabled'])
+            adapter.action('class_1_SPG','');room._request_team_class.assert_called_once_with(1,'SPG',True)
+        room._training_status=lambda:(True,False)
+        self.assertFalse(flash.model(room)['controls']['class_1_random']['enabled'])
+
     def test_callbacks_are_deferred_and_stale_views_cannot_control_reopened_room(self):
         class Base(object):
             def __init__(self): self.destroy = mock.Mock()

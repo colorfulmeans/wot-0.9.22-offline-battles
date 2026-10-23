@@ -1043,6 +1043,21 @@ def _install_exchange_dialog_limits(meta_type=None):
     _patch(meta_type, 'makeVO', make_vo)
 
 
+def _install_crew_skill_counter():
+    from gui.shared.gui_items.Tankman import Tankman
+    from gui.mods.offline_lan_0922.crew_skills import CREDITS
+    if any(owner is Tankman and name=='newSkillCount' for owner,name,original in _patches):return
+    original=Tankman.newSkillCount
+    def count(member):
+        value=original.fget(member)
+        row=(snapshot().get(CREDITS) or {}).get(str(member.invID),{})
+        remaining=row.get('remaining',0)
+        if remaining and member.hasNewSkill(useCombinedRoles=True):
+            return min(remaining,len(member.availableSkills(useCombinedRoles=True))),100
+        return value
+    _patch(Tankman,'newSkillCount',property(count))
+
+
 def install():
     if _patches:
         return
@@ -1058,6 +1073,7 @@ def install():
         _install_mission_results()
         _install_settings()
         _install_exchange_dialog_limits()
+        _install_crew_skill_counter()
         from gui.mods.offline_lan_0922 import crew_voice
         crew_voice.install(_patch)
         _schedule_daily_rollover()

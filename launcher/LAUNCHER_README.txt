@@ -72,10 +72,22 @@ presets inherit from the existing scope hierarchy. Ammunition uses digit ratios;
 all zero carries no ammunition. Magazine ratios count magazines, not rounds.
 Stock development only allows no equipment, in the dropdown and validation.
 
-Both room interfaces have per-team native class filters for automatic Bots.
-Manual vehicles and players keep their vehicles and consume artillery quota.
-Artillery permits 0 / 0-1 / 0-2 / 0-3 at team sizes 1-6 / 7-9 / 10-12 / 13-15.
-Reducing below seven clears its checkbox; raising size leaves it unchecked.
+Both room interfaces default to Random per-team vehicle types. Random shows
+all five class icons checked and disabled, while preserving the manual mask.
+Manual checks guarantee one BOT of each checked class and forbid unchecked
+automatic types. Fixed launcher Bots remain and can satisfy a guarantee;
+players never do. Shrinking drops newer selections first; growth restores none.
+Manual artillery guarantees one BOT even below seven. Random mode retains its
+0 / 0-1 / 0-2 / 0-3 limits at sizes 1-6 / 7-9 / 10-12 / 13-15. Impossible
+SPG-only fills, missing classes or incompatible tier windows refuse start.
+
+Members are selected by nation, tank type, vehicle, actual crew seat, gender,
+training (50/75/100) and skill count. Seat limits include combined roles and
+number duplicate professions separately. Women always have zero-XP Brothers
+in Arms, counted in the total. Below 100% ordinary skills are disabled.
+Full-skill choices are durable member-owned credits; choose skills in the
+native client. Moving seats or restarting never renews credits. Recruits,
+credits and delivery notices commit together to the selected save.
 
 New unlocked saves mount three legal improved devices and the corresponding
 battle directive, with directive auto-resupply checked. Users may change or
