@@ -2240,6 +2240,29 @@ class SimulationWorkerSocketTests(unittest.TestCase):
             self.assertEqual('worker_disconnected',
                              self.state.battle_result['reason'])
 
+    def test_refused_start_publishes_preflight_class_adjustments(self):
+        player = self._connect()
+        player.send(_player_hello())
+        player.receive_until('welcome')
+        player.receive_until('roster')
+        def refuse(*unused):
+            row = self.state.team_classes['2']
+            row.update(random=False, order=['SPG'])
+            for tag in ('lightTank', 'mediumTank', 'heavyTank', 'AT-SPG', 'SPG'):
+                row[tag] = tag == 'SPG'
+            self.state.state_revision += 1
+            self.state.team_class_notice = dict(
+                revision=self.state.state_revision, team=2, removed=['heavyTank'])
+            return None, 'bot_class_pool_empty'
+        with mock.patch.object(self.state, 'request_start', side_effect=refuse):
+            player.send({'type': 'start_battle', 'round_id': self.state.round_id})
+            self.assertEqual('bot_class_pool_empty',
+                             player.receive_until('start_denied')['code'])
+            roster = player.receive_until('roster')
+        self.assertEqual(['SPG'], roster['team_classes']['2']['order'])
+        self.assertEqual(['heavyTank'], roster['team_class_notice']['removed'])
+        self.assertEqual(self.state.state_revision, roster['state_revision'])
+
     def test_player_socket_has_no_worker_liveness_timeout(self):
         with mock.patch.object(
                 server_module,

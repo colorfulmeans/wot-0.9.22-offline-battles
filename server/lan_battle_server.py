@@ -16929,6 +16929,9 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "class_error": copy.deepcopy(server.state.last_bot_class_error),
                                     "players": len(server.state.players),
                                 })
+                                # Start preflight can trim class guarantees after
+                                # random human assignment, even when it refuses.
+                                server.state.broadcast_current_roster()
                                 _server_log("START denied for id=%d: %s" % (player.player_id, start_error))
                             else:
                                 _server_log("BATTLE LOADING round=%d map=%s players=%d requested_by=%s" % (
