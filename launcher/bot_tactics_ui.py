@@ -288,7 +288,12 @@ class BotTacticsEditor:
             values=self._preview_values(vehicle)
             preview=storage.ammunition_preview(self.game_root,vehicle,values)
         except (ValueError,KeyError,StopIteration,OSError,contract.TacticsError):
-            self._ammo_preview=None;return None
+            self._ammo_preview=None;self._ammo_identity=()
+            # A previous one/two-shell pinned gun must not leave generic
+            # scopes with disabled ratio controls.
+            state='disabled' if self.document['name']=='Default' else 'readonly'
+            for box in self.ammo_boxes:box.configure(state=state)
+            return None
         identities=tuple(s['name'] for s in preview['shells'])
         old=dict(zip(self._ammo_identity,(v.get() for v in self.ammo_vars)))
         if self._ammo_identity and self._ammo_identity!=identities:

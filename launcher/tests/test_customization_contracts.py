@@ -90,6 +90,17 @@ class EditorProtectionTests(unittest.TestCase):
             with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(e,'discard_prompt',return_value=True):e.import_profile()
             self.assertEqual(expected,e.document['name']);e.save()
         self.assertEqual(storage.contract.default_profile(),e.store.read('Default'))
+    def test_leaving_a_two_shell_pinned_vehicle_reenables_generic_ratios(self):
+        e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
+        e.lineup=lambda:[dict(team=1,slot=0,vehicle='ussr:R77_KV2')]
+        e.rule_vars['team'].set('1');e.rule_vars['slot'].set('1')
+        preview=dict(vehicle='ussr:R77_KV2',gun='G',shells=[dict(name='A',index=0),dict(name='B',index=1)])
+        with mock.patch.object(storage,'ammunition_preview',return_value=preview):e._refresh_ammunition()
+        self.assertEqual('disabled',str(e.ammo_boxes[2].cget('state')))
+        e.rule_vars['slot'].set('');e._refresh_ammunition()
+        self.assertEqual(['readonly']*3,[str(box.cget('state')) for box in e.ammo_boxes])
+        self.assertEqual((),e._ammo_identity)
+
     def test_packaged_editor_verifier_forks_default_and_exercises_the_new_presets(self):
         import bot_tactics_smoke
         destination=Path(self.temp.name)/'smoke.json'
