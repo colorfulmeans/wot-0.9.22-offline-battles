@@ -30,18 +30,18 @@ class RouteArrivalDiskTests(unittest.TestCase):
                                    (0., 40., False), (0., 80., False)])
         bot = _bot(23, 1, 0, route, 'AT-SPG')
         bot['state'] = _state(23, 1, 0., 0.)
-        self.assertEqual(1, planner._route(bot, 1.)[1])
+        self.assertEqual(2, planner._route(bot, 1.)[1])
         bot['state'].update(z=50.)
         self.assertEqual(3, planner._route(bot, 2.)[1])
         bot['state'].update(z=49.)
         self.assertEqual(3, planner._route(bot, 3.)[1])
 
-    def test_initial_join_does_not_skip_a_gate_twenty_metres_away(self):
+    def test_initial_deployment_join_remains_distinct_from_disk_progression(self):
         planner = BotPlanner()
         route = _route('entry', [(0., 0., False), (0., 20., False), (0., 100., False)])
         bot = _bot(23, 1, 0, route, 'AT-SPG')
         bot['state'] = _state(23, 1, 0., 0.)
-        self.assertEqual(1, planner._route(bot, 1.)[1])
+        self.assertEqual(2, planner._route(bot, 1.)[1])
 
     def test_terminal_crossing_does_not_require_returning_to_circle(self):
         import test_port_0922_terminal_route_handoff as terminal

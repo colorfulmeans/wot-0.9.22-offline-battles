@@ -14,7 +14,7 @@ import random
 
 from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
 from gui.mods.offline_lan_0922.bot_tactics import (
-	DEFAULT_ROUTE_PRIORITY, ROUTE_ARRIVAL_RADIUS, route_disk_reached)
+	DEFAULT_ROUTE_PRIORITY, route_disk_reached)
 
 
 CONTACT_MEMORY_SECONDS = 7.0
@@ -1056,7 +1056,7 @@ class BattleDirector(object):
 			# sit behind the hull. Let A* join the first meaningful route anchor.
 			while (nearest + 1 < len(waypoints) and
 					_distance_2d(position, (float(waypoints[nearest][0]),
-					position[1], float(waypoints[nearest][1]))) <= ROUTE_ARRIVAL_RADIUS):
+					position[1], float(waypoints[nearest][1]))) < 30.0):
 				nearest += 1
 			# A deployed formation can be closer to a connector that it has already
 			# passed than to the next lane point. Once a hull is moving forward its
@@ -1083,8 +1083,10 @@ class BattleDirector(object):
 		agent['route_arrival_observation'] = dict(route=route.get('id'), at=now,
 			position=(position[0], position[2]))
 		index = min(int(agent.get('waypoint_index', 0)), len(waypoints) - 1)
+		# Keep the local director's circle-only progression. Convoy forward-lane
+		# passage belongs to the server; applying it here skips narrow-gate turns.
 		while index + 1 < len(waypoints) and route_disk_reached(
-				(position[0], position[2]), waypoints[index][:2], waypoints[index+1][:2], previous):
+				(position[0], position[2]), waypoints[index][:2], previous=previous):
 			index += 1
 		agent['waypoint_index'] = index
 		waypoint = waypoints[index]

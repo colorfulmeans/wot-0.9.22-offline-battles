@@ -3307,8 +3307,8 @@ class BotPlanner(object):
             index = min(index, route_limit)
             while (index < route_limit and
                    math.hypot(_number(waypoints[index].get("x")) - bx,
-                              _number(waypoints[index].get("z")) - bz) <= ROUTE_ARRIVAL_RADIUS):
-                entry['skipped'].append(dict(index=index, reason='inside_arrival_disk'))
+                              _number(waypoints[index].get("z")) - bz) < 30.0):
+                entry['skipped'].append(dict(index=index, reason='within_30m'))
                 index += 1
             # Bot snapshots carry hull yaw in the same shared frame as uploaded
             # routes. Skip only a truly rear-facing connector; a side road remains a
