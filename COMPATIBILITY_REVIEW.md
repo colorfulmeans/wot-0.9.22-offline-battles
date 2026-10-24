@@ -10472,4 +10472,3 @@ Diagnostic mode separately retains compact, per-hull outcomes after 15s within
 an 8m pocket, at most once per 30s. These post-contact records preserve nearby
 hull poses, recovery controls, navigation status and recent contact acceptance
 without issuing extra engine queries or consuming the bulk-history quota.
-
