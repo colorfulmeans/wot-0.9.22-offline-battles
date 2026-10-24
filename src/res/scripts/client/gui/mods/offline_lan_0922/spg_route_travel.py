@@ -60,6 +60,7 @@ def apply(runtime,state,order,now):
         if not active or active['kind']!='defense':
             state['_authored_spg_resume']=copy.deepcopy(active)
             state['_authored_spg_return_zone']=copy.deepcopy(state.get('_authored_spg_zone') or zone)
+            state['_authored_spg_return_initial']=copy.deepcopy(state.get('_authored_spg_used_initial') or state.get('_spg_initial'))
             points=_return_points(active,zone,pose)
             active=_task(runtime,state,'defense',points,('defense',))
             state['_authored_spg_travel']=active
@@ -67,11 +68,14 @@ def apply(runtime,state,order,now):
         # Resume the actual interrupted sortie or return to the actual old zone.
         resume=state.pop('_authored_spg_resume',None)
         zone=state.pop('_authored_spg_return_zone',None) or zone
-        if resume:
+        if resume and resume['kind'] in ('attack','sortie_return'):
             active=_task(runtime,state,resume['kind'],resume['points'],resume['identity'])
         elif zone and zone.get('travel'):
             active=_task(runtime,state,'deploy',zone['travel'],('deploy',zone['id']))
         else:active=None
+        original=state.pop('_authored_spg_return_initial',None)
+        if original is not None:
+            state['_spg_initial']=original;state.pop('_spg_arrived_identity',None)
         state['_authored_spg_travel']=active
     if not defense:
         alive=[s for s in runtime._ordered_states() if s.get('alive',True) and s['team']==state['team']]
@@ -107,9 +111,10 @@ def apply(runtime,state,order,now):
                 points=zone['travel']
                 if previous and previous['id']!=zone['id']:
                     points=previous.get('links',{}).get(zone['id']) or list(reversed(zone.get('links',{}).get(previous['id'],()))) or list(reversed(previous.get('travel',())))+zone['travel']
-                active=_task(runtime,state,'deploy',points,identity,0)
+                entry=len(points)-1 if separation(pose,zone['point'])<=zone['radius'] else 0
+                active=_task(runtime,state,'deploy',points,identity,entry)
                 state['_authored_spg_travel']=active
-            state['_authored_spg_zone']=copy.deepcopy(zone)
+            if active:active['parking']=copy.deepcopy(zone)
     if not active:return order
     if defense and order.get('throttle_override')==0.:return order
     # Existing local combat keeps ownership; defense alone owns the moving hull.
@@ -137,12 +142,20 @@ def apply(runtime,state,order,now):
             destination=xy(points[active['index']])
             episode.update(index=active['index'],since=now,best=separation(pose,destination))
     arrived=active['index']==len(points)-1 and separation(pose,destination)<=bot_tactics.ROUTE_ARRIVAL_RADIUS
+    if active['kind']=='deploy' and active['index']==len(points)-1:
+        used=active.get('parking') or zone
+        if used and separation(pose,used['point'])<=used['radius']:active['arrived']=True
+        arrived=active.get('arrived',False)
     if arrived and active['kind']=='sortie_return':
         attack=state['_authored_spg_attack']
         active=_task(runtime,state,'attack',attack['points'],('attack',attack['id']),0)
         state['_authored_spg_travel']=active
         destination=xy(active['points'][0]);arrived=False
-    if arrived and active['kind']=='deploy':return order
+    if arrived and active['kind']=='deploy':
+        used=active.get('parking') or zone
+        state['_authored_spg_zone']=copy.deepcopy(used)
+        state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+        return order
     if arrived and active['kind']=='defense':return order
     if active['kind']=='attack':
         graph=runtime.baked_graph

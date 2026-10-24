@@ -146,7 +146,7 @@ class NarrowPassageTests(unittest.TestCase):
             module.BotRuntime.battle_start=configured
             return module
         case=gate.GreatWallGateTests('test_opposed_hulls_in_the_gatehouse_both_leave_the_passage')
-        case.setUp()
+        case.setUp();case.authoritative=True
         try:
             with mock.patch.object(fixtures,'_load',side_effect=load):
                 case.test_opposed_hulls_in_the_gatehouse_both_leave_the_passage()

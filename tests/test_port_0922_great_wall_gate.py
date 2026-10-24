@@ -121,12 +121,16 @@ class GreatWallGateTests(unittest.TestCase):
                                   'bot_authority_id': 1, 'bots': _bots()})[0]
         if not getattr(self,'authoritative',False):
             for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
-        planner=BotPlanner()
+        planner=BotPlanner();planner.tactics=runtime._bot_tactics;planner.tactics_map=MAP_NAME
         opposed = [bot_id for bot_id, state in runtime.states.items()
                    if int(state.get('team', 0)) == 2 and
                    abs(state['x'] - PASSAGE_X) < 1.0 and
                    -160.0 < state['z'] < -140.0]
         self.assertEqual(2, len(opposed))
+        if getattr(self,'authoritative',False):
+            # These two recorded hulls are already mid-route, not fresh spawns.
+            for actor in planner._alive_bots(published['bots'],list(runtime.states.values())):
+                if actor['id'] in opposed:planner._task_rejoin(actor)
 
         held = dict((bot_id, 0.0) for bot_id in opposed)
         broadside = dict((bot_id, 0.0) for bot_id in opposed)

@@ -251,6 +251,22 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=30,z=50)
         self.assertEqual((0,0.,100),self.apply()['move_position'])
 
+    def test_parking_region_hands_off_to_actual_off_center_native_goal(self):
+        self.apply();self.state.update(x=30,z=50);self.apply()
+        self.state.update(x=0,z=90)
+        native=(10,0,100)
+        result=self.apply(move_position=native)
+        self.assertEqual(native,result['move_position']);self.assertNotIn('authored_spg_connection',result)
+        self.state.update(x=10,z=100)
+        result=self.apply(move_position=native)
+        self.assertEqual(native,result['move_position']);self.assertNotIn('authored_spg_connection',result)
+
+    def test_restored_arrived_parking_does_not_deploy_from_base_again(self):
+        self.state.update(x=5,z=100)
+        result=self.apply('artillery_hold',move_position=(5,0,100),throttle_override=0.)
+        self.assertEqual('artillery_hold',result['combat_mode'])
+        self.assertEqual(0.,result['throttle_override'])
+
     def test_relocation_uses_authored_parking_link(self):
         self.apply();self.state.update(x=0,z=100)
         self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
@@ -268,6 +284,16 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         resumed=self.apply()
         self.assertEqual('deploy',self.state['_authored_spg_travel']['kind'])
         self.assertEqual((30,0.,50),resumed['move_position'])
+
+    def test_defense_during_relocation_returns_to_last_arrived_parking(self):
+        self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100);self.apply()
+        self.assertEqual('a',self.state['_authored_spg_zone']['id'])
+        self.state['_spg_initial']['zone']='b';self.apply('artillery_relocate')
+        self.assertEqual('a',self.state['_authored_spg_zone']['id'])
+        self.apply('base_defense');self.state.update(x=0,z=0)
+        self.apply('artillery_hold')
+        self.assertEqual('a',self.state['_spg_initial']['zone'])
+        self.assertEqual(('deploy','a'),self.state['_authored_spg_travel']['identity'])
 
     def test_sortie_returns_home_before_starting_authored_attack_and_holds_circle(self):
         self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100);self.regular['alive']=False
