@@ -113,6 +113,46 @@ class LogModeTests(unittest.TestCase):
         self.assertLess(len(self.output.getvalue()), 2000)
         self.assertNotIn('_execution_window', state)
 
+    def test_new_round_reopens_budget_but_duplicate_start_does_not(self):
+        with mock.patch.object(logs, '_detail_round', None):
+            logs.log_summary('round_start', 1)
+            logs._detail_budget.update(session=logs.DETAIL_SESSION_BYTES, session_closed=True)
+            logs.log_summary('round_start', 1)
+            self.assertTrue(logs._detail_budget['session_closed'])
+            logs.log_summary('round_end', 1)
+            self.assertTrue(logs._detail_budget['session_closed'])
+            logs.log_summary('round_start', 2)
+            self.assertEqual(0, logs._detail_budget['session'])
+            self.assertNotIn('session_closed', logs._detail_budget)
+
+    def test_fire_gate_uses_detail_budget_and_basic_entry_skips_encoder(self):
+        with mock.patch.object(logs.json, 'dumps', side_effect=AssertionError('encoded')):
+            logs.write_json_record('SPG FIRE GATE', dict(history=object()))
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        logs._detail_budget['session_closed'] = True
+        with mock.patch.object(logs.json, 'dumps', side_effect=AssertionError('encoded')):
+            logs.write_json_record('SPG FIRE GATE', dict(history=object()))
+
+    def test_long_stall_keeps_compact_outcome_after_bulk_budget_closed(self):
+        from test_port_0922_bot_runtime import _load
+        runtime = _load().BotRuntime(1)
+        logs.os.environ[logs.DETAIL_ENV] = '1'
+        logs._detail_budget['session_closed'] = True
+        state = dict(id=4, vehicle='uk:GB91_Super_Conqueror', x=135., y=-8., z=-154.)
+        runtime.states[4] = state
+        runtime.states[5] = dict(id=5, x=138., y=-8., z=-154., alive=False)
+        command = dict(movement_intent=True, recovery_mode='avoid', combat_mode='route')
+        for now in (0., 16., 17., 46.):
+            runtime._log_motion_stall(state, command, 1., .2, True, {}, now)
+            runtime._finish_motion_stall(state, False, False, (135.,-8.,-154.), now)
+        rows = [json.loads(line.split('BOT RECOVERY SUMMARY ',1)[1])
+                for line in self.output.getvalue().splitlines() if 'BOT RECOVERY SUMMARY ' in line]
+        self.assertEqual(2, len(rows))
+        self.assertEqual(5, rows[0]['nearby'][0]['id'])
+        self.assertFalse(rows[0]['nearby'][0]['alive'])
+        self.assertEqual(1., rows[0]['command']['throttle'])
+        self.assertNotIn('BOT MOTION PART', self.output.getvalue())
+
 
 if __name__ == '__main__':
     unittest.main()

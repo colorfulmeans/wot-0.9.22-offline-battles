@@ -24,7 +24,7 @@ _reports_by_method, _record_sequence = {}, 0
 # Detailed geometry histories are opt-in and bounded independently of errors
 # and lifecycle messages. Never use this budget for gameplay or wire events.
 DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
-DETAIL_LABELS = frozenset(('BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
+DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
     'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
     'BOT ROUTE CONNECTION', 'STACK CONTACT DECISION', 'BOT SEARCH JOB',
     'PROJECTILE INTERFACE', 'BOT NAV CHOICE', 'BOT EDGE DYNAMICS',
@@ -38,6 +38,7 @@ DETAIL_SESSION_BYTES = 32 * 1024 * 1024
 DETAIL_RECORD_BYTES = 256 * 1024
 _detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
                   'notice': False}
+_detail_round = None
 
 
 def detailed_enabled():
@@ -274,6 +275,12 @@ def snapshot():
 def log_summary(phase, round_id):
     """Cumulative process counters remain visible after the evidence quota."""
     try:
+        global _detail_round
+        if phase == 'round_start' and round_id != _detail_round:
+            _detail_round = round_id
+            _detail_budget.clear()
+            _detail_budget.update(start=None, window=0, session=0,
+                                  dropped=0, notice=False)
         payload = snapshot()
         payload.update(schema=1, pid=os.getpid(), phase=phase, round=round_id)
         write_json_record('NATIVE INPUT SUMMARY', payload)

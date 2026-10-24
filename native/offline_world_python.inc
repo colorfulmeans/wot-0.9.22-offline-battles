@@ -116,13 +116,26 @@ int world_dispatch(void *opaque, uint32_t opcode, const WorldRequest *requests,
   }
 }
 
+// Preserve the legacy flat contract for independent reference callers.
+// Shipping callers borrow descriptor spans and leave assembly in C++.
+void world_snapshot_values(PyObject *input, double *values) {
+  if (sequence(input) && size(input) == 4) {
+    world_array(items(input)[0], values, 9);
+    world_array(items(input)[1], values + 9, 4);
+    world_array(items(input)[2], values + 13, 2);
+    world_array(items(input)[3], values + 15, 4);
+  } else {
+    world_array(input, values, 19);
+  }
+}
+
 PyObject *WOT_CDECL world_run(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(world_run);
   bool entered = false;
   try {
     require_sequence(args, 2, true);
     double values[19];
-    world_array(items(args)[0], values, 19);
+    world_snapshot_values(items(args)[0], values);
     WorldSnapshot snapshot = {};
     std::memcpy(snapshot.position, values, 3 * sizeof(double));
     snapshot.yaw = values[3];

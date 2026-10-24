@@ -60,10 +60,12 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                      airborne=airborne,
                      extents=(max(abs(left), abs(right)), back, front),
                      lateral_bounds=(left, right))
-    snapshot = (pos.x, pos.y, pos.z, yaw, vel, dt, pitch, roll,
-                0.0 if motion_yaw is None else motion_yaw) + tuple(bounds) + tuple(heights) + (
-                motion_yaw is not None, airborne, exact_footprint,
-                departing_contact is not None)
+    # C++ validates and assembles the flat law input without intermediate
+    # Python concatenations or copying immutable descriptor geometry.
+    snapshot = ((pos.x, pos.y, pos.z, yaw, vel, dt, pitch, roll,
+                 0.0 if motion_yaw is None else motion_yaw), bounds, heights,
+                (motion_yaw is not None, airborne, exact_footprint,
+                 departing_contact is not None))
     hits = {}
     state = [module._UNPREPARED_COLLISION_FILTER, departing_contact]
     crush = [False]
@@ -71,10 +73,38 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     from . import destructibles_sensor
     ground_provider = module.ground_collision_filter
     ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
-    def xyz(v):
-        return (v.x, v.y, v.z)
+    dispatch = _WorldDispatch((module, query, state, V, pos, yaw, bounds,
+        heights, motion_yaw, spaceID, vel, td, crush, allow_kinetic,
+        kinetic_speed, commit_enabled, trace, hits, ground_batch, ground_provider)).dispatch
+    # An exception propagates. Replaying the law could repeat destruction.
+    scope = query.begin_ray_scope(reuse_readonly=not commit_enabled) if query is not None else None
+    try:
+        status = native_math.world_run(snapshot, dispatch, query,
+            (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
+    finally:
+        if scope is not None:
+            query.end_ray_scope(scope)
+    if status is None:
+        return None
+    if return_status:
+        return ('clear', 'hard', 'kinetic')[status]
+    return status != 0
+
+
+def xyz(v):
+    return (v.x, v.y, v.z)
+
+
+class _WorldDispatch(object):
+    """One solve owns its effects; the callback implementation is shared."""
+    def __init__(self, values):
+        self.values = values
+
     @observed('motion.world_dispatch')
-    def dispatch(op, rows):
+    def dispatch(self, op, rows):
+        (module, query, state, V, pos, yaw, bounds, heights, motion_yaw,
+         spaceID, vel, td, crush, allow_kinetic, kinetic_speed, commit_enabled,
+         trace, hits, ground_batch, ground_provider) = self.values
         if query is not None:
             query._live()
         if op == 1:
@@ -147,16 +177,3 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
                 normal = xyz(hit[1]) if len(hit) > 1 else (0.0, 0.0, 0.0)
                 result.append((xyz(hit[0]), normal, handle, xyz(start), xyz(end)))
         return tuple(result)
-    # An exception propagates. Replaying the law could repeat destruction.
-    scope = query.begin_ray_scope(reuse_readonly=not commit_enabled) if query is not None else None
-    try:
-        status = native_math.world_run(snapshot, dispatch, query,
-            (module._WORLD_SOFT_RECAST_BUDGET, module._GROUND_HIT_EPSILON, module._MAX_DRIVABLE_GRADIENT))
-    finally:
-        if scope is not None:
-            query.end_ray_scope(scope)
-    if status is None:
-        return None
-    if return_status:
-        return ('clear', 'hard', 'kinetic')[status]
-    return status != 0

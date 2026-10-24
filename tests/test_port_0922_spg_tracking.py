@@ -259,6 +259,6 @@ class SPGTrackingTests(unittest.TestCase):
                 runtime._record_artillery_gate(
                     state, order, targets[1000002], None, gun, ammo, 1., False, True, True, now, None)
         self.assertEqual([], native_calls)
-        self.assertEqual(1, output.getvalue().count('[SPG FIRE GATE]'))
+        self.assertEqual(1, output.getvalue().count('SPG FIRE GATE '))
         self.assertIn('planning_pending', output.getvalue())
         self.assertNotIn('_spg_position', state)

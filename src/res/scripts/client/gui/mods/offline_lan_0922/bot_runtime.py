@@ -7496,6 +7496,13 @@ class BotRuntime(object):
                         if isinstance(motion_probe, dict) else None))
             return
         self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
+        # This compact outcome has its own per-hull cadence. Bulk histories
+        # must not hide the actual controls when the shared quota is full.
+        state['_recovery_summary_command'] = {
+            key: command.get(key) for key in (
+                'movement_intent', 'combat_mode', 'recovery_mode',
+                'move_position', 'target_yaw', 'route_id', 'route_index')}
+        state['_recovery_summary_command'].update(throttle=throttle, turn=turn)
         from .native_input_diagnostics import detail_record_ready
         if not detail_record_ready():
             return
@@ -7866,6 +7873,7 @@ class BotRuntime(object):
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
         """Log the actual authority outcome without extra world queries."""
+        self._compact_recovery_outcome(state, support_rollback, pose_rollback, now)
         window=state.get('_execution_window') or {}
         actions=window.get('actions') or []
         if actions:
@@ -7961,6 +7969,45 @@ class BotRuntime(object):
         from .native_input_diagnostics import write_json_record
         observed_call('bot.motion_diagnostic_write', write_json_record, 'BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
+
+    def _compact_recovery_outcome(self, state, support_rollback, pose_rollback, now):
+        if not detailed_enabled():
+            return
+        command = state.pop('_recovery_summary_command', None)
+        if not command or not command.get('movement_intent'):
+            state.pop('_recovery_summary_anchor', None)
+            return
+        position = _position(state)
+        anchor = state.get('_recovery_summary_anchor')
+        if anchor is None or _distance(position, anchor[0]) > 8.0 or now < anchor[1]:
+            state['_recovery_summary_anchor'] = (position, now)
+            return
+        if now-anchor[1] < 15.0 or now-state.get('_recovery_summary_logged', -1e9) < 30.0:
+            return
+        state['_recovery_summary_logged'] = now
+        driver = getattr(getattr(getattr(self, 'adapter', None), 'driver', None), 'states', {}).get(int(state['id']), {})
+        nearby = sorted((_distance(position, _position(other)), int(other['id']), other)
+                        for other in self.states.values()
+                        if other['id'] != state['id'] and _distance(position, _position(other)) <= 12.0)
+        nav = getattr(getattr(self, 'navigator', None), 'bot_states', {}).get(int(state['id']), {})
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT RECOVERY SUMMARY', dict(
+            round=self.round_id, id=state['id'], vehicle=state.get('vehicle'),
+            at=now, position=position, anchor=anchor, command=command,
+            yaw=state.get('yaw'), pitch=state.get('pitch'), roll=state.get('roll'),
+            shape=state.get('collision_shape'), speed=state.get('speed'),
+            support_rollback=bool(support_rollback), pose_rollback=bool(pose_rollback),
+            nearby=[dict(distance=distance, id=ident,
+                         **{key: other.get(key) for key in (
+                             'alive', 'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'collision_shape')})
+                    for distance, ident, other in nearby[:8]],
+            contact=state.get('_contact_compact_receipt'),
+            navigation={key: nav.get(key) for key in ('navigation_status', 'index', 'last_target', 'planned_goal')},
+            driver={key: driver.get(key) for key in (
+                'stuck_time', 'recovery_time', 'recovery_count', 'recovery_mode')},
+            rotation={key: (state.get('_rotation_contact_trace') or {}).get(key)
+                      for key in ('reason', 'status', 'kinds', 'start_yaw', 'end_yaw')},
+            contacts=sorted(pair for pair in self._ram_contacts if state['id'] in pair)[:8]))
 
     def _queue_navigation_surface_trace(self, state, trace, now):
         # Observation only: never pass these results back to navigation/support.
@@ -11536,6 +11583,10 @@ class BotRuntime(object):
         if (now is not None and requested_move != (move_x, move_z) and
                 now >= state.get('_contact_motion_log_time', 0.0)):
             state['_contact_motion_log_time'] = now + 2.0
+            if detailed_enabled():
+                state['_contact_compact_receipt'] = dict(at=now,
+                    requested=requested_move, accepted=(move_x, move_z),
+                    vehicle_fraction=fraction, native_world=world_blocked)
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
                 'requested=%s accepted=%s vehicle_fraction=%.6f native_world=%s '
@@ -15149,7 +15200,15 @@ class BotRuntime(object):
             reason = ('exact_launch_failed_' + str(failure.get('reason'))
                       if failure and launch_stage == 'exact_launch_pending'
                       else launch_stage or 'gunner_or_selected_lane')
-        print('[SPG FIRE GATE] %s' % json.dumps({
+        from .native_input_diagnostics import detail_record_ready, write_json_record
+        if not detail_record_ready():
+            return
+        signature = (reason, target_key, state.get('fire_seq'), command.get('combat_mode'))
+        if (state.get('_spg_gate_signature') == signature and
+                now-state.get('_spg_gate_detail_at', -1e9) < 15.0):
+            return
+        state['_spg_gate_signature'], state['_spg_gate_detail_at'] = signature, now
+        write_json_record('SPG FIRE GATE', {
             'position_retry_receipt':state.get('_spg_position_retry_receipt'),
             'zone_failures':state.get('_spg_zone_failures',{}),
             'id': state['id'], 'vehicle': state.get('vehicle'), 'reason': reason,
@@ -15176,7 +15235,7 @@ class BotRuntime(object):
             'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
             'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
-        }, separators=(',', ':')))
+        })
 
     @staticmethod
     def _gun_angle_rejected(state, identity, now):

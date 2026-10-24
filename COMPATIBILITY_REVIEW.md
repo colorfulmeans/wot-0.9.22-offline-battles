@@ -10456,3 +10456,20 @@ changes, cached endpoints, initial reverse, withdrawal, contact pivots,
 route cooldown exhaustion, diagnostic gating and missing entities. These
 tests do not prove native clearance or gameplay timing in the reported jam;
 the rebuilt Windows package still requires the player's scene acceptance.
+# Native world entry and diagnostic continuity
+
+The world bridge accepts descriptor bounds/heights as separate spans and assembles
+the same 19-value law snapshot in C++. Its callback implementation is shared,
+while each synchronous solve owns its filters, hit handles and effects, including
+reentry and failures after destruction. Flat snapshots remain the independent
+reference contract; world host checks compare both representations before effects.
+This reduces Python entry work; it does not establish improved native frame pacing.
+
+Detailed geometry budgets restart at a distinct round start, never on a duplicate
+start notification or round end. Artillery gate histories use the same bounded,
+fragmented writer and coalesce unchanged reasons/targets/fire sequences for 15s.
+Diagnostic mode separately retains compact, per-hull outcomes after 15s within
+an 8m pocket, at most once per 30s. These post-contact records preserve nearby
+hull poses, recovery controls, navigation status and recent contact acceptance
+without issuing extra engine queries or consuming the bulk-history quota.
+
