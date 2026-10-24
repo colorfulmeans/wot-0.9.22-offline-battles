@@ -417,15 +417,22 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         self.assertEqual('pressure_already_covered', previous['observation']['outcome'])
         self.assertEqual('rebalance_not_due', previous['check']['outcome'])
 
-    def test_route_switch_serializes_selected_entry_without_changing_existing_choice(self):
+    def test_recovery_switch_serializes_first_entry_only_after_return_to_start(self):
         f = route_fixture.WreckRouteSwitchTests(); f.setUp()
-        f.orders(0.); f.orders(20.); orders = f.orders(40.)
+        f.orders(0.); f.orders(20.)
+        returned = f.orders(40.)[17]
+        self.assertEqual(('banana', 0), (returned['route_id'], returned['route_index']))
+        f.states[0].update(x=190., z=74.)
+        orders = f.orders(41.)
         order = orders[17]
         self.assertEqual('rail', order['route_id'])
         receipt = order['route_assignment']['entry_selection']
         self.assertEqual('rail', receipt['selected_route'])
         self.assertEqual(order['route_index'], receipt['selected_index'])
         self.assertEqual(order['move_position'], receipt['selected_point'])
+        self.assertEqual(0, receipt['selected_index'])
+        self.assertEqual('least_tried_then_affinity_at_first_point', receipt['policy'])
+        self.assertEqual(41., receipt['sampled_at'])
         self.assertTrue(receipt['candidates'])
         eligible = next(r for r in receipt['candidates'] if r['outcome'] == 'eligible')
         self.assertGreaterEqual(eligible['entry_distance'], 0.)

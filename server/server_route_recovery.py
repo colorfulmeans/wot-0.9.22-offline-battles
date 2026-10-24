@@ -123,6 +123,15 @@ class RouteRecoveryMixin:
         route = min(candidates, key=lambda row: row[:3])[3]
         identity = str(route['id'])
         self._record_route_assignment(bot, now, previous, identity, 'recovery_at_start')
+        self._route_assignment_receipts[bot['id']]['entry_selection'] = dict(
+            sampled_at=now, origin=_point(bot['state']),
+            policy='least_tried_then_affinity_at_first_point',
+            candidates=[dict(route=row[2], outcome='eligible', visits=row[0],
+                affinity=-row[1], entry_index=0,
+                entry_distance=_distance(_point(bot['state']), _point(row[3]['waypoints'][0])))
+                for row in candidates],
+            selected_route=identity, selected_index=0,
+            selected_point=_point(route['waypoints'][0]))
         self._route_assignments[bot['id']] = dict(route=route, until=0.)
         # Returning to the start completed the old traversal. A new traversal
         # owns fresh wait clocks and cannot restore an old failed route cursor.

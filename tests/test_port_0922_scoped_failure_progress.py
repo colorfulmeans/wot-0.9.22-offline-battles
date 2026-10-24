@@ -308,18 +308,21 @@ class ConnectorProgressTests(unittest.TestCase):
         self.assertEqual(_order_signature({'route_id': 'central'}),
             _order_signature({'route_id': 'central', 'route_assignment': receipt}))
 
-    def test_original_skip_then_switch_publishes_current_receipt(self):
+    def test_skip_return_then_switch_publishes_current_receipt(self):
         from test_port_0922_wreck_route_switch import WreckRouteSwitchTests
         fixture = WreckRouteSwitchTests()
         fixture.setUp()
         first = fixture.orders(0.)[17]
         skipped = fixture.orders(20.)[17]
-        changed = fixture.orders(40.)[17]
+        returned = fixture.orders(40.)[17]
         self.assertEqual(first['route_id'], skipped['route_id'])
+        self.assertEqual(('banana', 0), (returned['route_id'], returned['route_index']))
+        fixture.states[0].update(x=190., z=74.)
+        changed = fixture.orders(41.)[17]
         self.assertNotEqual(skipped['route_id'], changed['route_id'])
-        self.assertEqual(changed['route_assignment']['reason'], 'wreck_stall')
+        self.assertEqual(changed['route_assignment']['reason'], 'recovery_at_start')
         self.assertEqual(changed['route_assignment']['route'], changed['route_id'])
-        self.assertEqual(changed['route_assignment']['at'], 40.)
+        self.assertEqual(changed['route_assignment']['at'], 41.)
 
     def test_worker_receives_diagnostics_without_invalidating_control_cache(self):
         from test_port_0922_bot_runtime import _load
