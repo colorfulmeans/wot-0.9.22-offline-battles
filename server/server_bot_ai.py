@@ -22,6 +22,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
 from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from server_route_recovery import RouteRecoveryMixin, ROUTE_ATTEMPT_SECONDS, MIN_ROUTE_AFFINITY
+from server_route_tasks import RouteTasksMixin
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -54,7 +55,7 @@ ROUTE_ARRIVAL_RADIUS = bot_tactics.ROUTE_ARRIVAL_RADIUS
 CLOSE_THREAT_DISTANCE = 50.0
 CLOSE_THREAT_SCORE_BONUS = 100.0
 CLOSE_THREAT_FOCUS_LIMIT = 4
-ROUTE_REBALANCE_SECONDS = 60.0
+ROUTE_REBALANCE_SECONDS = 180.0
 # Cover the next scheduled evaluation, including one server-tick boundary.
 ROUTE_LEASE_SECONDS = ROUTE_REBALANCE_SECONDS + 1.0
 WRECK_ROUTE_WAIT_SECONDS = ROUTE_ATTEMPT_SECONDS
@@ -173,7 +174,7 @@ def _order_signature(order):
     return signature
 
 
-class BotPlanner(RouteRecoveryMixin):
+class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
     """Server-side route, focus-fire, and last-contact order coordinator."""
 
     def __init__(self):
@@ -195,6 +196,7 @@ class BotPlanner(RouteRecoveryMixin):
         self._route_assignment_receipts = {}
         self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
+        self._task_init()
         self._engage_anchors = {}
         self._firing_holds = {}
         self._affordances = {}
@@ -234,6 +236,7 @@ class BotPlanner(RouteRecoveryMixin):
         self._route_assignment_receipts = {}
         self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
+        self._task_init()
         self._engage_anchors = {}
         self._firing_holds = {}
         self._affordances = {}
@@ -755,7 +758,7 @@ class BotPlanner(RouteRecoveryMixin):
                 commanded_focus = self._team_order_focus(
                     team_order_by_bot.get(bot["id"]), bot,
                     self._contacts_for_bot(bot, contacts[team], now))
-                if (commanded_focus is not None and
+                if (commanded_focus is not None and assignments.get(bot['id']) is None and
                         bot["id"] not in defenders.get(team, {})):
                     assignments[bot["id"]] = commanded_focus
             assignments = self._mark_flank_suppressors(
@@ -772,9 +775,17 @@ class BotPlanner(RouteRecoveryMixin):
                         self._defense_contributor_keys(defense, 3-team))
                 route_point = order.pop("_route_position")
                 turnback_point = order.pop("_turnback_position")
-                self._apply_team_order(
-                    order, bot, team_order_by_bot.get(bot["id"]),
-                    players, defense, route_point, turnback_point)
+                player_order = team_order_by_bot.get(bot['id'])
+                combat = self._task_combat(order)
+                automatic = (bot['id'] in defenders.get(team,{}) or bot['id'] in self._route_recoveries or
+                    (self._travel_tasks.get(bot['id']) or {}).get('kind') in ('defense','pressure'))
+                if combat or automatic:
+                    if player_order:order['player_command_cancelled'] = True
+                    player_order = None
+                else:
+                    self._apply_team_order(order, bot, player_order, players, defense, route_point, turnback_point)
+                self._task_apply(order, bot, now, defenders.get(team,{}).get(bot['id']), player_order, defense)
+                self._task_capture_handoff(order,bot,capture_targets[team])
                 self._apply_authored_route_order(order, bot, route_point, now)
                 self._handoff_route_terminal(order, bot, capture_targets[team], now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
@@ -905,6 +916,9 @@ class BotPlanner(RouteRecoveryMixin):
 
     def _prune_tactical_state(self, bots, known_targets, now):
         live_bots = dict((bot["id"], bot) for bot in bots)
+        for actor in set(self._travel_tasks)-set(live_bots):self._travel_tasks.pop(actor,None)
+        self._previous_combat.intersection_update(live_bots)
+        for actor in set(self._previous_player)-set(live_bots):self._previous_player.pop(actor,None)
         largest_radius = max([math.hypot(3.5, 1.7)] + [
             _number(bot.get('profile', {}).get('parking_radius'), math.hypot(3.5, 1.7))
             for bot in bots])
@@ -1220,7 +1234,7 @@ class BotPlanner(RouteRecoveryMixin):
                     del responders[bot_id]
             raw_state = states.get(str(team), states.get(team, {}))
             raw_state = raw_state if isinstance(raw_state, dict) else {}
-            invaders = max(0, _integer(raw_state.get("invaders")))
+            invaders = max(0, _integer(raw_state.get("invaders")), len(self._defense_contributor_keys(defense, team)))
             points = self._defense_points(bases, team)
             contributor_keys = self._defense_contributor_keys(
                 defense, team)
@@ -1247,7 +1261,7 @@ class BotPlanner(RouteRecoveryMixin):
                 clear_since = incident.get("clear_since")
                 if clear_since is None:
                     incident["clear_since"] = _number(now)
-                elif _number(now) - _number(clear_since) >= 3.0:
+                elif _number(now) - _number(clear_since) >= 30.0:
                     responders.clear()
                     incident["clear_since"] = None
                     incident["need"] = 0
@@ -1277,6 +1291,11 @@ class BotPlanner(RouteRecoveryMixin):
                         live[bot_id], record, self._contacts_for_bot(
                             live[bot_id], contacts.get(team, ()), now),
                         contributor_keys, now)
+                    if (self._travel_tasks.get(bot_id) or {}).get('kind')=='defense':
+                        pose=(_number(state.get('x')),_number(state.get('z')))
+                        prior=record.setdefault('task_pose',pose)
+                        if math.hypot(pose[0]-prior[0],pose[1]-prior[1])>=1.:
+                            record['last_progress_at']=_number(now);record['task_pose']=pose
                     if combat_progress:
                         record['last_progress_at'] = _number(now)
                     backups = [value for value in live
@@ -1622,6 +1641,7 @@ class BotPlanner(RouteRecoveryMixin):
             # capture behaviour instead of leaving the vehicle stranded.
             return True
         if target is not None:
+            if self._inside_base(bot, target):return True
             if route_index != len(waypoints)-1:
                 return False
             if (not bot['state'].get('world_pose') or bot['state'].get('airborne') or
@@ -1671,6 +1691,7 @@ class BotPlanner(RouteRecoveryMixin):
             bot = bot_by_id.get(bot_id)
             if bot is None:
                 continue
+            if not self._inside_base(bot, defenders[bot_id]):continue
             bx = _number(bot["state"].get("x"))
             bz = _number(bot["state"].get("z"))
             choices = []
@@ -1680,13 +1701,6 @@ class BotPlanner(RouteRecoveryMixin):
             hit = self._recent_hit(bot_id, now) if now is not None else None
             lease = self._target_assignments.get(bot_id) or {}
             reads = self._target_decisions.get(bot_id, {}).get('target_capabilities', {})
-            if (hit is not None and current_key == hit.get('attacker') and
-                    bot_id in current.get('shootable_by_bot_ids', ()) and
-                    reads.get(bot_gunnery.CAPABILITY_TARGET_RETALIATION, True)):
-                decision = self._target_decisions.setdefault(bot_id, {})
-                decision['base_priority'] = dict(reason='recent_attacker_override',
-                    contributors=sorted(contributor_keys), selected=current_key)
-                continue
             for contact in self._contacts_for_bot(bot, contacts, now):
                 key = (str(contact.get("target_kind") or ""),
                        _integer(contact.get("id")))
@@ -1703,8 +1717,12 @@ class BotPlanner(RouteRecoveryMixin):
                 health_fraction = (
                     _number(contact.get("health"), 1.0) /
                     max(1.0, _number(contact.get("max_health"), 1.0)))
+                capture_rows = (defense.get('contributors', {}).get(str(team)) or ())
+                capture_points = max([float(row.get('points', 0)) for row in capture_rows
+                    if (row.get('kind'), row.get('id')) == key] or [0.])
+                scores=dict((tuple(row['target']),row['score']) for row in self._target_decisions.get(bot_id,{}).get('candidates',()) if 'score' in row)
                 choices.append((
-                    reservations.get(key, 0),
+                    -capture_points, scores.get(key,distance), reservations.get(key, 0),
                     0 if key == current_key else 1, health_fraction, distance,
                     key[0], key[1], contact))
             if not choices:
@@ -2685,7 +2703,7 @@ class BotPlanner(RouteRecoveryMixin):
             self._observe_route_leases(bots, now, 'rebalance_not_due', evaluation=False)
             return
         self._next_route_rebalance[team] = _number(now) + ROUTE_REBALANCE_SECONDS
-        protected_ids = set(protected_ids)
+        protected_ids = set(protected_ids).union(self._previous_combat)
         for bot in bots:
             authored = bot_tactics.route_config(self.tactics, self.tactics_map, (bot.get('route') or {}).get('id'), bot['team'])
             if authored is not None and authored['policy'] == 'fixed':
@@ -2697,13 +2715,21 @@ class BotPlanner(RouteRecoveryMixin):
         for bot in bots:
             assignment = self._route_assignments.get(bot['id']) or {}
             route = assignment.get('route')
-            if (assignment.get('radio_scoped') and
-                    _number(assignment.get('until')) > _number(now) and
+            if ((assignment.get('ordered_task') or assignment.get('radio_scoped') and
+                    _number(assignment.get('until')) > _number(now)) and
                     isinstance(route, dict) and route.get('waypoints')):
                 route_id = str(route.get('id') or '')
                 if route_id and route_id not in catalog:
                     catalog[route_id] = route
                     retained_routes.append(route_id)
+        for bot in bots:
+            task = self._travel_tasks.get(bot['id'])
+            if task:
+                protected_ids.add(bot['id'])
+                for route in (task.get('route'),task.get('target_route')):
+                    if route and route.get('waypoints'):
+                        catalog[str(route['id'])]=route
+        family=lambda identity:self._task_family(catalog.get(identity) or {'id':identity},team)
         # An active recovery owns its frozen lane through combat and folding.
         # Finishing recovery releases this protection for ordinary pressure work.
         for bot in bots:
@@ -2713,7 +2739,7 @@ class BotPlanner(RouteRecoveryMixin):
                 catalog[str(route.get('id') or '')] = route
                 protected_ids.add(bot['id'])
         for bot in bots:
-            if bot["id"] in self._route_recoveries:
+            if bot["id"] in self._route_recoveries or bot['id'] in self._travel_tasks:
                 continue
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -2775,6 +2801,9 @@ class BotPlanner(RouteRecoveryMixin):
             health_fraction = (_number(contact.get("health"), 1.0) /
                                max(1.0, _number(contact.get("max_health"), 1.0)))
             pressure[route_id] += max(0.3, health_fraction)
+        totals={}
+        for identity,value in pressure.items():totals[family(identity)]=totals.get(family(identity),0.)+value
+        pressure=dict((identity,totals[family(identity)]) for identity in pressure)
         if not pressure or max(pressure.values()) <= 0.0:
             self._observe_route_leases(bots, now, 'no_known_pressure')
             for bot in bots:
@@ -2792,7 +2821,7 @@ class BotPlanner(RouteRecoveryMixin):
         counts = dict((route_id, 0) for route_id in catalog)
         class_counts = {}
         for bot in bots:
-            if str(bot.get("profile", {}).get("class_tag") or "") == "SPG":
+            if str(bot.get("profile", {}).get("class_tag") or "") == "SPG" or bot['id'] in self._travel_tasks:
                 continue
             assignment = self._route_assignments.get(bot["id"], {})
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2804,11 +2833,21 @@ class BotPlanner(RouteRecoveryMixin):
                 class_counts[key] = class_counts.get(key, 0) + 1
                 if self._route_line_contributor(bot, self._contacts_for_bot(bot, contacts, now)):
                     counts[route_id] += 1
+        totals={}
+        for identity,value in counts.items():totals[family(identity)]=totals.get(family(identity),0)+value
+        counts=dict((identity,totals[family(identity)]) for identity in counts)
+        reservations=dict((route_id,0) for route_id in catalog)
+        for bot in bots:
+            task=self._travel_tasks.get(bot['id']) or {}
+            target=task.get('target_route') or {}
+            if task.get('kind')=='pressure' and target.get('id') in reservations:
+                for identity in reservations:
+                    if family(identity)==family(target['id']):reservations[identity]+=1
         target_route = max(sorted(catalog), key=lambda route_id:
-                           pressure[route_id] - counts[route_id] * 0.45)
-        target_score = pressure[target_route] - counts[target_route] * 0.45
+                           pressure[route_id] - (counts[route_id]+reservations[route_id]) * 0.45)
+        target_score = pressure[target_route] - (counts[target_route]+reservations[target_route]) * 0.45
         balance.update(outcome='no_improving_donor', target_route=target_route,
-                       pressure=dict(pressure), contributors=dict(counts),
+                       pressure=dict(pressure), contributors=dict(counts), reservations=reservations,
                        target_score=target_score)
         # Preserve the inputs behind pressure changes, not only the winning
         # total. Radio expiry, deaths and route transfers can change a total
@@ -2839,9 +2878,9 @@ class BotPlanner(RouteRecoveryMixin):
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
         for bot in bots:
-            if bot['id'] in self._route_recoveries:
+            if bot['id'] in self._route_recoveries or bot['id'] in self._travel_tasks:
                 continue
-            knows_target = any(self._nearest_route(contact, catalog) == target_route
+            knows_target = any(family(self._nearest_route(contact, catalog)) == family(target_route)
                                for contact in self._contacts_for_bot(bot, contacts, now))
             assignment = self._route_assignments.get(bot["id"])
             route = assignment.get("route") if isinstance(assignment, dict) else None
@@ -2887,14 +2926,11 @@ class BotPlanner(RouteRecoveryMixin):
         for bot in bots:
             check = dict(bot=bot['id'], outcome='eligible')
             candidate_checks.append(check)
-            if bot['id'] in self._route_recoveries or bot['state'].get('route_wreck_blocked'):
+            if bot['id'] in self._travel_tasks or bot['id'] in self._route_recoveries or bot['state'].get('route_wreck_blocked'):
                 check['outcome'] = 'route_recovery_in_progress'
                 continue
-            if class_counts.get((target_route, bot.get("profile", {}).get("class_tag")), 0) >= 3:
-                check['outcome'] = 'target_class_full'
-                continue
             received = self._contacts_for_bot(bot, contacts, now)
-            if not any(self._nearest_route(contact, catalog) == target_route
+            if not any(family(self._nearest_route(contact, catalog)) == family(target_route)
                        for contact in received):
                 check['outcome'] = 'no_received_target_contact'
                 continue
@@ -2906,7 +2942,11 @@ class BotPlanner(RouteRecoveryMixin):
                 # Rebalancing cannot discard an authored parking timer/lease.
                 check['outcome'] = 'parking_in_progress'
                 continue
-            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, target_route, bot['team'])
+            recipient_route=self._task_class_route(catalog[target_route],bot,catalog)
+            if recipient_route is None:
+                check['outcome']='authored_class_mismatch'
+                continue
+            target_authored = bot_tactics.route_config(self.tactics, self.tactics_map, recipient_route['id'], bot['team'])
             if target_authored is not None and not bot_tactics.matches(target_authored, bot):
                 check['outcome'] = 'authored_class_mismatch'
                 continue
@@ -2924,8 +2964,8 @@ class BotPlanner(RouteRecoveryMixin):
                 current = bot.get("route") or {}
             current_id = str(current.get("id") or "")
             check['current_route'] = current_id
-            if current_id == target_route or counts.get(current_id, 0) <= 1:
-                check['outcome'] = ('already_on_target' if current_id == target_route
+            if family(current_id) == family(target_route) or counts.get(current_id, 0) <= 1:
+                check['outcome'] = ('already_on_target' if family(current_id) == family(target_route)
                                     else 'last_line_contributor')
                 continue
             # Use the existing pressure-minus-contributors metric on BOTH
@@ -2943,7 +2983,7 @@ class BotPlanner(RouteRecoveryMixin):
                 continue
             profile = bot.get("profile", {})
             roles = profile.get("roles") or {}
-            class_weights = target_record.get("class_weights")
+            class_weights = recipient_route.get("class_weights")
             class_affinity = 0.5
             if isinstance(class_weights, dict):
                 class_tag = str(profile.get("class_tag") or "")
@@ -2986,25 +3026,13 @@ class BotPlanner(RouteRecoveryMixin):
                 contact_inputs=balance['contact_inputs'],
                 contributor_inputs=balance['contributor_inputs'],
                 candidates=candidate_checks, selected_bot=donor['id']))
-        self._route_assignments[donor["id"]] = {
-            "route": catalog[target_route],
-            "until": _number(now) + ROUTE_LEASE_SECONDS,
-            "radio_scoped": any("radio_bot_until" in contact
-                                for contact in contacts),
-            "_lease_observation": dict(evaluated_at=_number(now),
-                outcome='assigned', target_route=target_route,
-                target_pressure=pressure[target_route],
-                target_contributors=counts[target_route],
-                until=_number(now) + ROUTE_LEASE_SECONDS),
-        }
-        self._route_assignments[donor['id']]['_lease_check'] = dict(
-            self._route_assignments[donor['id']]['_lease_observation'])
-        self._route_states.pop(donor["id"], None)
+        destination=self._task_class_route(catalog[target_route],donor,catalog)
+        self._task_begin(donor, 'pressure', target_route=destination, now=now)
 
     def _observe_route_leases(self, bots, now, outcome, evaluation=True, **values):
         """Record early exits without renewing leases or altering allocation."""
         for bot in bots:
-            if bot['id'] in self._route_recoveries:
+            if bot['id'] in self._route_recoveries or bot['id'] in self._travel_tasks:
                 continue
             lease = self._route_assignments.get(bot['id']) or {}
             if _number(lease.get('until')) <= 0.0:
@@ -3274,6 +3302,8 @@ class BotPlanner(RouteRecoveryMixin):
         self._apply_authored_route_order(order, bot, move, now)
 
     def _route(self, bot, now, stop_before_objective=False):
+        if bot['id'] in self._travel_tasks:
+            return self._task_position(bot, now)
         if bot['id'] in self._route_recoveries:
             return self._cycle_position(bot, now)
         assignment = self._route_assignments.get(bot["id"])
@@ -3368,6 +3398,9 @@ class BotPlanner(RouteRecoveryMixin):
             if not history and scripted:
                 index = 0
                 entry['source'] = 'first_scripted_instruction'
+            if authored is not None and not history and len(waypoints)>1 and not authored['points'][0][2]:
+                index=min(1,route_limit)
+                entry['source']='fixed_spawn_next_node'
             entry.update(selected_index=index, selected_point=_point(waypoints[index]))
             state = {"index": index, "route_id": route_id,
                      "entry_receipt": entry,
@@ -3454,7 +3487,7 @@ class BotPlanner(RouteRecoveryMixin):
             route_index=order.get('route_index'), terminal_index=len(points)-1,
             input_mode=order.get('combat_mode'), outcome='no_route')
         order['tactical_evidence']['route_terminal'] = evidence
-        if bot['id'] in self._route_recoveries:
+        if bot['id'] in self._route_recoveries or bot['id'] in self._travel_tasks:
             evidence['outcome'] = 'route_recovery_in_progress'
             return
         if not points or route_state is None:
@@ -3652,7 +3685,7 @@ class BotPlanner(RouteRecoveryMixin):
 
     def _apply_authored_route_order(self, order, bot, route_point, now=None):
         """Apply explicit parking/travel instructions without suppressing aim."""
-        if bot['id'] in self._route_recoveries:
+        if bot['id'] in self._route_recoveries or bot['id'] in self._travel_tasks:
             return
         if order.get('defense_base_id') or order.get('combat_mode') == 'base_capture':
             return
@@ -4137,6 +4170,9 @@ class BotPlanner(RouteRecoveryMixin):
             capture_target is not None and not contacts and
             not no_known_enemies and
             str(bot.get("profile", {}).get("class_tag") or "") != "SPG")
+        own_route=self._task_route(bot)
+        if bot_tactics.route_config(self.tactics,self.tactics_map,own_route.get('id'),bot['team'],own_route.get('waypoints')) is not None:
+            capture_screen=False
         route_id, route_index, move, route_anchor, route_join = self._route(
             bot, now, stop_before_objective=capture_screen)
         retreat_point = self._retreat_point(bot, route_anchor)

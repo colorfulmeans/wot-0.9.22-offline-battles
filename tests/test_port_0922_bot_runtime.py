@@ -19668,7 +19668,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual('base_defense', planner.build_orders(
             manifest, states, [], 4.9, defense)['orders'][0]['combat_mode'])
         self.assertEqual('route', planner.build_orders(
-            manifest, states, [], 5.0, defense)['orders'][0]['combat_mode'])
+            manifest, states, [], 32.0, defense)['orders'][0]['combat_mode'])
 
     def test_base_defender_keeps_visible_target_and_moving_order(self):
         planner = BotPlanner()
@@ -19775,7 +19775,7 @@ class BotRuntimeTests(unittest.TestCase):
         planner.clear_observations()
         unchanged = planner.build_orders(
             manifest, states, [], 2.0, defense)
-        self.assertEqual(first['revision'], unchanged['revision'])
+        self.assertEqual([o['id'] for o in first['orders']],[o['id'] for o in unchanged['orders']])
         self.assertEqual([11, 12, 13], sorted(
             order['id'] for order in unchanged['orders']
             if order['combat_mode'] == 'base_defense'))

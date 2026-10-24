@@ -40,3 +40,12 @@ fixtures explicitly use their original empty/source-graph baseline; they do
 not stand in for the new baseline acceptance cases. The frozen executable
 smoke runner separately checks first-run adoption and route reset in a
 temporary store before its original manual authoring exercise.
+
+
+## Current route-task extension
+
+The subsequent main/reserve, defense-connection, SPG-connection and command
+ownership rules are specified and verified in
+[Authored route tasks](authored-route-tasks-20261025.md). That document supersedes
+the older capacity/deletion/pressure-lease expectations only; adopted travel
+geometry and native physical/shot checks retain their existing owners.

@@ -43,6 +43,8 @@ class MiddleBridgeTests(unittest.TestCase):
                 shared=next(r for r in expected['default_routes'] if r['team']==row['team']
                     and r['id']==row['id'] and r.get('class_tag','all')=='all')
                 row['points']=[p[:2]+[0] for p in shared['points']]
+            from gui.mods.offline_lan_0922 import route_network
+            route_network.migrate_default_rows(expected['default_routes'])
             expected['resource_sha256'] = cfg.MAPS['84_winter']['resource_sha256']
             self.assertEqual(expected, cfg.canonical(profile)['maps']['84_winter'])
         entry['resource_sha256'] = '0'*64

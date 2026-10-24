@@ -81,6 +81,7 @@ jobs:
             'test_port_0922_himmelsdorf_resolution.py'
             'test_port_0922_basic_slope_pose.py'
             'test_port_0922_eroded_fallback_cycle.py'
+            'test_port_0922_route_task_rules.py'
             'test_port_0922_initial_allocation.py'
             'test_port_0922_initial_navigation_handoffs.py'
             'test_port_0922_navigation*.py'

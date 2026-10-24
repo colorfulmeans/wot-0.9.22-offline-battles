@@ -301,6 +301,14 @@ class BattleRadioAdapterTests(unittest.TestCase):
         self.assertEqual((1, 12, 1),
                          (action_id, request_id, args['int32Arg1']))
 
+    def test_cooldown_ack_uses_only_negative_responder_replies(self):
+        self.assertTrue(self.adapter.handle_client_action(25,12,_args()))
+        self.assertTrue(self.adapter.receive_ack(41,False,[99002,99003]))
+        replies=self.avatar.chat2[1:]
+        self.assertEqual([99002,99003],[row[2]['int64Arg1'] for row in replies])
+        self.assertTrue(all(row[0]==28 for row in replies))
+        self.assertFalse(self.adapter.receive_ack(41,False,[99002]))
+
     def test_stock_team_chat_contract_and_normalization_are_pinned(self):
         self.assertEqual(19, tactical_radio.TEAM_CHAT_INIT_ACTION_ID)
         self.assertEqual(20, tactical_radio.TEAM_CHAT_DEINIT_ACTION_ID)

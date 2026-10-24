@@ -35,6 +35,7 @@ import types
 import typing
 import uuid
 import weakref
+import zipfile
 import zlib
 
 SERVER_STDLIB_MODULES = (
@@ -67,5 +68,6 @@ SERVER_STDLIB_MODULES = (
     typing.__name__,
     uuid.__name__,
     weakref.__name__,
+    zipfile.__name__,
     zlib.__name__,
 )

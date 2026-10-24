@@ -55,99 +55,80 @@ class RadioRouteTests(unittest.TestCase):
             self.assertEqual(-300.0, orders[identity]['move_position']['x'])
         self.assertTrue(all(row['target_id'] is None for row in orders.values()))
 
-    def test_only_a_receiving_donor_can_reinforce_the_reported_flank(self):
-        planner, manifest, states, players, unused = self._fixture((11,))
-        orders = self._orders(planner, manifest, states, players, 1.0)
-        self.assertEqual('right', orders[11]['route_id'])
-        self.assertEqual('left', orders[12]['route_id'])
-        self.assertEqual('left', orders[13]['route_id'])
-        self.assertTrue(planner._route_assignments[11]['radio_scoped'])
+    def test_only_receiving_donor_returns_to_old_start_before_transfer(self):
+        p,m,s,players,unused=self._fixture((11,))
+        orders=self._orders(p,m,s,players,1.)
+        self.assertEqual({11},set(p._travel_tasks))
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        self.assertEqual('left',orders[11]['route_id'])
+        self.assertEqual('route_transfer',orders[11]['combat_mode'])
+        self.assertEqual('left',orders[12]['route_id'])
+        s[0].update(x=300,z=0)
+        committed=self._orders(p,m,s,players,2.)[11]
+        self.assertEqual('right',committed['route_id']);self.assertNotIn(11,p._travel_tasks)
 
-    def test_disconnect_retires_route_only_at_minute_evaluation(self):
-        planner, manifest, states, players, contacts = self._fixture((11,))
-        orders = self._orders(planner, manifest, states, players, 1.0)
-        self.assertEqual('right', orders[11]['route_id'])
-        for contact in contacts:
-            contact['radio_recipients'] = []
-        planner.report_contacts(contacts, planner.known_targets(states, players), 1.1)
-        for now in (1.1, 5.0, 59.0):
-            orders = self._orders(planner, manifest, states, players, now)
-            self.assertEqual('right', orders[11]['route_id'])
-        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
-        self.assertEqual(0., planner._route_assignments[11]['until'])
+    def test_disconnected_donor_finishes_old_leg_until_task_expiry(self):
+        p,m,s,players,contacts=self._fixture((11,))
+        self._orders(p,m,s,players,1.)
+        for c in contacts:c['radio_recipients']=[]
+        p.report_contacts(contacts,p.known_targets(s,players),1.1)
+        for now in (1.1,5.,61.,180.):
+            self.assertEqual('route_transfer',self._orders(p,m,s,players,now)[11]['combat_mode'])
+        order=self._orders(p,m,s,players,181.)[11]
+        self.assertNotIn(11,p._travel_tasks);self.assertEqual('left',order['route_id'])
 
-    def test_active_assignment_survives_last_original_route_owner_death(self):
-        planner, manifest, states, players, contacts = self._fixture((11,))
-        self.assertEqual('right', self._orders(
-            planner, manifest, states, players, 1.)[11]['route_id'])
-        states[-1]['alive'] = False
-        states[-1]['health'] = 0
-        orders = self._orders(planner, manifest, states, players, 1.1)
-        self.assertEqual('right', orders[11]['route_id'])
-        self.assertGreater(planner._route_assignments[11]['until'], 1.1)
-        for contact in contacts: contact['radio_recipients'] = []
-        planner.report_contacts(contacts, planner.known_targets(states, players), 1.2)
-        self.assertEqual('right', self._orders(
-            planner, manifest, states, players, 1.2)[11]['route_id'])
-        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
-        receipt = planner._route_assignment_receipts[11]
-        self.assertEqual(['radio_knowledge_lost'],
-                         receipt['selection']['invalidation_causes'])
+    def test_pending_target_survives_last_original_owner_death(self):
+        p,m,s,players,contacts=self._fixture((11,),lease=500.)
+        self._orders(p,m,s,players,1.)
+        s[-1].update(alive=False,health=0)
+        p._next_route_rebalance[1]=2.
+        self._orders(p,m,s,players,2.)
+        self.assertEqual('right',p._travel_tasks[11]['target_route']['id'])
+        s[0].update(x=300,z=0)
+        self.assertEqual('right',self._orders(p,m,s,players,3.)[11]['route_id'])
+        self.assertTrue(p._route_assignments[11]['ordered_task'])
+        self.assertEqual('right',self._orders(p,m,s,players,183.)[11]['route_id'])
 
-    def test_invalidation_knowledge_is_a_frozen_snapshot(self):
-        planner, manifest, states, players, contacts = self._fixture((11,))
-        self._orders(planner, manifest, states, players, 1.)
-        planner.report_contacts(contacts, planner.known_targets(states, players), 60.9)
-        planner._route_assignments[11]['until'] = 60.95
-        self._orders(planner, manifest, states, players, 61.)
-        evidence = next(event['selection']['knowledge_contacts'] for event in planner._route_assignment_receipts[11]['history'] if event['reason'] == 'lease_expired')
-        self.assertTrue(evidence)
-        frozen = copy.deepcopy(evidence)
-        for contact in planner._contacts[1].values():
-            contact['position']['x'] = 9999.
-            contact['radio_bot_until'].clear()
-        self.assertEqual(frozen, evidence)
+    def test_selection_knowledge_is_a_frozen_snapshot(self):
+        p,m,s,players,contacts=self._fixture((11,))
+        self._orders(p,m,s,players,1.)
+        evidence=p._route_assignment_receipts[11]['selection']['contact_inputs']
+        self.assertTrue(evidence);frozen=copy.deepcopy(evidence)
+        for c in p._contacts[1].values():c['position']['x']=9999.;c['radio_bot_until'].clear()
+        self.assertEqual(frozen,evidence)
 
-    def test_expired_radio_lease_does_not_retain_route_movement(self):
-        planner, manifest, states, players, unused = self._fixture((11,), lease=0.5)
-        self.assertEqual('right', self._orders(
-            planner, manifest, states, players, 1.0)[11]['route_id'])
-        self.assertEqual('right', self._orders(
-            planner, manifest, states, players, 1.6)[11]['route_id'])
-        self.assertEqual('left', self._orders(planner, manifest, states, players, 61.)[11]['route_id'])
+    def test_three_minute_evaluation_does_not_repeat_an_in_transit_assignment(self):
+        p,m,s,players,contacts=self._fixture((11,12),lease=500.)
+        self._orders(p,m,s,players,1.)
+        donor=next(iter(p._travel_tasks));first=copy.deepcopy(p._travel_tasks[donor])
+        for now in (5.,61.,180.):self._orders(p,m,s,players,now)
+        self.assertEqual({donor},set(p._travel_tasks))
+        self.assertEqual(first['until'],p._travel_tasks[donor]['until'])
+        self.assertEqual(181.,p._next_route_rebalance[1])
 
-    def test_one_receivers_disconnect_keeps_another_receivers_knowledge(self):
-        planner, manifest, states, players, contacts = self._fixture((11,))
-        self._orders(planner, manifest, states, players, 1.0)
-        changed = copy.deepcopy(contacts)
-        for contact in changed:
-            contact['radio_recipients'] = [
-                {'kind': 'bot', 'id': 12, 'time_left': 10.0}]
-        planner.report_contacts(changed, planner.known_targets(states, players), 5.0)
-        orders = self._orders(planner, manifest, states, players, 5.0)
-        self.assertEqual('right', orders[11]['route_id'])
-        self.assertEqual('left', orders[12]['route_id'])
-        planner.report_contacts(changed, planner.known_targets(states, players), 60.9)
-        orders = self._orders(planner, manifest, states, players, 61.)
-        self.assertEqual('left', orders[11]['route_id'])
-        self.assertEqual('right', orders[12]['route_id'])
-        self.assertEqual('left', orders[13]['route_id'])
+    def test_new_receiver_waits_for_evaluation_and_old_cannot_renew_expired_task(self):
+        p,m,s,players,contacts=self._fixture((11,))
+        self._orders(p,m,s,players,1.)
+        for c in contacts:c['radio_recipients']=[dict(kind='bot',id=12,time_left=500.)]
+        p.report_contacts(contacts,p.known_targets(s,players),5.)
+        self._orders(p,m,s,players,61.)
+        self.assertNotIn(12,p._travel_tasks)
+        self._orders(p,m,s,players,181.)
+        self.assertNotIn(11,p._travel_tasks)
+        p.report_contacts(contacts,p.known_targets(s,players),181.9)
+        p._next_route_rebalance[1]=182.
+        self._orders(p,m,s,players,182.)
+        self.assertEqual('right',p._travel_tasks[12]['target_route']['id'])
+        self.assertEqual('left',p._route_assignments[11]['route']['id'])
 
-    def test_legacy_contacts_keep_existing_route_lease_semantics(self):
-        planner, manifest, states, players, unused = self._fixture(legacy=True)
-        orders = self._orders(planner, manifest, states, players, 1.0)
-        donors = [identity for identity in (11, 12, 13)
-                  if orders[identity]['route_id'] == 'right']
-        self.assertEqual(1, len(donors))
-        donor = donors[0]
-        old_deadline = planner._route_assignments[donor]['until']
-        orders = self._orders(planner, manifest, states, players, 5.0)
-        self.assertEqual('right', orders[donor]['route_id'])
-        self.assertEqual(planner._route_assignments[donor]['until'], old_deadline)
-        contacts = self._fixture(legacy=True)[-1]
-        planner.report_contacts(contacts, planner.known_targets(states, players), 60.9)
-        self._orders(planner, manifest, states, players, 61.)
-        self.assertGreater(planner._route_assignments[donor]['until'], old_deadline)
+    def test_legacy_contacts_use_same_ordered_transfer(self):
+        p,m,s,players,unused=self._fixture(legacy=True)
+        self._orders(p,m,s,players,1.)
+        self.assertEqual(1,len(p._travel_tasks))
+        donor=next(iter(p._travel_tasks));task=p._travel_tasks[donor]
+        self.assertEqual('pressure',task['kind']);self.assertEqual(181.,task['until'])
+        self.assertEqual('right',task['target_route']['id'])
+        self.assertEqual('left',p._route_assignments[donor]['route']['id'])
 
 
 if __name__ == '__main__':

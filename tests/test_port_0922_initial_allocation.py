@@ -41,18 +41,18 @@ class InitialRouteLotteryTests(unittest.TestCase):
             self.assertNotEqual(a['waypoints'],b['waypoints'])
         self.assertEqual(6,sum(usage.values()))
 
-    def test_draws_with_replacement_can_put_all_three_on_one_lane(self):
+    def test_random_empty_lanes_are_spread_before_existing_lanes(self):
         results=[self.assign(seed=seed)[0] for seed in range(100)]
-        self.assertTrue(any(len(set(p[i]['id'] for i in (100,101,102)))==1 for p in results))
+        self.assertTrue(all(len(set(p[i]['id'] for i in (100,101,102)))==3 for p in results))
         self.assertGreater(len(set(p[100]['id'] for p in results)),1)
 
-    def test_higher_priority_fills_before_lower_and_full_means_auto(self):
+    def test_priority_breaks_equal_load_and_overflow_keeps_authored_lanes(self):
         plans,outcomes,usage=self.assign(lanes(1,(9,5,5)),actors(10))
         self.assertEqual('lane_0',plans[100]['id'])
-        self.assertEqual({None},set(plans[i] for i in (109,209)))
-        self.assertEqual('full_or_unusable_routes_auto',outcomes[109])
-        self.assertTrue(all(n==3 for n in usage.values()))
-        self.assertEqual({'lane_1','lane_2'},set(plans[i]['id'] for i in (103,104,105,106,107,108)))
+        for team in (1,2):
+         self.assertEqual(3,len(set(plans[team*100+i]['id'] for i in range(3))))
+         self.assertTrue(all(plans[team*100+i] is not None for i in range(10)))
+         self.assertEqual([3,3,4],sorted(n for (t,lane,tag),n in usage.items() if t==team))
 
     def test_standalone_routes_can_differ_between_sides(self):
         catalog=lanes(symmetric=False)
@@ -72,6 +72,27 @@ class InitialRouteLotteryTests(unittest.TestCase):
         catalog=lanes();catalog[2]=catalog[2][:1]
         plans,unused,unused_usage=self.assign(catalog)
         self.assertTrue(all(plans[i] is not None for i in (100,101,102,200,201,202)))
+
+    def test_different_classes_share_lane_load_and_prefer_empty_roads(self):
+        catalog=lanes()
+        for side in catalog.values():
+            for row in side:row['class_weights']={'lightTank':1.,'heavyTank':1.}
+        states=actors(1)+actors(1,'heavyTank')
+        for row in states[2:]:row['id']+=10
+        for seed in range(20):
+            plans,unused,unused_usage=self.assign(catalog,states,seed)
+            for team in (1,2):self.assertNotEqual(plans[team*100]['id'],plans[team*100+10]['id'])
+
+    def test_reserve_after_full_main_then_authored_overflow(self):
+        catalog=lanes()
+        for side in catalog.values():
+            side[:]=side[:2];side[1]['_route_tier']='reserve'
+        plans,unused,usage=self.assign(catalog,actors(8),seed=44)
+        for team in (1,2):
+            self.assertEqual(['lane_0']*3,[plans[team*100+i]['id'] for i in range(3)])
+            self.assertEqual(['lane_1']*3,[plans[team*100+i]['id'] for i in range(3,6)])
+            self.assertTrue(all(plans[team*100+i] is not None for i in range(8)))
+            self.assertEqual([4,4],sorted(n for (t,lane,tag),n in usage.items() if t==team))
 
     def test_class_variants_have_independent_capacity(self):
         catalog=lanes(1)
@@ -105,11 +126,11 @@ class InitialRouteLotteryTests(unittest.TestCase):
                 for state in group:state['id']+=index*10
                 states.extend(group)
             plans,outcomes,usage=self.assign(catalog,states)
-            self.assertEqual(24,sum(p is not None for p in plans.values()))
-            self.assertEqual({(t,'lane_0',c):3 for t in (1,2) for c in tags},usage)
+            self.assertEqual(32,sum(p is not None for p in plans.values()))
+            self.assertEqual({(t,'lane_0',c):4 for t in (1,2) for c in tags},usage)
             for team in (1,2):
                 for index,tag in enumerate(tags):
-                    self.assertIsNone(plans[team*100+index*10+3])
+                    self.assertIsNotNone(plans[team*100+index*10+3])
                     self.assertTrue(all(plans[team*100+index*10+j] is not None for j in range(3)))
 
     def test_disabled_classes_and_spg_do_not_consume_front_lane_capacity(self):
@@ -157,8 +178,8 @@ class InitialRouteLotteryTests(unittest.TestCase):
         with mock.patch.object(planning,'_route_reachable',return_value=True):
             plans,outcomes,usage=planning.assign_initial_routes(raw,'08_ruinberg',graph,states,{},99)
         self.assertEqual('user_west',plans[10]['id']);self.assertEqual('user_east',plans[20]['id'])
-        self.assertIsNone(plans[12]);self.assertIsNone(plans[22])
-        self.assertEqual('full_or_unusable_routes_auto',outcomes[12])
+        self.assertIsNotNone(plans[12]);self.assertIsNotNone(plans[22])
+        self.assertEqual('random_fixed',outcomes[12])
 
     def test_custom_unreachable_route_is_never_admitted(self):
         raw=profile();graph=_graph();states=_states(graph,1)

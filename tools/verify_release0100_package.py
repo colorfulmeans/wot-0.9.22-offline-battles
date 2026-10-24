@@ -38,6 +38,7 @@ assert 'replay_launch.py' in verified
 assert 'wot_launcher.py' in verified
 assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
+assert 'bot_tactics_connections.py' in verified
 assert 'bot_tactics_preview.py' in verified
 assert 'bot_tactics_labels.py' in verified
 assert 'crew_ui.py' in verified
@@ -52,6 +53,7 @@ for directory in stage_payload.PAYLOAD_TREES['0.9.22']:
     server_sources.extend(path.relative_to(ROOT).as_posix()
                           for path in (ROOT / directory).rglob('*.py'))
 assert 'server/server_route_recovery.py' in server_sources
+assert 'server/server_route_tasks.py' in server_sources
 for relative in server_sources:
     bundled = app / '_internal/servers/0.9.22' / relative
     assert bundled.read_bytes().replace(b'\r\n', b'\n') == (ROOT / relative).read_bytes().replace(b'\r\n', b'\n'), relative
@@ -95,6 +97,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert 'nation_choices.py' in verified
     assert editor.get('vehicle_editor_language_preserved'), editor
     assert editor.get('scoped_effective_preview') and editor.get('save_initialization_and_backup') and editor.get('save_actions_two_by_four'), editor
+    assert editor.get('authored_connections_and_route_tiers'),editor
     assert editor.get('native_gameplay_tested') is False, editor
 
 print(json.dumps({'frozen_source_modules_verified': len(verified),

@@ -38,7 +38,8 @@ class AdoptedDefaultTests(unittest.TestCase):
             self.assertFalse(rear.get('disabled',False))
             for identity,tag in (('rear_guard','lightTank'),('rail','heavyTank')):
                 excluded=next(r for r in rows if r['team']==team and r['id']==identity and r.get('class_tag')==tag)
-                self.assertTrue(excluded['disabled'])
+                self.assertFalse(excluded.get('disabled'))
+                self.assertEqual('reserve',excluded['tier'])
         with tempfile.TemporaryDirectory() as temp:
             store=storage.Store(temp)
             store.save(storage.contract.default_profile('1'),apply=True)

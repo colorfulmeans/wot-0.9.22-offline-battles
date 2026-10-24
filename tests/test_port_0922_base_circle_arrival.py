@@ -50,14 +50,14 @@ class BaseCircleArrivalTests(unittest.TestCase):
         fourth = self.helper.order(scene, 4., contact=False)
         self.assertEqual(0., fourth['throttle_override'])
 
-    def test_circle_cannot_skip_intermediate_route_gate(self):
+    def test_enemy_circle_entry_retires_remaining_macro_gates(self):
         scene = self.helper.scene((70., 346.))
         self.helper.order(scene, contact=False)
         scene[2][0].update(x=32., z=-250.)
         scene[0]._route_states[17].update(index=0)
         order = self.helper.order(scene, contact=False)
-        self.assertNotEqual(0., order['throttle_override'])
-        self.assertEqual(0, order['route_index'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertEqual('base_capture',order['combat_mode'])
 
     def test_custom_radius_boundary_matches_circle_membership(self):
         for x, arrived in ((22.505, True), (22.515, False)):

@@ -1047,6 +1047,7 @@ class BattleDirector(object):
 			nearest = min(range(len(waypoints)), key=lambda value:
 				_distance_2d(position, (float(waypoints[value][0]),
 					position[1], float(waypoints[value][1]))))
+			if agent.get('route_entry_fixed') and len(waypoints)>1:nearest=1
 			# Point zero is the own flag. The formation is deployed in front of
 			# it, so entering battle must continue to the first tactical point.
 			if nearest == 0 and len(waypoints) > 1:

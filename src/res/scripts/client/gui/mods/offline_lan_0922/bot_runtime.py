@@ -35,7 +35,8 @@ from gui.mods.offline_lan_0922 import equipment_mechanics
 from gui.mods.offline_lan_0922 import gun_pitch_limits
 from gui.mods.offline_lan_0922 import hull_aiming
 from gui.mods.offline_lan_0922 import prebaked_navigation
-from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, bot_tactics_runtime
+from gui.mods.offline_lan_0922 import spg_positions
+from gui.mods.offline_lan_0922 import spg_route_travel, bot_tactics, bot_tactics_runtime
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -4263,6 +4264,8 @@ class BotRuntime(object):
                 agent = getattr(self.adapter.director, 'agents', {}).get(actor)
                 if agent is not None:
                     agent['route'] = plans[actor]
+                    if not restoring:
+                        agent['route_entry_fixed']=True;agent['route_started']=False
             sys.stdout.write('[Offline LAN 0.9.22] BOT TACTICS route bot=%d map=%s status=%s id=%s\n' % (
                 actor, name, status, (plans.get(actor) or {}).get('id', 'auto_navigation')))
 
@@ -17040,6 +17043,7 @@ class BotRuntime(object):
                     server_order = self._rear_laying_order(
                         state, server_order, targets, now)
                     order_steps.append(dict(stage='rear_laying', order=_order_evidence(server_order)))
+                    server_order = spg_route_travel.apply(self, state, server_order, now)
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
                     order_steps.append(dict(stage='artillery_position', order=_order_evidence(server_order)))

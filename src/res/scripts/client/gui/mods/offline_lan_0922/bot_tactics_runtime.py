@@ -91,11 +91,13 @@ def validate_route(grid, route):
 
 
 def route_value(route):
-    return {'id': 'user_' + route['id'], 'capacity': min(3, route['capacity']), 'risk': 0.5,
+    return {'id': 'user_' + route['id'], 'capacity': 15, 'risk': 0.5,
             'role_weights': {}, 'class_weights': dict((c, 1.0 if c in route['classes'] else 0.0) for c in config.CLASSES),
             # Wait conditions stay in the canonical tactics document on the
             # server. The manifest keeps its existing three-field geometry.
-            'waypoints': tuple(tuple(p[:3]) for p in route['points'])}
+            'waypoints': tuple(tuple(p[:3]) for p in route['points']),
+            '_route_tier': route.get('tier', 'main'), '_route_family': 'user_' + route.get('family',route['id']),
+            '_route_purpose': route.get('purpose')}
 
 
 def default_routes(profile, name, graph):
@@ -131,6 +133,7 @@ def default_routes(profile, name, graph):
         if error is None:
             if edit.get('class_tag', 'all') == 'all':
                 source['waypoints'] = [list(p[:3]) for p in edit['points']]
+                source['_route_tier'] = edit.get('tier', 'main')
                 source['_allocation_symmetric'] = bool(edit.get('symmetric', False))
             else:
                 if 'priority' in edit:
@@ -139,6 +142,7 @@ def default_routes(profile, name, graph):
                 variant.update(id=config.default_route_id(edit),
                                _editor_source=source['id'],
                                _editor_class=edit['class_tag'],
+                               _route_tier=edit.get('tier', 'main'), _route_family=source['id'],
                                _allocation_symmetric=bool(edit.get('symmetric', False)),
                                waypoints=[list(p[:3]) for p in edit['points']],
                                class_weights=dict((tag, 1.0 if tag == edit['class_tag'] else 0.0)
@@ -164,10 +168,10 @@ def default_routes(profile, name, graph):
 
 
 def assign_initial_routes(profile, name, graph, states, catalog, seed):
-    """Allocate lanes with independent per-team, per-class capacity.
+    """Spread classes over whole-team lanes before using reserve/overflow.
 
-    Shared geometry is an editing template; each class owns its occupancy.
-    Priorities are local to the vehicle class. Empty/full catalogs explicitly produce automatic routing.
+    Class geometry variants share one lane occupancy.
+    Priorities are local to the vehicle class. Only an absent/unusable catalog produces automatic routing.
     Restored manifests bypass this fresh-round allocator entirely.
     """
     settings = config.map_settings(profile, name)
@@ -202,14 +206,13 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             if tag in weights and weights[tag] <= 0:
                 continue
             key = (state['team'], ('spg:' if tag == 'SPG' else '') + base['id'], tag)
-            if usage.get(key, 0) >= 3:
-                continue
+            # Capacity is a soft whole-team lane threshold, not a class veto.
             priority = (route.get('class_priorities') or {}).get(tag, config.DEFAULT_ROUTE_PRIORITY)
             choices.append((priority, 'default:' + base['id'],
                             bool(route.get('_allocation_symmetric')), (route, key, 'random_default')))
         for route in custom:
             key = (state['team'], 'user_' + route['id'], tag)
-            if errors[route['id']] or usage.get(key, 0) >= min(3, route['capacity']):
+            if errors[route['id']] or route.get('purpose') == 'spg_attack':
                 continue
             if fixed and route['policy'] != 'fixed':
                 continue
@@ -235,6 +238,23 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
         plans[state['id']] = route
         usage[key] = usage.get(key, 0) + 1
         outcomes[state['id']] = status
+        lane = route.get('_route_family') or route.get('_editor_source') or route['id']
+        lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
+
+    lane_usage = {}
+    original_candidates = candidates
+    def candidates(state):
+        rows = original_candidates(state)
+        def rank(row):
+            route = row[3][0]
+            family = route.get('_route_family') or route.get('_editor_source') or route['id']
+            used = lane_usage.get((state['team'], family), 0)
+            reserve = route.get('_route_tier', 'main') == 'reserve'
+            stage = (1 if reserve else 0) if used < 3 else 2
+            return (-stage, -used, row[0])
+        if not rows:return []
+        best = max(rank(row) for row in rows)
+        return [row for row in rows if rank(row) == best]
 
     initial_allocation.allocate(states, candidates, reserve, seed, name + ':routes')
     return plans, outcomes, usage

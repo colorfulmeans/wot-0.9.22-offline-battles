@@ -497,18 +497,15 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual([7.,7.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
 
-    def test_delete_default_route_scopes_total_class_and_shared_views(self):
+    def test_delete_default_route_requires_all_and_class_tier_remains_visible(self):
         e=self.editor;e.route_class_var.set('total');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@lightTank'))
         identity=key.split(':',1)[1].split('@',1)[0]
-        e.items.selection_set(key);e.select_item()
-        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
-        self.assertFalse(e.items.exists(key))
+        e.items.selection_set(key);e.select_item();before=copy.deepcopy(e.document)
+        e.delete_item();self.assertEqual(before,e.document)
         e.route_class_var.set('lightTank');e.change_route_class()
-        self.assertFalse(e.items.exists('builtin:'+identity))
-        e.team=2;e._refresh_items();self.assertFalse(e.items.exists('builtin:'+identity))
-        e.team=1;e._refresh_items();e.route_class_var.set('heavyTank');e.change_route_class()
-        self.assertTrue(e.items.exists('builtin:'+identity))
+        e.selection=('builtin',identity);e._refresh_properties();e.set_tier('reserve')
+        self.assertEqual('reserve',e._selected()['tier']);self.assertTrue(e.items.exists('builtin:'+identity))
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
         e.route_class_var.set('heavyTank');e.change_route_class();self.assertFalse(e.items.exists('builtin:'+identity))

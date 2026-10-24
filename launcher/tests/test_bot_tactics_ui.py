@@ -235,7 +235,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.save(True);self.assertFalse(self.error_mock.called,self.error_mock.call_args)
         self.assertNotIn('points',self.ui.store.active()['maps']['31_airfield']['positions'][0])
         self.ui.reset_builtin();self.assertFalse(self.ui.entry()['positions'])
-        self.ui.new_route();self.assertEqual('positions',self.ui.selection[0])
+        self.ui.new_route();self.assertEqual('routes',self.ui.selection[0]);self.assertEqual('spg_attack',self.ui._selected()['purpose'])
 
     def test_wait_editor_detaches_symmetry_but_retains_both_route_geometries(self):
         source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]

@@ -577,9 +577,6 @@ class BattleRadioAdapter(object):
         if request is None:
             return False
         self._publish_response(request['stock_request_id'], accepted)
-        if not accepted:
-            return True
-
         # The reliable same-team broadcast owns the stock command echo.  The
         # acknowledgement closes the request and presents each assigned
         # Bot's positive response, so delivery order cannot duplicate the
@@ -589,7 +586,7 @@ class BattleRadioAdapter(object):
             account_dbid = _exact_int(account_dbid, 1)
             if (account_dbid is not None and account_dbid not in replied and
                     self._valid_sender(account_dbid)):
-                self.receive_command('POSITIVE', account_dbid)
+                self.receive_command('POSITIVE' if accepted else 'NEGATIVE', account_dbid)
                 replied.add(account_dbid)
                 if len(replied) == 3:
                     break

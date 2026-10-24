@@ -401,6 +401,8 @@ class PragueRouteResourceIdentityTests(unittest.TestCase):
                     if row.get('disabled'):
                         shared=next((r for r in expected if r['team']==row['team'] and r['id']==row['id'] and r.get('class_tag','all')=='all'),row)
                         row['points']=[p[:2]+[0] for p in shared['points']]
+                from gui.mods.offline_lan_0922 import route_network
+                route_network.migrate_default_rows(expected)
                 self.assertEqual(expected,normalized['default_routes'])
 
     def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):

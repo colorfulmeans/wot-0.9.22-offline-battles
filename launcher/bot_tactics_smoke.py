@@ -212,6 +212,22 @@ def run(destination):
             plans, statuses = storage.runtime.assign_manual_positions(active, '08_ruinberg', graph, [state])
             assert statuses[11] == 'manual_selected' and plans[11]['source'] == 'launcher_manual_v1'
             assert len(storage.contract.MAPS) == 41
+            # Drive connection controls through the frozen editor's save owner.
+            ui.route_class_var.set('heavyTank');ui.change_route_class()
+            ui.selection=('routes',next(r['id'] for r in active['maps']['08_ruinberg']['routes'] if r['team']==ui.team and 'heavyTank' in r['classes']))
+            ui.selected_point=0;ui.insert_point();ui._refresh_properties()
+            assert str(ui.defense_add.cget('state'))=='normal',(ui.selection,ui.selected_point,ui.network_mode,ui._selected_parent())
+            ui.add_defense();ui.selected_point=0;ui.insert_point();ui.save(True)
+            active=ui.store.active()
+            authored=active['maps']['08_ruinberg']['routes'][0]
+            assert len(authored['defense']['points'])==3 and not ui.dirty()
+            ui.network_mode='';ui.set_tier('reserve');ui.save(True)
+            assert ui.store.active()['maps']['08_ruinberg']['routes'][0]['tier']=='reserve'
+            ui.route_class_var.set('SPG');ui.change_route_class();ui.new_route();ui.save(True)
+            active=ui.store.active()
+            assert any(r.get('purpose')=='spg_attack' for r in active['maps']['08_ruinberg']['routes'])
+            assert any(p.get('travel') for p in active['maps']['08_ruinberg']['positions'])
+            report['authored_connections_and_route_tiers']=True
             # Verify translations from the real frozen executable, not just
             # source tests, while retaining the active canonical document.
             import bot_tactics_labels as labels

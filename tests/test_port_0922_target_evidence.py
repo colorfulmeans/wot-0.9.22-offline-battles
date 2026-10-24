@@ -97,7 +97,7 @@ class TargetEvidenceTests(unittest.TestCase):
             self.planner.known_targets(self.states, self.players), 1)[1]
         defense = dict(contributors={'1': [dict(kind='human', id=3)]})
         result = self.planner._prioritize_base_invaders(1, [bot], contacts,
-            {11: contacts[0]}, {11: {}}, defense, 1.1)
+            {11: contacts[0]}, {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.1)
         self.assertEqual(3, result[11]['id'])
         decision = self.planner._target_decisions[11]
         self.assertEqual(('human', 3), decision['selected'])
@@ -105,7 +105,7 @@ class TargetEvidenceTests(unittest.TestCase):
         self.assertGreater(self.planner._target_assignments[11]['until'], 1.1)
         lease = copy.deepcopy(self.planner._target_assignments[11])
         self.planner._prioritize_base_invaders(1, [bot], contacts, result,
-            {11: {}}, defense, 1.2)
+            {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.2)
         self.assertEqual(lease, self.planner._target_assignments[11])
 
     def test_capturer_does_not_bypass_wall_or_radio_expiry(self):
@@ -118,10 +118,10 @@ class TargetEvidenceTests(unittest.TestCase):
         selected = next(c for c in contacts if c['id'] == 2)
         defense = dict(contributors={'1': [dict(kind='human', id=3)]})
         result = self.planner._prioritize_base_invaders(1, [bot], contacts,
-            {11: selected}, {11: {}}, defense, 1.1)
+            {11: selected}, {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.1)
         self.assertEqual(2, result[11]['id'])
 
-    def test_base_priority_preserves_existing_recent_attacker_override(self):
+    def test_base_priority_preempts_recent_attacker_only_inside_own_circle(self):
         self.orders(1)
         self.planner.report_damage(11, 'player', 2, 100, 1.1)
         self.orders(1.2)
@@ -130,9 +130,9 @@ class TargetEvidenceTests(unittest.TestCase):
             self.planner.known_targets(self.states, self.players), 1.2)[1]
         current = next(c for c in contacts if c['id'] == 2)
         result = self.planner._prioritize_base_invaders(1, [bot], contacts, {11: current},
-            {11: {}}, dict(contributors={'1': [dict(kind='human', id=3)]}), 1.2)
-        self.assertEqual(2, result[11]['id'])
-        self.assertEqual('recent_attacker_override',
+            {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, dict(contributors={'1': [dict(kind='human', id=3)]}), 1.2)
+        self.assertEqual(3, result[11]['id'])
+        self.assertEqual('proved_capturer_lane',
             self.planner._target_decisions[11]['base_priority']['reason'])
 
     def test_working_defender_stays_but_idle_defender_is_eventually_replaced(self):

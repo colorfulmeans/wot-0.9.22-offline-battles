@@ -176,7 +176,7 @@ class ServerCaptureTests(unittest.TestCase):
         self.assertEqual([{
             'id': '1:1', 'x': 400.0, 'y': 0.0, 'z': 0.0, 'radius': 50.0,
         }], context['bases']['1'])
-        self.assertEqual([{'kind': 'human', 'id': 2}],
+        self.assertEqual([{'kind': 'human', 'id': 2, 'points': 1}],
                          context['contributors']['1'])
         self.assertEqual({
             '1': [

@@ -265,6 +265,9 @@ TEAM_CHAT_MAX_CHARACTERS = 140
 TEAM_COMMAND_TTL_TICKS = int(15 * TICK_HZ)
 # Travel orders need time to cross the map; short tactical focus stays brief.
 TEAM_COMMAND_MOVEMENT_TTL_TICKS = int(120 * TICK_HZ)
+TEAM_COMMAND_COOLDOWN_TICKS = int(10 * TICK_HZ)
+TEAM_GUARD_TRAVEL_TICKS = int(90 * TICK_HZ)
+TEAM_GUARD_SAFE_TICKS = int(30 * TICK_HZ)
 TEAM_COMMAND_MOVEMENT = frozenset((
     "ATTACK", "BACKTOBASE", "HELPME", "HELPMEEX", "FOLLOWME", "TURNBACK",
     "ATTENTIONTOCELL",
@@ -2236,6 +2239,8 @@ class Player(_EndpointSendMixin):
     equipment_intent_result: dict = field(default_factory=lambda: {
         "intent_seq": 0, "accepted": False, "reason": ""})
     team_command_seq: int = 0
+    team_command_ready_tick: int = 0
+    team_command_refusal_sent: bool = False
     team_command_fingerprints: OrderedDict = field(
         default_factory=OrderedDict, repr=False)
     team_command_acks: OrderedDict = field(
@@ -3596,6 +3601,8 @@ class BattleState:
             player.team_command_fingerprints.clear()
             player.team_command_acks.clear()
             player.team_command_publications.clear()
+            player.team_command_ready_tick = 0
+            player.team_command_refusal_sent = False
             player.team_chat_seq = 0
             player.team_chat_fingerprints.clear()
             player.team_chat_acks.clear()
@@ -5842,6 +5849,10 @@ class BattleState:
         return json.dumps(message, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=True)
 
+    @staticmethod
+    def _defense_points_for_guard(context, team):
+        return BotPlanner._defense_points(context.get('bases'), team)
+
     def _active_team_commands_locked(self):
         """Return only current commands whose issuer can still direct Bots."""
         active = []
@@ -5849,16 +5860,31 @@ class BattleState:
         for command_id, command in self.team_commands.items():
             issuer = self.players.get(command["issuer_id"])
             code = None
-            if self.tick >= command["expires_tick"]:
+            if command['command'] == 'BACKTOBASE':
+                phases = command.setdefault('guard_phases', {})
+                context = self._bot_defense_context()
+                base_rows = self._defense_points_for_guard(context, command['team'])
+                keep = []
+                for actor in command['recipient_bot_ids']:
+                    state = self.bot_states.get(actor) or {}
+                    phase = phases.setdefault(str(actor), {})
+                    inside = any(BotPlanner._inside_base(dict(state=state),base) for base in base_rows)
+                    if inside:phase['arrived'] = True
+                    occupied = bool(int((context.get('states', {}).get(str(command['team'])) or {}).get('invaders', 0)) > 0 or BotPlanner._defense_contributor_keys(context,command['team']))
+                    if phase.get('arrived'):
+                        if occupied:phase.pop('safe_tick', None)
+                        else:phase.setdefault('safe_tick', self.tick)
+                        if not occupied and self.tick-phase['safe_tick'] >= TEAM_GUARD_SAFE_TICKS:continue
+                    elif self.tick >= command['expires_tick']:continue
+                    keep.append(actor)
+                command['recipient_bot_ids'] = keep
+                if not keep:code = 'expired'
+            elif self.tick >= command["expires_tick"]:
                 code = "expired"
-            elif issuer is None or not issuer.connected:
-                code = "issuer_disconnected"
-            elif not issuer.participating:
-                code = "issuer_left"
-            elif not issuer.alive:
-                code = "issuer_dead"
-            elif issuer.team != command["team"]:
-                code = "issuer_changed"
+            if issuer is None or not issuer.connected:code='issuer_disconnected'
+            elif not issuer.participating:code='issuer_left'
+            elif not issuer.alive:code='issuer_dead'
+            elif issuer.team!=command['team']:code='issuer_changed'
             if code is not None:
                 expired.append((command_id, issuer, code))
                 continue
@@ -5994,7 +6020,11 @@ class BattleState:
         if not has_pose or not finite_pose:
             return False
         combat_mode = str((current_order or {}).get("combat_mode") or "")
+        if (current_order or {}).get('route_attempt', {}).get('phase') not in (None, 'normal', 'complete'):
+            return False
         if (combat_mode in (
+                "magazine_reload_retreat", "magazine_reload_hold", "engage", "flank", "advance_contact", "take_cover", "cover_hold", "cover_peek", "cover_return", "support_hold",
+                "route_transfer", "recovery_return", "base_defense",
                 "low_health_retreat", "low_health_defend",
                 "under_fire_withdraw", "under_fire_hold",
                 "crossfire_withdraw", "crossfire_hold") or
@@ -6289,10 +6319,32 @@ class BattleState:
                 bots.sort(key=sort_key)
                 recipients = [bot["id"]
                               for bot in bots[:recipient_limit]]
+                if recipients and self.tick < player.team_command_ready_tick:
+                    responders = recipients if not player.team_command_refusal_sent else []
+                    player.team_command_refusal_sent = True
+                    ack = self._team_command_ack(player, message, False, 'cooldown', command, responders)
+                    player.team_command_seq = sequence
+                    player.team_command_fingerprints[sequence] = fingerprint
+                    player.team_command_acks[sequence] = dict(ack)
+                    while len(player.team_command_acks)>TEAM_COMMAND_HISTORY:
+                        oldest=min(player.team_command_acks)
+                        player.team_command_acks.pop(oldest,None)
+                        player.team_command_fingerprints.pop(oldest,None)
+                    return ack
                 if recipients:
+                    player.team_command_ready_tick = self.tick + TEAM_COMMAND_COOLDOWN_TICKS
+                    player.team_command_refusal_sent = False
+                    # A covered Bot can never fall back to an older player request.
+                    for previous_id, previous in list(self.team_commands.items()):
+                        terminal_previous = dict(previous)
+                        previous['recipient_bot_ids'] = [actor for actor in previous['recipient_bot_ids'] if actor not in recipients]
+                        if not previous['recipient_bot_ids']:
+                            self.team_commands.pop(previous_id)
+                            self._publish_team_command_terminal(self.players.get(previous['issuer_id']), terminal_previous, 'superseded')
                     ttl = (TEAM_COMMAND_MOVEMENT_TTL_TICKS
                            if command in TEAM_COMMAND_MOVEMENT else
                            TEAM_COMMAND_TTL_TICKS)
+                    if command == 'BACKTOBASE':ttl = TEAM_GUARD_TRAVEL_TICKS
                     expires_tick = self.tick + ttl
                     command_id = "%d:%d:%d" % (
                         self.round_id, player.player_id, sequence)
@@ -6322,8 +6374,7 @@ class BattleState:
                     self._next_bot_planner_tick = min(
                         self._next_bot_planner_tick, self.tick)
             ack = self._team_command_ack(
-                player, message, True, "accepted", command, recipients,
-                expires_tick)
+                player, message, True, "accepted", command, recipients, expires_tick)
             player.team_command_seq = sequence
             player.team_command_fingerprints[sequence] = fingerprint
             player.team_command_acks[sequence] = dict(ack)
@@ -15310,7 +15361,7 @@ class BattleState:
                     continue
                 if kind not in ("human", "bot") or vehicle_id <= 0:
                     continue
-                values.append({"kind": kind, "id": vehicle_id})
+                values.append({"kind": kind, "id": vehicle_id, "points": int(self.capture_contributors[team].get(key, 0))})
             contributors[str(team)] = values
         capture_bases = {}
         for team in (1, 2):
@@ -15525,6 +15576,13 @@ class BattleState:
                         _server_log('BOT ROUTE ATTEMPT ' + json.dumps(dict(
                             attempt, bot=order['id'], round=self.round_id),
                             sort_keys=True, separators=(',', ':')))
+                cancelled = {o['id'] for o in self.bot_orders.get('orders', ()) if o.get('player_command_cancelled')}
+                for identity, request in list(self.team_commands.items()):
+                    terminal_request=dict(request)
+                    request['recipient_bot_ids'] = [actor for actor in request['recipient_bot_ids'] if actor not in cancelled]
+                    if not request['recipient_bot_ids']:
+                        self.team_commands.pop(identity)
+                        self._publish_team_command_terminal(self.players.get(request['issuer_id']), terminal_request, 'superseded')
                 self._next_bot_planner_tick = (
                     self.tick + BOT_PLANNER_INTERVAL_TICKS)
             # Freeze the one current clock sample shared by this tick's durable

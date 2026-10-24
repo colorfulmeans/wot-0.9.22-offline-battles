@@ -1428,8 +1428,9 @@ class ServerBotTacticsTests(unittest.TestCase):
         commanded = planner.build_orders(
             self.manifest, self.states, players, 1.0,
             team_orders=[team_order])['orders'][0]
-        self.assertEqual(3, commanded['target_id'])
-        self.assertEqual('ATTACKENEMY', commanded['team_command'])
+        self.assertEqual(2, commanded['target_id'])
+        self.assertNotIn('team_command',commanded)
+        self.assertTrue(commanded['player_command_cancelled'])
 
         blocked = dict(contacts[1])
         blocked['shootable_by_bot_ids'] = []
@@ -1702,7 +1703,7 @@ class ServerBotTacticsTests(unittest.TestCase):
                 self.assertNotIn('_route_position', order)
                 self.assertNotIn('_turnback_position', order)
 
-    def test_radio_stop_overrides_local_survival(self):
+    def test_radio_stop_cannot_override_existing_combat(self):
         planner = BotPlanner()
         contact = _contact(2, 0, 150, [11])
         players = self._report(planner, [contact])
@@ -1721,11 +1722,11 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.manifest, self.states, players, 1.0,
             team_orders=[team_order])['orders'][0]
 
-        self.assertEqual('team_stop', order['combat_mode'])
-        self.assertEqual(0.0, order['throttle_override'])
-        self.assertEqual('STOP', order['team_command'])
+        self.assertNotEqual('team_stop',order['combat_mode'])
+        self.assertNotIn('team_command',order)
+        self.assertTrue(order['player_command_cancelled'])
 
-    def test_radio_stop_overrides_an_urgent_base_responder(self):
+    def test_radio_stop_cannot_override_an_urgent_base_responder(self):
         defense = {
             'bases': {'1': [
                 {'id': '1:0', 'x': 0.0, 'y': 0.0, 'z': -100.0},
@@ -1753,9 +1754,9 @@ class ServerBotTacticsTests(unittest.TestCase):
             self.manifest, self.states, [], 1.0, defense,
             team_orders=[team_order])['orders'][0]
 
-        self.assertEqual('team_stop', order['combat_mode'])
-        self.assertEqual(0.0, order['throttle_override'])
-        self.assertEqual('STOP', order['team_command'])
+        self.assertNotEqual('team_stop',order['combat_mode'])
+        self.assertNotIn('team_command',order)
+        self.assertTrue(order['player_command_cancelled'])
 
     def test_nearby_ally_changes_cautious_support_advance_score(self):
         contact = _contact(2, 0, 380, [12, 13], 'heavyTank')
@@ -2799,7 +2800,7 @@ class ServerBotArtilleryTests(unittest.TestCase):
         self.assertEqual('a', orders[11]['route_id'])
         self.assertEqual('b', orders[13]['route_id'])
         self.assertEqual(1, sum(
-            orders[bot_id]['route_id'] == 'b' for bot_id in (12, 14)))
+            (planner._travel_tasks.get(bot_id,{}).get('target_route') or {}).get('id') == 'b' for bot_id in (12, 14)))
 
     def test_immobile_line_holders_count_but_cannot_be_route_donors(self):
         source = _route('source', [
@@ -2867,10 +2868,10 @@ class ServerBotArtilleryTests(unittest.TestCase):
 
                 self.assertEqual(
                     'target' if donor_id == 11 else 'source',
-                    orders[11]['route_id'])
+                    (planner._travel_tasks.get(11,{}).get('target_route') or {}).get('id',orders[11]['route_id']))
                 self.assertEqual(
                     'target' if donor_id == 12 else 'source',
-                    orders[12]['route_id'])
+                    (planner._travel_tasks.get(12,{}).get('target_route') or {}).get('id',orders[12]['route_id']))
 
     def test_rebalance_keeps_scouts_off_an_incompatible_heavy_lane(self):
         planner = BotPlanner()
@@ -2911,8 +2912,8 @@ class ServerBotArtilleryTests(unittest.TestCase):
             planner._route_assignments[bot_id]['route']['id'] == 'middle'
             for bot_id in range(20, 24)))
 
-    def test_rebalance_capacity_is_independent_for_each_class(self):
-        for target_tag, expected_move in (('heavyTank', True), ('mediumTank', False)):
+    def test_rebalance_reserves_target_lane_without_class_hard_cap(self):
+        for target_tag, expected_move in (('heavyTank', True), ('mediumTank', True)):
             planner=BotPlanner()
             source=_route('source',[(-100,0,False),(-100,100,False),(-100,500,False)],capacity=3)
             target=_route('target',[(100,0,False),(100,100,False),(100,500,False)],capacity=3)
@@ -2923,7 +2924,7 @@ class ServerBotArtilleryTests(unittest.TestCase):
             bots=planner._alive_bots(manifest,states)
             contacts=[{'position':{'x':100.0,'y':0.0,'z':250.0},'health':1000.0,'max_health':1000.0} for _ in range(4)]
             planner._rebalance_routes(1,bots,contacts,1.0)
-            moved=any(planner._route_assignments.get(i,{}).get('route',{}).get('id')=='target' for i in (41,42))
+            moved=any((planner._travel_tasks.get(i,{}).get('target_route') or {}).get('id')=='target' for i in (41,42))
             self.assertEqual(expected_move,moved)
 
     def test_spg_does_not_fill_frontline_capacity_during_rebalance(self):
@@ -2954,10 +2955,10 @@ class ServerBotArtilleryTests(unittest.TestCase):
         planner._rebalance_routes(1, bots, contacts, 1.0)
         donor_id = next(
             bot_id for bot_id in (41, 42)
-            if planner._route_assignments[bot_id]['route']['id'] == 'target')
+            if (planner._travel_tasks.get(bot_id,{}).get('target_route') or {}).get('id') == 'target')
         donor = next(bot for bot in bots if bot['id'] == donor_id)
         planner._route(donor, 1.1)
-        planner._route_states[donor_id]['index'] = 1
+        planner._route_states.setdefault(donor_id,{})['index'] = 1
         planner._rebalance_routes(1, bots, contacts, 5.0)
         planner._rebalance_routes(1, bots, contacts, 9.0)
 
@@ -2966,10 +2967,10 @@ class ServerBotArtilleryTests(unittest.TestCase):
                         planner._route_assignments.items())
         self.assertEqual('target', assigned[43])
         self.assertEqual(1, sum(
-            assigned[bot_id] == 'target' for bot_id in (41, 42)))
+            (planner._travel_tasks.get(bot_id,{}).get('target_route') or {}).get('id') == 'target' for bot_id in (41,42)))
         self.assertEqual(1, planner._route_states[donor_id]['index'])
         self.assertGreater(
-            planner._route_assignments[donor_id]['until'], 9.0)
+            planner._travel_tasks[donor_id]['until'], 9.0)
 
 
 class ServerHumanRamNormalTests(unittest.TestCase):
