@@ -219,10 +219,10 @@ def run(destination):
             assert str(ui.defense_add.cget('state'))=='normal',(ui.selection,ui.selected_point,ui.network_mode,ui._selected_parent())
             ui.add_defense();ui.selected_point=0;ui.insert_point();ui.save(True)
             active=ui.store.active()
-            authored=active['maps']['08_ruinberg']['routes'][0]
+            authored=next(r for r in active['maps']['08_ruinberg']['routes'] if r['team']==ui.team and 'heavyTank' in r['classes'])
             assert len(authored['defense']['points'])==3 and not ui.dirty()
             ui.network_mode='';ui.set_tier('reserve');ui.save(True)
-            assert ui.store.active()['maps']['08_ruinberg']['routes'][0]['tier']=='reserve'
+            assert next(r for r in ui.store.active()['maps']['08_ruinberg']['routes'] if r['team']==ui.team and 'heavyTank' in r['classes'])['tier']=='reserve'
             ui.route_class_var.set('SPG');ui.change_route_class();ui.new_route();ui.save(True)
             active=ui.store.active()
             assert any(r.get('purpose')=='spg_attack' for r in active['maps']['08_ruinberg']['routes'])
