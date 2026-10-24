@@ -9,6 +9,245 @@ from gui.mods.offline_lan_0922 import native_destructibles as geometry
 
 
 class WorkerQueryReuseTests(unittest.TestCase):
+    def test_normal_entry_keeps_filter_identity_and_no_candidate_collection(self):
+        from gui.mods.offline_lan_0922 import world_collision as world
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        callback = mock.Mock(side_effect=lambda material,*args: material != 73)
+        for detail in ('0', '1'):
+            trace = {}
+            with mock.patch.dict(diagnostic.os.environ, {diagnostic.DETAIL_ENV:detail}):
+                selected = world._trace_collision_filter(callback, trace)
+            self.assertEqual(False, selected(73,80,1,2))
+            self.assertEqual(True, selected(87,80,1,2))
+            if detail == '0':
+                self.assertIs(selected, callback)
+                self.assertEqual({}, trace)
+            else:
+                self.assertEqual([(73,80,1,2,False),(87,80,1,2,True)],
+                                 trace['native_surface_candidates'])
+
+    def test_prepared_rotation_geometry_is_exact_without_repeated_live_reads(self):
+        import random
+        import struct
+        from gui.mods.offline_lan_0922 import world_collision as world
+        module = fixtures.battle_runtime_module
+        rng = random.Random(461)
+        for unused in range(200):
+            bbox = (tuple(rng.uniform(-8,0) for i in range(3)),
+                    tuple(rng.uniform(0,8) for i in range(3)))
+            descriptor = module._destructible_world_sweep_descriptor({}, bbox)
+            expected = world._read_vehicle_motion_geometry(dict(descriptor))
+            with mock.patch.object(world, '_vehicle_hull_bbox', side_effect=AssertionError('reread')):
+                actual = world._vehicle_motion_geometry(descriptor)
+                self.assertIs(actual, world._vehicle_motion_geometry(descriptor))
+            self.assertEqual(struct.pack('6d', *(expected[0]+expected[1])),
+                             struct.pack('6d', *(actual[0]+actual[1])))
+
+    def test_rotation_reuses_preparation_but_preserves_every_posed_query(self):
+        import math
+        module = fixtures.battle_runtime_module
+        battle = fixtures.BattleRuntime(fixtures._runtime())
+        bbox = ((-1.,-.2,-3.),(2.,2.,4.))
+        battle._destructibles = types.SimpleNamespace(_vehicle_body_bbox=lambda d:bbox)
+        battle._avatar = types.SimpleNamespace(spaceID=1)
+        descriptor = {'physics':{}}
+        for pivot, travel, grounded in ((0.,(0.,0.),False),(.7,(.3,-.4),True)):
+            calls = []
+            def query(*args, **kwargs):
+                calls.append((args,kwargs))
+                return 'clear'
+            with mock.patch.object(module.world_collision, 'check_horizontal_collision', side_effect=query), \
+                    mock.patch.object(module, '_destructible_rotation_interval_bbox', wraps=module._destructible_rotation_interval_bbox) as prepare:
+                self.assertTrue(battle._native_world_rotation_is_clear(
+                    (1.,2.,3.),.1,.7,descriptor,pitch=.2,roll=-.1,
+                    pivot_offset=pivot,translation=travel,follow_ground=grounded))
+            steps = int(math.ceil(.6/module.DESTRUCTIBLE_POSE_MAX_ANGLE_STEP))
+            self.assertEqual(1,prepare.call_count)
+            self.assertEqual(steps*(1 if any(travel) else 2),len(calls))
+            self.assertEqual(1,len(set(id(args[6]) for args,kw in calls)))
+            for index,(args,kw) in enumerate(calls):
+                step = index if any(travel) else index//2
+                lower, upper = float(step)/steps, float(step+1)/steps
+                yaw = .1 + module._angle_delta(.1,.7)*(lower+upper)*.5
+                point = module.vehicle_physics.track_pivot_position((1.,2.,3.),.1,yaw,pivot)
+                self.assertEqual(yaw,args[4])
+                self.assertEqual((point[0]+travel[0]*lower,point[1],point[2]+travel[1]*lower),
+                                 tuple(args[3]))
+                self.assertFalse(kw['commit_enabled'])
+                self.assertEqual(not any(travel),kw['exact_footprint'])
+
+    def _fitted_control(self):
+        from gui.mods.offline_lan_0922.native_control_core import NativeControl
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        runtime = object.__new__(BotRuntime)
+        patch = mock.patch.dict(BotRuntime._spotting_profile.__globals__, {
+            '_bot_profile':mock.Mock(return_value={}),
+            '_base_invisibility':mock.Mock(return_value=0.),
+            '_shot_invisibility_factor':mock.Mock(return_value=1.)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        runtime._descriptors = {7: object()}
+        runtime._spotting_profiles = {}
+        runtime._vision_ranges = {}
+        runtime.bot_crew_level = lambda unused: 100
+        source = dict(id=7, kind='bot', team=1, slot=1, critical={})
+        control = object.__new__(NativeControl)
+        control.runtime = runtime
+        control._config_projections = {}
+        def project(row, tick):
+            return runtime._spotting_profile(row, tick), row['team']
+        control._project_actor_config = mock.Mock(side_effect=project)
+        return control, runtime, source
+
+    def test_fitted_bot_cache_uses_real_producer_key_for_every_tier(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value={}):
+            for tier in range(4):
+                owner, runtime, source = self._fitted_control()
+                runtime.bot_crew_level = lambda unused, tier=tier: (50,75,100,100)[tier]
+                for unused in range(1000):
+                    owner._actor_config(source, {})
+                self.assertEqual(1, owner._project_actor_config.call_count)
+                self.assertIn(('bot',7,((),False)), runtime._spotting_profiles)
+                self.assertNotIn(('bot',7), runtime._spotting_profiles)
+
+    def test_fitted_projection_invalidates_on_real_mutable_inputs(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value={}):
+            owner, runtime, source = self._fitted_control()
+            owner._actor_config(source, {})
+            mutations = [lambda:source['critical'].update(crew_ko=['driver']),
+                lambda:source['critical'].update(fire=True),
+                lambda:source['critical'].update(devices=[dict(name='surveyingDeviceHealth',hp=0)]),
+                lambda:source.update(team=2),
+                lambda:runtime._vision_ranges.update({7:450.}),
+                lambda:runtime._descriptors.update({7:object()})]
+            for expected, mutate in enumerate(mutations, 2):
+                mutate()
+                owner._actor_config(source, {})
+                owner._actor_config(source, {})
+                self.assertEqual(expected, owner._project_actor_config.call_count)
+            runtime._spotting_profiles.clear()
+            owner._actor_config(source, {})
+            self.assertEqual(8, owner._project_actor_config.call_count)
+
+    def test_legacy_bot_reuses_projection_and_human_never_uses_bot_cache(self):
+        from gui.mods.offline_lan_0922 import bot_fittings
+        with mock.patch.object(bot_fittings, 'context', return_value=None):
+            owner, runtime, source = self._fitted_control()
+            for unused in range(10):
+                owner._actor_config(source, {})
+            self.assertEqual(1, owner._project_actor_config.call_count)
+            self.assertIn(('bot',7), runtime._spotting_profiles)
+            owner._project_actor_config = mock.Mock(return_value=('human',))
+            source['kind'] = 'human'
+            for unused in range(3):
+                self.assertEqual(('human',), owner._actor_config(source, {}))
+            self.assertEqual(3, owner._project_actor_config.call_count)
+
+    def test_current_baked_footprint_is_reused_only_for_one_planning_snapshot(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        calls = []
+        def probe(position, yaw, length, width):
+            calls.append((position, yaw, length, width))
+            return abs(yaw) < 1.0
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for yaw in (0., .25, .5, 1., 1.5):
+            self.assertEqual((True, abs(yaw) < 1.), BotRuntime._planning_grid_pose_pair(
+                grid, (1., 2., 3.), 0., yaw, 3., 1.5, cache))
+        self.assertEqual(5, len(calls))  # one current pose, four other candidates
+        self.assertEqual(1, sum(row[1] == 0. for row in calls))
+        BotRuntime._planning_grid_pose_pair(grid, (1., 2., 3.), 0., .25, 3., 1.5, {})
+        self.assertEqual(7, len(calls))  # next decision rechecks the grid
+
+    def test_rotation_detail_only_in_test_entry_preserves_queries_and_verdict(self):
+        from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics
+        module = fixtures.battle_runtime_module
+        for detail in ('0','1'):
+            trace = WorkerCombatDiagnostics(lambda:1.)
+            trace.begin_frame(1, 1., 'test')
+            battle = object.__new__(fixtures.BattleRuntime)
+            battle._combat_diagnostics = trace
+            battle._bots = types.SimpleNamespace(states={})
+            battle._bot_motion_kinds = {}
+            calls = []
+            battle._destructible_pose_sweep = lambda *a,**k:(calls.append('catalog') or dict(status='clear'))
+            battle._native_world_rotation_is_clear = lambda *a,**k:(calls.append('native') or True)
+            battle._tree_motion_proposal = lambda *a,**k:None
+            battle._complete_bot_tree_contact = lambda *a,**k:'clear'
+            with mock.patch.dict(module.native_input_diagnostics.os.environ,
+                    {module.native_input_diagnostics.DETAIL_ENV:detail}):
+                self.assertTrue(battle._resolve_bot_rotation(
+                    1,(0.,0.,0.),0.,.1,object(),.1,1.,None))
+            row = trace.finish_frame()
+            self.assertEqual(['catalog','native'], calls)
+            self.assertEqual(detail=='1', 'rotation.catalog_probe' in row['stages'])
+            self.assertEqual(detail=='1', 'rotation.native_probe' in row['stages'])
+            self.assertEqual(int(detail), row['counts'].get('rotation.realised',0))
+
+    def test_baked_reuse_does_not_cross_pose_geometry_or_grid_identity(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        probe = mock.Mock(return_value=False)
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for point, yaw, length in (((0, 0, 0), 0., 3.),
+                                   ((1, 0, 0), 0., 3.),
+                                   ((1, 0, 0), .1, 3.),
+                                   ((1, 0, 0), .1, 4.)):
+            self.assertEqual((False, False), BotRuntime._planning_grid_pose_pair(
+                grid, point, yaw, yaw, length, 1.5, cache))
+        self.assertEqual(4, probe.call_count)
+        other = types.SimpleNamespace(hull_pose_clear=probe)
+        BotRuntime._planning_grid_pose_pair(other, (1, 0, 0), .1, .1, 4., 1.5, cache)
+        self.assertEqual(5, probe.call_count)
+
+    def test_identical_candidate_footprints_share_only_the_synchronous_scope(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        probe = mock.Mock(side_effect=lambda p,y,l,w:y<1.)
+        grid = types.SimpleNamespace(hull_pose_clear=probe)
+        cache = {}
+        for unused in range(20):
+            self.assertEqual((True, True), BotRuntime._planning_grid_pose_pair(
+                grid, (0.,0.,0.), 0., .5, 3., 1.5, cache))
+        self.assertEqual(2, probe.call_count)
+        BotRuntime._planning_grid_pose_pair(grid, (0.,0.,0.), 0., .5, 3., 1.5, {})
+        self.assertEqual(4, probe.call_count)
+
+    def test_navigation_handoff_keeps_early_returns_exceptions_and_gradual_rebases(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        authority = {'_navigation_target_receipt': {'source': 'retained'}}
+        for step in range(5):
+            BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+                {'combat_mode': 'route'}, {'now': step}, (3 + step, 0, 0))
+        lineage = authority['_navigation_handoff_lineage']
+        self.assertEqual(5, lineage['calls'])
+        self.assertEqual(2, lineage['changes'])  # accumulated rebase exceeds 2 m
+        BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+            {}, {'now': 5}, None)
+        self.assertEqual('no_target', lineage['events'][-1]['outcome'])
+        BotRuntime._record_navigation_handoff(authority, (0, 0, 0), (50, 0, 0),
+            {}, {'now': 6}, None, failed=True)
+        self.assertEqual('exception', lineage['events'][-1]['outcome'])
+        self.assertEqual((50, 0, 0), lineage['last_goal'])
+
+    def test_navigation_wrapper_records_actual_return_and_preserves_original_exception(self):
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        runtime = object.__new__(BotRuntime)
+        links = types.SimpleNamespace(origin=(1, 0, 0))
+        runtime.navigator = types.SimpleNamespace(grid=types.SimpleNamespace(local_height_links=links))
+        runtime.states = {1: {}}
+        runtime._navigation_target_impl = mock.Mock(return_value=None)
+        self.assertIsNone(runtime._navigation_target(1, (0, 0, 0), (10, 0, 0), {}, {'now': 1}))
+        self.assertIsNone(links.origin)
+        self.assertEqual('no_target', runtime.states[1]['_navigation_handoff_lineage']['events'][-1]['outcome'])
+        error = ValueError('original failure')
+        runtime._navigation_target_impl.side_effect = error
+        with self.assertRaises(ValueError) as raised:
+            runtime._navigation_target(1, (0, 0, 0), (10, 0, 0), {}, {'now': 2})
+        self.assertIs(error, raised.exception)
+        self.assertEqual('exception', runtime.states[1]['_navigation_handoff_lineage']['events'][-1]['outcome'])
+
     def test_shared_motion_geometry_is_exact_and_reads_the_hull_once(self):
         import random
         import struct

@@ -85,9 +85,9 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         self.assertEqual(0.,order['throttle_override'])
         self.assertFalse(order['fire_allowed'])
 
-    def test_push_outside_terminal_radius_resumes_original_route(self):
+    def test_push_outside_circle_resumes_original_route(self):
         scene=self.scene(); self.order(scene)
-        scene[2][0].update(x=25.,z=-245.)
+        scene[2][0].update(x=65.,z=-245.)
         order=self.order(scene,2.)
         self.assertEqual('advance',order['combat_mode'])
         self.assertEqual(1.,order['throttle_override'])
@@ -95,7 +95,7 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         self.assertEqual('outside_arrival',order['tactical_evidence']['route_terminal']['outcome'])
 
     def test_intermediate_point_and_distant_final_point_keep_travel(self):
-        for pose in ((84.523,-194.48),(30.,-220.)):
+        for pose in ((84.523,-194.48),(60.,-220.)):
             with self.subTest(pose=pose):
                 scene=self.scene(pose); order=self.order(scene,contact=False)
                 self.assertNotEqual(0.,order['throttle_override'])
@@ -112,6 +112,7 @@ class TerminalRouteHandoffTests(unittest.TestCase):
 
     def test_single_point_automatic_goal_keeps_existing_precise_arrival(self):
         scene=self.scene((8.,-250.))
+        scene[3].clear()
         scene[1][0]['route']=_route('automatic',[(2.,-250.,False)])
         order=self.order(scene)
         self.assertNotEqual(0.,order['throttle_override'])

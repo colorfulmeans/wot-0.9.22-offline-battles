@@ -150,6 +150,17 @@ class ServerCaptureTests(unittest.TestCase):
         self.assertEqual(2, state.rules_state['bases']['1']['points'])
         self.assertEqual(2, state.rules_state['bases']['1']['invaders'])
 
+    def test_custom_capture_radius_survives_both_planner_contexts(self):
+        state = self._state()
+        state.capture_bases = {1: [dict(x=0., z=0., radius=23.)],
+                               2: [dict(x=500., z=0., radius=70.)]}
+        state.players[2] = _player(2, 2, 22., 0.)
+        self.assertTrue(self._capture_tick(state))
+        context = state._bot_defense_context()
+        self.assertEqual(23., context['bases']['1'][0]['radius'])
+        self.assertEqual(23., context['capture_bases']['1'][0]['radius'])
+        self.assertEqual(70., context['capture_bases']['2'][0]['radius'])
+
     def test_defense_context_names_only_the_threatened_base(self):
         state = self._state()
         state.capture_bases = {
@@ -163,17 +174,17 @@ class ServerCaptureTests(unittest.TestCase):
 
         self.assertEqual(1, context['states']['1']['invaders'])
         self.assertEqual([{
-            'id': '1:1', 'x': 400.0, 'y': 0.0, 'z': 0.0,
+            'id': '1:1', 'x': 400.0, 'y': 0.0, 'z': 0.0, 'radius': 50.0,
         }], context['bases']['1'])
         self.assertEqual([{'kind': 'human', 'id': 2}],
                          context['contributors']['1'])
         self.assertEqual({
             '1': [
-                {'id': '1:0', 'x': 0.0, 'y': 0.0, 'z': 0.0},
-                {'id': '1:1', 'x': 400.0, 'y': 0.0, 'z': 0.0},
+                {'id': '1:0', 'x': 0.0, 'y': 0.0, 'z': 0.0, 'radius': 50.0},
+                {'id': '1:1', 'x': 400.0, 'y': 0.0, 'z': 0.0, 'radius': 50.0},
             ],
             '2': [
-                {'id': '2:0', 'x': 500.0, 'y': 0.0, 'z': 0.0},
+                {'id': '2:0', 'x': 500.0, 'y': 0.0, 'z': 0.0, 'radius': 50.0},
             ],
         }, context['capture_bases'])
         self.assertEqual((-500.0, -500.0, 500.0, 500.0),

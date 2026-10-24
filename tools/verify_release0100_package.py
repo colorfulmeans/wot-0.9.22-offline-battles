@@ -38,7 +38,10 @@ assert 'replay_launch.py' in verified
 assert 'wot_launcher.py' in verified
 assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
+assert 'bot_tactics_preview.py' in verified
 assert 'bot_tactics_labels.py' in verified
+assert 'crew_ui.py' in verified
+assert 'crew_store.py' in verified
 
 sys.path.insert(0, str(ROOT / 'launcher'))
 import stage_payload
@@ -48,6 +51,7 @@ for relative in stage_payload.PAYLOAD_FILES['0.9.22']:
 for directory in stage_payload.PAYLOAD_TREES['0.9.22']:
     server_sources.extend(path.relative_to(ROOT).as_posix()
                           for path in (ROOT / directory).rglob('*.py'))
+assert 'server/server_route_recovery.py' in server_sources
 for relative in server_sources:
     bundled = app / '_internal/servers/0.9.22' / relative
     assert bundled.read_bytes().replace(b'\r\n', b'\n') == (ROOT / relative).read_bytes().replace(b'\r\n', b'\n'), relative
@@ -72,8 +76,29 @@ with zipfile.ZipFile(app / '_internal/client/0.9.22.zip') as client:
         with zipfile.ZipFile(path) as mod:
             assert all(i.compress_type == zipfile.ZIP_STORED for i in mod.infolist())
             assert mod.read('res/offline_replay/replay_reader_process.py') == (ROOT / 'tools/replay/replay_reader_process.py').read_bytes()
+# Source equality alone cannot reveal windowed stdio/lifecycle failures.
+# Exercise the downloaded executable's real editor in its own temporary store.
+with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
+    receipt = Path(temp) / 'editor.json'
+    process = subprocess.run(
+        [str(app / 'wot-0.9.22-offline-battles.exe'),
+         '--verify-bot-editor', str(receipt)],
+        cwd=str(app), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=120, creationflags=0x08000000)
+    editor = json.loads(receipt.read_text(encoding='utf8')) if receipt.exists() else {}
+    assert process.returncode == 0 and editor.get('ok'), editor or process.stderr
+    assert editor.get('default_readonly') and editor.get('independent_presets_and_empty_ammo'), editor
+    assert editor.get('isolated_profile') and editor.get('map_count') == 41, editor
+    assert editor.get('crew_controls_and_outfit_override'), editor
+    assert editor.get('seat_aware_recruits'), editor
+    assert editor.get('nation_order_and_barracks_capacity'), editor
+    assert 'nation_choices.py' in verified
+    assert editor.get('vehicle_editor_language_preserved'), editor
+    assert editor.get('scoped_effective_preview') and editor.get('save_initialization_and_backup') and editor.get('save_actions_two_by_four'), editor
+    assert editor.get('native_gameplay_tested') is False, editor
+
 print(json.dumps({'frozen_source_modules_verified': len(verified),
                   'bundled_server_sources_verified': len(server_sources),
                   'native_math_matches_current_sources': True,
-                  'replay_entry_bundled': True, 'recorder_runtime_executed': True,
+                  'replay_entry_bundled': True, 'recorder_runtime_executed': True, 'packaged_editor_smoke': True,
                   'native_starter_matches_source_tree': True}))

@@ -159,7 +159,7 @@ bool GunState::cancel() {
 void AmmoState::validate(int count) const {
     demand(int(remaining.size())==count && int(categories.size())==count);
     demand(loaded>=0 && loaded<count && next>=0 && next<count);
-    for (int value:remaining) demand(value>=0 && value<=1000);
+    for (int value:remaining) demand(value>=0 && value<=1800);
     for (int value:categories) demand(value>=0 && value<=2);
     if (std::accumulate(remaining.begin(),remaining.end(),0)>0) {
         demand(remaining[next]>0); demand(reload_pending || remaining[loaded]>0);
@@ -177,15 +177,11 @@ int AmmoState::available(int requested) const {
     return requested>=0 && requested<int(remaining.size()) && remaining[requested]>0?requested:fallback();
 }
 bool AmmoState::stage(int requested,bool ready,bool full) {
-    if (!ready) return false;
-    bool changed=false;
-    if (reload_pending) {
-        if (full) { const int selected=available(next); if (selected!=loaded) {loaded=selected; changed=true;} }
-        reload_pending=false; plan_pending=true;
-    }
-    if (plan_pending) {
-        const int selected=available(requested); if (selected!=next) {next=selected; changed=true;}
-        plan_pending=false;
+    const int selected=available(requested);
+    bool changed=selected!=next; next=selected;
+    if (ready) {
+        if (full && selected!=loaded) {loaded=selected; changed=true;}
+        reload_pending=false; plan_pending=false;
     }
     return changed;
 }
@@ -371,9 +367,11 @@ const ActorState &Store::at(ActorKey key) const {auto found=actors_.find(key);de
 void Store::prepare(ActorKey key,double dt,double factor,int requested) {
     auto &state=at(key); if(state.burst.active) return;
     state.gun.rescale(factor);state.gun.tick(dt);
-    const int kind=state.gun.complete(factor,state.ammo.planned_rounds());
     const int selected=std::max(0,std::min(requested,state.gun.config.shell_count-1));
+    state.ammo.stage(selected,false,!state.gun.intra);
+    const int kind=state.gun.complete(factor,state.ammo.planned_rounds());
     state.ammo.stage(selected,kind>=0,kind==0);
+    if (kind==0) state.gun.clip=std::min(state.gun.config.clip_size,state.ammo.planned_rounds());
 }
 std::vector<BurstEdge> Store::after_motion(ActorKey key,const AimInput &input,double move,double rotation,
     double turret,double factor,double aim_factor,bool apply_aim) {

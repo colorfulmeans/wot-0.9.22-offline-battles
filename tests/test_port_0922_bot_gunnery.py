@@ -72,7 +72,7 @@ class SkillTierTableTests(unittest.TestCase):
         elite share #1513's full crew and separate on the gunner model alone.
         """
         self.assertEqual(
-            [75, 90, 100, 100],
+            [50, 75, 100, 100],
             [gunnery.crew_level(skill) for skill in gunnery.SKILL_TIERS])
 
     def test_unknown_names_fall_back_instead_of_raising(self):
@@ -319,9 +319,9 @@ class RatingSpectrumTests(unittest.TestCase):
             level = gunnery.rating_crew_level(index / 100.0)
             self.assertIn(level, gunnery.PROVEN_CREW_LEVELS)
 
-    def test_the_anchor_crew_levels_are_unchanged(self):
+    def test_the_anchor_crew_levels_follow_fitting_tiers(self):
         self.assertEqual(
-            [75, 90, 100, 100],
+            [50, 75, 100, 100],
             [gunnery.crew_level(skill) for skill in gunnery.SKILL_TIERS])
 
     def test_a_label_never_claims_more_competence_than_the_rating(self):
@@ -584,9 +584,11 @@ class SkillVocabularyParityTests(unittest.TestCase):
         waiting_room_ui = _load('waiting_room_ui')
 
         self.assertEqual(
-            tuple(gunnery.SKILL_MODES),
+            ('mixed', 'easy', 'relaxed', 'hard', 'brutal'),
             tuple(value for value, unused_label
                   in waiting_room_ui.BOT_SKILL_OPTIONS))
+        self.assertEqual(set(gunnery.SKILL_MODES),
+                         set(value for value, label in waiting_room_ui.BOT_SKILL_OPTIONS))
 
     def test_the_wire_accepts_exactly_the_supported_presets(self):
         lan_client = _load('lan_client')

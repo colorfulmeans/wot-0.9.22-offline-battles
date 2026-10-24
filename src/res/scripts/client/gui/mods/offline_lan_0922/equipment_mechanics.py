@@ -26,13 +26,42 @@ ACTIVATION_CREW_NAMES = frozenset((
 DEFAULT_BOT_CONSUMABLE_NAMES = (
     'autoExtinguishers', 'largeMedkit', 'largeRepairkit')
 
-# A Bot has one repair-kit charge, so a functional but damaged module only
-# earns it when losing that module costs the Bot the fight: its gun, its engine
-# and its ammo bay.  A yellow track, radio or observation device does not, and
-# waiting keeps the charge for the destroyed module that follows.  Any
-# destroyed module always earns it.
-BOT_YELLOW_REPAIR_DEVICES = frozenset(
-    ('ammoBayHealth', 'engineHealth', 'gunHealth'))
+BOT_SMALL_CONSUMABLE_NAMES = ('handExtinguishers', 'smallMedkit', 'smallRepairkit')
+BOT_SKILLS = ('rookie', 'regular', 'veteran', 'elite')
+BOT_REPAIR_PRIORITY = (
+    ('gunHealth', 'destroyed'), ('engineHealth', 'destroyed'),
+    ('turretRotatorHealth', 'destroyed'), ('ammoBayHealth', 'critical'),
+    ('gunHealth', 'critical'), ('engineHealth', 'critical'),
+    ('turretRotatorHealth', 'critical'), ('surveyingDeviceHealth', 'destroyed'),
+    ('surveyingDeviceHealth', 'critical'), ('fuelTankHealth', 'critical'),
+    ('radioHealth', 'destroyed'), ('radioHealth', 'critical'),
+    ('leftTrackHealth', 'destroyed'), ('rightTrackHealth', 'destroyed'))
+BOT_CREW_PRIORITY = ('loader1', 'loader2', 'gunner1', 'gunner2',
+                     'driver', 'commander', 'radioman1', 'radioman2')
+
+
+def bot_device_states(critical):
+    critical = critical if isinstance(critical, dict) else {}
+    states = dict((str(row.get('name')), str(row.get('state')))
+                  for row in critical.get('devices', ()) if isinstance(row, dict))
+    states.update((str(name), 'destroyed') for name in critical.get('destroyed', ()))
+    return states
+
+
+def bot_repair_selection(critical, skill):
+    states = bot_device_states(critical)
+    for name, severity in BOT_REPAIR_PRIORITY:
+        if skill == 'regular' and name in ('leftTrackHealth', 'rightTrackHealth'):
+            continue
+        if states.get(name) == severity:
+            return name
+    return None
+
+
+def bot_crew_selection(critical):
+    knocked_out = set((critical or {}).get('crew_ko', ()))
+    return next((name for name in BOT_CREW_PRIORITY if name in knocked_out), None)
+
 
 EQUIPMENT_CONTRACT_FIELDS = (
     'name', 'kind', 'id', 'compactDescr', 'tags', 'reuseCount',
@@ -162,12 +191,17 @@ def project_equipment(descriptor, reaction_seconds=None):
     return result
 
 
-def default_bot_consumables(cache):
-    """Project the three bot defaults from this exact client's item cache."""
+def default_bot_consumables(cache, skill='elite'):
+    """Resolve the tier's native items; only Bot use counts/delay are policy."""
+    if skill not in BOT_SKILLS:
+        raise ValueError('bot consumable skill is invalid')
+    if skill == 'rookie':
+        return []
+    names = DEFAULT_BOT_CONSUMABLE_NAMES if skill == 'elite' else BOT_SMALL_CONSUMABLE_NAMES
     ids = cache.equipmentIDs()
     descriptors = cache.equipments()
     result = []
-    for name in DEFAULT_BOT_CONSUMABLE_NAMES:
+    for name in names:
         descriptor = descriptors.get(ids.get(name))
         if descriptor is None:
             raise ValueError('client equipment %r is unavailable' % (name,))
@@ -176,6 +210,9 @@ def default_bot_consumables(cache):
             raise ValueError(
                 'client equipment %r resolved as %r' %
                 (name, projection['name']))
+        projection['reuseCount'] = 0 if skill == 'regular' else -1
+        if name == 'handExtinguishers':
+            projection['autoReactionSeconds'] = 5.0
         result.append(projection)
     return result
 
@@ -264,7 +301,7 @@ def _validate_contract(contract):
 
 
 def bot_consumable_contracts(descriptor, snapshot=None):
-    """Read and validate the fixed three-item bot loadout.
+    """Read and validate an empty, native small or native large Bot loadout.
 
     Wire validators may recover immutable contracts from canonical equipment
     snapshots when they do not have a native VehicleDescr projection.
@@ -277,19 +314,21 @@ def bot_consumable_contracts(descriptor, snapshot=None):
                if isinstance(value, dict)]
     if raw is None:
         return ()
-    if not isinstance(raw, (list, tuple)) or len(raw) != len(
-            DEFAULT_BOT_CONSUMABLE_NAMES):
+    if isinstance(raw, (list, tuple)) and not raw:
+        return ()
+    if not isinstance(raw, (list, tuple)) or len(raw) != 3:
         raise ValueError('bot consumable contract count is invalid')
     result = tuple(_validate_contract(dict(value)) for value in raw)
-    if tuple(value['name'] for value in result) != \
-            DEFAULT_BOT_CONSUMABLE_NAMES:
+    names = tuple(value['name'] for value in result)
+    if names not in (DEFAULT_BOT_CONSUMABLE_NAMES, BOT_SMALL_CONSUMABLE_NAMES):
         raise ValueError('bot consumable contract order is invalid')
     if tuple(value['kind'] for value in result) != (
             'extinguisher', 'medkit', 'repairkit'):
         raise ValueError('bot consumable contract kinds are invalid')
-    if (not result[0]['autoactivate'] or
-            not result[1]['repairAll'] or
-            not result[2]['repairAll']):
+    large = names == DEFAULT_BOT_CONSUMABLE_NAMES
+    if (result[0]['autoactivate'] != large or
+            result[1]['repairAll'] != large or
+            result[2]['repairAll'] != large):
         raise ValueError('bot consumable effect policy is invalid')
     return result
 
@@ -382,23 +421,6 @@ def _remaining_uses(value):
     return None
 
 
-def _bot_repair_is_worthwhile(critical):
-    """True when this damage is worth one of a Bot's repair-kit charges."""
-    critical = critical if isinstance(critical, dict) else {}
-    if critical.get('destroyed'):
-        return True
-    for record in (critical.get('devices') or ()):
-        if not isinstance(record, dict):
-            continue
-        state = str(record.get('state') or '')
-        if state == 'destroyed':
-            return True
-        if (state == 'critical' and
-                str(record.get('name') or '') in BOT_YELLOW_REPAIR_DEVICES):
-            return True
-    return False
-
-
 def passive_effects(equipments):
     """Fold mounted or active equipment into explicit stat policy values."""
     result = {
@@ -489,7 +511,8 @@ def _validated_snapshot_state(snapshot, contract):
             not contract.get('autoactivate', False)):
         raise ValueError('equipment wire auto clock is invalid')
     if (pending[1] is not None and
-            contract.get('kind') not in ('repairkit', 'medkit')):
+            contract.get('kind') not in ('repairkit', 'medkit') and
+            contract.get('name') != 'handExtinguishers'):
         raise ValueError('equipment wire AI clock is invalid')
     if uses_left == 0 and any(value is not None for value in pending):
         raise ValueError('exhausted equipment has a pending activation')
@@ -635,29 +658,53 @@ class EquipmentState(object):
             return None
         return self.activate(now, critical)
 
-    def poll_bot(self, now, critical=None, stunned=False):
-        """Apply deterministic bot policy without same-frame kit reactions."""
+    def poll_bot(self, now, critical=None, stunned=False, skill='elite'):
+        """Use the tier's eligible single target, keeping native kit effects."""
+        if skill not in BOT_SKILLS:
+            raise ValueError('bot consumable skill is invalid')
+        if skill == 'rookie':
+            self._auto_pending_since = self._ai_pending_since = None
+            return None
+        critical = critical if isinstance(critical, dict) else {}
+        now = _number(now, 0.0)
         kind = str(self.contract.get('kind') or '')
         if kind == 'extinguisher':
-            return self.poll_auto(now, critical)
-        if kind not in ('repairkit', 'medkit'):
-            self._ai_pending_since = None
-            return None
-        now = _number(now, 0.0)
-        candidate = effect_policy(self, critical, stunned=stunned)
-        if (candidate is None or not self.ready(now) or
-                (kind == 'repairkit' and
-                 not _bot_repair_is_worthwhile(critical))):
+            if self.contract.get('autoactivate'):
+                return self.poll_auto(now, critical)
+            candidate = effect_policy(self, critical)
+            if candidate is None or not self.ready(now):
+                self._ai_pending_since = None
+                return None
+            if self._ai_pending_since is None:
+                self._ai_pending_since = now
+            delay = max(0.0, self.contract['autoReactionSeconds'])
+            if now - self._ai_pending_since + 1.e-9 < delay:
+                return None
+            return self.activate(now, critical)
+        selected = None
+        if kind == 'repairkit':
+            selected = bot_repair_selection(critical, skill)
+            eligible = selected is not None
+        elif kind == 'medkit':
+            selected = bot_crew_selection(critical)
+            eligible = selected is not None or (stunned and skill != 'regular')
+        else:
+            eligible = False
+        if not eligible or not self.ready(now):
             self._ai_pending_since = None
             return None
         if self._ai_pending_since is None:
             self._ai_pending_since = now
             return None
-        # Even a zero-length simulator step may not consume a kit in the same
-        # observation that first noticed the damage.
-        if now <= self._ai_pending_since + 1.0e-9:
+        if now <= self._ai_pending_since + 1.e-9:
             return None
-        return self.activate(now, critical, stunned=stunned)
+        effect = self.activate(now, critical, selected=selected, stunned=stunned)
+        if effect and kind == 'repairkit' and self.contract['repairAll']:
+            states = bot_device_states(critical)
+            effect['excludedDevices'] = sorted(name for name, severity in states.items()
+                if (name == 'fuelTankHealth' and severity == 'destroyed') or
+                   (name in ('leftTrackHealth', 'rightTrackHealth') and severity == 'critical'))
+        return effect
 
     @staticmethod
     def _elapsed(now, started):

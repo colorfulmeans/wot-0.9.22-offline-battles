@@ -29,6 +29,17 @@ class SaveSlotConfigTests(unittest.TestCase):
             self.config.set_active_save_slot,
             self.config.DEFAULT_SAVE_SLOT)
 
+    def test_initial_berths_are_per_save_and_reject_invalid_native_counts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            slot=Path(self.config.save_slot_dir('career',directory));slot.mkdir(parents=True)
+            for value in (46,62,2000):
+                (slot/'save.json').write_text(json.dumps(dict(initial_berths=value)))
+                self.assertEqual(value,self.config.save_slot_initial_berths('career',directory))
+            for value in (True,-1,2**31,1.5,'46'):
+                (slot/'save.json').write_text(json.dumps(dict(initial_berths=value)))
+                self.assertIsNone(self.config.save_slot_initial_berths('career',directory))
+            self.assertIsNone(self.config.save_slot_initial_berths('default',directory))
+
     def test_initial_wallet_is_read_per_save_with_native_integer_bounds(self):
         with tempfile.TemporaryDirectory() as directory:
             slot_dir = self.config.save_slot_dir('career', directory)
@@ -65,6 +76,16 @@ class SaveSlotConfigTests(unittest.TestCase):
                 os.path.join(directory, 'saves', 'career',
                              'garage_state.json'),
                 second)
+
+    def test_initialized_default_does_not_adopt_old_progress_or_pending_recruits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            slot=Path(self.config.save_slot_dir('default',directory));slot.mkdir(parents=True)
+            (slot/'save.json').write_text(json.dumps(dict(skip_legacy_import=True)))
+            for name in ('garage_state.json','account_state.json','postbattle_state.json','launcher_crew_inbox.json','launcher_inbox.json'):
+                (Path(directory)/name).write_text('legacy')
+                path=self.config.save_slot_state_path(name,'default',directory)
+                self.assertEqual(str(slot/name),path)
+                self.assertFalse(os.path.exists(path))
 
     def test_the_default_slot_adopts_state_written_before_save_slots(self):
         with tempfile.TemporaryDirectory() as directory:

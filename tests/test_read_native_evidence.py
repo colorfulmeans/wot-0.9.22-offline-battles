@@ -28,7 +28,7 @@ class EvidenceReaderTests(unittest.TestCase):
         return output.getvalue().splitlines()
 
     def test_support_and_native_module_diagnostics_roundtrip(self):
-        for label in ('MODULE PRESENT','BOT SUPPORT MODE','BOT LANDING IMPACT','PLAYER LANDING IMPACT'):
+        for label in ('MODULE PRESENT','BOT SUPPORT MODE','BOT LANDING IMPACT','PLAYER LANDING IMPACT','KILLER CAMERA'):
             with self.subTest(label=label):
                 output=io.StringIO()
                 payload=dict(phase='sample',points=[dict(valid=True)]*5)
@@ -37,6 +37,20 @@ class EvidenceReaderTests(unittest.TestCase):
                 result=self.reader.parse_lines(output.getvalue().splitlines())
                 self.assertEqual([],result['issues'])
                 self.assertEqual(payload,result['records'][0]['data'])
+
+    def test_compact_fragment_writer_keeps_all_fields_and_engine_line_bound(self):
+        payload = {'rows': [{'index': i, 'text': 'keep spaces, quotes " and \\ slashes',
+                             'points': [1., 2., 3.]} for i in range(500)]}
+        output = io.StringIO()
+        with mock.patch('sys.stdout', output):
+            self.writer.write_json_record('BOT MOTION', payload)
+        lines = output.getvalue().splitlines()
+        self.assertTrue(all(len(line) < 8000 for line in lines))
+        parsed = self.reader.parse_lines(lines)
+        self.assertEqual([], parsed['issues'])
+        self.assertEqual(payload, parsed['records'][0]['data'])
+        parts = [json.loads(line.split(' PART ', 1)[1]) for line in lines]
+        self.assertLess(sum(len(p['data']) for p in parts), len(json.dumps(payload)))
 
     def test_environment_critical_native_feedback_roundtrips(self):
         payload = dict(event_id='3:3357:0', cause='world_collision', count=3,

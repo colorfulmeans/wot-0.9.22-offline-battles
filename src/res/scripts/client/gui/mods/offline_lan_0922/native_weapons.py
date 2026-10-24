@@ -40,8 +40,18 @@ def _gun_row(gun):
 
 
 def _ammo_row(ammo):
-    return (tuple(CATEGORIES.index(ammo.categories[index])
-                  for index in range(ammo.shell_count)),
+    # The native ABI has one category per physical shot index. Excluded Bot
+    # rounds still occupy a slot, with zero inventory; fallback skips them.
+    categories = []
+    for index in range(ammo.shell_count):
+        category = ammo.categories.get(index)
+        if category is None:
+            if ammo.remaining[index] != 0:
+                raise ValueError('excluded ammunition has nonzero inventory')
+            categories.append(0)
+        else:
+            categories.append(CATEGORIES.index(category))
+    return (tuple(categories),
             tuple(ammo.remaining), int(ammo.loaded), int(ammo.next),
             int(ammo.reload_pending), int(ammo.plan_pending))
 

@@ -104,16 +104,96 @@ def _atomic(path, document):
             os.unlink(temp)
 
 
+def _commit_files(changes):
+    """Stage all writes before mutation and restore originals on an I/O failure."""
+    changes=dict(changes)
+    for path,data in list(changes.items()):
+        backup=Path(str(path)+'.bak')
+        if data is not None and path.exists() and path.suffix!='.bak' and backup not in changes:
+            changes[backup]=path.read_bytes()
+    originals={path:path.read_bytes() if path.exists() else None for path in changes}
+    staged={}
+    def stage(path,data):
+        path.parent.mkdir(parents=True,exist_ok=True)
+        fd,name=tempfile.mkstemp(prefix=path.name+'.',suffix='.tmp',dir=str(path.parent))
+        try:
+            with os.fdopen(fd,'wb') as stream:
+                stream.write(data);stream.flush();os.fsync(stream.fileno())
+        except BaseException:
+            os.unlink(name);raise
+        return name
+    done=[]
+    try:
+        for path,data in changes.items():
+            if data is not None:staged[path]=stage(path,data)
+        try:
+            for path,data in changes.items():
+                if data is None:path.unlink(missing_ok=True)
+                else:os.replace(staged[path],path)
+                done.append(path)
+        except BaseException:
+            for path in reversed(done):
+                data=originals[path]
+                if data is None:path.unlink(missing_ok=True)
+                else:
+                    temp=stage(path,data)
+                    try:os.replace(temp,path)
+                    finally:
+                        if os.path.exists(temp):os.unlink(temp)
+            raise
+    finally:
+        for name in staged.values():
+            if os.path.exists(name):os.unlink(name)
+
+
+def _encoded(document):
+    data=(contract.dumps(document)+'\n').encode('ascii')
+    if len(data)>contract.MAX_BYTES:raise contract.TacticsError('Document is too large')
+    return data
+
+
+_UNSPECIFIED=object()
+
+
 class Store:
     def __init__(self, directory=None):
         self.root = Path(directory) if directory else root_path()
         self.profiles = self.root / 'profiles'
         self.active_path = self.root / 'active.json'
 
+    def _load_owned(self, path):
+        # Immutable defaults may contain a route retired by this build. Refresh
+        # their identity before strict route validation; never reset user plans.
+        data=path.read_bytes()
+        if len(data)<=contract.MAX_BYTES:
+            try:
+                raw=json.loads(data.decode('utf-8-sig'))
+            except (ValueError,UnicodeError):
+                raw=None
+            if (isinstance(raw,dict) and isinstance(raw.get('name'),str)
+                    and raw['name'].casefold()=='default'
+                    and raw.get('client')==contract.CLIENT
+                    and raw.get('schema')==contract.SCHEMA):
+                current=contract.default_profile()
+                if raw!=current:_atomic(path,current)
+                return contract.canonical(current)
+        return contract.load(str(path))
+
     def ensure_active(self):
         if not self.active_path.exists():
             _atomic(self.active_path, contract.default_profile())
-        contract.load(str(self.active_path))  # a corrupt file never becomes defaults
+        document = self._load_owned(self.active_path)
+        if document['name'].casefold() == 'default' and document != contract.default_profile():
+            _atomic(self.active_path, contract.default_profile())
+        # Keep the runtime materialization synchronized with its named owner.
+        if document['name'].casefold() != 'default':
+            path=self.profile_path(document['name'])
+            if path.exists():
+                latest=contract.load(str(path))
+                if latest!=document:_atomic(self.active_path,latest)
+            else:
+                # Migrate an older applied snapshot into a named profile once.
+                _atomic(path,document)
         return str(self.active_path.resolve())
 
     def active(self):
@@ -124,10 +204,26 @@ class Store:
         if self.profiles.exists():
             for path in sorted(self.profiles.glob('*.json')):
                 try:
-                    result.append(contract.load(str(path))['name'])
+                    document=self._load_owned(path)
+                    if document['name'].casefold()=='default' and document!=contract.default_profile():
+                        _atomic(path,contract.default_profile())
+                    result.append(document['name'])
                 except contract.TacticsError:
                     continue  # not deleted; importing it still reports the error
-        return sorted(set(result))
+        return ['Default'] + sorted(set(n for n in result if n.casefold() != 'default'))
+
+    def unique_name(self, name):
+        name = contract._text(name, 48)
+        occupied = {n.casefold() for n in self.names()}
+        if name.casefold() not in occupied:
+            return name
+        index = 1
+        while True:
+            suffix = str(index)
+            candidate = name[:48-len(suffix)] + suffix
+            if candidate.casefold() not in occupied:
+                return candidate
+            index += 1
 
     def profile_path(self, name):
         # Labels need not be safe path components; never use a label as a path.
@@ -135,21 +231,103 @@ class Store:
         return self.profiles / (hashlib.sha256(name.encode('utf8')).hexdigest() + '.json')
 
     def read(self, name):
+        if name.casefold() == 'default':
+            return contract.default_profile()
         return contract.load(str(self.profile_path(name)))
 
-    def save(self, document, apply=False):
+    def check_name(self,name,previous_name=None):
+        name=contract._text(name,48)
+        if name.casefold()=='default':raise contract.TacticsError('Name already exists: Default')
+        for existing in self.names():
+            if existing.casefold()==name.casefold() and existing!=previous_name:
+                raise contract.TacticsError('Name already exists: '+existing)
+        return name
+
+    def save(self, document, apply=False, previous_name=_UNSPECIFIED):
         document = contract.canonical(document)
-        _atomic(self.profile_path(document['name']), document)
-        if apply:
-            _atomic(self.active_path, document)
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
+        from gui.mods.offline_lan_0922.bot_fittings import validate_profile
+        validate_profile(document)
+        name=document['name']
+        if name.casefold()=='default':
+            if previous_name is not _UNSPECIFIED:
+                raise contract.TacticsError('Name already exists: Default')
+            default=contract.canonical(contract.default_profile())
+            if document!=default:raise contract.TacticsError('Default is read only; create a custom profile first')
+            if apply:_commit_files({self.active_path:_encoded(default)})
+            return copy.deepcopy(default)
+        if previous_name is _UNSPECIFIED:previous_name=name
+        self.check_name(name,previous_name)
+        if previous_name is not None and previous_name.casefold()=='default':
+            raise contract.TacticsError('Default is read only')
+        active=self.active()
+        changes={self.profile_path(name):_encoded(document)}
+        if previous_name is not None and previous_name!=name:
+            for path in (self.profile_path(previous_name),Path(str(self.profile_path(previous_name))+'.bak')):
+                changes[path]=None
+        if apply or active['name']==previous_name:changes[self.active_path]=_encoded(document)
+        _commit_files(changes)
         return copy.deepcopy(document)
 
+    def delete(self,name):
+        if name.casefold()=='default':raise contract.TacticsError('Default is read only')
+        path=self.profile_path(name)
+        if not path.exists():raise contract.TacticsError('Profile does not exist: '+name)
+        changes={path:None,Path(str(path)+'.bak'):None}
+        if self.active()['name']==name:changes[self.active_path]=_encoded(contract.default_profile())
+        _commit_files(changes)
+
     def export(self, document, filename):
-        _atomic(filename, contract.canonical(document))
+        document = contract.canonical(document)
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
+        _atomic(filename, document)
 
     @staticmethod
     def import_file(filename):
-        return contract.load(str(filename))
+        document=contract.load(str(filename))
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
+        from gui.mods.offline_lan_0922.bot_fittings import validate_profile
+        validate_profile(document)
+        return document
+
+
+def ammunition_preview(game_root, vehicle, values, ratios=None):
+    """Resolve the actual selected research gun from pinned source resources."""
+    try:
+        from . import vehicle_overlays as overlays
+    except ImportError:
+        import vehicle_overlays as overlays
+    from gui.mods.offline_lan_0922 import bot_fittings, ammo_policy
+    def plain(value):
+        if isinstance(value, overlays.packed_xml.PackedValue):return plain(value.value)
+        if isinstance(value, overlays.packed_xml.PackedElement):return dict((k.decode(),plain(v)) for k,v in value.children)
+        return value.decode('utf8',errors='replace') if isinstance(value,bytes) else value
+    package=Path(game_root)/'res/packages/scripts.pkg'
+    nation,name=vehicle.split(':')
+    def read(path):return plain(overlays._read_source_member(str(package),'scripts/item_defs/vehicles/'+path)[1])
+    selected=bot_fittings.plan(vehicle,values.get('skill','regular'),dict((k,values[k]) for k in ('development',) if k in values))
+    modules=selected['modules'];definition=read(nation+'/'+name+'.xml')
+    local=definition['turrets0'][modules['turret']]['guns'][modules['gun']] or {}
+    gun=read(nation+'/components/guns.xml')['shared'][modules['gun']]
+    gun.update(local)
+    shell_data=read(nation+'/components/shells.xml')
+    translations=overlays._vehicle_translations(game_root,nation)
+    def caption(name):
+        text=shell_data[name].get('userString',name)
+        key=text.split(':',1)[-1] if text.startswith('#') else text
+        return translations.gettext(key) if translations else name
+    shells=[dict(index=i,name=n,label=caption(n),kind=shell_data[n]['kind']) for i,n in enumerate(gun['shots'])]
+    profile=dict(vehicle_name=vehicle,gun_name=modules['gun'],shells=shells,class_tag=bot_fittings.CLASSES[vehicle],
+                 clip_size=int(float((gun.get('clip') or {}).get('count',1))),ammo_ratios=[1]*len(shells))
+    ordered=ammo_policy.ordered(profile)
+    if ratios is None:profile.pop('ammo_ratios')
+    else:profile['ammo_ratios']=list(ratios)
+    counts=ammo_policy.allocation(profile,int(float(gun['maxAmmo'])),len(shells))
+    listed=read(nation+'/list.xml')[name]
+    return dict(vehicle=vehicle,gun=modules['gun'],shells=ordered,counts=counts,clip_size=profile['clip_size'],fixed=isinstance(listed.get('price'),dict) and 'gold' in listed['price'])
 
 
 def graph_data(name):

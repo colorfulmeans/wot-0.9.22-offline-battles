@@ -963,16 +963,28 @@ class LocalDriver(object):
 
 	def _partial_pivot(self, pose_clear, yaw, direction, rate, horizon):
 		"""Prove a shorter arc and limit the command to its admitted angle."""
+		search = dict(yaw=yaw, candidates=[], reason='unavailable')
+		self._last_partial_pivot_search = search
 		if pose_clear is None or rate is None or float(rate) <= 0.0:
 			return None
 		for fraction in (0.5, 0.25, 0.125):
 			extent = RECOVERY_YAW_OFFSET * fraction
 			for side in (direction, -direction):
-				if all(self._pose_fits(pose_clear, float(yaw) + side * extent * f)
-						for f in RECOVERY_SWEEP_FRACTIONS):
+				candidate = dict(extent=extent, side=side, samples=[], clear=True)
+				search['candidates'].append(candidate)
+				for f in RECOVERY_SWEEP_FRACTIONS:
+					angle = float(yaw) + side * extent * f
+					clear = self._pose_fits(pose_clear, angle)
+					candidate['samples'].append(dict(yaw=angle, clear=clear))
+					if not clear:
+						candidate['clear'] = False
+						break
+				if candidate['clear']:
+					search['reason'] = 'selected'
 					turn = side * min(1.0, extent / (float(rate) * max(0.001, float(horizon))))
 					return dict(throttle=0.0, turn=turn, target_yaw=float(yaw) + side * extent,
 						recovery_mode='partial_pivot_recovery', recovery_pivot_extent=extent)
+		search['reason'] = 'all_arcs_refused'
 		return None
 
 	# Pin the current law without executing descriptors during admission.
@@ -1032,12 +1044,24 @@ class LocalDriver(object):
 		candidates = self._rank_yaw_candidates(state, desired_yaw)
 		# Probe in score order and return the first fully viable direction. Most
 		# frames need one terrain ray set instead of probing all seven candidates.
+		trace = dict(at=state['clock'], origin=position, desired_yaw=desired_yaw,
+			candidates=[], selected=None, clock_basis='driver_elapsed_seconds')
+		state['heading_selection'] = trace
 		for unused_score, candidate in candidates:
-			if ((pose_clear is None or pose_clear(candidate)) and
-					self._clear(direction_clear, candidate) and
-					not (position is not None and self._static_hull_ahead(
-						position, candidate, neighbours,
-						half_length, half_width, body=state.get('collision_body')))):
+			row = dict(yaw=candidate, score=unused_score, outcome='pose_rejected')
+			trace['candidates'].append(row)
+			pose_ok = pose_clear is None or pose_clear(candidate)
+			clear = pose_ok and self._clear(direction_clear, candidate)
+			if pose_ok:
+				row.update(outcome='world_rejected',
+					direction_receipt=dict(self._last_direction_receipt))
+			occupied = clear and position is not None and self._static_hull_ahead(
+				position, candidate, neighbours, half_length, half_width,
+				body=state.get('collision_body'))
+			if clear:
+				row['outcome'] = 'static_hull_rejected' if occupied else 'selected'
+			if clear and not occupied:
+				trace['selected'] = candidate
 				state['steering_reason'] = (
 					'route' if abs(_angle_delta(candidate, desired_yaw)) <= 0.05
 					else 'obstacle')
@@ -1083,6 +1107,7 @@ class LocalDriver(object):
 				if clear and blocker is None:
 					state['short_translation_escape'] = dict(start=tuple(position),
 						yaw=float(yaw), sign=sign, distance=distance,
+						selection_sequence=sequence,
 						until=state['clock'] + 4.0)
 					return dict(throttle=sign * 1.0, turn=0.0, target_yaw=float(yaw),
 						recovery_probe_distance=distance,
@@ -1098,6 +1123,22 @@ class LocalDriver(object):
 			position=tuple(position), reason=reason, remaining=remaining,
 			sign=escape.get('sign', 1.0), distance=escape['distance'],
 			recovery_time_before=state.get('recovery_time', 0.0))
+		# Keep every recent terminal across the slower motion-log cadence. The
+		# single last terminal used to hide an immediate forward/reverse pair.
+		terminal = dict(state['escape_terminal'])
+		terminal['selection_sequence'] = escape.get('selection_sequence')
+		validation = state.get('short_escape_validation') or {}
+		if (escape.get('selection_sequence') is not None and
+				validation.get('selection_sequence') == escape['selection_sequence']):
+			terminal['execution_check'] = dict((key, validation.get(key)) for key in
+				('sampled_at', 'reason', 'remaining', 'blocker', 'result'))
+			proof = validation.get('probe_receipt') or {}
+			terminal['direction_check'] = dict((key, proof.get(key)) for key in
+				('decision_id', 'query_index', 'sampled_at', 'reason', 'clear', 'motion_grid'))
+		history = state.setdefault('escape_terminals', [])
+		history.append(terminal)
+		state['escape_terminals_dropped'] = state.get('escape_terminals_dropped', 0) + max(0, len(history)-32)
+		del history[:-32]
 		if reason == 'distance_completed':
 			if state.get('recovery_time', 0.0) > 0.0:
 				state['recovery_count'] = state.get('recovery_count', 0) + 1
@@ -1246,6 +1287,9 @@ class LocalDriver(object):
 		requested_target = tuple(target)
 		# Cleared for every call, including arrival/hold/recovery early returns.
 		state.pop('pedal_observation', None)
+		# Reset on every invocation so a cached command cannot inherit an old block.
+		state['blocked_observation'] = dict(reason='not_blocked', at=state['clock'] + max(0., float(dt)),
+			origin=tuple(position), target=tuple(target), yaw=float(yaw))
 		alignment = state.get('alignment_target')
 		previous_alignment = alignment
 		release_reason = ('movement_hold' if not movement_intent else
@@ -1697,12 +1741,18 @@ class LocalDriver(object):
 							'turn': 0.0,
 							'target_yaw': float(yaw),
 							'recovery_mode': 'blocked',
+							'partial_pivot_search': self._last_partial_pivot_search,
 				'brake': True,
 						}
 						if reverse_blocker is not None:
 							blocked['reverse_blocked_by'] = reverse_blocker
 						if forward_blocker is not None:
 							blocked['forward_blocked_by'] = forward_blocker
+						state['blocked_observation'].update(
+							reason='recovery_no_clear_translation_or_pivot',
+							forward_blocker=forward_blocker, reverse_blocker=reverse_blocker,
+							direction_receipt=dict(self._last_direction_receipt),
+							vehicle_receipt=dict(getattr(self, '_last_reverse_receipt', {})))
 						return blocked
 				result = dict(throttle=0.0, turn=direction,
 					target_yaw=recovery_yaw, recovery_mode='pivot_recovery')
@@ -1763,6 +1813,12 @@ class LocalDriver(object):
 				own_half_length, own_half_width, pose_clear)
 			state['plan_age'] = 0.0
 		if chosen_yaw is None:
+			state['blocked_observation'].update(reason='no_forward_heading',
+				desired_yaw=desired_yaw,
+				direction_receipt=dict(getattr(self, '_last_direction_receipt', {})),
+				vehicle_receipt=dict(getattr(self, '_last_reverse_receipt', {})),
+				neighbours=[dict(id=peer.get('id'), alive=peer.get('alive', True),
+					position=peer.get('position'), yaw=peer.get('yaw')) for peer in neighbours])
 			# No forward ray is usable.  Start a timed recovery on the next tick
 			# rather than issuing an unsafe blind turn.
 			state['stuck_time'] = max(state['stuck_time'], threshold)

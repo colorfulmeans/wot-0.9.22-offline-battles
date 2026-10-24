@@ -3,10 +3,11 @@ from __future__ import print_function
 """Authority-side, engine-free bridge from v5 bots to the local AI package."""
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
+    detailed_observed,
     observed, observed_call, current as current_combat, count as combat_count)
 
 import copy
-from gui.mods.offline_lan_0922 import tank_contact_ledger
+from gui.mods.offline_lan_0922 import tank_contact_ledger, physics_audit
 import math
 import json
 import random
@@ -45,6 +46,7 @@ from gui.mods.offline_lan_0922 import tank_collision
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922 import native_simulation
 from gui.mods.offline_lan_0922.worker_diagnostics import timed, call as timed_call
+from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
 
 
 try:
@@ -147,7 +149,7 @@ _BOT_TARGET_STATIC_FIELDS = (
 # the nested critical payload after _mark_combat_publication has run.
 _PUBLICATION_EDGE_SCALAR_FIELDS = (
     'id', 'fire_seq', 'shell_index', 'next_shell_index',
-    'ammo_reload_pending', 'reload_duration', 'clip', 'clip_size',
+    'ammo_reload_pending', 'ammo_magazine_started', 'reload_duration', 'clip', 'clip_size',
     'burst_active', 'burst_group_seq', 'burst_count', 'burst_next_index',
     'burst_interval', 'burst_shell_index',
     'siege_state', 'siege_transition_total_ms',
@@ -276,6 +278,7 @@ _BOT_SUSPENSION_STATE_FIELDS = (
     'pose_sample', '_slope_pose_target', '_basic_slope_basis_yaw',
     '_basic_fall_origin_y', '_basic_continuous_support',
     '_legacy_straddle_reference_y', '_support_mode_basis', '_basic_support_datum',
+    '_basic_support_handoff',
 )
 
 # Route groups lease these lateral lanes without moving an existing member.
@@ -572,8 +575,13 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     whose gunner tier is a little stronger than intended is recoverable, and
     a round that refuses to start is not.
     """
+    from gui.mods.offline_lan_0922 import bot_fittings
+    if bot_fittings.context(descriptor) is not None:
+        return bot_fittings.native_factors(descriptor)
     factors = loadout.attribute_factors(
         descriptor, crew=None, crew_level=crew_level)
+    if factors is None and bot_fittings.context(descriptor) is not None:
+        raise RuntimeError('native Bot fitting crew factors were rejected')
     if factors is None and crew_level is not None:
         if crew_level not in _LOGGED_CREW_LEVEL_REJECTIONS:
             _LOGGED_CREW_LEVEL_REJECTIONS.add(crew_level)
@@ -587,11 +595,13 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     return factors
 
 
-def _bot_profile(descriptor, crew_level=None):
+def _bot_profile(descriptor, crew_level=None, critical=None):
     """Spotting inputs for a vehicle whose crew is the #1513 default crew."""
-    return loadout.spotting_profile(
-        descriptor, None,
-        factors=_bot_default_crew_factors(descriptor, crew_level))
+    from gui.mods.offline_lan_0922 import bot_fittings
+    factors = (bot_fittings.native_factors(descriptor, critical)
+               if bot_fittings.context(descriptor) is not None else
+               _bot_default_crew_factors(descriptor, crew_level))
+    return loadout.spotting_profile(descriptor, None, factors=factors)
 
 
 def _bot_physics_params(descriptor, crew_level=None):
@@ -642,6 +652,10 @@ def _base_invisibility(descriptor, profile=None, camouflage_id=None):
     if profile is None:
         profile = _bot_profile(descriptor)
     crew_factor = profile['camouflage_factor']
+    from gui.mods.offline_lan_0922 import bot_fittings
+    fitting = bot_fittings.context(descriptor)
+    if fitting is not None and camouflage_id is None:
+        camouflage_id = fitting['camouflages'].get(fitting.get('season'))
     calculator = getattr(descriptor, 'computeBaseInvisibility', None)
     if callable(calculator):
         try:
@@ -945,9 +959,27 @@ def _copy_runtime_state(state):
 @observed('bot.critical_factor')
 def _critical_factor(state, descriptor, stat):
     devices, destroyed, crew_ko, yellow = _critical_parts(state)
-    return (device_damage.crew_stat_factor(crew_ko, stat) *
-            device_damage.module_stat_factor(
-                devices, destroyed, descriptor, stat, yellow))
+    module_factor = device_damage.module_stat_factor(
+        devices, destroyed, descriptor, stat, yellow)
+    from gui.mods.offline_lan_0922 import bot_fittings, crew_battle
+    if bot_fittings.context(descriptor) is None:
+        return device_damage.crew_stat_factor(crew_ko, stat) * module_factor
+    base = bot_fittings.native_factors(descriptor)
+    current = bot_fittings.native_factors(descriptor, state.get('critical'))
+    keys = {'reload': 'gun/reloadTime', 'aim_time': 'gun/aimingTime',
+            'turret_speed': 'turret/rotationSpeed', 'vision': 'circularVisionRadius',
+            'signal': 'radio/distance'}
+    if stat == 'dispersion':
+        crew_factor = float(current['shotDispersion'][0]) / float(base['shotDispersion'][0])
+    elif stat == 'mobility':
+        crew_factor = float(base['chassis/terrainResistance'][0]) / float(current['chassis/terrainResistance'][0])
+    elif stat in keys:
+        crew_factor = float(current[keys[stat]]) / float(base[keys[stat]])
+    else:
+        crew_factor = 1.0
+    return crew_factor * module_factor * crew_battle.stat_multiplier(
+        crew_battle.from_native(current), stat, state.get('health', 0),
+        state.get('max_health', 1), module_factor)
 
 
 def _critical_signature(payload):
@@ -1139,6 +1171,10 @@ class _BotCriticalVehicle(object):
             equipment_passives.get('fireStartingChanceFactor'), 1.0))
         self._medkit_bonus_value = max(0.0, _number(
             equipment_passives.get('medkitBonusValue'), 0.0))
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(descriptor) is not None:
+            self._fire_starting_chance_factor *= bot_fittings.battle_factors(
+                descriptor, payload)['engine_fire_factor']
         self.is_tracked = False
         self.is_engine_dead = False
         self.is_gun_destroyed = False
@@ -1578,91 +1614,22 @@ def _bot_ammo_capacity(descriptor):
         maximum = int(maximum)
     except (TypeError, ValueError, OverflowError):
         maximum = 45
-    return max(0, min(maximum, 1000))
+    return max(0, min(maximum, 1800))
 
 
 def _bot_ammo_categories(profile, shell_count):
-    """Classify descriptor-order shells without relying on store prices.
-
-    The pinned descriptor does not expose a stable credits/gold price at this
-    seam.  The first non-HE shell is therefore the standard baseline; a later
-    non-HE shell is premium only when its representative penetration is at
-    least three percent higher.  This keeps standard AP/APCR as the default
-    while still recognizing the usual higher-penetration APCR/HEAT round.
-    """
-    shells = profile.get('shells', ()) if isinstance(profile, dict) else ()
-    shells = tuple(shells or ())
-    by_index = {}
-    for raw in shells:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            index = int(raw.get('index', -1))
-        except (TypeError, ValueError, OverflowError):
-            continue
-        if 0 <= index < shell_count:
-            by_index[index] = raw
-    non_he = []
-    categories = {}
-    for index in range(shell_count):
-        shell = by_index.get(index, {})
-        kind = str(shell.get('kind', '') or '').lower()
-        is_he = ('high_explosive' in kind or
-                 ('explosive' in kind and 'armor_piercing' not in kind))
-        if is_he:
-            categories[index] = 'he'
-        else:
-            non_he.append(index)
-    baseline = non_he[0] if non_he else None
-    baseline_penetration = max(0.0, _number(
-        by_index.get(baseline, {}).get('penetration', 0.0)))
-    for index in non_he:
-        penetration = max(0.0, _number(
-            by_index.get(index, {}).get('penetration', 0.0)))
-        categories[index] = (
-            'premium' if (index != baseline and
-                          baseline_penetration > 0.0 and
-                          penetration >= baseline_penetration * 1.03)
-            else 'standard')
-    return categories
+    """Logical slots only; physical kind and gold price are never inferred."""
+    from gui.mods.offline_lan_0922.ammo_policy import stages
+    return dict((int(shell['index']), ('standard', 'premium', 'he')[min(offset, 2)])
+                for offset, shell in enumerate(stages(profile)))
 
 
 def _bot_ammo_distribution(descriptor, profile, shell_count):
-    """Allocate one exact, fixed per-battle inventory by shell category."""
-    maximum = _bot_ammo_capacity(descriptor)
-    if shell_count <= 0 or maximum <= 0:
-        return [0] * max(0, shell_count)
-    categories = _bot_ammo_categories(profile, shell_count)
-    class_tag = str((profile or {}).get('class_tag', ''))
-    # Ordinary vehicles use the requested 3:2:1 baseline. Artillery carries a
-    # physically HE-led 1:1:4 load; unavailable categories are redistributed
-    # across the shells that the installed gun actually exposes.
-    category_weights = ({'standard': 1.0, 'premium': 1.0, 'he': 4.0}
-                        if class_tag == 'SPG' else
-                        {'standard': 3.0, 'premium': 2.0, 'he': 1.0})
-    active_categories = sorted(set(categories.values()))
-    total_weight = sum(category_weights[name] for name in active_categories)
-    if total_weight <= 0.0:
-        return [0] * shell_count
-    category_counts = dict((name, int(
-        maximum * category_weights[name] / total_weight))
-        for name in active_categories)
-    assigned = sum(category_counts.values())
-    remainders = sorted(
-        active_categories,
-        key=lambda name: (
-            -(maximum * category_weights[name] / total_weight -
-              category_counts[name]), name))
-    for offset in range(maximum - assigned):
-        category_counts[remainders[offset % len(remainders)]] += 1
-    result = [0] * shell_count
-    for name in active_categories:
-        indices = sorted(index for index, category in categories.items()
-                         if category == name)
-        quantity = category_counts[name]
-        for offset in range(quantity):
-            result[indices[offset % len(indices)]] += 1
-    return result
+    from gui.mods.offline_lan_0922.ammo_policy import allocation
+    profile = dict(profile)
+    clip = _value(_value(descriptor, 'gun', {}), 'clip', (1,)) or (1,)
+    profile['clip_size'] = max(1, int(clip[0]))
+    return allocation(profile, _bot_ammo_capacity(descriptor), shell_count)
 
 
 class _BotAmmoState(object):
@@ -1675,6 +1642,12 @@ class _BotAmmoState(object):
             self.shell_count = max(1, len(shots))
         except TypeError:
             self.shell_count = 1
+        # Tactical profiles may omit weapon data (for example a direct fire
+        # caller). Read the installed descriptor rather than inventing rounds.
+        if not profile.get('shells'):
+            supplied = profile
+            profile = ai_planner.build_vehicle_profile(descriptor)
+            profile.update(dict((key, val) for key, val in supplied.items() if key != 'shells'))
         self.categories = _bot_ammo_categories(profile, self.shell_count)
         self.remaining = _bot_ammo_distribution(
             descriptor, profile, self.shell_count)
@@ -1726,7 +1699,7 @@ class _BotAmmoState(object):
                 exact = int(quantity)
             except (TypeError, ValueError, OverflowError):
                 raise ValueError('bot ammunition quantity is invalid')
-            if (isinstance(quantity, bool) or exact < 0 or exact > 1000 or
+            if (isinstance(quantity, bool) or exact < 0 or exact > 1800 or
                     float(quantity) != exact):
                 raise ValueError('bot ammunition quantity is invalid')
             parsed.append(exact)
@@ -1756,23 +1729,15 @@ class _BotAmmoState(object):
         return True
 
     def stage(self, requested, ready, full_reload=True):
-        """Commit loaded/next choices only at one completed reload edge."""
-        if not ready:
-            return False
-        changed = False
-        if self.reload_pending:
-            if full_reload:
-                selected = self._available(self.next)
-                if selected != self.loaded:
-                    self.loaded = selected
-                    changed = True
-            self.reload_pending = False
-            self.plan_pending = True
-        if self.plan_pending:
-            selected = self._available(requested)
-            if selected != self.next:
-                self.next = selected
+        """Update an unstarted round/magazine without restarting its clock."""
+        selected = self._available(requested)
+        changed = selected != self.next
+        self.next = selected
+        if ready:
+            if full_reload and selected != self.loaded:
+                self.loaded = selected
                 changed = True
+            self.reload_pending = False
             self.plan_pending = False
         return changed
 
@@ -2108,7 +2073,8 @@ class BotRuntime(object):
                  artillery_status_probe=None, wreck_rotation_probe=None,
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
                  impact_contacts_resolver=None, navigation_surface_probe=None,
-                 navigation_height_columns=None, local_sweep_probe=None):
+                 navigation_height_columns=None, local_sweep_probe=None,
+                 bot_descriptor_resolver=None):
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -2119,6 +2085,7 @@ class BotRuntime(object):
         self._wreck_rotation_probe = wreck_rotation_probe
         self._wreck_ground_probe = wreck_ground_probe
         self.local_sweep_probe = local_sweep_probe
+        self.bot_descriptor_resolver = bot_descriptor_resolver
         self._local_sweep_cache = {}
         self._local_sweep_step = 0.0
         self.rotation_resolver = rotation_resolver
@@ -2214,7 +2181,7 @@ class BotRuntime(object):
             ram_contact_probe if callable(ram_contact_probe) else None)
         self.bot_equipment_resolver = (
             bot_equipment_resolver if callable(bot_equipment_resolver) else
-            (lambda: ()))
+            (lambda unused_skill: ()))
         self.destructible_body_scan = (
             destructible_body_scan
             if callable(destructible_body_scan) else None)
@@ -2899,6 +2866,7 @@ class BotRuntime(object):
         state.pop('_pseudo_ground_memory', None)
         state.pop('_suspension_ground_plane', None)
         state.pop('_basic_support_datum', None)
+        state.pop('_basic_support_handoff', None)
         state.pop('_support_mode_basis', None)
         if reset_grounded:
             state['grounded_once'] = False
@@ -3138,7 +3106,7 @@ class BotRuntime(object):
             selection_stage=selection_stage, pose_refreshed=bool(refreshed))
         missing = any(not row['valid'] for row in rows)
         if missing:
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state, 'point_support_lost')
             state['_edge_support_active'] = True
         self._report_support_mode(state, rows, 'enable' if missing else 'sample')
         return missing
@@ -3182,6 +3150,7 @@ class BotRuntime(object):
             total=5, points=rows, airborne=bool(state.get('airborne')),
             vertical_speed=state.get('vertical_speed'),
             basic_support_datum=state.get('_basic_support_datum'),
+            basic_support_handoff=state.get('_basic_support_handoff'),
             yaw=state.get('yaw'), terrain_pitch=self._terrain_pitch(state),
             roll=state.get('roll'), basic_basis_yaw=state.get('_basic_slope_basis_yaw'),
             support_basis=state.get('_support_mode_basis'),
@@ -3199,16 +3168,25 @@ class BotRuntime(object):
 
     def _release_detailed_support(self, state):
         """Hand back only after admitted landing effects, without moving the hull."""
+        if state.get('_support_release_after_contacts'):
+            return False
         if BOT_FULL_SUPPORT_ENABLED or not state.get('_edge_support_active'):
             return False
         rows = self._basic_support_status(state)
         if state.get('airborne') or not all(row['valid'] for row in rows):
             self._report_support_mode(state, rows, 'sample')
             return False
-        # The accepted rigid pose need not put its root exactly on the
-        # centre ray. Preserve that measured datum when the basic owner
-        # resumes; dropping it on the next frame recreates point loss.
+        # Preserve this ownership boundary's pose. The next positive-time
+        # basic step must revalidate the datum against its current footprint;
+        # a transient landing gap is not a permanent raised ground surface.
         state['_basic_support_datum'] = float(state['y'])-float(rows[0]['ground'])
+        state['_basic_support_handoff'] = dict(
+            phase='created', reason='accepted_detailed_pose',
+            created_at=getattr(self, '_contact_now', None),
+            at=getattr(self, '_contact_now', None),
+            origin=_position(state), raw_ground=float(rows[0]['ground']),
+            datum_before=state['_basic_support_datum'],
+            datum_after=state['_basic_support_datum'])
         state.pop('_edge_support_active', None)
         self._suspension_params.pop(int(state['id']), None)
         # Solver memory must not suppress the basic four-point pose owner.
@@ -3225,6 +3203,49 @@ class BotRuntime(object):
         state.pop('_legacy_straddle_reference_y', None)
         self._report_support_mode(state, rows, 'disable')
         return True
+
+    def _revalidate_basic_support_datum(self, state, ground, step):
+        """Retire handoff height only when the real basic pose keeps all five points."""
+        datum = state['_basic_support_datum']
+        receipt = dict(state.get('_basic_support_handoff') or {})
+        now = getattr(self, '_contact_now', None)
+        receipt.update(at=now, datum_before=datum, raw_ground=ground,
+                       root_before=float(state['y']), step=step)
+        if step <= 0. or (receipt.get('created_at') is not None and
+                         receipt['created_at'] == now):
+            receipt.update(phase='retained', reason='handoff_or_projection_slice',
+                           datum_after=datum)
+            state['_basic_support_handoff'] = receipt
+            return datum
+        # Reuse the normal five-point contract, at the same X/Z and attitude.
+        # Only root Y changes, so cached real ground columns remain applicable.
+        rows = self._basic_support_status(state)
+        shift = float(ground)-float(state['y'])
+        proof = [dict(name=row['name'], ground=row['ground'], gap=row['gap'],
+                      basic_gap=(None if row['gap'] is None else row['gap']+shift))
+                 for row in rows]
+        supported = all(row['basic_gap'] is not None and
+                        -0.6 <= row['basic_gap'] <= vehicle_physics.GROUND_FOLLOW_MIN
+                        for row in proof)
+        receipt.update(points=proof, phase='cleared' if supported else 'retained',
+                       reason='raw_footprint_supported' if supported else
+                              'raw_footprint_would_lose_support',
+                       datum_after=None if supported else datum)
+        state['_basic_support_handoff'] = receipt
+        if supported:
+            state.pop('_basic_support_datum', None)
+            return 0.
+        return datum
+
+    def _clear_basic_support_datum(self, state, reason):
+        if '_basic_support_datum' not in state:
+            return
+        receipt = dict(state.get('_basic_support_handoff') or {})
+        receipt.update(phase='cleared', reason=reason,
+                       at=getattr(self, '_contact_now', None),
+                       datum_before=state.pop('_basic_support_datum'),
+                       datum_after=None, root_before=state.get('y'))
+        state['_basic_support_handoff'] = receipt
 
     def _install_bot_descriptor(self, bot_id, state, siege_state):
         """Install one bot's active immutable mode descriptor."""
@@ -3275,8 +3296,8 @@ class BotRuntime(object):
             motion.descriptor_patch(bot_id)
         return True
 
-    def _bot_equipment_contracts(self, snapshots=None):
-        raw = tuple(self.bot_equipment_resolver() or ())
+    def _bot_equipment_contracts(self, bot_id, snapshots=None):
+        raw = tuple(self.bot_equipment_resolver(self.bot_consumable_skill(bot_id)) or ())
         contracts = ()
         if raw:
             contracts = equipment_mechanics.bot_consumable_contracts({
@@ -3285,7 +3306,8 @@ class BotRuntime(object):
             restored_contracts = \
                 equipment_mechanics.bot_consumable_contracts(
                     None, snapshot=snapshots)
-            if contracts and restored_contracts != contracts:
+            if ((contracts or self.bot_consumable_skill(bot_id) == 'rookie') and
+                    restored_contracts != contracts):
                 raise ValueError('bot equipment contracts changed')
             if not contracts:
                 contracts = restored_contracts
@@ -3295,7 +3317,7 @@ class BotRuntime(object):
                                 canonical_restore=False):
         """Create one independent exact consumable ledger for each bot."""
         bot_id = int(bot_id)
-        contracts = self._bot_equipment_contracts(snapshots)
+        contracts = self._bot_equipment_contracts(bot_id, snapshots)
         existing = self._equipment_states.get(bot_id)
         if existing is not None:
             existing_contracts = tuple(
@@ -3630,9 +3652,19 @@ class BotRuntime(object):
     def bot_crew_level(self, bot_id):
         """Return the #1513 crew level this Bot's rating trains it to."""
         values = getattr(self, '_bot_behavior', {}).get(int(bot_id), {})
+        if 'crew_preset' in values:
+            return {'50':50, '75':75, 'repair':100, 'all':100}[values['crew_preset']]
         if 'crew_level' in values:
             return int(values['crew_level'])
+        if getattr(self, 'bot_descriptor_resolver', None) is not None:
+            from gui.mods.offline_lan_0922 import bot_fittings
+            return bot_fittings.crew_level(self.bot_skill(bot_id))
         return int(bot_gunnery.rating_crew_level(self.bot_rating(bot_id)))
+
+    def bot_consumable_skill(self, bot_id):
+        value = getattr(self, '_bot_behavior', {}).get(int(bot_id), {}).get('consumables')
+        return {'none':'rookie', 'once':'regular', 'repeat':'veteran',
+                'large':'elite'}.get(value, self.bot_skill(bot_id))
 
     def bot_aim_selection_allowed(self, state, target):
         """Return whether this Bot's gunner picks the part it can hurt most.
@@ -3924,7 +3956,23 @@ class BotRuntime(object):
             bot_id = int(raw['id'])
             vehicle_name = self.vehicle_selector(raw)
             try:
-                resolved_descriptor = self.descriptor_resolver(vehicle_name)
+                if self.bot_descriptor_resolver is None:
+                    resolved_descriptor = self.descriptor_resolver(vehicle_name)
+                else:
+                    from gui.mods.offline_lan_0922 import bot_fittings
+                    class_tag = bot_fittings.CLASSES[vehicle_name]
+                    values = bot_tactics.effective(
+                        self._bot_tactics, int(raw.get('team', 1)),
+                        class_tag, int(raw.get('slot', 0)))
+                    rating = self._resolve_bot_rating(raw)
+                    if not restoring_authority and 'skill' in values:
+                        rating = bot_gunnery.rating_for_skill(values['skill'])
+                    tier = bot_gunnery.skill_for_rating(rating)
+                    level = ({'50':50, '75':75, 'repair':100, 'all':100}.get(values.get('crew_preset'))
+                             if 'crew_preset' in values else values.get('crew_level', bot_fittings.crew_level(tier)))
+                    overrides = dict((k, values[k]) for k in ('development', 'equipment', 'crew_preset', 'outfit') if k in values)
+                    args = (vehicle_name, tier, level, raw.get('fitting'))
+                    resolved_descriptor = self.bot_descriptor_resolver(*(args + (overrides,) if overrides else args))
                 descriptor_pair = siege_mechanics.descriptor_pair(
                     resolved_descriptor)
             except Exception as error:
@@ -3998,7 +4046,8 @@ class BotRuntime(object):
             self._physics_params[bot_id] = _bot_physics_params(
                 descriptor, crew_level)
             self._turn_speeds[bot_id] = 0.0
-            if isinstance(raw.get('profile'), dict):
+            if (self.bot_descriptor_resolver is None and
+                    isinstance(raw.get('profile'), dict)):
                 self.adapter.director.register_profile(bot_id, raw.get('team', 1),
                                                        raw['profile'], raw.get('name', 'Bot'))
             else:
@@ -4009,6 +4058,8 @@ class BotRuntime(object):
             agents = getattr(self.adapter.director, 'agents', {})
             agent = agents.get(bot_id, {})
             profile = agent.get('profile', {})
+            if 'ammo_ratios' in values:
+                profile['ammo_ratios'] = list(values['ammo_ratios'])
             route = agent.get('route') or {}
             max_health = max(1, int(getattr(descriptor, 'maxHealth',
                                             raw.get('max_health', 1000))))
@@ -4093,6 +4144,9 @@ class BotRuntime(object):
             state.setdefault('_overturn_check', 0.0)
             state.setdefault('_overturn_time', 0.0)
             state.setdefault('_overturn_level', 0)
+            if self.bot_descriptor_resolver is not None:
+                from gui.mods.offline_lan_0922 import bot_fittings
+                state['fitting'] = bot_fittings.context(descriptor)['wire']
             state.setdefault('_overturned', False)
             self._observe_bot_stun(
                 state, raw, max(0, int(_number(
@@ -4149,9 +4203,15 @@ class BotRuntime(object):
                 sync['authority_handoff_pending'] = True
             reload_factor = _critical_factor(state, descriptor, 'reload')
             state['clip_size'] = gun_state.clip_size
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
+        configure_boundary=getattr(self.navigator,'set_boundary_body',None)
+        if callable(configure_boundary):
+            for state in self._ordered_states():
+                configure_boundary(state['id'],_position(state),state['yaw'],
+                    state['half_length'],state['half_width'])
         self._prepare_user_routes(message, restoring_authority)
         self._prepare_initial_spg_positions(message, restoring_authority)
         self._ensure_native_simulation()
@@ -4651,7 +4711,8 @@ class BotRuntime(object):
         elif action == 'repair_devices':
             payload = critical_damage.repair_device(
                 shadow, effect.get('selected'),
-                bool(effect.get('repairAll', False)))
+                bool(effect.get('repairAll', False)),
+                excluded_devices=effect.get('excludedDevices', ()))
         elif action == 'restore_crew':
             payload = critical_damage.restore_crew(
                 shadow, effect.get('selected'),
@@ -4682,7 +4743,7 @@ class BotRuntime(object):
         for equipment in self._equipment_states.get(int(state['id']), ()):
             effect = equipment.poll_bot(
                 self._equipment_now, state.get('critical'),
-                stunned=self._bot_stunned(state))
+                stunned=self._bot_stunned(state), skill=self.bot_consumable_skill(state['id']))
             if effect is None:
                 continue
             effect = dict(effect)
@@ -4692,6 +4753,11 @@ class BotRuntime(object):
             self._apply_bot_equipment_effect(
                 state, descriptor, effect, strict=True)
             effects.append(dict(effect))
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT CONSUMABLE', dict(round=self.round_id,
+                bot=state['id'], skill=self.bot_skill(state['id']), at=self._equipment_now,
+                item=equipment.contract['name'], uses_left=equipment.uses_left,
+                cooldown=equipment.contract['cooldownSeconds'], effect=effect))
         if effects:
             self._refresh_equipment_passives(state['id'])
         self._publish_equipment_state(state)
@@ -4947,6 +5013,7 @@ class BotRuntime(object):
                         raw.get('clip'), raw.get('clip_size'))
                     reload_factor = _critical_factor(
                         state, descriptor, 'reload')
+                    state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
                     state['clip'] = gun_state.clip
                     state['reload_time'] = gun_state.remaining(reload_factor)
                     state['reload_duration'] = gun_state.duration(
@@ -5073,6 +5140,9 @@ class BotRuntime(object):
                 'siege_time_left_ms', 'siege_transition_total_ms',
                 'equipment_states', 'stun_end_server_time_ms')
         result = dict((key, state[key]) for key in keys)
+        if state.get('fitting') is not None:
+            from gui.mods.offline_lan_0922 import bot_fittings
+            result['fitting'] = bot_fittings.canonical(state['fitting'])
         if state.get('mass') is not None:
             result['stack_mass'] = float(state['mass'])
         result['profile'] = dict(result['profile'], parking_radius=math.hypot(
@@ -5197,7 +5267,15 @@ class BotRuntime(object):
             snapshot = _player_effective_params(target, tick_cache)
             dynamic_key, unused_row = _player_dynamic_spotting(
                 snapshot, target)
-        key = ((kind, int(target_id)) if kind == 'bot' else
+        if kind == 'bot':
+            from gui.mods.offline_lan_0922 import bot_fittings
+            descriptor = self._descriptors.get(int(target_id))
+            if bot_fittings.context(descriptor) is not None:
+                critical = target.get('critical') or {}
+                dynamic_key = (tuple(sorted(critical.get('crew_ko') or ())),
+                               bool(critical.get('fire', False)))
+        key = ((kind, int(target_id), dynamic_key) if kind == 'bot' and dynamic_key is not None else
+               (kind, int(target_id)) if kind == 'bot' else
                (kind, int(target_id), dynamic_key))
         cached = self._spotting_profiles.get(key)
         if cached is not None:
@@ -5205,7 +5283,7 @@ class BotRuntime(object):
         if kind == 'bot':
             descriptor = self._descriptors.get(int(target_id), {})
             profile = _bot_profile(
-                descriptor, self.bot_crew_level(target_id))
+                descriptor, self.bot_crew_level(target_id), target.get('critical'))
             cached = (_base_invisibility(descriptor, profile),
                       _shot_invisibility_factor(descriptor), profile)
         else:
@@ -5228,6 +5306,13 @@ class BotRuntime(object):
 
     def _bot_repair_factor(self, bot_id, descriptor):
         """A bot repairs at #1513's default-crew repair speed, like the player."""
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(descriptor) is not None:
+            factors = bot_fittings.native_factors(
+                descriptor, (self.states.get(bot_id) or {}).get('critical'))
+            passive = self._equipment_passives.get(int(bot_id), {})
+            return loadout.modifiers(descriptor, factors=factors)['repair_factor'] * (
+                1.0 + max(0.0, passive.get('repairkitBonusValue', 0.0)))
         cached = self._repair_factors.get(bot_id)
         if cached is None:
             cached = loadout.modifiers(
@@ -5332,6 +5417,7 @@ class BotRuntime(object):
         base = _number(_value(_value(descriptor, 'radio', {}), 'distance', 0.0))
         return max(0.0, base * factor)
 
+    @detailed_observed('bot.radio_configuration')
     def _configure_radio(self, players, now, tick_cache=None):
         actors = {}
         for source in self.states.values():
@@ -6018,6 +6104,7 @@ class BotRuntime(object):
             return 0.0
         return min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS, remaining)
 
+    @detailed_observed('bot.observer_lifecycle')
     def _track_human_observer_lifecycle(
             self, players, now, visibility_tick=None):
         """Open Last Effort only on one observed alive-to-dead edge."""
@@ -6513,6 +6600,18 @@ class BotRuntime(object):
         return None
 
     @staticmethod
+    def _same_probe_support_plane(previous, current):
+        if previous is None or current is None:
+            return previous is None and current is None
+        if previous == current:
+            return True
+        # Level ground stays the same plane through a yaw-only turn. Comparing
+        # Euler yaw here would needlessly invalidate every turning flat hull.
+        first = tank_collision.pose_axes(*previous)[1]
+        second = tank_collision.pose_axes(*current)[1]
+        return sum((a-b)**2 for a, b in zip(first, second)) <= .005**2
+
+    @staticmethod
     @observed('motion.cache_check')
     def _motion_probe_reusable(cached, position, travel_yaw, speed, now,
                                settled=False, dt=None,
@@ -6650,6 +6749,7 @@ class BotRuntime(object):
             cached, position, travel_yaw, speed, now, False, dt,
             ignore_deadline=True)
 
+    @detailed_observed('bot.neighbour_collection')
     def _neighbours_for(self, source, supplied, spatial_index=None,
                         traffic_bodies=None):
         if spatial_index is not None and traffic_bodies is not None:
@@ -6700,21 +6800,61 @@ class BotRuntime(object):
         return tank_collision.rotation_fraction(position, yaw, candidate,
             shape, self._rotation_neighbours_for(state, supplied))
 
+    @staticmethod
+    def _planning_grid_pose_pair(grid, position, yaw, candidate, half_length,
+                                 half_width, current_samples):
+        """Reuse the unchanged baked footprint only inside one planning call.
+
+        This is the coarse grid test, never a native collision/sweep receipt.
+        Planning callbacks do not commit poses or mutate the grid snapshot.
+        The caller discards this dictionary before the next actor/decision.
+        """
+        probe = getattr(grid, 'hull_pose_clear', None)
+        if not callable(probe):
+            return None, None
+        key = (id(grid), tuple(position), yaw, half_length, half_width)
+        if key not in current_samples:
+            current_samples[key] = bool(probe(position, yaw, half_length, half_width))
+            combat_count('planning_current_footprint_sampled')
+        else:
+            combat_count('planning_current_footprint_reused')
+        current = current_samples[key]
+        selected_key = (id(grid), tuple(position), candidate, half_length, half_width)
+        if selected_key not in current_samples:
+            current_samples[selected_key] = bool(probe(
+                position, candidate, half_length, half_width))
+            combat_count('planning_candidate_footprint_sampled')
+        elif candidate != yaw:
+            combat_count('planning_candidate_footprint_reused')
+        selected = current_samples[selected_key]
+        return current, selected
+
+    @detailed_observed('bot.planning_rotation_membership')
     def _planning_rotation_fraction_for(self, state, position, yaw, candidate,
-                                        supplied, allow_wreck_push=False):
-        """Keep traffic policy while projecting fresh numeric poses in C++."""
+                                        supplied, allow_wreck_push=False, rosters=None):
+        """Project current poses, reusing membership only inside one decision."""
         def admitted(peer):
             return ((not peer.get('alive', True) and not allow_wreck_push) or
                     (peer.get('alive', True) and peer.get('team') == state.get('team')))
-        supplied = tuple(peer for peer in (supplied or ()) if admitted(peer))
-        current = tuple((actor, raw) for actor, raw in self.states.items()
-                        if actor != state.get('id') and admitted(raw))
+        roster_key = (state.get('id'), bool(allow_wreck_push))
+        roster = rosters.get(roster_key) if rosters is not None else None
+        if roster is None:
+            supplied = tuple(peer for peer in (supplied or ()) if admitted(peer))
+            current = tuple((actor, raw) for actor, raw in self.states.items()
+                            if actor != state.get('id') and admitted(raw))
+            fitted = all(raw.get('collision_shape') is not None for actor, raw in current)
+            if rosters is not None:
+                rosters[roster_key] = (supplied, current, fitted)
+            combat_count('planning_rotation_roster_built')
+        else:
+            supplied, current, fitted = roster
+            combat_count('planning_rotation_roster_reused')
         shape = state.get('collision_shape') or tank_collision.DEFAULT_SHAPE
         from . import native_math
         # Legacy/missing shapes retain their original half-size projection.
         # Real current-release actors carry fitted shapes and x/y/z poses.
         if (callable(getattr(native_math._load(), 'rotation_current', None)) and
-                all(raw.get('collision_shape') is not None for actor, raw in current)):
+                fitted):
             result = native_math.call('rotation_current', position, yaw, candidate,
                                      shape, supplied, current, state.get('id'))
             if result is not None:
@@ -6885,6 +7025,10 @@ class BotRuntime(object):
             state.get('terrain_pitch', state.get('pitch')))
         roll = _number(state.get('roll'))
         result = []
+        probe_trace = []
+        state['_pseudo_probe_trace'] = ()
+        probe = self._suspension_ground_probe or self._wreck_ground_probe
+        probe_owner = getattr(probe, '__self__', getattr(probe, 'im_self', None))
         for index, point in enumerate(points):
             x, z = point
             contact = params['pseudo_contacts'][index]
@@ -6918,6 +7062,9 @@ class BotRuntime(object):
                 if contact.get('kind') == 'track' else None)
             ground = self._suspension_ground_value(
                 x, z, minimum_y, maximum_y, flat_maximum_y)
+            direct = ground
+            layers = getattr(probe_owner, '_suspension_ground_probe_layers', None)
+            previous_memory = memory[index]
             if contact.get('kind') == 'rigid':
                 memory[index] = None
             else:
@@ -6925,7 +7072,13 @@ class BotRuntime(object):
                     vehicle_physics.retained_ground_contact(
                         point, ground, memory[index],
                         params['contact_memory_distance'], support_gradient)
+            probe_trace.append(dict(index=index, kind=contact.get('kind'),
+                point=(x, z), minimum=minimum_y, maximum=maximum_y,
+                flat_maximum=flat_maximum_y, direct=direct, selected=ground,
+                layers=layers, retained=direct is None and ground is not None,
+                previous_memory=previous_memory))
             result.append(ground)
+        state['_pseudo_probe_trace'] = tuple(probe_trace)
         state['_pseudo_ground_memory'] = memory
         return tuple(result)
 
@@ -7195,7 +7348,9 @@ class BotRuntime(object):
         row['decision_id'] = receipt['id']
         row['sampled_at'] = receipt['sampled_at']
         row['query_index'] = receipt['query_count'] + 1
-        row['reason'] = row.get('reason') or ('clear' if row.get('clear') else 'unspecified_callback_rejection')
+        row['reason'] = (row.get('reason') or
+            (row.get('native_sweep') or {}).get('reason') or
+            ('clear' if row.get('clear') else 'unspecified_callback_rejection'))
         receipt['query_count'] += 1
         counts = receipt['reason_counts']
         counts[row['reason']] = counts.get(row['reason'], 0) + 1
@@ -7218,6 +7373,8 @@ class BotRuntime(object):
 
     def _log_route_connection(self, state, command, now):
         """Observe moving route joins as well as stationary failures; no probes."""
+        if not detailed_enabled():
+            return
         order = self._server_orders.get(state['id']) or {}
         assignment = order.get('route_assignment') or {}
         if not (order.get('route_join') or assignment.get('entry_selection')):
@@ -7255,6 +7412,62 @@ class BotRuntime(object):
                 'planning_goal', 'selected_target', 'final_target', 'runtime_leg_handoff')},
             query_policy='existing_receipts_only'))
 
+    @observed('bot.motion_diagnostic_prepare')
+    def _log_recovery_pocket(self, state, command, probe, now, applied=None):
+        """A compact diagnostic-only receipt survives bulk-history exhaustion."""
+        if not detailed_enabled():
+            return
+        position = _position(state)
+        previous = state.get('_recovery_pocket_log')
+        if not command.get('movement_intent'):
+            state.pop('_recovery_pocket_log', None)
+            return
+        if previous is None or _distance(position, previous[0]) > 8.:
+            state['_recovery_pocket_log'] = (position, now, now)
+            return
+        if now-previous[2] < 15.:
+            return
+        state['_recovery_pocket_log'] = (previous[0], previous[1], now)
+        order = self._server_orders.get(state['id']) or {}
+        attempt = order.get('route_attempt') or {}
+        driver = getattr(self.adapter, 'driver', None)
+        driver = getattr(driver, 'states', {}).get(state['id']) or {}
+        actions = (state.get('_execution_window') or {}).get('actions') or ()
+        outcome = actions[-1].get('outcome', {}) if actions else {}
+        handoff = state.get('_planner_blocked_handoff') or {}
+        return_memory = getattr(self.adapter, '_recovery_travel', {}).get(state['id']) or {}
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT RECOVERY POCKET', dict(
+            round=self.round_id, bot=state['id'], at=now,
+            position=position, origin=previous[0], age=now-previous[1],
+            yaw=state.get('yaw'), speed=state.get('speed'),
+            requested_controls=[command.get('throttle'), command.get('turn')],
+            driver_controls=[(command.get('control_trace') or {}).get('driver_throttle'),
+                             (command.get('control_trace') or {}).get('driver_turn')],
+            applied_controls=applied,
+            blockers=[command.get('forward_blocked_by'), command.get('reverse_blocked_by')],
+            last_execution={key:outcome.get(key) for key in (
+                'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
+            recovery_count=driver.get('recovery_count'),
+            return_memory={key:return_memory.get(key) for key in (
+                'active', 'origin', 'yaw', 'forward', 'returned', 'replan_requested')},
+            short_escape_denials=[{key:row.get(key) for key in (
+                'sign', 'distance', 'clear', 'reason', 'blocker')}
+                for row in (driver.get('short_escape_probes') or ())[:6]],
+            blocked_handoff={key:handoff.get(key) for key in (
+                'reason', 'all_hard_body_refusals', 'local_actions_exhausted',
+                'complete_pivot_arcs_exhausted', 'private_replan', 'retired')},
+            mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
+            target=command.get('move_position'),
+            route=order.get('route_id'), route_index=order.get('route_index'),
+            attempt={key:attempt.get(key) for key in
+                ('action', 'elapsed', 'physical_block', 'next_route', 'next_index', 'retry_after')},
+            backtrack=command.get('backtrack_budget'),
+            water_depth=state.get('_water_depth'),
+            probe={key:probe.get(key) for key in
+                ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
+
+    @detailed_observed('bot.motion_diagnostics')
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
                           traffic_input=None, traffic_output=None):
@@ -7265,6 +7478,34 @@ class BotRuntime(object):
         Emit at most once per three seconds per hull; movement resets the timer.
         """
         position = _position(state)
+        if not detailed_enabled():
+            # Keep a small, useful failure receipt without constructing nested
+            # histories on every control slice in ordinary play.
+            if (command.get('movement_intent') and abs(state.get('speed', 0.0)) < 0.1 and
+                    now-state.get('_basic_motion_log_at', now-30.0) >= 30.0):
+                state['_basic_motion_log_at'] = now
+                from .native_input_diagnostics import write_json_record
+                write_json_record('BOT MOTION BASIC', dict(
+                    round=self.round_id, id=state['id'], at=now,
+                    vehicle=state.get('vehicle'), position=position,
+                    mode=command.get('combat_mode'), recovery=command.get('recovery_mode'),
+                    target=command.get('move_position'), throttle=throttle, turn=turn,
+                    path_clear=path_clear,
+                    probe={key:motion_probe.get(key) for key in (
+                        'clear', 'collision', 'reason')}
+                        if isinstance(motion_probe, dict) else None))
+            return
+        self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
+        # This compact outcome has its own per-hull cadence. Bulk histories
+        # must not hide the actual controls when the shared quota is full.
+        state['_recovery_summary_command'] = {
+            key: command.get(key) for key in (
+                'movement_intent', 'combat_mode', 'recovery_mode',
+                'move_position', 'target_yaw', 'route_id', 'route_index')}
+        state['_recovery_summary_command'].update(throttle=throttle, turn=turn)
+        from .native_input_diagnostics import detail_record_ready
+        if not detail_record_ready():
+            return
         self._record_execution_window(state, command, throttle, turn, now)
         previous = state.get('_motion_stall_log')
         moved = (previous is not None and
@@ -7310,6 +7551,9 @@ class BotRuntime(object):
                 'local_fallback') or {})
         navigation['target_receipt'] = dict(state.get('_navigation_target_receipt') or {})
         navigation['target_history'] = list(state.get('_navigation_target_history') or ())
+        lineage = state.get('_navigation_handoff_lineage') or {}
+        navigation['handoff_lineage'] = dict(lineage)
+        navigation['handoff_lineage']['events'] = list(lineage.get('events') or ())
         navigation['pending_jobs'] = len(getattr(nav, 'searches', {}))
         search_receipt = getattr(nav, 'bot_search_diagnostics', None)
         if callable(search_receipt):
@@ -7360,6 +7604,8 @@ class BotRuntime(object):
                     age_seconds=max(0.0, driver_state.get('clock', 0.0)-evidence['at']))
             driver_trace[name] = evidence
         driver_trace['short_escape_probes'] = list(driver_state.get('short_escape_probes') or ())
+        driver_trace['escape_terminals'] = list(driver_state.get('escape_terminals') or ())
+        driver_trace['escape_terminals_dropped'] = driver_state.get('escape_terminals_dropped', 0)
         if driver_state:
             driver_trace['short_escape_observation'] = ai_driver.LocalDriver.short_escape_diagnostics(driver_state)
             driver_trace['short_escape_observation'].update(
@@ -7368,6 +7614,18 @@ class BotRuntime(object):
                 command_mode=command.get('recovery_mode'))
         driver_trace['failure_receipts'] = list(driver_state.get('failure_receipts') or ())
         driver_trace['arrival_trace'] = dict(driver_state.get('arrival_trace') or {})
+        blocked_observation = dict(driver_state.get('blocked_observation') or {})
+        if blocked_observation:
+            blocked_observation.update(observed_at=driver_state.get('clock'),
+                age_seconds=max(0., driver_state.get('clock', 0.)-blocked_observation['at']),
+                control_sampled_at=(command.get('control_trace') or {}).get('sampled_at'),
+                observed_simulation_at=now)
+        driver_trace['blocked_observation'] = blocked_observation
+        heading_selection = dict(driver_state.get('heading_selection') or {})
+        if heading_selection:
+            heading_selection.update(observed_at=driver_state.get('clock'),
+                age_seconds=max(0., driver_state.get('clock', 0.)-heading_selection['at']))
+        driver_trace['heading_selection'] = heading_selection
         driver_trace['failed_yaw_deadlines'] = sorted(
             (driver_state.get('failed_yaws') or {}).items())
         driver_trace['action_observation'] = dict(
@@ -7427,7 +7685,9 @@ class BotRuntime(object):
                 position_event=state.get('_spg_position_event'),
                 occupied=state.get('_spg_parking_occupied')),
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
+            'baked_pose_guards': list(state.get('_baked_pose_guards') or ()),
             'contact_escape': command.get('contact_escape'),
+            'backtrack_budget': command.get('backtrack_budget'),
             'wreck_push': command.get('wreck_push'),
             'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
             'withdrawal': command.get('withdrawal'),
@@ -7486,6 +7746,7 @@ class BotRuntime(object):
                 'motion': (throttle, turn),
                 'forward_blocked_by': after_traffic.get('forward_blocked_by'),
                 'reverse_blocked_by': after_traffic.get('reverse_blocked_by'),
+                'rotation_safety': dict(state.get('_traffic_rotation_receipt') or {}),
             },
             'yaw': state.get('yaw'), 'pitch': state.get('pitch'),
             'roll': state.get('roll'), 'shape': state.get('collision_shape'),
@@ -7570,11 +7831,30 @@ class BotRuntime(object):
                 last_position=position, samples=0, travel=0.0, net=0.0,
                 forward=0, reverse=0, turning=0, held=0,
                 command_modes={}, last_control_at=None, first_decision=None,
-                last_decision=None, last_goal=None)
+                last_decision=None, last_goal=None, actions=[], actions_dropped=0)
             state['_execution_window'] = row
         trace = command.get('control_trace') or {}
         planning = command.get('planning_receipt') or {}
         mode = str(command.get('recovery_mode') or command.get('combat_mode') or 'unspecified')
+        signature = (mode, command.get('combat_mode'),
+            _point(command['move_position']) if command.get('move_position') is not None else None,
+            _point(trace['strategic_move_position']) if trace.get('strategic_move_position') is not None else None,
+            command.get('target_kind'), command.get('target_id'))
+        actions = row['actions']
+        if not actions or actions[-1]['signature'] != signature:
+            actions.append(dict(signature=signature, at=now, origin=position,
+                yaw_before=state.get('yaw'), first_decision=planning.get('id'),
+                mode=mode, combat_mode=command.get('combat_mode'),
+                goal=command.get('move_position'),
+                strategic_goal=trace.get('strategic_move_position'),
+                target=(command.get('target_kind'),command.get('target_id')), samples=0))
+            if len(actions)>32:
+                del actions[0]
+                row['actions_dropped'] += 1
+        actions[-1].update(last_at=now, last_decision=planning.get('id'),
+            controls=(throttle,turn), samples=actions[-1]['samples']+1,
+            arrival=dict(trace.get('arrival') or {}),
+            gates=list((trace.get('pedal') or {}).get('gates') or ()))
         row['command_modes'][mode] = row['command_modes'].get(mode, 0) + 1
         row['travel'] += math.hypot(position[0]-row['last_position'][0],
                                    position[2]-row['last_position'][2])
@@ -7589,9 +7869,20 @@ class BotRuntime(object):
         if row['first_decision'] is None:
             row['first_decision'] = planning.get('id')
 
+    @observed('bot.motion_diagnostic_finish')
     def _finish_motion_stall(self, state, support_rollback, pose_rollback,
                              settled_position, now):
         """Log the actual authority outcome without extra world queries."""
+        self._compact_recovery_outcome(state, support_rollback, pose_rollback, now)
+        window=state.get('_execution_window') or {}
+        actions=window.get('actions') or []
+        if actions:
+            actions[-1]['outcome'] = dict(at=now, final=_position(state),
+                yaw=state.get('yaw'), speed=state.get('speed'),
+                settled=settled_position, support_rollback=bool(support_rollback),
+                pose_rollback=bool(pose_rollback),
+                displacement=math.hypot(state['x']-actions[-1]['origin'][0],
+                                        state['z']-actions[-1]['origin'][2]))
         trace = state.pop('_motion_stall_pending', None)
         if trace is None:
             return
@@ -7634,6 +7925,7 @@ class BotRuntime(object):
                     'ground_ahead','profile','native_surface_candidates',
                     'native_surface_columns','pivot_offset')},
             'support_datum': state.get('_basic_support_datum'),
+            'support_handoff': dict(state.get('_basic_support_handoff') or {}),
             'near_goal_motion': dict(state.get('_near_goal_motion') or {}),
             'final': position, 'speed_final': state.get('speed', 0.0),
             'support_rollback': bool(support_rollback),
@@ -7666,9 +7958,56 @@ class BotRuntime(object):
                 integrated=trace.get('integrated'), after_contacts=trace.get('after_contacts'),
                 settled=settled_position,
                 basis='same_physics_slice_after_contacts_and_support')
+        try:
+            episode = physics_audit.motion_episode(state.get('_audit_motion_episode'),
+                position, now, trace.get('decision') or {}, trace.get('driver') or {})
+            state['_audit_motion_episode'] = episode
+            trace['audit_episode'] = episode
+        except Exception as error:
+            trace['audit_episode'] = dict(scope='diagnostic_only',
+                error=type(error).__name__ + ': ' + str(error))
         from .native_input_diagnostics import write_json_record
-        write_json_record('BOT MOTION', trace)
+        observed_call('bot.motion_diagnostic_write', write_json_record, 'BOT MOTION', trace)
         self._queue_navigation_surface_trace(state, trace, now)
+
+    def _compact_recovery_outcome(self, state, support_rollback, pose_rollback, now):
+        if not detailed_enabled():
+            return
+        command = state.pop('_recovery_summary_command', None)
+        if not command or not command.get('movement_intent'):
+            state.pop('_recovery_summary_anchor', None)
+            return
+        position = _position(state)
+        anchor = state.get('_recovery_summary_anchor')
+        if anchor is None or _distance(position, anchor[0]) > 8.0 or now < anchor[1]:
+            state['_recovery_summary_anchor'] = (position, now)
+            return
+        if now-anchor[1] < 15.0 or now-state.get('_recovery_summary_logged', -1e9) < 30.0:
+            return
+        state['_recovery_summary_logged'] = now
+        driver = getattr(getattr(getattr(self, 'adapter', None), 'driver', None), 'states', {}).get(int(state['id']), {})
+        nearby = sorted((_distance(position, _position(other)), int(other['id']), other)
+                        for other in self.states.values()
+                        if other['id'] != state['id'] and _distance(position, _position(other)) <= 12.0)
+        nav = getattr(getattr(self, 'navigator', None), 'bot_states', {}).get(int(state['id']), {})
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT RECOVERY SUMMARY', dict(
+            round=self.round_id, id=state['id'], vehicle=state.get('vehicle'),
+            at=now, position=position, anchor=anchor, command=command,
+            yaw=state.get('yaw'), pitch=state.get('pitch'), roll=state.get('roll'),
+            shape=state.get('collision_shape'), speed=state.get('speed'),
+            support_rollback=bool(support_rollback), pose_rollback=bool(pose_rollback),
+            nearby=[dict(distance=distance, id=ident,
+                         **{key: other.get(key) for key in (
+                             'alive', 'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'collision_shape')})
+                    for distance, ident, other in nearby[:8]],
+            contact=state.get('_contact_compact_receipt'),
+            navigation={key: nav.get(key) for key in ('navigation_status', 'index', 'last_target', 'planned_goal')},
+            driver={key: driver.get(key) for key in (
+                'stuck_time', 'recovery_time', 'recovery_count', 'recovery_mode')},
+            rotation={key: (state.get('_rotation_contact_trace') or {}).get(key)
+                      for key in ('reason', 'status', 'kinds', 'start_yaw', 'end_yaw')},
+            contacts=sorted(pair for pair in self._ram_contacts if state['id'] in pair)[:8]))
 
     def _queue_navigation_surface_trace(self, state, trace, now):
         # Observation only: never pass these results back to navigation/support.
@@ -7826,6 +8165,7 @@ class BotRuntime(object):
         """Preserve 0.10.0 camera-based cadence and worker full-rate decisions."""
         return self._detail_tier(state)
 
+    @detailed_observed('bot.deadline_preparation')
     def _prepare_planning_deadlines(self, now):
         """Promote nearer observers before the native visibility cohort."""
         if not self._fixed_control:
@@ -7874,7 +8214,7 @@ class BotRuntime(object):
         return 2
 
     def _report_blocked_planner(self, position, command, samples, state=None, now=None,
-                                verdicts=None):
+                                verdicts=None, observation_interval=0.0):
         """Do not wait for movement when the driver already proved a wall."""
         report = getattr(self.navigator, 'report_blocked_plan', None)
         target = command.get('move_position')
@@ -7935,10 +8275,64 @@ class BotRuntime(object):
             for row in rotation_rows) and (all_hard or any(
                 row.get('reason') == 'realized_rotation_rejection'
                 for row in rotation_rows)))
+        # A usable pivot is not a usable drive action. At the Strv 81's
+        # house corner one pivot was clear but its translation hit the wall;
+        # all other pivots were hard-refused. That mixed failure previously
+        # kept the short connector alive forever. Match each admitted pivot
+        # to its same-decision direction proof; unknown/traffic-only results
+        # cannot retire a point or publish a global map wall.
+        directions = [row for row in (verdicts or ())
+                      if row.get('kind') == 'direction']
+        mixed_exhausted = bool(rotation_rows and all(
+            (row.get('clear') is False and row.get('reason') in (
+                'realized_rotation_rejection', 'local_sweep_blocked')) or
+            (row.get('clear') is True and row.get('reason') == 'local_sweep_clear' and
+                row.get('yaw') is not None and any(
+                step.get('yaw') is not None and
+                abs(_angle_delta(step['yaw'], row['yaw'])) < 0.0001 and
+                step.get('clear') is False and
+                step.get('reason') == 'planning_collision' and
+                step.get('decision_id') == row.get('decision_id') and
+                step.get('sampled_at') == row.get('sampled_at') and
+                (step.get('native_probe') or {}).get('collision') is True and
+                not (step.get('native_probe') or {}).get('deferred') and
+                not (step.get('native_probe') or {}).get('probe_failed')
+                for step in directions))
+            for row in rotation_rows) and all_hard)
+        # One clear intermediate sample does not admit the whole pivot arc.
+        # The driver records its six complete candidate outcomes, keeping the
+        # same probes/cadence. Match every failed arc to this decision's known
+        # refusal before retiring only this Bot's connector. Exceptions,
+        # deferred probes and traffic without a hard body sweep stay unknown.
+        pivot_search = command.get('partial_pivot_search') or {}
+        arcs = pivot_search.get('candidates') or ()
+        arc_exhausted = bool(
+            pivot_search.get('reason') == 'all_arcs_refused' and len(arcs) == 6 and
+            state is not None and state.get('yaw') is not None and
+            abs(_angle_delta(pivot_search.get('yaw', 1e9), state['yaw'])) < 0.000001 and
+            any(proof.get('distance') is not None and proof.get('at') == now
+                for proof in all_hard) and
+            all(arc.get('clear') is False and any(
+                sample.get('clear') is False and any(
+                    row.get('clear') is False and
+                    row.get('reason') in ('local_sweep_blocked',
+                        'realized_rotation_rejection', 'friendly_or_wreck_rotation') and
+                    row.get('sampled_at') == now and
+                    row.get('decision_id') is not None and any(
+                        sweep.get('decision_id') == row.get('decision_id') and
+                        (sweep.get('native_sweep') or {}).get('at') == now and
+                        (sweep.get('native_sweep') or {}).get('proved') is True
+                        for sweep in verdicts or () if sweep.get('kind') == 'local_sweep') and
+                    row.get('yaw') is not None and sample.get('yaw') is not None and
+                    abs(_angle_delta(row['yaw'], sample['yaw'])) < 0.000001
+                    for row in rotation_rows)
+                for sample in arc.get('samples', ())) for arc in arcs))
+        exhausted = exhausted or mixed_exhausted or arc_exhausted
         if (hard or remembered_rotation or exhausted) and state is not None and now is not None:
             feedback = getattr(self.navigator, 'report_blocked_local_action', None)
             if callable(feedback):
-                private = bool(feedback(state['id'], position, target, heading, now))
+                private = bool(feedback(state['id'], position, target, heading, now,
+                                        observation_interval))
         if state is not None:
             nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
             refusal_counts = {}
@@ -7951,6 +8345,8 @@ class BotRuntime(object):
                 remembered_rotation_refusals=(len(rotation_rows)
                     if remembered_rotation else 0),
                 local_actions_exhausted=exhausted,
+                complete_pivot_arcs_exhausted=arc_exhausted,
+                observation_interval=observation_interval,
                 all_hard_body_refusals=len(all_hard),
                 refusal_counts=refusal_counts,
                 realized_rotation_contact={key: value for key, value in
@@ -7971,6 +8367,7 @@ class BotRuntime(object):
                     retired=nav_state.get('local_target_retired'),
                     replan_count=nav_state.get('blocked_step_replans'),
                     source=(hard[0].get('source') if hard else
+                            'complete_pivot_arcs_exhausted' if arc_exhausted else
                             'realized_rotation_rejection'),
                     witness={key:trace.get(key) for key in (
                         'reason', 'hit', 'normal', 'ray_start', 'ray_end')})
@@ -8038,6 +8435,12 @@ class BotRuntime(object):
             # navigator explicitly selected that adjacent linked cell. The native
             # motion gate and per-frame hull sweep still prove realised travel.
             distance = max(1.0, _number(getattr(grid, 'cell_size', 1.0)))
+            local = prebaked_navigation.local_cell_at(graph, position)
+            if local is not None:
+                distance = max(1.0, _number(local[0]['cell_size']))
+            if evidence is not None:
+                evidence.update(corridor_cell_size=distance,
+                    corridor_resolution='local_mesh' if local is not None else 'base_grid')
             if maximum_distance is not None:
                 # A bounded recovery may stop before the next baked edge.
                 distance = min(distance, max(0.0, _number(maximum_distance)))
@@ -8755,16 +9158,25 @@ class BotRuntime(object):
             params, physics_state, ground, step, pseudo_ground,
             support_vertical_speed)
         moment = float(getattr(self, '_contact_now', None) or 0.0)
-        if (state.get('_edge_support_active') and
-                moment >= state.get('_next_edge_support_log', -1.e30)):
+        abnormal = vehicle_physics.suspension_abnormal_step(physics_state, solved)
+        if ((state.get('_edge_support_active') or BOT_FULL_SUPPORT_ENABLED) and
+                (moment >= state.get('_next_edge_support_log', -1.e30) or
+                 (abnormal and moment >= state.get('_next_abnormal_support_log', -1.e30)))):
             state['_next_edge_support_log'] = moment + 2.0
+            state['_next_abnormal_support_log'] = moment + .25
             from .native_input_diagnostics import write_json_record
             write_json_record('BOT EDGE DYNAMICS', dict(round=self.round_id,
                 bot=state['id'], position=position, before=physics_state, solved=solved,
+                replay=vehicle_physics.suspension_replay_receipt(
+                    params, physics_state, ground, step, pseudo_ground,
+                    support_vertical_speed, solved),
+                abnormal=abnormal, yaw=state.get('yaw'), tick_pose=tick_pose,
+                motion_pose=motion_pose, previous_plane=previous_plane,
                 spring_columns='local_x,local_y,local_z,height,patch_offset',
                 springs=[(p['x'],p.get('y',0.),p['z'],height,getattr(height,'offset',None))
                     for p,height in zip(params['springs'],ground)],
-                pseudo_ground=pseudo_ground))
+                pseudo_ground=pseudo_ground,
+                pseudo_probes=state.get('_pseudo_probe_trace', ())))
         values = (
             solved['height'], solved['vertical_velocity'],
             solved['pitch'], solved['pitch_velocity'],
@@ -8811,7 +9223,14 @@ class BotRuntime(object):
                 write_json_record('BOT SUPPORT REJECTION', dict(
                     round=self.round_id, bot=bot_id, before=physics_state, solved=solved,
                     invalid_pose=invalid_pose, raised_support=raised_support,
-                    contact_recovery=contact_recovery, position=position))
+                    contact_recovery=contact_recovery, position=position,
+                    previous_plane=previous_plane, current_plane=current_plane,
+                    tick_pose=tick_pose, motion_pose=motion_pose,
+                    terminal='restore_snapshot_zero_velocity',
+                    pseudo_probes=state.get('_pseudo_probe_trace', ()),
+                    contacts=vehicle_physics.suspension_contact_receipt(
+                        params, physics_state, ground, pseudo_ground, position,
+                        state.get('yaw', 0.), previous_plane)))
                 state['_support_rejection_log_at'] = moment + 1.
             self._restore_bot_suspension_state(
                 state, suspension_snapshot)
@@ -9182,11 +9601,10 @@ class BotRuntime(object):
         ground = centre if centre is not None else highest
         raw_support_centre = centre
         if was_basic_airborne or ground is None:
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state,
+                'airborne' if was_basic_airborne else 'missing_ground')
         elif '_basic_support_datum' in state:
-            # This is a reference-frame transfer from an admitted detailed
-            # pose, not an invented floor or an upward velocity impulse.
-            datum = state['_basic_support_datum']
+            datum = self._revalidate_basic_support_datum(state, ground, step)
             ground += datum
             centre = centre+datum if centre is not None else None
         if trace is not None:
@@ -9325,7 +9743,7 @@ class BotRuntime(object):
         # the last downward interval so the next query can see a crossed floor,
         # rather than rejecting that floor as an overhead bridge forever.
         if state.get('airborne', False):
-            state.pop('_basic_support_datum', None)
+            self._clear_basic_support_datum(state, 'became_airborne')
             state['_basic_fall_origin_y'] = fall_origin_y
         else:
             state.pop('_basic_fall_origin_y', None)
@@ -9371,6 +9789,21 @@ class BotRuntime(object):
                      else realised_pose, shoulder_cells=0,
                      hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS))):
             return False
+        guard_receipt = dict(reason=('arena_boundary' if moved_farther_outside
+            else 'baked_navigation_hazard'), before=tuple(tick_pose),
+            attempted=tuple(realised_pose), navigation_pose=navigation_pose,
+            navigation_hazards=bool(navigation_hazards),
+            before_safe=bool(tick_was_safe), yaw=state.get('yaw'),
+            hazard_mask=prebaked_navigation.MOTION_FATAL_HAZARDS)
+        local = prebaked_navigation.local_cell_at(self.baked_graph,
+            navigation_pose if navigation_pose is not None else realised_pose)
+        if local is not None:
+            guard_receipt.update(grid='local_mesh', cell_size=local[0]['cell_size'],
+                cell_index=local[1], hazards=int(local[0]['hazards'][local[1]]))
+        else:
+            guard_receipt['grid'] = 'base_grid'
+        state.setdefault('_baked_pose_guards', []).append(guard_receipt)
+        del state['_baked_pose_guards'][:-2]
         state['x'], state['y'], state['z'] = tick_pose
         state['speed'] = 0.0
         state['movement_dir'] = 0
@@ -9391,7 +9824,23 @@ class BotRuntime(object):
             # The contact batch belongs to the rejected realised pose. Drop
             # it with the angular solver history before restoring tick_pose.
             self._reset_bot_suspension_state(state)
-        self._invalidate_realised_motion(state['id'], attempted_yaw, 'baked_pose_guard')
+        self._invalidate_realised_motion(state['id'], attempted_yaw,
+            'arena_boundary' if moved_farther_outside else 'baked_pose_guard')
+        if moved_farther_outside:
+            from . import arena_boundary
+            target=(state.get('_navigation_target_receipt') or {}).get('final_target')
+            bounds=(self.baked_graph or {}).get('bounds')
+            if (target is not None and not arena_boundary.segment_clear(bounds,tick_pose,target,
+                    state.get('half_length',3.5),state.get('half_width',1.7)) and
+                    state.get('_boundary_replan_target') != tuple(target)):
+                # An external shove must not poison a legal drive leg. Retire
+                # only a leg whose own complete chassis footprint is outside.
+                state['_boundary_replan_target']=tuple(target)
+                now=float(getattr(self,'_contact_now',0.) or 0.)
+                report=getattr(self.navigator,'report_blocked_step',None)
+                replan=getattr(self.navigator,'request_replan',None)
+                if callable(report):report(state['id'],tick_pose,target,now)
+                if callable(replan):replan(state['id'],tick_pose,now)
         return True
 
     def _baked_boundary_overflow(self, state, position, yaw):
@@ -9420,16 +9869,13 @@ class BotRuntime(object):
                 return None
         except (KeyError, TypeError, ValueError, IndexError, OverflowError):
             return None
-        sine = abs(math.sin(hull_yaw))
-        cosine = abs(math.cos(hull_yaw))
-        extent_x = cosine * half_width + sine * half_length
-        extent_z = sine * half_width + cosine * half_length
-        return (
-            max(0.0, minimum_x + extent_x - x),
-            max(0.0, x + extent_x - maximum_x),
-            max(0.0, minimum_z + extent_z - z),
-            max(0.0, z + extent_z - maximum_z),
-        )
+        from . import arena_boundary
+        return arena_boundary.overflow(bounds,position,hull_yaw,half_length,half_width)
+
+    def _boundary_rotation_clear(self, state, position, yaw, candidate):
+        from . import arena_boundary
+        return arena_boundary.rotation_clear((self.baked_graph or {}).get('bounds'),
+            position,yaw,candidate,state.get('half_length',3.5),state.get('half_width',1.7))
 
     @observed('bot.boundary')
     def _baked_pose_progress_clear(self, state, before_position, before_yaw,
@@ -10010,12 +10456,17 @@ class BotRuntime(object):
                  nav_state.get('replan_generation', 0))
         leg = own.get('_occupied_route_leg')
         metadata = (dict(leg[2]) if leg is not None and leg[0] == key and len(leg) > 2 else {})
+        previous_epoch = metadata.get('epoch')
+        epoch_action = 'unchanged'
+        geometry_receipt = {}
         def finish(result, blocked, reason, source):
             observations = own.setdefault('_occupied_route_bypass_observations', [])
             observations.append(dict(at=now, goal=tuple(goal), position=tuple(position),
                 target=result, blocked=bool(blocked), reason=reason, source=source,
                 epoch=epoch, leg_target=leg[1] if leg is not None and leg[0] == key else None,
                 phase=metadata.get('phase'), completed_at=metadata.get('completed_at'),
+                previous_epoch=previous_epoch, epoch_action=epoch_action,
+                geometry=geometry_receipt or metadata.get('geometry', {}),
                 native_clearance_claimed=False))
             del observations[:-4]
             if blocked:own['route_wreck_blocked'] = True
@@ -10023,13 +10474,21 @@ class BotRuntime(object):
             return result
         if leg is not None and leg[0] == key:
             if metadata.get('epoch', epoch) != epoch:
-                # Only the existing replan owner or changed physical geometry
-                # renews this gate attempt; a completed short leg does not.
-                own.pop('_occupied_route_leg', None)
+                # A global corpse revision invalidates geometry receipts, not
+                # this actor's completed action. Only its existing retry owner
+                # may renew the attempt; unrelated deaths must not restart it.
                 cache.pop(key, None)
-                leg = None
-                metadata = {}
-            elif (metadata.get('phase') != 'completed' and
+                if metadata.get('epoch', epoch)[1] != epoch[1]:
+                    own.pop('_occupied_route_leg', None)
+                    leg = None
+                    metadata = {}
+                    epoch_action = 'retry_renewed'
+                else:
+                    metadata['epoch'] = epoch
+                    leg = (key, leg[1], metadata)
+                    own['_occupied_route_leg'] = leg
+                    epoch_action = 'geometry_revalidation'
+            if (leg is not None and metadata.get('phase') != 'completed' and
                     _distance(position, leg[1]) <= ai_driver.WAYPOINT_ARRIVAL_RADIUS):
                 metadata.update(epoch=epoch, phase='completed', completed_at=now)
                 leg = (key, leg[1], metadata)
@@ -10077,6 +10536,14 @@ class BotRuntime(object):
             return True
         result = None
         blocked = occupied(goal)
+        geometry_receipt.update(sampled_at=now, radius=radius,
+            goal=tuple(goal), blocked=bool(blocked), blockers=[
+                dict(position=body[1], radius=body[2]) for body in physical
+                if math.hypot(goal[0]-body[1][0], goal[2]-body[1][2]) < radius+body[2]+0.5])
+        if leg is not None and leg[0] == key:
+            metadata['geometry'] = geometry_receipt
+            leg = (key, leg[1], metadata)
+            own['_occupied_route_leg'] = leg
         if not blocked and leg is not None and leg[0] == key:
             own.pop('_occupied_route_leg', None)
             leg = None
@@ -10114,7 +10581,8 @@ class BotRuntime(object):
                     if direct_only and not grid.dry_segment_clear(position, point, now):
                         continue
                     result = point
-                    metadata = dict(epoch=epoch, phase='active', origin=tuple(position))
+                    metadata = dict(epoch=epoch, phase='active', origin=tuple(position),
+                                    geometry=geometry_receipt)
                     leg = (key, point, metadata)
                     own['_occupied_route_leg'] = leg
                     break
@@ -10180,12 +10648,60 @@ class BotRuntime(object):
 
     @observed('bot.navigation_target')
     def _navigation_target(self, bot_id, position, goal, strategic, state):
+        result, failed = None, False
         try:
-            return self._navigation_target_impl(bot_id,position,goal,strategic,state)
+            result = self._navigation_target_impl(bot_id,position,goal,strategic,state)
+            return result
+        except Exception:
+            failed = True
+            raise
         finally:
             links = getattr(getattr(self.navigator,'grid',None),'local_height_links',None)
             if links is not None:
                 links.origin = None
+            authority = self.states.get(int(bot_id))
+            if authority is not None:
+                self._record_navigation_handoff(
+                    authority, position, goal, strategic, state, result, failed)
+
+    @staticmethod
+    def _record_navigation_handoff(authority, position, goal, strategic, state,
+                                    result, failed=False):
+        """Observe every return without feeding evidence into route selection."""
+        receipt = authority.get('_navigation_target_receipt') or {}
+        lineage = authority.setdefault('_navigation_handoff_lineage', dict(
+            calls=0, changes=0, events=[], dropped_events=0,
+            first_at=state.get('now'), first_position=tuple(position)))
+        previous = lineage.get('last_target')
+        point = tuple(result) if result is not None else None
+        delta = (_distance(previous, point)
+                 if previous is not None and point is not None else None)
+        anchor = lineage.get('event_target')
+        event_delta = (_distance(anchor, point)
+                       if anchor is not None and point is not None else None)
+        source = receipt.get('source')
+        mode = strategic.get('combat_mode', 'route')
+        outcome = 'exception' if failed else 'no_target' if point is None else 'returned'
+        # Two metres is the existing driver local-leg identity boundary, used
+        # here only to retain significant history while counting every call.
+        changed = (lineage['calls'] == 0 or (previous is None) != (point is None) or
+                   event_delta is not None and event_delta > 2.0 or
+                   (source, mode, outcome) != lineage.get('last_owner'))
+        lineage['calls'] += 1
+        lineage.update(last_at=state.get('now'), last_target=point,
+            last_position=tuple(position), last_goal=tuple(goal),
+            last_owner=(source, mode, outcome), last_delta=delta)
+        if changed:
+            lineage['event_target'] = point
+            lineage['changes'] += 1
+            lineage['events'].append(dict(at=state.get('now'), origin=tuple(position),
+                previous=previous, selected=point, requested_goal=tuple(goal),
+                source=source, mode=mode, outcome=outcome, delta=delta,
+                selected_distance=_distance(position, point) if point is not None else None,
+                leg_handoff=dict(receipt.get('runtime_leg_handoff') or {})))
+            if len(lineage['events']) > 16:
+                lineage['dropped_events'] += len(lineage['events']) - 16
+                del lineage['events'][:-16]
 
     def _navigation_target_impl(self, bot_id, position, goal, strategic, state):
         state.pop('navigation_progress_target', None)
@@ -10197,6 +10713,11 @@ class BotRuntime(object):
             final_target=tuple(goal))
         if authority_state is not None:
             authority_state['_navigation_target_receipt'] = target_receipt
+        configure_boundary = getattr(self.navigator, 'set_boundary_body', None)
+        if (authority_state is not None and callable(configure_boundary) and
+                'half_length' in authority_state and 'half_width' in authority_state):
+            configure_boundary(bot_id, position, authority_state.get('yaw',0.),
+                authority_state.get('half_length',3.5), authority_state.get('half_width',1.7))
         local_height = None
         if grid is not None and callable(getattr(self,'_navigation_height_columns',None)):
             from .ai.local_height import LocalHeightLinks
@@ -10391,6 +10912,25 @@ class BotRuntime(object):
                     candidate = grid.safe_local_target(position,goal,now,avoid)
                 target = candidate if candidate is not None else tuple(position)
                 state['navigation_stop_at_target'] = False
+        guide = getattr(self.navigator, 'narrow_passage_target', None)
+        navigation_status = getattr(self.navigator, 'bot_states', {}).get(
+            int(bot_id), {}).get('navigation_status', 'pending')
+        if (callable(guide) and mode in ('route', 'advance') and
+                strategic.get('throttle_override') is None and
+                not strategic.get('parking_phase') and navigation_status == 'safe' and
+                'half_length' in state and 'half_width' in state):
+            original = target
+            target = guide(bot_id,position,goal,target,now,
+                float(state.get('yaw',0.)),float(state['half_length']),float(state['half_width']))
+            if target != original:
+                state['navigation_stop_at_target'] = False
+                target_receipt.update(source='narrow_passage', original_target=tuple(original))
+        else:
+            end_passage = getattr(self.navigator, 'end_narrow_passage', None)
+            if callable(end_passage):
+                end_passage(bot_id,now,'navigation_owner_changed')
+        # Passage guidance uses the same finite local-leg owner as every other
+        # runtime bypass, including arrival, hard-contact refusal and timeout.
         remember = getattr(self.navigator, 'remember_runtime_target', None)
         # Height resolution may change Y or round native XZ to float32. Neither
         # changes who owns this steering endpoint. Promoting that ordinary A*
@@ -10499,6 +11039,7 @@ class BotRuntime(object):
                     receipt=dict(target_receipt),decision_input=False))
         return target
 
+    @detailed_observed('bot.player_neighbour_projection')
     def _player_neighbours(self, players):
         result = []
         for raw in players or ():
@@ -11042,6 +11583,10 @@ class BotRuntime(object):
         if (now is not None and requested_move != (move_x, move_z) and
                 now >= state.get('_contact_motion_log_time', 0.0)):
             state['_contact_motion_log_time'] = now + 2.0
+            if detailed_enabled():
+                state['_contact_compact_receipt'] = dict(at=now,
+                    requested=requested_move, accepted=(move_x, move_z),
+                    vehicle_fraction=fraction, native_world=world_blocked)
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
                 'requested=%s accepted=%s vehicle_fraction=%.6f native_world=%s '
@@ -11892,6 +12437,7 @@ class BotRuntime(object):
         after = self._turret_state_pose(state, end, end_yaw)
         return bool(probe(before, after, descriptor))
 
+    @detailed_observed('bot.static_hull_publication')
     def _publish_static_hulls(self, players):
         """Give the navigator wrecks and landed turrets as static geometry.
 
@@ -12385,6 +12931,7 @@ class BotRuntime(object):
             intent_created=intent.get('created'), fire_seq=intent.get('fire_seq'),
             source_pose=intent.get('source_pose'), target=intent.get('target_identity'),
             target_position=intent.get('target_position'), solution=intent.get('solution'),
+            target_motion_reference=intent.get('target_motion_reference'),
             reproof=dict((key, reproof.get(key)) for key in (
                 'created', 'deadline', 'absolute_deadline', 'attempts',
                 'proof_latency', 'last_proof_latency', 'last_aim_staleness',
@@ -12569,6 +13116,9 @@ class BotRuntime(object):
             'solution': solution,
             'target_position': _point(
                 target.get('position'), _position(target)),
+            'target_motion_reference': dict(solution.get('target_motion_reference') or
+                dict(position=_point(target.get('position'), _position(target)),
+                     velocity=self._target_velocity(target), prediction_seconds=0.0)),
             'shot_yaw': shot_yaw,
             'shot_pitch': shot_pitch,
             'created': _number(now),
@@ -12622,6 +13172,7 @@ class BotRuntime(object):
                  if self._native_simulation is not None else
                  ballistics.ballistic_intercept)
         for unused in range(8 if adaptive else 1):
+            predicted_latency = proof_latency
             predicted = tuple(target_position[index] +
                               target_velocity[index] * proof_latency
                               for index in range(3))
@@ -12651,6 +13202,10 @@ class BotRuntime(object):
             'aim_position': aim_position,
             'yaw': yaw,
             'pitch': pitch, 'flight_time': flight_time, 'arc': arc,
+            'target_motion_reference': dict(target.get('_canonical_motion') or
+                dict(position=_point(target.get('position'), _position(target)),
+                     velocity=self._target_velocity(target)),
+                prediction_seconds=predicted_latency),
         }
 
     def _track_gunnery_hold(self, state, target, now):
@@ -12736,6 +13291,7 @@ class BotRuntime(object):
             position[2] - (dx / horizontal) * lateral)
         aimed['velocity'] = (velocity[0] * scale, velocity[1] * scale,
                              velocity[2] * scale)
+        aimed['_canonical_motion'] = dict(position=position, velocity=velocity)
         return aimed
 
     def _gunner_ready(self, state, gun_state, target, now):
@@ -13643,6 +14199,7 @@ class BotRuntime(object):
                     actor, key[1:], now)[:2] for actor in radio_keys)
             radio_values = dict(zip(radio_keys, radio_values))
             published_shooters = []
+            pending_shooters = []
             # A radio observation's 0.5-second *direct spotting* freshness is
             # not a firing-lane lifetime. At low worker FPS it expired between
             # two valid lane samples and silently removed ready shooters.
@@ -13673,12 +14230,19 @@ class BotRuntime(object):
                     lane_age=now-lane[0] if lane is not None else None,
                     mechanical_refusal=source.get('_gun_angle_refusal') == key[1:],
                     mechanical_retry_suppressed=bool(rejected))
+                evidence['movement_refresh_pending'] = bool(
+                    reason == 'lane_expired' and lane[1] and radio[0] > 0.0 and
+                    actor in selected_sources)
                 if actor in selected_sources:
                     source['_lane_publication_evidence'] = evidence
                 diagnostic = self._combat_diagnostics
                 if diagnostic is not None:
                     diagnostic.count('lane_publication_' + reason)
                 if reason != 'published':
+                    # Expiry is an unfinished refresh, not a new wall. It may
+                    # retain an existing movement owner but never permit fire.
+                    if evidence['movement_refresh_pending']:
+                        pending_shooters.append(actor)
                     continue
                 published_shooters.append(actor)
                 if diagnostic is not None and lane is not None:
@@ -13705,6 +14269,7 @@ class BotRuntime(object):
                 # means team-spotted without a local firing lane; the server
                 # rejects omission rather than guessing.
                 'shootable_by_bot_ids': published_shooters,
+                'pending_lane_by_bot_ids': pending_shooters,
                 # Positive evidence only: an absent id is unknown, not safe.
                 'threatened_bot_ids': sorted(set(
                     incoming_by_target.get(key, ()))) if fresh else [],
@@ -13813,6 +14378,10 @@ class BotRuntime(object):
         try:
             intended_impact = _point(intent_solution['aim_position'])
             flight_time = float(receipt['flight_time'])
+            reference = intent['target_motion_reference']
+            reference_position = _point(reference['position'])
+            reference_velocity = _point(reference['velocity'])
+            prediction_seconds = float(reference.get('prediction_seconds', 0.0))
         except (KeyError, TypeError, ValueError, OverflowError):
             self._cancel_artillery_intent(state.get('id'), reason='invalid_aim_receipt', now=now)
             return True
@@ -13824,16 +14393,29 @@ class BotRuntime(object):
             target_position[1] + 1.0 + target_velocity[1] * flight_time,
             target_position[2] + target_velocity[2] * flight_time,
         )
-        error = tuple(target_at_impact[index] - intended_impact[index]
+        reference_at_impact = tuple(reference_position[index] +
+            (1.0 if index == 1 else 0.0) +
+            reference_velocity[index] * (flight_time + prediction_seconds)
+            for index in range(3))
+        # Aim bias and imperfect lead are deliberate gunner behaviour. Only
+        # canonical target-motion changes may invalidate an immutable proof.
+        error = tuple(target_at_impact[index] - reference_at_impact[index]
                       for index in range(3))
+        frozen_offset = tuple(intended_impact[index] - reference_at_impact[index]
+                              for index in range(3))
+        raw_error = math.sqrt(sum((target_at_impact[index] - intended_impact[index])**2
+                                  for index in range(3)))
         if any(math.isnan(value) or math.isinf(value)
-               for value in target_at_impact + intended_impact + error):
+               for value in target_at_impact + intended_impact + error + reference_at_impact + frozen_offset):
             self._cancel_artillery_intent(state.get('id'), reason='nonfinite_aim_receipt', now=now)
             return True
         distance = math.sqrt(sum(value * value for value in error))
         if distance <= ARTILLERY_AIM_STALENESS_METRES + 1e-9:
             self._record_artillery_transition(state['id'], 'aim_receipt_current', now,
-                dict(error_metres=distance, target_velocity=target_velocity,
+                dict(error_metres=distance, raw_aim_error_metres=raw_error,
+                    frozen_aim_offset=frozen_offset, prediction_seconds=prediction_seconds,
+                    target_velocity=target_velocity, reference_at_impact=reference_at_impact,
+                    proof_latency=max(0.0, now-_number(intent.get('created'))),
                     target_at_impact=target_at_impact, intended_impact=intended_impact))
             return False
         reproof = self._active_artillery_reproof(
@@ -13867,7 +14449,10 @@ class BotRuntime(object):
         reproof['arc'] = str(intent_solution.get('arc') or '')
         self._cancel_artillery_intent(
             state.get('id'), preserve_reproof=True, reason='aim_receipt_stale', now=now,
-            evidence=dict(error_metres=distance, allowed_error=ARTILLERY_AIM_STALENESS_METRES,
+            evidence=dict(error_metres=distance, raw_aim_error_metres=raw_error,
+                frozen_aim_offset=frozen_offset, reference_at_impact=reference_at_impact,
+                prediction_seconds=prediction_seconds,
+                allowed_error=ARTILLERY_AIM_STALENESS_METRES,
                 target_velocity=target_velocity, target_at_impact=target_at_impact,
                 intended_impact=intended_impact, flight_time=flight_time,
                 proof_chords=receipt.get('proof_chords'),
@@ -14615,7 +15200,15 @@ class BotRuntime(object):
             reason = ('exact_launch_failed_' + str(failure.get('reason'))
                       if failure and launch_stage == 'exact_launch_pending'
                       else launch_stage or 'gunner_or_selected_lane')
-        print('[SPG FIRE GATE] %s' % json.dumps({
+        from .native_input_diagnostics import detail_record_ready, write_json_record
+        if not detail_record_ready():
+            return
+        signature = (reason, target_key, state.get('fire_seq'), command.get('combat_mode'))
+        if (state.get('_spg_gate_signature') == signature and
+                now-state.get('_spg_gate_detail_at', -1e9) < 15.0):
+            return
+        state['_spg_gate_signature'], state['_spg_gate_detail_at'] = signature, now
+        write_json_record('SPG FIRE GATE', {
             'position_retry_receipt':state.get('_spg_position_retry_receipt'),
             'zone_failures':state.get('_spg_zone_failures',{}),
             'id': state['id'], 'vehicle': state.get('vehicle'), 'reason': reason,
@@ -14642,7 +15235,7 @@ class BotRuntime(object):
             'position_failure_seconds': round((state.get('_spg_fire_position_failure') or {}).get('elapsed', 0.0), 3),
             'position_failure_proofs': len((state.get('_spg_fire_position_failure') or {}).get('proofs', ())),
             'position_retry_seconds': max(0.0, round(state.get('_spg_fire_position_retry_at', now) - now, 3)),
-        }, separators=(',', ':')))
+        })
 
     @staticmethod
     def _gun_angle_rejected(state, identity, now):
@@ -14668,11 +15261,12 @@ class BotRuntime(object):
     def _rear_approach_blocked(self, state, order, targets, now):
         """A fresh blocked lane leaves authored approach in control of travel.
 
-        Unknown/expired evidence cannot veto normal limited-traverse laying.
+        Both authored-route advance and direct contact approach use the same
+        evidence gate. Unknown/expired evidence cannot veto normal laying.
         This reads the existing pair/pose cache and performs no extra scan.
         """
         target = targets.get(order.get('target_id'))
-        eligible = (order.get('combat_mode') == 'advance_contact' and
+        eligible = (order.get('combat_mode') in ('advance_contact', 'advance') and
                     not order.get('parking_phase') and target is not None and
                     target.get('alive', True))
         sample = (self._shot_los_cache.get(self._shot_los_key(state, target))
@@ -14916,6 +15510,44 @@ class BotRuntime(object):
             return ((state.get('x', 0.0)-start[0])*math.sin(state.get('yaw', 0.0)) +
                     (state.get('z', 0.0)-start[2])*math.cos(state.get('yaw', 0.0))) / sweep['step'], 'realised_player_contact'
         return _number(state.get('speed')), 'physical_speed'
+
+    def _record_traffic_pivot(self, state, command, safety, target, hull_aiming, now):
+        """Hand an actually denied firing pivot to the existing angle owner.
+
+        This observes the already executed traffic sweep; it never samples or
+        grants collision clearance. Clear an unconsumed handoff when the guard
+        clears, without cancelling an angle action that already owns its exit.
+        """
+        previous = state.get('_traffic_rotation_receipt') or {}
+        identity = self._artillery_target_identity(target)
+        receipt = dict(safety.get('rotation_safety') or {})
+        receipt.setdefault('queried', False)
+        receipt.setdefault('blocked', False)
+        eligible = bool(target is not None and hull_aiming and
+            not command.get('parking_phase') and
+            command.get('combat_mode') not in (
+                'base_defense', 'artillery_deploy', 'artillery_relocate') and
+            (state.get('profile') or {}).get('class_tag') != 'SPG')
+        handoff = bool(eligible and receipt.get('blocked'))
+        receipt.update(at=now, target=identity, hull_aiming=bool(hull_aiming),
+            eligible=eligible, handoff=handoff,
+            requested_mode=command.get('combat_mode'),
+            applied_turn=safety.get('turn'),
+            reason=receipt.get('reason', 'guard_not_queried'))
+        if handoff:
+            state['_gun_angle_pivot_refusal'] = identity
+            if not previous.get('handoff') or previous.get('target') != identity:
+                self._decision_cache.pop(state['id'], None)
+            receipt['owner'] = 'existing_gun_angle_recovery'
+        elif (previous.get('handoff') and
+                state.get('_gun_angle_adjustment') is None and
+                state.get('_gun_angle_pivot_refusal') == previous.get('target')):
+            state.pop('_gun_angle_pivot_refusal', None)
+            receipt['owner'] = 'unconsumed_handoff_released'
+        else:
+            receipt['owner'] = ('existing_gun_angle_recovery' if
+                state.get('_gun_angle_adjustment') is not None else 'ordinary_controls')
+        state['_traffic_rotation_receipt'] = receipt
 
     def _gun_angle_order(self, state, order, targets, now, direction_clear):
         """Bound ordinary mechanical-angle recovery; parking and SPGs own theirs.
@@ -15403,6 +16035,7 @@ class BotRuntime(object):
         gun_state.commit_shot_bloom(
             _critical_factor(state, descriptor, 'dispersion'),
             final_round=final_round)
+        state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
         state['clip'] = gun_state.clip
         state['reload_time'] = gun_state.remaining(reload_factor)
         state['reload_duration'] = gun_state.duration(reload_factor)
@@ -15497,6 +16130,7 @@ class BotRuntime(object):
         if gun_state is not None:
             reload_factor = _critical_factor(
                 state, self._descriptors.get(bot_id, {}), 'reload')
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
@@ -16068,6 +16702,8 @@ class BotRuntime(object):
             decision_deadline = None
             raw_command = None
             planner_probe_samples = {}
+            current_footprint_samples = {}
+            planning_rotation_rosters = {}
             planning_verdicts = []
             planning_receipt = dict(
                 id=[self.round_id, int(state['id']),
@@ -16106,6 +16742,9 @@ class BotRuntime(object):
                 self.navigator, 'controlled_shallow_committed', None)
 
             def sample_pose_clear_impl(sample_yaw, allow_wreck_push=False):
+                if not self._boundary_rotation_clear(state,position,state['yaw'],sample_yaw):
+                    planning_reason[0] = 'arena_boundary_rotation'
+                    return False
                 # Whether this hull may rotate where it stands is a question
                 # about a rectangle, not about a heading. Answer it from the
                 # shipped graph the navigator already owns.
@@ -16120,18 +16759,16 @@ class BotRuntime(object):
                         return False
                 if self._planning_rotation_fraction_for(
                         state, position, state['yaw'], sample_yaw,
-                        neighbours, allow_wreck_push) < 1.0:
+                        neighbours, allow_wreck_push, planning_rotation_rosters) < 1.0:
                     planning_reason[0] = 'friendly_or_wreck_rotation'
                     return False
                 pose_grid = getattr(self.navigator, 'grid', None)
                 pose_probe = getattr(pose_grid, 'hull_pose_clear', None)
                 try:
-                    current_grid_clear = (bool(pose_probe(position, state['yaw'],
-                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
-                        if callable(pose_probe) else None)
-                    candidate_grid_clear = (bool(pose_probe(position, sample_yaw,
-                        state.get('half_length', 3.5), state.get('half_width', 1.7)))
-                        if callable(pose_probe) else None)
+                    current_grid_clear, candidate_grid_clear = self._planning_grid_pose_pair(
+                        pose_grid, position, state['yaw'], sample_yaw,
+                        state.get('half_length', 3.5), state.get('half_width', 1.7),
+                        current_footprint_samples)
                 except Exception:
                     planning_reason[0] = 'baked_pose_probe_exception_defer_native_commit'
                     return True
@@ -16207,6 +16844,16 @@ class BotRuntime(object):
                 return result
 
             def sample_clear_impl(sample_yaw, maximum_distance=None, drive_direction=1.0):
+                boundary_distance = (maximum_distance if maximum_distance is not None else
+                    decision_state.get('navigation_probe_distance') if decision_state is not None else None)
+                if boundary_distance is None:
+                    boundary_distance = max(1., float(getattr(grid,'cell_size',4.)))
+                boundary_end = (position[0]+math.sin(sample_yaw)*float(boundary_distance),
+                    position[1],position[2]+math.cos(sample_yaw)*float(boundary_distance))
+                if not self._baked_pose_progress_clear(state,position,state['yaw'],
+                                                        boundary_end,state['yaw']):
+                    planning_reason[0] = 'arena_boundary_translation'
+                    return False
                 bounded_recovery = maximum_distance is not None
                 if maximum_distance is None:
                     maximum_distance = decision_state.get(
@@ -16319,7 +16966,14 @@ class BotRuntime(object):
                         decision_cache[3] if decision_cache is not None else {})
                     stopping_distance = self._cached_traffic_stopping_distance(
                         state, previous_command, physics_params)
+                unused_motor_devices, motor_destroyed, unused_motor_crew, unused_motor_yellow = _critical_parts(state)
+                motor_disabled = sorted(motor_destroyed.intersection((
+                    'engineHealth', 'leftTrackHealth', 'rightTrackHealth')))
+                motor_hold = (dict(destroyed=motor_disabled,
+                    overturned=bool(state.get('_overturned', False)))
+                    if motor_disabled or state.get('_overturned', False) else {})
                 decision_state = {
+                    'wreck_push_motor_hold': motor_hold,
                     'id': state['id'],
                     'team': state.get('team', 0),
                     'collision_shape': state.get('collision_shape'),
@@ -16414,7 +17068,8 @@ class BotRuntime(object):
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
-                    position, command, planner_probe_samples, state, now, planning_verdicts)
+                    position, command, planner_probe_samples, state, now, planning_verdicts,
+                    observation_interval=decision_horizon)
                 command = timed_call(
                     self._combat_diagnostics, 'bot.traffic',
                     self._traffic_coordinator.adjust,
@@ -16571,11 +17226,15 @@ class BotRuntime(object):
             elif not burst_state.active:
                 gun_state.rescale_reload(reload_factor)
                 gun_state.tick(step)
+                selected = gun_state.shell_index(command.get('shell_index', 0))
+                ammo_state.stage(selected, False)
                 reload_kind = gun_state.complete_reload(
                     reload_factor, ammo_state.planned_rounds())
-                ammo_state.stage(
-                    gun_state.shell_index(command.get('shell_index', 0)),
-                    reload_kind is not None, reload_kind == 'full')
+                ammo_state.stage(selected, reload_kind is not None,
+                                 reload_kind == 'full')
+                if reload_kind == 'full':
+                    gun_state.clip = min(gun_state.clip_size,
+                                         ammo_state.planned_rounds())
             ammo_state.publish(state)
             is_spg = str(profile.get('class_tag') or '') == 'SPG'
             pending_intent = None
@@ -16621,6 +17280,7 @@ class BotRuntime(object):
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
+            state['_baked_pose_guards'] = []
             state['_short_escape_commit'] = dict(reason='not_short_escape')
             state['_committed_corridor'] = dict(reason='integration_not_run')
             throttle = max(-1.0, min(1.0, command['throttle']))
@@ -16733,6 +17393,7 @@ class BotRuntime(object):
                 safety_body, traffic_input,
                 self._neighbours_for(state, neighbours), now,
                 current_stopping_distance, step)
+            self._record_traffic_pivot(state, command, safety, target, hull_aiming, now)
             throttle, turn = safety['throttle'], safety['turn']
             state['traffic_braking'] = safety.get('traffic_mode') == 'vehicle_brake'
             if siege_motion_locked:
@@ -16845,6 +17506,16 @@ class BotRuntime(object):
                         throttle = 0.0
                         turn = 0.0
             cached_motion_probe = self._motion_probe_cache.get(state['id'])
+            motion_body_pose = ((state['yaw'], self._terrain_pitch(state),
+                                 state.get('roll', 0.))
+                                if not state.get('airborne', False) else None)
+            previous_body_pose = (cached_motion_probe or {}).get('body_pose')
+            # A corridor cast in another support plane cannot prove this one.
+            # Keep the existing angular tolerance used by settled motion.
+            motion_attitude_matches = bool(
+                'body_pose' not in (cached_motion_probe or {}) or
+                (previous_body_pose is None and motion_body_pose is None) or
+                self._same_probe_support_plane(previous_body_pose, motion_body_pose))
             # A frozen pose keeps this slice's realised translation at zero
             # without claiming that the corridor is blocked, so it must not
             # arm the failed-yaw, blocked-step or contact escalations that
@@ -16856,6 +17527,7 @@ class BotRuntime(object):
                 state.get('grounded_once', False) and
                 not state.get('airborne', False))
             motion_probe_reusable = bool(
+                motion_attitude_matches and
                 (not decision_due or self._motion_probe_covers_distance(
                     cached_motion_probe, maximum_probe_distance)) and
                 self._motion_probe_reusable(
@@ -16865,6 +17537,7 @@ class BotRuntime(object):
             cached_motion_result = (
                 (cached_motion_probe or {}).get('result') or {})
             cached_motion_geometry_reusable = bool(
+                motion_attitude_matches and
                 isinstance(cached_motion_result, dict) and
                 self._probe_is_clear(cached_motion_result) and
                 self._motion_probe_covers_distance(
@@ -16909,8 +17582,10 @@ class BotRuntime(object):
                 # reused or acquired.
                 motion_probe = self._probe_direction(
                     position, travel_yaw, state.get('speed', 0.0), descriptor,
-                    maximum_probe_distance)
-                # Planner alternatives keep the mature six horizontal rays.
+                    maximum_probe_distance, body_pose=motion_body_pose)
+                # Use the same occupied support plane as planner alternatives.
+                # Horizontal side lanes can intersect the uphill bank of an
+                # already grounded, rolled hull (GW Tiger, Serene Coast).
                 # Only the finally selected, translating, non-turning travel
                 # sample pays for the exact 3x3 receipt used by commit-side
                 # motion.  Releasing the throttle does not stop an already
@@ -16920,6 +17595,9 @@ class BotRuntime(object):
                         self._probe_is_clear(motion_probe) and
                         not motion_probe.get('deferred', False) and
                         abs(_number(motion_probe.get('slope'))) <= 0.01 and
+                        motion_body_pose is not None and
+                        abs(motion_body_pose[1]) <= .01 and
+                        abs(motion_body_pose[2]) <= .01 and
                         (abs(throttle) > 0.01 or
                          abs(state['speed']) > 0.0001) and
                         abs(turn) <= 0.01 and
@@ -16991,6 +17669,7 @@ class BotRuntime(object):
                         motion_probe.get('_world_receipt_pending', False))
                     self._motion_probe_cache[state['id']] = {
                         'result': motion_probe,
+                        'body_pose': motion_body_pose,
                         'position': position,
                         'yaw': travel_yaw,
                         'maximum_distance': maximum_probe_distance,
@@ -17180,9 +17859,8 @@ class BotRuntime(object):
                                 fraction=allowed)
                         state['_contact_motor_turn'] = steer_dir
                         state['rotation_dir'] = 0
-                rotation_blocked = (not self._baked_pose_progress_clear(
-                        state, position, old_hull_yaw,
-                        position, candidate_hull_yaw) or
+                rotation_blocked = (not self._boundary_rotation_clear(
+                        state, position, old_hull_yaw,candidate_hull_yaw) or
                         (abs(_angle_delta(candidate_hull_yaw,
                                           old_hull_yaw)) > 1.0e-8 and
                          not self._turret_pose_is_clear(
@@ -17556,6 +18234,7 @@ class BotRuntime(object):
                     _critical_factor(state, descriptor, 'dispersion'),
                     _critical_factor(state, descriptor, 'aim_time'))
             state['clip_size'] = gun_state.clip_size
+            state['ammo_magazine_started'] = gun_state.reload_kind == 'intra'
             state['clip'] = gun_state.clip
             state['reload_time'] = gun_state.remaining(reload_factor)
             state['reload_duration'] = gun_state.duration(reload_factor)
@@ -17799,6 +18478,9 @@ class BotRuntime(object):
                     state['id'], state.get('yaw', 0.0))
                 was_airborne = bool(state.get('airborne', False))
                 driven_pose = _position(state)
+                # Contact translation can still replace this trial endpoint.
+                # Retire detailed support only at the final physical pose.
+                state['_support_release_after_contacts'] = True
                 support_blocked = self._update_vertical_motion(
                     state, frame_step,
                     tick_poses[state['id']], attempted_yaw)
@@ -17910,6 +18592,12 @@ class BotRuntime(object):
                 if callable(clear_contact):
                     clear_contact(bot_id)
             self._settle_unresolved_drive_sweep(state)
+            state.pop('_support_release_after_contacts', None)
+            if state.get('_edge_support_active'):
+                state.setdefault('_support_motion_receipt', {}).update(
+                    release_stage='after_contacts_and_pose_guards',
+                    release_position=_position(state), release_at=now)
+            self._release_detailed_support(state)
             self._observe_near_goal_motion(state,tick_poses[bot_id],drive_targets.get(bot_id),now)
             self._finish_motion_stall(
                 state, support_blocked_by_id.get(bot_id, False),

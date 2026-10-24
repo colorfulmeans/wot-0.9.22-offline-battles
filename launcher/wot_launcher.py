@@ -26,13 +26,15 @@ if __package__ in (None, ""):
     import save_personal_missions
     import personal_missions_ui
     import customizations_ui
+    import crew_ui
+    import nation_choices
     import replay_launch
     import save_slots
     import vehicle_editor_ui
     import vehicle_overlays
     import window_diagnostics
 else:
-    from . import customizations_ui
+    from . import customizations_ui, crew_ui, nation_choices
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -57,6 +59,36 @@ LAUNCHER_VERSION = "0.10.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
 _CHINESE = {
+    'Each click adds 16 free berths. Pending recruits reserve space; crew serving in vehicles do not.':'每次免费增加16个床位。待领取成员预留床位；车上服役成员不占兵营床位。',
+    'Add 16 barracks berths': '添加16个兵营床位',
+    'Added 16 barracks berths to this save.': '已为当前存档增加16个兵营床位。',
+    'Total berths: %d | In barracks: %d | Pending: %d | Can recruit: %d': '总床位：%d｜兵营成员：%d｜待领取：%d｜可招募：%d',
+    'Barracks information is unavailable.': '无法读取兵营床位信息。',
+    'The barracks data could not be read.': '无法读取兵营床位数据，请先检查存档。',
+    'Not enough barracks berths': '兵营床位不足',
+    'Not enough barracks berths. Click Add 16 barracks berths first.': '兵营床位不足，请先点击“添加16个兵营床位”扩充兵营。',
+    'Close World of Tanks before changing crew or barracks berths.': '添加成员或扩充兵营床位前，请先关闭游戏。',
+    'Another crew or barracks edit is in progress. Try again.': '成员或兵营床位正在修改，请稍后重试。',
+    'The barracks berth limit has been reached.': '兵营床位数量已达到上限。',
+
+    'Self-propelled gun': '自行火炮',
+    'Tank type': '坦克类型', 'Profession': '专业', 'Training level': '训练水平',
+    'Skills and perks': '技能和特长', 'Also': '兼',
+    'Skill count reduced to the current seat limit: ': '技能数量已降低至当前席位上限：',
+    'Choose a vehicle and its actual crew seat. The skill limit includes its combined roles, with shared skills counted once. Below 100% training, ordinary skills are unavailable. Female crew always have zero-skill Brothers in Arms; it counts as one selected skill. At 100%, choose the other skills in the client. Grants belong to the member and are not renewed by moving seats. Close the game before adding; delivery and a system message occur next startup. Insufficient barracks space leaves the request pending.':
+        '按车辆和实际成员席位添加，共同技能去重后计算上限。训练不足100%时不能选择普通技能；女性始终具有零历练兄弟连，计入技能总数。100%成员的其他技能进入客户端后自行选择。技能额度属于成员，换座不重复授予。添加前请关闭游戏，下次启动进入兵营并显示系统消息；兵营不足时保留待领取。',
+    'Crew members': '成员', 'Crew role': '类型', 'Gender': '性别',
+    'Complete skills': '技能数', 'Trained vehicle': '受训车辆',
+    'Commander': '车长', 'Gunner': '炮手', 'Driver': '驾驶员',
+    'Loader': '装填手', 'Radio operator': '通信兵',
+    'Male': '男性', 'Female': '女性', 'Add to barracks': '添加到兵营',
+    'Close World of Tanks before adding crew.': '添加成员前请关闭游戏。',
+    'Select a trained vehicle with the requested crew role.': '请选择具备该岗位的受训车辆。',
+    'Start the game to receive pending crew first.': '请先启动游戏领取已添加的成员。',
+    'Crew member queued for this save. It arrives in the barracks on the next game startup.':
+        '成员已添加到当前存档的待领取列表，下次启动游戏时进入兵营，并显示系统消息。',
+    'Adds one 100% crew member, with experience for the selected number of complete skills. Choose the skills in the client. No zero-skill perk is added. Close the game before adding; the next startup delivers the recruit and a system message. Insufficient barracks space leaves the request pending.':
+        '每次添加一名 100% 成员，附带所选数量的完整技能经验，具体技能在客户端自行选择，不额外附赠零技能。技能数 0 表示只有 100% 基础熟练度。添加前请关闭游戏，下次启动时进入兵营并显示系统消息；兵营空间不足时保留待领取。',
     'Coatings': '涂装',
     'Edit preset style inventory...': '编辑预设风格库存…',
     'All compatible vehicles': '全部适用车辆',
@@ -177,6 +209,14 @@ _CHINESE = {
     "Open save folder": "打开存档文件夹",
     "Back up save...": "备份存档…",
     "Restore save...": "恢复存档…",
+    "Initialize save...": "初始化存档…",
+    "Initialize save?": "初始化存档？",
+    "Close World of Tanks before initializing a save.": "初始化存档前请先关闭游戏。",
+    "The save could not be initialized: %s": "初始化存档失败：%s",
+    "Initialized save '%s'. Recovery folder: %s": "已初始化存档“%s”。恢复备份目录：%s",
+    "Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.":
+        "确定初始化存档“%s”（%s）吗？全部进度、成员和待领取奖励将被重置。保留名称、存档类型和收益倍率。操作前自动备份，可通过“恢复存档”恢复。",
+
     "Back up save": "备份存档",
     "Restore save": "恢复存档",
     "Save backup": "存档备份",
@@ -241,7 +281,7 @@ _CHINESE = {
     "japan": "日本", "czech": "捷克", "sweden": "瑞典",
     "poland": "波兰", "italy": "意大利",
     "Light tank": "轻型坦克", "Medium tank": "中型坦克",
-    "Heavy tank": "重型坦克", "Tank destroyer": "坦克歼击车",
+    "Heavy tank": "重型坦克", "Tank destroyer": "自行反坦克炮",
     "SPG": "自行火炮",
     "Personal missions": "个人任务",
     "Edit mission progress...": "调整完成进度…",
@@ -393,10 +433,10 @@ _CHINESE = {
         "每个存档有独立的车库、乘员、账号设置和战斗记录。启动游戏时使用当前选中的"
         "存档。可以把存档备份成 ZIP 文件，也可以打开存档文件夹自行复制文件。",
     "Repair": "修复",
-    "Repair startup (keep saved data)": "修复启动问题（保留存档）",
+    "Repair startup (keep saved data)": "修复启动问题（保留存档和方案）",
     "Normal client stuck loading? Clean preferences...":
-        "正式客户端卡在加载界面？点击清理配置…",
-    "Reset all offline data...": "重置全部离线数据…",
+        "备份并重置正式客户端设置…",
+    "Reset all offline data...": "重置离线存档与设置…",
     "Create error report...": "一键汇报错误…",
     "Collect full-memory crash dumps (very large files)":
         "疑难闪退：收集完整内存（文件很大）",
@@ -415,8 +455,8 @@ _CHINESE = {
     "Delete vehicle profile?": "删除车辆属性方案？",
     "Delete profile '%s' and all of its saved vehicle edits?":
         "删除方案“%s”及其中保存的全部车辆修改？",
-    "Reset all offline data?": "重置全部离线数据？",
-    "Clean normal client preferences?": "清理正式客户端配置？",
+    "Reset all offline data?": "重置离线存档与设置？",
+    "Clean normal client preferences?": "备份并重置正式客户端设置？",
     "This moves the normal World of Tanks preferences.xml aside as a backup. "
     "Graphics, window, and input settings will reset the next time the normal "
     "client starts. Offline saved data is not changed. Continue?":
@@ -424,7 +464,7 @@ _CHINESE = {
     "This deletes this mod's saved address, account settings, garage fittings, "
     "post-battle results, configuration, and isolated client graphics/input "
     "preferences. Other mods and the normal World of Tanks profile are kept. "
-    "Continue?": "这会删除本 Mod 保存的地址、账号设置、车库配件、战后结果、配置，以及独立的客户端画面/输入偏好。其他 Mod 和正常的 World of Tanks 配置会保留。是否继续？",
+    "Continue?": "这会删除本 Mod 保存的地址、账号设置、车库配件、战后结果、配置，以及独立的客户端画面/输入偏好。自定义 BOT 战术、车辆属性方案、其他 Mod 和正式客户端配置会保留。是否继续？",
     "No launcher game session is available to report yet.":
         "还没有可汇报的启动器游戏场次。",
     "The latest game session has not produced any diagnostic logs yet. No "
@@ -856,8 +896,11 @@ class LauncherWindow(object):
         self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
-        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.personal_missions_panel):
+        self.crew_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
             self.save_tabs.add(panel)
+        self.crew_editor = crew_ui.CrewPanel(self, self.crew_panel)
+        self.save_tabs.bind('<<NotebookTabChanged>>', self._save_tab_changed)
         self.edit_customizations_button = tk.Button(self.customizations_panel, command=self._open_customizations)
         self.edit_customizations_button.pack(fill='x')
         self.edit_personal_missions_button = tk.Button(
@@ -898,39 +941,7 @@ class LauncherWindow(object):
         self.save_slot_box.grid(row=0, column=1, sticky="we", padx=(6, 0))
         self.save_slot_box.bind(
             "<<ComboboxSelected>>", self._save_slot_selected)
-        save_actions = tk.Frame(self.save_panel)
-        save_actions.grid(
-            row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
-        self.customize_save_button = tk.Button(
-            save_actions, text="", command=self._open_save_dialog)
-        self.customize_save_button.pack(side="left", fill="x", expand=True)
-        self.new_save_slot_button = tk.Button(
-            save_actions, text="", command=self._new_save_slot)
-        self.new_save_slot_button.pack(side="left", fill="x", expand=True)
-        self.rename_save_slot_button = tk.Button(
-            save_actions, text="", command=self._rename_save_slot)
-        self.rename_save_slot_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        self.delete_save_slot_button = tk.Button(
-            save_actions, text="", command=self._delete_save_slot)
-        self.delete_save_slot_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        # A save is a few small JSON files, so the recovery a player can
-        # always perform is copying them out and putting them back.
-        save_backup_actions = tk.Frame(self.save_panel)
-        save_backup_actions.grid(
-            row=2, column=0, columnspan=2, sticky="we", pady=(6, 0))
-        self.open_save_folder_button = tk.Button(
-            save_backup_actions, text="", command=self._open_save_folder)
-        self.open_save_folder_button.pack(side="left", fill="x", expand=True)
-        self.backup_save_button = tk.Button(
-            save_backup_actions, text="", command=self._backup_save_slot)
-        self.backup_save_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
-        self.restore_save_button = tk.Button(
-            save_backup_actions, text="", command=self._restore_save_slot)
-        self.restore_save_button.pack(
-            side="left", fill="x", expand=True, padx=(6, 0))
+        self._build_save_actions()
         self.save_help_label = tk.Label(
             self.save_panel, text="", anchor="w", justify="left",
             wraplength=620)
@@ -1180,6 +1191,7 @@ class LauncherWindow(object):
             text=self._t("Open save folder"))
         self.backup_save_button.config(text=self._t("Back up save..."))
         self.restore_save_button.config(text=self._t("Restore save..."))
+        self.initialize_save_button.config(text=self._t("Initialize save..."))
         self.save_help_label.config(text=self._t(
             "Each save keeps its own garage, crew, account settings and "
             "battle results. The selected save is the one the game starts "
@@ -1198,8 +1210,9 @@ class LauncherWindow(object):
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
         for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
-                             (self.customizations_panel, 'Coatings'), (self.personal_missions_panel, 'Personal missions')):
+                             (self.customizations_panel, 'Coatings'), (self.crew_panel, 'Crew members'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))
+        self.crew_editor.translate()
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
@@ -1248,6 +1261,12 @@ class LauncherWindow(object):
                 editor.set_language(self.language)
                 editors.append(editor)
         self._bot_tactics_editors = editors
+        vehicle_editors = []
+        for editor in getattr(self, '_vehicle_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                vehicle_editors.append(editor)
+        self._vehicle_editors = vehicle_editors
 
     def _sync_mode_tab(self):
         if getattr(self, '_replay_tab', False):
@@ -1419,6 +1438,7 @@ class LauncherWindow(object):
             "normal" if self._selected_client == core.PORT_0_9_22 and
             not self._busy and not self._maintenance_busy and
             not server_running else "disabled")
+        self.initialize_save_button.config(state='disabled' if self._busy or self._maintenance_busy else 'normal')
         self.repair_button.config(state=maintenance_state)
         self.normal_preferences_button.config(state=maintenance_state)
         self.reset_button.config(state=maintenance_state)
@@ -1574,6 +1594,7 @@ class LauncherWindow(object):
         self._refresh_save_slots()
         self.save_dialog.title(self._t("Customize save: %s") % self.save_slot.get())
         self.save_dialog_feedback.config(text="")
+        self._save_tab_changed()
         self.save_dialog.deiconify()
         self.save_dialog.grab_set()
         self.save_dialog.lift()
@@ -1597,6 +1618,10 @@ class LauncherWindow(object):
 
     def _open_customizations(self):
         return self._open_personal_editor(customizations_ui.CustomizationsDialog)
+
+    def _save_tab_changed(self, unused=None):
+        if self.save_tabs.select() == str(self.crew_panel):
+            self.crew_editor.refresh()
 
     def _open_account_badges(self):
         return self._open_personal_editor(personal_missions_ui.BadgesDialog)
@@ -1738,6 +1763,8 @@ class LauncherWindow(object):
         return catalogue
 
     def _refresh_gold_shop(self, status=None):
+        old_nation=getattr(self,'_gold_nation_by_label',{}).get(self.gold_nation.get())
+        old_class=getattr(self,'_gold_class_by_label',{}).get(self.gold_class.get())
         game_root = (status or {}).get("path") or self.game_root.get().strip()
         try:
             offers = gold_shop.list_offers(
@@ -1753,18 +1780,17 @@ class LauncherWindow(object):
         self.gold_class_label.config(text=self._t("Vehicle type"))
         self._gold_nation_by_label = {self._t("All"): None}
         self._gold_nation_by_label.update(
-            (self._t(nation), nation)
-            for nation in sorted(set(row["nation"] for row in offers)))
+            (nation_choices.caption(nation,self._t), nation)
+            for nation in nation_choices.ordered(row["nation"] for row in offers))
         self._gold_class_by_label = {self._t("All"): None}
         self._gold_class_by_label.update(
             (self._t(label), name)
             for name, label in vehicle_editor_ui.VEHICLE_CLASS_LABELS)
-        for box, variable, choices in (
-                (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label),
-                (self.gold_class_box, self.gold_class, self._gold_class_by_label)):
+        for box, variable, choices, selected in (
+                (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label,old_nation),
+                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class)):
             box.config(values=tuple(choices))
-            if variable.get() not in choices:
-                variable.set(self._t("All"))
+            variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
         return self._filter_gold_shop()
 
@@ -2007,6 +2033,48 @@ class LauncherWindow(object):
             self._log(self._t("The files that were replaced were kept in %s.")
                       % result["replaced"])
         self._refresh_save_slots()
+        return True
+
+    def _build_save_actions(self):
+        tk=self._tk
+        save_actions = tk.Frame(self.save_panel)
+        save_actions.grid(row=1,column=0,columnspan=2,sticky="we",pady=(6,0))
+        for column in range(4):
+            save_actions.grid_columnconfigure(column,weight=1,uniform="save_actions")
+        for index,(attribute,command) in enumerate((
+                ('customize_save_button',self._open_save_dialog),
+                ('new_save_slot_button',self._new_save_slot),
+                ('rename_save_slot_button',self._rename_save_slot),
+                ('delete_save_slot_button',self._delete_save_slot),
+                ('open_save_folder_button',self._open_save_folder),
+                ('backup_save_button',self._backup_save_slot),
+                ('restore_save_button',self._restore_save_slot),
+                ('initialize_save_button',self._initialize_save_slot))):
+            button=tk.Button(save_actions,text="",command=command)
+            button.grid(row=index//4,column=index%4,sticky="we",padx=3,pady=3)
+            setattr(self,attribute,button)
+
+    def _initialize_save_slot(self):
+        if self._busy or self._maintenance_busy:
+            self._log("Wait for the current launcher operation to finish.")
+            return False
+        if core.game_is_running():
+            self._log(self._t('Close World of Tanks before initializing a save.'))
+            return False
+        record=self._selected_save_slot_record()
+        if record is None:return False
+        from tkinter import messagebox
+        if not messagebox.askyesno(self._t('Initialize save?'),
+                self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')),
+                icon='warning',default='no',parent=self.root):
+            return False
+        try:
+            result=save_slots.initialize_slot(record['id'],self.game_root.get().strip() or None)
+        except save_slots.SaveSlotError as error:
+            self._log(self._t('The save could not be initialized: %s') % error)
+            return False
+        self._refresh_save_slots()
+        self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):
@@ -2619,7 +2687,8 @@ class LauncherWindow(object):
                 from . import bot_tactics_ui
             status = self._refresh_client()
             editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
-                                               language=self.language, log=self._log)
+                                               language=self.language, log=self._log,
+                                                lineup=lambda:bot_lineup_profiles.assignments_for(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
             editors = [value for value in getattr(self, '_bot_tactics_editors', ())
                        if value.root.winfo_exists()]
             editors.append(editor)
@@ -2719,9 +2788,12 @@ class LauncherWindow(object):
             self._log("Create or select a vehicle profile before editing.")
             return False
         self._remember_folder()
-        vehicle_editor_ui.open_vehicle_editor(
+        editor = vehicle_editor_ui.open_vehicle_editor(
             self.root, status["path"], profile_name, log=self._log,
             language=self.language)
+        if not hasattr(self, '_vehicle_editors'):
+            self._vehicle_editors = []
+        self._vehicle_editors.append(editor)
         return True
 
     def _delete_vehicle_profile(self):
@@ -3802,6 +3874,11 @@ def _serve(argv):
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Choose once per launcher process; child environments inherit this mode.
+    # A normal entry must not inherit a stale diagnostic setting from a shell.
+    if core.SERVE_FLAG not in argv:
+        os.environ['WOT_OFFLINE_DIAGNOSTICS'] = ('1' if '--diagnostics' in argv or
+            os.environ.get('WOT_OFFLINE_SPIKE_PROFILE') == '1' else '0')
     if '--verify-style-editor' in argv:
         index = argv.index('--verify-style-editor')
         if index + 2 >= len(argv):

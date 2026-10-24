@@ -37,6 +37,21 @@ def _body(identity, x=0.0, z=0.0, **changes):
 
 
 class NativeMathDispatchTests(unittest.TestCase):
+    def test_windowed_optional_load_failure_survives_missing_stdio(self):
+        self.native._attempted=False
+        loader=mock.Mock(side_effect=ImportError('no compatible optional backend'))
+        with mock.patch.dict(sys.modules,{'imp':types.SimpleNamespace(load_dynamic=loader)}),mock.patch.object(sys,'stdout',None),mock.patch.object(sys,'stderr',None):
+            self.assertIsNone(self.native.call('translation_fraction',{},(),[]))
+            self.assertIsNone(self.native.call('translation_fraction',{},(),[]))
+        loader.assert_called_once()
+        self.assertTrue(self.native._reported_failure)
+
+    def test_closed_stdio_cannot_override_the_optional_load_failure(self):
+        stream=io.StringIO();stream.close()
+        with mock.patch.object(sys,'stdout',stream),mock.patch.object(sys,'stderr',None):
+            self.native._report_failure(ImportError('optional backend'))
+        self.assertTrue(self.native._reported_failure)
+
     def test_projectile_fallback_evidence_is_bounded_and_never_inspects_custom_inputs(self):
         native = self.native
         class Trap(object):

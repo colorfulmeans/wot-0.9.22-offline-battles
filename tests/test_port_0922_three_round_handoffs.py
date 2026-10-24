@@ -48,7 +48,7 @@ class RecordedHandoffTests(unittest.TestCase):
                 for now in (325.6,326.,330.):
                     self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,now,True))
 
-    def test_completed_bypass_allows_existing_replan_retry_and_new_geometry(self):
+    def test_completed_bypass_renews_only_on_existing_replan_not_global_geometry(self):
         arrived=(34.88200447005671,-.12273275852203369,131.94391922028694)
         for changed in ('retry','geometry'):
             with self.subTest(changed=changed):
@@ -56,7 +56,13 @@ class RecordedHandoffTests(unittest.TestCase):
                 self.assertIsNone(runtime._occupied_route_target(12,arrived,goal,325.,True))
                 if changed=='retry':runtime.navigator.bot_states[12]['replan_generation']=2
                 else:grid.static_hull_revision+=1
-                self.assertIsNotNone(runtime._occupied_route_target(12,arrived,goal,326.,True))
+                result=runtime._occupied_route_target(12,arrived,goal,326.,True)
+                if changed=='retry':
+                    self.assertIsNotNone(result)
+                else:
+                    self.assertIsNone(result)
+                    self.assertEqual('completed_handoff',runtime.states[12]['_occupied_route_bypass_observations'][-1]['reason'])
+                    self.assertEqual('geometry_revalidation',runtime.states[12]['_occupied_route_bypass_observations'][-1]['epoch_action'])
 
     def test_unfinished_bypass_remains_fixed_and_completed_handoff_does_not_claim_clearance(self):
         runtime,grid,goal,target=self.occupied_emil(400.)

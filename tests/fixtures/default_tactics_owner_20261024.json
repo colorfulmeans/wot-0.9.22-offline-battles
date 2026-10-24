@@ -1,0 +1,252 @@
+{
+  "maps": {
+    "01_karelia": {
+      "digest": "eb7981e4db06169a6fcae1d78e66392b33a6de71fba012c350be0accbc3645f4",
+      "parking_groups": 0,
+      "points": 384,
+      "routes": 30
+    },
+    "02_malinovka": {
+      "digest": "5b01ffe4bc9ced107be7c4f69395355a78f840cdfc43ddf0b66a67ccac088b79",
+      "parking_groups": 2,
+      "points": 160,
+      "routes": 14
+    },
+    "04_himmelsdorf": {
+      "digest": "395823deb7a5f6cf20ddcb40b23722dffcc3f27d9642c4d64d9fd0d74eb70ff2",
+      "parking_groups": 0,
+      "points": 248,
+      "routes": 20
+    },
+    "05_prohorovka": {
+      "digest": "6b9303c109f37607427412b8ba873d1e95a4ca7a62870d74c24dc3f8ffff1777",
+      "parking_groups": 2,
+      "points": 162,
+      "routes": 16
+    },
+    "06_ensk": {
+      "digest": "bf45bcbd1ff81593b761e11809b17ec9232248fc6c0e80627a2c4211c66cb77f",
+      "parking_groups": 2,
+      "points": 209,
+      "routes": 18
+    },
+    "07_lakeville": {
+      "digest": "537150fea86ed84a1ad2c2baab98e8611cd119f5eff4d1f6354de7f6446ec0d0",
+      "parking_groups": 2,
+      "points": 274,
+      "routes": 24
+    },
+    "08_ruinberg": {
+      "digest": "f7d3f3df456ddc42e2f253dc833a89737dda6a0d988dc317f6dfa4e33ab2e983",
+      "parking_groups": 2,
+      "points": 180,
+      "routes": 14
+    },
+    "100_thepit": {
+      "digest": "42c1912b0a23915603e5f204a7f7213de3ba821ccbc2cd7561269268bedfaf35",
+      "parking_groups": 2,
+      "points": 287,
+      "routes": 30
+    },
+    "101_dday": {
+      "digest": "dd23b27c8a1c25c2f1ee6effaa2c0a599c5d27ca94dcb3385fbf78bd0c12692f",
+      "parking_groups": 2,
+      "points": 237,
+      "routes": 20
+    },
+    "103_ruinberg_winter": {
+      "digest": "b4418e6bedbe1cff4cd885d5493c9c72cababe4e834f66a93b320257e47ac4ed",
+      "parking_groups": 2,
+      "points": 180,
+      "routes": 14
+    },
+    "10_hills": {
+      "digest": "5342190d95b7a4bc56f9ba4ef5b36251db0838f22ff3a37e7c0b77ab65a08b04",
+      "parking_groups": 2,
+      "points": 216,
+      "routes": 20
+    },
+    "112_eiffel_tower_ctf": {
+      "digest": "0974302e6ef3e56d9edd12b513fcb4761c898da96d80613a40339c2e61fa106f",
+      "parking_groups": 2,
+      "points": 160,
+      "routes": 16
+    },
+    "114_czech": {
+      "digest": "5002c0a4d85d364f71710ea520aebad618e90573ff36d3e28f0d46207cd692bf",
+      "parking_groups": 0,
+      "points": 232,
+      "routes": 22
+    },
+    "11_murovanka": {
+      "digest": "86218b88be895c57c30644dfbeabbeaf8469b007690c4feb3a159bdb4bd73e8c",
+      "parking_groups": 2,
+      "points": 168,
+      "routes": 20
+    },
+    "13_erlenberg": {
+      "digest": "2023ea2c26930f3170cad6d29e742696ec885d849ac44e70af9b7088ec5ba083",
+      "parking_groups": 0,
+      "points": 449,
+      "routes": 30
+    },
+    "14_siegfried_line": {
+      "digest": "13f3d25d7b20806bb1e154c93b17de6ce7b88960d2842e85c8015c6c84d6610b",
+      "parking_groups": 2,
+      "points": 182,
+      "routes": 18
+    },
+    "17_munchen": {
+      "digest": "78d1ff22da5f52c7f0244ca532063425aa051f6a03248f6ff36e5766f1884b8f",
+      "parking_groups": 0,
+      "points": 132,
+      "routes": 16
+    },
+    "18_cliff": {
+      "digest": "6b6bc03614f1e9abe7b2de49ceb47453ec90d1d7952e00d38a13bc3543bf1970",
+      "parking_groups": 0,
+      "points": 240,
+      "routes": 22
+    },
+    "19_monastery": {
+      "digest": "3f8e2ffb71ddd0631be2e0149dc32712f21f86cf26d486bac54942314be3b309",
+      "parking_groups": 2,
+      "points": 209,
+      "routes": 18
+    },
+    "22_slough": {
+      "digest": "dd4dfb2d6e7c811d7ef9745064443df95fce92c1b2d6742012b56949b7be805b",
+      "parking_groups": 0,
+      "points": 110,
+      "routes": 10
+    },
+    "23_westfeld": {
+      "digest": "f462c3bc2efd554699cba90212fb14ae5160ad2f5d54590e317f7e91a0a71adf",
+      "parking_groups": 4,
+      "points": 242,
+      "routes": 22
+    },
+    "28_desert": {
+      "digest": "ae6bbcaf7220f446dc4b38ec685080719c2535b43b4941e0b9762911d072e4e9",
+      "parking_groups": 2,
+      "points": 237,
+      "routes": 20
+    },
+    "29_el_hallouf": {
+      "digest": "e3bd4c7e3731942cb2a4ef4a67db97dcd38b01169c02957b5955896e0cd8ef69",
+      "parking_groups": 4,
+      "points": 404,
+      "routes": 30
+    },
+    "31_airfield": {
+      "digest": "63ee01f6a422535fbfb86a81b42638796c9cf703865e26fb1b41b46b3520e57a",
+      "parking_groups": 2,
+      "points": 226,
+      "routes": 16
+    },
+    "33_fjord": {
+      "digest": "b554a27104457b32e26ca3fa90d75978933d427f0461684c0eea47a163b46a41",
+      "parking_groups": 0,
+      "points": 434,
+      "routes": 30
+    },
+    "34_redshire": {
+      "digest": "ea6fc5a5f3a4068b40149aec686ae119ec0f7f4418736f394bd910df83bda2d7",
+      "parking_groups": 0,
+      "points": 146,
+      "routes": 16
+    },
+    "35_steppes": {
+      "digest": "bbfc02d1ad836e834d99e9163d9ccc15a88e7d27b50877a74ea6b9801c5b462b",
+      "parking_groups": 6,
+      "points": 189,
+      "routes": 18
+    },
+    "36_fishing_bay": {
+      "digest": "7a778f97f9ecfad7971191255415e618650219e311bd84b0c1e76b92f51a000f",
+      "parking_groups": 4,
+      "points": 185,
+      "routes": 20
+    },
+    "37_caucasus": {
+      "digest": "318d6e8487c5a31759d0acf719cd0f81d8e105c1afdbd6ff7fe623739715208c",
+      "parking_groups": 4,
+      "points": 254,
+      "routes": 18
+    },
+    "38_mannerheim_line": {
+      "digest": "a20bb683bede2b7b170fea2da6eb7d7d1708e79de53d08f86ddbb61f194750a5",
+      "parking_groups": 2,
+      "points": 250,
+      "routes": 22
+    },
+    "44_north_america": {
+      "digest": "3fc261a84d1cd8a2609867fdf22cc0793c468c97795b4322274090fdca5eabac",
+      "parking_groups": 2,
+      "points": 216,
+      "routes": 18
+    },
+    "45_north_america": {
+      "digest": "47f330bf31274106ae183367ffdd6ba6a1d275f2cd4f35f82d7d82d556da250c",
+      "parking_groups": 2,
+      "points": 192,
+      "routes": 18
+    },
+    "47_canada_a": {
+      "digest": "f737cbacd729ae082ddc6de1e92613e5d34fa8b9dd8d2e121df1b7d1559498d4",
+      "parking_groups": 2,
+      "points": 387,
+      "routes": 30
+    },
+    "59_asia_great_wall": {
+      "digest": "91fe45fc9c07f91ae47437ef65876a1f82135a06bc1c35f0c634ff7fe0bc194f",
+      "parking_groups": 2,
+      "points": 306,
+      "routes": 22
+    },
+    "63_tundra": {
+      "digest": "cdae4595f58c4d8cab9e502c752ef7e24fdf324e247d230214bd21c09f99267a",
+      "parking_groups": 0,
+      "points": 383,
+      "routes": 30
+    },
+    "73_asia_korea": {
+      "digest": "591e388bd76aba46a89f370feb04f973da4270007be4594b7357f863551dcbe3",
+      "parking_groups": 0,
+      "points": 200,
+      "routes": 16
+    },
+    "83_kharkiv": {
+      "digest": "a8200967a3dcd5f4a2cc02cf3c8529d99b69096949ecb9a6126bb6110ddcb679",
+      "parking_groups": 0,
+      "points": 360,
+      "routes": 30
+    },
+    "84_winter": {
+      "digest": "6a5d0f097174f95fe4d117ae8419223b6f6eba18063a29b45a853f62a7505427",
+      "parking_groups": 0,
+      "points": 212,
+      "routes": 20
+    },
+    "86_himmelsdorf_winter": {
+      "digest": "aa48ce23e1884b5966f0f7bc99a56247df4bb7f9877e875c0429f6d2d0df524e",
+      "parking_groups": 0,
+      "points": 178,
+      "routes": 14
+    },
+    "92_stalingrad": {
+      "digest": "3abdb708aadce3cd98723f85bfaf1fc237870642fbc266a1bd69619bee1d39ea",
+      "parking_groups": 0,
+      "points": 238,
+      "routes": 16
+    },
+    "95_lost_city": {
+      "digest": "8754ba7ea43899d47948959ffb2248f2e867f4735522a86320ecfef95d6c5349",
+      "parking_groups": 0,
+      "points": 280,
+      "routes": 26
+    }
+  },
+  "profile_digest": "885fb513c91a916322c41568b789aea668b15267362314c13273f4c47900bc77",
+  "source": "Approved complete owner profile 1: final ten-point Himmelsdorf rear guard; light tanks exclude rear guard and heavy tanks exclude rail on both teams; all other maps retained."
+}

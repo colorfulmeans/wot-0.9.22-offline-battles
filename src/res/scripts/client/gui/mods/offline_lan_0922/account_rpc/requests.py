@@ -3,6 +3,7 @@
 from __future__ import print_function
 
 import sys
+import copy
 import time
 import traceback
 
@@ -67,6 +68,7 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     """
     started = _clock()
     state = _garage(context)
+    before_transaction=copy.deepcopy(state.snapshot()) if require_persistence else None
     from gui.mods.offline_lan_0922 import offline_services
     previous_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
     postbattle = context.get('postbattle_store')
@@ -98,6 +100,8 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
         store.mark_dirty()
         saved_ok = store.flush(state.snapshot())
         if require_persistence and not saved_ok:
+            state.snapshot().clear();state.snapshot().update(before_transaction)
+            context['selected_vehicle']=state.snapshot()
             raise garage.GarageError('The transaction could not be saved.')
     saved = _clock()
     push = context.get('push_update')
@@ -259,8 +263,12 @@ def _set_and_fill_layouts(context, args):
 def _add_tankman_skill(context, args):
     if len(args) < 2:
         return Result(commands.RES_FAILURE, 'INVALID_CREW_REQUEST')
-    return _fitting(context, lambda state: state.add_tankman_skill(
-        args[0], args[1]))
+    try:
+        with _garage(context)._transaction():
+            return _fitting(context, lambda state: state.add_tankman_skill(
+                args[0], args[1]),require_persistence=True)
+    except garage.GarageError as error:
+        return Result(commands.RES_FAILURE,str(error))
 
 
 def _drop_tankman_skills(context, args):
@@ -268,9 +276,11 @@ def _drop_tankman_skills(context, args):
     # (shopRev, tmanInvID, dropSkillsCostIdx).
     if len(args) < 3:
         return Result(commands.RES_FAILURE, 'INVALID_CREW_REQUEST')
-    return _fitting(
-        context,
-        lambda state: state.drop_tankman_skills(args[1], args[2]))
+    try:
+        with _garage(context)._transaction():
+            return _fitting(context,lambda state: state.drop_tankman_skills(args[1],args[2]),require_persistence=True)
+    except garage.GarageError as error:
+        return Result(commands.RES_FAILURE,str(error))
 
 
 def _train_tankman(context, args):

@@ -524,6 +524,8 @@ class LANSession(object):
         self._room_preferences = port_config.load_waiting_room_state()
         self._restored_team_generation = None
         self._restored_team_sizes_generation = None
+        self._restored_skill_generation = None
+        self._pending_skill_preference = None
         self._published_progress_battles = (
             -1 if postbattle_store is None else
             int(postbattle_store.progress().get('battles', 0)))
@@ -1174,6 +1176,9 @@ class LANSession(object):
         nor a message is what makes the button look dead after a round.
         """
         self._postbattle_return = None
+        if self._training_mode != (unused_action_name == 'training'):
+            self._close_picker()
+            self._leave_queue_screen()
         self._training_mode = unused_action_name == 'training'
         if self._stopped or self.state in ('error', 'stopped'):
             sys.stdout.write(
@@ -1404,6 +1409,8 @@ class LANSession(object):
             'team': current_team,
             'preferred': self._room_preferences.get('team', 0),
             'sizes': sizes,
+            'classes': getattr(self.client, 'team_classes', {}),
+            'class_supported': callable(getattr(self.client,'set_team_class',None)),
             'counts': counts,
             'supported': self._server_supports_team_selection(),
             'size_supported': self._server_supports_team_size_selection(),
@@ -1444,6 +1451,12 @@ class LANSession(object):
             if team == 0 else tr('Requesting Team %d...') % team)
         return True
 
+    def set_team_class(self, team, tag, allowed):
+        if (self._stopped or self.client is None or self.state != 'waiting' or not self._is_local_host()):
+            return False
+        setter = getattr(self.client, 'set_team_class', None)
+        return bool(callable(setter) and setter(team, tag, allowed))
+
     def set_team_size(self, team, size):
         """Ask the server to change one capacity without restarting."""
         if (self._stopped or self.client is None or self.state != 'waiting' or
@@ -1482,6 +1495,7 @@ class LANSession(object):
             self._status_notifier(
                 tr('The LAN server did not accept that Bot skill preset.'))
             return False
+        self._pending_skill_preference = (self._client_generation, mode)
         self._status_notifier(tr('Requesting Bot skill preset...'))
         return True
 
@@ -1547,9 +1561,33 @@ class LANSession(object):
         sizes[team] = size
         return self._save_room_preferences()
 
+    def _remember_accepted_bot_skill(self, message):
+        pending = self._pending_skill_preference
+        if pending is None:
+            return
+        generation, mode = pending
+        if generation != self._client_generation:
+            self._pending_skill_preference = None
+            return
+        if _message_value(message, 'bot_skill_mode') != mode:
+            return
+        self._pending_skill_preference = None
+        if self._room_preferences.get('bot_skill_mode') != mode:
+            self._room_preferences['bot_skill_mode'] = mode
+            self._save_room_preferences()
+
     def _restore_waiting_preferences(self):
-        """Apply saved capacities and team once after each connection."""
+        """Apply saved difficulty, capacities and team once per connection."""
         generation = self._client_generation
+        saved_skill = self._room_preferences.get('bot_skill_mode')
+        if (self._restored_skill_generation != generation and self._is_local_host()):
+            setter = getattr(self.client, 'set_bot_skill_mode', None)
+            current = getattr(self.client, 'bot_skill_mode', 'mixed')
+            if saved_skill is None or saved_skill == current:
+                self._restored_skill_generation = generation
+            elif callable(setter) and setter(saved_skill):
+                self._pending_skill_preference = (generation, saved_skill)
+                self._restored_skill_generation = generation
         if (self._restored_team_sizes_generation != generation and
                 self._is_local_host() and
                 self._server_supports_team_size_selection()):
@@ -1605,6 +1643,7 @@ class LANSession(object):
                 on_close=self._on_map_window_closed,
                 on_select=self._on_map_window_selected,
                 selection=self._map_window_selection)
+            window._team_sizes = lambda: self._team_status().get('sizes', {})
             window.install()
         except Exception as error:
             self._map_window_unavailable = True
@@ -1767,6 +1806,9 @@ class LANSession(object):
         return self._queue_screen
 
     def _ensure_queue_background(self):
+        if self._training_mode:
+            # The native TrainingRoom is the lobby page, not a random queue.
+            return True
         # Account and Scaleform views are recreated across every battle.
         # An earlier successful action is not proof of the current room.
         screen = self._ensure_queue_screen()
@@ -1775,6 +1817,9 @@ class LANSession(object):
         return bool(screen.is_ready())
 
     def _leave_queue_screen(self):
+        if self._training_mode:
+            background = getattr(getattr(self._queue, '_flash', None), 'leave_background', None)
+            return bool(background()) if callable(background) else False
         if self._queue_screen is None:
             return False
         return bool(self._queue_screen.leave())
@@ -1804,6 +1849,7 @@ class LANSession(object):
                     'request_team': self.select_team,
                     'team_status': self._team_status,
                     'request_team_size': self.set_team_size,
+                    'request_team_class': self.set_team_class,
                     'bot_tier_status': self._bot_tier_status,
                     'request_bot_tier_mode': self.set_bot_tier_mode,
                     'bot_skill_status': self._bot_skill_status,
@@ -1814,6 +1860,8 @@ class LANSession(object):
                     'round_seconds': self._round_seconds_value,
                     'training_status': lambda: (self._training_mode, self._training_bots),
                     'toggle_training_bots': self._toggle_training_bots,
+                    'player_roster': lambda: list(getattr(self.client, 'roster', ()) or ()),
+                    'local_player_id': lambda: getattr(self.client, 'player_id', None),
                 })
             room = self._room_factory(
                 self.request_start, self._map_pool_value, **options)
@@ -1990,8 +2038,8 @@ class LANSession(object):
         if not self._is_local_host() and not self._guest_surface():
             # The stock map window can only present the elected room host.
             return False
-        # As in 0.8.2, the stock queue screen loads under the room.
-        # Training changes LAN rules, not the visible pre-queue background.
+        # Only regular battles enter the random queue background. Training
+        # loads the native TrainingRoom lobby page through its own adapter.
         if not self._ensure_queue_background():
             self._schedule_picker_when_lobby_ready()
             return False
@@ -2212,7 +2260,24 @@ class LANSession(object):
             self.snapshot = None
             self._start_requested = False
 
+    def _show_class_adjustment(self, message):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        notice=_message_value(message,'team_class_notice')
+        if isinstance(notice,dict) and notice.get('revision')!=getattr(self,'_class_notice_revision',None):
+            self._class_notice_revision=notice.get('revision')
+            changes=notice.get('changes')
+            if not isinstance(changes,list):changes=[notice]
+            for change in changes[:2]:
+                if not isinstance(change,dict) or change.get('team') not in (1,2):continue
+                removed=change.get('removed')
+                if not isinstance(removed,list):continue
+                removed=[tag for tag in removed[:5] if tag in bot_tactics.CLASSES]
+                if removed:
+                    self._status_notifier(tr('Team %d: insufficient Bot slots; unchecked %s. Increasing team size will not restore these selections.') %
+                        (change.get('team',0),u', '.join(tr(tag) for tag in removed)))
+
     def _waiting_event(self, message):
+        self._show_class_adjustment(message)
         self._cancel_retry_callback()
         self._cancel_round_end_watchdog()
         recovered_connection = self._connection_error_notified
@@ -2272,6 +2337,7 @@ class LANSession(object):
                 self.state = 'awaiting_battle_start'
                 return
             self.state = 'waiting'
+            self._remember_accepted_bot_skill(message)
             self._restore_waiting_preferences()
             self._publish_postbattle_progress()
             self._publish_postbattle_results()
@@ -2742,6 +2808,7 @@ class LANSession(object):
         return True
 
     def _on_event(self, kind, message):
+        self._show_class_adjustment(message)
         if self._stopped or getattr(self, '_replay_exit_requested', False):
             return
         if getattr(self.client, 'is_offline_replay', False):
@@ -2779,7 +2846,17 @@ class LANSession(object):
                 message, 'host_player_id',
                 getattr(self.client, 'host_player_id',
                         self._host_player_id))
-            if _message_value(message, 'code') == 'host_only':
+            if _message_value(message, 'code') == 'bot_class_pool_empty':
+                detail=_message_value(message,'class_error')
+                if not isinstance(detail,dict):detail={}
+                reasons={'tier_window':tr('no shared battle-tier window can supply the selected classes'),
+                         'slots':tr('not enough automatic Bot slots'),
+                         'missing_class':tr('a selected class has no available vehicle at the current tier and exclusion settings'),
+                         'pool':tr('the selected classes and artillery limit cannot fill the team')}
+                self._status_notifier(tr('Team %d cannot start: %s. Adjust the class selection or team size.') %
+                    (detail.get('team',0),reasons.get(detail.get('reason'),tr('invalid Bot class selection'))+
+                     (u' ('+u', '.join(tr(tag) for tag in detail.get('classes',[]))+u')' if detail.get('classes') else u'')))
+            elif _message_value(message, 'code') == 'host_only':
                 self._status_notifier(
                     tr('Only the LAN room host can choose the map and start.'))
             else:
@@ -2845,6 +2922,7 @@ class LANSession(object):
             else:
                 self._refresh_surface()
         elif kind == 'bot_skill_mode_denied':
+            self._pending_skill_preference = None
             code = _message_value(message, 'code')
             if code == 'host_only':
                 notice = tr('Only the LAN room host can change the Bot skill '

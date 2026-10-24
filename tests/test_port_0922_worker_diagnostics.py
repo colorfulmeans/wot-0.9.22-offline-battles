@@ -1,11 +1,13 @@
 import importlib.util
 import itertools
 import threading
+import sys
 from pathlib import Path
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'src/res/scripts/client'))
 PATH = (ROOT / 'src/res/scripts/client/gui/mods/offline_lan_0922' /
         'worker_diagnostics.py')
 spec = importlib.util.spec_from_file_location('worker_diagnostic_test', PATH)
@@ -14,6 +16,17 @@ spec.loader.exec_module(diagnostics)
 
 
 class WorkerCombatDiagnosticsTests(unittest.TestCase):
+    def test_extra_helper_timings_are_diagnostic_entry_only(self):
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        measured=diagnostics.detailed_observed('extra.helper')(lambda value:value+1)
+        with mock.patch.object(diagnostics,'current',return_value=object()) as current, \
+             mock.patch.object(diagnostics,'_invoke',return_value=17) as invoke:
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=False):
+                self.assertEqual(4,measured(3));current.assert_not_called();invoke.assert_not_called()
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=True):
+                self.assertEqual(17,measured(3));invoke.assert_called_once()
+
     def test_spike_test_keeps_every_actor_after_old_capture_limit(self):
         ticks = iter(i * 0.001 for i in range(10000))
         trace = diagnostics.WorkerCombatDiagnostics.spike_test(

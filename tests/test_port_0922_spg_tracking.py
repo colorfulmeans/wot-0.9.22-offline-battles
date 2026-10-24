@@ -76,7 +76,7 @@ class SPGTrackingTests(unittest.TestCase):
             turret_speed=.3, gun_speed=.3, dispersion=.03, max_ammo=30)
         descriptor.chassis.rotationSpeed = .25
         descriptor.gun.pitchLimits = {'absolute': (-.9, .15)}
-        descriptor.gun.shots = ({'shell': {'effectsIndex': 0}, 'speed': 425.,
+        descriptor.gun.shots = ({'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.,
                                 'gravity': 143., 'maxDistance': 10000.},)
         controller = self.controller_type()
         clock = [0.]
@@ -259,6 +259,6 @@ class SPGTrackingTests(unittest.TestCase):
                 runtime._record_artillery_gate(
                     state, order, targets[1000002], None, gun, ammo, 1., False, True, True, now, None)
         self.assertEqual([], native_calls)
-        self.assertEqual(1, output.getvalue().count('[SPG FIRE GATE]'))
+        self.assertEqual(1, output.getvalue().count('SPG FIRE GATE '))
         self.assertIn('planning_pending', output.getvalue())
         self.assertNotIn('_spg_position', state)

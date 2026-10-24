@@ -161,9 +161,13 @@ def main():
     runtime._pending_launches = []
     reference = {}
     for actor_id, clip, burst in ((1, 1, (1, 0.0)), (2, 6, (3, 0.08)),
-                                  (3, 4, (4, 0.12))):
-        gun = source._BotGunState(descriptor(clip, burst))
-        ammo = source._BotAmmoState(descriptor(clip, burst), dict(shells=(
+                                  (3, 4, (4, 0.12)), (4, 1, (1, 0.0)),
+                                  (5, 3, (1, 0.0))):
+        params = descriptor(clip, burst)
+        if actor_id >= 4:
+            params['gun'].update(reloadTime=0.1, clip=(clip, 0.1), maxAmmo=1800)
+        gun = source._BotGunState(params)
+        ammo = source._BotAmmoState(params, dict(shells=(
             dict(index=0, kind='armor_piercing', penetration=100),
             dict(index=1, kind='armor_piercing', penetration=150),
             dict(index=2, kind='high_explosive', penetration=20))))
@@ -200,8 +204,11 @@ def main():
             if not burst.active:
                 gun.rescale_reload(factor)
                 gun.tick(dt)
+                ammo.stage(gun.shell_index(requested), False)
                 boundary = gun.complete_reload(factor, ammo.planned_rounds())
                 ammo.stage(gun.shell_index(requested), boundary is not None, boundary == 'full')
+                if boundary == 'full':
+                    gun.clip = min(gun.clip_size, ammo.planned_rounds())
             owner.prepare(actor_id, dt, factor, requested)
             compare(actor_id, 'prepare %d/%d' % (frame, actor_id))
             values = (abs(math.sin(frame) * 8.0), abs(math.cos(frame) * 0.4),
@@ -414,7 +421,8 @@ def main():
                                     'detach', 'same_round_migration', 'closed_lifetime',
                                     'atomic_install_failure', 'unknown_class_tag',
                                     'long_session_launch_timestamps', 'exact_double_timestamp_boundary',
-                                    'invalid_timestamp_bridge_rejection'])))
+                                    'invalid_timestamp_bridge_rejection', 'tenth_second_custom_guns',
+                                    'pending_reload_retarget', 'unstarted_magazine_retarget'])))
 
 
 if __name__ == '__main__':

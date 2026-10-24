@@ -1123,7 +1123,7 @@ class LanClientQueueTests(unittest.TestCase):
             'id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll',
             'aim_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'push_yaw', 'contact_push_acks',
             'movement_dir', 'rotation_dir', 'fire_seq', 'shell_index',
-            'next_shell_index', 'ammo_remaining', 'ammo_reload_pending',
+            'next_shell_index', 'ammo_remaining', 'ammo_reload_pending', 'ammo_magazine_started',
             'reload_time', 'reload_duration', 'clip', 'clip_size',
             'world_pose', 'airborne', 'service_brake', 'stun_end_server_time_ms',
             'health', 'alive', 'critical', 'combat_base_revision',

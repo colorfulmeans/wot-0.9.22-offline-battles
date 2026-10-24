@@ -111,15 +111,15 @@ class WaitParkingTests(unittest.TestCase):
         self.assertEqual([first[i]['move_position'] for i in range(11,15)],
                          [again[i]['move_position'] for i in range(11,15)])
 
-    def test_one_metre_arrival_and_individual_clocks(self):
+    def test_six_metre_arrival_and_individual_clocks(self):
         p,m=self.setup_parking();m=m[:3]
-        states=[_state(11,1,-1.01,0),_state(12,1,20,0),_state(13,1,40,0)]
+        states=[_state(11,1,-6.01,0),_state(12,1,20,0),_state(13,1,40,0)]
         first=self.orders(p,m,states,10)
         self.assertEqual('approach',first[11]['parking_phase'])
-        self.assertEqual(1,first[11]['arrival_radius'])
+        self.assertEqual(6,first[11]['arrival_radius'])
         self.assertEqual('waiting',first[12]['parking_phase'])
         self.assertEqual('waiting',first[13]['parking_phase'])
-        states[0]['x']=-1
+        states[0]['x']=-6
         self.assertEqual('waiting',self.orders(p,m,states,15)[11]['parking_phase'])
         self.assertEqual(0,self.orders(p,m,states,24.9)[11]['route_index'])
         at25=self.orders(p,m,states,25)
@@ -170,7 +170,7 @@ class WaitParkingTests(unittest.TestCase):
         first=order(0)
         self.assertEqual(0,first['route_index'])
         self.assertEqual(0,first['move_position']['x'])
-        self.assertNotIn('parking_phase',first)
+        self.assertIsNone(first.get('parking_phase'))
         skipped=order(20)
         self.assertEqual(1,skipped['route_index'])
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])

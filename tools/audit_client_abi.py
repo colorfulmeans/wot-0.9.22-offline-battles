@@ -105,6 +105,19 @@ EXPECTED_ABI = {
             'roleLevel', 'skillsMask', 'isPreview'),
         'TankmanDescr.__init__': ('self', 'compactDescr', 'battleOnly'),
         'TankmanDescr.skillLevel': ('self', 'skillName'),
+        'TankmanDescr.addSkill': ('self','skillName'),
+        'TankmanDescr.makeCompactDescr': ('self',),
+        'TankmanDescr.levelUpXpCost': ('fromSkillLevel', 'skillSeqNum'),
+        'makeTmanDescrByTmanData': ('tmanData',),
+        'getNationConfig': ('nationID',),
+    },
+    'scripts/common/items/components/tankmen_components.pyc': {
+        'NationConfig.getGroups': ('self', 'isPremium'),
+    },
+    'scripts/client/gui/shared/gui_items/Tankman.pyc': {
+        'Tankman.newSkillCount': ('self',),
+        'Tankman.hasNewSkill': ('self','useCombinedRoles'),
+        'Tankman.availableSkills': ('self','useCombinedRoles'),
     },
     'scripts/common/items/__init__.pyc': {
         'ItemsPrices.__init__': ('self', 'prices'),
@@ -113,6 +126,7 @@ EXPECTED_ABI = {
             'itemTypeName', 'nationID', 'itemID'),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('xmlCtx','section','type'),
         '_readSiegeModeParams': ('xmlCtx', 'section', 'vehType'),
         'VehicleDescr': ('compactDescr', 'typeID', 'typeName'),
         'getDefaultAmmoForGun': ('gunDescr',),
@@ -630,6 +644,7 @@ EXPECTED_ABI = {
         'PostmortemDelay.start': ('self',),
         'PostmortemDelay.__moveCameraTo': (
             'self', 'vehicleID', 'sourceVehicleID'),
+        'PostmortemDelay.__onVehicleLeaveWorld': ('self', 'vehicle'),
     },
     'scripts/client/CommandMapping.pyc': {
         'CommandMapping.isFired': ('self', 'command', 'key'),
@@ -1077,6 +1092,7 @@ EXPECTED_CODE_LITERALS = {
         'NoLegacyStuff.items': ('Operation is not supported',),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('/count','/rate'),
         '_readSiegeModeParams': (
             'siege_mode', 'switchOnTime', 'switchOffTime',
             'switchCancelEnabled', 'engineDamageCoeff', 'normal',
@@ -1167,10 +1183,16 @@ EXPECTED_CODE_NAMES = {
         'EffectsPlayer.stopAll': ('_effects', 'itervalues', 'stop'),
     },
     'scripts/common/items/tankmen.pyc': {
+        'TankmanDescr.addSkill': ('_TankmanDescr__levelUpLastSkill','_TankmanDescr__skills'),
+        'TankmanDescr.makeCompactDescr': ('freeXP','_TankmanDescr__lastSkillLevel'),
         'TankmanDescr.skillLevel': (
             'skills', 'MAX_SKILL_LEVEL', '_TankmanDescr__lastSkillLevel'),
+        'makeTmanDescrByTmanData': ('getNationConfig', 'getGroups', 'isFemales', 'firstNamesList', 'lastNamesList', 'iconsList', 'generateCompactDescr', 'addXP', 'makeCompactDescr'),
+        'TankmanDescr.levelUpXpCost': ('_g_levelXpCosts',),
     },
     'scripts/client/gui/shared/gui_items/Tankman.pyc': {
+        'Tankman.newSkillCount': ('hasNewSkill','TankmanDescr','addSkill','lastSkillLevel'),
+        'Tankman.hasNewSkill': ('availableSkills','roleLevel','lastSkillLevel'),
         'Tankman.getSkillsToLearn': (
             'COMMON_SKILLS', 'SKILLS_BY_ROLES', 'combinedRoles'),
     },
@@ -1195,6 +1217,7 @@ EXPECTED_CODE_NAMES = {
         'ModelHitTester.releaseBspModel': ('bbox',),
     },
     'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': ('readInt','readPositiveFloat'),
         '_readSiegeModeParams': (
             'readNonNegativeFloat', 'readBool', 'False', 'IS_CLIENT',
             'VEHICLE_SIEGE_STATE', 'SWITCHING_ON', 'SWITCHING_OFF'),
@@ -1452,6 +1475,11 @@ EXPECTED_CODE_NAMES = {
             'inputHandler',
             'steadyVehicleMatrixCalculator', 'outputMProv',
             '_PostmortemDelay__setCameraSettings'),
+        'PostmortemDelay.__onVehicleLeaveWorld': (
+            '_PostmortemDelay__bActive', 'id',
+            '_PostmortemDelay__killerVehicleID',
+            '_PostmortemDelay__bKillerVisionActive', 'Math', 'Matrix',
+            '_PostmortemDelay__arcadeCamera', 'vehicleMProv'),
     },
     'scripts/client/AvatarInputHandler/__init__.pyc': {
         'AvatarInputHandler.__constructComponents': (
@@ -2281,6 +2309,10 @@ EXPECTED_PACKED_XML_PATH_VALUES = {
 
 
 EXPECTED_GLOBALS = {
+    'scripts/common/items/tankmen.pyc': {
+        'MAX_SKILL_LEVEL': 100, '_MAX_FREE_XP': 2000000000,
+        '_LEVELUP_K1': 50.0, '_LEVELUP_K2': 100.0,
+    },
     'scripts/common/physics_shared.pyc': {
         'WEIGHT_SCALE': 0.001,
         'CMY_MIN': -0.15, 'CMY_MID': -0.2, 'CMY_MAX': -0.3,
@@ -2539,6 +2571,34 @@ EXPECTED_SUBSCRIPT_MUTATIONS = {
 # arithmetic between steps, but bounds each gap so dead or distant code cannot
 # accidentally satisfy a contract.
 EXPECTED_ORDERED_INSTRUCTION_PATTERNS = {
+    'scripts/common/items/tankmen.pyc': {
+        'TankmanDescr.levelUpXpCost': (
+            'native secondary skill XP doubles by skill sequence', 0, (
+                ('LOAD_CONST', 'value', 2), ('LOAD_FAST', 'value', 'skillSeqNum'),
+                ('BINARY_POWER', None, None), ('LOAD_FAST', 'value', 'costs'),
+                ('LOAD_FAST', 'value', 'fromSkillLevel'), ('LOAD_CONST', 'value', 1),
+                ('BINARY_ADD', None, None), ('BINARY_SUBSCR', None, None),
+                ('LOAD_FAST', 'value', 'costs'), ('LOAD_FAST', 'value', 'fromSkillLevel'),
+                ('BINARY_SUBSCR', None, None), ('BINARY_SUBTRACT', None, None),
+                ('BINARY_MULTIPLY', None, None), ('RETURN_VALUE', None, None),
+            )),
+    },
+    'scripts/common/items/vehicles.pyc': {
+        '_readGunClipBurst': (
+            'native clip and burst interval is sixty divided by rate',0,(
+                ('LOAD_CONST','value',60.0),
+                ('LOAD_GLOBAL','value','_xml'),
+                ('LOAD_ATTR','value','readPositiveFloat'),
+                ('LOAD_FAST','value','xmlCtx'),
+                ('LOAD_FAST','value','section'),
+                ('LOAD_FAST','value','type'),
+                ('LOAD_CONST','value','/rate'),
+                ('BINARY_ADD',None,None),
+                ('CALL_FUNCTION','argument',3),
+                ('BINARY_DIVIDE',None,None),
+                ('STORE_FAST','value','interval'),
+            )),
+    },
     'scripts/common/DestructiblesCache.pyc': {
         'encodeDestructibleModule': (
             'module material occupies one seven-bit field', 4, (

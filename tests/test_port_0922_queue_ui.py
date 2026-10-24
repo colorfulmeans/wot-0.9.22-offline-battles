@@ -50,6 +50,7 @@ class _Window(object):
         self.closed = False
         self.close_calls = 0
         self.data_updates = []
+        self.flashObject = types.SimpleNamespace(as_setOfflineOptions=mock.Mock())
         self._TrainingSettingsWindow__arenasCache = None
 
     def updateTrainingRoom(self, arena, round_length, is_private, comment):
@@ -61,6 +62,9 @@ class _Window(object):
 
     def getMapsData(self):
         return self._TrainingSettingsWindow__arenasCache.cache
+
+    def _isDAAPIInited(self):
+        return True
 
     def as_setDataS(self, info, maps):
         self.data_updates.append((info, maps))
@@ -438,13 +442,23 @@ class QueueUITests(unittest.TestCase):
             'gui.app_loader': app_loader,
         }
 
-        with mock.patch.dict(sys.modules, modules):
+        framework = modules['gui.Scaleform.framework']
+        framework.g_entitiesFactories = types.SimpleNamespace(
+            getSettings=mock.Mock(return_value=None), addSettings=mock.Mock())
+        framework.ViewSettings = mock.Mock()
+        framework.ViewTypes = types.SimpleNamespace(WINDOW=1)
+        framework.ScopeTemplates = types.SimpleNamespace(DEFAULT_SCOPE=2)
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(
+                self.queue_ui, '_load_runtime', return_value=(self.arena_type, _Window)):
             self.assertTrue(self.queue_ui.open_picker())
+        framework.ViewSettings.assert_called_once_with(
+            self.queue_ui.PICKER_ALIAS, _Window, 'offlineMapPicker.swf', 1,
+            self.queue_ui.PICKER_ALIAS, 2)
 
         app_loader.g_appLoader.getDefLobbyApp.assert_called_once_with()
         params, context = app.loadView.call_args[0]
-        self.assertEqual('trainingSettingsWindow', params.alias)
-        self.assertEqual('trainingSettingsWindow', params.name)
+        self.assertEqual(self.queue_ui.PICKER_ALIAS, params.alias)
+        self.assertEqual(self.queue_ui.PICKER_ALIAS, params.name)
         self.assertEqual({
             'isCreateRequest': True,
             'isOfflineLanPicker': True,
@@ -590,6 +604,21 @@ class QueueUITests(unittest.TestCase):
         self.assertEqual(
             'LAN SERVER: 10.0.0.5:28782\nPLAYERS (2): Host, Guest',
             window.data_updates[0][0]['description'])
+
+    def test_offline_capacity_tracks_live_team_sizes_and_never_changes_native_info(self):
+        sizes = {1: 10, 2: 12}
+        self.adapter._team_sizes = lambda: sizes
+        self.adapter.install()
+        window = _Window({'isOfflineLanPicker': True})
+        window.getInfo()
+        self.assertEqual('10/12', window._offline_picker_options['teamSizes'])
+        self.assertEqual('Select map', window._offline_picker_options['title'])
+        sizes[2] = 8
+        self.adapter.refresh()
+        self.assertEqual('10/8', window.flashObject.as_setOfflineOptions.call_args[0][0]['teamSizes'])
+        ordinary = _Window({'isCreateRequest': True})
+        self.assertEqual({'description': 'stock'}, ordinary.getInfo())
+        self.assertFalse(hasattr(ordinary, '_offline_picker_options'))
 
     def test_normal_training_window_fully_forwards(self):
         self.adapter.install()

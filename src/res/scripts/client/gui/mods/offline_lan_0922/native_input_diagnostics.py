@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sys
+import time
 
 try:
     _NUMBERS = (int, long, bool, float)
@@ -20,6 +21,84 @@ _MAX_DICT_ITEMS, _MAX_ITEMS, _MAX_NODES, _MAX_TEXT = 64, 8, 96, 80
 _counts, _reported = {}, set()
 _reports_by_method, _record_sequence = {}, 0
 
+# Detailed geometry histories are opt-in and bounded independently of errors
+# and lifecycle messages. Never use this budget for gameplay or wire events.
+DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
+DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
+    'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
+    'BOT ROUTE CONNECTION', 'STACK CONTACT DECISION', 'BOT SEARCH JOB',
+    'PROJECTILE INTERFACE', 'BOT NAV CHOICE', 'BOT EDGE DYNAMICS',
+    'BOT LOCAL HANDOFF', 'BOT MOTION PRESENT', 'BOT RECOVERY COMMIT',
+    'BOT SUPPORT RECOVERY', 'BOT SUPPORT REJECTION', 'BOT VERTICAL SUPPORT',
+    'LOCAL ATTITUDE CHART', 'LOCAL EDGE SUPPORT', 'LOCAL SUPPORT DECISION',
+    'RAM CONTACT GEOMETRY', 'RAM TRACK CONTACT', 'RICOCHET SURFACE EVIDENCE',
+    'VEHICLE STACK', 'WRECK POSE'))
+DETAIL_WINDOW_BYTES = 2 * 1024 * 1024
+DETAIL_SESSION_BYTES = 32 * 1024 * 1024
+DETAIL_RECORD_BYTES = 256 * 1024
+_detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
+                  'notice': False}
+_detail_round = None
+
+
+def detailed_enabled():
+    return os.environ.get(DETAIL_ENV) == '1'
+
+
+def _detail_window():
+    now = time.time()
+    budget = _detail_budget
+    if budget['start'] is None or now < budget['start'] or now-budget['start'] >= 60.0:
+        if budget['dropped']:
+            sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT dropped=%s session_bytes=%s\n' %
+                             (budget['dropped'], budget['session']))
+        budget.update(start=now, window=0, dropped=0, notice=False,
+                      window_closed=False)
+    return budget
+
+
+def _detail_dropped(budget):
+    budget['dropped'] += 1
+    if not budget['notice']:
+        sys.stdout.write('[Offline LAN 0.9.22] DIAGNOSTIC LIMIT detailed records suppressed; key events remain enabled\n')
+        budget['notice'] = True
+
+
+def detail_record_ready():
+    """Cheap admission before constructing or encoding diagnostic histories.
+
+    Once a byte ceiling rejects a record, close that window/session rather
+    than repeatedly encoding records to try to consume its last few bytes.
+    An individually oversized record does not close an otherwise free budget.
+    """
+    if not detailed_enabled():
+        return False
+    budget = _detail_window()
+    if (budget.get('window_closed') or budget.get('session_closed') or
+            budget['window'] >= DETAIL_WINDOW_BYTES or
+            budget['session'] >= DETAIL_SESSION_BYTES):
+        _detail_dropped(budget)
+        return False
+    return True
+
+
+def _detail_admitted(encoded):
+    budget = _detail_window()
+    # Include worst-case JSON fragment escaping and framing in the bound.
+    size = len(encoded) * 2 + ((len(encoded)+2999)//3000) * 240
+    if len(encoded) > DETAIL_RECORD_BYTES:
+        _detail_dropped(budget)
+        return False
+    if (budget['window']+size > DETAIL_WINDOW_BYTES or
+            budget['session']+size > DETAIL_SESSION_BYTES):
+        budget['window_closed'] = budget['window']+size > DETAIL_WINDOW_BYTES
+        budget['session_closed'] = budget['session']+size > DETAIL_SESSION_BYTES
+        _detail_dropped(budget)
+        return False
+    budget['window'] += size
+    budget['session'] += size
+    return True
+
 
 def _write_record(payload):
     write_json_record('NATIVE INPUT FALLBACK', payload)
@@ -28,16 +107,24 @@ def _write_record(payload):
 def write_json_record(label, payload):
     """Keep every engine stdout line below its 8 KiB truncation boundary."""
     global _record_sequence
-    encoded = json.dumps(payload)
+    detail = label in DETAIL_LABELS
+    if detail and not detail_record_ready():
+        return
+    encoded = json.dumps(payload, separators=(',', ':'))
+    if detail and not _detail_admitted(encoded):
+        return
     if len(encoded) <= 6000:
         sys.stdout.write('[Offline LAN 0.9.22] %s %s\n' % (label, encoded))
         return
     _record_sequence += 1
-    pieces = [encoded[i:i + 3000] for i in range(0, len(encoded), 3000)]
-    for index, piece in enumerate(pieces):
+    parts = (len(encoded) + 2999) // 3000
+    pid = os.getpid()
+    for index in range(parts):
+        piece = encoded[index * 3000:(index + 1) * 3000]
         sys.stdout.write('[Offline LAN 0.9.22] %s PART %s\n' % (label,
-            json.dumps({'schema': 1, 'pid': os.getpid(), 'record': _record_sequence,
-                'part': index + 1, 'parts': len(pieces), 'data': piece})))
+            json.dumps({'schema': 1, 'pid': pid, 'record': _record_sequence,
+                'part': index + 1, 'parts': parts, 'data': piece},
+                separators=(',', ':'))))
 
 
 def _type_name(value):
@@ -188,6 +275,12 @@ def snapshot():
 def log_summary(phase, round_id):
     """Cumulative process counters remain visible after the evidence quota."""
     try:
+        global _detail_round
+        if phase == 'round_start' and round_id != _detail_round:
+            _detail_round = round_id
+            _detail_budget.clear()
+            _detail_budget.update(start=None, window=0, session=0,
+                                  dropped=0, notice=False)
         payload = snapshot()
         payload.update(schema=1, pid=os.getpid(), phase=phase, round=round_id)
         write_json_record('NATIVE INPUT SUMMARY', payload)

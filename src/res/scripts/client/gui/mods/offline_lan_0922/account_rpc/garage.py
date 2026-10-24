@@ -503,6 +503,8 @@ class GarageState(object):
         # replace a live crew member in the barracks with a dismissed one.
         used.update(_int(value) for value in self._barracks())
         used.update(_int(value) for value in self._recycle_bin())
+        from gui.mods.offline_lan_0922.crew_skills import CREDITS
+        used.update(_int(value) for value in (self._snapshot.get(CREDITS) or {}))
         # A dismissed campaign reward may outlive its recycle-bin entry.
         # Its provenance ID must never be reassigned to an unrelated recruit.
         for key, effect in (self._snapshot.get(
@@ -1518,8 +1520,22 @@ class GarageState(object):
             raise GarageError('unknown crew skill index %r' % (skill_index,))
         try:
             descriptor = tankmen.TankmanDescr(rows[tankman_id])
-            descriptor.addSkill(skill_name)
-            rows[tankman_id] = descriptor.makeCompactDescr()
+            from gui.mods.offline_lan_0922 import crew_skills
+            credits=self._snapshot.get(crew_skills.CREDITS) or {}
+            credit=credits.get(str(tankman_id))
+            if credit and credit['remaining']:
+                roles=(descriptor.role,)
+                seat=self._seat_of(tankman_id)
+                if seat is not None:roles=self._crew_roles(seat[0])[seat[1]]
+                if skill_name not in crew_skills.skills_for(roles):
+                    raise ValueError('Skill is not available for the current crew seat')
+                serialized=crew_skills.grant_skill(descriptor,skill_name,tankmen)
+                tankmen.TankmanDescr(serialized)
+                updated=dict(remaining=credit['remaining']-1,learned=credit['learned']+[skill_name])
+                rows[tankman_id]=serialized;credits[str(tankman_id)]=updated
+            else:
+                descriptor.addSkill(skill_name)
+                rows[tankman_id] = descriptor.makeCompactDescr()
         except Exception as error:
             raise GarageError('the client refused the crew skill: %s' % error)
         self.revision += 1
@@ -1546,14 +1562,19 @@ class GarageState(object):
         except Exception as error:
             raise GarageError('the client refused the skill reset: %s' % error)
         try:
-            descriptor.dropSkills(
-                float(choice.get('xpReuseFraction', 0.0) or 0.0), False)
+            from gui.mods.offline_lan_0922 import crew_skills
+            credits=self._snapshot.get(crew_skills.CREDITS) or {}
+            credit=credits.get(str(tankman_id));updated=None
+            fraction=float(choice.get('xpReuseFraction',0.0) or 0.0)
+            if credit:updated=crew_skills.reset_grants(descriptor,credit,fraction,tankmen)
+            else:descriptor.dropSkills(fraction,False)
             serialized = descriptor.makeCompactDescr()
         except Exception as error:
             raise GarageError('the client refused the skill reset: %s' % error)
         if not free:
             self._charge(choice)
         rows[tankman_id] = serialized
+        if updated is not None:credits[str(tankman_id)]=updated
         self.revision += 1
         return tankman_id
 
@@ -2648,13 +2669,18 @@ class GarageState(object):
             # Requalification includes a lossless skill reset at no extra
             # price. Delegate to the native descriptor so its free-skill
             # prefix, rank and XP accounting are retained (#1513).
-            descriptor.dropSkills(1.0, False)
+            from gui.mods.offline_lan_0922 import crew_skills
+            credits=self._snapshot.get(crew_skills.CREDITS) or {}
+            credit=credits.get(str(tankman_id));updated_credit=None
+            if credit:updated_credit=crew_skills.reset_grants(descriptor,credit,1.0,self._tankmen_module())
+            else:descriptor.dropSkills(1.0,False)
             descriptor.role = role
             descriptor.vehicleTypeID = _int(vehicle_type_id)
             serialized = descriptor.makeCompactDescr()
         except Exception as error:
             raise GarageError('the client refused the role change: %s' % error)
         self._charge(cost)
+        if updated_credit is not None:credits[str(tankman_id)]=updated_credit
         if source is not None:
             record, slot = source
             crew = list(record['crew'])

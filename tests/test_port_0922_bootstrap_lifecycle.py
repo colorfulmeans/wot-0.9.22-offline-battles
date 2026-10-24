@@ -62,6 +62,10 @@ def _economy_modules(package_stubs):
                         'gui.mods.offline_lan_0922.account_rpc.economy'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.launcher_inbox'] = (
                 _real_module('launcher_inbox'))
+            for name in ('crew_seat_data','crew_skills'):
+                _ECONOMY_MODULES['gui.mods.offline_lan_0922.'+name]=_real_module(name)
+            _ECONOMY_MODULES['gui.mods.offline_lan_0922.crew_recruits'] = (
+                _real_module('crew_recruits'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (
                 _real_module('offline_services'))
             for name in ('ui_i18n', 'personal_campaign_ui'):
@@ -74,6 +78,8 @@ ACCOUNT_DATA = _real_module(
 VEHICLE_BLACKLIST = _real_module('vehicle_blacklist')
 VEHICLE_CONFIGURATION = _real_module('vehicle_configuration')
 VEHICLE_RECORDS = _real_module('vehicle_records')
+DEFAULT_LOADOUTS = _real_module('default_loadouts')
+DEFAULT_CREW = _real_module('default_crew')
 
 
 MAX_SKILL_LEVEL = 100
@@ -258,7 +264,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
     }
 
     def _load(self, save_mode=None, starters=None, earnings_percent=None,
-              initial_wallet=None):
+              initial_wallet=None, initial_berths=None):
         events = []
         callbacks = _Callbacks()
         spaces = types.SimpleNamespace(
@@ -303,6 +309,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         # beside the mode, and the client reads both once at startup.
         config_module.save_slot_earnings_percent = lambda: (
             100 if earnings_percent is None else earnings_percent)
+        config_module.save_slot_initial_berths = lambda: initial_berths
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
         config_module.save_slot_initial_personal_progress = lambda: {}
         config_module.save_slot_initial_customizations = lambda: {}
@@ -428,6 +435,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 return [previous_turret.compactDescr,
                         previous_gun.compactDescr]
 
+            def install_optional(cd,slot):
+                descriptor.optionalDevices[slot]=types.SimpleNamespace(compactDescr=cd)
+            descriptor.mayInstallOptionalDevice=lambda cd,slot:(True,None)
+            descriptor.installOptionalDevice=install_optional
             descriptor.installComponent = install_component
             descriptor.installTurret = install_turret
             return descriptor
@@ -518,7 +529,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             compactDescr=11200, tags=frozenset(('notForSale',)),
             equipmentType=1)
         equipment_ids = {'autoExtinguishers': 11000, 'largeMedkit': 11001,
-                         'largeRepairkit': 11002}
+                         'largeRepairkit': 11002,'aimingStabilizerBattleBooster':11200}
         crew_type_ids = []
         crew_skill_masks = []
         vehicles = types.SimpleNamespace(
@@ -540,7 +551,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             g_cache=types.SimpleNamespace(
                 customization20=lambda: customization,
                 optionalDevices=lambda: optional_devices,
-                optionalDeviceIDs=lambda: {},
+                optionalDeviceIDs=lambda: {'deluxAimingStabilizer':9000,'deluxRammer':9001,'deluxEnhancedAimDrives':9002},
                 equipmentIDs=lambda: equipment_ids,
                 equipments=lambda: equipments,
                 # The exact #1513 name-to-id maps the price index walks. This
@@ -630,6 +641,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.vehicle_configuration': (
                 VEHICLE_CONFIGURATION),
             'gui.mods.offline_lan_0922.vehicle_records': VEHICLE_RECORDS,
+            'gui.mods.offline_lan_0922.default_loadouts': DEFAULT_LOADOUTS,
+            'gui.mods.offline_lan_0922.default_crew': DEFAULT_CREW,
             'gui.app_loader': app_loader_module,
             'gui.app_loader.settings': settings_module,
             'items': items,
@@ -1512,6 +1525,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
 
         self._assert_depot_covers_the_garage(snapshot)
 
+    def test_first_garage_preserves_launcher_added_berths(self):
+        snapshot=self._with_saved_garage((),initial_berths=46)
+        self.assertEqual(46,snapshot['accountBerths'])
+
     def test_the_first_garage_uses_the_launchers_initial_wallet(self):
         snapshot = self._with_saved_garage(
             (), initial_wallet={'credits': 23, 'gold': 45, 'freeXP': 67})
@@ -1656,6 +1673,13 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertIn('role=hidden-worker', payload)
         self.assertIn('launcher_build=launcher-build', payload)
 
+    def test_hidden_worker_does_not_initialize_player_default_devices(self):
+        bootstrap,callbacks,compatibility,loader,spaces,events,modules=self._load()
+        bootstrap._client_mode=bootstrap.port_config.SIMULATION_WORKER_MODE
+        with mock.patch.dict(sys.modules,modules),mock.patch.object(VEHICLE_RECORDS,'initialize_elite_devices') as initialize:
+            bootstrap._selected_vehicle({'vehicle':'ussr:R11_MS-1'},restore_saved=False)
+        initialize.assert_not_called()
+
     def test_a_fresh_garage_vehicle_starts_with_the_refill_switches_on(self):
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events, modules) = self._load()
@@ -1664,11 +1688,28 @@ class BootstrapLifecycleTests(unittest.TestCase):
             selected = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
 
         # AUTO_REPAIR | AUTO_LOAD | AUTO_EQUIP
-        self.assertEqual(14, selected['settings'])
+        self.assertEqual(14 | 128, selected['settings'])
         for record in selected['vehicles']:
-            self.assertEqual(14, record['settings'])
+            self.assertEqual(14 | 128, record['settings'])
 
-    def test_every_crewman_starts_without_gifted_skill_experience(self):
+    def test_player_factory_ammunition_keeps_the_native_gun_default(self):
+        (bootstrap, callbacks, compatibility, app_loader, spaces, events, modules) = self._load()
+        native_ammo = modules['items'].vehicles.getDefaultAmmoForGun
+        seen = []
+        def record_native(gun):
+            result = native_ammo(gun)
+            seen.append(tuple(result))
+            return result
+        modules['items'].vehicles.getDefaultAmmoForGun = record_native
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(
+                DEFAULT_LOADOUTS, 'descriptor_roles', side_effect=AssertionError('Bot-only ammo policy')):
+            selected = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
+        self.assertTrue(seen)
+        for record in selected['vehicles']:
+            self.assertIn(tuple(record['shells']), seen)
+            self.assertEqual(record['shells'], record['shellsLayout'][record['shellsLayoutIdx']])
+
+    def test_sandbox_full_skills_do_not_add_spendable_crew_xp(self):
         (bootstrap, unused_callbacks, unused_compatibility,
          unused_app_loader, unused_spaces, unused_events, modules) = self._load()
 
@@ -1679,19 +1720,14 @@ class BootstrapLifecycleTests(unittest.TestCase):
             for compact_descr in record['tankmen'].values():
                 descriptor = _TankmanDescr(compact_descr)
                 self.assertEqual(0, descriptor.freeXP)
-                self.assertEqual([], descriptor.skills)
+                if descriptor.role == "commander":
+                    self.assertEqual(["commander_sixthSense"], descriptor.skills)
 
-    def test_no_crew_skill_is_chosen_for_the_player(self):
-        (bootstrap, unused_callbacks, unused_compatibility,
-         unused_app_loader, unused_spaces, unused_events, modules) = self._load()
-
-        with mock.patch.dict(sys.modules, modules):
-            selected = bootstrap._selected_vehicle({'vehicle': 'ussr:R11_MS-1'})
-
+    def test_career_crew_starts_without_secondary_skills(self):
+        unused_bootstrap, selected = self._career()
         for record in selected['vehicles']:
             for compact_descr in record['tankmen'].values():
-                skills = _TankmanDescr(compact_descr).skills
-                self.assertEqual([], skills)
+                self.assertEqual([], _TankmanDescr(compact_descr).skills)
 
     def test_restoring_crew_does_not_top_up_or_erase_earned_skills(self):
         (bootstrap, unused_callbacks, unused_compatibility,
@@ -1856,15 +1892,14 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertEqual([100001, 100002], selected['crew'])
         skill_xp = 0
         self.assertEqual(
-            [b'0:11:commander||%d' % skill_xp,
+            [b'0:11:commander|commander_sixthSense|%d' % skill_xp,
              b'0:11:driver||%d' % skill_xp],
             [selected['tankmen'][100001], selected['tankmen'][100002]])
         self.assertEqual((0, 111), selected['repair'])
         self.assertEqual((0, 0), selected['lock'])
-        # Every tank starts with the extinguisher, the large first aid kit
-        # and the large repair kit already mounted.
-        self.assertEqual([11000, 11001, 11002], selected['eqs'])
-        self.assertEqual([11000, 11001, 11002], selected['eqsLayout'])
+        # Sandbox slots are large medkit, large repair kit, then extinguisher.
+        self.assertEqual([11001, 11002, 11000, 11200], selected['eqs'])
+        self.assertEqual([11001, 11002, 11000, 11200], selected['eqsLayout'])
         # The top modules are mounted, not the stock ones: base 2000 gives
         # the stock parts 2002-2007 and the top parts 2012-2017.
         self.assertEqual((2013, 2014), selected['shellsLayoutIdx'])
@@ -1930,7 +1965,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         self.assertTrue({(1, 8), (1, 9)}.issubset(
                         set(runtime_vehicles.crewTypeIDs)))
         self.assertEqual(
-            {0},
+            {DEFAULT_CREW.sandbox_skill_mask()},
             set(modules['items'].tankmen.generatedSkillMasks))
         self.assertTrue(
             {(2, 1), (2, 2), (2, 3), (2, 4)}.isdisjoint(
@@ -2274,7 +2309,7 @@ class TopModuleRuleTests(unittest.TestCase):
         fallback = self._part('fallback', 4, 101, maxLoad=30)
         rejected = self._part('rejected', 5, 102, maxLoad=40)
         vehicle_type = types.SimpleNamespace(
-            chassis=(fallback, rejected), turrets=(), engines=(), radios=(),
+            name='test:unmodified', chassis=(fallback, rejected), turrets=(), engines=(), radios=(),
             fuelTanks=(), unlocksDescrs=())
         descriptor = types.SimpleNamespace(type=vehicle_type,
                                            chassis=fallback)
@@ -2304,7 +2339,7 @@ class TopModuleRuleTests(unittest.TestCase):
         selected = self._part('selected', 5, 102, maxLoad=40)
         mounted = self._part('mounted', 1, 101, maxLoad=20)
         vehicle_type = types.SimpleNamespace(
-            chassis=(selected,), turrets=(), engines=(), radios=(),
+            name='test:unmodified', chassis=(selected,), turrets=(), engines=(), radios=(),
             fuelTanks=(), unlocksDescrs=())
         descriptor = types.SimpleNamespace(
             type=vehicle_type, chassis=mounted,
@@ -2319,7 +2354,7 @@ class TopModuleRuleTests(unittest.TestCase):
         selected = self._part('selected', 5, 102, maxLoad=40)
         mounted = self._part('mounted', 1, 101, maxLoad=20)
         vehicle_type = types.SimpleNamespace(
-            chassis=(selected,), turrets=(), engines=(), radios=(),
+            name='test:unmodified', chassis=(selected,), turrets=(), engines=(), radios=(),
             fuelTanks=(), unlocksDescrs=())
         descriptor = types.SimpleNamespace(
             type=vehicle_type, chassis=mounted,
@@ -2341,7 +2376,7 @@ class TopModuleRuleTests(unittest.TestCase):
             'mounted-turret', 1, 211, guns=(mounted_gun,),
             primaryArmor=(20, 20, 20))
         vehicle_type = types.SimpleNamespace(
-            chassis=(), turrets=((turret,),), engines=(), radios=(),
+            name='test:unmodified', chassis=(), turrets=((turret,),), engines=(), radios=(),
             fuelTanks=(), unlocksDescrs=())
         descriptor = types.SimpleNamespace(
             type=vehicle_type, turret=mounted_turret, gun=mounted_gun,
@@ -2362,7 +2397,7 @@ class TopModuleRuleTests(unittest.TestCase):
             'mounted-turret', 1, 211, guns=(mounted_gun,),
             primaryArmor=(20, 20, 20))
         vehicle_type = types.SimpleNamespace(
-            chassis=(), turrets=((turret,),), engines=(), radios=(),
+            name='test:unmodified', chassis=(), turrets=((turret,),), engines=(), radios=(),
             fuelTanks=(), unlocksDescrs=())
         descriptor = types.SimpleNamespace(
             type=vehicle_type, turret=mounted_turret, gun=mounted_gun,

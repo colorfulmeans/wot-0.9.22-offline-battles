@@ -16,7 +16,8 @@ import math
 from collections import deque
 
 from gui.mods.offline_lan_0922.native_navigation import NativeNavigation
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import tank_collision, arena_boundary, bot_tactics
+from gui.mods.offline_lan_0922.prebaked_navigation import MOTION_FATAL_HAZARDS
 from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
 
 from gui.mods.offline_lan_0922.ai.driver import (
@@ -606,13 +607,18 @@ class TerrainGrid(object):
 	def _baked_corridor(self, start, end):
 		"""Share immutable directed link/hazard answers for one grid corridor.
 
-		Baked traversal depends on the endpoint cells, not each observer's
-		sub-cell position. Keep world bounds and short-distance checks in their
+		Coarse traversal depends on endpoint cells. Mixed-resolution rays also
+		depend on exact boundary crossings. Keep bounds and short checks in their
 		callers, and never cache live failed-edge penalties or native probes.
 		"""
 		key = (self.cell_for(start), self.cell_for(end))
 		if self._local_meshes is not None and self._local_meshes.touches(start, end):
-			key = (self._local_meshes.cell(start) or key[0], self._local_meshes.cell(end) or key[1])
+			# A coarse link and fixed-stride raster can both miss a fine wet-bank
+			# corner. Use the same physical boundaries as actual motion before
+			# accepting either proof, and do not alias different sub-cell rays.
+			key = (float(start[0]), float(start[2]), float(end[0]), float(end[2]))
+			if self.segment_has_motion_hazard(start, end, 1 | 8):
+				return False, 1 | 8
 		cached = self._baked_corridor_cache.get(key)
 		if cached is not None:
 			return cached
@@ -1138,7 +1144,7 @@ class TerrainGrid(object):
 		if (not callable(self.ground_probe) or
 				not callable(self.obstacle_probe) or
 				self.segment_has_motion_hazard(
-					start, end, 1 | BAKED_SHALLOW_WATER)):
+					start, end, MOTION_FATAL_HAZARDS | BAKED_SHALLOW_WATER)):
 			if evidence is not None:
 				evidence['egress_reason'] = 'hazard_or_unavailable'
 			combat_count('nav_live_egress_hazard_or_unavailable')
@@ -1513,7 +1519,12 @@ class TerrainGrid(object):
 			return 0.0
 		missing = max(0, len(self._NEIGHBOURS) -
 		              self._baked_link_count(cell))
-		return (float(missing) * self.cell_size *
+		# The retained weight is per metre. Charging a one-metre local vertex
+		# for four metres multiplies its clearance cost and exhausts the same
+		# authored-corridor search that passed before densification.
+		scale = (self._local_meshes.patches[-cell[0]-1]['cell_size']
+		         if self._local_meshes is not None and cell[0] < 0 else self.cell_size)
+		return (float(missing) * scale *
 		        BAKED_EDGE_CLEARANCE_WEIGHT)
 
 	def _baked_clearance_exposure(self, path):
@@ -2047,6 +2058,9 @@ class TerrainNavigator(object):
 			cell_size=18.0, baked_graph=None):
 		self.grid = TerrainGrid(ground_probe, obstacle_probe, bounds, cell_size,
 		                        baked_graph=baked_graph)
+		self._boundary_actor = None
+		self.boundary_bodies = {}
+		self.boundary_edge_cache = {}
 		self.paths = {}
 		self.path_times = {}
 		self.path_hull_revisions = {}
@@ -2084,6 +2098,8 @@ class TerrainNavigator(object):
 
 	def close(self):
 		"""Cancel background work before this map or round loses ownership."""
+		self.boundary_bodies.clear()
+		self.boundary_edge_cache.clear()
 		if self._native_navigation is not None:
 			self._native_navigation.close()
 		self.searches.clear()
@@ -2369,6 +2385,7 @@ class TerrainNavigator(object):
 					path_key=tuple(path_key), request_path_key=state.get('request_path_key'))
 			state.pop('local_fallback_target', None)
 			state.pop('local_retry_progress', None)
+			self._retire_path_frontier(state, now, 'movement_handoff')
 			state.pop('reached_path_corner', None)
 			return None
 		target = state.get('local_fallback_target')
@@ -2866,6 +2883,7 @@ class TerrainNavigator(object):
 		bot_id = int(bot_id)
 		path_identity = tuple(path_key)
 		if not movement_intent or _distance_2d(current, goal) <= WAYPOINT_ARRIVAL_RADIUS:
+			self._retire_path_frontier(self.bot_states.get(bot_id, {}), now, 'direct_hold_or_arrival')
 			self.bot_states.get(bot_id, {}).pop('local_retry_progress', None)
 			self.bot_states.get(bot_id, {}).pop('reached_path_corner', None)
 		state = self.bot_direct_progress.get(bot_id)
@@ -3001,12 +3019,56 @@ class TerrainNavigator(object):
 			return tuple(target)
 		return None
 
+	@staticmethod
+	def _retire_path_frontier(state, now, reason):
+		tracker=state.pop('path_frontier',None)
+		if tracker is not None:
+			state['path_frontier_observation']=dict(active=False,at=float(now),
+				reason=reason,progress_at=tracker['at'],replans=tracker['replans'],
+				age_seconds=max(0.,float(now)-tracker['at']))
+
+	def _observe_path_frontier(self, state, current, target, goal, now):
+		"""Retain realised progress across canonical-path corner/replan churn."""
+		request = state.get('request_key')
+		tracker = state.get('path_frontier')
+		cell = self.grid.cell_for(current)
+		if tracker is None or tracker['request'] != request:
+			tracker = dict(request=request, at=float(now), visited=set((cell,)),
+				best={}, reason='new_request', replans=0)
+			state['path_frontier'] = tracker
+		key = tuple(round(float(value), 3) for value in target)
+		distance = _distance_2d(current, target)
+		best = tracker['best'].get(key)
+		new_cell = cell not in tracker['visited']
+		improved = best is not None and best-distance >= MACRO_PROGRESS_METRES
+		if new_cell or improved:
+			tracker['at'] = float(now)
+			tracker['reason'] = 'new_realised_cell' if new_cell else 'new_leg_distance_best'
+		if len(tracker['visited']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+			tracker['visited'].clear()
+		tracker['visited'].add(cell)
+		if best is None or distance < best:
+			# Credit is measured from the last admitted best, not every substep.
+			if best is None or improved:
+				if len(tracker['best']) >= MAX_BAKED_SEARCH_EDGE_CACHE:
+					tracker['best'].clear()
+				tracker['best'][key] = distance
+		state['path_frontier_observation'] = dict(active=True,at=float(now),
+			progress_at=tracker['at'], age_seconds=max(0.,float(now)-tracker['at']),
+			reason=tracker['reason'], request=request, current=tuple(current),
+			target=tuple(target), distance=distance, previous_best=best,
+			new_cell=new_cell, improved=improved, cells=len(tracker['visited']),
+			targets=len(tracker['best']), replans=tracker['replans'])
+		return float(now)-tracker['at'] >= MACRO_STALL_SECONDS
+
 	def _observe_macro_progress(self, bot_id, state, current, goal, now):
 		"""Observe progress along the issued path target, not arbitrary motion."""
 		target = state.get('last_target')
 		fallback = bool(state.get('local_fallback_episode') ==
 			self._local_fallback_intent(goal, state))
 		if fallback:
+			if target is not None:
+				self._observe_path_frontier(state,current,target,goal,now)
 			# A retry's new tree and each two-metre fallback are still the same
 			# unfinished route. Count actual entry into new terrain, including a
 			# necessary retreat, rather than renew the deadline when A* changes
@@ -3032,6 +3094,20 @@ class TerrainNavigator(object):
 					state.get('macro_progress_replans', 0)) + 1
 			return bool(state.get('temporary_stalled'))
 		kind = 'path'
+		if target is not None and _distance_2d(current, goal) > WAYPOINT_ARRIVAL_RADIUS:
+			if self._observe_path_frontier(state,current,target,goal,now):
+				# Reuse the existing private retry. A changed index/path is not
+				# physical escape; it must not grant a fresh deadline forever.
+				if self._start_macro_replan(bot_id,state,current,target,now):
+					tracker=state['path_frontier']
+					tracker['at']=float(now)
+					tracker['replans']+=1
+					tracker['reason']='private_retry_issued'
+					state['path_frontier_observation'].update(outcome='private_retry_issued',
+						replans=tracker['replans'],retry_at=float(now))
+					return True
+		else:
+			self._retire_path_frontier(state, now, 'no_target_or_arrival')
 		if (state.get('macro_replan_active') and
 				state.get('macro_escape_target') is None and
 				not self._active_macro_edge_penalties(bot_id, now)):
@@ -3148,6 +3224,8 @@ class TerrainNavigator(object):
 			'reached_path_corner': state.get('reached_path_corner'),
 			'corner_selection_receipt': state.get('corner_selection_receipt'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
+			'near_corner_handoff': state.get('near_corner_handoff'),
+			'narrow_passage': state.get('narrow_passage_receipt'),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
@@ -3165,6 +3243,7 @@ class TerrainNavigator(object):
 			'macro_progress_age_ms': int(max(0.0, float(now) -
 				float(state.get('macro_progress_at', now))) * 1000.0),
 			'macro_progress_kind': state.get('macro_progress_kind'),
+			'path_frontier': state.get('path_frontier_observation'),
 			'macro_progress_replans': int(state.get('macro_progress_replans', 0)),
 			'native_capability': (state['native_capability'][0]
 				if state.get('native_capability') is not None else None),
@@ -3266,18 +3345,87 @@ class TerrainNavigator(object):
 			self.bot_macro_edges.pop(int(bot_id), None)
 		return result or None
 
+	def set_boundary_body(self, bot_id, position, yaw, half_length, half_width):
+		"""Publish actual actor dimensions; do not erode the shared terrain grid."""
+		grid = self.grid
+		bounds = grid.bounds
+		if not grid.prebaked or not arena_boundary.valid(bounds):
+			return
+		shape = (float(half_length),float(half_width))
+		key = (tuple(bounds),shape)
+		if key not in self.boundary_edge_cache:
+			if len(self.boundary_edge_cache)>=64:
+				self.boundary_edge_cache.clear()
+			# Only a boundary strip can fail. Build once per mounted chassis,
+			# never scan the complete map for each Bot or direction probe.
+			radius = math.hypot(*shape)+grid.cell_size
+			band = int(math.ceil(radius/grid.cell_size))+1
+			width,height = grid._baked_width,grid._baked_height
+			left,bottom=grid.cell_for((bounds[0],0.,bounds[1]))
+			right,top=grid.cell_for((bounds[2],0.,bounds[3]))
+			xlo,xhi=max(0,left-band),min(width,right+band+1)
+			zlo,zhi=max(0,bottom-band),min(height,top+band+1)
+			xedge=set(range(xlo,min(xhi,left+band+1))) | set(range(max(xlo,right-band),xhi))
+			zedge=set(range(zlo,min(zhi,bottom+band+1))) | set(range(max(zlo,top-band),zhi))
+			cells=set((x,z) for z in range(zlo,zhi) for x in xedge)
+			cells.update((x,z) for x in range(xlo,xhi) for z in zedge)
+			edges = {}
+			for cell in cells:
+				if grid._baked_index(cell) is None:continue
+				a=grid.point_for(cell,0.)
+				for dx,dz,unused in grid._NEIGHBOURS:
+					peer=(cell[0]+dx,cell[1]+dz)
+					if grid._baked_index(peer) is None:continue
+					b=grid.point_for(peer,0.)
+					heading=math.atan2(b[0]-a[0],b[2]-a[2])
+					if (any(arena_boundary.overflow(bounds,a,heading,*shape)) or
+							any(arena_boundary.overflow(bounds,b,heading,*shape))):
+						edges[tuple(sorted((cell,peer)))]=1.e12
+			self.boundary_edge_cache[key]=edges
+		cell=grid.cell_for(position)
+		previous=self.boundary_bodies.get(int(bot_id))
+		if previous is not None and previous['key']==key and previous['cell']==cell:
+			previous.update(position=tuple(position),yaw=float(yaw))
+			return
+		edges=self.boundary_edge_cache[key]
+		# Permit an inward first edge out of a coarse boundary cell. All
+		# later edges remain fenced; local/native proofs still own motion.
+		inward=[]
+		a=grid.point_for(cell,0.)
+		for dx,dz,unused in grid._NEIGHBOURS:
+			peer=(cell[0]+dx,cell[1]+dz);edge=tuple(sorted((cell,peer)))
+			if edge not in edges:continue
+			b=grid.point_for(peer,0.);heading=math.atan2(b[0]-a[0],b[2]-a[2])
+			if not any(arena_boundary.overflow(bounds,b,heading,*shape)):
+				inward.append(edge)
+		if inward:
+			edges=dict(edges)
+			for edge in inward:edges.pop(edge,None)
+		self.boundary_bodies[int(bot_id)]=dict(key=key,shape=shape,cell=cell,
+			position=tuple(position),yaw=float(yaw),edges=edges,scope=(shape,cell if inward else None))
+
 	def _active_planning_edge_penalties(self, bot_id, now):
 		result = dict(self._active_bot_edge_penalties(bot_id, now) or {})
 		result.update(self._active_macro_edge_penalties(bot_id, now) or {})
+		body=self.boundary_bodies.get(bot_id)
+		if body is not None:
+			if not result:return body['edges'] or None
+			result.update(body['edges'])
 		return result or None
 
 	def _bot_edges_penalized(self, bot_id, start, end, now):
 		"""True when this bot's own escalation covers any edge of the segment."""
+		body=self.boundary_bodies.get(int(bot_id))
+		if body is not None and not arena_boundary.segment_clear(self.grid.bounds,start,end,*body['shape']):
+			return True
 		retired = self.bot_states.get(int(bot_id), {}).get('local_target_retired')
 		if (retired is not None and float(now) < retired[1] and
 				_distance_2d(end, retired[0]) <= WAYPOINT_ARRIVAL_RADIUS):
 			return True
-		penalties = self._active_planning_edge_penalties(bot_id, now)
+		# Coarse boundary masks guide A*, but must not reject a physically
+		# legal sub-cell leg. Its exact chassis test above owns that answer.
+		penalties=dict(self._active_bot_edge_penalties(bot_id,now) or {})
+		penalties.update(self._active_macro_edge_penalties(bot_id,now) or {})
 		return bool(penalties and any(
 			edge in penalties
 			for edge in self.grid._edge_keys_for_segment(start, end)))
@@ -3292,7 +3440,7 @@ class TerrainNavigator(object):
 		return ((retired[0],) if state.get('local_target_retired_source') == 'hard_body'
 			and retired is not None and float(now) < retired[1] else ())
 
-	def report_blocked_step(self, bot_id, current, target, now):
+	def report_blocked_step(self, bot_id, current, target, now, observation_interval=0.0):
 		"""Escalate a repeated contact or planner veto into a bot-local replan."""
 		bot_id = int(bot_id)
 		state = self.bot_states.get(bot_id)
@@ -3313,7 +3461,7 @@ class TerrainNavigator(object):
 		tracker = state.get('blocked_step_tracker')
 		same_edge = bool(
 			isinstance(tracker, dict) and tracker.get('key') == key and
-			now - float(tracker.get('last_at', now)) <= 0.5 and
+			now - float(tracker.get('last_at', now)) <= max(0.5, 2.0 * observation_interval) and
 			_distance_2d(current, tracker.get('origin', current)) <=
 			max(1.5, self.grid.cell_size * 0.5))
 		if same_edge:
@@ -3367,7 +3515,9 @@ class TerrainNavigator(object):
 		return True
 
 	def _cache_key(self, path_key, goal):
-		return (tuple(path_key), self.grid.cell_for(goal))
+		key=(tuple(path_key),self.grid.cell_for(goal))
+		body=self.boundary_bodies.get(self._boundary_actor)
+		return key+(body['scope'],) if body is not None else key
 
 	@staticmethod
 	def _prefers_baked_clearance(path_key):
@@ -3442,7 +3592,7 @@ class TerrainNavigator(object):
 		return changed
 
 	def report_hard_contact(self, bot_id, current, target,
-			realised_yaw, now):
+			realised_yaw, now, observation_interval=0.0):
 		"""Report a physical blocker against stable navigation intent.
 
 		The driver deliberately remembers the realised hull heading so its
@@ -3503,10 +3653,10 @@ class TerrainNavigator(object):
 			state['hard_contact_episode'] = episode
 			state['blocked_step_tracker'] = None
 		return self.report_blocked_step(
-			bot_id, current, episode['report_target'], now)
+			bot_id, current, episode['report_target'], now, observation_interval)
 
 	def report_blocked_corridor(self, bot_id, current, target,
-			realised_yaw, now):
+			realised_yaw, now, observation_interval=0.0):
 		"""Accumulate a terrain veto on one stable semantic route edge.
 
 		A steep/world probe is sampled along the driver's realised heading,
@@ -3518,9 +3668,10 @@ class TerrainNavigator(object):
 		from restarting one another's verdict count.
 		"""
 		return self.report_hard_contact(
-			bot_id, current, target, realised_yaw, now)
+			bot_id, current, target, realised_yaw, now, observation_interval)
 
-	def report_blocked_local_action(self, bot_id, current, target, heading, now):
+	def report_blocked_local_action(self, bot_id, current, target, heading, now,
+			observation_interval=0.0):
 		"""Retire a proved unreachable short point through the existing retry gate.
 
 		A three-metre connector may remain inside one coarse cell. Its synthetic
@@ -3528,7 +3679,11 @@ class TerrainNavigator(object):
 		Retain the existing point-level refusal for the same finite edge lifetime;
 		never turn a rotation refusal into a global map obstacle.
 		"""
-		if not self.report_blocked_corridor(bot_id, current, target, heading, now):
+		# A far-camera control decision normally arrives every 0.6 seconds.
+		# Each receipt is fresh; the old fixed 0.5-second continuity window
+		# discarded every previous verdict before the next decision arrived.
+		if not self.report_blocked_corridor(bot_id, current, target, heading, now,
+				observation_interval):
 			return False
 		self.bot_states[int(bot_id)]['local_target_retired'] = (
 			tuple(target), float(now) + BLOCKED_STEP_EDGE_TTL)
@@ -3713,6 +3868,8 @@ class TerrainNavigator(object):
 	def _path(self, path_key, start, goal, now, avoid_points, native_capability=None):
 		key = self._cache_key(path_key, goal)
 		owner = self._path_owner(path_key)
+		if owner is None and self._boundary_actor in self.boundary_bodies:
+			owner=self._boundary_actor
 		if native_capability is not None and native_capability[0] != ('ignore_destructibles', 1):
 			raise ValueError('unsupported navigation collision policy')
 		if owner is not None:
@@ -3729,8 +3886,11 @@ class TerrainNavigator(object):
 				owner, keep_key=key, kind=path_key[0])
 		if key in self.paths:
 			path = self.paths[key]
-			hard_edge_penalties = self._active_planning_edge_penalties(
-				owner, now)
+			hard_edge_penalties=dict(self._active_bot_edge_penalties(owner,now) or {})
+			hard_edge_penalties.update(self._active_macro_edge_penalties(owner,now) or {})
+			body=self.boundary_bodies.get(owner)
+			boundary_bad=bool(body and any(not arena_boundary.segment_clear(
+				self.grid.bounds,a,b,*body['shape']) for a,b in zip(path or (), (path or ())[1:])))
 			# A probe can fail while distant chunks are still streaming. Successful
 			# paths are permanent for the battle; failed ones get another chance.
 			#
@@ -3744,7 +3904,7 @@ class TerrainNavigator(object):
 				self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path))
 			partial = bool(path and _distance_2d(path[-1], goal) > WAYPOINT_ARRIVAL_RADIUS)
-			if (path and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
+			if (path and not boundary_bad and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
 					not self.grid.path_has_penalty(path, now) and
 					not self.grid.path_has_edge_penalty(
 						path, hard_edge_penalties)):
@@ -3775,10 +3935,9 @@ class TerrainNavigator(object):
 			# otherwise A* can admit the expensive edge, smooth it back into a
 			# shortcut, then restart the same rejected search on the next frame.
 			hard_edge_penalties = edge_penalties
-			penalized_direct = bool(
-				edge_penalties and any(
-					edge in edge_penalties
-					for edge in self.grid._edge_keys_for_segment(start, goal)))
+			penalized_direct = (self._bot_edges_penalized(owner,start,goal,now) if owner is not None
+				else bool(edge_penalties and any(edge in edge_penalties
+					for edge in self.grid._edge_keys_for_segment(start,goal))))
 			# Most annotated segments are already open roads. Avoid invoking A*
 			# when one continuous support/collision check proves the direct link.
 			if (not penalized_direct and
@@ -3843,6 +4002,35 @@ class TerrainNavigator(object):
 			receipt['checks'].append(row)
 		else:
 			receipt['dropped'] += 1
+
+	def _handoff_blocked_corner(self, bot_id, state, current, path, index, now):
+		"""A known blocked outgoing leg must not keep steering at its setup."""
+		if (index + 1 >= len(path) or not (WAYPOINT_ARRIVAL_RADIUS <
+				_distance_2d(current, path[index]) <= bot_tactics.ROUTE_ARRIVAL_RADIUS)):
+			return False
+		receipt = state.get('corner_selection_receipt') or {}
+		if receipt.get('at') != float(now) or tuple(receipt.get('origin', ())) != tuple(current):
+			return False
+		known = any(row.get('index') == index and row.get('candidate') == index + 1 and
+			row.get('clear') is False and not row.get('proof_deferred') and
+			row.get('native_revision') == self.grid._native_proof_revision and
+			row.get('reason') in ('segment_blocked', 'dry_segment_blocked') and
+			(row.get('corridor') or {}).get('static_hull_crossing') is True and
+			(row.get('corridor') or {}).get('static_hull_revision') == self.grid.static_hull_revision
+			for row in receipt.get('checks', ()))
+		if not known or self.grid._proof_deferred:
+			return False
+		# These are existing checked refusals, not an inferred collision from yaw.
+		# Retire only this actor's outgoing connector for the normal retry lifetime.
+		edge = self.grid._edge_cells_for_segment(current, path[index + 1])
+		if edge is None:
+			return False
+		self.bot_failed_edges.setdefault(int(bot_id), {})[edge] = (
+			float(now) + BLOCKED_STEP_EDGE_TTL, BLOCKED_STEP_EDGE_PENALTY)
+		self.request_replan(bot_id, current, now)
+		state['near_corner_handoff'] = dict(at=float(now), corner=tuple(path[index]),
+			target=tuple(path[index + 1]), reason='blocked_outgoing_connector')
+		return True
 
 	def _planned_next_segment_clear(self, current, path, index, now,
 			bot_id=None):
@@ -3978,7 +4166,119 @@ class TerrainNavigator(object):
 		return None
 
 	@observed('nav.next_target')
-	def next_target(self, bot_id, current, goal, path_key, now,
+	def next_target(self, bot_id, *args, **kwargs):
+		previous=self._boundary_actor
+		self._boundary_actor=bot_id
+		try:
+			return self._next_target_with_boundary(bot_id,*args,**kwargs)
+		finally:
+			self._boundary_actor=previous
+
+	def end_narrow_passage(self, bot_id, now, reason):
+		state = self.bot_states.get(int(bot_id)) or {}
+		if state.pop('narrow_passage_target', None) is not None:
+			state.setdefault('narrow_passage_receipt', {}).update(
+				at=float(now), outcome=reason)
+
+	@observed('nav.narrow_passage')
+	def narrow_passage_target(self, bot_id, current, goal, selected, now,
+			yaw, half_length, half_width):
+		"""Keep a direct final leg on a proved passage axis until the tail exits.
+
+		This proposes a local target, never pedals or a collision result. Existing
+		A* bends, waits, native proofs, private refusals and final motion retain
+		their owners. No map names or authored route coordinates are consulted.
+		"""
+		state = self.bot_states.get(int(bot_id))
+		grid = self.grid
+		if state is None or not grid.prebaked:
+			return selected
+		if (_distance_2d(selected, goal) > WAYPOINT_ARRIVAL_RADIUS or
+				_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS or
+				half_length <= 0.0 or half_width <= 0.0):
+			self.end_narrow_passage(bot_id,now,'owned_corner_or_arrival')
+			return selected
+		# The baked span includes a whole quantised cell. A rotating rectangle
+		# needs its diagonal plus that sampling allowance, not only its width.
+		turn_span = 2.0 * math.hypot(half_length, half_width) + grid.cell_size
+		forward = (math.sin(yaw), math.cos(yaw))
+		candidates = []
+		for offset in (0.0, -half_length, half_length):
+			probe = (current[0]+forward[0]*offset, current[1],
+				current[2]+forward[1]*offset)
+			corridor = grid.local_corridor(probe)
+			if corridor is not None and corridor[1] < turn_span:
+				candidates.append((corridor[1], corridor[0], probe))
+		if not candidates:
+			self.end_narrow_passage(bot_id,now,'body_clear_of_passage')
+			return selected
+		width, angle, probe = min(candidates)
+		axis = (math.sin(angle), math.cos(angle))
+		dx, dz = goal[0]-current[0], goal[2]-current[2]
+		if dx*axis[0]+dz*axis[1] < 0.0:
+			axis = (-axis[0], -axis[1])
+		remaining = dx*axis[0]+dz*axis[1]
+		if remaining <= WAYPOINT_ARRIVAL_RADIUS * 2.0:
+			self.end_narrow_passage(bot_id,now,'goal_not_forward')
+			return selected
+		centre = grid.point_for(grid.cell_for(probe), current[1])
+		along = (current[0]-centre[0])*axis[0]+(current[2]-centre[2])*axis[1]
+		length = min(remaining, max(grid.cell_size*2.0, half_length*2.0+grid.cell_size))
+		candidate = (centre[0]+axis[0]*(along+length), current[1],
+			centre[2]+axis[1]*(along+length))
+		retained = state.get('narrow_passage_target')
+		if (retained is not None and retained['shape'] == (half_length,half_width) and
+				retained['axis'][0]*axis[0]+retained['axis'][1]*axis[1] > 0.99 and
+				_distance_2d(current, retained['point']) > WAYPOINT_ARRIVAL_RADIUS and
+				(retained['point'][0]-current[0])*axis[0]+
+				(retained['point'][2]-current[2])*axis[1] > 0.0 and
+				(retained['point'][0]-current[0])*axis[0]+
+				(retained['point'][2]-current[2])*axis[1] <= remaining and
+				_distance_2d(current, retained['point']) <= length+grid.cell_size):
+			candidate = retained['point']
+		height = grid._baked_cell_height(grid.cell_for(candidate))
+		receipt = dict(at=float(now), origin=tuple(current), goal=tuple(goal),
+			selected=tuple(selected), axis=axis, span=width, target=tuple(candidate),
+			shape=(half_length,half_width), outcome='unsupported_target')
+		state['narrow_passage_receipt'] = receipt
+		if height is None:
+			return selected
+		candidate = (candidate[0], height, candidate[2])
+		if not grid.hull_pose_clear(candidate, math.atan2(axis[0],axis[1]), half_length,half_width):
+			return selected
+		previous = self._boundary_actor
+		self._boundary_actor = int(bot_id)
+		try:
+			if grid.segment_has_motion_hazard(current,candidate,
+					MOTION_FATAL_HAZARDS | BAKED_SHALLOW_WATER):
+				receipt['outcome'] = 'water_or_edge_refusal'
+				return selected
+			if (grid.segment_penalty(current,candidate,now) > 0.0 or
+					self._bot_edges_penalized(bot_id,current,candidate,now)):
+				receipt['outcome'] = 'private_or_static_refusal'
+				return selected
+			evidence = {}
+			revision = grid._native_proof_revision
+			if grid._proof_deferred:
+				receipt['outcome'] = 'proof_deferred'
+				return selected
+			clear = grid.dry_segment_clear(current,candidate,now,evidence)
+			receipt['proof'] = evidence
+			if revision != grid._native_proof_revision or grid._proof_deferred:
+				receipt['outcome'] = 'proof_deferred'
+				return selected
+			if not clear:
+				receipt['outcome'] = 'corridor_refused'
+				return selected
+		finally:
+			self._boundary_actor = previous
+		state['narrow_passage_target'] = dict(point=candidate,axis=axis,
+			shape=(half_length,half_width))
+		receipt.update(outcome='guided', target=candidate)
+		combat_count('nav_narrow_passage_guided')
+		return candidate
+
+	def _next_target_with_boundary(self, bot_id, current, goal, path_key, now,
 			anchor=None, avoid_points=None, lookahead_distance=None,
 			movement_intent=True, native_capability=None):
 		"""Return a terrain-safe local target, holding if no safe path is ready."""
@@ -4101,6 +4401,7 @@ class TerrainNavigator(object):
 			# follower from its realised hull pose; never invent an edge veto.
 			self.request_replan(bot_id, current, now)
 		if not movement_intent:
+			self._retire_path_frontier(state, now, 'movement_handoff')
 			if state.get('local_fallback_target') is not None:
 				self._local_target_event(state, now, 'movement_hold', current=current, goal=goal)
 			state.pop('local_fallback_target', None)
@@ -4300,6 +4601,9 @@ class TerrainNavigator(object):
 		lookahead = self._lookahead_index(
 			current, path, index, effective_key, now, lookahead_distance,
 			bot_id)
+		if (movement_intent and lookahead == index and
+				self._handoff_blocked_corner(bot_id, state, current, path, index, now)):
+			return tuple(current)
 		if (lookahead == len(path) - 1 and
 				_distance_2d(current, path[lookahead]) < reach_radius and
 				_distance_2d(path[lookahead], goal) > reach_radius):

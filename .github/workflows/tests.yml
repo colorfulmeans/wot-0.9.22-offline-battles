@@ -40,6 +40,18 @@ jobs:
         with:
           name: navigation-resolution-evidence
           path: build/navigation-resolution/report.json
+      - name: Verify all 41 water-rebaked graphs with the shipping search
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: >-
+          python tools/check_navigation_water.py
+          --baseline-ref 100bac61f4d589f4e17b9854b4ed2154b7cda5c7
+          --output build/navigation-water
+          --native-executable /tmp/navigation-resolution
+      - uses: actions/upload-artifact@v4
+        with:
+          name: navigation-water-evidence
+          path: build/navigation-water/report.json
   bot-behavior-regressions:
     runs-on: ubuntu-latest
     steps:
@@ -59,6 +71,8 @@ jobs:
           set -euo pipefail
           patterns=(
             'test_port_0922_ai.py'
+            'test_port_0922_house_corner_feedback.py'
+            'test_diagnostic_log_modes.py'
             'test_port_0922_three_round_handoffs.py'
             'test_port_0922_crush_progress_handoffs.py'
             'test_port_0922_motion_052854.py'
@@ -73,12 +87,24 @@ jobs:
             'test_port_0922_driver*.py'
             'test_port_0922_traffic*.py'
             'test_port_0922_bot*.py'
+            'test_bot_shot_ammo_policy.py'
+            'test_bot_ammo_late_results.py'
+            'test_bot_tier_consumables.py'
+            'test_bot_fittings.py'
+            'test_artillery_motion_reference.py'
             'test_port_0922_contact*.py'
+            'test_port_0922_recovery_return_budget.py'
             'test_port_0922_capture_contact_launch.py'
             'test_port_0922_magazine_followup.py'
             'test_port_0922_windstorm_bridge.py'
             'test_port_0922_windstorm_north.py'
+            'test_port_0922_windstorm_middle.py'
+            'test_port_0922_e5_wreck_handoff.py'
+            'test_port_0922_water_surfaces.py'
+            'test_port_0922_water_rebake.py'
             'test_port_0922_recovery_commit_consistency.py'
+            'test_port_0922_serene_coast_spawns.py'
+            'test_port_0922_posed_direction_probe.py'
             'test_port_0922_motion_hazard_prefix.py'
             'test_replay_capacity.py'
             'test_port_0922_authored_route_progress.py'
@@ -100,6 +126,8 @@ jobs:
             'test_port_0922_local_action_sweep.py'
             'test_port_0922_combat_tracking_lifecycle.py'
             'test_port_0922_wait_parking.py'
+            'test_port_0922_route_recovery_cycle.py'
+            'test_port_0922_failed_route_retry.py'
             'test_port_0922_server_bot_ai.py'
             'test_port_0922_target_evidence.py'
             'test_port_0922_terminal_route_handoff.py'
@@ -307,6 +335,8 @@ jobs:
       - name: Reproduce the verified recorder resource
         run: python tools/build_replay_runtime.py
       - name: Stage verified style UI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: python tools/stage_release_style_ui.py
       - name: Rebuild and verify the shipping x86 native module
         run: sh tools/build_math_batch_native.sh

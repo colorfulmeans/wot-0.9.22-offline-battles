@@ -7,11 +7,15 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.2** — [Release notes](docs/releases/v0.10.2.md).
+Current release: **v0.10.1**. **v0.10.2 is an unpublished test candidate** —
+[candidate notes](docs/releases/v0.10.2.md) and
+[verification audit](docs/testing/release0102-failure-audit.md).
+Its fixes remain in pull-request review until repeated automated checks and
+the owner's Windows gameplay acceptance are complete. Do not publish it yet.
 
 ## Play
 
-1. Download `wot-0.9.22-offline-battles-0.10.2-Windows-x64.zip` from the releases,
+1. Download the Windows x64 package from the latest published release,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,
    removes any older mod files and installs the matching mod.
@@ -672,8 +676,17 @@ when strategy requests forward travel, avoid contact escape for a merely
 tangent parallel hull, and include ordinary forward `advance` in the existing
 20-second authored-gate retry budget. Actual overlap and movement into a peer
 retain the original checked escape; holds and explicit team commands remain
-outside the route-stall timer. No global recovery state or replacement route
-law is introduced.
+outside active route travel. The server now sequences macro recovery over the
+unchanged route points: a failed C tries D, then returns to B and earlier points.
+A failed return tries one earlier point before restarting C; there is no exhausted
+cycle stop or failed-lane cooldown. Successful return visits every remaining
+point to the own start before selecting another eligible lane at its first point.
+Combat pauses the attempt clock and preserves its cursor; resumption rejoins
+from the actual hull pose. Returning skips authored waits, while a new traversal
+starts fresh wait clocks. Pressure rebalancing cannot replace an active recovery.
+The existing worker path finder, local motor recovery and collision guards retain
+physical movement ownership. A singleton automatic objective retains its separate
+arrival/fallback policy because it has no ordered return corridor.
 The retained physical boundary also applies the existing ground-exit proof to
 upper hull rays, so leaving a slope is not rejected as an upper wall; real
 walls and beams still require a clear remainder and continue to block.
@@ -709,7 +722,7 @@ and bundled runtimes.
 
 This test branch removes broad native static-edge review and its live missing-cell/link repair machinery for every map. The rebuilt Airfield graph is retained; the other 40 graphs are unchanged and are not represented as newly baked. Local displaced-hull connector checks, moving-vehicle avoidance, wreck costs, per-Bot contact recovery and final physical collision remain. Native gameplay and performance require testing on the exact client.
 
-The route editor offers All class routes above All vehicle classes. Default route names are editable in shared, individual-class and total views; parking names are also editable. User-entered names stay unchanged when switching UI language. Authors can name the complete experimental layout in Chinese; English names are reviewed when that layout is adopted as the new bundled default. Renaming changes neither geometry nor class priorities. It shows effective per-class coloured routes and red SPG parking, without a separate shared-default line. Selecting a coloured route scopes edits to that vehicle class; overlapping routes can be selected by class in the list. All vehicle classes edits shared defaults in black. The last geometry edit wins: editing a shared default replaces the corresponding existing class geometry and clears its waiting places and timers, while preserving class priorities. Shared defaults expose travel geometry only. A later class edit affects only that class. The symmetry checkbox controls whether the opposite team is updated; merely switching views does not replace geometry. Only explicit small parking places own waiting durations. A parent with such places grows on the selected route; collapsed groups retain a large parent marker. A parent with no small places is an ordinary travel node and cannot retain a waiting clock. Default routes can be deleted for a specific class or all classes, including from the total view; deletion follows route symmetry and excludes the lane from Bot allocation. Undo or resetting the profile restores deleted defaults. Insert point adds a draggable node after the selected point (midpoint when a next node exists), within the sixteen-node limit. This view changes no battle-side navigation work.
+The route editor offers All class routes above All vehicle classes. Default route names are editable in shared, individual-class and total views; parking names are also editable. User-entered names stay unchanged when switching UI language. Authors can name the complete experimental layout in Chinese; English names are reviewed when that layout is adopted as the new bundled default. Renaming changes neither geometry nor class priorities. It shows effective per-class coloured routes and red SPG parking, without a separate shared-default line. Selecting a coloured route scopes edits to that vehicle class; overlapping routes can be selected by class in the list. All vehicle classes edits shared defaults in black. Shared travel edits preserve independently enabled class geometry, priorities and waiting places. Disabled class records follow shared travel with all waiting data removed and remain disabled. Shared defaults expose travel geometry only. A later class edit affects only that class. The symmetry checkbox controls whether the opposite team is updated; merely switching views does not replace geometry. Only explicit small parking places own waiting durations. A parent with such places grows on the selected route; collapsed groups retain a large parent marker. A parent with no small places is an ordinary travel node and cannot retain a waiting clock. Default routes can be deleted for a specific class or all classes, including from the total view; deletion follows route symmetry and excludes the lane from Bot allocation. Undo or resetting the profile restores deleted defaults. New routes contain fixed own/enemy spawn endpoints. Blank left clicks select nothing and add nothing; Shift-click or Insert point adds a draggable intermediate node, always before the terminal endpoint. Selecting fixed endpoints cannot move/delete them or clear redo history. The sixteen-node limit includes both endpoints. Existing reviewed capture-area terminals are retained. The Pit, Tundra and Lost City disable route symmetry; other maps reverse intermediate travel with fixed team endpoints. Waiting-mode blank clicks still add a 60-second place, and SPG parking keeps click-to-move. Double-clicking an existing route node opens waiting edits and detaches symmetry as an undoable change. This view changes no battle-side navigation work.
 
 Route priorities are set per vehicle class (0..9, higher first). All vehicle classes has no priority control. All class routes allows editing the selected vehicle class route priority and the selected SPG parking priority; priority-only edits retain shared custom-route geometry and class membership. At fresh round creation, each Bot draws uniformly among available highest-priority lanes, with replacement until capacity is reached; lower priorities become eligible after that tier fills. Default class variants share the original lane capacity. Explicit fixed-slot custom routes retain their assignment authority. Corresponding Bots by class ordinal share symmetric lane-family draws and use their own team's geometry. Standalone/asymmetric routes draw independently; unmatched class counts, unavailable counterparts and exhausted capacity also allow local allocation. Empty/full route catalogs use automatic navigation. SPG parking regions use the same priority-before-random policy, reserving actual vehicle-sized clear space rather than distributing in region order. Edited default parking tied to symmetric lane families shares the draw when both sides have the same available families; standalone parking and unmatched safe spaces stay local. Source-catalog cost priorities retain their lower-first convention; editor priorities are higher-first. A fresh entropy seed is shared by the round's initial allocators without changing projectile random state. Published manifests preserve the choice across authority handoff and reconnect; runtime blockage/relocation remains under existing navigation owners. Save and apply for the next round; allocation adds no native movement queries or configuration rewrites.
 

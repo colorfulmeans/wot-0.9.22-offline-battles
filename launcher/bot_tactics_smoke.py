@@ -1,8 +1,52 @@
 """Opt-in verification of the actual packaged editor; writes only a temp store."""
+import copy
 import json
 import tempfile
 from pathlib import Path
 import traceback
+
+
+def _verify_vehicle_editor_language(root, tk, ttk):
+    """Exercise shipped widgets with an isolated, read-only numeric fixture."""
+    from types import SimpleNamespace
+    import vehicle_editor_ui as editor_ui
+    member = editor_ui.DEFAULT_MEMBER
+    path = 'turrets0/Turret/guns/Gun/burst/count'
+    field = dict(member=member, fieldPath=path, categoryLabel='Gun', category='guns',
+                 fieldLabel='Gun / Magazine / Rounds per trigger', shared=False,
+                 affectedVehicles=['R11_MS-1'], displayVehicle='MS-1', scope='Affects this vehicle only.')
+    result = dict(member=member, fieldPath=path, originalValue=1, currentValue=1,
+                  packedType='integer', constraint='magazine capacity must be a positive integer',
+                  overlayPath='isolated smoke fixture')
+    calls = []
+    def inspect(*unused):
+        calls.append('inspect')
+        return result
+    service = SimpleNamespace(VehicleOverlayError=ValueError,
+        list_vehicle_choices=lambda *a: [dict(nation='ussr', vehicle='R11_MS-1',
+            label='MS-1', vehicleClass='lightTank', level=1, member=member)],
+        get_vehicle_profile_options=lambda *a: dict(excludeEditedVehiclesFromBots=False),
+        list_vehicle_profile_field_choices=lambda *a: [field], inspect_profile_field=inspect)
+    editor = editor_ui.VehicleEditorWindow(root, 'isolated fixture', 'Smoke', tk, ttk,
+        SimpleNamespace(), service=service, language='en',
+        armor_viewer_factory=editor_ui.vehicle_armor_viewer.NullArmorViewerPanel)
+    try:
+        editor.replacement.set('unfinished.12')
+        editor._show_error('This field uses the Packed integer type; enter a whole number.')
+        before = list(calls)
+        for language in ('zh', 'en', 'zh', 'en'):
+            editor.set_language(language)
+            root.update()
+            assert editor._selection() == (member, path)
+            assert editor.replacement.get() == 'unfinished.12'
+            assert str(editor.apply_button.cget('state')) == 'disabled'
+            assert calls == before
+            if language == 'zh':
+                assert '1—64' in editor.constraint.get() and '请输入整数' in editor.status.get()
+            else:
+                assert 'whole number' in editor.status.get()
+    finally:
+        editor.root.destroy()
 
 
 def run(destination):
@@ -23,6 +67,11 @@ def run(destination):
             report['adopted_baseline_maps']=len(ui.document['maps'])
             report['baseline_wait_places']=sum(len(storage.contract.waiting_positions(p))
                 for e in ui.document['maps'].values() for r in e.get('default_routes',()) for p in r['points'])
+            readonly=copy.deepcopy(ui.document)
+            ui.new_route();ui.rule_vars['skill'].set('elite');ui.save_rule();ui.undo()
+            assert ui.document==readonly and str(ui.save_button.cget('state'))=='disabled'
+            report['default_readonly']=True
+            ui.adopt(storage.contract.default_profile('Baseline verification'))
             ui.map_var.set('Ruinberg');ui.change_map()
             ui.route_class_var.set('AT-SPG');ui.change_route_class()
             original=next(r for r in storage.contract.default_map('08_ruinberg')['default_routes']
@@ -31,8 +80,102 @@ def run(destination):
             ui._editable_item()['points'][1][0]+=8;ui.reset_builtin()
             assert ui._editable_item()==original
             report['baseline_route_restore']=True
-            ui.store.save(storage.contract.empty(),apply=True)
+            ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())
+            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all',outfit='off').items():ui.rule_vars[key].set(value)
+            for var in ui.ammo_vars:var.set('0')
+            ui.save_rule()
+            report['independent_presets_and_empty_ammo']=True
+            preview=ui.preview_rule();root.update()
+            rendered=[preview.table.item(i,'values') for i in preview.table.get_children()]
+            assert len(rendered)==12 and any('0 : 0 : 0' in str(row) for row in rendered)
+            assert sum(row[0]=='Crew preset' for row in rendered)==1
+            ui.set_language('zh');root.update()
+            assert preview.root.title()=='生效值预览'
+            assert any('成员配置' in str(preview.table.item(i,'values')) for i in preview.table.get_children())
+            ui.set_language('en');root.update();preview.root.destroy()
+            report['scoped_effective_preview']=True
+            import save_slots
+            slots_root=Path(temp)/'isolated-saves'
+            record=save_slots.create_slot('Full unlock smoke',save_slots.MODE_UNLOCKED,root=str(slots_root))
+            slot=Path(record['path']);(slot/'garage_state.json').write_text('{}')
+            (slot/'launcher_crew_inbox.json').write_text('{"pending":"old"}')
+            reset=save_slots.initialize_slot(record['id'],root=str(slots_root),is_running=lambda:False)
+            assert not reset['record']['has_state'] and not (slot/'launcher_crew_inbox.json').exists()
+            assert Path(reset['backup']).is_file()
+            assert json.loads((slot/'save.json').read_text())['skip_legacy_import'] is True
+            report['save_initialization_and_backup']=True
+            import wot_launcher
+            owner=type('SaveActionsFixture',(),{})()
+            owner._tk=tk;owner.save_panel=tk.Frame(root);owner.save_panel.pack(fill='x')
+            for method in ('_open_save_dialog','_new_save_slot','_rename_save_slot','_delete_save_slot',
+                           '_open_save_folder','_backup_save_slot','_restore_save_slot','_initialize_save_slot'):
+                setattr(owner,method,lambda:None)
+            wot_launcher.LauncherWindow._build_save_actions(owner)
+            buttons=[owner.customize_save_button,owner.new_save_slot_button,owner.rename_save_slot_button,
+                owner.delete_save_slot_button,owner.open_save_folder_button,owner.backup_save_button,
+                owner.restore_save_button,owner.initialize_save_button]
+            for i,button in enumerate(buttons):button.configure(text='Button %d'%i)
+            root.geometry('1000x300');root.deiconify();root.update()
+            assert len({button.winfo_width() for button in buttons})<=2
+            assert [int(button.grid_info()['row']) for button in buttons]==[0]*4+[1]*4
+            assert [int(button.grid_info()['column']) for button in buttons]==list(range(4))*2
+            owner.save_panel.destroy();root.withdraw()
+            report['save_actions_two_by_four']=True
+
+
+            assert storage.contract.effective(ui.document,1,'heavyTank',0)['outfit']=='off'
+            from types import SimpleNamespace
+            from tkinter import ttk
+            import crew_ui
+            owner=SimpleNamespace(_tk=tk,_ttk=ttk,_t=lambda value:value,
+                game_root=tk.StringVar(value='smoke fixture'),_save_slot_id='smoke',_busy=False,_maintenance_busy=False)
+            panel=crew_ui.CrewPanel(owner,ttk.Frame(root))
+            panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'),vehicleClass='lightTank',seats=crew_ui.store.crew_skills.seats('ussr:R11_MS-1'))]
+            panel.capacity_state=dict(total=2000,occupied=0,pending=0,available=2000)
+            panel.filter();assert panel.by_label
+            panel.variables['female'].set('Female');panel.variables['skills'].set('2')
+            original_add=crew_ui.store.add;calls=[]
+            try:
+                crew_ui.store.add=lambda *args,**kwargs:calls.append((args,kwargs))
+                original_capacity=crew_ui.store.capacity
+                crew_ui.store.capacity=lambda *a,**k:dict(total=2000,occupied=0,pending=1,available=1999)
+                assert panel.add()
+                assert calls==[(('smoke','smoke fixture','ussr:R11_MS-1',0,True,2),{'training':100})]
+            finally:
+                crew_ui.store.add=original_add
+                crew_ui.store.capacity=original_capacity
+            panel.variables['class'].set('Heavy tank');panel.filter();assert not panel.by_label
+            assert str(panel.button.cget('state'))=='disabled'
+            report['crew_controls_and_outfit_override']=True
+            name='ussr:R45_IS-7'
+            panel.vehicles=[dict(name=name,nation='ussr',label='IS-7',vehicleClass='heavyTank',
+                seats=crew_ui.store.crew_skills.seats(name))]
+            panel.filter();panel.variables['seat'].set('Loader2 (Also Radio operator)');panel.update_skills()
+            assert max(panel.maps['skills'].values())==11
+            panel.variables['skills'].set('11');panel.variables['seat'].set('Loader1');panel.update_skills()
+            assert panel.variables['skills'].get()=='7'
+            panel.variables['training'].set('50%');panel.update_skills()
+            assert panel.variables['skills'].get()=='1' and str(panel.boxes['skills'].cget('state'))=='disabled'
+            panel.variables['training'].set('100%');panel.update_skills()
+            assert min(panel.maps['skills'].values())==1
+            report['seat_aware_recruits']=True
+            import nation_choices
+            assert list(panel.maps['nation'].values())==list(nation_choices.ORDER)
+            assert panel.boxes['nation'].cget('values')[0]=='China'
+            assert panel.expand_button.cget('text')=='Add 16 barracks berths'
+            with tempfile.TemporaryDirectory(prefix='barracks-smoke-') as beds:
+                record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=beds)
+                identity=record['id']
+                assert crew_ui.store.capacity(identity,root=beds)['total']==30
+                for total in (46,62):
+                    assert crew_ui.store.expand_berths(identity,root=beds,is_running=lambda:False)['total']==total
+                assert json.loads((Path(record['path'])/'save.json').read_text())['initial_berths']==62
+            report['nation_order_and_barracks_capacity']=True
+
+            _verify_vehicle_editor_language(root, tk, ttk)
+            report['vehicle_editor_language_preserved']=True
+
             root.update(); ui.book.select(1); root.update()
             ui.map_var.set('Ruinberg'); ui.change_map()
             ui.route_class_var.set('heavyTank'); ui.change_route_class(); root.update()
@@ -53,12 +196,15 @@ def run(destination):
             ui.canvas.event_generate('<ButtonPress-1>', x=int(x), y=int(y))
             ui.canvas.event_generate('<ButtonRelease-1>', x=int(x), y=int(y)); root.update()
             ui.item_vars['radius'].set('34')
-            ui.profile_name.set('Packaged editor smoke')
+            ui.document['name']='Packaged editor smoke'
+            ui.profile_name.set(ui.document['name'])
             ui.save(True); root.update()
             active = ui.store.active()
             assert active['maps']['08_ruinberg']['routes'][0]['policy'] == 'fixed'
             assert active['maps']['08_ruinberg']['positions'][0]['radius'] == 34.
             assert not ui.dirty()
+            values=storage.contract.effective(active,1,'heavyTank',0)
+            assert values['development']=='full' and values['equipment']=='improved' and values['ammo_ratios']==[0,0,0]
             # Prove that the runtime plan reader, not just the form, sees it.
             spawn = graph['spawn_formations']['1'][0]
             state = dict(id=11, team=1, slot=0, vehicle='smoke:SPG', profile={'class_tag':'SPG'},

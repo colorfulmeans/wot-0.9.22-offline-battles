@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-"""Self-drawn LAN waiting room for #1513.
+"""Native GUI LAN waiting room using client skin bitmaps for #1513.
 
 The room presents the reviewed 0.8.2 waiting-room law: a live room status, one
 map selector and one start button. The launcher owns the server address, so
@@ -11,17 +11,15 @@ Exact #1513 evidence for the native surface used here:
 - ``GUI.Simple``, ``GUI.Window`` and ``GUI.Text`` with the property names below:
   ``scripts/client/PostProcessing/ChainView.pyc`` and
   ``scripts/client/bwobsolete_tests/GUITest.pyc``.
-- Two rendering facts, both established on the real #1513 client and not
-  reversible from source: an untextured ``GUI.Simple``/``GUI.Window`` draws
-  NOTHING, and vertex ``colour`` is never applied to one that is textured.
-  A row of test quads varying ``materialFX`` (SOLID/BLEND/ADD), ``colour`` and
-  texture name all drew the same white, and the untextured quad drew nothing.
-  So every visible rectangle here carries ``system/maps/col_white.dds`` and is
-  white, and readable contrast comes from dark ``GUI.Text`` on top.
-- Mod-owned font ``system/fonts/offline_lan_cjk.font`` uses Windows
-  Microsoft YaHei with dynamic glyph caching; Windows rendering is pending.
+- Vertex colour does not tint this client's textured quads. The room therefore
+  uses the pinned client's window/button bitmaps, decoded to RGBA DDS with
+  native frame nine-slice sizing, and BLEND for their original alpha;
+  cursor and legacy service controls retain their proven white/black textures.
+- Mod-owned Microsoft YaHei fonts provide dynamic Chinese glyphs. The waiting
+  room uses 13 px body/button text and a 16 px title, following the stock
+  settings-window reference. Other service panels keep their 16 px font.
 - ``GUI.addRoot`` / ``GUI.delRoot`` / ``GUI.reSort`` and an overlay at
-  ``position.z = 0.1`` with ``focus``, ``moveFocus`` and ``wg_inputKeyMode``:
+  ``position.z = 0.1`` with ``focus`` and ``moveFocus``:
   ``scripts/client/new_year/fade_window.pyc``.
 - Mouse script methods ``handleMouseClickEvent``, ``handleMouseEnterEvent``,
   ``handleMouseLeaveEvent`` and ``handleMouseButtonEvent``: ``ChainView.pyc``.
@@ -44,27 +42,32 @@ import time
 from gui.mods.offline_lan_0922 import ui_i18n
 from gui.mods.offline_lan_0922.ui_i18n import as_text, tr
 
-# An untextured GUI.Simple/GUI.Window draws nothing on this client, and vertex
-# colour is never applied to a textured one, so every visible rectangle is a
-# white col_white quad and contrast comes from GUI.Text.  The panel stays
-# untextured on purpose: a white 680x300 slab would blank out the hangar.
-PANEL_TEXTURE = ''
+# Legacy white/black primitives remain owned by the cursor and service panels.
+PANEL_TEXTURE = 'gui/maps/offline_lan/waiting_panel.dds'
+BUTTON_TEXTURE = 'gui/maps/offline_lan/waiting_button.dds'
+START_TEXTURE = 'gui/maps/offline_lan/waiting_start.dds'
+FIELD_TEXTURE = 'gui/maps/offline_lan/waiting_field.dds'
 CONTROL_TEXTURE = 'system/maps/col_white.dds'
-# misc.pkg ships exactly two solid-colour maps, and colour cannot tint either,
-# so a dark shape has to come from the black one.
 OUTLINE_TEXTURE = 'system/maps/col_black.dds'
 CONTROL_TEXT_COLOUR = (16, 26, 36, 255)
 CONTROL_HOVER_COLOUR = (14, 82, 140, 255)
+ROOM_TEXT_COLOUR = (178, 178, 160, 255)
+ROOM_HOVER_COLOUR = (255, 222, 141, 255)
 PANEL_FONT = ui_i18n.CHINESE_FONT
+# GUI.Text.font takes a name relative to system/fonts, as stock addLabel does.
+ROOM_FONT = 'offline_lan_waiting.font'
 OVERLAY_Z = 0.1
 # Smaller z draws in front. The buttons render at CONTROL_Z and the pointer at
 # z=0 did not, so the pointer keeps the same 0.01 step inside that band.
 CONTROL_Z = 0.05
 CONTROL_FRAME_OFFSET = 0.01
-PANEL_WIDTH = 680
-PANEL_HEIGHT = 340
+PANEL_WIDTH = 640
+PANEL_HEIGHT = 286
 PANEL_SAFE_MARGIN = 16
 PANEL_RAISE_PIXELS = 24
+# The stock queue title and vehicle footer stay outside this vertical band.
+ROOM_TOP_FRACTION = 0.265
+ROOM_BOTTOM_FRACTION = 0.72
 POINTER_TICK_SECONDS = 0.03
 RANDOM_MAP_OPTION = 'server_random'
 
@@ -88,11 +91,11 @@ BOT_TIER_OPTIONS = (
     ('minus2_0', 'Tier -2 / -1 / 0'),
 )
 _BOT_SKILL_CONTROLS = ('skill_previous', 'skill', 'skill_next')
-# The values and their order are bot_gunnery.SKILL_MODES, easiest first, bound
-# by a parity test.  The labels name the enemy a preset produces.
+# Menu order starts with the unchanged mixed default. Wire preset values and
+# rating distributions are unchanged; labels match the launcher difficulty names.
 BOT_SKILL_OPTIONS = (
-    ('easy', 'Easy'), ('relaxed', 'Relaxed'), ('mixed', 'Pub mix'),
-    ('hard', 'Hard'), ('brutal', 'Brutal'),
+    ('mixed', 'Mixed'), ('easy', 'Rookie'), ('relaxed', 'Regular'),
+    ('hard', 'Veteran'), ('brutal', 'Elite'),
 )
 
 
@@ -161,16 +164,15 @@ def friendly_bot_skill_mode(mode):
     for value, label in BOT_SKILL_OPTIONS:
         if value == mode:
             return tr(label)
-    return tr('Pub mix')
+    return tr('Mixed')
 
 
-def panel_geometry(screen_size):
-    """Return a compact panel geometry that stays inside the screen.
+def panel_geometry(screen_size, size=None):
+    """Fit the room uniformly between the stock mode title and tank footer.
 
-    Native CLIP coordinates are resolution-independent, but the panel itself
-    has pixel dimensions.  Raising it by a fixed number of pixels keeps its
-    perceived position stable across aspect ratios, while the safe-margin
-    clamp prevents the move from pushing it off a short display.
+    Independent service panels retain their previous geometry. Room controls
+    use parent-relative CLIP coordinates, so scaling the root also scales their
+    positions, frames and hit rectangles together.
     """
     try:
         width, height = screen_size or (1024.0, 768.0)
@@ -181,12 +183,19 @@ def panel_geometry(screen_size):
         width, height = 1024.0, 768.0
     available_width = max(1.0, width - 2.0 * PANEL_SAFE_MARGIN)
     available_height = max(1.0, height - 2.0 * PANEL_SAFE_MARGIN)
-    panel_width = min(float(PANEL_WIDTH), available_width)
-    panel_height = min(float(PANEL_HEIGHT), available_height)
-    raise_limit = max(
-        0.0, (height - panel_height) * 0.5 - PANEL_SAFE_MARGIN)
-    raise_pixels = min(float(PANEL_RAISE_PIXELS), raise_limit)
-    return panel_width, panel_height, 2.0 * raise_pixels / height
+    nominal_width, nominal_height = size or (PANEL_WIDTH, PANEL_HEIGHT)
+    if (nominal_width, nominal_height) != (PANEL_WIDTH, PANEL_HEIGHT):
+        panel_width = min(float(nominal_width), available_width)
+        panel_height = min(float(nominal_height), available_height)
+        raise_limit = max(0.0, (height-panel_height)*0.5-PANEL_SAFE_MARGIN)
+        raise_pixels = min(float(PANEL_RAISE_PIXELS), raise_limit)
+        return panel_width, panel_height, 2.0*raise_pixels/height
+    top = height * ROOM_TOP_FRACTION
+    bottom = height * ROOM_BOTTOM_FRACTION
+    scale = min(1.0, available_width / nominal_width,
+                (bottom-top) / nominal_height)
+    return (nominal_width * scale, nominal_height * scale,
+            1.0 - (top+bottom) / height)
 
 
 class NativeSurface(object):
@@ -201,7 +210,7 @@ class NativeSurface(object):
     def window(self):
         return self._gui.Window(PANEL_TEXTURE)
 
-    def simple(self, texture=PANEL_TEXTURE):
+    def simple(self, texture=''):
         return self._gui.Simple(texture)
 
     def text(self):
@@ -346,6 +355,20 @@ class _ControlScript(object):
 class WaitingRoomUI(object):
     """A reversible native room used instead of the stock map picker."""
 
+    panel_size = (PANEL_WIDTH, PANEL_HEIGHT)
+    panel_font = ROOM_FONT
+    control_text_colour = (242, 241, 225, 255)
+    control_hover_colour = ROOM_HOVER_COLOUR
+
+    def _control_texture(self, role):
+        if role in ('tier', 'skill', 'map') or role.startswith('skill_choice_'):
+            return FIELD_TEXTURE
+        if role == 'start':
+            return START_TEXTURE
+        size = ('small' if role in _TEAM_SIZE_CONTROLS or role.endswith(('_previous','_next'))
+                else 'close' if role == 'close' else 'random' if role == 'random' else 'normal')
+        return 'gui/maps/offline_lan/waiting_button_' + size + '.dds'
+
     # The stock picker can only present the elected host.  This room also
     # presents the players who wait for that host.
     guest_view = True
@@ -358,7 +381,9 @@ class WaitingRoomUI(object):
                  request_bot_tier_mode=None, open_map_picker=None,
                  round_seconds=None, bot_skill_status=None,
                  request_bot_skill_mode=None, training_status=None,
-                 toggle_training_bots=None):
+                 toggle_training_bots=None, player_roster=None, local_player_id=None, request_team_class=None):
+        self._player_roster = player_roster or (lambda: [])
+        self._local_player_id = local_player_id or (lambda: None)
         self._training_status = training_status or (lambda: (False, False))
         self._toggle_training_bots = toggle_training_bots
         self._request_start = request_start
@@ -369,6 +394,7 @@ class WaitingRoomUI(object):
         self._random_supported = random_supported or (lambda: True)
         self._request_team = request_team
         self._request_team_size = request_team_size
+        self._request_team_class = request_team_class
         self._team_status = team_status or (lambda: {})
         self._bot_tier_status = bot_tier_status or (lambda: {})
         self._request_bot_tier_mode = request_bot_tier_mode
@@ -383,6 +409,7 @@ class WaitingRoomUI(object):
         self._open_map_picker = open_map_picker
         self._round_seconds = round_seconds or (lambda: None)
         self._surface = surface
+        self._flash = None
         self._panel = None
         self._controls = {}
         self._labels = {}
@@ -400,9 +427,23 @@ class WaitingRoomUI(object):
         self._pending_team_sizes = {}
         self._pending_bot_tier_mode = None
         self._pending_bot_skill_mode = None
+        self._skill_menu_open = False
+        self._layout_receipt = None
 
     def install(self):
         """Build the native components without showing them."""
+        if self._flash is not None:
+            return True
+        if self._surface is None and type(self) is WaitingRoomUI:
+            if self._training_status()[0]:
+                from gui.mods.offline_lan_0922.training_room import TrainingRoomWindow, register
+                register()
+                self._flash = TrainingRoomWindow(self)
+            else:
+                from gui.mods.offline_lan_0922.waiting_room_flash import RoomWindow, register
+                register()
+                self._flash = RoomWindow(self)
+            return True
         if self._panel is not None:
             return True
         surface = self._surface
@@ -419,8 +460,8 @@ class WaitingRoomUI(object):
         self._set(panel, 'verticalAnchor', 'CENTER')
         self._set(panel, 'width', PANEL_WIDTH)
         self._set(panel, 'height', PANEL_HEIGHT)
-        # Empty texture plus SOLID renders the flat vertex colour.
-        self._set(panel, 'materialFX', 'SOLID')
+        # The original client window bitmap supplies its own colour and alpha.
+        self._set(panel, 'materialFX', 'BLEND')
         self._set(panel, 'colour', (5, 12, 20, 245))
         self._set(panel, 'position', (0.0, 0.0, OVERLAY_Z))
         # Every stock root that hosts a live pointer sets focus AND moveFocus
@@ -435,76 +476,63 @@ class WaitingRoomUI(object):
         # GUI.Window can never accept it.  Setting it only logged a skip.
         self._set(panel, 'visible', False)
         self._apply_layout(panel=panel, surface=surface)
-        make_control = lambda role, position, width, height: self._make_control(
-            role, position, width, height, panel=panel, controls=controls,
-            surface=surface)
-        make_label = lambda role, text, position, width, height, **kwargs: \
-            self._make_label(
-                role, text, position, width, height, panel=panel, labels=labels,
-                surface=surface, **kwargs)
-        make_control('tier_previous', (-0.72, 0.30, CONTROL_Z), 0.20, 0.13)
-        make_control('tier', (0.0, 0.30, CONTROL_Z), 1.15, 0.13)
-        make_control('tier_next', (0.72, 0.30, CONTROL_Z), 0.20, 0.13)
-        make_control('skill_previous', (-0.72, 0.15, CONTROL_Z), 0.20, 0.13)
-        make_control('skill', (0.0, 0.15, CONTROL_Z), 1.15, 0.13)
-        make_control('skill_next', (0.72, 0.15, CONTROL_Z), 0.20, 0.13)
-        make_control('map', (-0.30, 0.0, CONTROL_Z), 1.00, 0.14)
-        make_control('random', (0.62, 0.0, CONTROL_Z), 0.56, 0.14)
-        make_control('team1_down', (-0.82, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team1_up', (-0.22, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team2_down', (0.22, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team2_up', (0.82, -0.18, CONTROL_Z), 0.12, 0.14)
-        make_control('team1', (-0.52, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('team2', (0.0, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('team_random', (0.52, -0.38, CONTROL_Z), 0.42, 0.14)
-        make_control('start', (0.0, -0.58, CONTROL_Z), 1.20, 0.20)
-        make_control('close', (0.0, -0.90, CONTROL_Z), 0.50, 0.16)
-        make_label('title', tr('LAN WAITING ROOM'), (-0.86, 0.82, 0.0), 1.72,
-                   0.12, colour=(232, 244, 255, 255))
-        make_label('room', '', (-0.86, 0.62, 0.0), 1.72, 0.11)
-        make_label('players', '', (-0.86, 0.44, 0.0), 1.72, 0.11)
-        # These labels sit on textured buttons, which render white until a
-        # tint is proved, so their text has to be dark to stay readable.
-        make_label('tier_previous', '<', (-0.72, 0.30, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('tier', '', (0.0, 0.30, 0.0), 1.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('tier_next', '>', (0.72, 0.30, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('skill_previous', '<', (-0.72, 0.15, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('skill', '', (0.0, 0.15, 0.0), 1.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('skill_next', '>', (0.72, 0.15, 0.0), 0.18, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('map', '', (-0.30, 0.0, 0.0), 0.96, 0.10,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('random', tr('RANDOM MAP'), (0.62, 0.0, 0.0), 0.52, 0.10,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team1_down', '-', (-0.82, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team1_capacity', '', (-0.52, -0.18, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=(232, 244, 255, 255))
-        make_label('team1_up', '+', (-0.22, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team2_down', '-', (0.22, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team2_capacity', '', (0.52, -0.18, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=(232, 244, 255, 255))
-        make_label('team2_up', '+', (0.82, -0.18, 0.0), 0.10, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team1', tr('TEAM 1'), (-0.52, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team2', tr('TEAM 2'), (0.0, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('team_random', tr('RANDOM'), (0.52, -0.38, 0.0), 0.40, 0.09,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('start', tr('START BATTLE'), (0.0, -0.58, 0.0), 1.16, 0.11,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('close', tr('LEAVE'), (0.0, -0.90, 0.0), 0.46, 0.10,
-                   anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-        make_label('message', '', (-0.86, -0.75, 0.0), 1.72, 0.10,
-                   colour=(184, 205, 222, 255))
+        # Design in actual pixels, then convert once to parent-relative CLIP.
+        # The root can shrink on short displays but never grows beyond 640x286.
+        def position(x, y, z):
+            return (2.0*x/PANEL_WIDTH-1.0, 1.0-2.0*y/PANEL_HEIGHT, z)
+
+        def make_control(role, x, y, width, height=22):
+            return self._make_control(role, position(x, y, CONTROL_Z),
+                2.0*width/PANEL_WIDTH, 2.0*height/PANEL_HEIGHT,
+                panel=panel, controls=controls, surface=surface)
+
+        def make_label(role, text, x, y, width, anchor='CENTER', colour=None):
+            return self._make_label(role, text, position(x, y, 0.0),
+                2.0*width/PANEL_WIDTH, 32.0/PANEL_HEIGHT, anchor=anchor,
+                colour=ROOM_TEXT_COLOUR if colour is None else colour,
+                panel=panel, labels=labels, surface=surface)
+
+        # Two compact selector columns; map and team rows occupy the full form.
+        for role, x, y, width in (
+                ('tier_previous', 34, 100, 24), ('tier', 164, 100, 232),
+                ('tier_next', 294, 100, 24),
+                ('skill_previous', 346, 100, 24), ('skill', 476, 100, 232),
+                ('skill_next', 606, 100, 24),
+                ('map', 250, 136, 456), ('random', 554, 136, 128),
+                ('team1_down', 34, 172, 24), ('team1_up', 294, 172, 24),
+                ('team2_down', 346, 172, 24), ('team2_up', 606, 172, 24),
+                ('team1', 116, 208, 180), ('team2', 320, 208, 180),
+                ('team_random', 524, 208, 180),
+                ('close', 568, 271, 100), ('start', 422, 271, 180)):
+            make_control(role, x, y, width, 26 if role == 'start' else 22)
+        make_label('title', tr('LAN WAITING ROOM'), 12, 12, 610,
+                   anchor='LEFT', colour=(219, 219, 204, 255))
+        make_label('room', '', 22, 49, 596, anchor='LEFT')
+        make_label('players', '', 22, 72, 596, anchor='LEFT')
+        for role, text, x, y, width in (
+                ('tier_previous', '<', 34, 100, 24), ('tier', '', 164, 100, 224),
+                ('tier_next', '>', 294, 100, 24),
+                ('skill_previous', '<', 346, 100, 24), ('skill', '', 476, 100, 224),
+                ('skill_next', '>', 606, 100, 24),
+                ('map', '', 250, 136, 448), ('random', tr('RANDOM MAP'), 554, 136, 120),
+                ('team1_down', '-', 34, 172, 24), ('team1_capacity', '', 164, 172, 232),
+                ('team1_up', '+', 294, 172, 24), ('team2_down', '-', 346, 172, 24),
+                ('team2_capacity', '', 476, 172, 232), ('team2_up', '+', 606, 172, 24),
+                ('team1', tr('TEAM 1'), 116, 208, 180),
+                ('team2', tr('TEAM 2'), 320, 208, 180),
+                ('team_random', tr('RANDOM'), 524, 208, 180),
+                ('start', tr('START BATTLE'), 422, 271, 172),
+                ('close', tr('LEAVE'), 568, 271, 92)):
+            make_label(role, text, x, y, width, colour=self.control_text_colour)
+        make_label('message', '', 22, 238, 596, anchor='LEFT')
+        # Put the dropdown directly below its own field. Its five hit/text
+        # surfaces share the same geometry, including when the root shrinks.
+        for index, (value, caption) in enumerate(BOT_SKILL_OPTIONS):
+            role = 'skill_choice_' + value
+            y = 123 + 22*index
+            make_control(role, 476, y, 232)
+            make_label(role, tr(caption), 476, y, 224,
+                       colour=self.control_text_colour)
         # Component construction is fallible on the native client. Commit the
         # installed state only after the complete graph exists.
         self._surface = surface
@@ -523,11 +551,25 @@ class WaitingRoomUI(object):
             screen_size = reader() if callable(reader) else None
         except Exception:
             screen_size = None
-        width, height, y = panel_geometry(screen_size)
+        width, height, y = panel_geometry(screen_size, self.panel_size)
+        for role, label in self._labels.items():
+            label.font = self._font_for_label(role)
         self._set(panel, 'width', width)
         self._set(panel, 'height', height)
         self._set(panel, 'position', (0.0, y, OVERLAY_Z))
+        receipt = (screen_size, width, height, y)
+        if self.panel_font == ROOM_FONT and receipt != self._layout_receipt:
+            _log('LAN room layout screen=%r design=%dx%d applied=(%r,%r) '
+                 'clip_y=%.4f fonts=(body:%s,title:%s)' % (
+                     screen_size, PANEL_WIDTH, PANEL_HEIGHT,
+                     panel.width, panel.height, y, ROOM_FONT, PANEL_FONT))
+            self._layout_receipt = receipt
         return True
+
+    def _font_for_label(self, role):
+        if self.panel_font == ROOM_FONT and role == 'title':
+            return PANEL_FONT
+        return self.panel_font
 
     @staticmethod
     def _set(component, name, value):
@@ -545,14 +587,14 @@ class WaitingRoomUI(object):
         panel = self._panel if panel is None else panel
         controls = self._controls if controls is None else controls
         surface = self._surface if surface is None else surface
-        component = surface.simple(CONTROL_TEXTURE)
+        component = surface.simple(self._control_texture(role))
         for name, value in (
                 ('horizontalPositionMode', 'CLIP'),
                 ('verticalPositionMode', 'CLIP'),
                 ('widthMode', 'CLIP'), ('heightMode', 'CLIP'),
                 ('horizontalAnchor', 'CENTER'), ('verticalAnchor', 'CENTER'),
                 ('position', position), ('width', width), ('height', height),
-                ('materialFX', 'SOLID'), ('colour', (24, 55, 78, 245)),
+                ('materialFX', 'BLEND'), ('colour', (255, 255, 255, 255)),
                 ('focus', True), ('mouseButtonFocus', True),
                 ('crossFocus', True), ('moveFocus', True),
                 ('visible', False)):
@@ -571,7 +613,7 @@ class WaitingRoomUI(object):
         component = surface.text()
         # A missing font must reach the session's stock-window fallback,
         # not silently leave translated text in an unreviewed default font.
-        component.font = PANEL_FONT
+        component.font = self._font_for_label(role)
         for name, value in (
                 ('text', as_text(text)),
                 ('horizontalPositionMode', 'CLIP'),
@@ -623,6 +665,22 @@ class WaitingRoomUI(object):
         return True
 
     def open(self):
+        if (self._surface is None and self._flash is not None and
+                bool(getattr(self._flash, 'training', False)) != bool(self._training_status()[0])):
+            self._flash.close()
+            self._flash = None
+            self._open = False
+        if self._surface is None and type(self) is WaitingRoomUI and self._flash is None:
+            self.install()
+        if self._flash is not None:
+            if self._open:
+                return self.refresh()
+            self._open = True
+            self._sync_selection()
+            if not self._flash.open():
+                self._open = False
+                return False
+            return True
         if self._open:
             self.refresh()
             return True
@@ -964,6 +1022,8 @@ class WaitingRoomUI(object):
         return True
 
     def refresh(self):
+        if self._flash is not None:
+            return self._flash.refresh() if self._open else False
         if not self._open:
             return False
         return self._refresh_contents()
@@ -1038,6 +1098,8 @@ class WaitingRoomUI(object):
                        skill_supported if role in _BOT_SKILL_CONTROLS else
                        random_supported if role == 'random' else
                        role == 'close' or is_host)
+            if role.startswith('skill_choice_'):
+                visible = bool(self._skill_menu_open and skill_supported)
             self._set(component, 'visible', visible)
             label = self._labels.get(role)
             if label is not None:
@@ -1056,6 +1118,16 @@ class WaitingRoomUI(object):
             for role in ('tier', 'tier_previous', 'tier_next'):
                 self._set(self._controls[role], 'visible', is_host)
                 self._set(self._labels[role], 'visible', True)
+        # A dropdown covers these rows. Hide their native text/hit surfaces
+        # together; this client otherwise draws their text through the menu.
+        if self._skill_menu_open and skill_supported:
+            for role in ('map', 'random', 'team1_down', 'team1_up', 'team2_down',
+                         'team2_up', 'team1_capacity', 'team2_capacity',
+                         'team1', 'team2', 'team_random', 'start'):
+                if role in self._controls:
+                    self._set(self._controls[role], 'visible', False)
+                if role in self._labels:
+                    self._set(self._labels[role], 'visible', False)
         self._paint()
         self._set(self._panel, 'visible', True)
         return True
@@ -1066,13 +1138,16 @@ class WaitingRoomUI(object):
             self._set(label, 'text', as_text(value))
 
     def _paint(self):
-        """Show hover through the label, the only colour this client applies."""
+        """Highlight native text without changing texture or input ownership."""
+        preferred = (self._team_status() or {}).get('preferred', 0)
+        selected = {0: 'team_random', 1: 'team1', 2: 'team2'}.get(preferred)
         for role in self._controls:
             label = self._labels.get(role)
             if label is None:
                 continue
-            self._set(label, 'colour', CONTROL_HOVER_COLOUR
-                      if role == self._hovered else CONTROL_TEXT_COLOUR)
+            self._set(label, 'colour', self.control_hover_colour
+                      if role == self._hovered or role == selected
+                      else self.control_text_colour)
 
     def hover(self, role):
         if not self._open:
@@ -1102,7 +1177,19 @@ class WaitingRoomUI(object):
         if role in _BOT_TIER_CONTROLS:
             return self._cycle_bot_tier_mode(
                 -1 if role == 'tier_previous' else 1)
+        if role == 'skill':
+            status = self._bot_skill_status() or {}
+            if not self._host() or not status.get('supported'):
+                return False
+            self._skill_menu_open = not self._skill_menu_open
+            self.refresh()
+            return True
+        if role and role.startswith('skill_choice_'):
+            if not self._skill_menu_open:
+                return False
+            return self._choose_bot_skill_mode(role[len('skill_choice_'):])
         if role in _BOT_SKILL_CONTROLS:
+            self._skill_menu_open = False
             return self._cycle_bot_skill_mode(
                 -1 if role == 'skill_previous' else 1)
         if not self._host():
@@ -1213,6 +1300,15 @@ class WaitingRoomUI(object):
         except ValueError:
             index = 0
         target = modes[(index + int(step)) % len(modes)]
+        return self._choose_bot_skill_mode(target)
+
+    def _choose_bot_skill_mode(self, target):
+        status = self._bot_skill_status() or {}
+        if (not self._host() or not callable(self._request_bot_skill_mode) or
+                not status.get('supported') or
+                target not in [value for value, caption in BOT_SKILL_OPTIONS]):
+            return False
+        self._skill_menu_open = False
         self._pending_bot_skill_mode = target
         self._message = tr('Setting Bot skill preset...')
         self.refresh()
@@ -1281,6 +1377,11 @@ class WaitingRoomUI(object):
         return True
 
     def close(self):
+        if self._flash is not None:
+            was_open, self._open = self._open, False
+            self._flash.close()
+            return was_open
+        self._skill_menu_open = False
         had_resources = self._has_open_resources()
         if not self._open and not had_resources:
             return False
@@ -1293,6 +1394,10 @@ class WaitingRoomUI(object):
         return True
 
     def uninstall(self):
+        if self._flash is not None:
+            self.close()
+            self._flash = None
+            return True
         if ((self._open or self._has_open_resources()) and
                 not self.close()):
             return False

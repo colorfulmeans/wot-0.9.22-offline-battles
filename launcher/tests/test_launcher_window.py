@@ -111,7 +111,7 @@ class _Notebook(_Widget):
 
 
 class _StringVar(object):
-    def __init__(self, value=""):
+    def __init__(self, value="", master=None):
         self._value = value
         self._callbacks = []
 
@@ -1288,6 +1288,26 @@ class WindowTest(unittest.TestCase):
             }, stream)
         return path
 
+    def test_initialize_save_requires_confirmation_defaults_to_no_and_keeps_selection(self):
+        self._saves_root();self.window._refresh_save_slots()
+        record=self.window._selected_save_slot_record()
+        with mock.patch('tkinter.messagebox.askyesno',return_value=False) as confirm, \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False), \
+                mock.patch.object(wot_launcher.save_slots,'initialize_slot') as reset:
+            self.assertFalse(self.window._initialize_save_slot())
+            reset.assert_not_called();self.assertEqual('no',confirm.call_args.kwargs['default'])
+            self.assertIn(record['name'],confirm.call_args.args[1])
+        with mock.patch('tkinter.messagebox.askyesno',return_value=True), \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False):
+            self.assertTrue(self.window._initialize_save_slot())
+        self.assertEqual(record['id'],self.window._save_slot_id)
+        self.assertFalse(self.window._selected_save_slot_record()['has_state'])
+
+    def test_initialize_button_refuses_running_game_without_prompt(self):
+        with mock.patch.object(wot_launcher.core,'game_is_running',return_value=True), \
+                mock.patch('tkinter.messagebox.askyesno') as confirm:
+            self.assertFalse(self.window._initialize_save_slot());confirm.assert_not_called()
+
     def test_customize_opens_a_modal_for_the_selected_save(self):
         self._saves_root()
         self.assertNotIn(self.window.account_panel, self.window.tools_tabs.tabs)
@@ -1295,6 +1315,10 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.save_tabs, self.window.account_panel.master)
         self.assertEqual(self.window.save_dialog, self.window.save_tabs.master)
         self.assertIn(self.window.customizations_panel, self.window.save_tabs.tabs)
+        tabs = self.window.save_tabs.tabs
+        self.assertEqual(tabs.index(self.window.customizations_panel) + 1,
+                         tabs.index(self.window.crew_panel))
+        self.assertEqual(self.window.crew_panel, self.window.crew_editor.frame)
         self.assertEqual(self.window._open_customizations,
                          self.window.edit_customizations_button.options['command'])
         self.assertTrue(self.window._open_save_dialog())
@@ -1509,11 +1533,22 @@ class WindowTest(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.window._gold_catalogue_cache = (None, None)
 
+    def test_garage_nations_follow_shared_display_order_and_keep_selection_across_language(self):
+        self._saves_root();self._with_shop();self.window._refresh_gold_shop()
+        self.assertEqual(('All','China','Germany'),tuple(self.window.gold_nation_box.cget('values')))
+        self.window.gold_nation.set('Germany');self.window.gold_class.set('Heavy tank');self.window._filter_gold_shop()
+        self.window.language='zh';self.window._refresh_gold_shop()
+        self.assertEqual(('全部','中国','德国'),tuple(self.window.gold_nation_box.cget('values')))
+        self.assertEqual('德国',self.window.gold_nation.get())
+        self.assertEqual('germany:G51_Lowe',self.window._gold_offer_by_label[self.window.gold_vehicle.get()])
+        self.window.language='en';self.window._refresh_gold_shop()
+        self.assertEqual('Germany',self.window.gold_nation.get())
+
     def test_gold_filters_intersect_and_empty_results_disable_add(self):
         self._saves_root()
         self._with_shop()
         self.window._refresh_gold_shop()
-        self.window.gold_nation.set("germany")
+        self.window.gold_nation.set("Germany")
         self.window.gold_class.set("Heavy tank")
         self.assertEqual(("Lowe - tier 8",), self.window._filter_gold_shop())
         self.window.gold_class.set("Medium tank")
@@ -1530,13 +1565,13 @@ class WindowTest(unittest.TestCase):
         self._saves_root()
         self._with_shop()
         self.window._refresh_save_slots()
-        self.window.gold_nation.set("china")
+        self.window.gold_nation.set("China")
         self.window._filter_gold_shop()
         self.window.balance_entries["gold"].delete(0, "end")
         self.window.balance_entries["gold"].insert(0, "1234")
         with mock.patch.object(core, "game_is_running", return_value=False):
             self.assertTrue(self.window._buy_gold_vehicle())
-        self.assertEqual("china", self.window.gold_nation.get())
+        self.assertEqual("China", self.window.gold_nation.get())
         self.assertEqual("Type 59 - tier 8 (queued)", self.window.gold_vehicle.get())
         self.assertEqual("disabled", self.window.buy_gold_vehicle_button.cget("state"))
         self.assertEqual("1234", self.window.balance_entries["gold"].get())

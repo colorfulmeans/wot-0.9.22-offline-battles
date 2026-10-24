@@ -68,7 +68,9 @@ def _wallet_changes(before, after):
 def ledger_path(slot_id, game_root=None, environment=None, root=None):
     directory = save_slots.slot_dir(slot_id, game_root, environment, root)
     path = os.path.join(directory, LEDGER_FILE_NAME)
-    if slot_id == save_slots.DEFAULT_SLOT_ID and not os.path.isfile(path):
+    metadata = save_slots._read_metadata(os.path.join(directory, save_slots.METADATA_NAME)) or {}
+    if (slot_id == save_slots.DEFAULT_SLOT_ID and not os.path.isfile(path)
+            and metadata.get('skip_legacy_import') is not True):
         # Match the client's default-slot migration order before its first run.
         legacy_dirs = [os.path.dirname(os.path.dirname(directory))]
         if game_root is not None and root is None:

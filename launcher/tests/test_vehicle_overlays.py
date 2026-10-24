@@ -492,7 +492,7 @@ class VehicleOverlayTest(unittest.TestCase):
             "Depression curve",
             records["shared/Gun-A/pitchLimits/maxPitch"]["fieldLabel"])
         self.assertIn(
-            "shorter reload",
+            "Short reload time (seconds)",
             records["shared/Gun-A/clip/rate"]["fieldLabel"])
 
         vehicle_overlays.apply_vehicle_edit(

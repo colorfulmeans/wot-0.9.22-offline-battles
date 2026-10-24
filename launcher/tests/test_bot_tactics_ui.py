@@ -16,7 +16,7 @@ import bot_tactics_store as storage
 class EditorUITests(unittest.TestCase):
     def test_deleted_wait_places_do_not_reappear_when_parent_is_reselected(self):
         from types import SimpleNamespace
-        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.selected_point=0;self.ui.edit_point_condition()
         for point in ((-66,306),(-46,306),(-26,306)):self.click(point)
         parent=list(self.ui._wait_point()[:2])+[0]
@@ -33,7 +33,7 @@ class EditorUITests(unittest.TestCase):
 
     def test_empty_parent_does_not_recreate_wait_after_save_and_reload(self):
         from types import SimpleNamespace
-        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.selected_point=0;self.ui.edit_point_condition();self.click((-66,306))
         self.ui.selected_wait=0;self.ui.delete_wait_point()
         selection=self.ui.selection
@@ -52,7 +52,7 @@ class EditorUITests(unittest.TestCase):
 
     def test_explicit_add_button_can_add_a_new_place_at_cleared_parent(self):
         from types import SimpleNamespace
-        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.selected_point=0;self.ui.edit_point_condition();self.click((-66,306))
         self.ui.selected_wait=0;self.ui.delete_wait_point()
         self.ui.edit_point_condition()
@@ -65,7 +65,7 @@ class EditorUITests(unittest.TestCase):
         # Exercise the historical source-graph fixture independently of the adopted baseline.
         patcher=mock.patch.object(storage.contract,'default_map',return_value={})
         patcher.start();self.addCleanup(patcher.stop)
-        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
+        storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw()
         self.addCleanup(self.root.destroy)
         self.errors=mock.patch.object(ui_module.messagebox,'showerror');self.error_mock=self.errors.start();self.addCleanup(self.errors.stop)
@@ -82,7 +82,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(x),y=int(y));self.root.update()
 
     def test_wait_panel_three_places_individual_times_delete_and_collapse(self):
-        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.selected_point=0;self.ui.edit_point_condition()
         self.assertTrue(self.ui.wait_edit)
         self.assertLess(int(self.ui.point_actions.grid_info()['row']),int(self.ui.wait_panel.grid_info()['row']))
@@ -101,7 +101,7 @@ class EditorUITests(unittest.TestCase):
         self.ui.selected_point=0;self.ui.edit_point_condition()
         self.ui.selected_wait=1;self.ui.delete_selected_point()
         self.assertEqual([10,30],[p[2] for p in self.ui._wait_point()[4]])
-        self.assertEqual(2,len(self.ui._selected()['points']))
+        self.assertEqual(4,len(self.ui._selected()['points']))
         self.ui.selected_wait=0;self.ui.delete_wait_point()
         self.ui.selected_wait=0;self.ui.delete_wait_point()
         self.assertEqual(3,len(self.ui._wait_point()))
@@ -128,66 +128,48 @@ class EditorUITests(unittest.TestCase):
         self.assertEqual(('total',True),self.initial_defaults)
         self.assertEqual(('33_fjord','北欧峡湾','北欧峡湾'),self.initial_map)
 
-    def test_base_snap_is_between_coordinates_and_symmetry_and_resets_on_noop(self):
-        self.assertEqual('路线首尾移至出生点中心',self.ui.base_snap_check.cget('text'))
-        self.assertEqual(self.ui.base_label.master,self.ui.base_snap_check.master)
-        self.assertLess(self.ui.base_label.winfo_x(),self.ui.base_snap_check.winfo_x())
-        self.assertLess(self.ui.base_snap_check.winfo_x(),self.ui.symmetry_check.winfo_x())
-        before=copy.deepcopy(self.ui.document)
-        self.ui.base_snap_check.invoke()
-        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
-        self.ui.new_route();self.root.update();before=copy.deepcopy(self.ui.document)
-        self.ui.base_snap_check.invoke()
-        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
-        self.ui.new_position();self.root.update();before=copy.deepcopy(self.ui.document)
-        self.ui.base_snap_check.invoke()
-        self.assertFalse(self.ui.base_snap_var.get());self.assertEqual(before,self.ui.document)
+    def test_legacy_asymmetric_terminal_survives_save_without_snap_action(self):
+        baseline=storage.contract.default_profile('Editable fixture')
+        with mock.patch.object(storage.contract,'default_map',side_effect=lambda name:baseline['maps'].get(name,{})):
+            self.ui.adopt(baseline)
+            self.ui.map_var.set(storage.MAP_LABELS['95_lost_city']);self.ui.change_map()
+            self.ui.route_class_var.set('lightTank');self.ui.change_route_class()
+            key=next(k for k in self.ui.items.get_children() if k.startswith('builtin:'))
+            self.ui.items.selection_set(key);self.ui.select_item()
+            before=copy.deepcopy(self.ui.document);points=copy.deepcopy(self.ui._selected()['points'])
+            self.assertNotEqual(self.ui.graph_cache['95_lost_city']['spawn_anchors'][1],points[-1][:2])
+            self.ui.save(False)
+            self.assertEqual(before,self.ui.document);self.assertEqual(points,self.ui._selected()['points'])
+            self.error_mock.assert_not_called()
 
-    def test_all_map_base_markers_and_snapped_endpoints_use_validated_spawn_centres(self):
+    def test_all_map_new_routes_use_fixed_validated_spawn_centres(self):
         for name in storage.contract.MAPS:
             with self.subTest(map=name):
                 self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
+                self.ui.new_route();item=self.ui._editable_item()
                 bases=self.ui.graph_cache[name]['spawn_anchors']
-                self.assertEqual(2,len(self.ui.canvas.find_withtag('spawn_anchor')))
-                self.assertEqual(2,len(self.ui.canvas.find_withtag('capture_base')))
+                self.assertEqual([bases[self.ui.team-1]+[0],bases[2-self.ui.team]+[0]],item['points'])
+                self.assertEqual(0,self.ui.selected_point)
+                self.assertFalse(hasattr(self.ui,'base_snap_check'))
                 for team,centre in enumerate(bases,1):
                     box=self.ui.canvas.coords('spawn_anchor_'+str(team))
-                    marker=((min(box[::2])+max(box[::2]))/2,(min(box[1::2])+max(box[1::2]))/2)
                     expected=self.ui.view.screen(centre)
-                    self.assertAlmostEqual(expected[0],marker[0])
-                    self.assertAlmostEqual(expected[1],marker[1])
-                    graph=self.ui.graph_cache[name]
-                    capture=self.ui.canvas.coords('capture_base_'+str(team))
-                    expected_capture=self.ui.view.screen(graph['objective_bases'][team-1])
-                    self.assertAlmostEqual(expected_capture[0],(capture[0]+capture[2])/2)
-                    self.assertAlmostEqual(expected_capture[1],(capture[1]+capture[3])/2)
-                    self.assertAlmostEqual(graph['objective_base_radii'][team-1]*self.ui.view.frame()[2],(capture[2]-capture[0])/2)
-                self.ui.new_route();item=self.ui._editable_item()
-                item['symmetric']=False;item['points']=[[0,0,0],[1,1,0]]
-                self.ui.base_snap_check.invoke()
-                self.assertEqual(bases[self.ui.team-1],item['points'][0][:2])
-                self.assertEqual(bases[2-self.ui.team],item['points'][-1][:2])
+                    self.assertAlmostEqual(expected[0],(min(box[::2])+max(box[::2]))/2)
+                    self.assertAlmostEqual(expected[1],(min(box[1::2])+max(box[1::2]))/2)
 
-    def test_separate_spawn_maps_default_off_but_allow_explicit_symmetry(self):
+    def test_separate_spawn_maps_reject_explicit_symmetry(self):
         disabled=[]
         for name in storage.contract.MAPS:
             self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
             if not self.ui._default_route_symmetry():disabled.append(name)
-            self.assertEqual(self.ui._default_route_symmetry(),self.ui.symmetry_var.get())
         self.assertEqual(['100_thepit','63_tundra','95_lost_city'],sorted(disabled))
         for name in disabled:
-            self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
-            self.ui.new_route();item=self.ui._editable_item()
-            self.assertFalse(self.ui.symmetry_check.instate(['disabled']))
-            self.assertFalse(self.ui.symmetry_var.get())
-            item['points']=[[0,0,0],[1,1,0]]
-            self.ui.base_snap_check.invoke()
-            self.assertFalse(item['symmetric'])
-            self.assertFalse(any(r['team']!=self.ui.team for r in self.ui.entry()['routes']))
+            self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map();self.ui.new_route()
+            before=copy.deepcopy(self.ui.document)
+            self.assertTrue(self.ui.symmetry_check.instate(['disabled']))
             self.ui.symmetry_var.set(True);self.ui.change_symmetry()
-            self.assertTrue(self.ui.symmetry_var.get())
-            peer=next(r for r in self.ui.entry()['routes'] if r['team']!=self.ui.team)
-            self.assertEqual(list(reversed(item['points'])),peer['points'])
+            self.assertFalse(self.ui.symmetry_var.get());self.assertEqual(before,self.ui.document)
+            self.assertFalse(any(r['team']!=self.ui.team for r in self.ui.entry()['routes']))
 
     def test_builtin_symmetry_default_and_saved_off_survive_roundtrip(self):
         for name in ('08_ruinberg','95_lost_city'):
@@ -195,7 +177,8 @@ class EditorUITests(unittest.TestCase):
             source=self.ui.graph_cache[name]['routes']['1'][0]
             self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
             self.assertEqual(name=='08_ruinberg',self.ui.symmetry_var.get())
-            self.assertFalse(self.ui.symmetry_check.instate(['disabled']))
+            self.assertEqual(name=='95_lost_city',self.ui.symmetry_check.instate(['disabled']))
+            if name=='95_lost_city':continue
             self.ui.symmetry_var.set(True);self.ui.change_symmetry()
             own=self.ui._editable_item()
             peer=next(r for r in self.ui.entry()['default_routes'] if r['team']==2)
@@ -205,41 +188,32 @@ class EditorUITests(unittest.TestCase):
             self.ui._refresh_properties()
             self.assertFalse(self.ui.symmetry_var.get())
 
-    def test_base_snap_default_uses_spawn_centres_preserves_waits_and_undo(self):
-        source=self.ui.graph_cache['08_ruinberg']['routes']['1'][0]
-        self.ui.items.selection_set('builtin:'+source['id']);self.root.update()
-        item=self.ui._editable_item();item['points'][0][3:]=[12.0]
-        item['points'][-1][3:]=[-1.0];before=copy.deepcopy(self.ui.document)
-        old=copy.deepcopy(item['points']);self.ui.base_snap_check.invoke()
-        points=self.ui._selected()['points'];bases=self.ui.graph_cache['08_ruinberg']['spawn_anchors']
-        self.assertEqual(bases[0],points[0][:2]);self.assertEqual(bases[1],points[-1][:2])
-        self.assertEqual(old[1:-1],points[1:-1]);self.assertEqual(old[0][2:],points[0][2:])
-        self.assertEqual(old[-1][2:],points[-1][2:]);self.assertFalse(self.ui.base_snap_var.get())
-        self.assertIn(str(bases[0]),self.ui.base_label.cget('text'))
-        self.ui.undo();self.assertEqual(before,self.ui.document)
+    def test_fixed_endpoint_selection_and_delete_preserve_waits_and_history(self):
+        self.ui.new_route();item=self.ui._editable_item()
+        item['points'][0][3:]=[0.,[item['points'][0][:2]+[25.]]]
+        before=copy.deepcopy(self.ui.document);undo=copy.deepcopy(self.ui.histories)
+        for index in (0,len(item['points'])-1):
+            self.ui.selected_point=index;self.ui.delete_point()
+            self.click(item['points'][index][:2])
+        self.assertEqual(before,self.ui.document);self.assertEqual(undo,self.ui.histories)
 
-    def test_base_snap_team_two_single_point_and_repeat_click(self):
-        self.ui.team_var.set('2');self.ui.change_map();self.ui.new_route();self.root.update()
-        item=self.ui._editable_item();item['symmetric']=False;item['points']=[[0.0,0.0,0,7.0]]
-        self.ui.base_snap_check.invoke();bases=self.ui.graph_cache['08_ruinberg']['spawn_anchors']
-        self.assertEqual([bases[1]+[0,7.0]],item['points'])
-        item['points'].append([100.0,100.0,0]);self.ui.base_snap_check.invoke()
-        self.assertEqual(bases[0],item['points'][-1][:2]);self.assertFalse(self.ui.base_snap_var.get())
+    def test_team_two_insert_after_terminal_stays_before_fixed_end(self):
+        self.ui.team_var.set('2');self.ui.change_map();self.ui.new_route()
+        before=copy.deepcopy(self.ui._selected()['points']);self.ui.selected_point=1
+        self.ui.insert_point();points=self.ui._selected()['points']
+        self.assertEqual(3,len(points));self.assertEqual(before[0],points[0]);self.assertEqual(before[-1],points[-1])
+        self.ui.undo();self.assertEqual(before,self.ui._selected()['points'])
 
-    def test_base_snap_total_class_respects_symmetry_and_saved_geometry(self):
+    def test_fixed_endpoints_cannot_be_dragged_in_total_class_view(self):
         self.ui.route_class_var.set('total');self.ui.change_route_class()
         identity=next(i for i in self.ui.items.get_children() if i.startswith('builtin:') and i.endswith('@heavyTank'))
-        self.ui.items.selection_set(identity);self.root.update()
-        self.ui._editable_item()['points'][0][0]+=10.0
-        self.ui.base_snap_check.invoke();edits=self.ui.entry()['default_routes']
-        own=next(r for r in edits if r['team']==1);peer=next(r for r in edits if r['team']==2)
-        self.assertEqual('heavyTank',own['class_tag'])
-        self.assertEqual(list(reversed(own['points'])),peer['points'])
-        self.assertTrue(all(r['class_tag']=='heavyTank' for r in edits))
-        self.ui.profile_name.set('Base endpoints');self.ui.save(True)
-        saved=self.ui.store.active()['maps']['08_ruinberg']['default_routes']
-        expected=storage.contract.canonical(self.ui.document)['maps']['08_ruinberg']['default_routes']
-        self.assertEqual(expected,saved)
+        self.ui.items.selection_set(identity);self.root.update();before=copy.deepcopy(self.ui.document)
+        for index in (0,len(self.ui._selected()['points'])-1):
+            point=self.ui._selected()['points'][index];x,y=self.ui.view.screen(point)
+            self.ui.canvas.event_generate('<ButtonPress-1>',x=int(x),y=int(y))
+            self.ui.canvas.event_generate('<B1-Motion>',x=int(x+20),y=int(y+20))
+            self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(x+20),y=int(y+20));self.root.update()
+        self.assertEqual(before,self.ui.document)
 
     def test_spg_defaults_only_allow_repositioning_parking(self):
         self.ui.map_var.set(storage.MAP_LABELS['31_airfield']);self.ui.change_map()
@@ -306,7 +280,7 @@ class EditorUITests(unittest.TestCase):
         self.assertIn(ui_module.CLASS_COLORS['heavyTank'],colors)
 
     def test_custom_symmetry_updates_from_other_side_and_copy_is_independent(self):
-        self.ui.new_route();self.click((-66,306));self.click((-126,246))
+        self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.symmetry_var.set(True);self.ui.change_symmetry()
         own=self.ui._selected();peer=next(r for r in self.ui.entry()['routes'] if r['id']==own['mirror_id'])
         self.assertEqual(list(reversed(own['points'])),peer['points'])
@@ -333,15 +307,15 @@ class EditorUITests(unittest.TestCase):
         self.ui.selected_point=1;self.ui.delete_point()
         self.assertEqual(len(original)-1,len(self.ui._selected()['points']))
         self.ui.undo();self.assertEqual(original,self.ui._selected()['points']);self.ui.redo()
-        first=self.ui._selected()['points'][0];start=self.ui.view.screen(first)
+        first=self.ui._selected()['points'][1];start=self.ui.view.screen(first)
         end=self.ui.view.screen((first[0]+8,first[1]-8))
         self.ui.canvas.event_generate('<ButtonPress-1>',x=int(start[0]),y=int(start[1]))
         self.ui.canvas.event_generate('<B1-Motion>',x=int(end[0]),y=int(end[1]))
         self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(end[0]),y=int(end[1]));self.root.update()
-        self.assertNotEqual(original[0][:2],self.ui._selected()['points'][0][:2])
+        self.assertNotEqual(original[2][:2],self.ui._selected()['points'][1][:2])
         self.ui.selected_point=0;self.click(original[1],shift=True)
         self.assertEqual(len(original),len(self.ui._selected()['points']))
-        self.ui.profile_name.set('Default adjustments');self.ui.save(True);self.root.update()
+        self.ui.document['name']='Default adjustments';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(True);self.root.update()
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
         saved=self.ui.store.active();entry=saved['maps']['08_ruinberg']
         self.assertEqual([],entry['routes']);self.assertEqual(2,len(entry['default_routes']))
@@ -355,21 +329,21 @@ class EditorUITests(unittest.TestCase):
 
     def test_draw_drag_insert_undo_save_reopen_and_apply_route(self):
         self.ui.new_route();self.root.update()
-        self.click((-66,306));self.click((-126,246));self.click((-186,186))
-        route=self.ui._selected();self.assertEqual(3,len(route['points']))
-        first=copy.deepcopy(route['points'][0]);x,y=self.ui.view.screen(first)
+        self.click((-96,276),shift=True);self.click((-126,246),shift=True);self.click((-186,186),shift=True)
+        route=self.ui._selected();self.assertEqual(5,len(route['points']))
+        first=copy.deepcopy(route['points'][1]);x,y=self.ui.view.screen(first)
         end=self.ui.view.screen((-80,290))
         self.ui.canvas.event_generate('<ButtonPress-1>',x=int(x),y=int(y))
         self.ui.canvas.event_generate('<B1-Motion>',x=int(end[0]),y=int(end[1]))
         self.ui.canvas.event_generate('<ButtonRelease-1>',x=int(end[0]),y=int(end[1]));self.root.update()
-        self.assertNotEqual(first,route['points'][0]);self.ui.undo();self.root.update()
-        self.assertEqual(first,self.ui._selected()['points'][0]);self.ui.redo();self.root.update()
-        self.ui.selected_point=0;self.click((-90,270),shift=True)
-        self.assertEqual(4,len(self.ui._selected()['points']))
+        self.assertNotEqual(first,route['points'][1]);self.ui.undo();self.root.update()
+        self.assertEqual(first,self.ui._selected()['points'][1]);self.ui.redo();self.root.update()
+        self.ui.selected_point=0;self.click((-160,275),shift=True)
+        self.assertEqual(6,len(self.ui._selected()['points']))
         self.ui.item_vars['label'].set('Test road');self.ui.item_vars['policy'].set('fixed')
-        self.ui.profile_name.set('UI test');self.ui.save(False);self.root.update()
+        self.ui.document['name']='UI test';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False);self.root.update()
         self.assertFalse(self.error_mock.called,self.error_mock.call_args)
-        self.assertEqual({},self.ui.store.active()['maps'])
+        self.assertEqual(self.ui.document['maps'],self.ui.store.active()['maps'])
         draft=self.ui.store.read('UI test');self.assertEqual('fixed',draft['maps']['08_ruinberg']['routes'][0]['policy'])
         self.ui.adopt(draft);self.ui.save(True)
         self.assertEqual(draft,self.ui.store.active());self.assertFalse(self.ui.dirty())
@@ -385,16 +359,16 @@ class EditorUITests(unittest.TestCase):
 
     def test_switching_class_keeps_saved_routes_and_limits_visible_items(self):
         self.ui.new_route();self.root.update()
-        self.click((-66,306));self.click((-126,246))
+        self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         heavy=copy.deepcopy(self.ui._selected())
         self.assertEqual(['heavyTank'],heavy['classes'])
         self.ui.route_class_var.set('mediumTank');self.ui.change_route_class()
         self.assertNotIn('routes:'+heavy['id'],self.ui.items.get_children())
         self.ui.new_route();self.root.update()
-        self.click((-76,306));self.click((-136,246))
+        self.click((-76,306),shift=True);self.click((-136,246),shift=True)
         medium=copy.deepcopy(self.ui._selected())
         self.assertEqual(['mediumTank'],medium['classes'])
-        self.ui.profile_name.set('Separate classes');self.ui.save(False)
+        self.ui.document['name']='Separate classes';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False)
         saved=self.ui.store.read('Separate classes')
         self.assertEqual(2,len(saved['maps']['08_ruinberg']['routes']))
         self.ui.route_class_var.set('heavyTank');self.ui.change_route_class()
@@ -403,14 +377,14 @@ class EditorUITests(unittest.TestCase):
 
     def test_double_click_condition_survives_save_and_reopen(self):
         self.ui.new_route();self.root.update()
-        self.click((-66,306));self.click((-126,246))
+        self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         point=self.ui._selected()['points'][0]
         x,y=self.ui.view.screen(point)
         event=type('Event',(),dict(x=x,y=y))()
         self.ui.edit_point_condition(event)
         self.ui.edit_point_condition()  # Explicit Add; selecting a parent never creates parking.
         self.click(point[:2]);self.ui.wait_seconds.set('25');self.ui.update_wait_time()
-        self.ui.profile_name.set('Timed route');self.ui.save(False)
+        self.ui.document['name']='Timed route';self.ui.profile_name.set(self.ui.document['name']);self.ui.save(False)
         saved=self.ui.store.read('Timed route')
         self.assertEqual(25,saved['maps']['08_ruinberg']['routes'][0]['points'][0][4][0][2])
         self.ui.adopt(saved)
@@ -424,10 +398,10 @@ class EditorUITests(unittest.TestCase):
     def test_behavior_form_changes_actual_schema_and_can_be_removed(self):
         self.ui.book.select(0);self.root.update()
         self.ui.rule_vars['team'].set('1');self.ui.rule_vars['class_tag'].set('SPG')
-        self.ui.rule_vars['crew_level'].set('100');self.ui.rule_vars['reaction_seconds'].set('2.7')
+        self.ui.rule_vars['crew_preset'].set('all');self.ui.rule_vars['reaction_seconds'].set('2.7')
         self.ui.save_rule();self.ui.save(True)
         raw=self.ui.store.active();actual=storage.contract.effective(raw,1,'SPG',2)
-        self.assertEqual({'crew_level':100,'reaction_seconds':2.7},actual)
+        self.assertEqual({'crew_preset':'all','reaction_seconds':2.7},actual)
         self.assertEqual({},storage.contract.effective(raw,2,'SPG',2))
         self.ui.rules.selection_set('0');self.root.update();self.ui.delete_rule();self.ui.save(True)
         self.assertEqual([],self.ui.store.active()['behavior'])

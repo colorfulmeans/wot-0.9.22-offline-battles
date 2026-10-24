@@ -349,7 +349,7 @@ class NativeColumnContractTests(unittest.TestCase):
             'src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py','BotRuntime')
         links=SimpleNamespace(origin=(1.,2.,3.))
         def fail(*args):raise RuntimeError('fixture failure')
-        runtime=SimpleNamespace(navigator=SimpleNamespace(grid=SimpleNamespace(
+        runtime=SimpleNamespace(states={}, navigator=SimpleNamespace(grid=SimpleNamespace(
             local_height_links=links)),_navigation_target_impl=fail)
         with self.assertRaises(RuntimeError):call(runtime,1,(1.,2.,3.),(2.,3.,4.),{}, {})
         self.assertIsNone(links.origin)

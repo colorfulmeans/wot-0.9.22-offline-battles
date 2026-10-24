@@ -58,6 +58,7 @@ STATE_FILE_NAMES = (
 # The client deletes what it has delivered from this one, so a restore that
 # left it behind would hand the player vehicles a different save paid for.
 LAUNCHER_INBOX_NAME = "launcher_inbox.json"
+LAUNCHER_CREW_INBOX_NAME = "launcher_crew_inbox.json"
 APPDATA_PARTS = ("Wargaming.net", "WorldOfTanks", "offline_lan_0922")
 LEGACY_RELATIVE = "mods/configs/offline_lan_0922"
 
@@ -457,7 +458,7 @@ def _belongs_to_state(name):
         # A half-written replacement is not state; it is what the atomic
         # write left behind when it was interrupted.
         return False
-    for state_name in STATE_FILE_NAMES + (LAUNCHER_INBOX_NAME,):
+    for state_name in STATE_FILE_NAMES + (LAUNCHER_INBOX_NAME, LAUNCHER_CREW_INBOX_NAME):
         stem = os.path.splitext(state_name)[0]
         if name == state_name or name.startswith(stem + "."):
             return True
@@ -620,10 +621,6 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                     written.append(name)
         with zipfile.ZipFile(archive_path) as archive:
             for name in backup["files"]:
-                if keep_name and name == METADATA_NAME:
-                    # The archive's own name would rename the save it is put
-                    # into, which is not what restoring one file of it means.
-                    continue
                 target = _contained(
                     directory, os.path.join(directory, name),
                     "The restored file")
@@ -632,9 +629,21 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                 if len(payload) > MAX_BACKUP_MEMBER_BYTES:
                     raise SaveSlotError(
                         "This file holds a member that is too large.")
-                with open(target, "wb") as destination:
-                    destination.write(payload)
-                written.append(name)
+                if keep_name and name == METADATA_NAME:
+                    # Initial berth grants and other initial save state belong
+                    # to the backup too; preserve only destination identity.
+                    metadata = json.loads(payload.decode('utf8'))
+                    if not isinstance(metadata,dict):
+                        raise SaveSlotError("The save is not in the expected format.")
+                    previous = _read_metadata(target) or {}
+                    metadata.update(id=record['id'],name=record['name'])
+                    if slot_id == DEFAULT_SLOT_ID or previous.get('skip_legacy_import') is True:
+                        metadata['skip_legacy_import'] = True
+                    _write_metadata(target,metadata)
+                else:
+                    with open(target, "wb") as destination:
+                        destination.write(payload)
+                if name not in written:written.append(name)
     except Exception as error:
         for name in written:
             try:
@@ -688,3 +697,63 @@ def open_slot_folder(slot_id, game_root=None, environment=None, root=None,
     except (IOError, OSError) as error:
         raise SaveSlotError("The save folder could not be opened: %s" % error)
     return directory
+
+
+def initialize_slot(slot_id, game_root=None, environment=None, root=None, is_running=None):
+    """Reset one save transactionally; preserve identity, mode and earnings rate."""
+    if is_running is None:
+        try:
+            from . import core
+        except ImportError:
+            import core
+        is_running = core.game_is_running
+    if is_running():
+        raise SaveSlotError('Close World of Tanks before initializing a save.')
+    record = read_slot(slot_id, game_root, environment, root)
+    directory = record['path']
+    # A unique recovery directory also holds the ordinary, restorable ZIP.
+    import tempfile
+    try:
+        os.makedirs(directory, exist_ok=True)
+        recovery = tempfile.mkdtemp(prefix='pre-initialize-', dir=directory)
+    except OSError as error:
+        raise SaveSlotError('The save could not be initialized: %s' % error)
+    backup = os.path.join(recovery, 'save-backup.zip')
+    moved = []
+    names = []
+    writing_metadata = False
+    metadata = os.path.join(directory, METADATA_NAME)
+    try:
+        names = _state_file_names(directory)
+        if names:
+            backup_slot(slot_id, backup, game_root, environment, root)
+        else:
+            backup = None
+        # Include interrupted writes, which must never survive a fresh start.
+        names += [name for name in os.listdir(directory) if name.endswith('.tmp')
+                  and _belongs_to_state(name[:-4]) and os.path.isfile(os.path.join(directory,name))]
+        for name in names:
+            os.replace(os.path.join(directory,name),os.path.join(recovery,name))
+            moved.append(name)
+        writing_metadata = True
+        _write_metadata(metadata,dict(schema=METADATA_SCHEMA,id=record['id'],
+            name=record['name'],mode=record['mode'],earnings_percent=record[EARNINGS_KEY],
+            created=int(time.time()),skip_legacy_import=True))
+    except Exception as error:
+        # Do not remove the old metadata if failure occurred before it moved.
+        rollback_failed = False
+        if writing_metadata:
+            for path in (metadata,metadata+'.tmp'):
+                try:
+                    if os.path.isfile(path):os.unlink(path)
+                except OSError:
+                    rollback_failed = True
+        for name in reversed(moved):
+            try:
+                os.replace(os.path.join(recovery,name),os.path.join(directory,name))
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise SaveSlotError('The save could not be initialized: %s; recovery files: %s' % (error,recovery))
+        raise SaveSlotError('The save could not be initialized: %s' % error)
+    return dict(record=read_slot(slot_id,game_root,environment,root),backup=backup,recovery=recovery)

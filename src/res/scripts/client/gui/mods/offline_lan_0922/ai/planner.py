@@ -13,7 +13,8 @@ import math
 import random
 
 from gui.mods.offline_lan_0922.ai import maps as bot_ai_maps
-from gui.mods.offline_lan_0922.bot_tactics import DEFAULT_ROUTE_PRIORITY
+from gui.mods.offline_lan_0922.bot_tactics import (
+	DEFAULT_ROUTE_PRIORITY, ROUTE_ARRIVAL_RADIUS, route_disk_reached)
 
 
 CONTACT_MEMORY_SECONDS = 7.0
@@ -56,13 +57,21 @@ def vehicle_in_battle_tier_band(player_tier, candidate_tier):
 		return False
 
 
-def select_bot_lineup(pool, count, spg_limit=3, fallback_candidates=()):
+def team_artillery_limit(team_size):
+	"""Cap automatic artillery by total team size, including human slots."""
+	team_size = max(0, int(team_size))
+	return 0 if team_size <= 6 else min(3, (team_size - 4) // 3)
+
+
+def select_bot_lineup(pool, count, spg_limit=None, fallback_candidates=()):
 	"""Fill a team while enforcing an exact SPG cap.
 
-	Automatic bots allow at most three artillery per team, including humans. ``AT-SPG`` is a tank destroyer
+	The caller subtracts human artillery from the total-team limit. ``AT-SPG`` is a tank destroyer
 	in the legacy tags and does not consume the artillery quota.
 	"""
 	count = max(0, int(count))
+	if spg_limit is None:
+		spg_limit = team_artillery_limit(count)
 	spg_limit = max(0, min(3, int(spg_limit)))
 	pool = list(pool or ())
 	if not pool or count <= 0:
@@ -306,7 +315,7 @@ def match_tier_slots(allowed_tiers, team_size):
 
 def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 		rng=None, required_profiles=()):
-	"""Share tier/class slots and a feasible 0..3 SPG quota between teams.
+	"""Share tier/class slots and a size-bounded SPG quota between teams.
 
 	Reserve SPGs against tiers that actually contain artillery. Picking an
 	arbitrary tier first and silently replacing a missing SPG with a medium
@@ -315,6 +324,7 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 	"""
 	rng = rng or random
 	team_size = max(1, int(team_size))
+	artillery_limit = team_artillery_limit(team_size)
 	allowed = tuple(sorted(set(int(value) for value in allowed_tiers)))
 	if not allowed:
 		allowed = (int(player_candidate.get('level', 1) or 1),)
@@ -342,14 +352,24 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 			tier_slots.pop()
 
 	for profile in required:
+		if (vehicle_match_class(profile) == 'SPG' and
+				sum(vehicle_match_class(value) == 'SPG' for value in result) >= artillery_limit):
+			# A human's chosen SPG remains theirs; it must not force an
+			# automatic mirrored SPG into a small opposing team.
+			choices = [candidate for candidate in usable
+				if vehicle_match_class(candidate) != 'SPG']
+			if choices:
+				same_tier = [value for value in choices if int(value['level']) == int(profile['level'])]
+				take(same_tier or choices)
+			continue
 		choices = [candidate for candidate in usable
 			if int(candidate.get('level', 0) or 0) == int(profile['level'])
 			and vehicle_match_class(candidate) == vehicle_match_class(profile)]
 		take(choices or [profile])
 
 	spg_count = sum(vehicle_match_class(value) == 'SPG' for value in result)
-	spg_max = min(3, spg_count + team_size - len(result))
-	# Uniform 0..3 is a synthetic-room choice, not an official spawn rate.
+	spg_max = min(artillery_limit, spg_count + team_size - len(result))
+	# Uniform within the size limit is a room choice, not a retail spawn rate.
 	quota = spg_count + int(rng.random() * (max(0, spg_max-spg_count) + 1))
 	quota = min(spg_max, quota)
 	while spg_count < quota:
@@ -374,7 +394,7 @@ def build_match_template(pool, team_size, player_candidate, allowed_tiers,
 		choices = preferred or choices or regular
 		if not choices:
 			# Do not fill an impossible catalogue with 15 SPGs.
-			if spg_count >= 3:
+			if spg_count >= artillery_limit:
 				break
 			choices = usable
 			spg_count += 1
@@ -552,6 +572,7 @@ def _shell_profiles(descriptor):
 		result.append({
 			'index': int(index),
 			'kind': str(kind),
+			'name': _attribute_or_key(shell, 'name', ''),
 			'penetration': _middle_value(
 				_attribute_or_key(shell, 'piercingPower', 0.0), 0.0),
 			'damage': _middle_value(
@@ -630,79 +651,19 @@ def build_vehicle_profile(descriptor):
 		'fire_range': fire_range,
 		'speed': speed,
 		'armor': armor,
+		'burst_size': int((_attribute_or_key(_attribute_or_key(descriptor, 'gun', {}), 'burst', (1,)) or (1,))[0]),
+		'clip_size': int((_attribute_or_key(_attribute_or_key(descriptor, 'gun', {}), 'clip', (1,)) or (1,))[0]),
+		'gun_name': str(_attribute_or_key(
+			_attribute_or_key(descriptor, 'gun', {}), 'name', '')),
 		'shells': _shell_profiles(descriptor),
 	}
 
 
 def select_shell_index(profile, target, personality):
-	"""Plan standard AP first, HE for soft targets and premium for hard ones."""
-	shells = profile.get('shells', ()) or ()
-	if not shells:
-		return 0
-	target_armor = max(0.0, _number(target.get('armor', 0.0), 0.0))
-	target_health = max(0.0, _number(target.get('health', 0.0), 0.0))
-	non_he = []
-	high_explosive = []
-	for shell in shells:
-		kind = str(shell.get('kind', '')).lower()
-		is_he = ('high_explosive' in kind or
-		         ('explosive' in kind and 'armor_piercing' not in kind))
-		(high_explosive if is_he else non_he).append(shell)
-	baseline = min(non_he, key=lambda value: int(value.get('index', 0))) \
-		if non_he else None
-	baseline_penetration = max(0.0, _number(
-		(baseline or {}).get('penetration', 0.0), 0.0))
-	standard = []
-	premium = []
-	for shell in non_he:
-		penetration = max(0.0, _number(
-			shell.get('penetration', 0.0), 0.0))
-		if (shell is not baseline and baseline_penetration > 0.0 and
-				penetration >= baseline_penetration * 1.03):
-			premium.append(shell)
-		else:
-			standard.append(shell)
-	best_standard = max(standard, key=lambda value: (
-		_number(value.get('penetration', 0.0), 0.0),
-		_number(value.get('damage', 0.0), 0.0),
-		-int(value.get('index', 0)))) if standard else None
-	best_premium = max(premium, key=lambda value: (
-		_number(value.get('penetration', 0.0), 0.0),
-		_number(value.get('damage', 0.0), 0.0),
-		-int(value.get('index', 0)))) if premium else None
-	best_he = max(high_explosive, key=lambda value: (
-		_number(value.get('damage', 0.0), 0.0),
-		_number(value.get('penetration', 0.0), 0.0),
-		-int(value.get('index', 0)))) if high_explosive else None
-	if target_armor <= 0.0:
-		if best_standard is not None:
-			return max(0, int(best_standard.get('index', 0)))
-		if best_premium is not None:
-			return max(0, int(best_premium.get('index', 0)))
-		return (max(0, int(best_he.get('index', 0)))
-			if best_he is not None else 0)
-	if best_he is not None:
-		he_penetration = max(0.0, _number(
-			best_he.get('penetration', 0.0), 0.0))
-		he_damage = max(0.0, _number(best_he.get('damage', 0.0), 0.0))
-		if (target_armor <= he_penetration * 0.90 or
-				(target_health > 0.0 and
-				 target_health <= he_damage * (
-					0.72 + personality['aggression'] * 0.18) and
-				 target_armor <= he_penetration * 1.10)):
-			return max(0, int(best_he.get('index', 0)))
-	if best_standard is not None:
-		standard_penetration = max(0.0, _number(
-			best_standard.get('penetration', 0.0), 0.0))
-		if (best_premium is not None and
-				standard_penetration < target_armor * 1.05):
-			return max(0, int(best_premium.get('index', 0)))
-		return max(0, int(best_standard.get('index', 0)))
-	if best_premium is not None:
-		return max(0, int(best_premium.get('index', 0)))
-	if best_he is not None:
-		return max(0, int(best_he.get('index', 0)))
-	return max(0, int(shells[0].get('index', 0)))
+	"""Initial logical round only; admitted shot outcomes own later choices."""
+	from gui.mods.offline_lan_0922.ammo_policy import ordered
+	shells = ordered(profile)
+	return int(shells[0]['index']) if shells else 0
 
 
 def _distance_2d(first, second):
@@ -1095,7 +1056,7 @@ class BattleDirector(object):
 			# sit behind the hull. Let A* join the first meaningful route anchor.
 			while (nearest + 1 < len(waypoints) and
 					_distance_2d(position, (float(waypoints[nearest][0]),
-					position[1], float(waypoints[nearest][1]))) < 30.0):
+					position[1], float(waypoints[nearest][1]))) <= ROUTE_ARRIVAL_RADIUS):
 				nearest += 1
 			# A deployed formation can be closer to a connector that it has already
 			# passed than to the next lane point. Once a hull is moving forward its
@@ -1116,14 +1077,21 @@ class BattleDirector(object):
 			agent['route_started'] = True
 			agent['route_join_anchor'] = tuple(position)
 			agent['route_join_index'] = nearest
+		observation = agent.get('route_arrival_observation') or {}
+		previous = (observation.get('position') if observation.get('route') == route.get('id') and
+			0. < now-observation.get('at', now-3.) <= 2. else None)
+		agent['route_arrival_observation'] = dict(route=route.get('id'), at=now,
+			position=(position[0], position[2]))
 		index = min(int(agent.get('waypoint_index', 0)), len(waypoints) - 1)
+		# Retain local circle-only progression. The server additionally owns
+		# convoy passage; projecting local turning poses skips narrow-gate setups.
+		while index + 1 < len(waypoints) and route_disk_reached(
+				(position[0], position[2]), waypoints[index][:2],
+				None, previous):
+			index += 1
+		agent['waypoint_index'] = index
 		waypoint = waypoints[index]
 		world = (float(waypoint[0]), float(position[1]), float(waypoint[1]))
-		if _distance_2d(position, world) <= 13.0:
-			if index + 1 < len(waypoints):
-				agent['waypoint_index'] = index + 1
-				waypoint = waypoints[index + 1]
-				world = (float(waypoint[0]), float(position[1]), float(waypoint[1]))
 		return world
 
 	def _fallback_position(self, agent, position):

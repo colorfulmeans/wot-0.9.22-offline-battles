@@ -25,23 +25,31 @@ class WreckRouteSwitchTests(unittest.TestCase):
         return {o['id']: o for o in self.planner.build_orders(
             self.manifest, self.states, [], now)['orders']}
 
-    def test_skip_blocked_gate_then_change_route_after_next_attempt(self):
-        first=self.orders(0)
-        self.orders(19.9)
-        skipped=self.orders(20)
+    def test_blocked_return_retries_for_the_full_battle_without_route_cooldown(self):
+        self.orders(0)
+        phases=set()
+        for now in range(20,901,20):
+            order=self.orders(now)[17]
+            phases.add(self.planner._route_recoveries[17]['phase'])
+            self.assertEqual('banana',order['route_id'])
+            self.assertIsNone(order['throttle_override'])
+        self.assertEqual({'forward','skip','return'},phases)
+
+    def test_skip_then_fold_to_start_before_entering_other_lane(self):
+        first=self.orders(0);self.orders(19.9);skipped=self.orders(20)
         for bot_id in (17,24):
             self.assertEqual('banana',skipped[bot_id]['route_id'])
             self.assertEqual(first[bot_id]['route_index']+1,skipped[bot_id]['route_index'])
             self.assertEqual('blocked_timeout',skipped[bot_id]['route_point_skip_reason'])
-            self.assertEqual(dict(x=self.states[0 if bot_id==17 else 1]['x'],y=0.,
-                                  z=self.states[0 if bot_id==17 else 1]['z']),
-                             skipped[bot_id]['route_anchor'])
-            self.assertTrue(skipped[bot_id]['route_join'])
-        self.assertEqual('banana',self.orders(39.9)[17]['route_id'])
-        changed=self.orders(40)
+        returned=self.orders(40)
         for bot_id in (17,24):
-            self.assertEqual('rail',changed[bot_id]['route_id'])
-            self.assertEqual('wreck_stall',changed[bot_id]['route_switch_reason'])
+            self.assertEqual(('banana',0),(returned[bot_id]['route_id'],returned[bot_id]['route_index']))
+        for row in self.states[:2]:row.update(x=190,z=74)
+        changed=self.orders(41)
+        for bot_id in (17,24):
+            self.assertEqual(('rail',0),(changed[bot_id]['route_id'],changed[bot_id]['route_index']))
+            self.assertEqual('recovery_at_start',changed[bot_id]['route_switch_reason'])
+            self.assertEqual('transfer',self.planner._route_recoveries[bot_id]['phase'])
 
     def test_recovery_orbits_do_not_extend_attempt_budget(self):
         self.orders(0)
@@ -51,7 +59,7 @@ class WreckRouteSwitchTests(unittest.TestCase):
             orders=self.orders(now)
         self.assertEqual(2,orders[17]['route_index'])
         self.assertEqual('banana',orders[17]['route_id'])
-        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+        self.assertEqual(('banana',0),(self.orders(40)[17]['route_id'],self.orders(40)[17]['route_index']))
 
     def test_actual_progress_past_next_gate_resets_skip_sequence(self):
         self.lane['waypoints'].append(dict(x=-200,y=0,z=-280))
@@ -60,10 +68,10 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual(3,self.orders(21)[17]['route_index'])
         self.assertNotIn('blocked_skip_to',self.planner._route_states[17])
 
-    def test_second_blocked_gate_changes_route_instead_of_skipping_again(self):
+    def test_second_blocked_gate_folds_back_instead_of_skipping_again(self):
         self.lane['waypoints'].append(dict(x=-200,y=0,z=-280))
         self.orders(0);self.orders(20)
-        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+        self.assertEqual(('banana',0),(self.orders(40)[17]['route_id'],self.orders(40)[17]['route_index']))
 
     def test_reaching_next_gate_allows_a_fresh_skip_on_later_obstruction(self):
         self.lane['waypoints'].extend([dict(x=-200,y=0,z=-280),dict(x=-400,y=0,z=-280)])
@@ -82,14 +90,14 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.orders(30)
         self.states[0]['route_wreck_blocked']=True
         self.orders(40)
-        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+        self.assertEqual(('banana',0),(self.orders(40)[17]['route_id'],self.orders(40)[17]['route_index']))
 
     def test_contact_flicker_cannot_renew_an_unmoved_gate(self):
         self.orders(0)
         for now in range(1, 41):
             self.states[0]['route_wreck_blocked'] = bool((now // 7) % 2)
             orders = self.orders(now)
-        self.assertEqual('rail', orders[17]['route_id'])
+        self.assertEqual(('banana',0),(orders[17]['route_id'],orders[17]['route_index']))
 
     def test_base_defense_pauses_and_resumes_the_same_gate_budget(self):
         bot = self.planner._alive_bots(self.manifest, self.states)[0]
@@ -117,7 +125,7 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual(('banana',2),(order['route_id'],order['route_index']))
         self.assertEqual(-64,order['route_anchor']['z'])
         self.planner._reroute_wreck_stall(order,bot,self.manifest,40)
-        self.assertEqual('rail',order['route_id'])
+        self.assertEqual(('banana',0),(order['route_id'],order['route_index']))
 
     def test_missing_owned_pose_or_immobilization_never_switches(self):
         self.states[0]['route_wreck_blocked'] = False
@@ -127,12 +135,12 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual('banana', self.orders(100)[17]['route_id'])
         self.assertEqual('banana', self.orders(100)[24]['route_id'])
 
-    def test_native_stall_without_wreck_skips_then_switches(self):
+    def test_native_stall_without_wreck_skips_then_returns(self):
         for state in self.states:state['route_wreck_blocked']=False
         first=self.orders(0)[17]
         skipped=self.orders(20)[17]
         self.assertEqual(first['route_index']+1,skipped['route_index'])
-        self.assertEqual('rail',self.orders(40)[17]['route_id'])
+        self.assertEqual(('banana',0),(self.orders(40)[17]['route_id'],self.orders(40)[17]['route_index']))
 
     def test_capture_and_route_transitions_keep_the_failed_gate_budget(self):
         self.states[0]['route_wreck_blocked']=False
@@ -146,7 +154,8 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual(2,order['route_index'])
         order['combat_mode']='base_capture'
         self.planner._reroute_wreck_stall(order,bot,self.manifest,40)
-        self.assertEqual('no_route_progress',order['route_switch_reason'])
+        self.assertEqual('return_to_anchor',order['route_attempt']['action'])
+        self.assertEqual(0,order['route_index'])
 
     def test_forward_progress_refreshes_timer_but_local_orbit_does_not(self):
         self.states[0]['route_wreck_blocked']=False
@@ -180,14 +189,16 @@ class WreckRouteSwitchTests(unittest.TestCase):
         for now in (0,20):self.planner._reroute_wreck_stall(order,bot,self.manifest,now)
         self.assertNotIn('route_switch_reason',order)
 
-    def test_switch_joins_current_entry_instead_of_restoring_old_failed_cursor(self):
+    def test_switch_joins_first_point_and_discards_stale_lane_history(self):
         self.planner._route_history[17]={'rail':dict(index=2,parking_completed={0})}
-        self.orders(0);self.orders(20)
-        order=self.orders(40)[17]
-        self.assertEqual('rail',order['route_id'])
-        self.assertEqual(1,order['route_index'])
-        self.assertTrue(order['route_join'])
-        self.assertEqual({0},self.planner._route_states[17]['parking_completed'])
+        self.orders(0);self.orders(20);self.orders(40)
+        self.states[0].update(x=190,z=74)
+        order=self.orders(41)[17]
+        self.assertEqual(('rail',0),(order['route_id'],order['route_index']))
+        self.states[0].update(x=100,z=100)
+        order=self.orders(42)[17]
+        self.assertEqual(('rail',1),(order['route_id'],order['route_index']))
+        self.assertNotIn(0,self.planner._route_states[17].get('parking_completed',()))
 
     def test_artillery_only_capturer_does_not_wait_for_a_stationary_route_cursor(self):
         bot=self.planner._alive_bots(self.manifest,self.states)[0]
@@ -206,28 +217,41 @@ class WreckRouteSwitchTests(unittest.TestCase):
             capture_target=target,no_known_enemies=True)
         self.assertNotEqual('base_capture',order['combat_mode'])
 
-    def test_no_suitable_route_holds_and_does_not_oscillate(self):
-        self.bypass['class_weights'] = {'heavyTank': 0, 'AT-SPG': 0}
-        self.orders(0)
-        self.orders(20)
-        self.assertEqual('banana', self.orders(100)[17]['route_id'])
-        self.bypass['class_weights'] = {'heavyTank': 1, 'AT-SPG': 1}
-        orders = self.orders(120)
-        self.assertEqual('rail', orders[17]['route_id'])
-        self.assertEqual('rail', self.orders(140)[17]['route_id'])
-        self.assertNotIn('route_switch_reason', self.orders(141)[17])
+    def test_no_suitable_route_retries_and_newly_eligible_lane_requires_return(self):
+        self.bypass['class_weights']={'heavyTank':0,'AT-SPG':0}
+        self.orders(0);self.orders(20);self.orders(40)
+        self.states[0].update(x=190,z=74)
+        order=self.orders(41)[17]
+        self.assertEqual('banana',order['route_id'])
+        self.assertEqual('retry_no_alternative',order['route_attempt']['action'])
+        self.bypass['class_weights']={'heavyTank':1,'AT-SPG':1}
+        self.states[0].update(x=120,z=-28)
+        self.orders(61);self.orders(81);self.orders(101)
+        self.states[0].update(x=190,z=74)
+        self.assertEqual('rail',self.orders(102)[17]['route_id'])
 
-    def test_combat_hold_and_explicit_command_reset_stall_clock(self):
-        bot = self.planner._alive_bots(self.manifest, self.states)[0]
-        for extra in ({'combat_mode': 'engage'}, {'throttle_override': 0},
-                      {'team_command': 'STAY'}):
-            order = dict(route_id='banana', route_index=1, combat_mode='route',
-                         move_position=self.lane['waypoints'][1])
-            self.planner._reroute_wreck_stall(order, bot, self.manifest, 0)
-            held = dict(order, **extra)
-            self.planner._reroute_wreck_stall(held, bot, self.manifest, 25)
-            self.assertNotIn(17, self.planner._wreck_route_progress)
-            self.assertEqual('banana', held['route_id'])
+    def test_combat_hold_and_explicit_command_pause_the_existing_clock(self):
+        for extra in ({'combat_mode':'engage'},{'throttle_override':0},{'team_command':'STAY'}):
+            self.planner._route_recoveries.clear();self.planner._wreck_route_progress.clear()
+            bot=self.planner._alive_bots(self.manifest,self.states)[0]
+            order=dict(route_id='banana',route_index=1,combat_mode='route',move_position=self.lane['waypoints'][1])
+            self.planner._reroute_wreck_stall(order,bot,self.manifest,0)
+            held=dict(order,**extra)
+            self.planner._reroute_wreck_stall(held,bot,self.manifest,10)
+            self.assertIn(17,self.planner._wreck_route_progress)
+            self.assertEqual(10.,held['route_attempt']['elapsed'])
+            self.assertEqual('banana',held['route_id'])
+
+    def test_advance_contact_pauses_instead_of_erasing_unfinished_attempt(self):
+        self.orders(0)
+        bot=self.planner._alive_bots(self.manifest,self.states)[0]
+        held=dict(route_id='banana',route_index=1,combat_mode='advance_contact')
+        self.planner._reroute_wreck_stall(held,bot,self.manifest,10)
+        self.assertEqual('pause_advance_contact',held['route_attempt']['action'])
+        self.assertIn(17,self.planner._wreck_route_progress)
+        self.orders(15)
+        self.assertEqual('blocked_timeout',self.orders(25)[17]['route_point_skip_reason'])
+        self.assertEqual(('banana',0),(self.orders(45)[17]['route_id'],self.orders(45)[17]['route_index']))
 
     def test_round_reset_clears_stall_and_rejected_routes(self):
         self.orders(0)

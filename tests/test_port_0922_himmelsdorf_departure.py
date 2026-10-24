@@ -100,7 +100,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 self.assertTrue(order['route_join'])
                 self.assertTrue(agent['route_started'])
 
-    def test_report_roster_parked_route_joins_match_server_contract(self):
+    def test_report_roster_parked_joins_match_disk_and_server_passage_contracts(self):
         """Rebuild the reported map, human slot, Bot slots and baked routes.
 
         The report contains one human in team-2 slot zero, leaving all fifteen
@@ -168,17 +168,30 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 route_counts[(team, route_id)] += 1
                 self.assertEqual(route_id, local_order['route_id'])
                 self.assertEqual(server_route_id, local_order['route_id'])
-                self.assertEqual(server_index, local_order['route_index'])
-                self.assertEqual(
-                    (server_point['x'], server_point['y'], server_point['z']),
-                    local_order['move_position'])
-                self.assertEqual(
-                    (server_anchor['x'], server_anchor['y'],
-                     server_anchor['z']),
-                    spawn)
-                self.assertEqual(spawn, local_order['route_anchor'])
-                self.assertTrue(server_join)
-                self.assertTrue(local_order['route_join'])
+                local_index = local_order['route_index']
+                self.assertLessEqual(local_index, server_index)
+                # Both owners use the six-metre disk. Only the server keeps
+                # its convoy forward-passage rule: every additional consumed
+                # spawn gate must have that precise bounded lane proof.
+                from gui.mods.offline_lan_0922.bot_tactics import route_disk_reached
+                for passed in range(local_index, server_index):
+                    point = route['waypoints'][passed]
+                    following = route['waypoints'][passed+1]
+                    self.assertTrue(route_disk_reached((spawn[0], spawn[2]),
+                        (point['x'], point['z']), (following['x'], following['z'])))
+                local_point = route['waypoints'][local_index]
+                self.assertEqual((local_point['x'],local_point['y'],local_point['z']),
+                                 local_order['move_position'])
+                server_expected = route['waypoints'][server_index]
+                self.assertEqual(server_expected, server_point)
+                for cursor, joined, anchor in (
+                        (local_index,local_order['route_join'],local_order['route_anchor']),
+                        (server_index,server_join,(server_anchor['x'],server_anchor['y'],server_anchor['z']))):
+                    if joined:
+                        self.assertEqual(spawn,anchor)
+                    else:
+                        previous = route['waypoints'][cursor-1]
+                        self.assertEqual((previous['x'],previous['y'],previous['z']),anchor)
 
                 if team == 1 and route_id == 'hill':
                     dx = local_order['move_position'][0] - spawn[0]

@@ -74,3 +74,29 @@ class PlanningRotationTests(unittest.TestCase):
             self.runtime._planning_rotation_fraction_for(
                 self.source, (0., 0., 0.), 0., .4, self.supplied)
             self.assertNotIn('rotation_current', [args[0][0] for args in call.call_args_list])
+
+    def test_decision_roster_reuse_keeps_live_poses_and_distinct_push_policy(self):
+        from gui.mods.offline_lan_0922 import native_math as module
+        cache = {}
+        backend = mock.Mock(rotation_current=mock.Mock())
+        with mock.patch.object(module, '_load', return_value=backend), mock.patch.object(
+                module, 'call', return_value=.75) as call:
+            self.runtime._planning_rotation_fraction_for(
+                self.source, (0., 0., 0.), 0., .4, self.supplied, False, cache)
+            first = call.call_args[0][6]
+            self.runtime.states[2]['x'] = 9.
+            self.runtime._planning_rotation_fraction_for(
+                self.source, (0., 0., 0.), 0., .8, self.supplied, False, cache)
+            self.assertIs(first, call.call_args[0][6])
+            self.assertEqual(.8, call.call_args[0][3])
+            self.assertEqual(9., call.call_args[0][6][0][1]['x'])
+            self.runtime._planning_rotation_fraction_for(
+                self.source, (0., 0., 0.), 0., .8, self.supplied, True, cache)
+            self.assertEqual([2], [key for key, raw in call.call_args[0][6]])
+            self.assertEqual(2, len(cache))
+            # New decisions rebuild membership, including death/team changes.
+            self.runtime.states[3]['team'] = 1
+            self.runtime._planning_rotation_fraction_for(
+                self.source, (0., 0., 0.), 0., .8, self.supplied, False, {})
+            self.assertEqual([2, 3, 4], [key for key, raw in call.call_args[0][6]])
+            self.assertEqual(4, call.call_count)

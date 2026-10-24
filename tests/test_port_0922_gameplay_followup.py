@@ -357,7 +357,7 @@ class AimProgressTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, pitch=0.0, roll=0.0,
                      turret_yaw=0.0, aim_yaw=0.0, gun_pitch=-0.2,
-                     profile={'class_tag': 'SPG'})
+                     profile=dict(state['profile'], class_tag='SPG'))
         target = {'id': 2, 'kind': 'human', 'network_id': 2, 'alive': True,
                   'position': (0.0, 0.0, 500.0)}
         proved = {'yaw': 0.0, 'pitch': -0.2, 'flight_time': 1.0,
@@ -378,7 +378,7 @@ class AimProgressTests(unittest.TestCase):
         descriptor = bot_fixture._combat_descriptor(
             gun_speed=0.15, turret_speed=0.25, dispersion=0.01)
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0}, 'speed': 425.0,
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.0,
             'gravity': 143.0, 'maxDistance': 10000.0},)
         descriptor.gun.pitchLimits = {'absolute': (-0.8, 0.15)}
         command = {
@@ -427,7 +427,7 @@ class AimProgressTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, pitch=0.0, roll=0.0,
                      aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
-                     profile={'class_tag': 'SPG'})
+                     profile=dict(state['profile'], class_tag='SPG'))
         runtime._gun_states[11].elapsed = 100.0
         player = bot_fixture._admit_player({
             'id': 2, 'team': 1, 'alive': True,
@@ -462,7 +462,7 @@ class AimProgressTests(unittest.TestCase):
     def test_artillery_family_progress_survives_native_pose_settling(self):
         descriptor = bot_fixture._combat_descriptor()
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0}, 'speed': 425.0,
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.0,
             'gravity': 143.0, 'maxDistance': 10000.0},)
         descriptor.gun.pitchLimits = {'absolute': (-1.55, 0.15)}
         source = {'id': 11, 'x': 0.0, 'y': 0.0, 'z': 0.0}
@@ -491,7 +491,7 @@ class AimProgressTests(unittest.TestCase):
         descriptor = bot_fixture._combat_descriptor(
             gun_speed=0.15, turret_speed=0.25, dispersion=0.01)
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0}, 'speed': 425.0,
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.0,
             'gravity': 143.0, 'maxDistance': 10000.0},)
         descriptor.gun.pitchLimits = {'absolute': (-0.8, 0.15)}
         descriptor.activeTurretPosition = 0
@@ -552,7 +552,7 @@ class AimProgressTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, pitch=0.0, roll=0.0,
                      aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
-                     profile={'class_tag': 'SPG'})
+                     profile=dict(state['profile'], class_tag='SPG'))
         runtime._gun_states[11].elapsed = 100.0
         player = bot_fixture._admit_player({
             'id': 2, 'team': 1, 'alive': True,
@@ -612,7 +612,7 @@ class AimProgressTests(unittest.TestCase):
             gun_speed=0.15, turret_speed=0.25, dispersion=0.01,
             turret_yaw_limits=(-0.1, 0.1))
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0}, 'speed': 425.0,
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 425.0,
             'gravity': 143.0, 'maxDistance': 10000.0},)
         descriptor.gun.pitchLimits = {'absolute': (-1.55, 0.15)}
         descriptor.activeTurretPosition = 0
@@ -673,7 +673,7 @@ class AimProgressTests(unittest.TestCase):
         state = runtime.states[11]
         state.update(x=0.0, y=0.0, z=0.0, yaw=0.0, pitch=0.0, roll=0.0,
                      aim_yaw=0.0, turret_yaw=0.0, gun_pitch=0.0,
-                     profile={'class_tag': 'SPG'})
+                     profile=dict(state['profile'], class_tag='SPG'))
         runtime._gun_states[11].elapsed = 100.0
         player = bot_fixture._admit_player({
             'id': 2, 'team': 1, 'alive': True,

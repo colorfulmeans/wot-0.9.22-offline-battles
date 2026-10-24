@@ -719,6 +719,10 @@ class Checker(object):
         runtime.states = {1: state}
         runtime._descriptors[1] = dict(radio=dict(distance=180.))
         runtime._vision_ranges[1] = (350., 450., .5)
+        # The tier defaults may already resolve to 75. Pin the initial crew
+        # so the later 100 -> 75 invalidation is a real input change.
+        runtime._bot_behavior[1] = {'crew_level': 100}
+        assert runtime.bot_crew_level(1) == 100
         profile = ((.1, .15), .4, dict(invisibility_moving=(0., 1.),
             invisibility_still=(.05, 1.), has_camouflage_net=True,
             camouflage_net_delay=.4))
@@ -740,7 +744,7 @@ class Checker(object):
         def check(expected_builds):
             actual = owner._actor_config(state, {})
             self.equal(actual, project(state, {}), 'projection.cached_mechanics')
-            assert len(calls) == expected_builds
+            assert len(calls) == expected_builds, (len(calls), expected_builds)
         check(1)
         # Moving, firing, damage to hull HP and terminal pose do not change
         # the immutable view/radio mechanics; pose samples still update.
@@ -767,6 +771,7 @@ class Checker(object):
             (.2, .3), .5, dict(profile[2]))
         check(8)
         runtime._bot_behavior[1] = {'crew_level': 75}
+        assert runtime.bot_crew_level(1) == 75
         check(9)
         state['team'], state['slot'] = 2, 5
         check(10)

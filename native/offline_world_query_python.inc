@@ -77,7 +77,7 @@ PyObject *WOT_CDECL world_run_native(PyObject *,PyObject *args) {
     NATIVE_PROFILE_ENTRY(world_run_native);
     bool entered=false;
     try {
-        require_sequence(args,4,true);double v[19];world_array(items(args)[0],v,19);
+        require_sequence(args,4,true);double v[19];world_snapshot_values(items(args)[0],v);
         WorldSnapshot snapshot={};std::memcpy(snapshot.position,v,3*sizeof(double));
         snapshot.yaw=v[3];snapshot.speed=v[4];snapshot.dt=v[5];snapshot.pitch=v[6];snapshot.roll=v[7];snapshot.motion_yaw=v[8];
         std::memcpy(snapshot.bounds,v+9,4*sizeof(double));std::memcpy(snapshot.heights,v+13,2*sizeof(double));

@@ -81,16 +81,20 @@ class EngineQuery(object):
                 getattr(self._bots, 'round_id', None) != self._round):
             raise RuntimeError('Native engine query owner changed')
 
-    def begin_ray_scope(self):
+    def begin_ray_scope(self, reuse_readonly=False):
         """Reuse exact unfiltered rays during one synchronous world solve.
 
-        A nested solve gets a separate cache. No result survives a caller,
+        A normal nested solve gets a separate cache. Read-only sub-solves may
+        borrow the enclosing rotation sweep's cache. No result survives a caller,
         frame, actor move, or destructive effect. Filtered rays retain their
         native callback: its thread-local candidate/exclusion context is NOT
         represented by the callable's identity and must run on every query.
         """
         self._live()
-        scope = {}
+        scope = (getattr(self.owner, '_readonly_world_rays', None)
+                 if reuse_readonly else None)
+        if not isinstance(scope, dict):
+            scope = {}
         self._ray_scopes.append(scope)
         return scope
 
@@ -102,6 +106,9 @@ class EngineQuery(object):
     def invalidate_ray_scope(self):
         for cache in self._ray_scopes:
             cache.clear()
+        readonly = getattr(self.owner, '_readonly_world_rays', None)
+        if isinstance(readonly, dict):
+            readonly.clear()
         count('world_ray_reuse_invalidated')
 
     def _remember(self, error):

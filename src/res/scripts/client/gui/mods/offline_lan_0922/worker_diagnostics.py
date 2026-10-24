@@ -68,6 +68,20 @@ def observed_ray(stage, function, space, start, end, *args):
     return _invoke(diagnostic, stage, function, (space, start, end) + args, {})
 
 
+def detailed_observed(stage):
+    """Extra investigation boundaries are exclusive to the diagnostic entry."""
+    def decorate(function):
+        @functools.wraps(function)
+        def measured(*args, **kwargs):
+            from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+            diagnostic = current() if detailed_enabled() else None
+            if diagnostic is None:
+                return function(*args, **kwargs)
+            return _invoke(diagnostic, stage, function, args, kwargs)
+        return measured
+    return decorate
+
+
 def observed(stage):
     """Observe a pure helper only inside its synchronous worker owner."""
     def decorate(function):
@@ -116,6 +130,15 @@ def timed(stage):
 
 class WorkerCombatDiagnostics(object):
     """Capture three combat windows without retaining native objects."""
+
+    @classmethod
+    def audit_sample(cls, clock):
+        """Sample one complete control callback in 32, for three windows.
+
+        This changes no control budget or cadence. A normal report must carry
+        measured stage contents, including preparation/writing of diagnostics.
+        """
+        return cls(clock, detail_stride=32)
 
     @classmethod
     def spike_test(cls, clock):

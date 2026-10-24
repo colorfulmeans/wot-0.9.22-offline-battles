@@ -115,7 +115,7 @@ ENUM_NAMES = {
         'lightTank': ('轻型坦克', 'Light tank'),
         'mediumTank': ('中型坦克', 'Medium tank'),
         'heavyTank': ('重型坦克', 'Heavy tank'),
-        'AT-SPG': ('坦克歼击车', 'Tank destroyer'),
+        'AT-SPG': ('自行反坦克炮', 'Tank destroyer'),
         'SPG': ('自行火炮', 'Self-propelled gun'),
     },
     'skill': {'': ('继承上级设置', 'Inherit'),
@@ -128,8 +128,28 @@ ENUM_NAMES = {
     'team': {'0': ('全部队伍', 'All teams'), '1': ('队伍 1', 'Team 1'), '2': ('队伍 2', 'Team 2')},
     'slot': {'': ('全部槽位', 'All slots')},
 }
+for _key, _choices in {
+    'development': [('stock','白板'),('intermediate','中间配置'),('full','完全体')],
+    'equipment': [('none','无配件'),('single','1 配件'),('standard','3 普通配件'),('improved','3 紫色配件＋对应指令')],
+    'consumables': [('none','无给养'),('once','小急救包＋小修理箱＋手动灭火器·一次'),('repeat','小急救包＋小修理箱＋手动灭火器·重复'),('large','大急救包＋大修理箱＋自动灭火器·重复')],
+    'crew_preset': [('50','50%'),('75','75%'),('repair','100% 满修理满隐蔽'),('all','100% 全部满技能')],
+    'outfit': [('off','不使用涂装'),('on','使用现有涂装')],
+}.items():
+    ENUM_NAMES[_key] = dict([('', ('继承上级设置','Inherit'))] + [(v,(z,v)) for v,z in _choices])
+
+ENUM_NAMES['outfit'].update(off=('不使用涂装','Do not use an outfit'),on=('使用现有涂装','Use existing outfit'))
+
+for _level in (75,90,100):
+    ENUM_NAMES['crew_preset']['legacy'+str(_level)] = (str(_level)+'%（旧方案，原技能）',str(_level)+'% (legacy skills)')
+
+ENUM_NAMES['number'] = ENUM_NAMES['ratio'] = {'': ('继承上级设置','Inherit')}
+
 PARAM_NAMES = {
     'skill': ('难度', 'Difficulty'), 'crew_level': ('乘员等级', 'Crew level'),
+    'development': ('研发配置','Development'), 'equipment': ('配件','Equipment'),
+    'consumables': ('给养','Consumables'), 'crew_preset': ('成员配置','Crew preset'),
+    'ammo_ratios': ('弹药比例','Ammunition ratios'),
+    'outfit': ('BOT 使用涂装','Bot outfit'),
     'reaction_seconds': ('反应时间（秒）', 'Reaction delay (s)'),
     'patience_seconds': ('首次开火缩圈等待上限（秒）', 'Opening aim patience (s)'),
     'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),
@@ -180,7 +200,7 @@ def parameter_label(key, language):
 
 
 def parameter_value(key, value, language):
-    if key in ('skill', 'crew_level'):
+    if key in ENUM_NAMES:
         return enum_label(key, value, language)
     return str(value)
 

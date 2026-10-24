@@ -460,7 +460,12 @@ def _misc_factor(td, key):
     attrs = getattr(td, 'miscAttrs', None)
     if attrs is None:
         return 1.0
-    return float(_descriptor_value(attrs, key, 1.0))
+    factor = float(_descriptor_value(attrs, key, 1.0))
+    if key == 'ammoBayHealthFactor':
+        from gui.mods.offline_lan_0922 import bot_fittings
+        if bot_fittings.context(td) is not None:
+            factor *= bot_fittings.native_factors(td).get('offline/ammoBayHealth', 1.0)
+    return factor
 
 
 def _raw_hp(td, name):

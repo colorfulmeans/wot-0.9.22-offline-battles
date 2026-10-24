@@ -213,7 +213,7 @@ class SpgFrozenPivotTests(unittest.TestCase):
     def test_support_float_jitter_preserves_bounded_proof_until_one_committed_shot(self):
         from gui.mods.offline_lan_0922.artillery_controller import ArtilleryController
         descriptor=runtime_fixture._combat_descriptor(dispersion=.03)
-        descriptor.gun.shots=({'shell':{'effectsIndex':0},'speed':425.,'gravity':143.,'maxDistance':10000.},)
+        descriptor.gun.shots=({'shell':{'effectsIndex':0,'kind':'HIGH_EXPLOSIVE'},'speed':425.,'gravity':143.,'maxDistance':10000.},)
         controller=ArtilleryController(maximum_step=.12)
         keys=[];origins=[]
         def launch(source,target,installed,shell,seq,yaw,pitch,flight,now):

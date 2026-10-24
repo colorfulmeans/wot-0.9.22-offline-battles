@@ -1,4 +1,5 @@
 from __future__ import print_function
+from gui.mods.offline_lan_0922 import bot_tactics
 
 import base64
 import json
@@ -1697,6 +1698,7 @@ class LANClient(object):
         self.player_id = None
         self.team = None
         self.team_sizes = {1: 15, 2: 15}
+        self.team_classes = bot_tactics.team_class_choices()
         self.bot_tier_mode = 'random'
         self.bot_skill_mode = bot_gunnery.DEFAULT_SKILL_MODE
         self.slot = 0
@@ -2027,6 +2029,12 @@ class LANClient(object):
         if team in (1, 2) and team == self.team:
             return True
         return self._send({'type': 'select_team', 'team': team})
+
+    def set_team_class(self, team, tag, allowed):
+        if (not self.ready or self.phase!='waiting' or self.player_id!=self.host_player_id or
+                team not in (1, 2) or tag not in bot_tactics.CLASSES+('random',) or type(allowed) is not bool):
+            return False
+        return self._send({'type':'set_team_class','team':team,'class_tag':tag,'allowed':allowed})
 
     def set_team_size(self, team, size):
         """Request one live waiting-room capacity as the elected host."""
@@ -2407,6 +2415,15 @@ class LANClient(object):
 
     def send_player_environment(self, observations, sample_seq):
         """Publish bounded environment classifications from the worker."""
+        receipt = dict(reason='validating', sample_seq=sample_seq, round=self.round_id,
+            phase=self.phase, player=self.player_id, epoch=self.authority_epoch,
+            authority=self.is_bot_authority(),
+            client_capability=PLAYER_ENVIRONMENT_CAPABILITY in self.capabilities,
+            server_capability=PLAYER_ENVIRONMENT_CAPABILITY in self.server_capabilities)
+        self._player_environment_send_receipt = receipt
+        def reject(reason):
+            receipt['reason'] = reason
+            return False
         sequence = _projectile_int_range(
             sample_seq, 1, MAX_PROJECTILE_ID)
         epoch = _projectile_int_range(
@@ -2419,7 +2436,7 @@ class LANClient(object):
                 self.server_capabilities or
                 not isinstance(observations, (list, tuple)) or
                 len(observations) > 30):
-            return False
+            return reject('authority_phase_capability_or_batch_gate')
         rows = []
         seen = set()
         for raw in observations:
@@ -2428,7 +2445,7 @@ class LANClient(object):
                         {'player_id', 'input_seq', 'level'},
                         {'player_id', 'input_seq', 'level',
                          'drowning_critical'})):
-                return False
+                return reject('invalid_row_shape')
             player_id = _projectile_int_range(
                 raw.get('player_id'), 1, MAX_PROJECTILE_ID)
             input_seq = _projectile_int_range(
@@ -2436,7 +2453,7 @@ class LANClient(object):
             level = _projectile_int_range(raw.get('level'), 0, 2)
             if (player_id is None or input_seq is None or level is None or
                     player_id in seen):
-                return False
+                return reject('invalid_row_fields')
             seen.add(player_id)
             row = {
                 'player_id': player_id,
@@ -2445,16 +2462,19 @@ class LANClient(object):
             }
             if 'drowning_critical' in raw:
                 if level != 2 or not isinstance(raw['drowning_critical'], dict):
-                    return False
+                    return reject('invalid_critical_shape')
                 row['drowning_critical'] = raw['drowning_critical']
             rows.append(row)
-        return self._send({
+        sent = self._send({
             'type': 'player_environment',
             'round_id': self.round_id,
             'authority_epoch': epoch,
             'sample_seq': sequence,
             'observations': rows,
         })
+        receipt.update(reason='enqueued' if sent else 'transport_not_enqueued',
+                       rows=len(rows), sent=bool(sent))
+        return sent
 
     def _send_pending_landing_observation(self, rebind=False):
         pending = self._landing_observation_pending
@@ -2902,7 +2922,7 @@ class LANClient(object):
             # Each projectile owner reports the ammunition at its trigger edge.
             # A shot that happened was drawn from at least one shell, so
             # zero is not a smaller count, it is an invalid report.
-            parsed_shells = _projectile_int_range(shells_before_shot, 1, 1000)
+            parsed_shells = _projectile_int_range(shells_before_shot, 1, 1800)
             if parsed_shells is not None:
                 message['shells_before_shot'] = parsed_shells
             if not self._send(message):
@@ -4442,6 +4462,29 @@ class LANClient(object):
             sample = 0.0
         return int(round(max(0.0, min(sample, 999.0)))), stale
 
+    def _log_worker_latency(self, received_time):
+        """Separate displayed worker frame time from relay/dispatch latency."""
+        try:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import (
+                detailed_enabled, write_json_record)
+            if not detailed_enabled():
+                return
+            now = _monotonic_time()
+            scope = (self.round_id, self.authority_epoch)
+            previous = getattr(self, '_worker_latency_log', None)
+            if previous is not None and previous[0] == scope and now - previous[1] < 15.0:
+                return
+            self._worker_latency_log = (scope, now)
+            write_json_record('WORKER LATENCY', dict(
+                round=self.round_id, epoch=self.authority_epoch,
+                server_rtt_ms=self.rtt_ms, worker_relay_rtt_ms=self.worker_rtt_ms,
+                worker_frame_ms=self.worker_frame_ms,
+                dispatch_delay_ms=max(0.0, now - received_time) * 1000.0,
+                displayed_ping_ms=self.worker_ping_display(now)[0]))
+        except Exception:
+            # Observation failure must never interrupt pong or battle dispatch.
+            return
+
     def _report_snapshot_stall(self, now):
         """Say out loud that the replica is drawing a frozen world.
 
@@ -4768,6 +4811,10 @@ class LANClient(object):
             self.vehicle = _safe_text(message.get('vehicle'), self.vehicle)
             self.team = team
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self.bot_tier_mode = bot_tier_mode
             self.bot_skill_mode = bot_skill_mode
             self.slot = slot
@@ -4909,6 +4956,10 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self.bot_tier_mode = bot_tier_mode
             self.bot_skill_mode = bot_skill_mode
             self._adopt_published_vehicle(players)
@@ -5034,6 +5085,10 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
             self._adopt_published_vehicle(players)
             self.host_player_id = host_player_id
             self._battle_start_round_id = round_id
@@ -5101,6 +5156,10 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
         elif kind == 'team_size_denied':
             round_id = _exact_int(message.get('round_id'))
             team = _team_choice(message.get('team'), None)
@@ -5119,6 +5178,10 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            if 'team_classes' in message:
+                try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
+                except bot_tactics.TacticsError:
+                    self.last_error = 'invalid team class choices'; self.stop(); return
         elif kind == 'bot_tier_mode_denied':
             round_id = _exact_int(message.get('round_id'))
             mode = _safe_text(message.get('bot_tier_mode'), '', 32)
@@ -5638,6 +5701,7 @@ class LANClient(object):
             frame_ms = _finite_float(message.get('frame_ms'), -1.0)
             self.worker_frame_ms = frame_ms if frame_ms > 0.0 else None
             self._worker_pong_time = received_time
+            self._log_worker_latency(received_time)
         elif kind == 'pong':
             client_time = _finite_float(message.get('client_time'), 0.0)
             if client_time > 0.0:

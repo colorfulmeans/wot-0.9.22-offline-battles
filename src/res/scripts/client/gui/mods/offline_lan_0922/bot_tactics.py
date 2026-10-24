@@ -24,6 +24,13 @@ DEFAULT_ROUTE_PRIORITY = 5
 MAX_ENTRIES = sum(128 + sum(len(routes) for routes in meta['route_ids'].values()) *
                   (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
+PRESETS = {
+    'development': ('stock', 'intermediate', 'full'),
+    'equipment': ('none', 'single', 'standard', 'improved'),
+    'consumables': ('none', 'once', 'repeat', 'large'),
+    'outfit': ('off', 'on'),
+    'crew_preset': ('50', '75', 'repair', 'all'),
+}
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
     'converged_factor': (1.0, 5.0), 'aim_bias_factor': (0.0, 4.0),
@@ -89,10 +96,18 @@ def default_map(name):
 
 
 def normalize_values(raw):
-    _keys(raw, tuple(PARAMETERS) + ('skill', 'crew_level'))
+    _keys(raw, tuple(PARAMETERS) + tuple(PRESETS) + ('skill', 'crew_level', 'ammo_ratios'))
     out = {}
     for key, value in raw.items():
-        if key == 'skill':
+        if key in PRESETS:
+            if value not in PRESETS[key]:
+                raise TacticsError('Unsupported %s preset' % key)
+            out[key] = value
+        elif key == 'ammo_ratios':
+            if not isinstance(value, (tuple, list)) or not 1 <= len(value) <= 8:
+                raise TacticsError('Ammunition ratios require 1..8 digits')
+            out[key] = [integer(v, 0, 9) for v in value]
+        elif key == 'skill':
             if value not in SKILLS:
                 raise TacticsError('Unsupported Bot skill')
             out[key] = value
@@ -112,7 +127,36 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
-WAIT_AVOIDANCE_RADIUS = 6.0
+ROUTE_ARRIVAL_RADIUS = 6.0
+WAIT_AVOIDANCE_RADIUS = ROUTE_ARRIVAL_RADIUS
+
+
+def route_disk_reached(position, point, following=None, previous=None):
+    """Shared two-dimensional macro disk/crossing/forward-passage contract."""
+    bx, bz = position
+    px, pz = point
+    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
+        return True
+    if previous is not None:
+        ax, az = previous
+        dx, dz = bx-ax, bz-az
+        length = dx*dx + dz*dz
+        if length > 0.000001:
+            fraction = max(0., min(1., ((px-ax)*dx+(pz-az)*dz)/length))
+            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
+                return True
+    # A convoy can shove a hull past the gate along its finite outgoing lane.
+    if following is None:
+        return False
+    dx, dz = following[0]-px, following[1]-pz
+    length = dx*dx + dz*dz
+    if length <= 0.000001:
+        return False
+    fraction = ((bx-px)*dx+(bz-pz)*dz)/length
+    if fraction <= 0.0:
+        return False
+    fraction = min(1., fraction)
+    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
 
 
 def waiting_heading(place, following=None):
@@ -328,6 +372,18 @@ def canonical(raw):
             total += 1
         if defaults:
             entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
+            for route in entry['default_routes']:
+                if not route.get('disabled'):
+                    continue
+                shared = next((r for r in entry['default_routes']
+                    if r['team'] == route['team'] and r['id'] == route['id']
+                    and r.get('class_tag', 'all') == 'all'), None)
+                if shared is None:
+                    shared = next((r for r in default_map(name).get('default_routes', ())
+                        if r['team'] == route['team'] and r['id'] == route['id']
+                        and r.get('class_tag', 'all') == 'all'), None)
+                route['points'] = [p[:2]+[0] for p in
+                    (shared or route)['points']]
         if entry['routes'] or entry['positions'] or defaults or deleted:
             out['maps'][name] = entry
     if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:
@@ -446,3 +502,10 @@ def for_round(profile, map_name):
     if len(dumps(selected).encode('ascii')) > 64 * 1024:
         raise TacticsError('This round tactics payload exceeds 64 KiB')
     return selected
+
+
+def team_class_choices(value=None, sizes=None):
+    """Canonical room selection; low-size artillery is a manual-only exception."""
+    from gui.mods.offline_lan_0922 import team_class_policy
+    try:return team_class_policy.canonical(value)
+    except ValueError as error:raise TacticsError(str(error))

@@ -14,7 +14,8 @@ import zlib
 TARGET_VERSION = '0.9.22.0.1'
 TARGET_BUILD = '1513'
 SOURCE_MEMBER = 'gui/flash/trainingWindow.swf'
-OUTPUT_PATH = 'src/res/gui/flash/trainingWindow.swf'
+# Diagnostic export only. The mod must use the client's unmodified movie.
+OUTPUT_PATH = 'build/native-ui/trainingWindow.swf'
 
 
 class SWFError(ValueError):
@@ -320,45 +321,20 @@ def build(client_root, output_path):
         raise SWFError(
             'training text placements changed: %r' % relevant_placements)
 
-    original = bytes(decoded)
-    changed_offsets = []
-    for character_id in sorted(expected_texts):
-        alpha_offset = edit_texts[character_id].color_offset + 3
-        if decoded[alpha_offset] != 0xFF:
-            raise SWFError(
-                'DefineEditText id %d alpha is not opaque' % character_id)
-        decoded[alpha_offset] = 0
-        changed_offsets.append(alpha_offset)
-
-    differences = [
-        index for index, (before, after) in enumerate(zip(original, decoded))
-        if before != after
-    ]
-    if differences != changed_offsets:
-        raise SWFError(
-            'decoded output changed unexpected bytes: %r' % differences)
-    for offset in changed_offsets:
-        if original[offset] != 0xFF or decoded[offset] != 0:
-            raise SWFError('alpha edit is not 255 -> 0 at %d' % offset)
-
+    # A prior override set these two DefineEditText alpha bytes to zero.
+    # Native runtime presentation produced black fields. Restore the original
+    # format as a whole instead of introducing per-field text recolouring.
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_bytes(_compress_swf(bytes(decoded), source[3]))
-    written = _decompress_swf(output_path.read_bytes())
-    written_differences = [
-        index for index, (before, after) in enumerate(zip(original, written))
-        if before != after
-    ]
-    if len(written) != len(original) or written_differences != changed_offsets:
-        raise SWFError('written SWF failed the two-byte decoded diff check')
-    print(
-        'Built %s from %s; decoded alpha edits: %s' %
-        (output_path, SOURCE_MEMBER, ', '.join(
-            '%d:255->0' % offset for offset in changed_offsets)))
+    output_path.write_bytes(source)
+    if output_path.read_bytes() != source:
+        raise SWFError('Native map picker export differs from client source')
+    print('Exported unchanged #1513 map picker: %s' % output_path)
+
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Build the #1513 offline map picker Flash resource.')
+        description='Verify and export the unchanged #1513 map picker for diagnostics.')
     parser.add_argument(
         'client_root', type=Path,
         help='Chinese HD 0.9.22.0.1 #1513 client root')

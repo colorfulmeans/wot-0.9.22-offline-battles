@@ -817,6 +817,20 @@ class PortConfigTests(unittest.TestCase):
                 json.loads(
                     (Path(directory) / surviving[0]).read_text()))
 
+    def test_waiting_difficulty_roundtrip_does_not_replace_the_mixed_default(self):
+        config_module = _load_port_source('config')
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'waiting_room_state.json')
+            self.assertNotIn('bot_skill_mode', config_module.load_waiting_room_state(path))
+            for mode in ('mixed', 'easy', 'relaxed', 'hard', 'brutal'):
+                choices = config_module.load_waiting_room_state(path)
+                choices['bot_skill_mode'] = mode
+                self.assertTrue(config_module.save_waiting_room_state(choices, path))
+                self.assertEqual(mode, config_module.load_waiting_room_state(path)['bot_skill_mode'])
+            choices['bot_skill_mode'] = 'unrecognized'
+            self.assertFalse(config_module.save_waiting_room_state(choices, path))
+            self.assertEqual('brutal', config_module.load_waiting_room_state(path)['bot_skill_mode'])
+
     def test_waiting_room_choices_round_trip_in_player_owned_state(self):
         config_module = _load_port_source('config')
         with tempfile.TemporaryDirectory() as directory:
@@ -3656,6 +3670,8 @@ class OfflineCompatibilityTests(unittest.TestCase):
                     self._CompoundAppearance__filter = replacement
                 self.nested_filter = self._readFilterDuringRefresh()
                 self._CompoundAppearance__filter.syncGunAngles(0.5, -0.1)
+                if getattr(self, 'fail_models_refresh', False) == 'assertion':
+                    raise AssertionError('stale native model state')
                 if getattr(self, 'fail_models_refresh', False):
                     raise RuntimeError('models refresh failed')
                 operations.append(('compound_refresh_after',))
@@ -5157,6 +5173,11 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertIs(
             replacement,
             appearance._CompoundAppearance__filter)
+
+        appearance.fail_models_refresh = 'assertion'
+        with self.assertRaisesRegex(AssertionError, 'stale native model state'):
+            getattr(appearance, method_name)('stale', {})
+        self.assertIsNone(compatibility._compound_refreshing_models)
 
         appearance.fail_models_refresh = True
         with self.assertRaisesRegex(RuntimeError, 'models refresh failed'):

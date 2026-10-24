@@ -2,6 +2,7 @@
 import copy
 import json
 import os
+from pathlib import Path
 import tempfile
 import tkinter as tk
 import unittest
@@ -12,7 +13,65 @@ import bot_tactics_ui as ui
 import bot_tactics_labels as labels
 
 
+def reviewed_routes(filename, name):
+    rows=json.loads(filename.read_text(encoding='utf8'))['default_routes']
+    document=storage.contract.empty('Historical route review')
+    document['maps'][name]=dict(mode='regular',resource_sha256=storage.contract.MAPS[name]['resource_sha256'],
+        routes=[],positions=[],default_routes=rows)
+    normalized=storage.contract.canonical(document)['maps'][name]['default_routes']
+    for old in rows:
+        if not old.get('disabled'):
+            current=next(r for r in normalized if (r['team'],r['id'],r.get('class_tag','all'))==
+                (old['team'],old['id'],old.get('class_tag','all')))
+            assert current==old
+    return normalized
+
+
 class BaselineDataTests(unittest.TestCase):
+    def test_owner_lakeville_routes_are_shipped_and_first_run_baseline(self):
+        fixture=Path(__file__).resolve().parents[2]/'tests/fixtures/lakeville_owner_routes_20261024.json'
+        expected=reviewed_routes(fixture,'07_lakeville')
+        with tempfile.TemporaryDirectory() as temp:
+            actual=storage.Store(temp).active()
+            self.assertEqual(expected,actual['maps']['07_lakeville']['default_routes'])
+        routes,outcomes=storage.runtime.default_routes(actual,'07_lakeville',storage.graph_data('07_lakeville'))
+        for edit in expected:
+            identity=storage.contract.default_route_id(edit)
+            key='%s:%s'%(edit['team'],identity)
+            row=next((r for r in routes[str(edit['team'])] if r['id']==identity),None)
+            if edit.get('disabled'):
+                self.assertEqual('route_deleted',outcomes[key]);self.assertIsNone(row)
+            else:
+                self.assertEqual('baked_route_connected',outcomes[key])
+                self.assertEqual([p[:3] for p in edit['points']],row['waypoints'])
+
+    def test_owner_windstorm_routes_are_the_first_run_baseline(self):
+        fixture = Path(__file__).resolve().parents[2] / 'tests/fixtures/windstorm_owner_routes_20261021.json'
+        routes = reviewed_routes(fixture,'84_winter')
+        with tempfile.TemporaryDirectory() as temp:
+            adopted = storage.Store(temp).active()
+            self.assertEqual(routes, adopted['maps']['84_winter']['default_routes'])
+            self.assertEqual(routes, storage.contract.default_map('84_winter')['default_routes'])
+            self.assertEqual(adopted, storage.contract.canonical(adopted))
+
+    def test_owner_windstorm_routes_reach_runtime_without_silent_fallback(self):
+        profile = storage.contract.default_profile()
+        graph = storage.graph_data('84_winter')
+        original = copy.deepcopy(graph)
+        routes, outcomes = storage.runtime.default_routes(profile, '84_winter', graph)
+        for edit in profile['maps']['84_winter']['default_routes']:
+            identity = storage.contract.default_route_id(edit)
+            key = '%s:%s' % (edit['team'], identity)
+            actual = next((r for r in routes[str(edit['team'])] if r['id'] == identity), None)
+            if edit.get('disabled'):
+                self.assertEqual('route_deleted', outcomes[key])
+                self.assertIsNone(actual)
+            else:
+                self.assertEqual('baked_route_connected', outcomes[key])
+                self.assertIsNotNone(actual)
+                self.assertEqual([p[:3] for p in edit['points']], actual['waypoints'])
+        self.assertEqual(original, graph)
+
     def test_complete_canonical_baseline_returns_independent_documents(self):
         a=storage.contract.default_profile()
         self.assertEqual(41,len(a['maps']))
@@ -54,6 +113,7 @@ class BaselineEditorTests(unittest.TestCase):
         patch=mock.patch.object(ui.messagebox,'showerror')
         self.errors=patch.start();self.addCleanup(patch.stop)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name))
+        self.editor.adopt(storage.contract.default_profile('Editable fixture'))
         self.editor.map_var.set(storage.MAP_LABELS['29_el_hallouf']);self.editor.change_map()
         self.editor.route_class_var.set('AT-SPG');self.editor.change_route_class()
 
@@ -85,11 +145,10 @@ class BaselineEditorTests(unittest.TestCase):
         self.assertEqual(original,e._selected())
         e.save(True);self.errors.assert_not_called()
 
-    def test_whole_default_restore_and_new_profile_use_adopted_baseline(self):
+    def test_new_profile_uses_adopted_baseline_and_remains_unsaved(self):
         e=self.editor;e.document['maps'].clear()
-        with mock.patch.object(e,'discard_prompt',return_value=True):e.default_profile()
-        self.assertEqual(storage.contract.default_profile(),e.document)
-        with mock.patch.object(e,'discard_prompt',return_value=True):e.new_profile()
+        with mock.patch.object(e,'discard_prompt',return_value=True),mock.patch.object(ui.simpledialog,'askstring',return_value='New'):e.new_profile()
         self.assertEqual(storage.contract.default_profile()['maps'],e.document['maps'])
+        self.assertTrue(e.unsaved_new);self.assertTrue(e.dirty())
         e.set_language('en');self.root.update()
         self.assertTrue(all(ord(c)<128 for i in e.items.get_children() for c in e.items.item(i,'text')))

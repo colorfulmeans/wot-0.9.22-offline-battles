@@ -874,6 +874,8 @@ class ArmorViewerPanel(object):
         self._focus_key = None
         self._scene = None
         self._scene_error = ""
+        self._scene_error_source = ""
+        self._language_widgets = []
         self._yaw = -0.65
         self._pitch = -0.22
         self._zoom = 1.0
@@ -882,18 +884,17 @@ class ArmorViewerPanel(object):
         self._dragged = False
         self._item_surface = {}
 
-        self.frame = tk_module.LabelFrame(
-            parent, text=self._t("3D armor viewer"), padx=8, pady=8)
+        self.frame = self._widget(tk_module.LabelFrame,
+            parent, text="3D armor viewer", padx=8, pady=8)
         self.frame.grid_columnconfigure(0, weight=1)
         self.frame.grid_rowconfigure(2, weight=1)
-        tk_module.Label(
+        self._widget(tk_module.Label,
             self.frame,
-            text=self._t(
-                "Drag to orbit · wheel to zoom · click armor to select its field"),
+            text="Drag to orbit · wheel to zoom · click armor to select its field",
             anchor="w").grid(row=0, column=0, sticky="we")
         self.selection = tk_module.StringVar(
             value=self._t("No armor field selected"))
-        tk_module.Label(
+        self._widget(tk_module.Label,
             self.frame, textvariable=self.selection, anchor="w",
             justify="left", wraplength=520).grid(
                 row=1, column=0, sticky="we", pady=(4, 6))
@@ -903,11 +904,11 @@ class ArmorViewerPanel(object):
         self.canvas.grid(row=2, column=0, sticky="nsew")
         controls = tk_module.Frame(self.frame)
         controls.grid(row=3, column=0, sticky="we", pady=(6, 0))
-        tk_module.Button(
-            controls, text=self._t("Reset view"), command=self.reset_view).pack(
+        self._widget(tk_module.Button,
+            controls, text="Reset view", command=self.reset_view).pack(
                 side="right")
-        tk_module.Label(
-            controls, text=self._t("Nominal thickness (mm)"),
+        self._widget(tk_module.Label,
+            controls, text="Nominal thickness (mm)",
             anchor="w").pack(side="left")
         self.legend = tk_module.Canvas(
             controls, width=285, height=28, background="#171b22",
@@ -922,6 +923,27 @@ class ArmorViewerPanel(object):
         self.canvas.bind("<MouseWheel>", self._wheel)
         self.canvas.bind("<Button-4>", lambda event: self._zoom_by(1.12))
         self.canvas.bind("<Button-5>", lambda event: self._zoom_by(1.0 / 1.12))
+
+    def _widget(self, factory, parent, text=None, **options):
+        if text is not None:
+            options['text'] = self._t(text)
+        widget = factory(parent, **options)
+        if text is not None:
+            self._language_widgets.append((widget, text))
+        return widget
+
+    def set_language(self, language):
+        self._language = i18n.resolve_language(language)
+        for widget, text in self._language_widgets:
+            widget.config(text=self._t(text))
+        if self._scene_error_source:
+            self._scene_error = self._t('Armor model unavailable: %s') % self._scene_error_source
+        record = self._record_by_key.get(self._focus_key)
+        if record is not None:
+            self.focus_field(record, reload_scene=False)
+        else:
+            self.selection.set(self._scene_error or self._t('No armor field selected'))
+            self._redraw()
 
     def _t(self, text):
         return _translated(self._language, text)
@@ -949,11 +971,13 @@ class ArmorViewerPanel(object):
         except (ArmorViewerError, vehicle_overlays.VehicleOverlayError,
                 IOError, OSError, ValueError, zipfile.BadZipFile) as error:
             self._scene = None
+            self._scene_error_source = str(error)
             self._scene_error = self._t("Armor model unavailable: %s") % error
             self.selection.set(self._scene_error)
             self._redraw()
             return False
         self._scene_error = ""
+        self._scene_error_source = ""
         self._redraw()
         if focus_record is None:
             self.selection.set(self._t(
@@ -1173,6 +1197,9 @@ class NullArmorViewerPanel(object):
         self.loaded = []
         self.focused = []
         self.updated = []
+
+    def set_language(self, language):
+        return None
 
     def grid(self, *unused_args, **unused_kwargs):
         return None

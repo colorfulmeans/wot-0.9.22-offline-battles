@@ -1,5 +1,310 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24: shared owner routes and generic narrow passages
+
+Adopt the reviewed complete profile 1 as the built-in Default for all users,
+including the four corrected Ensk east-field positions. The immutable fixture
+records the complete canonical document digest and every map digest/count:
+41 maps, 834 route records. Existing Default documents refresh from this
+source; independent custom profiles retain their own data. This is shipped
+baseline data, not a machine-specific savegame override.
+
+The unchanged opposed Great Wall gate simulation passes with the old built-in
+routes but fails when supplied the reviewed owner routes. Owner routes before
+and after simplification give identical 30-second traces: actor 16 remains near
+(403.807, -152.693), repeatedly reversing/alignment-blocking toward a slanted
+final target even after the other actor leaves. This establishes a general
+steering failure on that configured reference scene; it does not establish a
+new collision or traffic-priority law for the native client.
+
+For an already safe direct/final leg, inspect the existing baked corridor at
+the hull centre, front and rear. If turning clearance is narrower than the
+vehicle diagonal plus one quantised cell, propose a bounded local endpoint
+along the corridor axis. Retain the endpoint until arrival and continue while
+the tail is still in the passage. Preserve unconsumed A* bends, tactical holds,
+parking ownership and authored route arrival. Hand the endpoint to the existing
+finite local-leg owner so contact refusals, no-progress deadlines and replans
+also observe the actual target. There are no map-name checks, traffic locks,
+new recovery budgets or direct pedal overrides.
+
+Every proposal still requires supported hull terrain and a fresh existing
+static/private-edge, arena-boundary and dry-segment proof. Water, deferred
+proofs or a changed native proof revision refuse the proposal. Existing
+friendly/wreck collision and final native motion retain authority. The new
+bounded passage receipt and timing counter join existing detailed-entry-only
+diagnostics; the normal entry gains no verbose output.
+
+Regression coverage includes the original captured 29-Bot opposed-gate scene
+with the adopted Default, finite local-leg handoff, vertical and diagonal
+passages, tail clearance, direction changes, fixed endpoints, nearby goals,
+owned corners, static/private/native/deferred/revision/water refusals and
+actor-scoped boundary proof. The captured configured gate now passes its
+original 30-second exit and maximum five-second traffic-hold assertions.
+All-map route/parking authoring checks verify the new shared baseline. These
+are deterministic reference checks; real Windows bridge/gate traversal and
+frame pacing remain gameplay acceptance boundaries.
+
+## October 24 report 041538: route disks and blocked outgoing connectors
+
+Candidate 494's T110E3 (Bot 23, round 2, The Pit) repeatedly aligned with a
+near A* setup while its outgoing edge was refused by the static-hull corridor
+check. The captured receipt at simulation time 491.273 records a 1.528 m
+setup distance, `segment_penalty` and `dry_segment_blocked` /
+`static_hull_path`. A prior execution window records a 2.047 m local target
+and 173.538 m strategic distance with brake-and-align gates. This is not a
+proof that all editor waypoints were exact-coordinate goals: server macro
+arrival was 13 m, local driver arrival 1.5 m, and initial waiting arrival 1 m.
+
+Use the shared 6 m authoring radius for macro arrival and waiting-place entry.
+The selected editor node now draws that actual disk, including nodes with
+waiting places; unselected rendering is unchanged. Preserve bounded forward
+lane passage after a convoy shove, and detect a disk crossed between adjacent
+(twice the existing one-second tactics interval) grounded position observations. Airborne, stale or duplicate observations
+cannot create a retained terminal crossing after landing outside the disk. Remove
+the initial 30 m gate shortcut: an unvisited forward gate at 20 m must not be
+mistaken for disk entry. Server and local tactical owners consume the same
+shared disk/crossing helper. Only the server retains its existing convoy
+forward-lane passage; applying that projection to the local director regressed
+opposed narrow-gate traffic. The full-roster spawn policy
+regression verifies every server-only consumed gate has the exact bounded
+forward-passage proof and each owner retains its correct join anchor. Authored single-point destinations use the
+same radius, while automatic one-point tactical goals retain 1.5 m. Waiting
+clocks start only on actual entry, preserve displaced-vehicle timing and
+vertical checks, and pass the same radius to the local stop owner. Capture
+and defense still use the actual base circle, independently of route disks.
+
+Do not enlarge local driver corner tolerances or skip an unproved bend.
+Instead, a fresh known static-hull refusal of the adjacent outgoing corridor
+within 6 m retires only that actor's connector for the existing private edge
+lifetime and starts its ordinary replan. Reuse existing short-circuit receipts;
+no added geometry query, global obstacle or inferred collision from yaw.
+Stale, changed-revision, deferred, unproved and distant receipts cannot do so.
+The captured fixture and boundary regressions cover these distinctions.
+
+Worker optimization reuses allied/wreck roster membership across rotation
+candidates inside one synchronous decision. Every native rotation query still
+runs against live state references and its exact candidate yaw. Separate
+wreck-push policy and new decision dictionaries rebuild membership. No shared
+cross-frame collision receipt, cadence, probe budget or native motion law is
+changed. Diagnostic-only timing/counters expose membership construction/reuse.
+This removes repeated Python roster preparation; it does not prove a whole
+frame-rate improvement. Report measurements show 7.02 FPS / 138.648 ms Python
+per frame in one heavy window, with 124.079 ms in Bot update and ordinary
+server RTT mostly 8–24 ms. Exact Windows gameplay remains the acceptance
+boundary for escape success and frame pacing. The damage-panel Flash animation
+error after player death and missing interior layouts remain unproved/unfixed
+resource or lifecycle issues; neither is silently classified as repaired.
+
+
+## October 24 reports 030753 / 031525: complete pivot failure handoff
+
+Both sessions use candidate 492 (fcc7b942). The HUD deliberately displays the
+worker's recent mean render-callback interval, not socket RTT. Heavy Lakeville
+and The Pit windows record 5.99 / 6.72 worker FPS and 162.871 / 145.286 ms mean
+Python execution respectively. Critical-equipment binding takes at most 0.613
+ms per observed call and 4.539 ms per 30 s capture; it does not explain this
+movement workload. Do not infer a particular performance regression from
+unmatched battles. Add diagnostic-entry-only timings for radio configuration,
+human observer lifecycle, player-neighbour projection and static-hull
+publication. A bounded WORKER LATENCY receipt separates server RTT, worker
+relay RTT, worker frame time and receive-to-dispatch delay without changing
+the HUD, poll cadence or simulation work.
+
+The Pit Bot 19 (Ch41_WZ_111_5A) did attempt the corpse push: its own motor
+receipt exhausted after 14.166 s and the corpse moved 0.564 m. Server route
+attempts skipped gate 4 at 03:11:53, switched to class_ht_rim_west at 03:12:13,
+and switched back at 03:14:21. The near escape remained blocked. At authority
+time 361.733 it had 95 recovery selections, hard native sweep refusals, a
+spent reverse-return budget and no complete pivot. One individually clear
+rotation sample prevented the runtime from recognizing exhausted local
+actions. Replaying the captured samples makes _partial_pivot return None,
+while the previous _report_blocked_planner returns no_hard_evidence with zero
+local-action feedback calls.
+
+Keep the exact existing candidate arcs, query order and short-circuiting.
+Publish each complete partial-pivot candidate outcome with its checked sample
+prefix through BotAdapter. The runtime admits exhaustion only with six failed
+arcs, matching live yaw/time/decision refusal receipts and a hard translation
+sweep. Unknown, deferred, exception, stale and traffic-only evidence cannot
+retire a connector. Use the existing finite per-Bot blocked-step retry gate,
+retire only its near connector, preserve that refusal across a route replan,
+and never publish the rotation/traffic obstruction as a global terrain wall.
+The captured fixture and tests cover a clear intermediate sample, no added
+probes, real private connector retirement, replan retention/expiry, usable
+complete arcs and invalid evidence fences.
+
+A second continuity defect was reproduced independently: five fresh blocked
+local-action reports at the normal far-camera 0.6-second cadence never passed
+the fixed 0.5-second tracker window (the final count stayed one). Pass the
+current decision horizon through local-action feedback and use the greater of
+0.5 seconds or twice that interval for continuity. Preserve the existing
+verdict-count/time threshold, stationary origin/edge identity and stale-gap
+reset. Other physical-contact callers retain the previous default. Tests
+cover both near/far cadences and a genuinely interrupted episode.
+
+Bot 17 (R151_Object_257_2) also changes yaw and repeatedly moves near Bot 19;
+reverse_turn/avoid and route changes are present, so absent steering commands
+are not established. Extend the diagnostic-entry 15-second compact recovery
+receipt with requested/applied controls, blockers, previous actual pose/yaw
+outcome and the local handoff result. Keep it independent of bulk geometry
+history budgets and retain basic-mode silence for these added records. Include
+the return-budget memory and at most six short-escape denial summaries from
+existing receipts; do not issue diagnostic world probes.
+
+No projectile effects failure, critical-profile rejection, water diagnostic
+error or native exception is present in these sessions. Four missing internal
+layout identities remain resource limitations: R120_T22SR_A22, R129_Object_257,
+GB88_T95_Chieftain_turret and Ch40_WZ120G_FT. Do not invent interiors or change
+collision/steering laws for unproved symptoms. Gameplay escape success and
+worker frame pacing still require candidate testing on the exact #1513 client.
+
+## October 24 report 022654: repeated incoming and outgoing shot loss
+
+Candidate 491 / runtime source 973d035d records 253 Bot and two player
+PROJECTILE FAILURE events with KeyError('regen_hp') at impact effects. Bot 20
+(china:Ch19_121) fired 16 shots; 13 failed this way. The first and seventh
+resolved impacts, while the sixth missed. Failed effects became explicit
+expired terminals without a direct hit. This is actual lost settlement, not
+merely a missing tracer. It affects incoming and outgoing shots whenever the
+victim already owns any device-state rows, including repaired normal rows.
+
+The previous fix passed state.critical to bind_device_profile. The server and
+critical_damage._device_record deliberately produce sparse mutable rows with
+name/hp/max_hp/state, without regen_hp. A full immutable profile instead has
+all fitted device maximum/regen pools. The old test fabricated regen_hp in a
+damage row and therefore missed the real producer-consumer mismatch.
+
+Resolve the victim's accepted fitting with the existing native descriptor
+cache and project every device pool from that descriptor and its registered
+crew context. Cache this immutable profile in the fitting context; bind it to
+live and frozen critical views, including before any device was damaged.
+Never use damage-state rows as configuration, invent a regen fraction, or
+relax server validation. Preserve the native geometry descriptor and the
+existing player effective_params path. This also fixes omitted untouched
+modules and the pre-damage fitted ammo-rack maximum mismatch.
+
+Regression coverage uses real sparse wire rows (empty, damaged and repaired),
+separate raw/fitted descriptors (ammo rack 210 versus 236/118), frozen targets,
+and both player and Bot direct-hit paths with real armour/module resolution.
+The report also has zero water query-environment errors, no native exception
+records and no model-refresh assertion. Worker stage timings remain high;
+these do not establish an additional navigation or physical-law defect. Keep
+existing diagnostic-entry timing/model-state records without speculative
+physics changes. Local tests/package inspection do not prove native gameplay;
+repeat incoming/outgoing hits on #1513 with the candidate package.
+
+## October 24 report 011258: chassis boundary parity and remote Bot module pools
+
+Candidate 490 / source 3d10dba0 reproduces Conqueror GC 15 changing firing
+positions after repeated native world_blocked ballistic proofs. It then steers
+toward a local vertex at (-62, 398), remaining near Z 394..396 for over 30 s.
+The navigation rectangle admitted cell centres while the final authority guard
+constrained chassis corners. Generic native geometry is not proof that a
+vehicle fits the official arena rectangle. No complete GC motion record was
+captured, so individual final refusals are not inferred from a clear ground ray.
+
+Use arena_boundary for the same oriented chassis extents in local-player and
+Bot boundary checks. Apply it before steering/recovery candidate selection,
+non-committing forward/reverse sweeps and stationary turn previews. Legal
+stationary turns check intermediate corner extrema, not just both endpoints.
+Preserve inward recovery of an already stale outside pose without teleporting.
+Keep the final post-contact guard, and replan a rejected outward navigation
+leg once; an external shove must not blacklist an otherwise legal drive leg.
+
+A* receives footprint-specific hard edges in the official boundary strip, not
+a shared terrain erosion or a fabricated world collision. Masks are cached per
+mounted chassis and prewarmed before combat, with at most 64 shape entries.
+Use official clipped bounds even when the baked arrays extend beyond them.
+Direct, cached, fallback and shortcut admission retain each Bot's boundary
+refusal; cached route/search keys include the footprint scope. The first inward
+edge can leave a coarse boundary cell. Native movement, water, occupancy and
+collision checks still own the resulting travel. A local Python 2 Lakeville
+sample measured 34 ms for the first shape mask (521 edges) and 26 ms for 10,000
+cache-hit updates. These are local costs, not a native frame-rate claim.
+
+At 01:11:22 a human hit on Bot 1 proposed ammoBayHealth maximum 210 while the
+server's accepted fitted pool was 236. Remote Bot critical projections looked
+for player effective_params. The first attempted ledger-based fix was invalid:
+the sparse damage ledger is not the immutable fitted device profile. See the
+022654 regression below. Preserve native geometry/descriptors, target-owned
+regen pools and strict server maximum checks.
+
+The exact pinned CompoundAppearance.__onModelsRefresh bytecode at line 838
+asserts callback modelState equals currentDamageState.modelState. The report
+lacks the vehicle and state-transition identity needed to retire an async
+callback safely. Keep the assertion/exception cleanup behavior and add at most
+eight diagnostic-entry records with vehicle ID/type and both model states.
+Do not silence it or replace native resources without ownership evidence.
+
+Worker full-live windows still include 154.75 ms Python execution at 6.31 FPS.
+Captured 30 s self costs include bot.slice 6.3..7.1 s, world rotation 1.8..2.9 s,
+ground probes 2.3..2.9 s and translation 1.3..3.1 s. No further cache, collision
+budget or decision-cadence change is justified by these samples. Add bounded
+existing-capture timings for neighbour collection, deadline preparation and
+motion diagnostic construction only in the diagnostic entrance; basic-mode
+calls retain their original results and do not create those timing records.
+
+Regression coverage includes full-body edge vertices, middle-of-turn overflow,
+forward/reverse preview refusal before native calls, inward recovery, official
+bounds inside wider arrays, actor isolation, mask reuse/retirement, cached A*
+path rejection, accepted Bot critical pools, basic/detail logging gates and
+original model-refresh exception restoration. Full source/Windows CI and exact
+candidate inspection complement these reference checks. Native recovery feel,
+model callback identity and worker frame cost still need the supplied package.
+
+## October 24 report 002139: exhausted return handoff and Lakeville baseline
+
+The 6442c2779d47 report runs candidate 489 / source 3246693e. Across three
+completed Lakeville rounds it contains no fatal traceback, but T-100 LT 12
+remains at (-105.8567, 10.2590, 17.9733) from 00:11:57 to 00:13:42 after
+1.9799 m forward / 0.9943 m returned, with zero return allowance. Switching
+macro routes does not prove that this physical pocket has been exited.
+
+Reject a spent bounded return during local action selection with a distinct
+policy receipt, retire its old translation lease, and choose another short
+exit only after the existing direction, braking-distance and vehicle checks.
+Request one navigation replan per exhausted pocket, including when selection
+already changes to waiting. Keep the final native collision veto, independent
+rear exits, live traffic and tactical withdrawal intact. Genuine departure
+retires the pocket; route changes and motion back to a previous endpoint do not
+buy more return distance. Preserve the unfinished macro gate clock across
+advance_contact, just as across other temporary tactical holds. Intentional
+holds pause elapsed time; they do not consume a new gate/route attempt.
+
+The 295 worker sample_entity AttributeErrors come from diagnostic sampling of
+partially exposed client entities. Read spaceID and position independently,
+retain available coordinates, and list unavailable fields without borrowing
+Avatar space as Vehicle evidence. Native water results and drowning remain
+unchanged; these secondary receipts are confined to the diagnostic entrance.
+
+Worker samples identify bot update / translation / ground / rotation as the
+main cost. Ground samples are mostly distinct, so no coarse height cache or
+reduced query/decision cadence is introduced. Two powered-contact admission
+paths only consume speed limits but derived a full chassis parameter set.
+Read live descriptor gearing there, preserving the incomplete-descriptor
+fallback; leave all full-physics consumers untouched. A local Python 2 test of
+100,000 representative descriptor reads measured 0.673 s full derivation vs
+0.108 s narrow reads. This is a microbenchmark, not a measured game FPS gain.
+Existing bounded stage/probe/pocket receipts remain diagnostic-only. Physical
+passability of the other captured pockets is still unproved; do not force a
+collision bypass or invent a terrain result.
+
+Adopt only saved owner profile 1's 07_lakeville default_routes into the immutable
+shipped Default. The other 40 maps and Lakeville SPG positions are unchanged.
+The independent fixture checks all 24 class/team edits: 20 connected active
+routes and four deliberate deletions, with exact authored points preserved.
+Fresh stores, new profiles and restored Default use this baseline. Archive the
+owner's live tactics directory externally before clearing profile 1 and its
+local history, and activate the new Default; unrelated saves remain intact.
+
+Regression coverage includes checked forward handoff, no available exit,
+one-shot replanning, withdrawal compatibility, contact pause/resume, partial
+water entities, live speed-limit changes and baseline runtime expansion.
+Full reference-model, Windows editor, Python 2 compile and packaged-source
+checks complement CI. Native #1513 gameplay recovery and actual worker frame
+cost still require a run of the supplied candidate; no universal jam-free or
+frame-rate claim follows from engine-free tests.
+
 ## October 20 report 135041: wreck-edge and friendly-lane avoidance
 
 The captured f64ad975 run reproduces blocked advisory wreck edges for T28,
@@ -2665,13 +2970,15 @@ the room's current arena and battle time. Whether that stock view hides or only
 disables the three fixed controls is a property of `gui.pkg`, not of any client
 script, and remains unproved until it is seen on the exact Windows client.
 
-The packaged picker replaces only the exact #1513 `trainingWindow.swf` resource.
-Its `maxPlayers` value is `DefineEditText` id 10 at sprite 16 depth 12, while
-the adjacent `#menu:training/create/maxPlayers` label is the unnamed id 14 at
-depth 16. The build keeps both objects and their layout but changes their text
-color alpha from 255 to zero. Exact `lobby.swf` bytecode only assigns
-`maxPlayers.text` when the map changes; it does not replace the text format or
-alpha, so repeated map selection cannot restore either string.
+The mod no longer overrides `trainingWindow.swf`. An earlier version hid the
+`maxPlayers` value (`DefineEditText` id 10 at sprite 16 depth 12) and adjacent
+label (id 14, depth 16) by zeroing their alpha bytes at decoded offsets 3708
+and 4055. The owner's current screenshot shows those strings black, refuting
+the previous static assumption that they would remain invisible. Remove the
+movie override and let the client supply its original text format and colours.
+The diagnostic exporter verifies those stock fields but writes only an
+unchanged client movie outside shipping resources. No per-field recolouring
+or replacement runtime display writer is installed.
 
 `updateTrainingRoom` is the single Scaleform-to-Python call of that view
 (`TrainingWindowMeta`). In this mode it records the map and the battle time and
@@ -9817,3 +10124,411 @@ These tests supply corridor admission separately from recorded XZ coordinates;
 they do not constitute a native Windstorm replay. Final package checks and suite
 counts are recorded in the delivered manifest; the user's next battle remains
 the native acceptance test. The reported floating shrubs are not changed here.
+
+
+### 2026-10-21 report 191606: unculled water and consistent fine-grid handoffs
+
+The exact #1513 native registration at 0x5e8310 binds wg_collideWater to
+0xf629d0. Its per-water helper at 0xa302e0 checks bytes +0x2a5 and +0x2a1
+before geometric intersection. The +0x2a1 writer at 0xa2ff64 derives its value
+from the water bounding box's render clip outcode (helper 0x11bbfe0). The
+False third argument bypasses the later edge-alpha branch at 0xa305dc; it
+does not bypass visibility. Both worker ray directions and the extended ray
+missed the same water which the visible client hit; the worker camera stayed
+at approximately y=-495. Do not use that render-dependent miss as dry physics.
+
+The shared depth probe now evaluates the pinned BWWa water rectangles directly:
+record position, yaw, half extents, native 0.001 m boundary tolerance and the
+same downward forward-ray intersection. It does not use navigation heights,
+BWWa streaming coverage cells or a world-wide guessed water plane. Sixteen of
+104 captured native hits lie outside those streaming cells; all 104 are inside
+the actual rectangles and their heights agree within 0.000006 m. The generated
+catalog explicitly covers all supported maps, including maps without water.
+Visible and worker physics use the same source. Diagnostic-cadence receipts
+still compare the native ray against the selected rectangle/depth, recording
+misses, differences and exceptions. Drowning timers, hull classification,
+critical proposals, health/death semantics and server settlement are unchanged.
+The next Windows session must verify the complete drowning lifecycle.
+
+E5's captured 1 m corridor was tested as a 4 m base edge, hitting a later wet
+bank. Admission now uses the actual local cell scale. A world-denied wreck-push
+attempt publishes an explicit terminal handoff and cannot reclaim the driver
+every time its forward probe briefly clears during reverse recovery. Existing
+motor progress, corpse displacement, encounter retirement, retry and rerouting
+laws remain. No collision hull is shrunk beyond the existing planning inset.
+
+The upstream Windstorm city bridge receives an additive 1 m patch over both
+mouths and deck. Original routes, formations, coarse heights/hazards and the two
+previous patches are retained. A verified reverse shortcut exposed fixed-stride
+planning skipping a tiny wet-bank corner which realised motion rejected.
+Python and C++ now apply the same physical-boundary water/shore veto before a
+coarse link can override the fine mesh. Fine corridor caches use exact XZ rays.
+Clearance cost retains the original weight but uses each local vertex's metre
+scale; charging 1 m vertices for 4 m exhausted the unchanged 4096-node authored
+corridor budget. No slope policy, tactical priorities or navigation strategies
+are added. The discarded 2 m survey failed full-width support and was not shipped.
+
+Support activation/release remains one invalid point on/all five valid points
+off. No support solver, impact damage or ammunition-selection logic changes.
+
+
+A deferred, unavailable or failed direction query remains an unknown receipt,
+not a world-corridor terminal. Its original push timer continues. Within the same unchanged wreck encounter, active driver
+reverse leases (ordinary recovery and navigation-wait recovery) retain ownership
+until their existing completion or safety refusal; the adapter does not interrupt
+them with a newly clear push probe. No new recovery timer or route policy is added.
+### Report 205154: bank admission, immobilised push clocks and mastery list
+
+The recorded VK168 native bank exits were admitted before final navigation
+pose rollback. Keep LocalHeightLinks unchanged. Native-only egress now checks
+the same fatal-motion mask as committed driving. Rebuild only the added
+Windstorm bridge patch: deck and adjoining bank use the existing 2.15 m support
+proof instead of a distant 3/6 m erosion apron. Validate full wide-body and
+recorded-VK corner support on each link; an unsafe corner exposed by the first
+revised bake was rejected before packaging. Coarse terrain/heights/hazards,
+authored routes, both older local meshes, real collision, water limits and
+retry/reroute laws are retained.
+
+AT7's destroyed tracks suppressed actual pedals while both wreck-failure
+clocks advanced. Pass the same track/engine/overturned gate into the adapter,
+pause the motor budget and resume it after repair. Real executing pushes still
+expire after 14 seconds without progress. Retain original refusal receipts and
+final pose-guard evidence. Short-escape terminals retain bounded history with
+selection identities, execution reasons and an explicit dropped count; their
+selection and direction policy are unchanged.
+
+Pinned ProfileTechnique reads the account markOfMasteryCut, separately from
+each vehicle's achievements.markOfMastery. Populate the native account cut from
+persisted highest classes (positive integer 1..4), including existing history.
+No panel or award formula is added. A CPython 2 roundtrip through pinned dossier
+builders preserves the class; visible UI acceptance remains an owner test.
+
+Report 214201 round 3 bot 26 (WT E100) had fired five rounds, zero clip and
+38.53 seconds of reload remaining at 21:40:42. It waited after magazine
+withdrawal, then moved and fired shot 6; that wait adds no gameplay change.
+
+Serene Coast report 232823 exposed unsafe retained spawn slots and unequal
+support frames in direction probes. Audit all 30 slots with the exact client's
+terrain and the largest shipping chassis envelope; move only five unsafe slots
+within 16 m, preserving headings, the other 25 slots, every route and grid.
+The offline repair checks full footprint gradients, hard/soft scenery clearance,
+maximum chassis spacing and directed home connectivity. It introduces no live
+spawn relocation or navigation policy.
+
+Selected motion probes now carry the same grounded yaw/pitch/roll as planner
+probes. Reverse travel changes the travel heading, not the occupied body frame;
+airborne probes retain their previous unposed behavior. Invalidate a cached
+support-plane proof after the existing 0.005-radian attitude tolerance, and do
+not acquire a flat-only exact corridor receipt on a banked hull. Native sweep,
+wall, water, missing-ground and support-mode rules remain authoritative. Record
+fresh live push blockers and all queried heading rejection stages, with original
+sample times and observation ages, instead of treating a retained receipt as a
+current explanation. These changes require owner Windows gameplay acceptance.
+
+The standard and training waiting room share an aligned canvas, original
+RGBA olive/red button textures, and a translucent dark panel. Baked texture
+colours avoid #1513's ignored textured-quad tint; the cursor and independent
+daily-services panel retain their existing primitives, font and dimensions.
+The difficulty dropdown orders mixed/easy/relaxed/hard/brutal as Mixed, Rookie,
+Regular, Veteran, Elite (Chinese labels match the launcher). Wire presets,
+ratings and the mixed first-run default are unchanged. Persist the last chosen
+preset only after a matching server acknowledgement in the same connection;
+restore it once when reconnecting as host, never impose it on a remote host.
+The redesigned room uses a 640x330 pixel canvas; it can shrink on short
+screens but never grows beyond that size, including 2560x1080 and 4K. Native
+logs from the owner's rejected build confirmed the previous 960x480 cap was
+still reached at high resolution. Testing only a small inferred viewport did
+not validate that design. The room remains inside the 26.5%-78% vertical
+band, with independent service panels retaining their previous geometry.
+
+Two selector columns share a compact form above full-width map and team rows.
+Dark recessed selector fields and muted olive buttons follow the stock
+settings-window proportions. A compact 26 px red/gold footer button starts the battle, using the
+client's existing battle-button bitmap instead of a wide banner. Body/button text is 12 px YaHei, the header is 16 px,
+secondary text is subdued and actionable labels are brighter. The existing
+native cursor, callbacks, dropdown menu roles and host restrictions remain.
+Map selection, difficulty preset order/default/memory and server behavior do
+not change. Record the actual screen, applied root size and font names once
+on open or geometry changes rather than assuming the fake's viewport is real.
+
+The missing-Chinese fix retains the native relative font-name contract:
+#1513 `ChainView.addLabel` and `GUITest.create` assign `label_small.font` and
+`default_smaller.font`, not full `system/fonts/...` paths. The packaged
+YaHei descriptors remain dynamic. `build_waiting_room_skin.py` losslessly extracts pinned #1513 bitmaps from
+`windows.swf` (window frame/body), `guiControlsLobbyBattle.swf` (normal
+button), `guiControlsLobby.swf` (recessed field) and `guiControlsLogin.swf`
+(red/gold battle button). Only the window uses standard nine-slice sizing;
+button/field DDS pixels match their native source content crops exactly.
+Trim baked shadow padding so the requested button height describes its face. There is no custom
+noise, gradient, recolouring or guessed art. Record member identities and
+bitmap IDs in `waiting_skin_source.json`. Keep the existing native GUI
+interaction implementation; no new native APIs or alternate display writer.
+Native appearance and CJK rasterization still require Windows owner
+acceptance; the engine-free geometry/lifecycle checks are not screenshots.
+
+### All-map water rebake and authoring danger overlay
+
+Report 20261022-002558 showed Tiger I and A-44 motion rejected by the old
+shore apron on 45_north_america, despite clear native probes. Exact #1513
+quarter-metre width measurements found the existing north ford at about
+1.02 m maximum, below the current 1.2 m navigation limit. All 41 main grids
+still recorded 0.9 m; changing the baker/runtime constant had not rebuilt
+those retained assets. This was a data/consumer mismatch, not a reason to
+add another live exemption or change Bot steering.
+
+`tools/rebake_navigation_water.py` decodes exact terrain, BWWa water and
+compiled collision again, measures every main/local cell, reclassifies water
+and proves new shore nodes and reversible links under the existing support,
+width, grade and collision rules. It preserves grid placement/resolution,
+authored layers, old proved links, all routes and all spawns. Existing 1.2 m
+local support proofs are retained; separately reviewed deeper fords keep
+their original conditional permission. Isolated new water pockets cannot
+be published as navigation. Per-layer complete measurement/change receipts,
+current topology summaries and saved-profile identity migration accompany
+the new assets. The old coarse-only Windstorm validator omitted its local
+bridge passages; water validation now reads the actual layered search rather
+than discarding that failure or changing the route.
+
+Reproduce into a staging directory with `python tools/rebake_navigation_water.py
+--client "$WOT_0922_CLIENT" --previous navgraphs --output build/water-stage
+--all`. Inspect/validate the complete batch before replacing any live assets,
+then update the manifest and run `tools/build_bot_editor_maps.py`; the adopted
+default-profile resource identities must change with the editor registry.
+`tools/check_navigation_water.py` verifies the complete retained-geometry and
+receipt boundary and compares original/default route segments through the
+shipping C++ search. Its complete-search benchmark budget belongs only to
+offline connectivity validation; no worker cadence, search budget or live
+navigation strategy changes.
+
+The launcher adds an independent red danger overlay beside Show navigation
+grid in the shared route/SPG editor. It reads the worker's shore classifier
+and the local/parent flags used by pose and motion checks, including exact
+base-node aliases; unknown local data cannot hide a parent veto. Raster
+images are cached, clipped before display scaling and do not write profiles.
+The right panel shows the actual map's depth, base shoulder radii, link grade,
+bake width and grid resolutions, plus still-active reviewed ford limits.
+Hover identifies the hazard type. A red conditional ford is not presented
+as an absolute barrier, and missing routing height is not labelled water.
+Owner testing on the native client remains the gameplay acceptance boundary.
+
+
+### House-corner local refusals and diagnostic entrances
+
+The 2026-10-23 032606 report records Strv 81 travelling 20.535 m with only
+1.473 m net displacement in one eight-second window. Its later blocked
+connector has nine hard pivot refusals and one clear pivot whose forward
+translation hits the house. A clear rotation is not a complete usable action.
+`BotRuntime._report_blocked_planner` now recognizes that mixed exhaustion only
+when every pivot is refused or paired with a same-decision, same-time native
+translation collision. Unknown, deferred, other-heading and traffic-only
+receipts do not qualify. The existing per-Bot finite retry/retirement owner
+handles it; no collision threshold, global obstacle, navigation scoring, route
+strategy or recovery duration is changed. Focused feedback tests prove this
+handoff, not Windows driving acceptance or the absence of every recovery loop.
+
+Normal launcher entry selects basic logging; `START_DIAGNOSTIC_TEST.bat`
+selects `--diagnostics` for that process and its children. Basic mode records
+small stationary-movement summaries without constructing nested motion
+histories. Bulk geometry traces use the opt-in mode and independent 2 MiB
+per-minute / 32 MiB process budgets, including conservative fragment overhead.
+Oversized records are explicitly suppressed rather than silently truncated;
+key events and errors do not share this diagnostic budget. Reference trace
+checks explicitly opt in; basic-mode, budget and launcher-entry regressions
+exercise the production defaults separately.
+
+`tools/audit_optional_internal_resources.py` inspects the six unavailable
+vehicle identities in the optional official ASIA 2.4.1 #980 resource directory.
+`tools/evidence/internal_mesh_0922/optional-pc241-inventory.json` records all 45
+script/vehicle packages checked, including HD packages, resource counts and
+exact named-surface leads. All six contain modern Havok TAG0 collision assets;
+the only matched module name is `surveyingDevice`. The existing indexed
+interior decoder accepts old packfiles, not these tagfiles, and the inventory
+finds no named ammo bay, fuel tank, engine/transmission or crew geometry to
+register. This is not proof that every possible external source is empty.
+No interior coordinates or same-tank aliases are fabricated, and the supported
+runtime remains PC Chinese HD 0.9.22.0.1 #1513.
+
+
+## Crew delivery, effective preview and save initialization
+
+The launcher recruit handoff now selects a complete passport group matching the
+requested gender from the native nation configuration. Normal groups are tried
+before premium passport groups. The pinned client keeps ordinary female names
+in its premium passport pool; this flag does not refer to the trained vehicle.
+All three group indices are passed explicitly to the native factory. Missing
+or incomplete groups leave the request pending. Existing request receipts and
+atomic garage delivery remain responsible for preventing duplicate recruits.
+
+`tools/export_crew_passports.py CLIENT_ROOT OUTPUT.json` exports the pinned
+resource groups. Run `tools/audit_native_crew_grants.py CLIENT_ROOT OUTPUT.json`
+with Python 2.7 to execute the exact native factory and codec across all ten
+nations, both genders, all primary seats of a representative vehicle per nation,
+and 50/75/100 training. The reviewed run covered 228 presets. Python bytecode
+execution with resource-backed groups is not a live game acceptance test.
+
+The effective preview is a read-only window with setting, effective value and
+source columns. It resolves every selected team/class/slot using the same rule
+matching order as the runtime, groups identical values and origins, and keeps
+slot exceptions visible. Only rules already added to the current document draft
+are included; unsubmitted form fields are excluded. Opening or translating the
+preview never saves or applies the document. Missing difficulty is reported as
+inherited room difficulty, retaining the existing sampled rating distribution.
+Explicit crew presets suppress the legacy crew-level display. Ammunition ratios
+use colon-separated values; all zero means no ammunition. Fixed vehicle gun
+information is read only when research is resolvable, never guessed from Regular.
+
+The Saves tab has two rows of four equally sized buttons. Initialize save is the
+last button in the second row. It refuses a running game and defaults its warning
+to No. It resets only the selected save, preserving its id, name, mode and earnings
+multiplier. Initial funds and progress revert to the existing new-save defaults.
+Fully unlocked saves therefore use the current improved equipment, matching
+directive and directive auto-resupply defaults; users can still change those.
+
+Before replacement, owned live states, recovery generations and pending inboxes
+are backed up to an ordinary ZIP under a unique `pre-initialize-*` directory.
+Interrupted owned writes are moved aside too. A metadata write failure restores
+the old files. Shared vehicle/tactics profiles and other saves are not reset.
+An explicit metadata marker prevents the default save from importing legacy
+state again, in both the client path resolver and the launcher ledger reader.
+The existing Restore save action can restore the automatic backup.
+
+Verification includes native factory/codec checks, recruit retry/receipt tests,
+all-scope preview/source tests, language changes, reset ownership/rollback/
+legacy migration tests, and actual frozen editor smoke receipts for the preview,
+initialization/backup and two-by-four button layout. Worker behavior and difficulty
+sampling are unchanged in this revision. No user save was initialized during
+verification; all reset tests use temporary directories.
+
+
+## Launcher recruitment capacity and nation presentation
+
+Crew choices now use the existing player-standard vehicle predicate, preserving
+supported retired vehicles while excluding missing-resource entries and clones.
+The pinned catalogue has 581 usable choices from 614 definitions. Submission
+revalidates that catalogue. Nation display captions/order are shared by Members
+and Garage; serialization continues to use the unchanged native nation indices.
+
+Recruit capacity is authoritative from the saved garage ledger: berths minus
+encoded barracks passports minus pending requests without a durable delivery receipt. Empty
+new saves use the existing economy defaults and an explicit initial_berths
+metadata override. The first garage reads that override before restoring any
+saved ledger. Serving and dismissed crew are not counted as barracks occupants.
+
+Free blocks add exactly 16, do not change balances, and queue the existing
+account-change notification. Crew/capacity edits share an OS-released per-save
+lock and atomic writes. Full, malformed, unreadable or overflowing data refuses
+an edit. Client delivery retains its independent berth check and pending retry.
+Backup restore now restores initial metadata state while preserving destination
+identity/name and an explicit legacy-import block, so pre-start grants restore
+correctly. Initialization removes the override through existing metadata reset.
+Regression coverage includes receipt retries, repeated/concurrent edits, slot
+isolation, running-game refusal, write failures, first start, restore/reset,
+language round trips and mandatory frozen-editor capacity/nation receipts.
+
+## Recovery return budget and blocked-route retries
+
+The Lakeville 2026-10-23 23:07 report shows Bot 2 (110) remaining near
+(-281, -88) after switching from west valley to town and back. Bot 9 (268)
+eventually passed; that is not proof of reliable recovery. Contact escapes
+now retain failed world headings through pivots. A shared adapter travel
+receipt survives route/waypoint changes and measures realised horizontal
+forward progress, rather than planned distance or track travel. Wreck recovery
+backtracking can spend at most half that forward high-water mark. Returning
+to an old endpoint earns no new credit. Initial independent reverse exits
+and tactical withdrawal remain legal. Live-vehicle traffic does not start a
+wreck-return budget. Departure beyond the existing hull
+clearance distance or Bot retirement releases the local receipt.
+
+Limited reverses use the existing short-escape runtime endpoint contract,
+including cached decision retirement and final native collision vetoes.
+The macro planner still skips a gate after the existing bounded attempt;
+it now respects failed-route cooldowns when every alternative is exhausted,
+instead of immediately alternating between failed lanes. Local checked
+recovery continues while those cooldowns expire.
+
+The diagnostic entrance additionally emits a compact pocket receipt at most
+once per 15 seconds per trapped Bot, even when the bulk history budget is
+exhausted. Basic entry does not construct this record. Water diagnostics
+report an absent engine entity as not_present instead of dereferencing None;
+the actual water classification and movement rules are unchanged. Regression
+tests cover realised/blocked travel, repeated endpoint oscillation, route
+changes, cached endpoints, initial reverse, withdrawal, contact pivots,
+route cooldown exhaustion, diagnostic gating and missing entities. These
+tests do not prove native clearance or gameplay timing in the reported jam;
+the rebuilt Windows package still requires the player's scene acceptance.
+# Native world entry and diagnostic continuity
+
+The world bridge accepts descriptor bounds/heights as separate spans and assembles
+the same 19-value law snapshot in C++. Its callback implementation is shared,
+while each synchronous solve owns its filters, hit handles and effects, including
+reentry and failures after destruction. Flat snapshots remain the independent
+reference contract; world host checks compare both representations before effects.
+This reduces Python entry work; it does not establish improved native frame pacing.
+
+Detailed geometry budgets restart at a distinct round start, never on a duplicate
+start notification or round end. Artillery gate histories use the same bounded,
+fragmented writer and coalesce unchanged reasons/targets/fire sequences for 15s.
+Diagnostic mode separately retains compact, per-hull outcomes after 15s within
+an 8m pocket, at most once per 30s. These post-contact records preserve nearby
+hull poses, recovery controls, navigation status and recent contact acceptance
+without issuing extra engine queries or consuming the bulk-history quota.
+
+
+# Shared route cleanup and fixed editor endpoints
+
+The reviewed owner profile 1 now supplies restored seven-point Murovanka routes
+for both teams. Himmelsdorf rear-guard lanes retain their original identities
+and include the final owner-reviewed ten-point park-side travel in both
+directions. Both teams exclude light tanks from rear_guard and heavy tanks from
+rail; other enabled variants and parking are unchanged. The shared defaults run
+between fixed own/enemy spawn anchors inside the base circles, without waiting
+data. First-run/reset defaults and the local Default adopt the same complete
+reviewed profile before profile 1 is removed. The
+original baked route catalog and collision data remain unchanged. Disabled class records retain their
+allocation exclusions, follow shared travel coordinates and contain no waiting
+flags, durations or places. Independent enabled class travel and parking survive.
+
+The editor creates own/enemy spawn endpoints up front, never relocates submitted
+points on save, and protects endpoints against drag, delete, insertion outside
+the route, import and persistence. Legacy reviewed capture-area terminals remain
+valid; asymmetric capture/spawn maps refuse symmetry. Blank clicks cannot add
+travel points. Shift-click and the insert button share terminal-safe insertion.
+Selection does not checkpoint or clear redo; a drag checkpoints once. Waiting
+and SPG clicks keep their explicit existing behavior. Immutable Default upgrade
+refresh precedes retired-identity validation; invalid independent plans are not
+silently replaced. These authoring/storage changes do not alter recovery,
+pressure allocation, collision or physical motion laws. Actual gameplay of the
+edited routes still requires the exact Windows client.
+
+# Ordered macro route recovery
+
+The server owns an explicit forward/skip/return/return-skip/start-transfer cursor
+over immutable route points. Twenty seconds without existing meaningful travel
+progress moves C to D, then back to B. Reached return points continue toward
+index zero without executing parking. A failed return tries one earlier point;
+a second failure restarts C immediately. No multi-point lane cooldown or permanent
+failure budget can suppress another cycle. Successful forward C/D travel releases
+recovery; changing lanes first reaches the old start and then the new start.
+Route choice retains class exclusions and affinity, preferring less-tried lanes
+without turning visit counts into a refusal. Entering a new traversal clears stale
+wait and cursor history; coincident starts hand over in the same order.
+
+Combat, urgent tactical actions, human commands and unavailable/immobilized poses
+pause the clock rather than erase it. Resumption rebases the connector on the
+realised pose without crediting combat displacement as recovery progress. Disk
+crossings require consecutive grounded observations no more than two seconds
+apart. Pressure lease expiry, renewal and donation cannot replace an active
+recovery; finishing it restores normal eligibility. Death and round reset prune
+all transient recovery state. A recovery reaching the terminal restores the
+existing capture-circle handoff in that same order. Singleton automatic goals
+and refusal of an optional small parking place retain their separate owners.
+
+Engine-free tests exercise the complete fifteen-minute retry sequence, every
+phase boundary, return success/failure, missing D/A/alternative cases, class
+exclusions, fresh waiting on the new lane, combat displacement, pressure release,
+terminal handoff, telemetry revision stability and cleanup. Existing local motion,
+contact and native-query checks remain required. The launcher stages the new
+server module explicitly and final package verification checks its exact source.
+These tests prove control intent, not actual clearance through live wrecks or
+native gameplay performance; the exact Windows client remains the acceptance
+boundary for the delivered candidate.
