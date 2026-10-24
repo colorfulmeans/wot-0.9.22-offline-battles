@@ -60,7 +60,10 @@ def apply(runtime,state,order,now):
         if not active or active['kind']!='defense':
             state['_authored_spg_resume']=copy.deepcopy(active)
             state['_authored_spg_return_zone']=copy.deepcopy(state.get('_authored_spg_zone') or zone)
-            state['_authored_spg_return_initial']=copy.deepcopy(state.get('_authored_spg_used_initial') or state.get('_spg_initial'))
+            used=state.get('_authored_spg_zone') or zone
+            initial=state.get('_spg_initial') or {}
+            prior=initial if used and initial.get('zone')==used['id'] else state.get('_authored_spg_used_initial') or initial
+            state['_authored_spg_return_initial']=copy.deepcopy(prior)
             points=_return_points(active,zone,pose)
             active=_task(runtime,state,'defense',points,('defense',))
             state['_authored_spg_travel']=active
@@ -114,7 +117,7 @@ def apply(runtime,state,order,now):
                 entry=len(points)-1 if separation(pose,zone['point'])<=zone['radius'] else 0
                 active=_task(runtime,state,'deploy',points,identity,entry)
                 state['_authored_spg_travel']=active
-            if active:active['parking']=copy.deepcopy(zone)
+                if active:active['parking']=copy.deepcopy(zone)
     if not active:return order
     if defense and order.get('throttle_override')==0.:return order
     # Existing local combat keeps ownership; defense alone owns the moving hull.
@@ -153,8 +156,10 @@ def apply(runtime,state,order,now):
         destination=xy(active['points'][0]);arrived=False
     if arrived and active['kind']=='deploy':
         used=active.get('parking') or zone
-        state['_authored_spg_zone']=copy.deepcopy(used)
-        state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+        if not active.get('parking_recorded'):
+            state['_authored_spg_zone']=copy.deepcopy(used)
+            state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+            active['parking_recorded']=True
         return order
     if arrived and active['kind']=='defense':return order
     if active['kind']=='attack':

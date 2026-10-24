@@ -272,6 +272,13 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         result=self.apply(move_position=native)
         self.assertEqual(native,result['move_position']);self.assertNotIn('authored_spg_connection',result)
 
+    def test_arrived_parking_does_not_copy_static_network_every_control_frame(self):
+        self.state.update(x=0,z=100);self.apply('artillery_hold')
+        original=self.travel.copy.deepcopy
+        with mock.patch.object(self.travel.copy,'deepcopy',wraps=original) as copies:
+            for unused in range(30):self.apply('artillery_hold')
+        self.assertEqual(0,copies.call_count)
+
     def test_restored_arrived_parking_does_not_deploy_from_base_again(self):
         self.state.update(x=5,z=100)
         result=self.apply('artillery_hold',move_position=(5,0,100),throttle_override=0.)
