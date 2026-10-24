@@ -54,6 +54,10 @@ class RouteTasksMixin:
         settings=bot_tactics.map_settings(self.tactics,self.tactics_map)
         rows=[r for r in settings.get('default_routes',()) if r['team']==bot['team'] and r['id']==family and not r.get('disabled') and r.get('class_tag','all') in (tag,'all')]
         if rows:
+            from gui.mods.offline_lan_0922 import bot_tactics_runtime
+            graph=self._task_graph()
+            rows=[row for row in rows if graph is not None and bot_tactics_runtime.validate_route(graph,row) is None]
+        if rows:
             row=min(rows,key=lambda r:r.get('class_tag','all')!=tag)
             return dict(id=bot_tactics.default_route_id(row),capacity=15,
                 class_weights={tag:1.},waypoints=[point(p) for p in row['points']])
@@ -100,7 +104,7 @@ class RouteTasksMixin:
         source = route.get('waypoints') or []
         state = self._route_states.get(bot['id']) or {}
         index = max(0, min(int(state.get('index', 0))-1, len(source)-1))
-        config = bot_tactics.route_config(self.tactics, self.tactics_map, route.get('id'), bot['team'])
+        config = bot_tactics.route_config(self.tactics, self.tactics_map, route.get('id'), bot['team'],source)
         junction = -1
         if config and config.get('defense'):
             junction = route_network.nodes(config).index(config['defense']['junction'])

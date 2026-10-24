@@ -127,6 +127,17 @@ class RouteTaskTests(unittest.TestCase):
         self.assertEqual(base['point'],o['move_position'])
         self.assertEqual('base_defense',o['combat_mode'])
 
+    def test_rejected_default_edit_cannot_attach_its_branch_to_fallback_geometry(self):
+        p,b=self.scene();route=p._task_route(b);route['id']='central_streets'
+        p.tactics_map='08_ruinberg'
+        raw=dict(id='central_streets',team=1,points=[[0,0,0],[50,50,0],[0,300,0]],node_ids=['a','b','c'],
+            defense=dict(junction='b',points=[[50,50,0],[-80,80,0],[-100,0,0]]))
+        p.tactics={'maps':{'08_ruinberg':dict(default_routes=[raw])}}
+        base=dict(base_id='own',point=dict(x=-100,y=0,z=0),radius=30)
+        task=p._task_begin(b,'defense',base,now=0.)
+        self.assertNotIn(dict(x=-80.,y=0.,z=80.),task['points'])
+        self.assertEqual(base['point'],task['points'][-1])
+
     def test_defense_branch_has_stable_identity_after_insertion(self):
         route=dict(points=[[0,0,0],[0,100,0],[0,200,0]],node_ids=['a','b','c'],
                    defense=dict(junction='b',points=[[0,100,0],[-100,0,0]]))
