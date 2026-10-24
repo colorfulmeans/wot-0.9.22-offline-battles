@@ -48,7 +48,7 @@ class CatalogTests(unittest.TestCase):
             for routes in graph['routes'].values():
                 seen.update(route['id'] for route in routes)
         self.assertEqual(seen, set(labels.ROUTE_NAMES))
-        self.assertEqual(95, len(seen))
+        self.assertEqual(96, len(seen))
         for key in seen:
             self.assertNotEqual(key, labels.route_label(key, 'zh'))
             self.assertNotIn('_', labels.route_label(key, 'en'))

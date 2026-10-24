@@ -2015,8 +2015,9 @@ def validate_downhill_spawn_ingress(graph, record, legacy):
 def expand_stationary_routes(graph, routes, bases, legacy):
     """Turn a tactical hold anchor into a graph-connected locomotion route.
 
-    A stationary authoring anchor describes a hold, not the drive from spawn.
-    A baked route must contain that drive.  Join the team's safe
+    Himmelsdorf's mature ``rear_guard`` annotation is intentionally one point:
+    it describes an artillery hold, not the drive from spawn.  A baked route is
+    a different contract and must contain that drive.  Join the team's safe
     spawn anchor to the projected hold over validated graph links instead of
     shipping a one-point route or weakening the release gate.
     """

@@ -154,6 +154,5 @@ class NavigationResolutionEvidenceTests(unittest.TestCase):
         altered['routes']['1'][0]['waypoints'][1][0]+=.1
         with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
         altered=copy.deepcopy(new)
-        retired=next(r for r in old['routes']['1'] if r['id']=='rear_guard')
-        altered['routes']['1'].append(retired)
+        altered['routes']['1']=[r for r in altered['routes']['1'] if r['id']!='rear_guard']
         with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)

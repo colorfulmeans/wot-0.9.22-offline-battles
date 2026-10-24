@@ -37,6 +37,12 @@ class MiddleBridgeTests(unittest.TestCase):
             entry['resource_sha256'] = identity
             entry['default_routes'][0]['disabled'] = True
             expected = copy.deepcopy(entry)
+            # Disabled travel follows the matching shared path and owns no waits.
+            for row in expected['default_routes']:
+                if not row.get('disabled'):continue
+                shared=next(r for r in expected['default_routes'] if r['team']==row['team']
+                    and r['id']==row['id'] and r.get('class_tag','all')=='all')
+                row['points']=[p[:2]+[0] for p in shared['points']]
             expected['resource_sha256'] = cfg.MAPS['84_winter']['resource_sha256']
             self.assertEqual(expected, cfg.canonical(profile)['maps']['84_winter'])
         entry['resource_sha256'] = '0'*64

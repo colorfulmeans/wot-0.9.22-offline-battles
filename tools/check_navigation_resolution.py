@@ -82,22 +82,10 @@ def write_native_input(path, graph, cases):
     path.write_text('\n'.join(rows)+'\n', encoding='ascii')
 
 
-def retained_route_catalog(graph, name):
-    routes=copy.deepcopy(graph.get('routes'))
-    # The owner retired this entire lane for both teams. Every other route
-    # remains byte-for-value identical to the collision-resolution baseline.
-    if name=='04_himmelsdorf':
-        for rows in routes.values():
-            rows[:]=[r for r in rows if r['id']!='rear_guard']
-    return routes
-
-
 def verify_retained_gameplay(old, new, name):
     from rebake_navigation_resolution import GAMEPLAY_FIELDS
     for key in GAMEPLAY_FIELDS:
-        if key == 'routes':
-            assert retained_route_catalog(old,name)==new.get(key),(name,key)
-        elif key != 'spawn_formations':
+        if key != 'spawn_formations':
             assert old.get(key) == new.get(key), (name, key)
     expected=copy.deepcopy(old.get('spawn_formations'))
     if expected != new.get('spawn_formations'):

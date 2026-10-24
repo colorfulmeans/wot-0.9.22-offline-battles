@@ -13,10 +13,10 @@
       "routes": 14
     },
     "04_himmelsdorf": {
-      "digest": "e74392f81e864be2a09367c604b2b33f94adf675a9f93a769bc040369f06a8de",
+      "digest": "b86be75e0cce707e410f2bdf5ec6c21c42e0bde878b2515ba5578f95a131a410",
       "parking_groups": 0,
-      "points": 178,
-      "routes": 14
+      "points": 210,
+      "routes": 16
     },
     "05_prohorovka": {
       "digest": "6b9303c109f37607427412b8ba873d1e95a4ca7a62870d74c24dc3f8ffff1777",
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "388b992a61f30a0f81b2357b6e0941bdb53de4824bda32c08d5a7511f4c3d1c6",
-  "source": "Reviewed owner profile 1: restored Murovanka; removed retired Himmelsdorf; disabled travel aligned without waiting."
+  "profile_digest": "f70c1ffdbb7e380cbfaa97cabfdbd5e05f4b76bab2e9e1c6140cc22e78272541",
+  "source": "Reviewed owner profile 1: restored Murovanka; restored disabled Himmelsdorf rear guard with fixed base endpoints; disabled travel aligned without waiting."
 }

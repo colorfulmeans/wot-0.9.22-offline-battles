@@ -66,6 +66,16 @@ HIMMELSDORF = {
 					(17.1, 300.0, 0),
 				),
 			},
+			{
+				'id': 'rear_guard',
+				'capacity': 2,
+				'risk': 0.08,
+				'role_weights': {
+					'brawler': 0.00, 'support': 0.18, 'flanker': 0.00,
+					'sniper': 0.28, 'scout': 0.00, 'artillery': 1.00,
+				},
+				'waypoints': ((-80.0, -270.0, 1),),
+			},
 		),
 		2: (),
 	},
@@ -80,9 +90,20 @@ def _reverse_route(route):
 	return result
 
 
-# The three retained fighting corridors are bidirectional.
-HIMMELSDORF['routes'][2] = tuple(_reverse_route(route)
-	for route in HIMMELSDORF['routes'][1])
+# All three fighting corridors are bidirectional on this version of the map.
+# The rear guard is anchored separately because each base needs its own cover.
+_north_routes = []
+for _route in HIMMELSDORF['routes'][1]:
+	if _route['id'] == 'rear_guard':
+		_north = _reverse_route(_route)
+		_north['waypoints'] = ((45.0, 270.0, 1),)
+	else:
+		_north = _reverse_route(_route)
+	_north_routes.append(_north)
+HIMMELSDORF['routes'][2] = tuple(_north_routes)
+del _north_routes
+del _route
+del _north
 
 
 TACTICAL_MAPS = {

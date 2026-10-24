@@ -22,7 +22,9 @@ def profile():
     raw=cfg.empty('Editor regression')
     raw['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':2.5,'lead_error':0.0})]
     graph=_graph()
-    points=graph['routes']['1'][0]['waypoints'][:4]
+    points=[list(p) for p in graph['routes']['1'][0]['waypoints'][:4]]
+    points[0]=graph['spawn_anchors'][0]+[0]
+    points.append(graph['spawn_anchors'][1]+[0])
     raw['maps']['08_ruinberg']={
         'mode':'regular','resource_sha256':cfg.MAPS['08_ruinberg']['resource_sha256'],
         'routes':[dict(id='west',label='West city',team=1,classes=['heavyTank'],slots=[],policy='fixed',capacity=6,weight=1,
@@ -132,9 +134,16 @@ class TacticsContractTests(unittest.TestCase):
                     for tag in ('all',)+cfg.CLASSES:
                         entry['default_routes'].append(dict(id=identity,team=int(team),class_tag=tag,
                             label='测试路线',points=copy.deepcopy(points)))
+                        route=entry['default_routes'][-1]
+                        route['points'][0][:2]=graph_data(name)['spawn_anchors'][int(team)-1]
+                        references=[r for r in cfg.default_map(name)['default_routes'] if r['team']==int(team) and r['id']==identity]
+                        baseline=next((r for r in references if r.get('class_tag','all')==tag),next(r for r in references if r.get('class_tag','all')=='all'))
+                        route['points'][-1][:2]=baseline['points'][-1][:2]
             for i in range(32):
                 entry['routes'].append(dict(id='r_%d'%i,label='测试路线',team=1,
                     classes=list(cfg.CLASSES[:-1]),points=copy.deepcopy(points)))
+                entry['routes'][-1]['points'][0][:2]=graph_data(name)['spawn_anchors'][0]
+                entry['routes'][-1]['points'][-1][:2]=graph_data(name)['spawn_anchors'][1]
             for i in range(48):
                 entry['positions'].append(dict(id='p_%d'%i,label='测试炮位',team=1,
                     point=[x,z],radius=16,heading=0,priority=5))

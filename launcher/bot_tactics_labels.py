@@ -80,7 +80,7 @@ _ROUTE_ZH = {
     'north_ridge': '北侧山脊', 'north_road': '北侧道路',
     'north_runway': '北侧跑道', 'outskirts': '城郊', 'park': '公园',
     'pit': '深坑', 'plateau': '高原', 'rail': '铁路线',
-    'rail_line': '铁路沿线', 'railway': '铁路',
+    'rail_line': '铁路沿线', 'railway': '铁路', 'rear_guard': '后方守备',
     'ridge': '山脊', 'rim_east': '东侧边缘', 'rim_west': '西侧边缘',
     'river': '河流', 'river_crossing': '渡河点', 'river_town': '河畔城镇',
     'south_bridge': '南侧桥梁', 'south_coast': '南侧海岸',
@@ -101,7 +101,7 @@ _ROUTE_ZH = {
 ROUTE_NAMES = {key: (value, key.replace('_', ' ').capitalize())
                for key, value in _ROUTE_ZH.items()}
 ROUTE_NAMES.update({
-    'banana': ('香蕉弯道', 'Banana bend'),
+    'banana': ('香蕉弯道', 'Banana bend'), 'rear_guard': ('后方守备', 'Rear guard'),
     'rail': ('铁路线', 'Rail line'), 'rim_east': ('东侧边缘', 'Eastern rim'),
     'rim_west': ('西侧边缘', 'Western rim'),
     'tower_east': ('铁塔东侧', 'East of the tower'),

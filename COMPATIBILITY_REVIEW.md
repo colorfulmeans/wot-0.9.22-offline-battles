@@ -10477,9 +10477,10 @@ without issuing extra engine queries or consuming the bulk-history quota.
 # Shared route cleanup and fixed editor endpoints
 
 The reviewed owner profile 1 now supplies restored seven-point Murovanka routes
-for both teams. Retired Himmelsdorf rear-guard lanes are absent from the live
-annotation registry, navigation route catalog and immutable defaults. The pinned
-vendor snapshot remains provenance only. Disabled class records retain their
+for both teams. Himmelsdorf rear-guard lanes retain their original identities
+and allocation exclusions. Their editable shared defaults now run between fixed
+own/enemy spawn anchors inside the base circles; waiting data is cleared. The
+original baked route catalog and collision data remain unchanged. Disabled class records retain their
 allocation exclusions, follow shared travel coordinates and contain no waiting
 flags, durations or places. Independent enabled class travel and parking survive.
 

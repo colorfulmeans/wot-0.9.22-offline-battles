@@ -263,8 +263,12 @@ class BotAiPortTests(unittest.TestCase):
                             team_routes[2][route_id][key])
 
         himmelsdorf = maps.TACTICAL_MAPS['04_himmelsdorf']
-        for routes in himmelsdorf['routes'].values():
-            self.assertEqual({'banana','hill','rail'},{r['id'] for r in routes})
+        rear_one = next(route for route in himmelsdorf['routes'][1]
+                        if route['id'] == 'rear_guard')
+        rear_two = next(route for route in himmelsdorf['routes'][2]
+                        if route['id'] == 'rear_guard')
+        self.assertEqual(((-80.0, -270.0, 1),), rear_one['waypoints'])
+        self.assertEqual(((45.0, 270.0, 1),), rear_two['waypoints'])
 
     def test_cover_contract_is_plain_data_and_deterministic(self):
         result = cover.score_candidates([{
@@ -426,7 +430,7 @@ class BotAiPortTests(unittest.TestCase):
         first = director.register_profile(501, 1, profile, 'Battery one')
         second = director.register_profile(502, 1, profile, 'Battery two')
 
-        self.assertIn(first['route']['id'],('banana','hill','rail'))
+        self.assertEqual('rear_guard', first['route']['id'])
         self.assertNotEqual(first['route']['id'], second['route']['id'])
         self.assertEqual({}, director.route_usage)
 

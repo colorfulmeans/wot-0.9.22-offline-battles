@@ -128,16 +128,29 @@ class SharedRouteDataTests(unittest.TestCase):
             store=storage.Store(temp)
             old=storage.contract.default_profile()
             old['maps']['04_himmelsdorf']['default_routes'].append(dict(
-                id='rear_guard',team=1,disabled=True,points=[[46.,270.,0],[70.,346.,0]]))
+                id='obsolete_debug_route',team=1,disabled=True,points=[[46.,270.,0],[70.,346.,0]]))
             store.active_path.write_text(storage.contract.dumps(old))
             self.assertEqual(storage.contract.default_profile(),store.active())
 
-    def test_retired_routes_are_absent_and_disabled_rows_have_no_waits(self):
+    def test_restored_rear_guard_keeps_fixed_endpoints_and_disabled_rows_have_no_waits(self):
         from gui.mods.offline_lan_0922.ai.maps import TACTICAL_MAPS
         profile=storage.contract.default_profile()
         for team in (1,2):
-            self.assertNotIn('rear_guard',[r['id'] for r in TACTICAL_MAPS['04_himmelsdorf']['routes'][team]])
-            self.assertNotIn('rear_guard',[r['id'] for r in storage.graph_data('04_himmelsdorf')['routes'][str(team)]])
+            self.assertIn('rear_guard',[r['id'] for r in TACTICAL_MAPS['04_himmelsdorf']['routes'][team]])
+            self.assertIn('rear_guard',[r['id'] for r in storage.graph_data('04_himmelsdorf')['routes'][str(team)]])
+        graph=storage.graph_data('04_himmelsdorf')
+        restored=[r for r in profile['maps']['04_himmelsdorf']['default_routes'] if r['id']=='rear_guard']
+        self.assertEqual(2,len(restored))
+        for row in restored:
+            self.assertTrue(row['disabled'])
+            self.assertEqual(graph['spawn_anchors'][row['team']-1],row['points'][0][:2])
+            self.assertEqual(graph['spawn_anchors'][2-row['team']],row['points'][-1][:2])
+            self.assertTrue(all(len(p)==3 and p[2]==0 for p in row['points']))
+        with tempfile.TemporaryDirectory() as temp:
+            store=storage.Store(temp)
+            editable=storage.contract.default_profile('1')
+            store.save(editable,apply=False)
+            self.assertEqual(editable,store.read('1'))
         for name,entry in profile['maps'].items():
             for row in entry['default_routes']:
                 if not row.get('disabled'):continue
