@@ -139,10 +139,11 @@ class SharedRouteDataTests(unittest.TestCase):
             self.assertIn('rear_guard',[r['id'] for r in TACTICAL_MAPS['04_himmelsdorf']['routes'][team]])
             self.assertIn('rear_guard',[r['id'] for r in storage.graph_data('04_himmelsdorf')['routes'][str(team)]])
         graph=storage.graph_data('04_himmelsdorf')
-        restored=[r for r in profile['maps']['04_himmelsdorf']['default_routes'] if r['id']=='rear_guard']
+        restored=[r for r in profile['maps']['04_himmelsdorf']['default_routes'] if r['id']=='rear_guard' and r.get('class_tag','all')=='all']
         self.assertEqual(2,len(restored))
         for row in restored:
-            self.assertTrue(row['disabled'])
+            self.assertFalse(row.get('disabled',False))
+            self.assertEqual(10,len(row['points']))
             self.assertEqual(graph['spawn_anchors'][row['team']-1],row['points'][0][:2])
             self.assertEqual(graph['spawn_anchors'][2-row['team']],row['points'][-1][:2])
             self.assertTrue(all(len(p)==3 and p[2]==0 for p in row['points']))

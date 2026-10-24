@@ -10478,8 +10478,12 @@ without issuing extra engine queries or consuming the bulk-history quota.
 
 The reviewed owner profile 1 now supplies restored seven-point Murovanka routes
 for both teams. Himmelsdorf rear-guard lanes retain their original identities
-and allocation exclusions. Their editable shared defaults now run between fixed
-own/enemy spawn anchors inside the base circles; waiting data is cleared. The
+and include the final owner-reviewed ten-point park-side travel in both
+directions. Both teams exclude light tanks from rear_guard and heavy tanks from
+rail; other enabled variants and parking are unchanged. The shared defaults run
+between fixed own/enemy spawn anchors inside the base circles, without waiting
+data. First-run/reset defaults and the local Default adopt the same complete
+reviewed profile before profile 1 is removed. The
 original baked route catalog and collision data remain unchanged. Disabled class records retain their
 allocation exclusions, follow shared travel coordinates and contain no waiting
 flags, durations or places. Independent enabled class travel and parking survive.

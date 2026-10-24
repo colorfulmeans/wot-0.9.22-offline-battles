@@ -13,10 +13,10 @@
       "routes": 14
     },
     "04_himmelsdorf": {
-      "digest": "b86be75e0cce707e410f2bdf5ec6c21c42e0bde878b2515ba5578f95a131a410",
+      "digest": "395823deb7a5f6cf20ddcb40b23722dffcc3f27d9642c4d64d9fd0d74eb70ff2",
       "parking_groups": 0,
-      "points": 210,
-      "routes": 16
+      "points": 248,
+      "routes": 20
     },
     "05_prohorovka": {
       "digest": "6b9303c109f37607427412b8ba873d1e95a4ca7a62870d74c24dc3f8ffff1777",
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "f70c1ffdbb7e380cbfaa97cabfdbd5e05f4b76bab2e9e1c6140cc22e78272541",
-  "source": "Reviewed owner profile 1: restored Murovanka; restored disabled Himmelsdorf rear guard with fixed base endpoints; disabled travel aligned without waiting."
+  "profile_digest": "885fb513c91a916322c41568b789aea668b15267362314c13273f4c47900bc77",
+  "source": "Approved complete owner profile 1: final ten-point Himmelsdorf rear guard; light tanks exclude rear guard and heavy tanks exclude rail on both teams; all other maps retained."
 }

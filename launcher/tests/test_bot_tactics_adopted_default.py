@@ -25,6 +25,28 @@ class AdoptedDefaultTests(unittest.TestCase):
                 self.assertEqual(expected['routes'],len(entry['default_routes']))
                 self.assertEqual(expected['points'],sum(len(r['points']) for r in entry['default_routes']))
 
+    def test_final_rear_guard_and_class_exclusions_survive_profile_one_deletion(self):
+        profile=storage.contract.default_profile()
+        entry=profile['maps']['04_himmelsdorf']
+        rows=entry['default_routes']
+        expected=[[2.0,-250.0,0],[-54.5749,-217.1544,0],[-125.8231,-164.8773,0],
+                  [-130.4093,-62.6351,0],[-149.5248,0.9548,0],[-127.1684,159.9135,0],
+                  [-123.0571,266.5681,0],[-93.5783,318.1559,0],[5.8701,326.0228,0],[70.0,346.0,0]]
+        for team,points in ((1,expected),(2,list(reversed(expected)))):
+            rear=next(r for r in rows if r['team']==team and r['id']=='rear_guard' and r.get('class_tag','all')=='all')
+            self.assertEqual(points,rear['points'])
+            self.assertFalse(rear.get('disabled',False))
+            for identity,tag in (('rear_guard','lightTank'),('rail','heavyTank')):
+                excluded=next(r for r in rows if r['team']==team and r['id']==identity and r.get('class_tag')==tag)
+                self.assertTrue(excluded['disabled'])
+        with tempfile.TemporaryDirectory() as temp:
+            store=storage.Store(temp)
+            store.save(storage.contract.default_profile('1'),apply=True)
+            store.delete('1')
+            self.assertEqual(['Default'],store.names())
+            self.assertEqual(profile,store.active())
+            self.assertEqual(profile,storage.Store(temp).active())
+
     def test_every_enabled_route_and_parking_exit_has_no_silent_fallback(self):
         profile=storage.contract.default_profile()
         for name in profile['maps']:
