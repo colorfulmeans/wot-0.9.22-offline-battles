@@ -75,7 +75,8 @@ def run(module, spaceID, pos, yaw, vel, td=None, airborne=False, dt=0.04,
     ground_batch = destructibles_sensor.ground_filter_batch_1513(ground_provider)
     dispatch = _WorldDispatch((module, query, state, V, pos, yaw, bounds,
         heights, motion_yaw, spaceID, vel, td, crush, allow_kinetic,
-        kinetic_speed, commit_enabled, trace, hits, ground_batch, ground_provider)).dispatch
+        kinetic_speed, commit_enabled, trace, hits, ground_batch, ground_provider,
+        BigWorld)).dispatch
     # An exception propagates. Replaying the law could repeat destruction.
     scope = query.begin_ray_scope(reuse_readonly=not commit_enabled) if query is not None else None
     try:
@@ -104,7 +105,7 @@ class _WorldDispatch(object):
     def dispatch(self, op, rows):
         (module, query, state, V, pos, yaw, bounds, heights, motion_yaw,
          spaceID, vel, td, crush, allow_kinetic, kinetic_speed, commit_enabled,
-         trace, hits, ground_batch, ground_provider) = self.values
+         trace, hits, ground_batch, ground_provider, BigWorld) = self.values
         if query is not None:
             query._live()
         if op == 1:
