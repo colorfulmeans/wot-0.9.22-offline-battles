@@ -1545,6 +1545,9 @@ class PayloadStagingTest(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(core.server_script(port_version, self.target)),
                 port_version)
+            self.assertTrue(os.path.isfile(os.path.join(
+                os.path.dirname(core.server_script(port_version,self.target)),
+                'server_route_recovery.py')))
 
     def test_windows_distribution_guard_rejects_map_studio_paths(self):
         script_path = os.path.join(

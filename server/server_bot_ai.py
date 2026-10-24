@@ -21,6 +21,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
 
 from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
+from server_route_recovery import RouteRecoveryMixin, ROUTE_ATTEMPT_SECONDS, MIN_ROUTE_AFFINITY
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -56,13 +57,13 @@ CLOSE_THREAT_FOCUS_LIMIT = 4
 ROUTE_REBALANCE_SECONDS = 60.0
 # Cover the next scheduled evaluation, including one server-tick boundary.
 ROUTE_LEASE_SECONDS = ROUTE_REBALANCE_SECONDS + 1.0
-WRECK_ROUTE_WAIT_SECONDS = 20.0
+WRECK_ROUTE_WAIT_SECONDS = ROUTE_ATTEMPT_SECONDS
 WRECK_ROUTE_AVOID_SECONDS = 120.0
 MAX_BASE_DEFENDERS = 3
 BASE_DEFENSE_RELEASE_SECONDS = 3.0
 MAX_BASE_CAPTURERS = 3
 CAPTURE_STAGING_RADIUS = 30.0
-MIN_ROUTE_CLASS_AFFINITY = 0.20
+MIN_ROUTE_CLASS_AFFINITY = MIN_ROUTE_AFFINITY
 RECENT_HIT_SECONDS = 6.0
 RECENT_ATTACKER_SCORE_BONUS = 140.0
 # Target ranking weights.  A lower score wins, so a per-metre term prefers a
@@ -172,7 +173,7 @@ def _order_signature(order):
     return signature
 
 
-class BotPlanner(object):
+class BotPlanner(RouteRecoveryMixin):
     """Server-side route, focus-fire, and last-contact order coordinator."""
 
     def __init__(self):
@@ -186,6 +187,8 @@ class BotPlanner(object):
         self._route_states = {}
         self._route_history = {}
         self._wait_claims = {}
+        self._route_recoveries = {}
+        self._recovery_route_visits = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
@@ -223,6 +226,8 @@ class BotPlanner(object):
         self._route_states = {}
         self._route_history = {}
         self._wait_claims = {}
+        self._route_recoveries = {}
+        self._recovery_route_visits = {}
         self._wreck_route_progress = {}
         self._wreck_route_avoid = {}
         self._route_assignments = {}
@@ -773,6 +778,10 @@ class BotPlanner(object):
                 self._apply_authored_route_order(order, bot, route_point, now)
                 self._handoff_route_terminal(order, bot, capture_targets[team], now)
                 self._reroute_wreck_stall(order, bot, manifest, now)
+                if ((order.get('route_attempt') or {}).get('action') in (
+                        'recovery_complete', 'switch_at_start') and
+                        bot['id'] not in self._route_recoveries):
+                    self._handoff_route_terminal(order, bot, capture_targets[team], now)
                 evidence = order['tactical_evidence']
                 capture_state = self._base_capture.get(team, {})
                 evidence['capture_allocation'] = capture_state.get('allocation')
@@ -908,7 +917,8 @@ class BotPlanner(object):
             changed = stage.get('route_id') != key[1] or stage.get('index') != key[2]
             if owner is None or departed or (changed and not claim.get('departing')):
                 self._wait_claims.pop(key, None)
-        for states in (self._wreck_route_progress, self._wreck_route_avoid):
+        for states in (self._route_recoveries, self._recovery_route_visits,
+                       self._wreck_route_progress, self._wreck_route_avoid):
             for bot_id in list(states):
                 if bot_id not in live_bots:
                     del states[bot_id]
@@ -1598,6 +1608,8 @@ class BotPlanner(object):
 
     def _capture_staged(self, bot, route_index, target=None):
         """Separate the existing screen gate from capture route completion."""
+        if bot['id'] in self._route_recoveries:
+            return False
         assignment = self._route_assignments.get(bot["id"])
         route = assignment.get("route") if isinstance(
             assignment, dict) else None
@@ -2692,14 +2704,17 @@ class BotPlanner(object):
                 if route_id and route_id not in catalog:
                     catalog[route_id] = route
                     retained_routes.append(route_id)
-        # A physical detour survives a donor's death and pressure rebalance.
+        # An active recovery owns its frozen lane through combat and folding.
+        # Finishing recovery releases this protection for ordinary pressure work.
         for bot in bots:
             assigned = self._route_assignments.get(bot['id'], {})
-            if assigned.get('wreck_detour'):
-                route = assigned['route']
+            if bot['id'] in self._route_recoveries:
+                route = assigned.get('route') or bot.get('route') or {}
                 catalog[str(route.get('id') or '')] = route
                 protected_ids.add(bot['id'])
         for bot in bots:
+            if bot["id"] in self._route_recoveries:
+                continue
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
             assigned = self._route_assignments.get(bot["id"])
@@ -2763,6 +2778,8 @@ class BotPlanner(object):
         if not pressure or max(pressure.values()) <= 0.0:
             self._observe_route_leases(bots, now, 'no_known_pressure')
             for bot in bots:
+                if bot['id'] in self._route_recoveries:
+                    continue
                 assignment = self._route_assignments.get(bot['id']) or {}
                 if _number(assignment.get('until')) > 0.0:
                     assignment['_lease_observation'] = dict(
@@ -2822,6 +2839,8 @@ class BotPlanner(object):
         # the same pressured route in place so its waypoint index survives;
         # only a real route change clears progress below.
         for bot in bots:
+            if bot['id'] in self._route_recoveries:
+                continue
             knows_target = any(self._nearest_route(contact, catalog) == target_route
                                for contact in self._contacts_for_bot(bot, contacts, now))
             assignment = self._route_assignments.get(bot["id"])
@@ -2868,6 +2887,9 @@ class BotPlanner(object):
         for bot in bots:
             check = dict(bot=bot['id'], outcome='eligible')
             candidate_checks.append(check)
+            if bot['id'] in self._route_recoveries or bot['state'].get('route_wreck_blocked'):
+                check['outcome'] = 'route_recovery_in_progress'
+                continue
             if class_counts.get((target_route, bot.get("profile", {}).get("class_tag")), 0) >= 3:
                 check['outcome'] = 'target_class_full'
                 continue
@@ -2982,6 +3004,8 @@ class BotPlanner(object):
     def _observe_route_leases(self, bots, now, outcome, evaluation=True, **values):
         """Record early exits without renewing leases or altering allocation."""
         for bot in bots:
+            if bot['id'] in self._route_recoveries:
+                continue
             lease = self._route_assignments.get(bot['id']) or {}
             if _number(lease.get('until')) <= 0.0:
                 continue
@@ -2991,7 +3015,7 @@ class BotPlanner(object):
             if evaluation:
                 lease['_lease_observation'] = receipt
 
-    def _reroute_wreck_stall(self, order, bot, manifest, now):
+    def _reroute_automatic_goal(self, order, bot, manifest, now):
         """Bound each blocked gate attempt; skip once before changing lanes."""
         bot_id = bot['id']
         state = bot['state']
@@ -3228,7 +3252,7 @@ class BotPlanner(object):
             candidates=entry_receipts, selected_route=str(route.get('id')),
             selected_index=entry, selected_point=_point(route['waypoints'][entry]))
         self._route_assignments[bot_id] = {
-            'route': route, 'until': 0.0, 'wreck_detour': True}
+            'route': route, 'until': 0.0}
         # Join the evaluated entry from the current hull position, rather than
         # restoring a stale failed cursor from an earlier visit to this lane.
         saved = self._route_history.get(bot_id, {}).get(str(route.get('id'))) or {}
@@ -3250,6 +3274,8 @@ class BotPlanner(object):
         self._apply_authored_route_order(order, bot, move, now)
 
     def _route(self, bot, now, stop_before_objective=False):
+        if bot['id'] in self._route_recoveries:
+            return self._cycle_position(bot, now)
         assignment = self._route_assignments.get(bot["id"])
         route = assignment.get("route") if isinstance(assignment, dict) else None
         if not isinstance(route, dict):
@@ -3428,6 +3454,9 @@ class BotPlanner(object):
             route_index=order.get('route_index'), terminal_index=len(points)-1,
             input_mode=order.get('combat_mode'), outcome='no_route')
         order['tactical_evidence']['route_terminal'] = evidence
+        if bot['id'] in self._route_recoveries:
+            evidence['outcome'] = 'route_recovery_in_progress'
+            return
         if not points or route_state is None:
             if order.get('combat_mode') == 'base_capture' and capture_target:
                 arrived = self._inside_base(bot, capture_target)
@@ -3623,6 +3652,8 @@ class BotPlanner(object):
 
     def _apply_authored_route_order(self, order, bot, route_point, now=None):
         """Apply explicit parking/travel instructions without suppressing aim."""
+        if bot['id'] in self._route_recoveries:
+            return
         if order.get('defense_base_id') or order.get('combat_mode') == 'base_capture':
             return
         route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}

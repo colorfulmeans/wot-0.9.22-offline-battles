@@ -170,7 +170,7 @@ class WaitParkingTests(unittest.TestCase):
         first=order(0)
         self.assertEqual(0,first['route_index'])
         self.assertEqual(0,first['move_position']['x'])
-        self.assertNotIn('parking_phase',first)
+        self.assertIsNone(first.get('parking_phase'))
         skipped=order(20)
         self.assertEqual(1,skipped['route_index'])
         self.assertEqual('blocked_timeout',skipped['route_point_skip_reason'])

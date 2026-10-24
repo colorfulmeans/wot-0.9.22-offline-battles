@@ -676,8 +676,17 @@ when strategy requests forward travel, avoid contact escape for a merely
 tangent parallel hull, and include ordinary forward `advance` in the existing
 20-second authored-gate retry budget. Actual overlap and movement into a peer
 retain the original checked escape; holds and explicit team commands remain
-outside the route-stall timer. No global recovery state or replacement route
-law is introduced.
+outside active route travel. The server now sequences macro recovery over the
+unchanged route points: a failed C tries D, then returns to B and earlier points.
+A failed return tries one earlier point before restarting C; there is no exhausted
+cycle stop or failed-lane cooldown. Successful return visits every remaining
+point to the own start before selecting another eligible lane at its first point.
+Combat pauses the attempt clock and preserves its cursor; resumption rejoins
+from the actual hull pose. Returning skips authored waits, while a new traversal
+starts fresh wait clocks. Pressure rebalancing cannot replace an active recovery.
+The existing worker path finder, local motor recovery and collision guards retain
+physical movement ownership. A singleton automatic objective retains its separate
+arrival/fallback policy because it has no ordered return corridor.
 The retained physical boundary also applies the existing ground-exit proof to
 upper hull rays, so leaving a slope is not rejected as an upper wall; real
 walls and beams still require a clear remainder and continue to block.

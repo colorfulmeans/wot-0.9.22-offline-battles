@@ -10499,3 +10499,36 @@ refresh precedes retired-identity validation; invalid independent plans are not
 silently replaced. These authoring/storage changes do not alter recovery,
 pressure allocation, collision or physical motion laws. Actual gameplay of the
 edited routes still requires the exact Windows client.
+
+# Ordered macro route recovery
+
+The server owns an explicit forward/skip/return/return-skip/start-transfer cursor
+over immutable route points. Twenty seconds without existing meaningful travel
+progress moves C to D, then back to B. Reached return points continue toward
+index zero without executing parking. A failed return tries one earlier point;
+a second failure restarts C immediately. No multi-point lane cooldown or permanent
+failure budget can suppress another cycle. Successful forward C/D travel releases
+recovery; changing lanes first reaches the old start and then the new start.
+Route choice retains class exclusions and affinity, preferring less-tried lanes
+without turning visit counts into a refusal. Entering a new traversal clears stale
+wait and cursor history; coincident starts hand over in the same order.
+
+Combat, urgent tactical actions, human commands and unavailable/immobilized poses
+pause the clock rather than erase it. Resumption rebases the connector on the
+realised pose without crediting combat displacement as recovery progress. Disk
+crossings require consecutive grounded observations no more than two seconds
+apart. Pressure lease expiry, renewal and donation cannot replace an active
+recovery; finishing it restores normal eligibility. Death and round reset prune
+all transient recovery state. A recovery reaching the terminal restores the
+existing capture-circle handoff in that same order. Singleton automatic goals
+and refusal of an optional small parking place retain their separate owners.
+
+Engine-free tests exercise the complete fifteen-minute retry sequence, every
+phase boundary, return success/failure, missing D/A/alternative cases, class
+exclusions, fresh waiting on the new lane, combat displacement, pressure release,
+terminal handoff, telemetry revision stability and cleanup. Existing local motion,
+contact and native-query checks remain required. The launcher stages the new
+server module explicitly and final package verification checks its exact source.
+These tests prove control intent, not actual clearance through live wrecks or
+native gameplay performance; the exact Windows client remains the acceptance
+boundary for the delivered candidate.
