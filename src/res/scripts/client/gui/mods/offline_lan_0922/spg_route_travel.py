@@ -76,6 +76,15 @@ def apply(runtime,state,order,now):
     if not defense:
         alive=[s for s in runtime._ordered_states() if s.get('alive',True) and s['team']==state['team']]
         alone=alive and all((s.get('profile') or {}).get('class_tag')=='SPG' for s in alive)
+        if alone:
+            for human in getattr(runtime,'_contact_players',()):
+                if not human.get('alive',True) or human.get('team')!=state['team']:continue
+                tag=(human.get('profile') or {}).get('class_tag') or human.get('class_tag')
+                if not tag:
+                    resolve=getattr(runtime,'_player_vehicle_profile',None)
+                    try:tag=resolve(human).get('class_tag') if callable(resolve) else None
+                    except (ValueError,TypeError,KeyError):tag=None
+                if tag!='SPG':alone=False;break
         sorties=sorted(s['id'] for s in alive if s['team']==state['team'])[:3]
         routes=[r for r in settings.get('routes',()) if r.get('purpose')=='spg_attack' and r['team']==state['team']]
         if alone and routes and state['id'] in sorties:

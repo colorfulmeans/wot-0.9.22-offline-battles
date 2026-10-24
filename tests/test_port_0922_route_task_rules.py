@@ -291,6 +291,16 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.apply('artillery_hold')
         self.assertEqual('attack',self.state['_authored_spg_travel']['kind'])
 
+    def test_live_non_artillery_player_prevents_premature_sortie(self):
+        self.regular['alive']=False
+        self.settings['routes']=[dict(id='attack',team=1,purpose='spg_attack',points=[[0,0,0],[0,300,0]])]
+        human=dict(team=1,alive=True,class_tag='heavyTank')
+        self.runtime._contact_players=[human]
+        self.assertNotIn('_authored_spg_attack',self.state)
+        self.apply();self.assertNotIn('_authored_spg_attack',self.state)
+        human['alive']=False;self.apply()
+        self.assertIn('_authored_spg_attack',self.state)
+
     def test_combat_keeps_existing_order_and_non_artillery_unchanged(self):
         self.apply();self.state.update(x=30,z=50)
         result=self.apply('engage',target_id=9,fire_allowed=True)
