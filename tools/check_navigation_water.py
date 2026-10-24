@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_navigation_resolution import write_native_input
+from check_navigation_resolution import write_native_input, retained_route_catalog
 
 
 def main():
@@ -23,7 +23,8 @@ def main():
         old=json.loads(subprocess.check_output(['git','show',args.baseline_ref+':'+path.as_posix()]))
         for key in ('routes','spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                     'cell_size','origin','width','height'):
-            assert old.get(key)==new.get(key),(path.stem,key)
+            expected=retained_route_catalog(old,path.stem) if key=='routes' else old.get(key)
+            assert expected==new.get(key),(path.stem,key)
         assert new['bake']['water_depth_limit']==new['bake']['shallow_water_threshold']==1.2
         receipts=new['bake']['water_policy_rebake']
         before_layers=[old]+old.get('local_meshes',[])
