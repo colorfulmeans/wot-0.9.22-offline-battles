@@ -3225,6 +3225,7 @@ class TerrainNavigator(object):
 			'corner_selection_receipt': state.get('corner_selection_receipt'),
 			'reached_corner_replans': state.get('reached_corner_replans', 0),
 			'near_corner_handoff': state.get('near_corner_handoff'),
+			'narrow_passage': state.get('narrow_passage_receipt'),
 			'local_target_progress_age_ms': int(max(0.0, float(now) - float(state.get('local_target_progress_at', now))) * 1000.0),
 			'current_cell': cell,
 			'current_cell_height': self.grid._baked_cell_height(cell),
@@ -4172,6 +4173,110 @@ class TerrainNavigator(object):
 			return self._next_target_with_boundary(bot_id,*args,**kwargs)
 		finally:
 			self._boundary_actor=previous
+
+	def end_narrow_passage(self, bot_id, now, reason):
+		state = self.bot_states.get(int(bot_id)) or {}
+		if state.pop('narrow_passage_target', None) is not None:
+			state.setdefault('narrow_passage_receipt', {}).update(
+				at=float(now), outcome=reason)
+
+	@observed('nav.narrow_passage')
+	def narrow_passage_target(self, bot_id, current, goal, selected, now,
+			yaw, half_length, half_width):
+		"""Keep a direct final leg on a proved passage axis until the tail exits.
+
+		This proposes a local target, never pedals or a collision result. Existing
+		A* bends, waits, native proofs, private refusals and final motion retain
+		their owners. No map names or authored route coordinates are consulted.
+		"""
+		state = self.bot_states.get(int(bot_id))
+		grid = self.grid
+		if state is None or not grid.prebaked:
+			return selected
+		if (_distance_2d(selected, goal) > WAYPOINT_ARRIVAL_RADIUS or
+				_distance_2d(current, selected) <= WAYPOINT_ARRIVAL_RADIUS or
+				half_length <= 0.0 or half_width <= 0.0):
+			self.end_narrow_passage(bot_id,now,'owned_corner_or_arrival')
+			return selected
+		# The baked span includes a whole quantised cell. A rotating rectangle
+		# needs its diagonal plus that sampling allowance, not only its width.
+		turn_span = 2.0 * math.hypot(half_length, half_width) + grid.cell_size
+		forward = (math.sin(yaw), math.cos(yaw))
+		candidates = []
+		for offset in (0.0, -half_length, half_length):
+			probe = (current[0]+forward[0]*offset, current[1],
+				current[2]+forward[1]*offset)
+			corridor = grid.local_corridor(probe)
+			if corridor is not None and corridor[1] < turn_span:
+				candidates.append((corridor[1], corridor[0], probe))
+		if not candidates:
+			self.end_narrow_passage(bot_id,now,'body_clear_of_passage')
+			return selected
+		width, angle, probe = min(candidates)
+		axis = (math.sin(angle), math.cos(angle))
+		dx, dz = goal[0]-current[0], goal[2]-current[2]
+		if dx*axis[0]+dz*axis[1] < 0.0:
+			axis = (-axis[0], -axis[1])
+		remaining = dx*axis[0]+dz*axis[1]
+		if remaining <= WAYPOINT_ARRIVAL_RADIUS * 2.0:
+			self.end_narrow_passage(bot_id,now,'goal_not_forward')
+			return selected
+		centre = grid.point_for(grid.cell_for(probe), current[1])
+		along = (current[0]-centre[0])*axis[0]+(current[2]-centre[2])*axis[1]
+		length = min(remaining, max(grid.cell_size*2.0, half_length*2.0+grid.cell_size))
+		candidate = (centre[0]+axis[0]*(along+length), current[1],
+			centre[2]+axis[1]*(along+length))
+		retained = state.get('narrow_passage_target')
+		if (retained is not None and retained['shape'] == (half_length,half_width) and
+				retained['axis'][0]*axis[0]+retained['axis'][1]*axis[1] > 0.99 and
+				_distance_2d(current, retained['point']) > WAYPOINT_ARRIVAL_RADIUS and
+				(retained['point'][0]-current[0])*axis[0]+
+				(retained['point'][2]-current[2])*axis[1] > 0.0 and
+				(retained['point'][0]-current[0])*axis[0]+
+				(retained['point'][2]-current[2])*axis[1] <= remaining and
+				_distance_2d(current, retained['point']) <= length+grid.cell_size):
+			candidate = retained['point']
+		height = grid._baked_cell_height(grid.cell_for(candidate))
+		receipt = dict(at=float(now), origin=tuple(current), goal=tuple(goal),
+			selected=tuple(selected), axis=axis, span=width, target=tuple(candidate),
+			shape=(half_length,half_width), outcome='unsupported_target')
+		state['narrow_passage_receipt'] = receipt
+		if height is None:
+			return selected
+		candidate = (candidate[0], height, candidate[2])
+		if not grid.hull_pose_clear(candidate, math.atan2(axis[0],axis[1]), half_length,half_width):
+			return selected
+		previous = self._boundary_actor
+		self._boundary_actor = int(bot_id)
+		try:
+			if grid.segment_has_motion_hazard(current,candidate,
+					MOTION_FATAL_HAZARDS | BAKED_SHALLOW_WATER):
+				receipt['outcome'] = 'water_or_edge_refusal'
+				return selected
+			if (grid.segment_penalty(current,candidate,now) > 0.0 or
+					self._bot_edges_penalized(bot_id,current,candidate,now)):
+				receipt['outcome'] = 'private_or_static_refusal'
+				return selected
+			evidence = {}
+			revision = grid._native_proof_revision
+			if grid._proof_deferred:
+				receipt['outcome'] = 'proof_deferred'
+				return selected
+			clear = grid.dry_segment_clear(current,candidate,now,evidence)
+			receipt['proof'] = evidence
+			if revision != grid._native_proof_revision or grid._proof_deferred:
+				receipt['outcome'] = 'proof_deferred'
+				return selected
+			if not clear:
+				receipt['outcome'] = 'corridor_refused'
+				return selected
+		finally:
+			self._boundary_actor = previous
+		state['narrow_passage_target'] = dict(point=candidate,axis=axis,
+			shape=(half_length,half_width))
+		receipt.update(outcome='guided', target=candidate)
+		combat_count('nav_narrow_passage_guided')
+		return candidate
 
 	def _next_target_with_boundary(self, bot_id, current, goal, path_key, now,
 			anchor=None, avoid_points=None, lookahead_distance=None,

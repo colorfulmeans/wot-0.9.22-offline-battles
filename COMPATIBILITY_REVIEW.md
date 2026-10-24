@@ -1,5 +1,49 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 24: shared owner routes and generic narrow passages
+
+Adopt the reviewed complete profile 1 as the built-in Default for all users,
+including the four corrected Ensk east-field positions. The immutable fixture
+records the complete canonical document digest and every map digest/count:
+41 maps, 834 route records. Existing Default documents refresh from this
+source; independent custom profiles retain their own data. This is shipped
+baseline data, not a machine-specific savegame override.
+
+The unchanged opposed Great Wall gate simulation passes with the old built-in
+routes but fails when supplied the reviewed owner routes. Owner routes before
+and after simplification give identical 30-second traces: actor 16 remains near
+(403.807, -152.693), repeatedly reversing/alignment-blocking toward a slanted
+final target even after the other actor leaves. This establishes a general
+steering failure on that configured reference scene; it does not establish a
+new collision or traffic-priority law for the native client.
+
+For an already safe direct/final leg, inspect the existing baked corridor at
+the hull centre, front and rear. If turning clearance is narrower than the
+vehicle diagonal plus one quantised cell, propose a bounded local endpoint
+along the corridor axis. Retain the endpoint until arrival and continue while
+the tail is still in the passage. Preserve unconsumed A* bends, tactical holds,
+parking ownership and authored route arrival. Hand the endpoint to the existing
+finite local-leg owner so contact refusals, no-progress deadlines and replans
+also observe the actual target. There are no map-name checks, traffic locks,
+new recovery budgets or direct pedal overrides.
+
+Every proposal still requires supported hull terrain and a fresh existing
+static/private-edge, arena-boundary and dry-segment proof. Water, deferred
+proofs or a changed native proof revision refuse the proposal. Existing
+friendly/wreck collision and final native motion retain authority. The new
+bounded passage receipt and timing counter join existing detailed-entry-only
+diagnostics; the normal entry gains no verbose output.
+
+Regression coverage includes the original captured 29-Bot opposed-gate scene
+with the adopted Default, finite local-leg handoff, vertical and diagonal
+passages, tail clearance, direction changes, fixed endpoints, nearby goals,
+owned corners, static/private/native/deferred/revision/water refusals and
+actor-scoped boundary proof. The captured configured gate now passes its
+original 30-second exit and maximum five-second traffic-hold assertions.
+All-map route/parking authoring checks verify the new shared baseline. These
+are deterministic reference checks; real Windows bridge/gate traversal and
+frame pacing remain gameplay acceptance boundaries.
+
 ## October 24 report 041538: route disks and blocked outgoing connectors
 
 Candidate 494's T110E3 (Bot 23, round 2, The Pit) repeatedly aligned with a

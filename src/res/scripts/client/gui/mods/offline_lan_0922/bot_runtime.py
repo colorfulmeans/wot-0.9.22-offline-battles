@@ -10865,6 +10865,25 @@ class BotRuntime(object):
                     candidate = grid.safe_local_target(position,goal,now,avoid)
                 target = candidate if candidate is not None else tuple(position)
                 state['navigation_stop_at_target'] = False
+        guide = getattr(self.navigator, 'narrow_passage_target', None)
+        navigation_status = getattr(self.navigator, 'bot_states', {}).get(
+            int(bot_id), {}).get('navigation_status', 'pending')
+        if (callable(guide) and mode in ('route', 'advance') and
+                strategic.get('throttle_override') is None and
+                not strategic.get('parking_phase') and navigation_status == 'safe' and
+                'half_length' in state and 'half_width' in state):
+            original = target
+            target = guide(bot_id,position,goal,target,now,
+                float(state.get('yaw',0.)),float(state['half_length']),float(state['half_width']))
+            if target != original:
+                state['navigation_stop_at_target'] = False
+                target_receipt.update(source='narrow_passage', original_target=tuple(original))
+        else:
+            end_passage = getattr(self.navigator, 'end_narrow_passage', None)
+            if callable(end_passage):
+                end_passage(bot_id,now,'navigation_owner_changed')
+        # Passage guidance uses the same finite local-leg owner as every other
+        # runtime bypass, including arrival, hard-contact refusal and timeout.
         remember = getattr(self.navigator, 'remember_runtime_target', None)
         # Height resolution may change Y or round native XZ to float32. Neither
         # changes who owns this steering endpoint. Promoting that ordinary A*
