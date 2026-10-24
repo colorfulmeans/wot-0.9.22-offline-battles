@@ -10472,3 +10472,25 @@ Diagnostic mode separately retains compact, per-hull outcomes after 15s within
 an 8m pocket, at most once per 30s. These post-contact records preserve nearby
 hull poses, recovery controls, navigation status and recent contact acceptance
 without issuing extra engine queries or consuming the bulk-history quota.
+
+
+# Shared route cleanup and fixed editor endpoints
+
+The reviewed owner profile 1 now supplies restored seven-point Murovanka routes
+for both teams. Retired Himmelsdorf rear-guard lanes are absent from the live
+annotation registry, navigation route catalog and immutable defaults. The pinned
+vendor snapshot remains provenance only. Disabled class records retain their
+allocation exclusions, follow shared travel coordinates and contain no waiting
+flags, durations or places. Independent enabled class travel and parking survive.
+
+The editor creates own/enemy spawn endpoints up front, never relocates submitted
+points on save, and protects endpoints against drag, delete, insertion outside
+the route, import and persistence. Legacy reviewed capture-area terminals remain
+valid; asymmetric capture/spawn maps refuse symmetry. Blank clicks cannot add
+travel points. Shift-click and the insert button share terminal-safe insertion.
+Selection does not checkpoint or clear redo; a drag checkpoints once. Waiting
+and SPG clicks keep their explicit existing behavior. Immutable Default upgrade
+refresh precedes retired-identity validation; invalid independent plans are not
+silently replaced. These authoring/storage changes do not alter recovery,
+pressure allocation, collision or physical motion laws. Actual gameplay of the
+edited routes still requires the exact Windows client.

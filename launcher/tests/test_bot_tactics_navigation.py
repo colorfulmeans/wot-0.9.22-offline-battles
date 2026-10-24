@@ -176,7 +176,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('水深上限',e.danger_parameters_var.get())
         self.assertEqual(before,e.document)
 
-    def test_shared_geometry_clears_class_waits_and_class_edit_wins_later(self):
+    def test_shared_geometry_preserves_independent_class_waits_and_later_edit(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('AT-SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -186,10 +186,10 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         self.assertEqual('disabled',str(e.wait_button.cget('state')))
         e.selected_point=1;e.edit_point_condition();self.assertFalse(e.wait_edit)
-        e.checkpoint();shared=e._editable_item();shared['points'][0][0]+=8
+        before=copy.deepcopy(scoped);e.checkpoint();shared=e._editable_item();shared['points'][1][0]+=8
         e._sync_symmetry(geometry=True,item=shared)
-        self.assertEqual(shared['points'],scoped['points'])
-        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+        self.assertEqual(before,scoped)
+        self.assertEqual(25,scoped['points'][1][4][0][2])
         e.route_class_var.set('AT-SPG');e.change_route_class();e.items.selection_set(key);e.select_item()
         e.selected_point=1;e.edit_point_condition();point=e._wait_point()
         e._store_wait_places([[point[0]+12,point[1],45]])
@@ -353,16 +353,16 @@ class NavigationUITests(unittest.TestCase):
 
     def test_total_shared_custom_route_edit_splits_class_and_its_mirror(self):
         e=self.editor;e.route_class_var.set('all');e.new_route()
-        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];e._sync_symmetry()
+        item=e._selected();item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];e._sync_symmetry()
         old_id=item['id'];e.route_class_var.set('total');e.change_route_class()
         e.selection=('routes',old_id+'@lightTank')
-        e.checkpoint();e._editable_points()[0][0]+=7;e._sync_symmetry();e._refresh_items()
+        e.checkpoint();e._editable_points()[1][0]+=7;e._sync_symmetry();e._refresh_items()
         entries=e.entry()['routes'];self.assertEqual(4,len(entries))
         for r in entries:
             if r['id']==old_id:
-                self.assertNotIn('lightTank',r['classes']);self.assertEqual(-100.,r['points'][0][0])
+                self.assertNotIn('lightTank',r['classes']);self.assertEqual(-100.,r['points'][1][0])
         selected=e._selected();self.assertEqual(['lightTank'],selected['classes'])
-        self.assertEqual(-93.,selected['points'][0][0])
+        self.assertEqual(-93.,selected['points'][1][0])
         other=next(r for r in entries if r['id']==selected['mirror_id'])
         self.assertEqual(selected['points'],list(reversed(other['points'])))
         storage.contract.canonical(e.document)
@@ -403,7 +403,7 @@ class NavigationUITests(unittest.TestCase):
 
     def test_custom_route_priority_values_are_independent_for_each_class(self):
         e=self.editor;e.route_class_var.set('all');e.new_route();item=e._selected()
-        item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];identity=item['id']
         for tag,value in (('lightTank',8),('heavyTank',2)):
             e.route_class_var.set(tag);e.change_route_class();e.selection=('routes',identity);e._refresh_properties()
             e.item_vars['route_priority'].set(str(value));self.assertTrue(e.update_properties())
@@ -412,7 +412,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('优先级 8',e.items.item('routes:'+identity+'@lightTank','text'))
         self.assertIn('优先级 2',e.items.item('routes:'+identity+'@heavyTank','text'))
 
-    def test_shared_drag_after_class_edit_wins_without_losing_priorities(self):
+    def test_shared_drag_preserves_independent_class_geometry_and_priorities(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -427,9 +427,9 @@ class NavigationUITests(unittest.TestCase):
         e.press(SimpleNamespace(x=x,y=y,state=0));e.motion(SimpleNamespace(x=x-10,y=y));e.release(None)
         shared_geometry=copy.deepcopy(e._selected()['points']);self.assertNotEqual(class_geometry,shared_geometry)
         edits=e.entry()['default_routes'];light=next(r for r in edits if r['team']==1 and r.get('class_tag')=='lightTank')
-        self.assertEqual(shared_geometry,light['points']);self.assertEqual(8,light['priority'])
+        self.assertEqual(class_geometry,light['points']);self.assertEqual(8,light['priority'])
         other=next(r for r in edits if r['team']==2 and r.get('class_tag')=='lightTank')
-        self.assertEqual(shared_geometry,list(reversed(other['points'])));self.assertEqual(8,other['priority'])
+        self.assertEqual(class_geometry,list(reversed(other['points'])));self.assertEqual(8,other['priority'])
         e.save(True);self.assertEqual(e.document,e.store.active())
         shared_geometry=copy.deepcopy(e._selected()['points'])
         e.route_class_var.set('lightTank');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
@@ -437,7 +437,7 @@ class NavigationUITests(unittest.TestCase):
         e.press(SimpleNamespace(x=x,y=y,state=0));e.motion(SimpleNamespace(x=x+5,y=y));e.release(None)
         self.assertNotEqual(shared_geometry,e._selected()['points'])
         e.route_class_var.set('heavyTank');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
-        self.assertEqual(shared_geometry,e._selected()['points'])
+        self.assertEqual([[round(v,4) for v in p[:2]]+[0] for p in shared_geometry],e._selected()['points'])
 
     def test_shared_wait_reset_and_single_team_changes_preserve_class_priorities(self):
         e=self.editor;e.map_name='31_airfield';e._load_map();e.route_class_var.set('heavyTank');e.change_route_class()
@@ -519,7 +519,7 @@ class NavigationUITests(unittest.TestCase):
         e=self.editor;e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'));e.items.selection_set(key);e.select_item()
         # Shipped default lanes can already contain sixteen nodes.
-        item=e._editable_item();item['points']=copy.deepcopy(item['points'][:3])
+        item=e._editable_item();item['points']=copy.deepcopy(item['points'][:2]+item['points'][-1:])
         old=copy.deepcopy(item['points']);e.selected_point=0;e._refresh_properties()
         self.assertEqual('normal',str(e.insert_button.cget('state')))
         e.insert_button.invoke();current=e._selected()['points']
@@ -563,7 +563,7 @@ class NavigationUITests(unittest.TestCase):
 
     def test_total_priorities_update_only_selected_class_and_parking(self):
         e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
-        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        item=e._selected();item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];identity=item['id']
         before=copy.deepcopy(item);e.route_class_var.set('total');e.change_route_class()
         key='routes:'+identity+'@lightTank';e.items.selection_set(key);e.select_item()
         e.item_vars['route_priority'].set('9');self.assertTrue(e.update_properties())

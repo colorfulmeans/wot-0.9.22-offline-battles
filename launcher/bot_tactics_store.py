@@ -161,10 +161,28 @@ class Store:
         self.profiles = self.root / 'profiles'
         self.active_path = self.root / 'active.json'
 
+    def _load_owned(self, path):
+        # Immutable defaults may contain a route retired by this build. Refresh
+        # their identity before strict route validation; never reset user plans.
+        data=path.read_bytes()
+        if len(data)<=contract.MAX_BYTES:
+            try:
+                raw=json.loads(data.decode('utf-8-sig'))
+            except (ValueError,UnicodeError):
+                raw=None
+            if (isinstance(raw,dict) and isinstance(raw.get('name'),str)
+                    and raw['name'].casefold()=='default'
+                    and raw.get('client')==contract.CLIENT
+                    and raw.get('schema')==contract.SCHEMA):
+                current=contract.default_profile()
+                if raw!=current:_atomic(path,current)
+                return contract.canonical(current)
+        return contract.load(str(path))
+
     def ensure_active(self):
         if not self.active_path.exists():
             _atomic(self.active_path, contract.default_profile())
-        document = contract.load(str(self.active_path))
+        document = self._load_owned(self.active_path)
         if document['name'].casefold() == 'default' and document != contract.default_profile():
             _atomic(self.active_path, contract.default_profile())
         # Keep the runtime materialization synchronized with its named owner.
@@ -186,7 +204,7 @@ class Store:
         if self.profiles.exists():
             for path in sorted(self.profiles.glob('*.json')):
                 try:
-                    document=contract.load(str(path))
+                    document=self._load_owned(path)
                     if document['name'].casefold()=='default' and document!=contract.default_profile():
                         _atomic(path,contract.default_profile())
                     result.append(document['name'])
@@ -227,6 +245,8 @@ class Store:
 
     def save(self, document, apply=False, previous_name=_UNSPECIFIED):
         document = contract.canonical(document)
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
         from gui.mods.offline_lan_0922.bot_fittings import validate_profile
         validate_profile(document)
         name=document['name']
@@ -259,11 +279,16 @@ class Store:
         _commit_files(changes)
 
     def export(self, document, filename):
-        _atomic(filename, contract.canonical(document))
+        document = contract.canonical(document)
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
+        _atomic(filename, document)
 
     @staticmethod
     def import_file(filename):
         document=contract.load(str(filename))
+        import bot_tactics_geometry
+        bot_tactics_geometry.validate(document, contract, graph_data)
         from gui.mods.offline_lan_0922.bot_fittings import validate_profile
         validate_profile(document)
         return document

@@ -40,7 +40,7 @@ class ResolutionTests(unittest.TestCase):
                 self.assertEqual(a[field],b[field],field)
         a=bot_tactics.default_map('04_himmelsdorf')['default_routes']
         b=bot_tactics.default_map('86_himmelsdorf_winter')['default_routes']
-        self.assertEqual([r for r in a if r['id']!='rear_guard'],b)
+        self.assertEqual(a,b)
 
     def test_local_exact_collision_keeps_width_and_does_not_inflate_wall_cells(self):
         import test_port_0922_navigation_collision_bake as fixture
@@ -120,7 +120,10 @@ class ResolutionTests(unittest.TestCase):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             baseline=json.loads(subprocess.check_output(['git','show','ca22f909:navgraphs/'+name+'.json'],cwd=ROOT))
             for key in ('cell_size','width','height','origin','hazards','routes'):
-                self.assertEqual(baseline[key],graph[key],key)
+                expected=copy.deepcopy(baseline[key])
+                if key=='routes' and name=='04_himmelsdorf':
+                    expected={team:[r for r in rows if r['id'] in ('banana','hill','rail')] for team,rows in expected.items()}
+                self.assertEqual(expected,graph[key],key)
             expected=copy.deepcopy(baseline['spawn_formations'])
             for change in graph['validation']['spawn_railway_revalidation']['changes']:
                 self.assertEqual(expected[change['team']][change['slot']],change['before'])

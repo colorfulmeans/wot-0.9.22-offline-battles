@@ -429,23 +429,10 @@ class CompiledSpace0922Test(unittest.TestCase):
                             for index in water_indexes))
         self.assertGreater(data['validation']['route_segments'], 0)
 
-    def test_real_himmelsdorf_rear_guard_has_connected_locomotion(self):
-        graph = ROOT / 'navgraphs' / '04_himmelsdorf.json'
-        self.assertTrue(graph.is_file(), 'baked Himmelsdorf graph is missing')
-        data = json.loads(graph.read_text())
-
-        for team in ('1', '2'):
-            route = next(value for value in data['routes'][team]
-                         if value['id'] == 'rear_guard')
-            self.assertGreaterEqual(len(route['waypoints']), 2)
-            self.assertLessEqual(len(route['waypoints']), 16)
-            self.assertTrue(route['waypoints'][-1][2])
-            start = route['waypoints'][0]
-            anchor = data['spawn_anchors'][int(team) - 1]
-            self.assertLessEqual(
-                ((start[0] - anchor[0]) ** 2 +
-                 (start[1] - anchor[1]) ** 2) ** 0.5,
-                data['cell_size'] * 1.5)
+    def test_live_himmelsdorf_authoring_does_not_recreate_retired_routes(self):
+        from gui.mods.offline_lan_0922.ai.maps import TACTICAL_MAPS
+        for routes in TACTICAL_MAPS['04_himmelsdorf']['routes'].values():
+            self.assertEqual({'banana','hill','rail'},{r['id'] for r in routes})
 
     def test_real_dday_graph_uses_packed_ctf_bases_and_valid_routes(self):
         graph = ROOT / 'navgraphs' / '101_dday.json'
@@ -730,7 +717,7 @@ class CompiledSpace0922Test(unittest.TestCase):
                     route_ids = [route['id'] for route in routes]
                     if path.stem == '04_himmelsdorf':
                         self.assertEqual(
-                            {'banana', 'hill', 'rail', 'rear_guard'},
+                            {'banana', 'hill', 'rail'},
                             set(route_ids))
                     elif path.stem == '06_ensk':
                         self.assertEqual(

@@ -48,7 +48,7 @@ class CatalogTests(unittest.TestCase):
             for routes in graph['routes'].values():
                 seen.update(route['id'] for route in routes)
         self.assertEqual(seen, set(labels.ROUTE_NAMES))
-        self.assertEqual(96, len(seen))
+        self.assertEqual(95, len(seen))
         for key in seen:
             self.assertNotEqual(key, labels.route_label(key, 'zh'))
             self.assertNotIn('_', labels.route_label(key, 'en'))
@@ -185,7 +185,7 @@ class LanguageUITests(unittest.TestCase):
 
     def test_policy_captions_round_trip_without_localized_json(self):
         self.ui.new_route();self.root.update()
-        self.ui._selected()['points']=[[-66.,306.,0],[-126.,246.,0]]
+        self.ui._selected()['points']=[[-66.,306.,0],[-126.,246.,0],[-86.,-290.,0]]
         self.choose(self.ui.item_fields['policy'][1],1)
         self.ui.update_properties();self.ui.save(True)
         self.assertEqual('fixed',self.ui.store.active()['maps']['08_ruinberg']['routes'][0]['policy'])

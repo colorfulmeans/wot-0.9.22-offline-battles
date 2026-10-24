@@ -147,9 +147,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
             self.assertEqual(2, len(objectives))
             team_1 = graph['routes']['1']
             team_2 = graph['routes']['2']
-            if path.stem == '04_himmelsdorf':
-                expected = 4
-            elif path.stem == '06_ensk':
+            if path.stem == '06_ensk':
                 expected = 2
             else:
                 expected = 3
@@ -159,8 +157,7 @@ class TacticalRouteReviewTest(unittest.TestCase):
                              [route['id'] for route in team_2])
             team_2_by_id = {route['id']: route for route in team_2}
             for route in team_1:
-                if (route['id'] == 'rear_guard' or
-                        route.get('terminal_hold', False)):
+                if route.get('terminal_hold', False):
                     continue
                 reverse = team_2_by_id[route['id']]
                 self.assertEqual(
@@ -170,8 +167,8 @@ class TacticalRouteReviewTest(unittest.TestCase):
                     (path.stem, route['id']))
             route_records += len(team_1) + len(team_2)
             unique_routes += len(team_1)
-        self.assertEqual(246, route_records)
-        self.assertEqual(123, unique_routes)
+        self.assertEqual(244, route_records)
+        self.assertEqual(122, unique_routes)
 
     def test_decoded_team_starts_select_all_fifteen_corrected_route_gates(self):
         # These are the eight geometry-changing graphs from the full 41-map

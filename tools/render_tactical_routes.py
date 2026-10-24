@@ -5,7 +5,7 @@ The output is intended for human route review. Team 1 uses solid lines and
 filled arrowheads; team 2 uses dashed lines and outlined arrowheads. Ordinary
 through-routes share one validated geometry in strict reverse; both directions
 remain visible so the reviewer can confirm that contract. Local terminal
-routes such as Himmelsdorf's rear_guard stay team-specific.
+terminal routes stay team-specific.
 """
 
 from __future__ import annotations
@@ -363,7 +363,7 @@ h2{font-size:17px;margin:9px 3px 2px}
     (output / "README.txt").write_text(
         "World of Tanks %s tactical route review\n\n" % game_version +
         "This folder renders the current reviewed route candidate.\n"
-        "There are 41 maps: 39 have three routes per team; 06_ensk has two reviewed routes; 04_himmelsdorf has an additional rear_guard route.\n\n"
+        "There are 41 maps: 40 have three routes per team; 06_ensk has two reviewed routes.\n\n"
         "Team 1: solid lines and filled arrows.\n"
         "Team 2: dashed lines and outlined arrows.\n"
         "Ordinary through-routes: one validated geometry, travelled in strict reverse.\n"
@@ -373,7 +373,7 @@ h2{font-size:17px;margin:9px 3px 2px}
         "An asterisk in the legend marks a route with a soft fallback on at least one team side.\n"
         "Green: team 1. Red: team 2.\n\n"
         "Annotate any incorrect lane with opaque red ink, preserve the image dimensions and map filename, and return only changed PNGs.\n"
-        "Local terminal routes such as Himmelsdorf rear_guard are reviewed manually from the marked image.\n",
+        "Local terminal routes are reviewed manually from the marked image.\n",
         encoding="utf-8",
     )
 

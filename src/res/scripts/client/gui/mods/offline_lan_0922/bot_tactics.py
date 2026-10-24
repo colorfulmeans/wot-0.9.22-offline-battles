@@ -372,6 +372,18 @@ def canonical(raw):
             total += 1
         if defaults:
             entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
+            for route in entry['default_routes']:
+                if not route.get('disabled'):
+                    continue
+                shared = next((r for r in entry['default_routes']
+                    if r['team'] == route['team'] and r['id'] == route['id']
+                    and r.get('class_tag', 'all') == 'all'), None)
+                if shared is None:
+                    shared = next((r for r in default_map(name).get('default_routes', ())
+                        if r['team'] == route['team'] and r['id'] == route['id']
+                        and r.get('class_tag', 'all') == 'all'), None)
+                route['points'] = [p[:2]+[0] for p in
+                    (shared or route)['points']]
         if entry['routes'] or entry['positions'] or defaults or deleted:
             out['maps'][name] = entry
     if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:

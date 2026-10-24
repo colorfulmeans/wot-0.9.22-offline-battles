@@ -13,10 +13,24 @@ import bot_tactics_ui as ui
 import bot_tactics_labels as labels
 
 
+def reviewed_routes(filename, name):
+    rows=json.loads(filename.read_text(encoding='utf8'))['default_routes']
+    document=storage.contract.empty('Historical route review')
+    document['maps'][name]=dict(mode='regular',resource_sha256=storage.contract.MAPS[name]['resource_sha256'],
+        routes=[],positions=[],default_routes=rows)
+    normalized=storage.contract.canonical(document)['maps'][name]['default_routes']
+    for old in rows:
+        if not old.get('disabled'):
+            current=next(r for r in normalized if (r['team'],r['id'],r.get('class_tag','all'))==
+                (old['team'],old['id'],old.get('class_tag','all')))
+            assert current==old
+    return normalized
+
+
 class BaselineDataTests(unittest.TestCase):
     def test_owner_lakeville_routes_are_shipped_and_first_run_baseline(self):
         fixture=Path(__file__).resolve().parents[2]/'tests/fixtures/lakeville_owner_routes_20261024.json'
-        expected=json.loads(fixture.read_text(encoding='utf8'))['default_routes']
+        expected=reviewed_routes(fixture,'07_lakeville')
         with tempfile.TemporaryDirectory() as temp:
             actual=storage.Store(temp).active()
             self.assertEqual(expected,actual['maps']['07_lakeville']['default_routes'])
@@ -33,7 +47,7 @@ class BaselineDataTests(unittest.TestCase):
 
     def test_owner_windstorm_routes_are_the_first_run_baseline(self):
         fixture = Path(__file__).resolve().parents[2] / 'tests/fixtures/windstorm_owner_routes_20261021.json'
-        routes = json.loads(fixture.read_text(encoding='utf8'))['default_routes']
+        routes = reviewed_routes(fixture,'84_winter')
         with tempfile.TemporaryDirectory() as temp:
             adopted = storage.Store(temp).active()
             self.assertEqual(routes, adopted['maps']['84_winter']['default_routes'])

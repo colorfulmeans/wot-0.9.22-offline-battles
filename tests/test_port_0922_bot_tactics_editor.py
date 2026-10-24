@@ -387,8 +387,12 @@ class PragueRouteResourceIdentityTests(unittest.TestCase):
                 normalized = cfg.canonical(raw)['maps'][name]
                 self.assertEqual(cfg.MAPS[name]['resource_sha256'],
                                  normalized['resource_sha256'])
-                self.assertEqual(settings['default_routes'],
-                                 normalized['default_routes'])
+                expected=copy.deepcopy(settings['default_routes'])
+                for row in expected:
+                    if row.get('disabled'):
+                        shared=next((r for r in expected if r['team']==row['team'] and r['id']==row['id'] and r.get('class_tag','all')=='all'),row)
+                        row['points']=[p[:2]+[0] for p in shared['points']]
+                self.assertEqual(expected,normalized['default_routes'])
 
     def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
         raw = cfg.empty('Existing Prague profile')
