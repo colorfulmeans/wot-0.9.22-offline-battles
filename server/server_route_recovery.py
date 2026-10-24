@@ -86,7 +86,11 @@ class RouteRecoveryMixin:
             self._apply_authored_route_order(order, bot, move, now)
 
     def _cycle_finish(self, bot):
-        self._route_recoveries.pop(bot['id'], None)
+        recovery = self._route_recoveries.pop(bot['id'], None)
+        if recovery is not None:
+            self._route_states.setdefault(bot['id'], {}).update(
+                route_id=recovery['route_id'], index=recovery['index'],
+                join_index=recovery['index'], join_anchor=_point(bot['state']))
         self._wreck_route_progress.pop(bot['id'], None)
         self._cycle_drop_parking(bot)
 
@@ -187,6 +191,8 @@ class RouteRecoveryMixin:
                 # gate from its realised pose, with no stale start/arrival sweep.
                 if recovery is not None:
                     recovery['anchor'] = dict(pose)
+                    self._route_states.setdefault(bot_id, {}).update(
+                        join_index=recovery['index'], join_anchor=dict(pose))
                     recovery.pop('last_pose', None)
                     recovery.pop('last_at', None)
                 trace['resumed_after_pause'] = duration

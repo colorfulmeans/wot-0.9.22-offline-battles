@@ -270,6 +270,26 @@ class RouteRecoveryCycleTests(unittest.TestCase):
             self.assertEqual('retry_no_alternative',order['route_attempt']['action'])
             self.assertIsNotNone(s.recovery)
 
+    def test_combat_resume_and_completed_gate_wait_keep_actual_connector(self):
+        s=RecoveryScene()
+        points=[[p['x'],p['z'],0] for p in s.main['waypoints']]
+        points[3][2:]=[1,0,[[110,200,60]]]
+        s.planner.tactics_map='08_ruinberg'
+        s.planner.tactics['maps']['08_ruinberg']=dict(default_routes=[dict(
+            id='main',team=1,class_tag='heavyTank',points=points)])
+        # Use the class-specific identity so the real authored wait owner sees it.
+        s.main['id']='class_ht_main'
+        s.planner._route_states[17]['route_id']=s.main['id']
+        s.step(0);s.step(20);s.step(25,mode='engage',target_id=55)
+        s.step(50,(20,150),mode='engage',target_id=55)
+        order=s.step(51)
+        self.assertEqual(dict(x=20.,y=0.,z=150.),s.planner._route_states[17]['join_anchor'])
+        order=s.step(52,(100,200))
+        self.assertIsNone(s.recovery)
+        self.assertEqual('parking_approach',order['combat_mode'])
+        self.assertEqual(dict(x=100.,y=0.,z=200.),order['route_anchor'])
+        self.assertEqual(110.,order['move_position']['x'])
+
     def test_reset_clears_cycles_and_gate_clocks(self):
         s = RecoveryScene(); s.step(0); s.step(20)
         s.planner.reset(3)
