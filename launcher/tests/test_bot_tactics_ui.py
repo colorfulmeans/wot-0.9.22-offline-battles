@@ -142,13 +142,17 @@ class EditorUITests(unittest.TestCase):
             self.assertEqual(before,self.ui.document);self.assertEqual(points,self.ui._selected()['points'])
             self.error_mock.assert_not_called()
 
-    def test_all_map_new_routes_use_fixed_validated_spawn_centres(self):
+    def test_all_map_new_routes_use_map_specific_fixed_endpoints(self):
         for name in storage.contract.MAPS:
             with self.subTest(map=name):
                 self.ui.map_var.set(storage.MAP_LABELS[name]);self.ui.change_map()
                 self.ui.new_route();item=self.ui._editable_item()
                 bases=self.ui.graph_cache[name]['spawn_anchors']
-                self.assertEqual([bases[self.ui.team-1]+[0],bases[2-self.ui.team]+[0]],item['points'])
+                graph=self.ui.graph_cache[name]
+                offset_maps=('100_thepit','63_tundra','95_lost_city')
+                target=graph['objective_bases'][2-self.ui.team] if name in offset_maps else bases[2-self.ui.team]
+                expected_end=[round(v,4) for v in target]+[0]
+                self.assertEqual([bases[self.ui.team-1]+[0],expected_end],item['points'])
                 self.assertEqual(0,self.ui.selected_point)
                 self.assertFalse(hasattr(self.ui,'base_snap_check'))
                 for team,centre in enumerate(bases,1):
