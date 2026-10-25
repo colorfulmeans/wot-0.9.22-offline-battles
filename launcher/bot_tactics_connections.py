@@ -71,7 +71,7 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         if hasattr(self, 'route_delete_button'):
             self.route_delete_button.configure(state='normal' if not self.builtin and (parking or attack or bool(self.network_mode) or self.route_class_var.get()=='all') else 'disabled')
         for tier, button in getattr(self, 'tier_buttons', {}).items():
-            button.configure(state='normal' if editable and self.route_class_var.get()!='total' and ordinary_route and not self.network_mode and item.get('tier','main')!=tier else 'disabled')
+            button.configure(state='normal' if editable and ordinary_route and not self.network_mode and item.get('tier','main')!=tier else 'disabled')
         junction=bool(route and not self.network_mode and item.get('defense') and index is not None and 0<=index<len(item['points']) and route_network.nodes(item)[index]==item['defense']['junction'])
         if self.network_mode or junction or attack:
             for control in (self.wait_button,self.wait_edit_check,self.hold_button):control.configure(state='disabled')
@@ -162,7 +162,9 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         self.network_mode = '';self._refresh_items();self.mark()
 
     def set_tier(self, tier):
-        if self.builtin or self.route_class_var.get() == 'total' or self.network_mode or (self._selected_parent() or {}).get('purpose')=='spg_attack':return
+        item=self._selected_parent()
+        if (self.builtin or not self.selection or self.selection[0] not in ('builtin','routes')
+                or self.network_mode or not item or item.get('purpose')=='spg_attack'):return
         self.checkpoint();self._editable_parent()['tier'] = tier
         self._sync_connection_scope(('tier',));self._refresh_items();self.mark(sync=False)
 

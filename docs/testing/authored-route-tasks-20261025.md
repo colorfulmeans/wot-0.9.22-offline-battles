@@ -395,3 +395,22 @@ Regression coverage also checks symmetric Erlenberg endpoints, offset Tundra
 endpoints, old-file migration, full-map save/reopen and a missing capture center
 that cannot legitimize an invalid ordinary intermediate point. The actual
 source/frozen editor smoke requires `map_endpoint_policy_and_team_connections`.
+
+### Total-view route tier controls (2026-10-26)
+
+Selecting an ordinary route in Total view must allow changing the selected
+class's main/reserve tier. Remove both the stale disabled-button condition and
+the action's Total-view rejection. All classes still changes only the current
+map/team/family's tier metadata; individual class changes remain independent.
+Do not propagate tier changes through the geometry/defense synchronization.
+Changing one class of a multi-class custom road splits its class ownership while
+retaining the same points and independent sibling tiers. Do not change route
+geometry, waits, defense branches, allocation laws or runtime behavior.
+
+Disable the conversion to the already selected tier. Both controls stay locked
+for immutable Default, no selection, parking, artillery attacks and active
+defense editing; direct handler calls must preserve those guards too. Actual Tk
+regressions invoke buttons in Total view for built-in and custom families,
+verify complete document differences, undo/redo, save/reopen, common-scope tier
+propagation and protected contexts. The real source/frozen editor smoke requires
+`total_view_route_tier_controls` and exercises conversion, undo/redo and save.

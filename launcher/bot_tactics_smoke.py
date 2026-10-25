@@ -321,6 +321,20 @@ def run(destination):
                 assert not ui.canvas.find_withtag('connection_team_'+str(3-team))
                 assert ui.network_mode==''
             report['map_endpoint_policy_and_team_connections']=True
+            ui.selection=('builtin','village@heavyTank');ui._refresh_items()
+            before=copy.deepcopy(ui.document)
+            assert str(ui.tier_buttons['reserve'].cget('state'))=='normal'
+            ui.tier_buttons['reserve'].invoke()
+            expected=copy.deepcopy(before)
+            selected=next(r for r in expected['maps']['63_tundra']['default_routes']
+                if r['team']==1 and r['id']=='village' and r.get('class_tag')=='heavyTank')
+            selected['tier']='reserve'
+            assert ui.document==expected
+            assert str(ui.tier_buttons['main'].cget('state'))=='normal'
+            ui.undo('maps');assert ui.document==before
+            ui.redo('maps');assert ui.document==expected
+            ui.save(False);assert not ui.dirty()
+            report['total_view_route_tier_controls']=True
             report.update(ok=True, pillow=PIL.__version__, tk=tk.TkVersion,
                           map_count=41, canvas_route_points=len(active['maps']['08_ruinberg']['routes'][0]['points']),
                           manual_plan=plans[11], profile_sha256=storage.contract.digest(active),

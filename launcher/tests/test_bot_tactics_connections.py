@@ -63,6 +63,75 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(original,e.entry()['routes'])
         self.assertEqual(storage.contract.default_map(e.map_name)['default_routes'],e.entry()['default_routes'])
 
+    def test_total_view_builtin_tier_changes_only_selected_class_and_round_trips(self):
+        e=self.editor;e.adopt(storage.contract.default_profile('Editable'))
+        e.map_var.set(storage.MAP_LABELS['63_tundra']);e.change_map()
+        e.route_class_var.set('total');e.change_route_class()
+        e.selection=('builtin','village@heavyTank');e._refresh_items()
+        self.root.update()
+        before=copy.deepcopy(e.document)
+        self.assertEqual('normal',str(e.tier_buttons['reserve'].cget('state')))
+        e.tier_buttons['reserve'].invoke()
+        expected=copy.deepcopy(before)
+        row=next(r for r in expected['maps']['63_tundra']['default_routes'] if r['team']==1 and r['id']=='village' and r.get('class_tag')=='heavyTank')
+        row['tier']='reserve'
+        self.assertEqual(expected,e.document)
+        self.assertEqual('normal',str(e.tier_buttons['main'].cget('state')))
+        self.assertEqual('disabled',str(e.tier_buttons['reserve'].cget('state')))
+        e.undo('maps');self.assertEqual(before,e.document)
+        e.redo('maps');self.assertEqual(expected,e.document)
+        e.save(False);self.errors.assert_not_called()
+        self.assertEqual(storage.contract.canonical(expected),self.store.read('Editable'))
+
+    def test_total_view_custom_family_splits_only_selected_class_tier(self):
+        e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
+        identity=e.selection[1];before=copy.deepcopy(e.document)
+        e.route_class_var.set('total');e.change_route_class()
+        e.selection=('routes',identity+'@mediumTank');e._refresh_items()
+        e.tier_buttons['reserve'].invoke()
+        selected=e._selected_parent()
+        self.assertEqual(['mediumTank'],selected['classes'])
+        self.assertEqual('reserve',selected['tier'])
+        original=next(r for r in e.entry()['routes'] if r['id']==identity)
+        self.assertNotIn('mediumTank',original['classes'])
+        self.assertEqual('main',original.get('tier','main'))
+        self.assertEqual(original['points'],selected['points'])
+        changed=copy.deepcopy(e.document)
+        e.undo('maps');self.assertEqual(before,e.document)
+        e.redo('maps');self.assertEqual(changed,e.document)
+        e.save(False);self.errors.assert_not_called()
+
+    def test_all_classes_tier_changes_only_current_team_family_metadata(self):
+        e=self.editor;e.adopt(storage.contract.default_profile('Editable'))
+        e.map_var.set(storage.MAP_LABELS['63_tundra']);e.change_map()
+        e.route_class_var.set('all');e.change_route_class()
+        e.selection=('builtin','village');e._refresh_items()
+        expected=copy.deepcopy(e.document)
+        for row in expected['maps']['63_tundra']['default_routes']:
+            if row['team']==1 and row['id']=='village':row['tier']='reserve'
+        e.tier_buttons['reserve'].invoke()
+        self.assertEqual(expected,e.document)
+        self.assertEqual('normal',str(e.tier_buttons['main'].cget('state')))
+
+    def test_tier_controls_remain_locked_for_default_connections_artillery_and_no_selection(self):
+        e=self.editor
+        for readonly,kind in ((True,'ordinary'),(False,'defense'),(False,'attack'),(False,'parking'),(False,'none')):
+            with self.subTest(readonly=readonly,kind=kind):
+                e.adopt(storage.contract.default_profile('Default' if readonly else 'Editable'))
+                e.map_var.set(storage.MAP_LABELS['63_tundra']);e.change_map()
+                e.route_class_var.set('total');e.change_route_class()
+                e.selection=('builtin','village@heavyTank')
+                if kind=='defense':e.network_mode='defense'
+                elif kind=='attack':
+                    item=next(r for r in e.entry()['routes'] if r.get('purpose')=='spg_attack' and r['team']==1)
+                    e.selection=('routes',item['id']+'@SPG')
+                elif kind=='parking':e.selection=('positions',e.entry()['positions'][0]['id'])
+                elif kind=='none':e.selection=None
+                e._refresh_items()
+                before=copy.deepcopy(e.document)
+                for button in e.tier_buttons.values():self.assertEqual('disabled',str(button.cget('state')))
+                e.set_tier('reserve');self.assertEqual(before,e.document)
+
     def test_connection_roundtrip_and_clone_rebind(self):
         e=self.route();e.add_defense();e.network_mode=''
         e.network_mode='defense';e.save(True)
