@@ -50,9 +50,9 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         order=self.order(scene,2.,lane=False)
         self.assertEqual(8,order['target_id'])
         self.assertFalse(order['fire_allowed'])
-        self.assertIsNone(order['throttle_override'])
-        self.assertEqual('advance_contact',order['combat_mode'])
-        self.assertEqual(order['aim_position'],order['move_position'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertEqual('engage',order['combat_mode'])
+        self.assertNotEqual(order['aim_position'],order['move_position'])
 
     def test_contact_free_capture_finishes_with_a_stable_hold(self):
         scene=self.scene()
@@ -89,9 +89,9 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         scene=self.scene(); self.order(scene)
         scene[2][0].update(x=65.,z=-245.)
         order=self.order(scene,2.)
-        self.assertEqual('advance',order['combat_mode'])
-        self.assertEqual(1.,order['throttle_override'])
-        self.assertEqual(dict(x=2.,y=0.,z=-250.),order['move_position'])
+        self.assertEqual('base_capture',order['combat_mode'])
+        self.assertIsNone(order['throttle_override'])
+        self.assertEqual(dict(x=2.505,y=0.,z=-252.6),order['move_position'])
         self.assertEqual('outside_arrival',order['tactical_evidence']['route_terminal']['outcome'])
 
     def test_intermediate_point_and_distant_final_point_keep_travel(self):
@@ -108,7 +108,9 @@ class TerminalRouteHandoffTests(unittest.TestCase):
         self.assertNotIn(order['combat_mode'],('low_health_retreat','low_health_defend'))
         scene=self.scene();scene[2][0].update(clip=0,clip_size=4,fire_seq=1,reload_time=25.)
         order=self.order(scene)
-        self.assertIn(order['combat_mode'],('magazine_reload_retreat','magazine_reload_hold'))
+        self.assertEqual('engage',order['combat_mode'])
+        self.assertEqual(0.,order['throttle_override'])
+        self.assertFalse(order['fire_allowed'])
 
     def test_single_point_automatic_goal_keeps_existing_precise_arrival(self):
         scene=self.scene((8.,-250.))

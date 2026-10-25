@@ -5851,7 +5851,7 @@ class BattleState:
 
     @staticmethod
     def _defense_points_for_guard(context, team):
-        return BotPlanner._defense_points(context.get('bases'), team)
+        return BotPlanner._defense_points(context.get('capture_bases'), team)
 
     def _active_team_commands_locked(self):
         """Return only current commands whose issuer can still direct Bots."""
@@ -15448,7 +15448,7 @@ class BattleState:
                 position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})
                 for bot in bots],
             incidents=planner._base_defense,
-            capture_squads=planner._base_capture,
+            capture_holds=planner._capture_arrivals,
             final_orders=[dict(id=order['id'], mode=order.get('combat_mode'),
                 defense_base_id=order.get('defense_base_id'), goal=order.get('move_position'))
                 for order in self.bot_orders.get('orders', ())]), separators=(',', ':')))

@@ -96,6 +96,8 @@ jobs:
             'test_port_0922_contact*.py'
             'test_port_0922_recovery_return_budget.py'
             'test_port_0922_capture_contact_launch.py'
+            'test_port_0922_capture_protection.py'
+            'test_port_0922_base_circle_arrival.py'
             'test_port_0922_magazine_followup.py'
             'test_port_0922_windstorm_bridge.py'
             'test_port_0922_windstorm_north.py'

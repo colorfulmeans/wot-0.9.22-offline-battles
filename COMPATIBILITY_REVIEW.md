@@ -10425,7 +10425,7 @@ Regression coverage includes receipt retries, repeated/concurrent edits, slot
 isolation, running-game refusal, write failures, first start, restore/reset,
 language round trips and mandatory frozen-editor capacity/nation receipts.
 
-## Recovery return budget and blocked-route retries
+## Recovery return budget and blocked-route retries (superseded allowance)
 
 The Lakeville 2026-10-23 23:07 report shows Bot 2 (110) remaining near
 (-281, -88) after switching from west valley to town and back. Bot 9 (268)
@@ -10437,7 +10437,9 @@ backtracking can spend at most half that forward high-water mark. Returning
 to an old endpoint earns no new credit. Initial independent reverse exits
 and tactical withdrawal remain legal. Live-vehicle traffic does not start a
 wreck-return budget. Departure beyond the existing hull
-clearance distance or Bot retirement releases the local receipt.
+clearance distance or Bot retirement releases the local receipt. The cumulative
+allowance described above was removed in the October 25 capture/recovery follow-up
+below; it must not be reintroduced by updating the old regression fixtures.
 
 Limited reverses use the existing short-escape runtime endpoint contract,
 including cached decision retirement and final native collision vetoes.
@@ -10532,3 +10534,33 @@ server module explicitly and final package verification checks its exact source.
 These tests prove control intent, not actual clearance through live wrecks or
 native gameplay performance; the exact Windows client remains the acceptance
 boundary for the delivered candidate.
+
+## October 25 capture and recovery follow-up
+
+Report ebb19501b480 records two Bots abandoning 69 accumulated capture points
+for an outside contact destination. Capture squad allocation, replacement and
+peripheral screening are removed. All ordinary authored lanes can finish at the
+actual enemy capture circle. Every actual arrival retains circle ownership across
+contact pursuit, reload and worker-local repositioning, with existing shot checks.
+A shove outside requests re-entry. Separate task priorities and physical recovery
+remain; this does not change server capture scoring or its three-contributor rate.
+Canonical `capture_bases`, rather than threat-only `bases`, also owns player guard
+creation and arrival even when the own base is currently safe.
+
+The local cumulative half-forward-distance return quota is removed, including
+its cached allowance and reverse veto. The reported ST-I centimetre-scale pushes
+cannot exhaust reverse permission. Existing physical short-escape proofs, endpoint
+retirement, map boundaries, water checks and macro route recovery remain active.
+Detailed pocket diagnostics retain their existing opt-in gate and bounded rate.
+
+Artillery without a purpose-specific deployment, relocation, defense or sortie
+connection retains the old automatic destination. Missing relocation links do not
+invent a base detour. Missing sorties release stale deployment ownership. Existing
+connections remain authored when a join cannot be proved; native physical checks
+still decide actual movement. A present relocation link remains usable even when
+the destination parking has no deployment connection.
+
+The updated route-task verification document records report-derived scenarios,
+network cache invalidation, worker adapter checks and repeatable test commands.
+All 209 client modules compile under CPython 2.7. Engine-free tests are separate
+from native extension/packaging checks and do not establish live match acceptance.

@@ -229,7 +229,7 @@ class RouteTasksMixin:
         elif task and task['kind'] == 'defense':
             self._travel_tasks.pop(actor, None);self._task_rejoin(bot);task = None;released=True
         if task is None and player_order and player_order.get('command') == 'BACKTOBASE' and not combat:
-            bases = self._defense_points((defense or {}).get('bases'), bot['team'])
+            bases = self._defense_points((defense or {}).get('capture_bases'), bot['team'])
             if bases:
                 base = min(bases, key=lambda b:distance(point(bot['state']), b['point']))
                 task = self._task_begin(bot, 'guard', dict(base_id=base['id'], **base), now=now)

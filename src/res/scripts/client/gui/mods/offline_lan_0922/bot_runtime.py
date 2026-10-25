@@ -7438,7 +7438,6 @@ class BotRuntime(object):
         actions = (state.get('_execution_window') or {}).get('actions') or ()
         outcome = actions[-1].get('outcome', {}) if actions else {}
         handoff = state.get('_planner_blocked_handoff') or {}
-        return_memory = getattr(self.adapter, '_recovery_travel', {}).get(state['id']) or {}
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
@@ -7452,8 +7451,6 @@ class BotRuntime(object):
             last_execution={key:outcome.get(key) for key in (
                 'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
             recovery_count=driver.get('recovery_count'),
-            return_memory={key:return_memory.get(key) for key in (
-                'active', 'origin', 'yaw', 'forward', 'returned', 'replan_requested')},
             short_escape_denials=[{key:row.get(key) for key in (
                 'sign', 'distance', 'clear', 'reason', 'blocker')}
                 for row in (driver.get('short_escape_probes') or ())[:6]],
@@ -7465,7 +7462,6 @@ class BotRuntime(object):
             route=order.get('route_id'), route_index=order.get('route_index'),
             attempt={key:attempt.get(key) for key in
                 ('action', 'elapsed', 'physical_block', 'next_route', 'next_index', 'retry_after')},
-            backtrack=command.get('backtrack_budget'),
             water_depth=state.get('_water_depth'),
             probe={key:probe.get(key) for key in
                 ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
@@ -7690,7 +7686,6 @@ class BotRuntime(object):
             'motion_control_gates': list(state.get('_motion_control_gates') or ()),
             'baked_pose_guards': list(state.get('_baked_pose_guards') or ()),
             'contact_escape': command.get('contact_escape'),
-            'backtrack_budget': command.get('backtrack_budget'),
             'wreck_push': command.get('wreck_push'),
             'wreck_push_last_terminal': command.get('wreck_push_last_terminal'),
             'withdrawal': command.get('withdrawal'),
@@ -17019,6 +17014,8 @@ class BotRuntime(object):
                         callable(decide_with_order)):
                     if diagnostic is not None:
                         diagnostic.count('decision_reposition_order')
+                    if (server_order or {}).get('capture_area'):
+                        reposition_order = dict(reposition_order, capture_area=server_order['capture_area'])
                     command = timed_call(
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,

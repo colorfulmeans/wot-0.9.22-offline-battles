@@ -7,13 +7,12 @@ for visibility, collision probes, and applying commands to any client entity.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
-from gui.mods.offline_lan_0922 import tank_collision
-from gui.mods.offline_lan_0922.ai import recovery_travel
+from gui.mods.offline_lan_0922 import tank_collision, capture_orders
 
 import math
 
 from gui.mods.offline_lan_0922.ai.driver import (
-    LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance, short_escape_remaining,
+    LocalDriver, WAYPOINT_ARRIVAL_RADIUS, recovery_probe_distance,
 )
 from gui.mods.offline_lan_0922.ai.planner import BattleDirector
 
@@ -53,7 +52,6 @@ class BotAdapter(object):
         self._wreck_last_terminal = {}
         self._withdrawal_attempts = {}
         self._flank_arrivals = {}
-        self._recovery_travel = {}
 
     def register(self, bot_id, team, descriptor, display_name='Bot'):
         return self.director.register(bot_id, team, descriptor, display_name)
@@ -69,7 +67,6 @@ class BotAdapter(object):
         self._wreck_last_terminal.pop(int(bot_id), None)
         self._withdrawal_attempts.pop(int(bot_id), None)
         self._flank_arrivals.pop(int(bot_id), None)
-        self._recovery_travel.pop(int(bot_id), None)
 
     def _hull_contact(self, bot_id, state, position):
         """Return geometry for a real hull contact across small gaps."""
@@ -519,6 +516,7 @@ class BotAdapter(object):
         strategic = strategic if isinstance(strategic, dict) else {}
         bot_id = int(state.get('id', 0))
         position = _position(state.get('position'))
+        strategic = capture_orders.constrain(strategic, position)
         return self._drive_order(
             bot_id, state, position, strategic, direction_clear)
 
@@ -638,103 +636,6 @@ class BotAdapter(object):
                 state['neighbours'] = original_neighbours
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
-                              direction_clear):
-        yaw = float(state.get('yaw', 0.))
-        memory = recovery_travel.observe(self._recovery_travel.get(bot_id),
-            position, yaw, 2.*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS)
-        self._recovery_travel[bot_id] = memory
-        budget_before = recovery_travel.remaining(memory)
-        original_clear = direction_clear
-        spent_return = (budget_before is not None and budget_before <= .05 and
-                strategic.get('combat_mode') not in ('withdraw', 'low_health_retreat',
-                    'magazine_reload_retreat', 'under_fire_withdraw', 'crossfire_withdraw'))
-        if spent_return:
-            def return_checked_clear(heading, maximum_distance=None, drive_direction=1.):
-                # This is a spent recovery action, not a fabricated wall.
-                # Reject it during selection so the same decision can choose
-                # a checked forward exit or pivot instead of braking forever.
-                if (maximum_distance is not None and
-                        math.cos(heading-memory['yaw']) < -.5):
-                    return_checked_clear.last_receipt = dict(clear=False,
-                        reason='recovery_return_budget_spent', distance=maximum_distance)
-                    return False
-                result = self.driver._clear(original_clear, heading, maximum_distance, drive_direction)
-                return_checked_clear.last_receipt = dict(self.driver._last_direction_receipt)
-                return result
-            direction_clear = return_checked_clear
-        command = self._unbounded_drive_order_controls(bot_id, state, position,
-                                                       strategic, direction_clear)
-        mode = command.get('recovery_mode')
-        if spent_return and not memory.get('replan_requested'):
-            command['navigation_replan'] = True
-            memory['replan_requested'] = True
-        if (not memory.get('active') and command.get('throttle', 0.) > 0. and
-                mode in ('wreck_push', 'contact_escape', 'short_forward_escape', 'forward_escape')):
-            escape = self._contact_escapes.get(bot_id)
-            wreck_encounter = (mode == 'wreck_push' or
-                (escape is not None and not escape['peer_alive']) or
-                any(not peer.get('alive', True) and
-                    math.hypot(_position(peer.get('position'))[0]-position[0],
-                               _position(peer.get('position'))[2]-position[2]) <=
-                    2.*float(state.get('half_length', 3.5))+WAYPOINT_ARRIVAL_RADIUS
-                    for peer in state.get('neighbours', ())))
-            if wreck_encounter:
-                memory = recovery_travel.observe(None, position, yaw, 0.)
-                memory['active'] = True
-                self._recovery_travel[bot_id] = memory
-        budget = recovery_travel.remaining(memory)
-        returning = math.cos(yaw-memory['yaw']) > .5
-        if (budget is not None and returning and command.get('throttle', 0.) < 0. and
-                mode in ('reverse_turn', 'short_reverse_escape', 'contact_escape')):
-            # A return budget may only shorten an admitted exit. It must
-            # never extend the original proof beyond a wall or another hull.
-            admitted = short_escape_remaining(command, position)
-            if admitted is None:
-                admitted = command.get('recovery_probe_distance')
-            if admitted is not None:
-                budget = min(budget, max(0., float(admitted)))
-            command['backtrack_budget'] = dict(forward=memory['forward'],
-                returned=memory['returned'], remaining=budget, origin=memory['origin'])
-            if budget <= .05:
-                command.update(throttle=0., brake=True,
-                    recovery_mode='short_reverse_escape', recovery_probe_distance=0.,
-                    recovery_probe_origin=tuple(position), recovery_probe_yaw=yaw+math.pi,
-                    recovery_probe_length=0.)
-                driver_state = self.driver.states.get(bot_id)
-                if driver_state is not None and recovery_travel.remaining(memory) <= .05:
-                    heading = yaw+math.pi
-                    driver_state['failed_yaws'][self.driver._yaw_key(heading)] = (
-                        driver_state['clock']+self.driver.failure_ttl)
-                    driver_state.pop('short_translation_escape', None)
-                    driver_state.pop('translation_escape', None)
-                    # Retire the old backing lease, then seek another proved
-                    # straight exit without allowing the spent return heading.
-                    alternative = self.driver._short_escape(driver_state,
-                        position, yaw, state.get('speed', 0.), state.get('dt', .1),
-                        state.get('decision_horizon', 0.), state.get('stopping_distance', 0.),
-                        state.get('neighbours', ()),
-                        direction_clear, state.get('half_length', 3.5), state.get('half_width', 1.7))
-                    if alternative is not None:
-                        command.update(alternative, brake=False)
-                    if not memory.get('replan_requested'):
-                        command['navigation_replan'] = True
-                        memory['replan_requested'] = True
-                escape = self._contact_escapes.pop(bot_id, None)
-                attempt = self._contact_attempts.get(bot_id)
-                if escape is not None and attempt is not None:
-                    attempt.setdefault('failed_headings', []).append(escape['yaw']+math.pi)
-                    del attempt['failed_headings'][:-32]
-            else:
-                # Reuse the existing runtime endpoint clamp and all final
-                # collision vetoes. Cached decisions cannot drive past this
-                # endpoint while waiting for another planner update.
-                command.update(recovery_mode='short_reverse_escape',
-                    recovery_probe_distance=budget, recovery_probe_origin=tuple(position),
-                    recovery_probe_yaw=yaw+math.pi, recovery_probe_length=budget)
-        memory.update(throttle=command.get('throttle', 0.) if memory.get('active') else 0.)
-        return command
-
-    def _unbounded_drive_order_controls(self, bot_id, state, position, strategic,
                                        direction_clear):
         # Navigation waits, withdrawal and contact plans do not execute drive.
         # Their receipts must not reuse the previous drive call's distances.
@@ -777,6 +678,8 @@ class BotAdapter(object):
                 self._contact_escape_evidence(state, escape, 'parking_cancelled')
         combat_hold = (strategic.get('target_id') is not None and
             strategic.get('combat_mode') in ('engage', 'support_hold', 'cover_hold') and
+            strategic.get('throttle_override') == 0.0)
+        combat_hold = combat_hold or bool(strategic.get('capture_area') and
             strategic.get('throttle_override') == 0.0)
         if combat_hold:
             escape = self._contact_escapes.pop(bot_id, None)

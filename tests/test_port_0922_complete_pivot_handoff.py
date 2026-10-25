@@ -136,7 +136,7 @@ class CompletePivotHandoffTests(unittest.TestCase):
                      recovery_mode='blocked', partial_pivot_search=proof)
         state = dict(self.state, slot=0, team=2, speed=0., dt=0.1)
         with mock.patch.object(adapter.driver, 'drive', return_value=local):
-            command = adapter._unbounded_drive_order_controls(19, state,
+            command = adapter._drive_order_controls(19, state,
                 self.position, dict(combat_mode='route', move_position=self.goal),
                 lambda *unused: True)
         self.assertIs(proof, command['partial_pivot_search'])

@@ -137,35 +137,7 @@ class BaseCircleArrivalTests(unittest.TestCase):
             config.assert_not_called()
         self.assertEqual(previous, order)
 
-    def test_actual_occupants_and_humans_fill_capture_budget(self):
-        planner = BotPlanner()
-        route = _route('lane', [(0., 100., False), (0., 200., False)])
-        bots = [_bot(11+i, 1, i, route, 'mediumTank') for i in range(5)]
-        for i, bot in enumerate(bots):
-            bot['state'] = _state(bot['id'], 1, 100.+i, 0.)
-        target = dict(id='2:0', point=dict(x=0., y=0., z=0.), radius=50.)
-        initial = planner._update_base_capture(1, bots, target, set(), 1.)
-        self.assertEqual({11,12,13}, initial)
-        contributors = {('human', 99), ('bot', 15)}
-        bots[-1]['state']['x'] = 30.
-        bots[-1]['state']['critical'] = {'destroyed': ['leftTrackHealth']}
-        selected = planner._update_base_capture(1, bots, target, set(), 2., contributors=contributors)
-        self.assertEqual({11,15}, selected)
-        self.assertEqual(selected, planner._update_base_capture(1, bots, target, set(), 3., contributors=contributors))
-        self.assertEqual(set(), planner._update_base_capture(1, bots, target, set(), 4.,
-            contributors={('human',97),('human',98),('human',99)}))
-        restored = planner._update_base_capture(1, bots, target, set(), 5.)
-        self.assertEqual(3, len(restored))
 
-    def test_build_orders_counts_authoritative_human_contributors(self):
-        scene = self.helper.scene((32., -250.))
-        scene[3]['contributors'] = {'1': [dict(kind='human', id=i) for i in (91,92,93)]}
-        self.helper.order(scene, contact=False)
-        self.assertEqual([], scene[0]._base_capture[2]['bot_ids'])
-        self.assertEqual(0, scene[0]._base_capture[2]['allocation']['budget'])
-        scene[3]['contributors']['1'].pop()
-        self.helper.order(scene, 2., contact=False)
-        self.assertEqual([17], scene[0]._base_capture[2]['bot_ids'])
 
     def test_capture_without_route_still_stops_inside_circle(self):
         scene = self.helper.scene((32., -250.))
@@ -190,15 +162,6 @@ class BaseCircleArrivalTests(unittest.TestCase):
                     self.assertEqual(0., order['throttle_override'])
                     self.assertEqual(100., order['move_position']['x'])
 
-    def test_contact_stall_records_evidence_without_changing_retry_policy(self):
-        scene = self.helper.scene((60., -220.))
-        self.helper.order(scene)
-        self.helper.order(scene, 30.)
-        receipt = scene[0]._base_capture[2]['progress'][17]['observation']
-        self.assertEqual(1, receipt['known_contacts'])
-        self.assertGreater(receipt['seconds_without_progress'], 20.)
-        self.assertIn('fire_seq', receipt)
-        self.assertEqual([17], scene[0]._base_capture[2]['bot_ids'])
 
 
 if __name__ == '__main__':

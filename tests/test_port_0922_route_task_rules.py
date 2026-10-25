@@ -51,7 +51,7 @@ class CommandCooldownTests(unittest.TestCase):
 
     def test_guard_has_one_way_arrival_and_continuous_safe_time(self):
         self.send('BACKTOBASE',1)
-        context=dict(bases={'1':[dict(id='own',x=0.,y=0.,z=-200.,radius=30.)]},states={'1':dict(invaders=1)},contributors={'1':[]})
+        context=dict(capture_bases={'1':[dict(id='own',x=0.,y=0.,z=-200.,radius=30.)]},states={'1':dict(invaders=1)},contributors={'1':[]})
         with mock.patch.object(self.server,'_bot_defense_context',return_value=context):
             self.server.tick+=int(80*TICK_HZ)
             self.assertTrue(self.server._active_team_commands_locked())
@@ -76,6 +76,19 @@ class CommandCooldownTests(unittest.TestCase):
         self.send('BACKTOBASE',1)
         self.server.tick+=int(90*TICK_HZ)
         self.assertFalse(self.server._active_team_commands_locked())
+
+    def test_safe_base_uses_canonical_circle_for_arrival_and_thirty_second_release(self):
+        self.send('BACKTOBASE',1)
+        context=dict(bases={'1':[]},capture_bases={'1':[dict(id='own',x=0.,z=-200.,radius=30.)]},
+                     states={'1':dict(invaders=0)},contributors={'1':[]})
+        with mock.patch.object(self.server,'_bot_defense_context',return_value=context):
+            self.server.tick+=int(80*TICK_HZ)
+            for actor in (11,12):self.server.bot_states[actor].update(x=0,z=-200,world_pose=True)
+            self.assertTrue(self.server._active_team_commands_locked())
+            self.server.tick+=int(29*TICK_HZ)
+            self.assertTrue(self.server._active_team_commands_locked())
+            self.server.tick+=int(TICK_HZ)
+            self.assertFalse(self.server._active_team_commands_locked())
         self.server.tick+=int(10*TICK_HZ);self.send('BACKTOBASE',2)
         self.fixture.sender.alive=False
         self.assertFalse(self.server._active_team_commands_locked())
@@ -292,6 +305,61 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state['_spg_initial']['zone']='b'
         result=self.apply('artillery_relocate')
         self.assertEqual((50,0.,150),result['move_position'])
+
+    def test_missing_link_uses_automatic_goal_not_invented_trip_via_base(self):
+        self.state.update(x=0,z=100)
+        self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
+        self.state['_spg_initial']['zone']='b'
+        result=self.apply('artillery_relocate',move_position=(100,0,100))
+        self.assertEqual((100,0,100),result['move_position'])
+        self.assertNotIn('authored_spg_connection',result)
+        self.state.update(x=100,z=100);self.apply('artillery_hold')
+        self.assertEqual('b',self.state['_authored_spg_zone']['id'])
+
+    def test_present_relocation_link_does_not_require_destination_deployment(self):
+        self.peer.pop('travel')
+        self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
+        self.state.update(x=0,z=100)
+        self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
+        self.state['_spg_initial']['zone']='b'
+        self.assertEqual((50,0.,150),self.apply('artillery_relocate')['move_position'])
+
+    def test_missing_deployment_keeps_native_goal_and_drops_stale_connection(self):
+        self.apply()
+        self.zone.pop('travel')
+        result=self.apply(move_position=(5,0,105))
+        self.assertEqual((5,0,105),result['move_position'])
+        self.assertNotIn('authored_spg_connection',result)
+        self.assertNotIn('_authored_spg_travel',self.state)
+
+    def test_missing_sortie_does_not_resume_cached_deployment(self):
+        self.apply();self.regular['alive']=False
+        result=self.apply('base_capture',move_position=(0,0,300))
+        self.assertEqual((0,0,300),result['move_position'])
+        self.assertEqual('base_capture',result['combat_mode'])
+        self.assertNotIn('_authored_spg_travel',self.state)
+
+    def test_missing_defense_connection_keeps_automatic_base_destination(self):
+        self.zone.pop('travel')
+        result=self.apply('base_defense',move_position=(0,0,0))
+        self.assertEqual((0,0,0),result['move_position'])
+        self.assertNotIn('authored_spg_connection',result)
+
+    def test_missing_attack_route_keeps_present_deployment_for_regular_team(self):
+        self.assertEqual((30,0.,50),self.apply()['move_position'])
+
+    def test_unproved_join_retains_existing_connection_and_retries(self):
+        self.join.return_value=None
+        self.state.update(x=90,z=100)
+        result=self.apply('base_defense',move_position=(0,0,-300))
+        self.assertEqual('defense',result['authored_spg_connection'])
+        self.assertEqual((0,0.,100),result['move_position'])
+        self.assertNotEqual((0,0,-300),result['move_position'])
+        for now in (2.,100.,300.):
+            result=self.travel.apply(self.runtime,self.state,
+                dict(combat_mode='base_defense',move_position=(0,0,-300)),now)
+            self.assertEqual('defense',result['authored_spg_connection'])
+            self.assertIsNone(result['throttle_override'])
 
     def test_defense_preserves_actual_parking_and_resumes_deployment(self):
         self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100)

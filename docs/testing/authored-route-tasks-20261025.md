@@ -50,6 +50,23 @@ points, then existing target score; retain real visibility, range, aiming and
 launch checks. An outside attacker cannot retain a target lease over a legal
 capturer. Ordinary combat ranking resumes when defense ends.
 
+Player guard creates and checks its own-circle task against canonical
+`capture_bases`, including a currently safe base. Threat-only `bases` cannot
+define guard arrival or its continuous-safe release phase.
+
+Attack travel has no selected three-Bot capture squad and no peripheral capture
+screen. Every ordinary route can finish at the actual enemy circle. All actual
+arrivals retain their circle during contact pursuit, reload and worker-local
+repositioning; aim, range and final launch checks remain unchanged. Displacement
+outside the circle requests re-entry. Separate defense, recovery, player and
+pressure task ownership remains intact. The native/server capture law still
+limits scoring speed to three contributors; this is not a vehicle admission cap.
+
+Local recovery has no cumulative half-forward-distance reverse allowance.
+Repeated proved reverse escapes remain eligible even after tiny forward pushes.
+Short escape endpoints, collision/water/boundary checks and the existing macro
+recovery cycle still apply; removal of the allowance is not clearance evidence.
+
 Player command admission has one shared 10-second cooldown per issuer. Only an
 executable recipient starts it. A cooldown rejection neither queues nor renews
 an old order: eligible recipients reply negatively only on the first rejected
@@ -91,6 +108,12 @@ Existing unconfigured parking retains its prior automatic path until an authored
 connection is supplied. These new two-point outlines require map authoring;
 they do not claim to have authored bridge detours automatically.
 
+Missing deployment, relocation, defense and sortie connections each retain the
+existing automatic destination for that purpose. A missing relocation link does
+not invent a connection through base. A missing sortie cannot retain a cached
+deployment. Present authored connections retain their points when join proof is
+unavailable and continue through the existing physical checks and retries.
+
 Optional schema-1 fields are `tier`, `family`, `node_ids`, `defense`, route
 `purpose=spg_attack`, and parking `travel`/`links`. Exact map resource identities,
 endpoint ownership and bounds remain checked. Packaging includes the new client
@@ -103,6 +126,18 @@ runtime import.
   task ownership, frozen turnback, circle handoff, pressure commitment/expiry,
   class-family occupancy, directed rejoin, stable junctions and SPG deployment,
   relocation, defense and sortie sequencing.
+- `test_port_0922_capture_protection.py` reproduces the ebb19501b480 circle and
+  contact positions, including lost firing lanes, reload, six arrivals with
+  three human contributors, displacement, owner changes and network cache
+  invalidation. Local adapter tests reject outside reposition goals without
+  changing target or shot permissions. `test_port_0922_recovery_return_budget.py`
+  now requires continued reverse eligibility and retains blocked-exit and
+  diagnostic-entry coverage; the obsolete cumulative-budget tests are removed.
+- Repeat these checks with `python tools/run_test_suite.py --jobs 4 --pattern
+  test_port_0922_capture_protection.py --pattern test_port_0922_route_task_rules.py
+  --pattern test_port_0922_recovery_return_budget.py --pattern
+  test_port_0922_terminal_route_handoff.py --pattern
+  test_port_0922_base_circle_arrival.py --pattern test_port_0922_server_bot_ai.py`.
 - Real Windows Tk tests exercise connection editing, fixed ends, long branches,
   waiting-place exclusion, tier changes, class-specific junction identities,
   save/reopen, copy/undo and toolbar reachability. Frozen editor smoke saves a

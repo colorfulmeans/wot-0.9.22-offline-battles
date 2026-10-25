@@ -32,7 +32,10 @@ def _join(runtime,state,points):
 def _task(runtime,state,kind,points,identity,index=None):
     if not points:return None
     if index is None:index=_join(runtime,state,points)
-    if index is None:return None
+    # An authored connection still exists when its join query cannot prove a
+    # shortcut. Keep its first node and the normal physical/retry machinery;
+    # do not silently substitute the unrelated automatic destination.
+    if index is None:index=0
     return dict(kind=kind,points=copy.deepcopy(points),identity=identity,index=index)
 
 
@@ -94,6 +97,12 @@ def apply(runtime,state,order,now):
                 if tag!='SPG':alone=False;break
         sorties=sorted(s['id'] for s in alive if s['team']==state['team'])[:3]
         routes=[r for r in settings.get('routes',()) if r.get('purpose')=='spg_attack' and r['team']==state['team']]
+        if alone and not routes:
+            # No authored sortie exists. Do not let a cached deployment
+            # override the existing automatic capture/combat destination.
+            state.pop('_authored_spg_travel', None)
+            state.pop('_authored_spg_attack', None)
+            return order
         if alone and routes and state['id'] in sorties:
             if order.get('target_id') is not None and order.get('fire_allowed'):return order
             attack=state.get('_authored_spg_attack')
@@ -107,18 +116,40 @@ def apply(runtime,state,order,now):
                 if active is None:
                     active=_task(runtime,state,'attack',attack['points'],('attack',attack['id']),0)
                 state['_authored_spg_travel']=active
-        elif zone and zone.get('travel') and mode in ('artillery_deploy','artillery_hold','artillery_relocate'):
+        elif zone and mode in ('artillery_deploy','artillery_hold','artillery_relocate'):
+            previous=state.get('_authored_spg_zone')
+            relocating=bool(previous and previous['id']!=zone['id'])
+            if not relocating and not zone.get('travel'):
+                state.pop('_authored_spg_travel', None)
+                if separation(pose,zone['point'])<=zone['radius']:
+                    state['_authored_spg_zone']=copy.deepcopy(zone)
+                    state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+                return order
             identity=('deploy',zone['id'])
             if active is None or active['identity']!=identity:
-                previous=state.get('_authored_spg_zone')
-                points=zone['travel']
-                if previous and previous['id']!=zone['id']:
-                    points=previous.get('links',{}).get(zone['id']) or list(reversed(zone.get('links',{}).get(previous['id'],()))) or list(reversed(previous.get('travel',())))+zone['travel']
+                points=zone.get('travel')
+                if relocating:
+                    points=previous.get('links',{}).get(zone['id']) or list(reversed(zone.get('links',{}).get(previous['id'],())))
+                    if not points:
+                        # A missing link is an automatic navigation leg,
+                        # not permission to invent an authored trip via base.
+                        state.pop('_authored_spg_travel', None)
+                        if separation(pose,zone['point'])<=zone['radius']:
+                            state['_authored_spg_zone']=copy.deepcopy(zone)
+                            state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+                        return order
+                if not points:
+                    state.pop('_authored_spg_travel', None)
+                    if separation(pose,zone['point'])<=zone['radius']:
+                        state['_authored_spg_zone']=copy.deepcopy(zone)
+                        state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
+                    return order
                 entry=len(points)-1 if separation(pose,zone['point'])<=zone['radius'] else 0
                 active=_task(runtime,state,'deploy',points,identity,entry)
                 state['_authored_spg_travel']=active
                 if active:active['parking']=copy.deepcopy(zone)
     if not active:return order
+    if not defense and active['kind']=='defense':return order
     if defense and order.get('throttle_override')==0.:return order
     # Existing local combat keeps ownership; defense alone owns the moving hull.
     if not defense and mode not in ('artillery_deploy','artillery_hold','artillery_relocate','route','advance','base_capture','spg_route_travel'):

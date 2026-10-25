@@ -718,6 +718,16 @@ assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage
 and bundled runtimes.
 
+Enemy-base approach now follows ordinary routes without a selected capture squad
+or peripheral screening group. Every actual circle arrival retains capture while
+aiming and reloading; worker-local pursuit cannot replace it with an outside goal.
+Physical displacement requests circle re-entry. Capture scoring keeps its native
+three-contributor rate limit. Recovery reverses no longer consume a cumulative
+half-forward-distance allowance; normal physical probes and route retries remain.
+Artillery uses authored travel when present and the previous automatic navigation
+when the corresponding deployment, relocation, defense or sortie connection is
+absent. See the updated [route-task validation](docs/testing/authored-route-tasks-20261025.md).
+
 ### Static navigation review removal test
 
 This test branch removes broad native static-edge review and its live missing-cell/link repair machinery for every map. The rebuilt Airfield graph is retained; the other 40 graphs are unchanged and are not represented as newly baked. Local displaced-hull connector checks, moving-vehicle avoidance, wreck costs, per-Bot contact recovery and final physical collision remain. Native gameplay and performance require testing on the exact client.
