@@ -1,4 +1,5 @@
 """The reviewed complete owner baseline ships to every installation."""
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +10,7 @@ import bot_tactics_store as storage
 
 
 ROOT=Path(__file__).resolve().parents[2]
-EXPECTED=json.loads((ROOT/'tests/fixtures/default_tactics_owner_20261024.json').read_text(encoding='utf8'))
+EXPECTED=json.loads((ROOT/'tests/fixtures/default_tactics_owner_20261025.json').read_text(encoding='utf8'))
 
 
 class AdoptedDefaultTests(unittest.TestCase):
@@ -56,8 +57,27 @@ class AdoptedDefaultTests(unittest.TestCase):
             for edit in profile['maps'][name]['default_routes']:
                 key='%s:%s'%(edit['team'],storage.contract.default_route_id(edit))
                 self.assertEqual('route_deleted' if edit.get('disabled') else 'baked_route_connected',outcomes[key],(name,key))
-            for identity,status,issues in storage.runtime.authoring_check(profile,name,graph,details=True):
+            # Legacy ordinary-node checker does not model SPG base-circle goals.
+            # Inventory regressions separately check all artillery area endpoints.
+            ordinary=copy.deepcopy(profile)
+            ordinary['maps'][name]['routes']=[r for r in ordinary['maps'][name]['routes']
+                if r.get('purpose')!='spg_attack']
+            for identity,status,issues in storage.runtime.authoring_check(ordinary,name,graph,details=True):
                 self.assertIn(status,('baked_route_connected','generic_parking_found'),(name,identity,issues))
+
+    def test_review_deletion_and_fresh_editable_copies_keep_the_complete_shared_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store=storage.Store(temp)
+            review=storage.contract.default_profile('Route review 20261025')
+            store.save(review,apply=True);path=store.profile_path(review['name'])
+            store.delete(review['name'])
+            self.assertFalse(path.exists());self.assertFalse(Path(str(path)+'.bak').exists())
+            self.assertEqual(['Default'],store.names())
+            self.assertEqual(EXPECTED['profile_digest'],storage.contract.digest(store.active()))
+            fresh=storage.contract.default_profile('Fresh editable')
+            self.assertEqual(store.active()['maps'],fresh['maps'])
+            store.save(fresh,apply=True)
+            self.assertEqual(fresh,storage.Store(temp).active())
 
     def test_existing_default_updates_but_independent_profiles_are_preserved(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -973,16 +973,18 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if key not in self.spg_default_cache:
             self.spg_default_cache[key]=storage.default_spg_positions(self.map_name,self.graph_cache.get(self.map_name),self.document)
         self.spg_defaults=self.spg_default_cache[key]
+        for tag,color in CLASS_COLORS.items():
+            self.items.tag_configure('route_'+tag,foreground=color)
         self.items.tag_configure('artillery',foreground=CLASS_COLORS['SPG'])
         def insert_custom(item,tag=None):
             identity=item['id']+'@'+tag if tag else item['id']
             self.items.insert('','end',iid='routes:'+identity,text=self._custom_caption('routes',item,tag),
-                tags=('artillery',) if item.get('purpose')=='spg_attack' else ())
+                tags=('artillery',) if item.get('purpose')=='spg_attack' else ('route_'+(tag or self.route_class_var.get()),))
         for item in self.entry()['routes']:
             if item['team']!=self.team or item.get('purpose')=='spg_attack' or not self._visible_for_class('routes',item):continue
             for tag in (item['classes'] if self.route_class_var.get()=='total' else (None,)):insert_custom(item,tag)
         for route,tag,identity in self._builtin_views():
-            self.items.insert('','end',iid='builtin:'+identity,text=self._builtin_caption(route['id'],tag))
+            self.items.insert('','end',iid='builtin:'+identity,text=self._builtin_caption(route['id'],tag),tags=('route_'+tag,))
         if self.route_class_var.get() in ('SPG','total'):
             default_ids={p['id'] for p in self.spg_defaults}
             for item in self._parking_items():

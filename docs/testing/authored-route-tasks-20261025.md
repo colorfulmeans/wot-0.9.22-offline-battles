@@ -213,16 +213,18 @@ runtime import.
   laws or weaken the departure bound to make packaging appear fully validated.
 
 
-## Editable connection review draft and complete map checks
+## Shared reviewed connections and complete map checks
 
-`tools/evidence/route-review-draft-20261025.json` is a separate profile named
-`Route review 20261025`, copied from the current Default. It contains 246
+The owner approved `Route review 20261025` and requested its complete adoption
+into the immutable shared Default on 2026-10-25. The same data now ships to
+every installation, rather than requiring a personal profile import. It contains 246
 base-to-parking deployment paths, 492 explicitly directed parking-to-parking
 paths, and 82 artillery endgame routes across all 41 maps. Endgame paths use
 an existing authored road with base-circle ends; deployment and relocation
 paths retain the shipping planner's supported bends, dry support, clearance
-and climb approach within the sixteen-point editor contract. Nothing is added
-to the public Default and no profile is applied automatically.
+and climb approach within the sixteen-point editor contract. Existing Default
+materializations refresh to the shared baseline; independent user plans remain
+independent. The standalone review JSON is retired from source and packaging.
 
 Only Mittengard, Tundra and Ghost Town gain ordinary-route defense branches.
 Each enabled class variant is considered independently. The nearest original
@@ -253,10 +255,10 @@ to the existing collected launcher log.
 
 Reproduce draft generation with `python tools/build_route_review_draft.py
 OUTPUT.json`; its evidence sidecar records paths which could not be generated.
-The checked-in candidate has no unconfigured connections. Generation is an
-initial authoring aid, not proof that a gate, bridge or slope is safe in native
-physics. The owner reviews this named profile before any Default promotion.
-The runnable package includes the same JSON for normal profile import.
+The shared baseline has no unconfigured connections. Generation preserves
+existing authored deployment, relocation, sortie and defense paths, adding only
+missing data; rerunning it cannot overwrite reviewed geometry or duplicate
+sorties. Generation is an authoring aid, not native passage evidence.
 
 Regression: run all `launcher/tests`, including `test_bot_tactics_inventory.py`.
 The new tests check every map in both directions, effective class overrides,
@@ -331,3 +333,36 @@ inherited-link and check-result-location regressions. The packaged editor smoke
 now requires the separate artillery category, red attack canvas object,
 one-shot connect/undo/redo and child-node editing through the frozen executable.
 The downloadable review profile and public Default geometry are unchanged.
+
+
+## Approved shared Default adoption and class-colored route entries
+
+The complete reviewed document is embedded in `bot_tactics_default_data.py`.
+The 20261025 adoption fixture locks the whole profile and each map, including
+all ordinary points/waits, artillery parking/travel/relocation/attack paths,
+defense junctions, tiers and behavior overrides. First installation, refresh of
+an older Default, deletion of an applied review copy and creation of a new
+editable Default copy must retain the exact shared contents. Independent custom
+profiles are preserved. The old standalone review file is no longer packaged.
+
+Tree entries use the same class palette as the map: light green, medium ochre,
+heavy gray, tank destroyer blue, artillery red, shared All-classes black. Total
+view colors each effective class separately. Filter changes and language
+switching preserve geometry, selection and colors; reserve tiers keep their
+existing map dashes. No combat, steering or worker scheduling code changes.
+
+Validation runs all launcher test files, all 41 effective navigation inventories,
+relevant route/runtime tests, CPython 2.7 compilation and the frozen editor smoke.
+The downloaded package must contain the exact shared baseline in its client and
+server payload and must omit the retired review JSON. Static navigation checks
+do not guarantee native bridge, slope or gate passage. Previously reported
+Airfield departure and opposed Great Wall gate simulation failures remain
+separate from this data/editor change; do not weaken those assertions.
+
+Local focused evidence for the adoption: five complete-default/storage checks,
+ten inventory checks (all 41 maps plus generator idempotence), fourteen actual
+Tk artillery/color tests, and 116 route/runtime checks across seven files pass.
+All 209 client modules compile with CPython 2.7.18. The actual source editor
+smoke passes and records `route_tree_class_colors`; the frozen verifier now
+requires that receipt as well. Full launcher and exact-package results are
+recorded by their test/build jobs.

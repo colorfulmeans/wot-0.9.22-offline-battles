@@ -17,7 +17,16 @@ import bot_tactics_geometry as geometry
 import bot_tactics_ui as ui
 
 ROOT=Path(__file__).resolve().parents[2]
-PROFILE=ROOT/'tools/evidence/route-review-draft-20261025.json'
+def review():return storage.contract.default_profile('Review test')
+
+
+def unconfigured():
+    profile=review()
+    for entry in profile['maps'].values():
+        entry['routes']=[r for r in entry['routes'] if r.get('purpose')!='spg_attack']
+        for p in entry['positions']:
+            p.pop('travel',None);p.pop('links',None)
+    return profile
 
 
 class InventoryTests(unittest.TestCase):
@@ -37,7 +46,7 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(all(x['disabled'] for x in inv.inventory(p,name,g,storage.contract) if x['identity']==shared['id'] and x['team']==1))
 
     def test_missing_is_separate_and_optional_defense_is_only_three_maps(self):
-        p=storage.contract.default_profile()
+        p=unconfigured()
         for name in storage.contract.MAPS:
             rows=inv.inventory(p,name,storage.graph_data(name),storage.contract)
             self.assertEqual(name in inv.DEFENSE_MAPS,any(x['kind']=='defense' for x in rows))
@@ -46,7 +55,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(2,sum(x['kind']=='sortie' and not x['points'] for x in rows))
 
     def test_reciprocal_link_is_not_missing_and_distinct_directed_paths_are_checked(self):
-        name='04_himmelsdorf';p=storage.contract.default_profile();g=storage.graph_data(name)
+        name='04_himmelsdorf';p=unconfigured();g=storage.graph_data(name)
         peers=[x for x in p['maps'][name]['positions'] if x['team']==1];a,b=peers[:2]
         a['links']={b['id']:[a['point']+[0],b['point']+[0]]}
         rows=inv.inventory(p,name,g,storage.contract)
@@ -57,7 +66,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(2,len(pair))
 
     def test_directional_failure_cannot_be_reported_as_pass_and_check_is_read_only(self):
-        name='04_himmelsdorf';p=storage.contract.default_profile();g=storage.graph_data(name)
+        name='04_himmelsdorf';p=unconfigured();g=storage.graph_data(name)
         before=copy.deepcopy((p,g));receipts=[]
         def proof(grid,graph,a,b):return dict(connected=a[0]<=b[0],start=a[:2],end=b[:2])
         with mock.patch.object(nav,'connection',side_effect=proof):
@@ -76,8 +85,8 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(issues);self.assertTrue(all(i.get('wait_slot') in (1,2,3) for i in issues))
         self.assertTrue(any(i['wait_slot']==2 for i in issues))
 
-    def test_draft_has_every_connection_and_preserves_default_and_non_target_maps(self):
-        p=storage.contract.load(str(PROFILE));baseline=storage.contract.default_profile()
+    def test_shared_default_has_every_connection_and_valid_defense_junctions(self):
+        p=review();baseline=storage.contract.default_profile()
         geometry.validate(p,storage.contract,storage.graph_data)
         counts=dict(deployment=0,relocation=0,sortie=0,defense=0)
         for name,e in p['maps'].items():
@@ -86,15 +95,7 @@ class InventoryTests(unittest.TestCase):
                 if not row['disabled']:
                     self.assertTrue(row['points'],(name,row['kind'],row['identity']))
                     if row['kind'] in counts:counts[row['kind']]+=1
-            old=baseline['maps'][name]
-            self.assertEqual([x['point'] for x in old['positions']],[x['point'] for x in e['positions']])
-            if name not in inv.DEFENSE_MAPS:self.assertEqual(old['default_routes'],e['default_routes'])
-            for prior,current in zip(old['default_routes'],e['default_routes']):
-                self.assertEqual(prior.get('disabled'),current.get('disabled'))
-                self.assertEqual(prior.get('tier'),current.get('tier'))
-                old_waits=[pt for pt in prior['points'] if storage.contract.waiting_positions(pt)]
-                self.assertEqual(old_waits,[pt for pt in current['points'] if storage.contract.waiting_positions(pt)])
-                self.assertTrue(all(pt in current['points'] for pt in prior['points']))
+            for current in e['default_routes']:
                 if current.get('defense'):
                     branch=current['defense'];ids=current['node_ids'];index=ids.index(branch['junction'])
                     self.assertTrue(0<index<len(ids)-1);self.assertFalse(current['points'][index][2])
@@ -106,8 +107,17 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(before,store.active());self.assertEqual(p,store.read(p['name']))
         self.assertEqual(baseline,storage.contract.default_profile())
 
+    def test_regeneration_preserves_every_reviewed_path_and_never_duplicates_sorties(self):
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('review_builder',ROOT/'tools/build_route_review_draft.py')
+        builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
+        expected=review()
+        with mock.patch.object(builder.Author,'path',side_effect=AssertionError('Reviewed path overwritten')):
+            actual,evidence=builder.build(name=expected['name'],progress=lambda *args,**kwargs:None)
+        self.assertEqual([],evidence);self.assertEqual(expected,actual)
+
     def test_every_generated_map_passes_shipping_navigation_in_both_directions(self):
-        profile=storage.contract.load(str(PROFILE))
+        profile=review()
         for name in profile['maps']:
             with self.subTest(map=name):
                 rows=inv.inspect(profile,name,storage.graph_data(name),storage.contract)
@@ -116,7 +126,7 @@ class InventoryTests(unittest.TestCase):
                 self.assertEqual([],failures)
 
     def test_area_center_snap_does_not_hide_invalid_intermediate_node(self):
-        name='04_himmelsdorf';p=storage.contract.load(str(PROFILE));g=storage.graph_data(name)
+        name='04_himmelsdorf';p=review();g=storage.graph_data(name)
         route=p['maps'][name]['routes'][0]
         route['points'].insert(1,[-10000.,-10000.,0])
         rows=inv.inspect(p,name,g,storage.contract)
@@ -129,7 +139,7 @@ class InventoryTests(unittest.TestCase):
 class ReportUITests(unittest.TestCase):
     def test_report_groups_locates_connections_and_refuses_stale_location(self):
         with tempfile.TemporaryDirectory() as folder:
-            store=storage.Store(folder);p=storage.contract.load(str(PROFILE));store.save(p,True)
+            store=storage.Store(folder);p=review();store.save(p,True)
             root=tk.Tk();root.withdraw()
             try:
                 e=ui.BotTacticsEditor(root,store=store);e.book.select(1)

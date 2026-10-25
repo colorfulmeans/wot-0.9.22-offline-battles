@@ -46,9 +46,7 @@ assert 'bot_tactics_preview.py' in verified
 assert 'bot_tactics_labels.py' in verified
 assert 'crew_ui.py' in verified
 assert 'crew_store.py' in verified
-draft_name = 'route-review-draft-20261025.json'
-assert json.loads((app / draft_name).read_text(encoding='utf-8')) == json.loads(
-    (ROOT / 'tools/evidence' / draft_name).read_text(encoding='utf-8'))
+assert not (app / 'route-review-draft-20261025.json').exists()
 
 sys.path.insert(0, str(ROOT / 'launcher'))
 import stage_payload
@@ -105,6 +103,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert editor.get('scoped_effective_preview') and editor.get('save_initialization_and_backup') and editor.get('save_actions_two_by_four'), editor
     assert editor.get('authored_connections_and_route_tiers'),editor
     assert editor.get('separate_artillery_editor'),editor
+    assert editor.get('route_tree_class_colors'),editor
     assert editor.get('route_toolbar_and_restore_menu'),editor
     assert editor.get('native_gameplay_tested') is False, editor
 

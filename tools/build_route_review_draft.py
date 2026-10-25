@@ -78,13 +78,14 @@ def build(name='Route review 20261025', loader=graph_data, progress=print):
             base=graph['objective_bases'][team-1];enemy=graph['objective_bases'][2-team]
             peers=sorted([p for p in entry['positions'] if p['team']==team],key=lambda p:p['id'])
             for p in peers:
-                path=create('deployment',p['id'],base,p['point'])
+                path=p.get('travel') or create('deployment',p['id'],base,p['point'])
                 if path:p['travel']=path
                 # Directed connections avoid assuming downhill also permits uphill.
                 for other in peers:
                     if p['id']==other['id']:continue
-                    path=create('relocation',p['id']+'->'+other['id'],p['point'],other['point'])
+                    path=p.get('links',{}).get(other['id']) or create('relocation',p['id']+'->'+other['id'],p['point'],other['point'])
                     if path:p.setdefault('links',{})[other['id']]=path
+            if any(r.get('purpose')=='spg_attack' and r['team']==team for r in entry['routes']):continue
             # An endgame route follows an already authored road, rather than
             # forcing a long arbitrary A* path into sixteen strategic nodes.
             candidates=[]
@@ -100,7 +101,7 @@ def build(name='Route review 20261025', loader=graph_data, progress=print):
                 team=team,classes=['SPG'],slots=[],policy='preferred',capacity=3,weight=1.,purpose='spg_attack',points=path))
         if map_name in DEFENSE_MAPS:
             for route in entry['default_routes']+entry['routes']:
-                if route.get('purpose')=='spg_attack' or route.get('disabled'):continue
+                if route.get('purpose')=='spg_attack' or route.get('disabled') or route.get('defense'):continue
                 base=graph['objective_bases'][route['team']-1];points=route['points']
                 # Reverse-travel divergence: the nearest approach to the own base
                 # before the route turns away toward the spawn. Prefer existing nodes.

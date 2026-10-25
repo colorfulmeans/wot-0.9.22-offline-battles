@@ -96,6 +96,14 @@ def run(destination):
             assert ui._editable_item()==original
             report['route_toolbar_and_restore_menu']=True
             report['baseline_route_restore']=True
+            from bot_tactics_ui import CLASS_COLORS
+            ui.route_class_var.set('total');ui.change_route_class()
+            for key in ui.items.get_children():
+                if key.startswith('builtin:'):
+                    tag='route_'+key.rsplit('@',1)[1]
+                    assert tag in ui.items.item(key,'tags')
+                    assert str(ui.items.tag_configure(tag,'foreground'))==CLASS_COLORS[tag[6:]]
+            report['route_tree_class_colors']=True
             ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())
             for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all',outfit='off').items():ui.rule_vars[key].set(value)

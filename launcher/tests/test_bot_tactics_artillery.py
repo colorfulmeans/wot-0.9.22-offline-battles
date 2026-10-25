@@ -22,8 +22,36 @@ class ArtilleryEditorTests(unittest.TestCase):
     click=fixture.RouteControlsTests.click
 
     def review(self):
-        self.editor.adopt(storage.contract.load(str(ROOT/'tools/evidence/route-review-draft-20261025.json')))
+        self.editor.adopt(storage.contract.default_profile('Review test'))
         return self.editor
+
+    def test_route_tree_colors_match_map_palette_in_every_view_and_language(self):
+        e=self.review()
+        for scope in ('total','all')+storage.contract.CLASSES:
+            e.route_class_var.set(scope);e.change_route_class()
+            for key in e.items.get_children():
+                row=e.items.item(key)
+                if 'positions:' in key or (key.startswith('routes:') and e.entry()['routes'][0].get('purpose')=='spg_attack'):
+                    tag='artillery';expected=ui.CLASS_COLORS['SPG']
+                else:
+                    actual=key.rsplit('@',1)[1] if '@' in key else scope
+                    tag='route_'+actual;expected=ui.CLASS_COLORS[actual]
+                self.assertIn(tag,row['tags'],(scope,key))
+                self.assertEqual(expected,str(e.items.tag_configure(tag,'foreground')))
+            keys=e.items.get_children()
+            if keys:
+                e.items.selection_set(keys[0]);e.select_item()
+                selection=e.selection;before={k:e.items.item(k,'tags') for k in keys}
+                for language in ('en','zh'):
+                    e.set_language(language)
+                    self.assertEqual(selection,e.selection)
+                    self.assertEqual(before,{k:e.items.item(k,'tags') for k in keys})
+        e.route_class_var.set('heavyTank');e.change_route_class();e.new_route()
+        key=':'.join(e.selection)
+        self.assertEqual(('route_heavyTank',),e.items.item(key,'tags'))
+        e.route_class_var.set('all');e.change_route_class()
+        key=next(k for k in e.items.get_children() if k.startswith('routes:'))
+        self.assertEqual(('route_all',),e.items.item(key,'tags'))
 
     def parking(self):
         e=self.editor;e.route_class_var.set('SPG');e.change_route_class()
@@ -105,7 +133,10 @@ class ArtilleryEditorTests(unittest.TestCase):
         self.assertEqual(before,e.document)
 
     def test_connect_all_is_once_preserves_links_and_has_single_undo(self):
-        e=self.parking();peers=e._parking_items();a,b=peers[:2]
+        e=self.parking()
+        for row in e._parking_items():
+            row=copy.deepcopy(row);row['links']={};e._store_parking(row)
+        e._refresh_items();peers=e._parking_items();a,b=peers[:2]
         existing=[a['point']+[0],[20.,20.,0],b['point']+[0]]
         row=copy.deepcopy(a);row['links']={b['id']:existing};e._store_parking(row);e._refresh_items()
         before=copy.deepcopy(e.document);history=len(e.histories['maps'][0])
@@ -125,7 +156,10 @@ class ArtilleryEditorTests(unittest.TestCase):
         self.assertTrue(all(new['id'] not in p.get('links',{}) for p in e._parking_items()))
 
     def test_connect_failure_rolls_back_all_content_and_history(self):
-        e=self.parking();before=copy.deepcopy(e.document);history=copy.deepcopy(e.histories)
+        e=self.parking()
+        for row in e._parking_items():
+            row=copy.deepcopy(row);row['links']={};e._store_parking(row)
+        e._refresh_items();before=copy.deepcopy(e.document);history=copy.deepcopy(e.histories)
         original=e._store_parking;calls=[]
         def fail_second(item):
             calls.append(item)
