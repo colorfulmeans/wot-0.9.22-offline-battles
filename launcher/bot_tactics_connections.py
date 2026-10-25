@@ -1,23 +1,36 @@
 """Route tier and connection editing; all writes remain draft/undo owned."""
 import copy
+import tkinter as tk
 from tkinter import ttk, messagebox
+from bot_tactics_artillery import ArtilleryEditorMixin
 
 from gui.mods.offline_lan_0922 import route_network
 
 
-class ConnectionEditorMixin:
+class ConnectionEditorMixin(ArtilleryEditorMixin):
     def _build_connections(self, parent):
-        panel = ttk.LabelFrame(parent, text=self.tr('回防／火炮路线编辑', 'Defense / SPG connections'))
+        panel = ttk.LabelFrame(parent, text=self.tr('回防路线编辑', 'Defense connection editor'))
+        self.defense_panel=panel
         panel.grid(row=23, column=0, sticky='ew', pady=5)
         self.network_mode = ''
         self.network_link = ''
-        self.network_box = ttk.Combobox(panel, state='readonly', values=(), width=28)
-        self.network_box.pack(fill='x')
-        self.network_box.bind('<<ComboboxSelected>>', self.choose_network)
         self.defense_add = ttk.Button(panel, text=self.tr('添加回防路线', 'Add defense connection'), command=self.add_defense)
         self.defense_add.pack(fill='x')
         self.defense_delete = ttk.Button(panel, text=self.tr('删除回防路线', 'Delete defense connection'), command=self.delete_defense)
         self.defense_delete.pack(fill='x')
+        self.defense_edit=ttk.Button(panel,text=self.tr('编辑／返回回防路线','Edit / leave defense connection'),command=self.edit_defense)
+        self.defense_edit.pack(fill='x')
+        ttk.Label(panel,text=self.tr('仅普通中间节点可挂接回防线；回防反向经过等待点不等待。',
+            'Only ordinary intermediate nodes can own a defense branch. Reverse defense travel skips waits.'),wraplength=250).pack(anchor='w')
+        panel=ttk.LabelFrame(parent,text=self.tr('火炮路线编辑','Artillery route editor'))
+        self.artillery_panel=panel;panel.grid(row=24,column=0,sticky='ew',pady=5)
+        self.network_box = ttk.Combobox(panel, state='readonly', values=(), width=28)
+        self.network_box.pack(fill='x')
+        self.network_box.bind('<<ComboboxSelected>>', self.choose_network)
+        self.connect_all_var=tk.BooleanVar(value=False)
+        self.connect_all_button=ttk.Checkbutton(panel,text=self.tr('连接全部炮位','Connect all parking positions'),
+            variable=self.connect_all_var,command=self.connect_all_positions)
+        self.connect_all_button.pack(anchor='w')
         self.link_target = ttk.Combobox(panel, state='readonly', width=28)
         self.link_target.pack(fill='x')
         self.link_add = ttk.Button(panel, text=self.tr('连接到炮位', 'Connect parking positions'), command=self.add_spg_link)
@@ -25,8 +38,8 @@ class ConnectionEditorMixin:
         self.link_delete=ttk.Button(panel,text=self.tr('删除炮位连接','Delete parking connection'),command=self.delete_spg_link)
         self.link_delete.pack(fill='x')
         ttk.Label(panel, wraplength=250, text=self.tr(
-            '主要实线：优先分配，每路3辆以内；备用虚线：主要路线满额后使用。反向回防经过等待点不等待。黑色为全部车型，其他颜色对应车型。回防虚线通往己方基地；火炮实线为部署／换位，红色虚线为残局出击。',
-            'Main solid lines: preferred below three Bots per lane. Reserve dashed lines: overflow after main lanes fill. Reverse defense travel skips waits. Black means all classes. Defense branches lead to the own base; red solid connections deploy/relocate SPGs, red dashed routes attack in the endgame.')).pack(anchor='w')
+            '红色实线：基地到炮位的部署线、炮位间换位线；红色虚线：火炮进攻路线。己方只剩火炮时，选取最多3辆火炮BOT先回己方基地，再沿进攻路线行进。连接全部炮位是一次性补连接操作，完成后自动取消勾选；保留已有连接，生成直连后仍需编辑和检查。',
+            'Red solid: deployment and relocation. Red dashed: artillery attack. When the own team has only artillery left, up to three artillery Bots return to the own base and follow an attack route. Connect all is a one-shot action which clears its check, preserves existing links and adds missing straight connections for editing and checking.')).pack(anchor='w')
 
     def _selected(self):
         item = self._selected_parent()
@@ -53,35 +66,44 @@ class ConnectionEditorMixin:
         item = self._selected_parent()
         route = bool(item and self.selection[0] in ('builtin', 'routes'))
         parking = bool(item and self.selection[0] in ('positions', 'builtin_positions'))
-        choices = [(self.tr('普通路线／炮位', 'Route / parking'), '', '')]
-        if item and item.get('defense'):choices.append((self.tr('回防路线', 'Defense connection'), 'defense', ''))
+        attack=bool(item and item.get('purpose')=='spg_attack')
+        choices = [(self.tr('炮位','Parking'), '', '')]
         if parking:
             choices.append((self.tr('基地到炮位', 'Base to parking'), 'travel', ''))
-            for key in sorted(item.get('links', {})):choices.append((self.tr('换位：', 'Relocate: ')+key, 'link', key))
+            for key in sorted(item.get('links', {})):choices.append((self._connection_caption('link',key), 'link', key))
         self.network_choices = choices
-        self.network_box.configure(values=[row[0] for row in choices])
+        self.network_box.configure(values=[row[0] for row in choices],state='readonly' if parking else 'disabled')
         selected = next((i for i, row in enumerate(choices) if row[1:] == (self.network_mode, self.network_link)), 0)
         self.network_box.current(selected)
-        if selected == 0:self.network_mode = '';self.network_link = ''
+        if parking and selected==0 and self.network_mode!='travel':self.network_mode='';self.network_link=''
+        if self.network_mode=='defense' and not (item or {}).get('defense'):self.network_mode=''
+        if parking and self.network_mode=='link' and self.network_link not in item.get('links',{}):self.network_mode='';self.network_link=''
+        ordinary_route=route and not attack
+        artillery_view=parking or attack or self.route_class_var.get() in ('SPG','spg_attack')
+        self.artillery_panel.grid() if artillery_view else self.artillery_panel.grid_remove()
+        self.defense_panel.grid_remove() if artillery_view else self.defense_panel.grid()
         index = self.selected_point
-        ordinary = (route and not self.network_mode and index is not None and
+        ordinary = (ordinary_route and not self.network_mode and index is not None and
                     0 < index < len(item['points'])-1 and not item['points'][index][2] and
                     not item.get('defense'))
         editable = not self.builtin and self.route_class_var.get() != 'total'
         self.defense_add.configure(state='normal' if editable and ordinary else 'disabled')
-        self.defense_delete.configure(state='normal' if editable and item and item.get('defense') else 'disabled')
+        self.defense_delete.configure(state='normal' if editable and ordinary_route and item.get('defense') else 'disabled')
+        self.defense_edit.configure(state='normal' if ordinary_route and item.get('defense') else 'disabled')
+        self.connect_all_button.configure(state='normal' if editable and self.route_class_var.get()=='SPG' and len(self._parking_items())>=2 else 'disabled')
+        self.route_duplicate_button.configure(state='normal' if not self.builtin and item and not self.network_mode else 'disabled')
         self.link_add.configure(state='normal' if editable and parking else 'disabled')
         self.link_delete.configure(state='normal' if editable and parking and self.network_mode=='link' else 'disabled')
-        peers = [p for p in self.entry()['positions']+self.spg_defaults if parking and p['team']==self.team and p['id']!=item['id']]
+        peers = [p for p in self._parking_items() if parking and p['id']!=item['id']]
         self.link_targets = dict((p['id'], p) for p in peers)
         self.link_target.configure(values=sorted(self.link_targets))
         if self.link_target.get() not in self.link_targets:self.link_target.set('')
         if hasattr(self, 'route_delete_button'):
-            self.route_delete_button.configure(state='normal' if editable and (parking or self.route_class_var.get()=='all') else 'disabled')
+            self.route_delete_button.configure(state='normal' if not self.builtin and (parking or attack or bool(self.network_mode) or self.route_class_var.get()=='all') else 'disabled')
         for tier, button in getattr(self, 'tier_buttons', {}).items():
-            button.configure(state='normal' if editable and route and item.get('tier','main')!=tier else 'disabled')
+            button.configure(state='normal' if editable and ordinary_route and not self.network_mode and item.get('tier','main')!=tier else 'disabled')
         junction=bool(route and not self.network_mode and item.get('defense') and index is not None and 0<=index<len(item['points']) and route_network.nodes(item)[index]==item['defense']['junction'])
-        if self.network_mode or junction:
+        if self.network_mode or junction or attack:
             for control in (self.wait_button,self.wait_edit_check,self.hold_button):control.configure(state='disabled')
 
     def choose_network(self, event=None):
@@ -96,7 +118,7 @@ class ConnectionEditorMixin:
                 item['travel'] = [list(base)+[0], list(item['point'])+[0]]
                 self.mark()
         self.wait_edit = False;self.selected_wait = None;self.selected_point = 0
-        self._refresh_properties();self.redraw()
+        self._refresh_items()
 
     def _sync_connection_scope(self, fields=('defense',)):
         if self.route_class_var.get() != 'all' or not self.selection:return
@@ -122,7 +144,7 @@ class ConnectionEditorMixin:
                 if 'tier' in fields:row['tier']=item.get('tier','main')
 
     def add_defense(self):
-        if str(self.defense_add.cget('state')) == 'disabled':return
+        if self.builtin or str(self.defense_add.cget('state')) == 'disabled':return
         before = copy.deepcopy(self.document)
         history=copy.deepcopy(self.histories);selection=self.selection
         self.checkpoint()
@@ -146,13 +168,15 @@ class ConnectionEditorMixin:
     def add_spg_link(self):
         peer = self.link_targets.get(self.link_target.get())
         if peer is None or self.builtin:return
-        self.checkpoint();item = self._editable_parent()
-        item.setdefault('links', {})[peer['id']] = [list(item['point'])+[0], list(peer['point'])+[0]]
+        item=self._selected_parent()
+        if peer['id'] not in item.get('links',{}):
+            self.checkpoint();item=self._editable_parent()
+            item.setdefault('links', {})[peer['id']] = [list(item['point'])+[0], list(peer['point'])+[0]]
         self.network_mode = 'link';self.network_link = peer['id'];self.selected_point = 0
         self._refresh_items();self.mark()
 
     def set_tier(self, tier):
-        if self.builtin or self.route_class_var.get() == 'total':return
+        if self.builtin or self.route_class_var.get() == 'total' or self.network_mode or (self._selected_parent() or {}).get('purpose')=='spg_attack':return
         self.checkpoint();self._editable_parent()['tier'] = tier
         self._sync_connection_scope(('tier',));self._refresh_items();self.mark(sync=False)
 

@@ -191,6 +191,9 @@ def route_label(key, language):
     return _label(ROUTE_NAMES, key, language)
 
 
+ENUM_NAMES['route_view']=dict(ENUM_NAMES['class_tag'],SPG=('火炮驻炮点','SPG parking'),spg_attack=('火炮进攻路线','Artillery attack routes'))
+
+
 def enum_label(kind, key, language):
     return _label(ENUM_NAMES.get(kind, {}), str(key), language)
 

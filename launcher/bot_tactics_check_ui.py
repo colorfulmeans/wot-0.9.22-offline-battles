@@ -63,12 +63,12 @@ def show(editor):
         row=targets.get(selected[0]) if selected else None
         if not row or not row['selection'] or row['disabled']:return
         e.team_var.set(str(row['team']));e.team=row['team'];e._load_map()
-        e.route_class_var.set('total' if row['scope']!='SPG' else 'SPG')
+        e.route_class_var.set('spg_attack' if row['kind']=='sortie' else 'total' if row['scope']!='SPG' else 'SPG')
         e.network_mode='';e.network_link='';e.selection=tuple(row['selection'])
         if row['scope']=='SPG' and e.selection[0]=='routes':e.selection=('routes',row['identity'])
-        e._refresh_items()
         if row['mode'] and row['points']:
             e.network_mode=row['mode'];e.network_link=row['link']
+        e._refresh_items()
         e.wait_edit=False;e.selected_wait=None
         e.selected_point=(row.get('issue',{}).get('nodes') or [1])[0]-1
         if row.get('issue',{}).get('wait_slot') is not None:

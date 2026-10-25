@@ -182,6 +182,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 item = next(v for v in self.entry()[kind] if v['id'] == identity.partition('@')[0])
                 text = self._custom_caption(kind,item,identity.partition('@')[2] or None)
             self.items.item(iid, text=text)
+        for key,(selection,mode,link) in getattr(self,'tree_connections',{}).items():
+            if self.items.exists(key):self.items.item(key,text=self._connection_caption(mode,link))
         self.redraw()
         for preview in getattr(self,'previews',[]):
             if preview.root.winfo_exists():preview.set_language(language)
@@ -372,10 +374,10 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.team_box=t
         t.bind('<<ComboboxSelected>>',lambda e:self.change_map(),add='+')
         self.route_class_var = tk.StringVar(value='total')
-        ttk.Label(bar,text=self.tr('显示车型','Show class')).pack(side='left',padx=6)
+        ttk.Label(bar,text=self.tr('显示内容','Show content')).pack(side='left',padx=6)
         scope = LocalizedCombobox(bar,variable=self.route_class_var,
-            kind='class_tag',values=('total','all')+contract.CLASSES,
-            language=self.language,width=13)
+            kind='route_view',values=('total','all')+contract.CLASSES+('spg_attack',),
+            language=self.language,width=20)
         scope.pack(side='left');self.route_class_box=scope
         scope.bind('<<ComboboxSelected>>',lambda e:self.change_route_class(),add='+')
         base_bar=ttk.Frame(parent);base_bar.pack(fill='x',pady=3)
@@ -401,7 +403,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
             tk.Label(legend,text='  ',background=color).pack(side='left',padx=(6,2))
             ttk.Label(legend,text=self.tr(*labels.ENUM_NAMES['class_tag'][tag])).pack(side='left',padx=(0,8))
         tk.Label(legend,text='■',foreground=CLASS_COLORS['SPG']).pack(side='left',padx=(6,2))
-        ttk.Label(legend,text=self.tr('火炮驻炮点（红色）','SPG parking (red)')).pack(side='left')
+        ttk.Label(legend,text=self.tr('火炮驻炮点','SPG parking')).pack(side='left')
+        tk.Label(legend,text=' ┄ ',foreground=CLASS_COLORS['SPG']).pack(side='left',padx=(6,2))
+        ttk.Label(legend,text=self.tr('火炮进攻路线','Artillery attack route')).pack(side='left')
         tools=ttk.Frame(parent);tools.pack(fill='x');self.route_toolbar=tools
         for tool_index,(zh,en,command) in enumerate([('新建路线','New route',self.new_route),('新建炮位','New SPG',self.new_position),
                               ('复制','Duplicate',self.duplicate_item),('删除','Delete',self.delete_item),
@@ -412,6 +416,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                               ('导入地图','Load image',self.load_background)]):
             button=ttk.Button(tools,text=self.tr(zh,en),command=command);button.grid(row=tool_index//6,column=tool_index%6,sticky='ew',padx=1,pady=2);tools.columnconfigure(tool_index%6,weight=1,uniform='tools')
             if en=='Delete':self.route_delete_button=button
+            if en=='Duplicate':self.route_duplicate_button=button
             if en in ('Make main','Make reserve'):
                 if not hasattr(self,'tier_buttons'):self.tier_buttons={}
                 self.tier_buttons['main' if en=='Make main' else 'reserve']=button
@@ -436,7 +441,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
         properties.bind('<Configure>',lambda e:properties.itemconfigure(properties_window,width=e.width))
         self.properties_canvas=properties
         self.items=ttk.Treeview(left,show='tree',height=16,selectmode='browse');self.items.column('#0',width=175)
-        self.items.pack(fill='both',expand=True);self.items.bind('<<TreeviewSelect>>',self.select_item)
+        item_scroll=ttk.Scrollbar(left,orient='vertical',command=self.items.yview)
+        self.items.configure(yscrollcommand=item_scroll.set);item_scroll.pack(side='right',fill='y')
+        self.items.pack(side='left',fill='both',expand=True);self.items.bind('<<TreeviewSelect>>',self.select_item)
         self.canvas=tk.Canvas(centre,background='#202529',highlightthickness=0)
         self.canvas.pack(fill='both',expand=True)
         self.canvas.bind('<Configure>',lambda e:self.redraw())
@@ -512,7 +519,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             'Ring: actual 6 m arrival radius. Arrow: preferred idle heading; combat can turn freely. Click to add/drag; Delete removes.'),wraplength=250).pack(anchor='w')
         self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
         self._build_connections(right)
-        self.node_legend.grid(row=24,column=0,sticky='ew',pady=(5,0))
+        self.node_legend.grid(row=25,column=0,sticky='ew',pady=(5,0))
         for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
                 (7,'大圆点：等待点组（点击展开）','Large circle: wait group (click to expand)'),
                 (4,'方点：等待位；圆环：抵达半径6米','Square: wait place; ring: 6 m arrival radius'))):
@@ -526,10 +533,10 @@ class BotTacticsEditor(ConnectionEditorMixin):
             '◇ Spawn centre; dashed circle: capture area'),wraplength=250).grid(row=3,column=0,columnspan=2,sticky='w')
         ttk.Label(right,text=self.tr(
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n通用路线不覆盖已启用的车型专用路线；禁用条目只同步普通点。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\n普通点击空白不加点；Shift+点击插入中间点；固定首尾不可移动或删除。\n滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared travel preserves enabled class variants; disabled records follow without waits.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nBlank clicks do not add points; Shift-click inserts between fixed endpoints.\nWheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=24,column=0,sticky='w',pady=8)
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared travel preserves enabled class variants; disabled records follow without waits.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nBlank clicks do not add points; Shift-click inserts between fixed endpoints.\nWheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=26,column=0,sticky='w',pady=8)
 
         danger=ttk.LabelFrame(right,text=self.tr('危险区参数（只读）','Danger parameters (read only)'))
-        danger.grid(row=25,column=0,sticky='ew',pady=(0,8))
+        danger.grid(row=27,column=0,sticky='ew',pady=(0,8))
         self.danger_parameters_var=tk.StringVar()
         ttk.Label(danger,textvariable=self.danger_parameters_var,justify='left',wraplength=245).pack(anchor='w',padx=4,pady=4)
         ttk.Label(danger,text=self.tr(
@@ -681,6 +688,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return self.document['maps'].setdefault(self.map_name, self.entry())
 
     def _route_scope(self):
+        if self.selection and self.selection[0]=='routes':
+            item=next((r for r in self.entry()['routes'] if r['id']==self.selection[1].partition('@')[0]),None)
+            if item and item.get('purpose')=='spg_attack':return 'SPG'
         if self.route_class_var.get() == 'total' and self.selection:
             return self.selection[1].partition('@')[2] or 'all'
         return self.route_class_var.get()
@@ -689,6 +699,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return self.selection[1].partition('@')[0]
 
     def _builtin_views(self):
+        if self.route_class_var.get() in ('SPG','spg_attack'):return
         graph = self.graph_cache.get(self.map_name) or {}
         tags = contract.CLASSES[:-1] if self.route_class_var.get() == 'total' else (self.route_class_var.get(),)
         for route in graph.get('routes', {}).get(str(self.team), ()):
@@ -783,6 +794,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
     def _sync_symmetry(self, geometry=False, item=None):
         if self.network_mode:return
         if item is None:item=self._editable_item()
+        if item.get('purpose')=='spg_attack':return
         shared=geometry and self.selection[0]=='builtin' and item.get('class_tag','all')=='all'
         if shared:self._sync_shared_default_geometry(item)
         if not item.get('symmetric') or not self._symmetry_allowed():return
@@ -885,16 +897,15 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self._refresh_items()
 
     def _visible_for_class(self, kind, item):
-        if kind=='routes' and item.get('classes')==['SPG']:return self.route_class_var.get() in ('all','total','SPG')
-        tag = self.route_class_var.get()
-        if tag in ('all','total'):
-            return True
-        if kind == 'positions':
-            return tag == 'SPG'
-        if kind == 'builtin':
-            if tag=='SPG':return False
-            weights = item.get('class_weights') or {}
-            return weights.get(tag, 0.0) > 0.0 if weights else (item.get('role_weights',{}).get('artillery',0)>0 if tag=='SPG' else True)
+        tag=self.route_class_var.get()
+        if kind=='positions':return tag in ('total','SPG')
+        if item.get('purpose')=='spg_attack' or item.get('classes')==['SPG']:
+            return tag in ('total','spg_attack')
+        if tag in ('SPG','spg_attack'):return False
+        if tag in ('all','total'):return True
+        if kind=='builtin':
+            weights=item.get('class_weights') or {}
+            return weights.get(tag,0.)>0. if weights else True
         return tag in item['classes']
 
     def _priority_caption(self, value):
@@ -952,6 +963,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         caption=('['+labels.enum_label('class_tag',tag,self.language)+'] ') if tag else ''
         priority=self._priority_caption(item.get('class_priorities',{}).get(tag or self.route_class_var.get(),contract.DEFAULT_ROUTE_PRIORITY)) if kind=='routes' and self.route_class_var.get()!='all' else self._priority_caption(item['priority']) if kind=='positions' else ''
         name=caption+(self.tr('路线 ','Route ') if kind=='routes' else self.tr('炮位 ','SPG '))+labels.tactic_name(item['label'],self.language)
+        if item.get('purpose')=='spg_attack':return self.tr('火炮进攻路线：','Artillery attack: ')+labels.tactic_name(item['label'],self.language)
         return priority.strip()+' '+name if self.route_class_var.get()=='total' else name+priority
 
     def _refresh_items(self):
@@ -961,59 +973,70 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if key not in self.spg_default_cache:
             self.spg_default_cache[key]=storage.default_spg_positions(self.map_name,self.graph_cache.get(self.map_name),self.document)
         self.spg_defaults=self.spg_default_cache[key]
-        for kind in ('routes','positions'):
-            for item in self.entry()[kind]:
-                if item['team']==self.team and self._visible_for_class(kind,item):
-                    if kind=='positions' and any(p['id']==item['id'] for p in self.spg_defaults):continue
-                    tags=item['classes'] if kind=='routes' and self.route_class_var.get()=='total' else (None,)
-                    for tag in tags:
-                        identity=item['id']+'@'+tag if tag else item['id']
-                        name=self._custom_caption(kind,item,tag)
-                        self.items.insert('','end',iid=kind+':'+identity,text=name)
-        if self.route_class_var.get() in ('SPG','all','total'):
-            for item in self.spg_defaults:
-                if item['team']!=self.team:continue
-                self.items.insert('','end',iid='builtin_positions:'+item['id'],text=self._parking_caption(item['id']))
+        self.items.tag_configure('artillery',foreground=CLASS_COLORS['SPG'])
+        def insert_custom(item,tag=None):
+            identity=item['id']+'@'+tag if tag else item['id']
+            self.items.insert('','end',iid='routes:'+identity,text=self._custom_caption('routes',item,tag),
+                tags=('artillery',) if item.get('purpose')=='spg_attack' else ())
+        for item in self.entry()['routes']:
+            if item['team']!=self.team or item.get('purpose')=='spg_attack' or not self._visible_for_class('routes',item):continue
+            for tag in (item['classes'] if self.route_class_var.get()=='total' else (None,)):insert_custom(item,tag)
         for route,tag,identity in self._builtin_views():
             self.items.insert('','end',iid='builtin:'+identity,text=self._builtin_caption(route['id'],tag))
+        if self.route_class_var.get() in ('SPG','total'):
+            default_ids={p['id'] for p in self.spg_defaults}
+            for item in self._parking_items():
+                kind='builtin_positions' if item['id'] in default_ids else 'positions'
+                self.items.insert('','end',iid=kind+':'+item['id'],text=self._parking_caption(item['id']) if kind=='builtin_positions' else self._custom_caption(kind,item),tags=('artillery',))
+        for item in self.entry()['routes']:
+            if item['team']!=self.team or item.get('purpose')!='spg_attack' or not self._visible_for_class('routes',item):continue
+            insert_custom(item,'SPG' if self.route_class_var.get()=='total' else None)
+        self._refresh_connection_tree()
         if self.selection and self.items.exists(':'.join(self.selection)):
-            self.items.selection_set(':'.join(self.selection))
+            self.items.selection_set(self._connection_tree_key() or ':'.join(self.selection))
         else:self.selection=None
         self._refresh_properties();self.redraw()
 
     def select_item(self,event=None):
-        values=self.items.selection()
-        selected=tuple(values[0].split(':',1)) if values else None
-        if selected!=self.selection:
-            self.network_mode='';self.network_link='';self.selection=selected;self.selected_point=None
-            self.selected_wait=None;self.wait_edit=False
+        values=self.items.selection();key=values[0] if values else None
+        connection=getattr(self,'tree_connections',{}).get(key)
+        selected,mode,link=connection if connection else (tuple(key.split(':',1)) if key else None,'','')
+        if (selected,mode,link)!=(self.selection,self.network_mode,self.network_link):
+            self.selection=selected;self.network_mode=mode;self.network_link=link
+            self.selected_point=0 if mode else None;self.selected_wait=None;self.wait_edit=False
         self._refresh_properties();self.redraw()
 
     def _refresh_properties(self):
+        parent=self._selected_parent()
+        if self.network_mode and (parent is None or not self._connection_points(parent)):
+            self.network_mode='';self.network_link='';self.selected_point=None
         item=self._selected()
         route = self.selection and (self.selection[0]=='routes' or bool(self.network_mode))
         builtin = self.selection and self.selection[0]=='builtin'
         parking = self.selection and self.selection[0] in ('positions','builtin_positions') and not self.network_mode
+        attack=bool(item and item.get('purpose')=='spg_attack')
         self.insert_button.config(state='normal' if route or builtin else 'disabled')
         allowed = {'label','policy','weight','slots'} if route else {'label'} if builtin else {'label','radius','heading','priority'} if item else set()
         if (route or builtin) and self.route_class_var.get()!='all':allowed.add('route_priority')
         if parking and self.route_class_var.get()=='all':allowed.discard('priority')
+        if attack:allowed={'label'}
         if self.network_mode:allowed=set()
         for key, widgets in self.item_fields.items():
             for widget in widgets:
                 widget.grid() if key in allowed else widget.grid_remove()
         self.item_fields['route_priority'][1].config(state='readonly')
         self.item_fields['priority'][1].config(state='readonly')
-        self.classes_frame.grid() if route and not self.network_mode and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
+        self.classes_frame.grid() if route and not attack and not self.network_mode and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
+        self.wait_panel.grid_remove() if attack or self.network_mode else self.wait_panel.grid()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
         self.wait_button.config(state='normal' if (route or builtin) and not
             (builtin and self._route_scope()=='all') else 'disabled')
         self.hold_button.config(text=self.tr('切换驻留点','Toggle hold'))
-        if parking or self.route_class_var.get()=='SPG':self.symmetry_var.set(False)
+        if parking or attack or self.route_class_var.get() in ('SPG','spg_attack'):self.symmetry_var.set(False)
         elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',False)))
         if self.wait_edit:self.symmetry_var.set(False)
-        self.symmetry_check.config(state='normal' if (route or builtin) and not self.wait_edit and self._symmetry_allowed() else 'disabled',
+        self.symmetry_check.config(state='normal' if (route or builtin) and not attack and not self.network_mode and not self.wait_edit and self._symmetry_allowed() else 'disabled',
             text=self.tr('路线对称','Route symmetry'))
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
@@ -1040,6 +1063,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
         # SPG routes are explicit endgame routes, distinct from parking connections.
         self.checkpoint();identity='r_'+uuid.uuid4().hex[:12]
         scope=self.route_class_var.get()
+        if scope in ('SPG','spg_attack'):scope='SPG';self.route_class_var.set('spg_attack')
+        self.network_mode='';self.network_link=''
+        self.wait_edit=False;self.selected_wait=None
         self._ensure_entry()['routes'].append(dict(id=identity,label=self.tr('新路线','New route'),team=self.team,
             classes=list(contract.CLASSES[:-1]) if scope=='all' else [scope],class_priorities={tag:contract.DEFAULT_ROUTE_PRIORITY for tag in (contract.CLASSES[:-1] if scope=='all' else (scope,)) if tag!='SPG'},slots=[],policy='preferred',capacity=3,weight=1.0,
             points=route_geometry.anchors(self.graph_cache[self.map_name],self.team),
@@ -1053,6 +1079,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def new_position(self):
         self.route_class_var.set('SPG')
+        self.network_mode='';self.network_link='';self.wait_edit=False;self.selected_wait=None
         self.checkpoint();identity='p_'+uuid.uuid4().hex[:12]
         base=self.graph_cache[self.map_name]['objective_bases'][self.team-1]
         other=contract.MAPS[self.map_name]['bases'][2-self.team]
@@ -1062,6 +1089,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.selection=('positions',identity);self._refresh_items();self.mark()
 
     def duplicate_item(self):
+        if self.builtin or self.network_mode:return
         item=self._selected_parent()
         if self.selection and self.selection[0]=='builtin':
             source=next((v for v in self.graph_cache[self.map_name].get('routes',{}).get(str(self.team),()) if v['id']==self._route_identity()),None)
@@ -1089,15 +1117,24 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if self.selection[0]=='routes' and self.route_class_var.get()=='total':new['classes']=[self._route_scope()]
         new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=self.tr(' 副本',' copy')
         new.pop('mirror_id',None);new.pop('symmetric',None);new.pop('family',None)
+        if 'point' in new:
+            new.pop('links',None)
+            if not new.get('travel'):
+                base=self.graph_cache[self.map_name]['objective_bases'][self.team-1]
+                new['travel']=[list(base)+[0],list(new['point'])+[0]]
         kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
         self._ensure_entry()[kind].append(new)
         identity=new['id']+'@'+new['classes'][0] if kind=='routes' and self.route_class_var.get()=='total' else new['id']
         self.selection=(kind,identity);self._refresh_items();self.mark()
 
     def delete_item(self):
+        if self.builtin:return
+        if self.network_mode=='link':return self.delete_spg_link()
+        if self.network_mode=='travel':return self.delete_deployment()
+        if self.network_mode=='defense':return self.delete_defense()
         item=self._selected_parent()
         if item is None:return
-        if self.selection[0] in ('builtin','routes') and self.route_class_var.get()!='all':return
+        if self.selection[0] in ('builtin','routes') and self.route_class_var.get()!='all' and item.get('purpose')!='spg_attack':return
         if self.selection[0]=='builtin':
             if not messagebox.askyesno(self.tr('删除默认路线','Delete default route'),
                     self._builtin_caption(self.selection[1])+'?',parent=self.root):return
@@ -1122,7 +1159,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             deleted=entry.setdefault('deleted_positions',[])
             if item['id'] not in deleted:deleted.append(item['id'])
             entry['positions'][:]=[p for p in entry['positions'] if p['id']!=item['id']]
-            for peer in entry['positions']:peer.get('links',{}).pop(item['id'],None)
+            self._remove_parking_references(item['id'])
             self.selection=None;self.selected_point=None;self._refresh_items();self.mark();return
         if not messagebox.askyesno(self.tr('删除','Delete'),item['label']+'?',parent=self.root):return
         self.checkpoint()
@@ -1138,7 +1175,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             self.entry()['routes'][:]=[r for r in self.entry()['routes'] if r.get('family',r['id']) not in families]
         else:
             self.entry()[self.selection[0]].remove(item)
-            for parking in self.entry()['positions']:parking.get('links',{}).pop(item['id'],None)
+            self._remove_parking_references(item['id'])
         self.selection=None;self.network_mode='';self._refresh_items();self.mark()
 
     def reset_builtin(self):
@@ -1148,7 +1185,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
             if original is not None:
                 self.checkpoint();entry=self._ensure_entry()
                 entry['positions'][:]=[p for p in entry['positions'] if p['id']!=original['id']]
-                entry['positions'].append(copy.deepcopy(original))
+                restored=copy.deepcopy(original);entry['positions'].append(restored)
+                self._sync_parking_endpoints(restored)
                 entry['deleted_positions']=[p for p in entry.get('deleted_positions',()) if p!=original['id']]
                 self.selected_point=None;self._refresh_items();self.mark();return
         if self.selection and self.selection[0]=='builtin':
@@ -1209,7 +1247,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
         try:
             new=copy.deepcopy(item);new['label']=self.item_vars['label'].get()
             kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
-            if self.selection[0]=='routes':
+            if self.selection[0]=='routes' and item.get('purpose')=='spg_attack':
+                pass  # Only the name and authored nodes are editable for this purpose.
+            elif self.selection[0]=='routes':
                 if not 1<=int(self.item_vars['capacity'].get())<=3:raise ValueError(self.tr('本车型路线容量应为1–3辆。','Class route capacity must be 1–3.'))
                 new.update(policy=self.item_vars['policy'].get(),capacity=int(self.item_vars['capacity'].get()),
                     weight=float(self.item_vars['weight'].get()),classes=[k for k,v in self.class_vars.items() if v.get()],
@@ -1289,7 +1329,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if (item is None or not self.selection or self.selection[0] not in ('routes','builtin') or
                 index is None or not 0<=index<len(item.get('points',()))):return None
         if self.selection[0]=='builtin' and self._route_scope()=='all':return None
-        if self.network_mode:return None
+        if self.network_mode or item.get('purpose')=='spg_attack':return None
         if item.get('defense') and route_network.nodes(item)[index]==item['defense']['junction']:return None
         return item['points'][index]
 
@@ -1427,7 +1467,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
     def press(self,event):
         self.canvas.focus_set();self.drag=None;self._drag_started=False
         if self.wait_edit:return self._press_wait(event)
-        if self.route_class_var.get()=='total' and not event.state & 1:
+        if self.route_class_var.get()=='total' and not self.network_mode and not event.state & 1:
             targets=[v for v in self.route_hit_targets if math.hypot(v[2][0]-event.x,v[2][1]-event.y)<10]
             if targets:
                 target=min(targets,key=lambda v:(v[0]!=self.selection,math.hypot(v[2][0]-event.x,v[2][1]-event.y)))
@@ -1442,10 +1482,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             if list(item['point'])!=list(p):
                 self.checkpoint();self._editable_item()['point']=list(p)
                 zone=self._editable_item()
-                if zone.get('travel'):zone['travel'][-1]=list(p)+[0]
-                for path in zone.get('links',{}).values():path[0]=list(p)+[0]
-                for peer in self.entry()['positions']:
-                    if zone['id'] in peer.get('links',{}):peer['links'][zone['id']][-1]=list(p)+[0]
+                self._sync_parking_endpoints(zone)
                 self.mark()
             self.selected_point=0;self.drag=('position',0);self._drag_started=True
             self._refresh_properties();return
@@ -1474,10 +1511,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             places[self.drag[1]][:2]=p;self._store_wait_places(places)
         elif self.drag[0]=='position':
             zone=self._editable_item();zone['point']=p
-            if zone.get('travel'):zone['travel'][-1]=p+[0]
-            for path in zone.get('links',{}).values():path[0]=p+[0]
-            for peer in self.entry()['positions']:
-                if zone['id'] in peer.get('links',{}):peer['links'][zone['id']][-1]=p+[0]
+            self._sync_parking_endpoints(zone)
         else:
             self._editable_points()[self.drag[1]][:2]=p
             if not self.network_mode:route_network.sync_junction(self._editable_item())
@@ -1573,13 +1607,13 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 if item['team']!=self.team or not self._visible_for_class(kind,item):continue
                 chosen=self.selection==(kind,item['id']) or self.selection==('builtin_positions',item['id'])
                 if kind=='routes':
-                    tags=item['classes'] if self.route_class_var.get()=='total' else (self.route_class_var.get(),)
+                    tags=('SPG',) if item.get('purpose')=='spg_attack' else item['classes'] if self.route_class_var.get()=='total' else (self.route_class_var.get(),)
                     for tag in sorted(tags,key=lambda tag:self.selection==('routes',item['id']+'@'+tag)):
                         identity=item['id']+'@'+tag if self.route_class_var.get()=='total' else item['id']
                         selected=self.selection==('routes',identity)
                         color=CLASS_COLORS[tag]
                         coords=[v for p in item['points'] for v in self.view.screen(p)]
-                        if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if selected else 2,arrow='last',dash=(5,5) if item.get('tier')=='reserve' or item.get('purpose')=='spg_attack' else ())
+                        if len(coords)>=4:c.create_line(*coords,fill=color,width=3 if selected else 2,arrow='last',dash=(5,5) if item.get('tier')=='reserve' or item.get('purpose')=='spg_attack' else (),tags=('artillery_attack',) if item.get('purpose')=='spg_attack' else ('authored_route',))
                         for i,p in enumerate(item['points']):
                             x,y=self.view.screen(p)
                             self.route_hit_targets.append((('routes',identity),i,(x,y)))

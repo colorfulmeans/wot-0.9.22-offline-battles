@@ -283,3 +283,51 @@ missing Python-3-host native extension, then all 31 passed in explicit
 engine-free reference mode. No missing-native failure was hidden or weakened.
 All 209 client sources compile with CPython 2.7.18. These results do not replace
 the owner's native-client review of the new geometry.
+
+## Independent artillery editing and visible connections
+
+The route-view selector separates ordinary class/shared routes, artillery
+parking and artillery attack routes. Total view includes all effective routes;
+All classes edits only ordinary shared travel. Both the legend and the left
+tree place artillery parking before artillery attack. Parking and connections
+use red solid lines; attacks always use red dashed lines, even in Total view.
+The parking caption does not carry a literal color suffix. A scrollable left
+tree lists each authored deployment/relocation connection below its parking
+position. Selecting a child edits that connection's nodes without moving the
+parking or rewriting another path.
+
+Defense and artillery controls use separate, contextual panels. Attack routes
+are ordinary node-editing objects with fixed own/enemy base ends, but have no
+editable class priority, policy, slots, weight, tier, waiting places or class
+scope. Their copy/delete actions work in the independent view and Total view.
+The explanation retains the existing runtime law: once the own team has only
+artillery alive, up to three artillery Bots return to base and take an authored
+attack route. No runtime selection or combat law changes in this editor fix.
+
+New parking creates its own deployment connection. Connect all parking is a
+one-shot check-shaped action, not a persisted switch. It resets its check,
+connects only the current map/team and leaves existing directed or reciprocally
+reusable paths intact. Missing pairs receive straight connections for manual
+editing/checking. Repeated clicks do not alter paths or create undo entries;
+later parking creation does not automatically join the graph. Fewer than two
+positions or immutable Default disables the action. All added pairs share one
+undo checkpoint, and an exception restores the entire document and history.
+
+Moving a parking position updates its deployment endpoint, outgoing starts and
+incoming ends, including inherited incoming connections not yet materialized
+in the editable profile. Middle nodes remain authored. Copies get independent
+IDs/deployment geometry without the original's relocation references. Deleting
+parking removes all incoming references; deleting a connection child removes
+the child, not its parking. Node editing still protects connection endpoints.
+Check-map location selects the right independent view and tree child; language
+changes preserve the selected connection and unsaved geometry.
+
+`test_bot_tactics_artillery.py` exercises actual Tk lists and canvas objects for
+all 41 maps and both teams, independent attack controls, connection child
+editing, single undo/redo, repeat/failure/default boundaries, inherited reference
+updates, copying/deleting, save/reopen, localization and check-result location.
+All 34 launcher test files pass; the final focused run covers the additional
+inherited-link and check-result-location regressions. The packaged editor smoke
+now requires the separate artillery category, red attack canvas object,
+one-shot connect/undo/redo and child-node editing through the frozen executable.
+The downloadable review profile and public Default geometry are unchanged.
