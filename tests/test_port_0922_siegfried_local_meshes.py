@@ -68,5 +68,23 @@ class SiegfriedLocalMeshesTests(unittest.TestCase):
             self.assertEqual('waypoint_unusable' if failure=='hazard' else 'waypoints_disconnected',runtime.validate_route(grid,row))
             self.assertTrue(runtime.route_issues(grid,row))
 
+    def test_admission_cannot_connect_two_legal_nodes_by_leaving_arena_bounds(self):
+        graph=copy.deepcopy(self.graph)
+        graph.update(width=3,height=3,origin=[0.,0.],heights_mm=[1000]*9,
+                     hazards=[0]*9,links=[0]*9)
+        graph['heights_mm'][4]=None
+        for i in range(9):
+            if graph['heights_mm'][i] is None:continue
+            for bit,(dx,dz) in enumerate(graph['directions']):
+                x,z=i%3+dx,i//3+dz
+                if 0<=x<3 and 0<=z<3 and graph['heights_mm'][z*3+x] is not None:
+                    graph['links'][i]|=1<<bit
+        graph['local_meshes']=[dict(origin=[-4.,-4.],cell_size=2.,width=2,height=2,
+            heights_mm=[None]*4,hazards=[0]*4,links=[0]*4)]
+        grid=runtime.graph_view('14_siegfried_line',graph)
+        grid.bounds=(0.,4.,8.,4.)
+        route=dict(team=1,points=[[0.,4.,0],[8.,4.,0]])
+        self.assertEqual('waypoints_disconnected',runtime.validate_route(grid,route))
+
 
 if __name__=='__main__':unittest.main()

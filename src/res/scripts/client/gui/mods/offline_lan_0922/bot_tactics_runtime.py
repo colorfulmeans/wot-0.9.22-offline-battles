@@ -122,7 +122,9 @@ def _validate_local_route(grid, route, details=False):
 
     def supported(cell):
         index=travel._baked_index(cell) if cell is not None else None
-        return index is not None and not int(travel._baked_hazards[index]) & 15
+        if index is None or int(travel._baked_hazards[index]) & 15:return False
+        point=travel.point_for(cell,0.)
+        return grid.bounds[0]<=point[0]<=grid.bounds[2] and grid.bounds[1]<=point[2]<=grid.bounds[3]
 
     def target(point, index=None):
         pose=(point[0],0.,point[1])
