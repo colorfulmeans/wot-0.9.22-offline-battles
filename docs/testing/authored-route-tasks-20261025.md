@@ -198,7 +198,8 @@ runtime import.
 - The old default source and all baked geometry are unchanged. A 41-map audit
   checks that only historical class masks migrate to reserve, with aligned
   shared travel and no resurrected waits. The three exceptional spawn/base maps
-  (Mittengard, Tundra, Ghost Town) are left for the owner's authored defense edits.
+  (Mittengard, Tundra, Ghost Town) have a separate editable review profile;
+  their public Default geometry is not replaced by that draft.
 - CPython 2.7 compilation and exact packaged bytecode verification cover all
   client sources. Frozen source checks cover the launcher and server payload.
 - Engine-free simulations and baked graph timings do not establish native
@@ -210,3 +211,75 @@ runtime import.
   allocation/own-route checks passing does not establish traffic acceptance.
   This candidate must disclose that failure rather than silently change motion
   laws or weaken the departure bound to make packaging appear fully validated.
+
+
+## Editable connection review draft and complete map checks
+
+`tools/evidence/route-review-draft-20261025.json` is a separate profile named
+`Route review 20261025`, copied from the current Default. It contains 246
+base-to-parking deployment paths, 492 explicitly directed parking-to-parking
+paths, and 82 artillery endgame routes across all 41 maps. Endgame paths use
+an existing authored road with base-circle ends; deployment and relocation
+paths retain the shipping planner's supported bends, dry support, clearance
+and climb approach within the sixteen-point editor contract. Nothing is added
+to the public Default and no profile is applied automatically.
+
+Only Mittengard, Tundra and Ghost Town gain ordinary-route defense branches.
+Each enabled class variant is considered independently. The nearest original
+approach to the own base identifies the reverse-travel divergence from the
+spawn-bound leg. An appropriate ordinary node owns the stable junction; a
+new ordinary point can be inserted on the original segment when space permits.
+Existing points, waits, disabled flags, lane tiers and parking positions remain.
+Full sixteen-node variants use the closest existing eligible ordinary node;
+the reviewer must inspect these coarse junctions as well as all draft paths.
+
+`launcher/bot_tactics_inventory.py` enumerates effective team/class routes,
+reserve routes, parking, deployment, relocation, sorties and the three maps'
+defense branches. It distinguishes configured/correct, configured/incorrect
+and unconfigured. Disabled lanes are listed separately, never counted as a
+successful or failed active configuration. A single reciprocal parking link
+is not reported missing; distinct explicit paths in both directions are both
+checked. All path segments are checked in both directions. Existing ordinary
+node, waiting-place entry/exit and generic parking-envelope checks remain.
+Fixed base and parking centers use only the shipping bounded endpoint snap
+inside their actual area radius; missing intermediate support is still an error.
+
+The check window labels passing data as navigation-data checks, not live
+physics acceptance. Double-click or Locate selects the team/class, route,
+connection and offending node/wait place without changing the draft. Editing
+or changing profiles expires old results and prevents stale node indexing.
+Closing the report cancels its refresh callback. Complete receipts are written
+to the existing collected launcher log.
+
+Reproduce draft generation with `python tools/build_route_review_draft.py
+OUTPUT.json`; its evidence sidecar records paths which could not be generated.
+The checked-in candidate has no unconfigured connections. Generation is an
+initial authoring aid, not proof that a gate, bridge or slope is safe in native
+physics. The owner reviews this named profile before any Default promotion.
+The runnable package includes the same JSON for normal profile import.
+
+Regression: run all `launcher/tests`, including `test_bot_tactics_inventory.py`.
+The new tests check every map in both directions, effective class overrides,
+reciprocal links, disabled families, missing-vs-invalid separation, preserved
+original geometry/waits, save/reopen without applying, report location and
+stale-result refusal. Existing navigation report tests now assert the three
+categories and retain node/wait-place coordinates and failure explanations.
+The seven authored-route/default-editor/recovery/task/wait/terminal test files
+remain enabled. On a Windows Python 3 host without the game Python 2 native
+extension, the runtime integration file requires the documented engine-free
+reference test mode; it is not native worker acceptance.
+
+
+Local candidate evidence: all 33 launcher test files passed (1,093 discovered
+checks, 15 existing environment/catalog skips); the final inventory/navigation/
+localization rerun includes the additional wait-slot receipt regression.
+All 41 draft maps produced 2,122 active configured/correct inventory entries,
+zero configured/incorrect entries and zero missing required connections.
+There are 86 stored defense branches including shared/class rows, projecting
+to 72 active class-route branches across exactly the three approved maps.
+The seven relevant route test files cover 140 tests. Six files passed on the
+Windows source runner; the runtime-integration file initially refused its
+missing Python-3-host native extension, then all 31 passed in explicit
+engine-free reference mode. No missing-native failure was hidden or weakened.
+All 209 client sources compile with CPython 2.7.18. These results do not replace
+the owner's native-client review of the new geometry.

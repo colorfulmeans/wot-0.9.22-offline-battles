@@ -1695,36 +1695,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def check_map(self):
         try:
-            doc=contract.canonical(self.document);graph=self.graph_cache.get(self.map_name)
-            result=navigation_view.check_map(doc,self.map_name,graph,contract,
-                                             receipt=navigation_view.persist_receipt)
-            names={v['id']:labels.enum_label('team',str(v['team']),self.language)+' / '+v['label'] for kind in ('routes','positions') for v in self.entry()[kind]}
-            names.update(('%s:%s'%(r['team'],contract.default_route_id(r)),labels.enum_label('team',str(r['team']),self.language)+' / '+self.tr('[默认] ','[Default] ')+r.get('label',labels.route_label(r['id'],self.language))+' / '+labels.enum_label('class_tag',r.get('class_tag','all'),self.language))
-                         for r in self.entry().get('default_routes',()))
-            for team,routes in graph.get('routes',{}).items():
-                for route in routes:
-                    names.setdefault('%s:%s'%(team,route['id']),labels.enum_label('team',team,self.language)+' / '+self.tr('[默认] ','[Default] ')+labels.route_label(route['id'],self.language))
-            lines=[]
-            for identity,status,issues in result:
-                lines.append('%s: %s'%(names.get(identity,identity),labels.validation_label(status,self.language)))
-                for issue in issues:
-                    nodes=' → '.join(str(n) for n in issue['nodes'])
-                    coords=' → '.join('X %.1f, Z %.1f'%tuple(p) for p in issue['points'])
-                    reason=labels.validation_label(issue.get('reason',issue['status']),self.language)
-                    if issue.get('wait_slot') is not None:
-                        lines.append(self.tr('  节点 %s / 等待点 %d（%s）：%s',
-                            '  Node %s / wait place %d (%s): %s')%(nodes,issue['wait_slot'],coords,reason))
-                    else:
-                        lines.append(self.tr('  节点 %s（%s）：%s','  Node %s (%s): %s')%(nodes,coords,reason))
-            text='\n'.join(lines) or self.tr('本图没有自定义数据。','No custom data on this map.')
-            window=tk.Toplevel(self.root);window.title(self.tr('验证结果','Validation'))
-            window.geometry('800x500');window.transient(self.root)
-            body=ttk.Frame(window);body.pack(fill='both',expand=True,padx=8,pady=8)
-            scroll=ttk.Scrollbar(body);scroll.pack(side='right',fill='y')
-            output=tk.Text(body,wrap='word',yscrollcommand=scroll.set)
-            output.pack(fill='both',expand=True);scroll.config(command=output.yview)
-            output.insert('1.0',text);output.config(state='disabled')
-            ttk.Button(window,text=self.tr('关闭','Close'),command=window.destroy).pack(pady=(0,8))
+            import bot_tactics_check_ui
+            return bot_tactics_check_ui.show(self)
         except Exception as e:self.error(e)
 
     def load_background(self):

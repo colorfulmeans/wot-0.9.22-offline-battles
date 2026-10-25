@@ -39,10 +39,15 @@ assert 'wot_launcher.py' in verified
 assert 'core.py' in verified
 assert 'bot_tactics_ui.py' in verified
 assert 'bot_tactics_connections.py' in verified
+assert 'bot_tactics_inventory.py' in verified
+assert 'bot_tactics_check_ui.py' in verified
 assert 'bot_tactics_preview.py' in verified
 assert 'bot_tactics_labels.py' in verified
 assert 'crew_ui.py' in verified
 assert 'crew_store.py' in verified
+draft_name = 'route-review-draft-20261025.json'
+assert json.loads((app / draft_name).read_text(encoding='utf-8')) == json.loads(
+    (ROOT / 'tools/evidence' / draft_name).read_text(encoding='utf-8'))
 
 sys.path.insert(0, str(ROOT / 'launcher'))
 import stage_payload
