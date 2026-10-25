@@ -521,3 +521,15 @@ Later additive local meshes are checked separately against their measurement
 count, 1.2m water policy, exact-client collision provenance and graph schema;
 they must not replace or weaken the old water-layer assertions. The existing
 41-map static water audit passes with the new additive layers.
+
+Route admission and its detailed authoring report previously consulted only
+the coarse SPG graph even when the navigator used additive local meshes. A
+physically supported fine-only corner could therefore pass the editor's
+inventory but silently fall back to the original road at battle setup. Maps
+with local meshes now admit ordinary/wait travel over the same baked local
+nodes and directed links. Cache directed reachability for one plan; do not
+change parking clearance, live collision, combat or worker control. Intermediate
+points must own a safe sampled cell; only existing capture-circle endpoints
+retain bounded area snapping. Negative regressions reject an identical anchor
+after marking its fine cell hazardous or disconnecting its local links. The
+six shared-default regressions include a complete no-fallback check and now pass.

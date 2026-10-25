@@ -1,9 +1,10 @@
 """Town precision keeps the reviewed anchor and every wall restriction."""
+import copy
 import json
 import math
 from pathlib import Path
 import unittest
-from gui.mods.offline_lan_0922 import prebaked_navigation as pn,bot_tactics
+from gui.mods.offline_lan_0922 import prebaked_navigation as pn,bot_tactics,bot_tactics_runtime as runtime
 from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -40,6 +41,32 @@ class SiegfriedLocalMeshesTests(unittest.TestCase):
             self.assertLess(math.hypot(path[-1][0]-b[0],path[-1][2]-b[1]),4.)
             cost=sum(math.hypot(y[0]-x[0],y[2]-x[2]) for x,y in zip(path,path[1:]))
             self.assertLess(cost,math.dist(a,b)*1.8+12.)
+
+    def test_runtime_admission_and_detailed_check_accept_the_same_fine_anchor(self):
+        profile=bot_tactics.default_profile();name='14_siegfried_line'
+        unused,outcomes=runtime.default_routes(profile,name,self.graph)
+        for team in (1,2):
+            for tag in ('heavyTank','AT-SPG'):
+                row=next(r for r in profile['maps'][name]['default_routes'] if r['team']==team and r['id']=='fortification_line' and r.get('class_tag')==tag)
+                self.assertEqual('baked_route_connected',outcomes['%s:%s'%(team,bot_tactics.default_route_id(row))])
+                grid=runtime.graph_view(name,self.graph)
+                self.assertIsNone(runtime.validate_route(grid,row))
+                self.assertEqual([],runtime.route_issues(grid,row))
+
+    def test_local_hazard_or_disconnection_cannot_be_admitted_via_coarse_snapping(self):
+        name='14_siegfried_line'
+        row=next(r for r in bot_tactics.default_profile()['maps'][name]['default_routes'] if r['team']==1 and r['id']=='fortification_line' and r.get('class_tag')=='AT-SPG')
+        for failure in ('hazard','disconnected'):
+            graph=copy.deepcopy(self.graph);patch=graph['local_meshes'][0]
+            if failure=='hazard':
+                patch['hazards']=list(patch['hazards'])
+                x=int(math.floor((80.8441-patch['origin'][0])/patch['cell_size']+.5))
+                z=int(math.floor((-67.0406-patch['origin'][1])/patch['cell_size']+.5))
+                patch['hazards'][z*patch['width']+x]=1
+            else:patch['links']=[0]*len(patch['links'])
+            grid=runtime.graph_view(name,graph)
+            self.assertEqual('waypoint_unusable' if failure=='hazard' else 'waypoints_disconnected',runtime.validate_route(grid,row))
+            self.assertTrue(runtime.route_issues(grid,row))
 
 
 if __name__=='__main__':unittest.main()

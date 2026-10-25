@@ -26,6 +26,8 @@ def graph_view(name, graph):
     grid=spg_positions._Graph(view, config.MAPS[name]['bounds'])
     grid._objective_bases=graph.get('objective_bases',())
     grid._objective_base_radii=graph.get('objective_base_radii',())
+    if graph.get('local_meshes'):
+        grid._authored_navigation_graph=view
     return grid
 
 
@@ -104,7 +106,87 @@ def _route_target(grid, point, route, index):
     return min(candidates)[1] if candidates else None
 
 
+def _validate_local_route(grid, route, details=False):
+    """Admit the same additive cells the shipping navigator actually follows.
+
+    Parking keeps its coarse full-hull policy. This once-per-plan travel check
+    never invents a nearest-free intermediate node or a new graph connection.
+    """
+    from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
+    from gui.mods.offline_lan_0922 import prebaked_navigation as pn
+    if not hasattr(grid, '_authored_local_grid'):
+        graph=pn.with_shore_hazards(grid._authored_navigation_graph)
+        grid._authored_local_grid=TerrainGrid(lambda *args:None,baked_graph=graph)
+        grid._authored_local_reachability={}
+    travel=grid._authored_local_grid
+
+    def supported(cell):
+        index=travel._baked_index(cell) if cell is not None else None
+        return index is not None and not int(travel._baked_hazards[index]) & 15
+
+    def target(point, index=None):
+        pose=(point[0],0.,point[1])
+        if not (grid.bounds[0]<=point[0]<=grid.bounds[2] and grid.bounds[1]<=point[1]<=grid.bounds[3]):
+            return None
+        cell=travel._local_meshes.cell(pose)
+        if cell is None:cell=travel.cell_for(pose)
+        if supported(cell):return cell
+        # Only authored capture-circle endpoints retain their existing area
+        # semantics; ordinary nodes and waits require their own sampled cell.
+        side=None
+        if route.get('team') in (1,2):
+            if index==len(route['points'])-1:side=2-route['team']
+            elif index==0 and route.get('purpose')=='spg_attack':side=route['team']-1
+        if side is not None and len(grid._objective_bases)==2 and len(grid._objective_base_radii)==2:
+            base=grid._objective_bases[side];radius=grid._objective_base_radii[side]
+            if math.hypot(point[0]-base[0],point[1]-base[1])<=radius:
+                nearest=travel._nearest_baked_cell(cell,3)
+                if supported(nearest):
+                    value=travel.point_for(nearest,0.)
+                    if math.hypot(value[0]-base[0],value[2]-base[1])<=radius:return nearest
+        return None
+
+    def reachable(start,goal):
+        key=(start,goal);cache=grid._authored_local_reachability
+        if key in cache:return cache[key]
+        seen=set([start]);todo=[(0.,start)];end=travel.point_for(goal,0.)
+        while todo:
+            unused,cell=heapq.heappop(todo)
+            if cell==goal:cache[key]=True;return True
+            for unused_dx,unused_dz,unused_cost,other,unused_y in travel._baked_neighbours(cell):
+                if other in seen or not supported(other):continue
+                seen.add(other);position=travel.point_for(other,0.)
+                heapq.heappush(todo,((position[0]-end[0])**2+(position[2]-end[2])**2,other))
+        cache[key]=False
+        return False
+
+    previous=None;issues=[]
+    for index,point in enumerate(route['points']):
+        current=target(point,index)
+        if current is None:
+            pose=(point[0],0.,point[1]);cell=travel._local_meshes.cell(pose)
+            if cell is None:cell=travel.cell_for(pose)
+            reason='navigation_hazard' if travel._baked_index(cell) is not None else 'missing_ground'
+            if not (grid.bounds[0]<=point[0]<=grid.bounds[2] and grid.bounds[1]<=point[1]<=grid.bounds[3]):reason='outside_bounds'
+            issues.append(dict(status='waypoint_unusable',nodes=[index+1],points=[list(point[:2])],reason=reason))
+        elif previous is not None and not reachable(previous,current):
+            issues.append(dict(status='waypoints_disconnected',nodes=[index,index+1],points=[list(route['points'][index-1][:2]),list(point[:2])]))
+        for slot,place in enumerate(config.waiting_positions(point)):
+            parked=target(place)
+            status=('wait_place_unusable' if parked is None else
+                    'wait_place_disconnected' if current is not None and not reachable(current,parked) else None)
+            if status:issues.append(dict(status=status,nodes=[index+1],points=[list(place[:2])],wait_slot=slot+1))
+            if parked is not None and index+1<len(route['points']):
+                following=target(route['points'][index+1],index+1)
+                if following is not None and not reachable(parked,following):
+                    issues.append(dict(status='wait_exit_disconnected',nodes=[index+1,index+2],points=[list(place[:2]),list(route['points'][index+1][:2])],wait_slot=slot+1))
+        previous=current
+    return issues if details else (issues[0]['status'] if issues else None)
+
+
 def validate_route(grid, route):
+    if hasattr(grid, '_authored_navigation_graph'):
+        return _validate_local_route(grid,route)
     previous = None
     for index,point in enumerate(route['points']):
         target = _route_target(grid,point,route,index)
@@ -452,6 +534,8 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
 
 def route_issues(grid, route):
     """Report every unusable node and every disconnected adjacent pair."""
+    if hasattr(grid,'_authored_navigation_graph'):
+        return _validate_local_route(grid,route,details=True)
     issues, previous = [], None
     for index, point in enumerate(route['points']):
         target = _route_target(grid,point,route,index)
