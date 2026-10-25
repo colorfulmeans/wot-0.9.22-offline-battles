@@ -309,3 +309,49 @@ on Mittengard and Tundra, where existing class/common endpoints differ. The
 all-map regression resets every ordinary class family across all 41 maps, saves
 and reopens the entire profile, then checks later class edits and rejection of
 a detached endpoint without changing the applied profile.
+
+### Owner-selected artillery corridors (2026-10-25 follow-up)
+
+The shared Default uses the following class-specific corridors for both teams'
+artillery attacks, except the explicitly different Erlenberg team choices.
+Copy the intermediate coordinates in their original order, clear ordinary
+waiting behavior, and retain exact own/enemy objective-base endpoints. Do not
+copy ordinary-route priorities, defense branches or allocation membership.
+
+| Map | Ordinary corridor source |
+| --- | --- |
+| Kharkov | Light / factory |
+| Erlenberg | Team 1 Light / north_bridge; team 2 Light / south_bridge |
+| El Halluf | Light / south_valley |
+| Ensk | Medium / east_field |
+| Mittengard | Light / rim_west |
+| Lakeville | Light / east_town |
+| Redshire | Light / river_town |
+| Arctic Region | Light / west_lakeside |
+| Sacred Valley | Light / river |
+| Mountain Pass | Light / central_basin |
+| Sand River | Light / village_road |
+| Himmelsdorf and Winter Himmelsdorf | Light / banana |
+| Airfield | Light / south_towns |
+| Westfield | Tank destroyer / east_fields |
+| Malinovka | Light / central_field |
+| Siegfried Line | Light / east_city |
+| Ruinberg and Winterberg | Owner profile 1 Ruinberg Light / central_streets |
+
+Ruinberg's two edited seven-point Light routes from profile 1 also become the
+Light and Medium class overrides in both Ruinberg and Winterberg, retaining
+each map's ordinary fixed endpoints. Winterberg's corresponding built-in
+family is `city`; keep that internal identity and label the two class overrides
+Central streets. Leave shared/heavy/tank-destroyer geometry unchanged.
+
+Verification: all 38 changed artillery attacks and eight ordinary class rows
+pass the actual editor inventory's directional navigation-data checks. The
+complete profile passes canonical/fixed-endpoint validation and save/reopen.
+An exact whole-profile comparison excludes only these permitted changes and
+proves all other geometry, parking, behavior and metadata unchanged. Refresh
+the adopted-default digest fixture, retain the existing all-map default tests,
+and compile the modified client data module under CPython 2.7.18. No native
+passage or artillery combat/performance improvement is established by this
+data-only change. The existing editable profile 1 retains unrelated edits and
+receives the same requested routes for immediate owner review; do not delete it
+or change the selected applied profile.

@@ -7,13 +7,13 @@
       "routes": 30
     },
     "02_malinovka": {
-      "digest": "9b01f3e5c5bd0066299c59162ab2d0c5c962fb20f91e0eee6368a05616fc9237",
+      "digest": "40ab11ccc1222f909897c04f013afb7bfa34cc9f7a62bf072e49405d0a3c8a4f",
       "parking_groups": 6,
       "points": 160,
       "routes": 14
     },
     "04_himmelsdorf": {
-      "digest": "a94fb8c6c96332ec635263dfc3d751089cce199ff3c6192fd368651d48fc12ef",
+      "digest": "9cf94cacde12ca785885f3c9417515a2de8955e636a2ef353c5b8b3c13d996ce",
       "parking_groups": 6,
       "points": 248,
       "routes": 20
@@ -25,25 +25,25 @@
       "routes": 16
     },
     "06_ensk": {
-      "digest": "cd9a45f843547a3ea614d00ddbc20f7846294746463be19433ef89314e3c8c04",
+      "digest": "1d92337005ce1e9ecbb80beeff399372a331f37c24d6f9561bb3fd23ceac77f0",
       "parking_groups": 6,
       "points": 209,
       "routes": 18
     },
     "07_lakeville": {
-      "digest": "9f9cc6a3e5add3f35266f743368b614f67f4ca5eea1cc86ee54037bca12a8f30",
+      "digest": "73aff45c2022b7106c454ccc25320a58e955f008ee3c38ddc77157ad84fea3bc",
       "parking_groups": 6,
       "points": 274,
       "routes": 24
     },
     "08_ruinberg": {
-      "digest": "27008a481c1d841409e015dd280e20cf8f2a94dc7c78b78880f7488c5d3be27c",
+      "digest": "5874ee484ff0d276ca67ce851204a03acbd9d97482f90ec59a1d4048c2b6e5e9",
       "parking_groups": 6,
-      "points": 180,
-      "routes": 14
+      "points": 208,
+      "routes": 18
     },
     "100_thepit": {
-      "digest": "8a78044825f4bde367e6798ae4474aefa999eb0c632e8457d504c5136b206436",
+      "digest": "b2b119c5a0a7d3e0778b633c26ed5af5bc2af072ee0112cfbf41a05ea31d1efc",
       "parking_groups": 6,
       "points": 313,
       "routes": 30
@@ -55,10 +55,10 @@
       "routes": 20
     },
     "103_ruinberg_winter": {
-      "digest": "08f7fe19231754b4940452682cb618e249241d71c73c46a1c87ca9a08f52ae2a",
+      "digest": "2ff2db036f2ecb484429562442264ed4e276a78c08c623b6b30533200b14a607",
       "parking_groups": 6,
-      "points": 180,
-      "routes": 14
+      "points": 208,
+      "routes": 18
     },
     "10_hills": {
       "digest": "cd7a040c8dd6709baf8c6a48dd2f08b0b40d58c758a2b4c4c0be4c54e5210ead",
@@ -85,13 +85,13 @@
       "routes": 20
     },
     "13_erlenberg": {
-      "digest": "3b96a1711ce6778dd8535b95e3b10c49f40e5c9a60ce413ffe42ab16baf8be81",
+      "digest": "4e4ccc7792d0ff2368203e2a62f8bb3423560c92ee46395f4c4dcd52d862ab14",
       "parking_groups": 6,
       "points": 449,
       "routes": 30
     },
     "14_siegfried_line": {
-      "digest": "08d138501f8c34f8f46fdb2e151dae79d080205a3c214da0d93449b08bbdda87",
+      "digest": "fcf0e6aa5686773d548fde43f1b5b2df8100dc3808eab203453f87e391848b5a",
       "parking_groups": 6,
       "points": 182,
       "routes": 18
@@ -121,25 +121,25 @@
       "routes": 10
     },
     "23_westfeld": {
-      "digest": "6d8ea42327bce06e2a38efcd3f1d4ae34524ead31e51f52bc7dcc4a205c819a2",
+      "digest": "b53360bfb562125a4bedb9562792c73c3e22f166e2c2f05fb1a92de78aa5b5a3",
       "parking_groups": 6,
       "points": 242,
       "routes": 22
     },
     "28_desert": {
-      "digest": "fdcfdd0551ad4bf180061611899c9467a6e327a68ca872467b5fb4370bf70f7e",
+      "digest": "754855c2a2fd560511524f60871609bb8f035a307c2099a4615acc604d1e3c07",
       "parking_groups": 6,
       "points": 237,
       "routes": 20
     },
     "29_el_hallouf": {
-      "digest": "314cd9ed4aa253715dfb00ee3ff4c1e8b4e775b553e6d37575315e473eebc426",
+      "digest": "add65d96a6b5d76794b14b906ea99023d58cb06b4aed8c696375c3c1c9e8ee3f",
       "parking_groups": 6,
       "points": 404,
       "routes": 30
     },
     "31_airfield": {
-      "digest": "25c92d021bde9da5b279332e881d1291f93c023c687fb6e01a400186f97c4cb9",
+      "digest": "8d761123334f01022166ed29b694b8aa9de14d311f6abf35f9caf8bcb56b4fdb",
       "parking_groups": 6,
       "points": 226,
       "routes": 16
@@ -151,7 +151,7 @@
       "routes": 30
     },
     "34_redshire": {
-      "digest": "2018713a91d132badacef3429dff55046af5030d778245c92bdb5a55ddfe575f",
+      "digest": "c326a1da7335c5226f5bc8396d2dfb22304992f474f161ae3838a12cc2bb8700",
       "parking_groups": 6,
       "points": 146,
       "routes": 16
@@ -169,13 +169,13 @@
       "routes": 20
     },
     "37_caucasus": {
-      "digest": "259e919ff633aa83456c9b42ddba384ffa095b9627463b385f0fc052a6727474",
+      "digest": "89b8434832ff0a9b50dfc1b0913ef30582b3a9e9265448ee24ac980d48817e2f",
       "parking_groups": 6,
       "points": 254,
       "routes": 18
     },
     "38_mannerheim_line": {
-      "digest": "a52fc3f1bad8cb1c586f90df9c29a752fc1437a960c53ebe3b989d910a25d3a0",
+      "digest": "d8ee3e20741d47d9e9546784c11fc69f3a7ee6dc92e854816a73ac8755dd78ed",
       "parking_groups": 6,
       "points": 250,
       "routes": 22
@@ -211,13 +211,13 @@
       "routes": 30
     },
     "73_asia_korea": {
-      "digest": "5b27b387603da205d69860aed3c14c5528e8f3208c26a835ec8f7cf6fac932c1",
+      "digest": "24163387dba2c10a8be38007b830696de943ddf92cecf7f638cad42e6cb2a930",
       "parking_groups": 6,
       "points": 200,
       "routes": 16
     },
     "83_kharkiv": {
-      "digest": "f48959a06e73e52e622d07bbdcc86fd56d9dabab3bf5fbd952da4f1a1472105a",
+      "digest": "a2f8a584b605020088e9aab9bc9259e78de6c6c36a136341a638f8a4131694b6",
       "parking_groups": 6,
       "points": 360,
       "routes": 30
@@ -229,7 +229,7 @@
       "routes": 20
     },
     "86_himmelsdorf_winter": {
-      "digest": "94b257f7aa864679ee026eec870af984737209dd46b434947b16cd23637058d8",
+      "digest": "d887203f1534822b8dc4ddd87408b145902e89db59d574054546a59ae4f7eba7",
       "parking_groups": 6,
       "points": 178,
       "routes": 14
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "fa8f8dfcc7cc0ad79a90c6cc4a81e2527c9f3c8735b43cd3e2f1767a4b8b87f2",
-  "source": "Owner-approved Route review 20261025, promoted to shared Default"
+  "profile_digest": "6eec0d45aee3b85d7392c1fea6507218e68fc021e33d4af314d8ada50d3f8762",
+  "source": "Owner-approved shared Default with requested artillery corridors and profile 1 Ruinberg central streets, 2026-10-25"
 }
