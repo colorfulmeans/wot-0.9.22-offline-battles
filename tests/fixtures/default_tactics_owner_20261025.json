@@ -43,9 +43,9 @@
       "routes": 18
     },
     "100_thepit": {
-      "digest": "74040183cc0e97be84419db3a061817d1bdee5b3454e7990b52e17495b9f7836",
+      "digest": "ad84758f7986c6c3b4916f3c2c36af27d84154c1d9c46f5d4a423f9a15941cb1",
       "parking_groups": 6,
-      "points": 313,
+      "points": 300,
       "routes": 30
     },
     "101_dday": {
@@ -205,7 +205,7 @@
       "routes": 22
     },
     "63_tundra": {
-      "digest": "8f350b4ac39422568051b6a54c0db8b821284b725b5664d170d94bf115fd268a",
+      "digest": "10186dc0f6fdb930843e7a3c49ec62999e284f8d50d1be8e34d508d49a637889",
       "parking_groups": 6,
       "points": 409,
       "routes": 30
@@ -241,12 +241,12 @@
       "routes": 16
     },
     "95_lost_city": {
-      "digest": "fc27bc518eada51b3a04b08a9b8feae879a7e02187d3ee2e9d7ef1959030b2c4",
+      "digest": "1db3e1b4a8f6112b5bbbcfafd67d34adb3be0e5368ad9da0c7a980e32afa0936",
       "parking_groups": 6,
       "points": 301,
       "routes": 26
     }
   },
-  "profile_digest": "b3870806f2709d026a9f9a00f8b43fc3da158fa113fdf6a21e56f630a6f42a8d",
-  "source": "Owner-approved corridors, Tundra defense and enemy-base endpoint corrections, 2026-10-25"
+  "profile_digest": "edb5195cf5bb60a07ee142df075756a30d338b3c1c8c79751dc7f921c56ec697",
+  "source": "Owner-reviewed Tundra, Mittengard and Ghost Town profile 1 map promotion, 2026-10-26"
 }

@@ -414,3 +414,29 @@ regressions invoke buttons in Total view for built-in and custom families,
 verify complete document differences, undo/redo, save/reopen, common-scope tier
 propagation and protected contexts. The real source/frozen editor smoke requires
 `total_view_route_tier_controls` and exercises conversion, undo/redo and save.
+
+### Three-map owner review promotion (2026-10-26)
+
+In profile 1, replace only Mittengard's six All-classes rows: both teams' rim_west
+use their Light road, pit their Heavy road and rim_east their Medium road. Copy
+the selected road's coordinates/order, stable node identities and attached
+defense topology so the adopted common road cannot retain detached references.
+Common nodes have no waits. Preserve class-specific rows and all target tier,
+priority and labeling metadata.
+
+For Ghost Town, only team-1 park and team-2 outskirts Medium/Heavy/TD defense
+branches adopt the corresponding Light branch. Rebind to each target's existing
+unique matching intermediate node. Keep their main points and every other field
+unchanged, including the black common branch and the Light source itself.
+
+Then promote exactly the complete profile-1 map entries for Tundra, Mittengard
+and Ghost Town into shared Default. Retain the other 38 maps and global behavior;
+do not delete profile 1 or switch the applied profile. Exact whitelist comparison
+limits personal changes to these twelve rows and shared changes to these three
+complete maps. All 168 map inventory entries are configured/correct, including
+both directions, parking, ordinary roads, defense branches and artillery attacks.
+Both complete profiles save/reopen; the adopted-default and baseline tests pass
+all 16 checks, and the changed client data compiles with CPython 2.7.18. Native
+physics passage remains a separate gameplay check. Ship the new Default in both
+client and server payloads; old packaged Default references cannot represent
+the newly adopted fixed common endpoints.
