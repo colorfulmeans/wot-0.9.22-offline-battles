@@ -3318,9 +3318,6 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         history[route_id] = state
         requested_limit = route_limit
         previous_index = max(0, _integer(state.get('index')))
-        # Screening may stop an approaching tank before the flag. It cannot
-        # rewind a tank which already passed that gate while assigned capture.
-        route_limit = min(len(waypoints)-1, max(route_limit, previous_index))
         index = min(max(0, _integer(state.get("index"))), route_limit)
         state["index"] = index
         point = _point(waypoints[index])
@@ -3379,7 +3376,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
             requested_limit=requested_limit, effective_limit=route_limit,
             previous_index=previous_index, selected_index=index,
             point=dict(point), anchor=dict(anchor), route_join=route_join,
-            outcome='preserve_passed_screen' if requested_limit < previous_index else 'normal_progress')
+            outcome='normal_progress')
         return route_id, index, point, anchor, route_join
 
     def _handoff_route_terminal(self, order, bot, capture_target, now):

@@ -10562,5 +10562,9 @@ the destination parking has no deployment connection.
 
 The updated route-task verification document records report-derived scenarios,
 network cache invalidation, worker adapter checks and repeatable test commands.
-All 209 client modules compile under CPython 2.7. Engine-free tests are separate
+The isolated engine-free suite plus affected-file reruns passes 420 files /
+9,074 tests with seven recorded skips and no remaining failures. The stale
+screen-toggle regression was updated to require uninterrupted terminal travel;
+its original failure is retained in the local audit evidence. All 209 client
+modules compile under CPython 2.7. Engine-free tests are separate
 from native extension/packaging checks and do not establish live match acceptance.
