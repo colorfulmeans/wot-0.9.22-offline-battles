@@ -72,13 +72,15 @@ class ConnectionTests(unittest.TestCase):
         clone=route_network.clone_route(row)
         self.assertNotEqual(row['defense']['junction'],clone['defense']['junction'])
 
-    def test_all_scope_rebinds_each_class_by_actual_junction_not_array_index(self):
+    def test_common_junction_index_is_identical_even_when_old_variants_had_extra_nodes(self):
         e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route();e.insert_point()
         source=e._editable_parent();source['family']=source['id']
         peer=route_network.clone_route(source);peer.update(id='class_copy',classes=['heavyTank'],family=source['id'])
-        source['classes'].remove('heavyTank');route_network.insert_node(peer,1,[(source['points'][0][0]+source['points'][1][0])*.5,(source['points'][0][1]+source['points'][1][1])*.5,0])
+        source['classes'].remove('heavyTank')
+        route_network.insert_node(peer,1,[source['points'][0][0]+5,source['points'][0][1]+5,0])
         e.entry()['routes'].append(peer);e.selected_point=1;e._refresh_properties();e.add_defense()
-        self.assertEqual(route_network.nodes(peer)[2],peer['defense']['junction'])
+        self.assertEqual(source['points'],peer['points'])
+        self.assertEqual(1,route_network.nodes(peer).index(peer['defense']['junction']))
         self.assertEqual(source['defense']['points'],peer['defense']['points'])
 
     def test_long_connection_cannot_create_waits_or_touch_main_geometry(self):
@@ -174,14 +176,36 @@ class ConnectionTests(unittest.TestCase):
         self.assertNotIn('lightTank',original['classes'])
         self.assertFalse(self.errors.called)
 
-    def test_shared_edit_keeps_each_stable_junction_and_other_main_geometry(self):
+    def test_shared_edit_resets_different_geometry_and_junction_to_common_sequence(self):
         e,source_id,peer_id=self.shared_routes(True)
         peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
-        original=copy.deepcopy(peer);e.insert_point()
-        self.assertEqual(original['points'],peer['points'])
-        self.assertEqual(original['defense']['junction'],peer['defense']['junction'])
-        self.assertEqual(peer['points'][1][:2],peer['defense']['points'][0][:2])
-        self.assertEqual(e._selected_parent()['defense']['points'][1:],peer['defense']['points'][1:])
+        route_network.insert_node(peer,1,[peer['points'][0][0]+5,peer['points'][0][1]+5,0])
+        self.assertEqual(2,route_network.nodes(peer).index(peer['defense']['junction']))
+        before=copy.deepcopy(e.document);e.insert_point()
+        source=e._selected_parent();peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        self.assertEqual(source['points'],peer['points'])
+        self.assertEqual(source['node_ids'],peer['node_ids'])
+        self.assertEqual(1,route_network.nodes(peer).index(peer['defense']['junction']))
+        self.assertEqual(source['defense']['points'],peer['defense']['points'])
+        e.undo('maps');self.assertEqual(before,e.document)
+
+    def test_common_main_edit_unifies_point_order_then_class_edit_is_independent(self):
+        e,source_id,peer_id=self.shared_routes(True)
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        route_network.insert_node(peer,1,[peer['points'][0][0]+5,peer['points'][0][1]+5,0])
+        e.network_mode='';e.selected_point=0;e._refresh_properties();e.insert_point()
+        source=e._selected_parent();self.assertEqual(source['points'],peer['points'])
+        self.assertEqual(2,route_network.nodes(source).index(source['defense']['junction']))
+        self.assertEqual(2,route_network.nodes(peer).index(peer['defense']['junction']))
+        shared=copy.deepcopy(source['points'])
+        e.route_class_var.set('heavyTank');e.change_route_class();e.selection=('routes',peer_id)
+        e._refresh_items();e.selected_point=0;e.insert_point()
+        self.assertEqual(shared,next(r for r in e.entry()['routes'] if r['id']==source_id)['points'])
+        self.assertNotEqual(shared,e._selected_parent()['points'])
+        e.route_class_var.set('all');e.change_route_class();e.selection=('routes',source_id)
+        e._refresh_items();e.selected_point=0;e.insert_point()
+        self.assertEqual(e._selected_parent()['points'],next(r for r in e.entry()['routes'] if r['id']==peer_id)['points'])
+        self.assertFalse(self.errors.called)
 
     def test_shared_delete_and_undo_cover_every_variant(self):
         e,source_id,peer_id=self.shared_routes();before=copy.deepcopy(e.document)
@@ -189,13 +213,13 @@ class ConnectionTests(unittest.TestCase):
         e.undo('maps');self.assertEqual(before,e.document)
         e.redo('maps');self.assertTrue(all('defense' not in r for r in e.entry()['routes']))
 
-    def test_shared_failure_restores_entire_draft_history_and_selection(self):
+    def test_common_edit_also_initializes_a_variant_without_old_defense(self):
         e,source_id,peer_id=self.shared_routes(True)
         peer=next(r for r in e.entry()['routes'] if r['id']==peer_id);peer.pop('defense')
-        before=copy.deepcopy(e.document);history=copy.deepcopy(e.histories);selection=e.selection
-        e.insert_point()
-        self.assertTrue(self.errors.called);self.assertEqual(before,e.document)
-        self.assertEqual(history,e.histories);self.assertEqual(selection,e.selection)
+        e.insert_point();source=e._selected_parent()
+        self.assertEqual(source['points'],peer['points'])
+        self.assertEqual(source['defense']['junction'],peer['defense']['junction'])
+        self.assertFalse(self.errors.called)
 
     def test_symmetry_copies_defense_to_other_team_only_when_enabled(self):
         e,source_id,peer_id=self.shared_routes();source=e._editable_parent()

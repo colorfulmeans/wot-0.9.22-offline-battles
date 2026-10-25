@@ -20,8 +20,8 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         self.defense_delete.pack(fill='x')
         self.defense_edit=ttk.Button(panel,text=self.tr('编辑／返回回防路线','Edit / leave defense connection'),command=self.edit_defense)
         self.defense_edit.pack(fill='x')
-        ttk.Label(panel,text=self.tr('仅普通中间节点可挂接回防线；回防经过等待点不等待。全部车型共同覆盖后续回防路径，保留各车型已有挂接点；单车型及总路线只改选中车型。最后一次实际编辑生效，开启路线对称才同步另一队。',
-            'Only ordinary intermediate nodes can own a defense branch; reverse travel skips waits. All classes shares later defense bends while preserving existing class junctions. A class or Total view edits only the selected class. Last edits win; route symmetry alone also updates the other team.'),wraplength=250).pack(anchor='w')
+        ttk.Label(panel,text=self.tr('仅普通中间节点可挂接回防线；回防经过等待点不等待。全部车型统一同一路线的点位、点序和回防挂接；单车型及总路线只改选中车型。最后一次实际编辑生效，开启路线对称才同步另一队。',
+            'Only ordinary intermediate nodes can own a defense branch; reverse travel skips waits. All classes resets the same route family to the common point sequence and defense junction. A class or Total view edits only the selected class. Last edits win; route symmetry alone also updates the other team.'),wraplength=250).pack(anchor='w')
         panel=ttk.LabelFrame(parent,text=self.tr('火炮路线编辑','Artillery route editor'))
         self.artillery_panel=panel;panel.grid(row=24,column=0,sticky='ew',pady=5)
         ttk.Label(panel,wraplength=250,text=self.tr(
@@ -89,7 +89,7 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         if 'tier' in fields:
             for row in peers:row['tier']=item.get('tier','main')
             return
-        for row in peers:self._copy_defense(item,row)
+        for row in peers:self._copy_defense(item,row,shared=True)
         if not item.get('symmetric') or not self._symmetry_allowed():return
         other=3-self.team
         if self.selection[0]=='builtin':
@@ -99,41 +99,48 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
             if counterpart is None:
                 inherited=next((r for r in rows if r['team']==other and r['id']==item['id']
                                 and r.get('class_tag','all')=='all'),None)
-                if inherited is None:raise ValueError(self.tr('另一队缺少对应路线。','The other team has no matching route.'))
-                counterpart=copy.deepcopy(inherited);counterpart['class_tag']=scope;rows.append(counterpart)
+                if inherited is None:
+                    source=next((r for r in self.graph_cache[self.map_name].get('routes',{}).get(str(other),()) if r['id']==item['id']),None)
+                    if source is None:raise ValueError(self.tr('另一队缺少对应路线。','The other team has no matching route.'))
+                    counterpart=dict(id=item['id'],team=other,class_tag=scope,points=copy.deepcopy(source['waypoints']),symmetric=True)
+                else:
+                    counterpart=copy.deepcopy(inherited);counterpart['class_tag']=scope
+                rows.append(counterpart)
             targets=[r for r in rows if r['team']==other and r['id']==item['id']] if shared else [counterpart]
         else:
             counterpart=next((r for r in rows if r['id']==item.get('mirror_id')),None)
             if counterpart is None:raise ValueError(self.tr('另一队缺少对应路线。','The other team has no matching route.'))
             targets=[r for r in rows if r['team']==other and r.get('family',r['id'])==counterpart.get('family',counterpart['id'])] if shared else [counterpart]
         for row in targets:
-            if row.get('purpose')!='spg_attack' and row.get('classes')!=['SPG']:self._copy_defense(item,row)
+            if row.get('purpose')!='spg_attack' and row.get('classes')!=['SPG']:self._copy_defense(item,row,shared=shared,mirror=True)
 
-    def _copy_defense(self, source, target):
-        if target.get('disabled'):return
+    def _copy_defense(self, source, target, shared=False, mirror=False):
         branch=source.get('defense')
-        if not branch:target.pop('defense',None);return
-        points=copy.deepcopy(branch['points'])
-        # Route symmetry reverses the authored road in world coordinates;
-        # shared branch bends keep those coordinates and each team owns its base.
-        old=target.get('defense')
-        ids=list(route_network.nodes(target))
-        # Existing class junctions are stable owners, not interchangeable indices.
-        if old and old['junction'] in ids[1:-1]:index=ids.index(old['junction'])
-        else:
-            matches=[i for i,p in enumerate(target['points']) if 0<i<len(ids)-1
-                     and abs(p[0]-points[0][0])<.00011 and abs(p[1]-points[0][1])<.00011
-                     and not p[2] and not contract.waiting_positions(p)]
-            if len(matches)!=1:raise ValueError(self.tr(
-                '部分车型没有对应的普通挂接点，请先对齐或按车型编辑回防线。',
-                'Some classes lack the matching ordinary junction; align nodes or edit defense by class.'))
-            index=matches[0]
-        if target['points'][index][2] or contract.waiting_positions(target['points'][index]):raise ValueError(self.tr('等待点不能挂接回防线。','A waiting node cannot own a defense branch.'))
-        target['node_ids']=ids
-        points[0]=target['points'][index][:2]+[0]
-        points[-1]=list(self.graph_cache[self.map_name]['objective_bases'][target['team']-1])+[0]
-        target['defense']=dict(junction=ids[index],points=points)
-
+        if shared or mirror:
+            # A common edit replaces the family's point sequence, not just a
+            # cursor number. Keep local waits only at unchanged ordinary nodes.
+            old={tuple(p[:2]):p for p in target['points']}
+            target['points']=copy.deepcopy(list(reversed(source['points'])) if mirror else source['points'])
+            target['node_ids']=list(reversed(route_network.nodes(source))) if mirror else list(route_network.nodes(source))
+            if mirror:
+                starts=self.graph_cache[self.map_name]['spawn_anchors']
+                target['points'][0]=list(starts[target['team']-1])+[0]
+                target['points'][-1]=list(starts[2-target['team']])+[0]
+            junction=branch['junction'] if branch else None
+            for index,point in enumerate(target['points']):
+                prior=old.get(tuple(point[:2]))
+                if (prior and target['node_ids'][index]!=junction
+                        and contract.waiting_positions(prior)):
+                    target['points'][index]=point[:2]+copy.deepcopy(prior[2:])
+            if target.get('disabled'):
+                target['points']=[p[:2]+[0] for p in target['points']];target.pop('defense',None);return
+            if branch:
+                target['defense']=copy.deepcopy(branch)
+                index=target['node_ids'].index(branch['junction'])
+                target['defense']['points'][0]=target['points'][index][:2]+[0]
+                target['defense']['points'][-1]=list(self.graph_cache[self.map_name]['objective_bases'][target['team']-1])+[0]
+            else:target.pop('defense',None)
+            return
     def add_defense(self):
         if self.builtin or str(self.defense_add.cget('state')) == 'disabled':return
         before = copy.deepcopy(self.document)

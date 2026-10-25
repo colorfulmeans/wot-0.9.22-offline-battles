@@ -295,15 +295,19 @@ def run(destination):
             source=next(r for r in ui.entry()['routes'] if r['team']==ui.team and 'heavyTank' in r['classes'])
             source['symmetric']=False;source.pop('mirror_id',None);source['family']=source['id']
             peer=route_network.clone_route(source);peer.update(id='smoke_shared_peer',classes=['mediumTank'],family=source['id'])
+            route_network.insert_node(peer,1,[peer['points'][0][0]+5,peer['points'][0][1]+5,0])
             ui.entry()['routes'].append(peer)
             ui.selection=('routes',source['id']);ui.network_mode='defense';ui.selected_point=0;ui._refresh_items()
             before=copy.deepcopy(ui.document);ui.insert_point();root.update()
             assert ui.network_mode=='defense',(ui.selection,ui.map_name,ui.route_class_var.get(),ui.items.selection(),source['id'])
             assert [[round(v,4) for v in p] for p in source['defense']['points']]==[[round(v,4) for v in p] for p in peer['defense']['points']]
+            assert source['points']==peer['points']
+            assert source['node_ids']==peer['node_ids']
             shared=copy.deepcopy(ui.document);ui.undo('maps');assert ui.document==before
             ui.redo('maps');assert ui.document==shared
             ui.save(True);assert not ui.dirty()
             report['shared_defense_transactions']=True
+            report['common_route_reset']=True
             report.update(ok=True, pillow=PIL.__version__, tk=tk.TkVersion,
                           map_count=41, canvas_route_points=len(active['maps']['08_ruinberg']['routes'][0]['points']),
                           manual_plan=plans[11], profile_sha256=storage.contract.digest(active),

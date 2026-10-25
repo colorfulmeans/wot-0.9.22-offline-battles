@@ -108,11 +108,13 @@ or branch references.
 A defense junction cannot be a waiting place, endpoint or parking zone. A defense
 junction also cannot be converted into a waiting place. Connection editing has
 its own selected geometry and fixed ends; insertion, dragging, deletion, copying,
-import and map undo preserve or remove stable references. All-classes branch edits
-retain each existing class junction; new bindings match coordinates, not indices.
-A missing/ambiguous matching junction rejects the edit atomically rather than
-silently attaching a different road. Tier edits do not overwrite independent
-class defense branches.
+import and map undo preserve or remove stable references. All-classes edits
+reset the selected route family to the common point coordinates and ordering,
+including the common defense-junction node; old per-class third/fourth-node
+choices do not survive a later common edit. Main/reserve priorities stay local.
+Wait places survive only on unchanged coordinates that remain ordinary nodes;
+removed/moved nodes cannot retain orphaned waits. Disabled rows remain disabled
+and do not acquire waits or defense branches.
 
 Parking deployment, relocation and return to a remembered parking position use
 existing automatic navigation. Remove authored parking connection controls,
@@ -134,22 +136,25 @@ and resume that owner after defense. Missing attacks retain the old automatic
 endgame fallback. Existing combat/fire gates and ordinary navigation/recovery
 remain unchanged. Authored attack geometry still requires owner review.
 
-All-classes is the black common-editing view. A defense edit updates only the
-selected map/team/route family. Existing class junction identities and main
-geometry remain local; later branch bends are shared. A class without an existing
-branch needs an unambiguous matching ordinary junction; otherwise roll back the
-entire edit and history. Total view and individual class views edit only their
-selected class. Later common edits overwrite earlier individual branch edits;
-view selection itself never edits data. Main/reserve states and artillery are
-excluded. Add/delete/insert/move/remove and map undo/redo all use the same scope.
+All-classes is the black common-editing view. An actual main-route or defense
+geometry edit updates only the selected map/team/route family: copy the common
+point coordinates, order, node identities and defense branch into every ordinary
+class variant. If the common junction is point three, every same-team variant
+now uses that same point three, even if it previously had a different point four.
+Do not preserve the superseded class geometry or select a nearby old junction.
+Total and individual-class views edit only the selected class. A later common
+edit replaces those independent edits again. View selection itself never writes.
+Tiers, priorities, other families and artillery are excluded from propagation.
 
-When route symmetry is enabled and the map permits it, copy branch bends to the
-corresponding opposite-team route as well, keeping that team's stable junction
-and fixed own base endpoint. This follows the editor's world-coordinate reversed
-road semantics; it is not a new terrain-mirroring algorithm. Failure on either
-team rolls back both. Unsupported maps keep symmetry disabled. Tier changes do
-not overwrite defense geometry. A list refresh/queued selection event preserves
-active defense editing; map-check location also enters the correct branch.
+When route symmetry is enabled and the map permits it, also reset the opposite
+team's corresponding variants to the reversed common road, keeping their fixed
+spawn ends and own-base defense endpoint. The shared junction keeps its stable
+identity in the reversed order. This follows existing reversed-road semantics;
+it does not invent terrain-mirrored roads. Failure on either team rolls back
+both drafts/history. Unsupported maps keep symmetry disabled. Add/delete/insert,
+dragging, main-junction movement, deletion and undo/redo all use the same scope.
+A list refresh/queued selection event preserves active defense editing; map-check
+location enters the actual branch. Single-class custom splits retain selection.
 
 Optional schema-1 fields remain `tier`, `family`, `node_ids`, `defense` and route
 `purpose=spg_attack`. Endpoint ownership, bounds, stable junctions, waits and
@@ -258,7 +263,7 @@ artillery is red. Language/view changes preserve pending edits and selection.
 Regression gates: run all launcher tests, especially artillery, connection,
 inventory, adopted-default, route-control and localization tests. Connection
 regressions exercise shared -> individual -> shared edits, Total-view edits,
-independent stable junctions, unchanged main geometry, symmetry, deletion,
+common point-sequence/junction resets, later independent class edits, symmetry, deletion,
 transaction rollback and undo/redo. Artillery tests cover old-file migration,
 no retired controls/data, all-map display and retained attacks. Route-task tests
 cover automatic parking even with stale caches, offset spawn/base sequencing,
@@ -273,8 +278,8 @@ bridge, slope, wall passage or worker performance. Real-client tests must use
 START_DIAGNOSTIC_TEST to collect the existing diagnostic logs.
 
 Local validation of this change: all 34 launcher test files pass after final
-transaction/UI/route-control reruns (1,111 discovered checks, existing local
-environment skips retained). Nineteen connection tests exercise the complete
+transaction/UI/route-control reruns (1,112 discovered checks, existing local
+environment skips retained). The connection tests exercise the complete
 shared/single-class/symmetry/rollback contract. Seven route/runtime files pass
 119 checks; 31 additional editor/runtime integration checks pass in explicitly
 engine-free reference mode. All 209 client sources compile under CPython 2.7.18.
@@ -282,3 +287,17 @@ Exact Default comparison against the previous commit proves that only parking
 travel/links were removed, preserving every other field on all 41 maps. Source
 editor smoke exercises automatic parking UI and real shared defense edits with
 undo/redo; the frozen-package verifier requires these receipts too.
+
+The final common-edit clarification is covered by explicit point-order resets:
+a class whose old junction was point four is replaced by the common point-three
+road/junction. Main point insertion/movement/deletion uses the same family reset
+as defense edits, while subsequent single-class changes remain local. Tests
+retain per-class priorities, reverse-team endpoints and valid unchanged-node
+waits. The frozen editor verifies different old node counts are unified, with
+`common_route_reset` required by the downloaded-package verifier.
+
+Reset-route/default restoration is an explicit baseline operation, not another
+common geometry edit: restoring must not recreate overlays just removed or
+propagate over freshly restored class defaults. Navigation tests fail fast on
+unexpected error dialogs and exercise this reset path. Final navigation,
+connection, route-control and launcher-window reruns all pass after this fix.

@@ -84,19 +84,19 @@ class RouteControlsTests(unittest.TestCase):
         with self.assertRaises(storage.contract.TacticsError):self.store.import_file(path)
         self.assertEqual(active,self.store.active()); self.assertEqual(saved,self.store.read('Editable'))
 
-    def test_shared_geometry_preserves_enabled_waits_and_disabled_status(self):
-        e=self.editor; e.adopt(storage.contract.default_profile('Editable'))
-        e.map_var.set(storage.MAP_LABELS['11_murovanka']); e.change_map()
-        rows=e.entry()['default_routes']; shared=next(r for r in rows if r['team']==1 and r['id']=='central_field' and r.get('class_tag','all')=='all')
-        enabled=next(r for r in rows if r['team']==1 and r['id']=='central_field' and r.get('class_tag')=='lightTank')
-        enabled['points'][1][3:]=[0.,[enabled['points'][1][:2]+[25.]]]
-        before=copy.deepcopy(enabled); shared['points'][1][0]+=2
-        e._sync_shared_default_geometry(shared)
-        self.assertEqual(before,enabled)
-        for r in rows:
-            if r['team']==1 and r['id']=='central_field' and r.get('disabled'):
-                self.assertEqual(shared['points'],r['points'])
-                self.assertTrue(all(len(p)==3 and p[2]==0 for p in r['points']))
+    def test_shared_geometry_resets_enabled_variants_and_preserves_disabled_status(self):
+        e=self.editor;e.adopt(storage.contract.default_profile('Editable'))
+        e.map_var.set(storage.MAP_LABELS['11_murovanka']);e.change_map()
+        e.route_class_var.set('all');e.change_route_class();e.selection=('builtin','central_field')
+        e.selected_point=1;e._refresh_items()
+        rows=e.entry()['default_routes'];enabled=next(r for r in rows if r['team']==1 and r['id']=='central_field' and r.get('class_tag')=='lightTank')
+        before=copy.deepcopy(e.document);e.checkpoint();shared=e._editable_parent()
+        shared['points'][1][0]+=2;e._sync_symmetry(geometry=True,item=shared);e.mark()
+        self.assertEqual([p[:2] for p in shared['points']],[p[:2] for p in enabled['points']])
+        for row in rows:
+            if row['team']==1 and row['id']=='central_field' and row.get('disabled'):
+                self.assertEqual(shared['points'],row['points']);self.assertNotIn('defense',row)
+        e.undo('maps');self.assertEqual(before,e.document)
 
     def test_wait_mode_and_artillery_keep_explicit_click_behavior(self):
         e=self.editor; e.new_route(); self.click((-96,276),True)

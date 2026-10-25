@@ -532,8 +532,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
         ttk.Label(self.node_legend,text=self.tr('◇ 出生点中心；虚线圈：占领基地范围',
             '◇ Spawn centre; dashed circle: capture area'),wraplength=250).grid(row=3,column=0,columnspan=2,sticky='w')
         ttk.Label(right,text=self.tr(
-            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n通用路线不覆盖已启用的车型专用路线；禁用条目只同步普通点。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\n普通点击空白不加点；Shift+点击插入中间点；固定首尾不可移动或删除。\n滚轮缩放；中键拖动。',
-            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nShared travel preserves enabled class variants; disabled records follow without waits.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nBlank clicks do not add points; Shift-click inserts between fixed endpoints.\nWheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=26,column=0,sticky='w',pady=8)
+            '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n全部车型编辑统一同一路线各车型的点位、点序和回防；之后单车型可独立编辑，再次共同编辑会覆盖。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\n普通点击空白不加点；Shift+点击插入中间点；固定首尾不可移动或删除。\n滚轮缩放；中键拖动。',
+            'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes resets the same family to common points, order and defense. Later class edits stay independent until another common edit.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nBlank clicks do not add points; Shift-click inserts between fixed endpoints.\nWheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=26,column=0,sticky='w',pady=8)
 
         danger=ttk.LabelFrame(right,text=self.tr('危险区参数（只读）','Danger parameters (read only)'))
         danger.grid(row=27,column=0,sticky='ew',pady=(0,8))
@@ -560,7 +560,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if scope=='maps' and self.selection and self.selection[0] in ('builtin','routes'):
             self._connection_snapshot=(copy.deepcopy(self.document),{key:(list(pair[0]),list(pair[1])) for key,pair in self.histories.items()},
                 self.selection,self.network_mode,self.network_link,self.selected_point,
-                copy.deepcopy((self._selected_parent() or {}).get('defense')))
+                copy.deepcopy({key:(self._selected_parent() or {}).get(key) for key in ('points','defense')}))
         undo,redo=self.histories[scope]
         undo.append(copy.deepcopy(self.document[scope]));del undo[:-50];redo.clear()
 
@@ -598,8 +598,10 @@ class BotTacticsEditor(ConnectionEditorMixin):
         snapshot=getattr(self,'_connection_snapshot',None)
         self._connection_snapshot=None
         if sync and snapshot and self.selection and self.selection[0] in ('builtin','routes'):
-            current=(self._selected_parent() or {}).get('defense')
-            if current!=snapshot[-1]:
+            current=self._selected_parent() or {}
+            changed=current.get('defense')!=snapshot[-1]['defense']
+            shared_geometry=(self._route_scope()=='all' or current.get('symmetric')) and current.get('points')!=snapshot[-1]['points']
+            if changed or shared_geometry:
                 try:self._sync_connection_scope()
                 except Exception as error:
                     self.document,self.histories,self.selection,self.network_mode,self.network_link,self.selected_point=snapshot[:6]
@@ -787,13 +789,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return edit
 
     def _sync_shared_default_geometry(self, item):
-        # Enabled class variants own independent travel and parking. Only
-        # disabled remnants follow shared travel; they never own wait places.
+        # Family propagation occurs atomically in mark, after the edit completes.
         item['points']=[list(p[:2])+[0] for p in item['points']]
-        for edit in self.entry().get('default_routes',()):
-            if (edit['id']==item['id'] and edit['team']==item['team']
-                    and edit.get('disabled')):
-                edit['points']=copy.deepcopy(item['points'])
 
     def _symmetry_allowed(self):
         return route_geometry.symmetry_allowed(self.graph_cache.get(self.map_name) or {})
@@ -1197,7 +1194,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 restored=copy.deepcopy(original);entry['positions'].append(restored)
                 self._sync_parking_endpoints(restored)
                 entry['deleted_positions']=[p for p in entry.get('deleted_positions',()) if p!=original['id']]
-                self.selected_point=None;self._refresh_items();self.mark();return
+                self.selected_point=None;self._refresh_items();self.mark(sync=False);return
         if self.selection and self.selection[0]=='builtin':
             scope=self._route_scope();item=self._selected()
             originals=[r for r in baseline.get('default_routes',()) if r['id']==self._route_identity() and
@@ -1209,11 +1206,11 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 entry['default_routes']=[r for r in entry.get('default_routes',()) if
                     (r['team'],r['id'],r.get('class_tag','all')) not in keys]+copy.deepcopy(originals)
                 self.selected_point=None;self.selected_wait=None;self.wait_edit=False
-                self._refresh_items();self.mark();return
+                self._refresh_items();self.mark(sync=False);return
         if self.selection and self.selection[0]=='builtin_positions':
             entries=self.entry()['positions'];remaining=[p for p in entries if p['id']!=self.selection[1]]
             if len(entries)!=len(remaining):
-                self.checkpoint();self._ensure_entry()['positions']=remaining;self.selected_point=None;self._refresh_items();self.mark()
+                self.checkpoint();self._ensure_entry()['positions']=remaining;self.selected_point=None;self._refresh_items();self.mark(sync=False)
             return
         if not self.selection or self.selection[0]!='builtin':return
         edits=self.entry().get('default_routes',[])
@@ -1233,7 +1230,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         else:self.entry().pop('default_routes',None)
         if not self.entry()['routes'] and not self.entry()['positions'] and not remaining and not self.entry().get('deleted_positions'):
             self.document['maps'].pop(self.map_name,None)
-        self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw();self.mark()
+        self.selected_point=None;self.selected_wait=None;self.wait_edit=False;self._refresh_properties();self.redraw();self.mark(sync=False)
 
     def update_properties(self):
         if self.network_mode:return True

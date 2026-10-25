@@ -176,7 +176,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('水深上限',e.danger_parameters_var.get())
         self.assertEqual(before,e.document)
 
-    def test_shared_geometry_preserves_independent_class_waits_and_later_edit(self):
+    def test_shared_geometry_replaces_class_points_and_later_class_edit_is_independent(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('AT-SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -187,9 +187,10 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual('disabled',str(e.wait_button.cget('state')))
         e.selected_point=1;e.edit_point_condition();self.assertFalse(e.wait_edit)
         before=copy.deepcopy(scoped);e.checkpoint();shared=e._editable_item();shared['points'][1][0]+=8
-        e._sync_symmetry(geometry=True,item=shared)
-        self.assertEqual(before,scoped)
-        self.assertEqual(25,scoped['points'][1][4][0][2])
+        e._sync_symmetry(geometry=True,item=shared);e.mark()
+        self.assertNotEqual(before['points'],scoped['points'])
+        self.assertEqual([p[:2] for p in shared['points']],[p[:2] for p in scoped['points']])
+        self.assertFalse(ui.contract.waiting_positions(scoped['points'][1]))
         e.route_class_var.set('AT-SPG');e.change_route_class();e.items.selection_set(key);e.select_item()
         e.selected_point=1;e.edit_point_condition();point=e._wait_point()
         e._store_wait_places([[point[0]+12,point[1],45]])
@@ -200,7 +201,8 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         e.reset_builtin()
         scoped=next(r for r in e.entry()['default_routes'] if r.get('class_tag')=='AT-SPG' and r['team']==1)
-        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+        self.assertEqual([p[:2] for p in e._selected()['points']],[p[:2] for p in scoped['points']])
+        self.assertFalse(any(place[2]==45 for p in scoped['points'] for place in ui.contract.waiting_positions(p)))
     def test_wait_clearance_ring_heading_save_and_auto_reset(self):
         e=self.editor;e.route_class_var.set('AT-SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -238,6 +240,8 @@ class NavigationUITests(unittest.TestCase):
 
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        patcher=mock.patch.object(ui.messagebox,'showerror',side_effect=lambda *a,**kw: (_ for _ in ()).throw(AssertionError(str(a))))
+        patcher.start();self.addCleanup(patcher.stop)
         # Exercise the historical source-graph fixture independently of the adopted baseline.
         patcher=mock.patch.object(storage.contract,'default_map',return_value={})
         patcher.start();self.addCleanup(patcher.stop)
@@ -409,7 +413,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('优先级 8',e.items.item('routes:'+identity+'@lightTank','text'))
         self.assertIn('优先级 2',e.items.item('routes:'+identity+'@heavyTank','text'))
 
-    def test_shared_drag_preserves_independent_class_geometry_and_priorities(self):
+    def test_shared_drag_replaces_class_geometry_but_preserves_priorities(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -424,9 +428,9 @@ class NavigationUITests(unittest.TestCase):
         e.press(SimpleNamespace(x=x,y=y,state=0));e.motion(SimpleNamespace(x=x-10,y=y));e.release(None)
         shared_geometry=copy.deepcopy(e._selected()['points']);self.assertNotEqual(class_geometry,shared_geometry)
         edits=e.entry()['default_routes'];light=next(r for r in edits if r['team']==1 and r.get('class_tag')=='lightTank')
-        self.assertEqual(class_geometry,light['points']);self.assertEqual(8,light['priority'])
+        self.assertEqual(shared_geometry,light['points']);self.assertEqual(8,light['priority'])
         other=next(r for r in edits if r['team']==2 and r.get('class_tag')=='lightTank')
-        self.assertEqual(class_geometry,list(reversed(other['points'])));self.assertEqual(8,other['priority'])
+        self.assertEqual(shared_geometry,list(reversed(other['points'])));self.assertEqual(8,other['priority'])
         e.save(True);self.assertEqual(e.document,e.store.active())
         shared_geometry=copy.deepcopy(e._selected()['points'])
         e.route_class_var.set('lightTank');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
