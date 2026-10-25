@@ -440,3 +440,26 @@ all 16 checks, and the changed client data compiles with CPython 2.7.18. Native
 physics passage remains a separate gameplay check. Ship the new Default in both
 client and server payloads; old packaged Default references cannot represent
 the newly adopted fixed common endpoints.
+
+### Mittengard west class alignment (2026-10-26)
+
+In profile 1 and shared Default, only both teams' rim_west Medium/Heavy/TD rows
+adopt the current profile-1 Light row's complete points, stable node sequence
+and attached defense branch. Preserve each target's tier, priority, label and
+all unrelated rows/maps/behavior. Exact field-whitelist comparisons guard both
+documents; the complete profiles must still save/reopen. Directional navigation
+and defense checks pass, and all four classes now use the same west geometry:
+477.3m planned for team 1 and 489.0m for team 2. The former west large-detour
+screen flags are absent. This is a planning-data result, not a native heavy-hull
+clearance guarantee. Retain the adopted-default/baseline regressions and fixture
+digests. No runtime, editor or allocation code changes.
+
+The other flagged corridors remain unchanged. Owner-facing node-location
+evidence must identify map, team, class, family, one-based edge nodes and exact
+X/Z coordinates, rather than just listing map names or total distances. At this
+snapshot: Paris tower_east TD 1:7->8 / 2:4->5; Siegfried fortification_line
+Heavy/TD 1:6->7 / 2:7->8; Westfield east_fields TD and SPG attack 1:5->6 /
+2:3->4; Sacred Valley hills Light 1:6->7 / 2:8->9; Stalingrad city Light
+1:8->9 / 2:6->7 and Medium 1:11->12 / 2:4->5. Re-audit after node insertion
+or deletion because later indexes change. A flagged edge does not identify
+which of its two nodes is wrong; terrain/obstacle necessity needs review.

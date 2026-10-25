@@ -43,9 +43,9 @@
       "routes": 18
     },
     "100_thepit": {
-      "digest": "ad84758f7986c6c3b4916f3c2c36af27d84154c1d9c46f5d4a423f9a15941cb1",
+      "digest": "f5f04692f774687a41c629290f47c0e66e419487c211845d6f85ef98b438098d",
       "parking_groups": 6,
-      "points": 300,
+      "points": 296,
       "routes": 30
     },
     "101_dday": {
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "edb5195cf5bb60a07ee142df075756a30d338b3c1c8c79751dc7f921c56ec697",
-  "source": "Owner-reviewed Tundra, Mittengard and Ghost Town profile 1 map promotion, 2026-10-26"
+  "profile_digest": "a148be4f7d5ef563493bab48c58fb1ce4dc7fe9b320db12a1a5d629ce51e46b3",
+  "source": "Owner-reviewed three maps and all Mittengard west class alignment, 2026-10-26"
 }
