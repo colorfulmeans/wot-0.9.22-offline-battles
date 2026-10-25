@@ -10,7 +10,7 @@ from bot_tactics_store import contract
 
 def show(editor):
     e=editor
-    rows=inventory.inspect(e.document,e.map_name,e.graph_cache[e.map_name],
+    rows=inventory.inspect(contract.canonical(e.document),e.map_name,e.graph_cache[e.map_name],
                            contract,receipt=navigation.persist_receipt)
     snapshot=copy.deepcopy(e.document['maps']);name=e.map_name;profile_name=e.document['name']
     window=tk.Toplevel(e.root);window.title(e.tr('本图检查清单','Map check inventory'))
@@ -37,6 +37,8 @@ def show(editor):
         if row['category']=='unconfigured':result=e.tr('未配置，使用现有兜底','Unconfigured; existing fallback')
         if row['issues']:result=e.tr('发现 %d 个问题','%d issues')%len(row['issues'])
         caption=labels.tactic_name(row['label'],e.language)
+        if row['selection'] and row['selection'][0]=='builtin' and row['label']==row['identity']:
+            caption=labels.route_label(row['identity'],e.language)
         if row['link']:caption+=' → '+row['link']
         tree.insert('disabled' if row['disabled'] else row['category'],'end',iid=key,text=caption,
             values=(row['team'],labels.enum_label('class_tag',row['scope'],e.language),e.tr(*kinds[row['kind']]),result))
