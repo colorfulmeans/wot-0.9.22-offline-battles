@@ -278,7 +278,7 @@ bridge, slope, wall passage or worker performance. Real-client tests must use
 START_DIAGNOSTIC_TEST to collect the existing diagnostic logs.
 
 Local validation of this change: all 34 launcher test files pass after final
-transaction/UI/route-control reruns (1,112 discovered checks, existing local
+transaction/UI/route-control reruns (1,113 discovered checks, existing local
 environment skips retained). The connection tests exercise the complete
 shared/single-class/symmetry/rollback contract. Seven route/runtime files pass
 119 checks; 31 additional editor/runtime integration checks pass in explicitly
@@ -301,3 +301,11 @@ common geometry edit: restoring must not recreate overlays just removed or
 propagate over freshly restored class defaults. Navigation tests fail fast on
 unexpected error dialogs and exercise this reset path. Final navigation,
 connection, route-control and launcher-window reruns all pass after this fix.
+
+Fixed endpoint validation also accepts the packaged common endpoint for a class
+variant after a common reset. The old class endpoint stays legal for untouched
+or restored class defaults; arbitrary endpoints remain rejected. This matters
+on Mittengard and Tundra, where existing class/common endpoints differ. The
+all-map regression resets every ordinary class family across all 41 maps, saves
+and reopens the entire profile, then checks later class edits and rejection of
+a detached endpoint without changing the applied profile.

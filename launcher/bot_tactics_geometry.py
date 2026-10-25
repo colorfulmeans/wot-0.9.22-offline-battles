@@ -44,8 +44,15 @@ def validate(document, contract, graph_loader):
                             and r['id'] == route['id'] and r.get('class_tag', 'all') == 'all'), None)
                     if reference is not None:
                         ends[1] = reference['points'][-1]
+                allowed_ends=[ends[1]]
+                if kind=='default_routes' and route.get('class_tag','all')!='all':
+                    shared=next((r for r in baseline if r['team']==route['team'] and r['id']==route['id']
+                                 and r.get('class_tag','all')=='all'),None)
+                    # A common reset adopts the common fixed end. Later class
+                    # edits keep that end even when their interior diverges.
+                    if shared is not None:allowed_ends.append(shared['points'][-1])
                 if (len(points) < 2 or not same_point(points[0],ends[0])
-                        or not same_point(points[-1],ends[1])):
+                        or not any(same_point(points[-1],end) for end in allowed_ends)):
                     raise contract.TacticsError('Route endpoints are fixed: %s / %s' % (name, route['id']))
                 if route.get('symmetric') and not symmetry_allowed(graph):
                     raise contract.TacticsError('Route symmetry is unavailable on this map: '+name)

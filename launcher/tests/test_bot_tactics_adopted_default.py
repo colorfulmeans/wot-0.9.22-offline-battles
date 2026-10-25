@@ -91,5 +91,37 @@ class AdoptedDefaultTests(unittest.TestCase):
             self.assertEqual(independent,storage.Store(temp).active())
             self.assertEqual(EXPECTED['profile_digest'],storage.contract.digest(store.read('Default')))
 
+    def test_common_reset_of_every_map_saves_with_fixed_common_ends(self):
+        from types import SimpleNamespace
+        import bot_tactics_geometry as geometry
+        from bot_tactics_connections import ConnectionEditorMixin
+        from gui.mods.offline_lan_0922 import route_network
+        profile=storage.contract.default_profile('Common reset all maps')
+        owner=SimpleNamespace(graph_cache={})
+        copied=0
+        for name,entry in profile['maps'].items():
+            owner.map_name=name;owner.graph_cache[name]=storage.graph_data(name)
+            for source in entry['default_routes']:
+                if source.get('class_tag','all')!='all':continue
+                for target in entry['default_routes']:
+                    if target['team']==source['team'] and target['id']==source['id'] and target.get('class_tag','all')!='all':
+                        ConnectionEditorMixin._copy_defense(owner,source,target,shared=True)
+                        self.assertEqual([p[:2] for p in source['points']],[p[:2] for p in target['points']])
+                        if source.get('defense'):
+                            self.assertEqual(route_network.nodes(source).index(source['defense']['junction']),route_network.nodes(target).index(target['defense']['junction']))
+                        copied+=1
+        self.assertGreater(copied,500)
+        geometry.validate(profile,storage.contract,storage.graph_data)
+        with tempfile.TemporaryDirectory() as temp:
+            store=storage.Store(temp);saved=store.save(profile,True)
+            self.assertEqual(saved,store.active());self.assertEqual(saved,store.read(profile['name']))
+            # Interior class edits remain legal after inheriting a common end.
+            row=next(r for r in profile['maps']['100_thepit']['default_routes'] if r.get('class_tag')=='heavyTank')
+            row['points'][1][0]+=.5;route_network.sync_junction(row)
+            store.save(profile,True);before=store.active()
+            row['points'][-1][0]+=17
+            with self.assertRaises(storage.contract.TacticsError):store.save(profile,True)
+            self.assertEqual(before,store.active())
+
 
 if __name__=='__main__':unittest.main()
