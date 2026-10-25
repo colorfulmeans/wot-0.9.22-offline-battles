@@ -200,6 +200,7 @@ class WorkerCombatDiagnostics(object):
         self._reset_actor_frame()
 
     def _reset_actor_frame(self):
+        self._residual_slice = None
         self._actor_key = None
         self._actor_token = None
         self._phase_token = None
@@ -245,6 +246,29 @@ class WorkerCombatDiagnostics(object):
                 'publish_requested': bool(publish),
                 'detail': self.detail_active,
             })
+
+    def begin_residual_slice(self):
+        """Diagnostic-entry checkpoints partition only the parent's self time."""
+        if self.active and self._stack:
+            token = self._stack[-1]
+            self._residual_slice = [token, token[0], token[1]]
+
+    def residual_checkpoint(self, name):
+        if self.active and self._residual_slice is not None:
+            try:
+                self._residual_checkpoint(name, self._finite(self.clock()))
+            except Exception:
+                self._fail()
+
+    def _residual_checkpoint(self, name, now):
+        anchor = self._residual_slice
+        if anchor is None or not self._stack or self._stack[-1] is not anchor[0]:
+            return
+        token, previous, children = anchor
+        own = max(0., now - previous - (token[1] - children))
+        # These are subdivisions of bot.slice self_ms, NOT additional work.
+        self.count('slice_residual_' + name + '_us', int(round(own * 1000000.)))
+        anchor[1:] = [now, token[1]]
 
     def actor(self, bot_id):
         """Attribute a synchronous Bot work block, including its residual time.
@@ -481,6 +505,9 @@ class WorkerCombatDiagnostics(object):
             elapsed = max(0.0, self._finite(self.clock()) - token[0])
             if not self._stack or self._stack[-1] is not token:
                 raise ValueError('diagnostic scope ownership changed')
+            if self._residual_slice is not None and self._residual_slice[0] is token:
+                self._residual_checkpoint('tail', token[0] + elapsed)
+                self._residual_slice = None
             self._stack.pop()
             if self._stack:
                 self._stack[-1][1] += elapsed
@@ -737,6 +764,8 @@ class WorkerCombatDiagnostics(object):
     def _complete_capture(self, reason):
         self._completed.append({
             'capture': self.capture, 'trigger': self._reason,
+            'queue_kind': 'shot_lane_identity',
+            'slice_residual_basis': 'microseconds_partitioning_bot.slice_self_ms',
             'end_reason': reason,
             'authority_start': self._capture_started,
             'authority_last_frame': self._capture_last,

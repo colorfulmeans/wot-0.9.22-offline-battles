@@ -7,7 +7,7 @@ for visibility, collision probes, and applying commands to any client entity.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
-from gui.mods.offline_lan_0922 import tank_collision, capture_orders
+from gui.mods.offline_lan_0922 import tank_collision, capture_orders, bot_tactics
 
 import math
 
@@ -810,10 +810,11 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
-                    progress_identity=(('combat', strategic.get('target_kind'), strategic['target_id'])
+                    progress_identity=(bot_tactics.route_motion_identity(strategic) or
+                        (('combat', strategic.get('target_kind'), strategic['target_id'])
                         if strategic.get('target_id') is not None and
                         not strategic.get('parking_phase') and strategic.get('combat_mode') not in
-                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None),
+                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks

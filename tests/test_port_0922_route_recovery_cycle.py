@@ -35,6 +35,18 @@ class RecoveryScene:
 
 
 class RouteRecoveryCycleTests(unittest.TestCase):
+    def test_aiming_during_route_advance_does_not_pause_any_recovery_leg(self):
+        s = RecoveryScene()
+        expected = [('forward', 2), ('skip', 3), ('return', 1), ('return_skip', 0)]
+        for tick in range(46):
+            order = s.step(tick * 20, mode='advance', target_id=26 + tick % 2,
+                           target_kind='bot', throttle_override=1., fire_allowed=False)
+            self.assertEqual(expected[tick % 4],
+                             (s.recovery['phase'], order['route_index']))
+            self.assertNotEqual('pause_advance', order['route_attempt']['action'])
+            self.assertEqual(26 + tick % 2, order['target_id'])
+            self.assertFalse(order['fire_allowed'])
+
     def test_c_d_b_a_retry_c_for_the_entire_fifteen_minutes(self):
         s = RecoveryScene()
         original = copy.deepcopy(s.main)

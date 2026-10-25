@@ -152,7 +152,11 @@ class RouteRecoveryMixin:
         points = route.get('waypoints') or []
         progress = self._wreck_route_progress.get(bot_id)
         travel_modes = ('route', 'advance', 'parking_approach', 'base_capture')
-        paused = (order.get('target_id') is not None or order.get('team_command')
+        # Distant-contact advance still travels the authored leg. Only actual
+        # combat ownership pauses it; retaining/changing aim is not a hold.
+        aiming_owns_motion = (order.get('target_id') is not None and
+                              bot_tactics.route_motion_identity(order) is None)
+        paused = (aiming_owns_motion or order.get('team_command')
                   or order.get('defense_base_id') or order.get('combat_mode') not in travel_modes
                   or not self._route_donor_eligible(bot)
                   or not bot['state'].get('world_pose') or bot['state'].get('airborne')

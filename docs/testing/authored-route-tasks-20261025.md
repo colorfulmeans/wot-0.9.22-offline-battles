@@ -139,6 +139,21 @@ runtime import.
 
 ## Verification and limitations
 
+- Report 171327 exposes authored `advance` travel paused solely by an aiming
+  target. Host recovery and local driver now use one shared route-leg identity:
+  acquiring, changing or losing a distant target cannot suspend C/D/B/A travel
+  or replace its progress episode. Actual engagement/cover/retreat ownership,
+  commanded holds, parking, defense and player commands retain their existing
+  behavior. The full fifteen-minute retry test also runs while aim targets
+  change; existing engagement-pause/resume tests remain unchanged.
+- Diagnostic-entry captures label `completed_wait` as `shot_lane_identity`;
+  this is not a global worker/motion queue or screen ping. Bounded
+  `slice_residual_*_us` counters partition the existing `bot.slice.self_ms`
+  into preparation, actor work, advisory work, contacts/support and tail.
+  They are not additive stages or extra CPU work. Checkpoints are enabled
+  only by the diagnostic entry and subtract completed nested stage times;
+  no physical query, steering law or probe budget changes for timing.
+
 - `test_port_0922_initial_allocation.py` reproduces the parking-artillery
   capacity defect, checks unchanged ordinary draws with/without SPGs across
   40 seeds, and covers the reported mixed TD/heavy roster with a class-specific

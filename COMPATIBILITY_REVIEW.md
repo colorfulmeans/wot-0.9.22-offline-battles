@@ -10610,3 +10610,18 @@ physical-neighbour refusal receipt). This is not fixed or converted into a pass.
 Keep its timing/occupancy assertions and diagnostics. Focused allocation, own
 sortie/automatic fallback and toolbar results must be reported separately from
 this unresolved traffic regression; native match acceptance remains unproved.
+
+Report 171327 follow-up separates travel ownership from aiming. An authored
+`route`/`advance` leg uses `(route, route_id, route_index)` on both host and
+driver. A distant target cannot pause that leg's macro retry timer or reset
+local progress when aim changes. True engagement/cover, retreat and intentional
+holds keep their prior selection, aim, fire and pause behavior. A fifteen-minute
+retry regression with changing targets reproduces the old freeze and covers
+the complete forward/skip/return cycle after the fix.
+
+Worker timing remains observational. Diagnostic-only residual checkpoints
+partition existing slice self-time, excluding timed children, and identify
+shot-line queue metrics explicitly. No world result is cached, no physics or
+weapon safety is reduced, and no native performance gain is claimed without
+the next #1513 runtime capture. The banana-bend local steering feasibility
+question remains open beyond the confirmed ownership defect.

@@ -16462,6 +16462,10 @@ class BotRuntime(object):
         diagnostic = self._combat_diagnostics
         if diagnostic is not None and diagnostic.active:
             diagnostic.begin_slice(frame_step, refresh_control, publish)
+        residual = (diagnostic if diagnostic is not None and diagnostic.active and
+                    native_input_diagnostics.detailed_enabled() else None)
+        if residual is not None:
+            residual.begin_residual_slice()
         diagnostic = current_combat()
         if self._combat_diagnostics is not None:
             self._combat_diagnostics.count(
@@ -16584,6 +16588,8 @@ class BotRuntime(object):
         drive_targets = {}
         siege_locked_poses = {}
         integrated = set()
+        if residual is not None:
+            residual.residual_checkpoint('preparation')
         for state in self.states.values():
             if diagnostic is not None:
                 diagnostic.actor(state['id'])
@@ -18379,6 +18385,8 @@ class BotRuntime(object):
         # resolve at most the bounded service cohort against current poses.
         # Missing advisory samples remain "not shootable", and the selected
         # target still passes its independent final-fire check above.
+        if residual is not None:
+            residual.residual_checkpoint('actors')
         if refresh_shot_lanes:
             shot_lane_pending_pairs = self._service_shot_lane_work(
                 now, shot_lane_refresh_time, team_visibility, players,
@@ -18463,6 +18471,8 @@ class BotRuntime(object):
                         'candidates': list(candidates),
                     })
         ordered_states = self._ordered_states()
+        if residual is not None:
+            residual.residual_checkpoint('advisory')
         if refresh_control:
             self._support_repair_budget = 1
         slope_candidates = []
@@ -18628,8 +18638,12 @@ class BotRuntime(object):
             if publish:
                 self._mark_combat_publication(state)
         if not publish:
+            if residual is not None:
+                residual.residual_checkpoint('contacts_and_support')
             self._sample_time_us = step_end_time_us
             return []
+        if residual is not None:
+            residual.residual_checkpoint('contacts_and_support')
         wire_rows = []
         failed_ids = set()
         published_states = []

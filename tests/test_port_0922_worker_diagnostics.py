@@ -16,6 +16,51 @@ spec.loader.exec_module(diagnostics)
 
 
 class WorkerCombatDiagnosticsTests(unittest.TestCase):
+    def test_residual_partition_excludes_children_and_does_not_double_count_stages(self):
+        now = [0.]
+        trace = diagnostics.WorkerCombatDiagnostics(lambda: now[0])
+        trace.begin_frame(1, 20., 'profile_window')
+
+        def child():
+            now[0] = 3.
+
+        def update():
+            trace.begin_residual_slice()
+            now[0] = 1.
+            trace.residual_checkpoint('preparation')
+            diagnostics.call(trace, 'child', child)
+            now[0] = 4.
+            trace.residual_checkpoint('actors')
+            now[0] = 7.
+
+        diagnostics.call(trace, 'bot.slice', update)
+        row = trace.finish_frame()
+        self.assertEqual(5000., row['stages']['bot.slice']['self_ms'])
+        self.assertEqual(2000., row['stages']['child']['total_ms'])
+        residual = {k:v for k,v in row['counts'].items() if k.startswith('slice_residual_')}
+        self.assertEqual(dict(slice_residual_preparation_us=1000000,
+                              slice_residual_actors_us=1000000,
+                              slice_residual_tail_us=3000000), residual)
+        self.assertIsNone(trace._residual_slice)
+        self.assertFalse(any('residual' in k for k in row['stages']))
+        trace.close()
+        summary = trace.drain_completed()[0]
+        self.assertEqual('shot_lane_identity', summary['queue_kind'])
+        self.assertEqual('microseconds_partitioning_bot.slice_self_ms',
+                         summary['slice_residual_basis'])
+
+    def test_residual_scope_closes_when_slice_raises(self):
+        trace = diagnostics.WorkerCombatDiagnostics(lambda: 1.)
+        trace.begin_frame(1, 20., 'profile_window')
+        def fail():
+            trace.begin_residual_slice()
+            raise ValueError('local failure')
+        with self.assertRaises(ValueError):
+            diagnostics.call(trace, 'bot.slice', fail)
+        self.assertIsNone(trace._residual_slice)
+        self.assertTrue(trace.active)
+        self.assertIsNotNone(trace.finish_frame())
+
     def test_extra_helper_timings_are_diagnostic_entry_only(self):
         from unittest import mock
         from gui.mods.offline_lan_0922 import native_input_diagnostics

@@ -45,6 +45,15 @@ class TacticsError(ValueError):
     pass
 
 
+def route_motion_identity(order):
+    """An aiming target does not own an unchanged authored travel leg."""
+    if (order.get('combat_mode') not in ('route', 'advance') or
+            not order.get('route_id') or order.get('parking_phase') or
+            order.get('team_command') or order.get('defense_base_id')):
+        return None
+    return ('route', order['route_id'], order.get('route_index'))
+
+
 def _keys(raw, allowed, required=()):
     if not isinstance(raw, dict) or set(raw) - set(allowed) or set(required) - set(raw):
         raise TacticsError('Unexpected or missing configuration fields')
