@@ -5005,6 +5005,9 @@ class BotRuntimeTests(unittest.TestCase):
             'lane_service_cover_blocked', 0) for row in traces), 0)
         self.assertGreater(max(row['completed_wait']['max_kept_ms']
                                for row in traces), 1000.0)
+        residual = sum(row['counts'].get('slice_residual_actors_us', 0)
+                       for row in traces)
+        self.assertEqual(self.module.detailed_enabled(), residual > 0)
 
     def _suspension_case(self, terrain):
         descriptor = _suspension_descriptor()

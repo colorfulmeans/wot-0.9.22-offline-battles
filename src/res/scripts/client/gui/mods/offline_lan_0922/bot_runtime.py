@@ -16463,7 +16463,7 @@ class BotRuntime(object):
         if diagnostic is not None and diagnostic.active:
             diagnostic.begin_slice(frame_step, refresh_control, publish)
         residual = (diagnostic if diagnostic is not None and diagnostic.active and
-                    native_input_diagnostics.detailed_enabled() else None)
+                    detailed_enabled() else None)
         if residual is not None:
             residual.begin_residual_slice()
         diagnostic = current_combat()
