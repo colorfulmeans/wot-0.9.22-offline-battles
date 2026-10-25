@@ -717,6 +717,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         graph = self.graph_cache.get(self.map_name) or {}
         tags = contract.CLASSES[:-1] if self.route_class_var.get() == 'total' else (self.route_class_var.get(),)
         for route in graph.get('routes', {}).get(str(self.team), ()):
+            route=dict(route,waypoints=route_geometry.display_points(route['waypoints'],graph,self.team))
             for tag in tags:
                 if tag == 'SPG':continue
                 weights = route.get('class_weights') or {}
@@ -739,7 +740,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 edit=self._default_edit(source,self._route_scope())
                 result=dict(id=source['id'],label=self._default_name(source['id'],self._route_scope(),'zh'),team=self.team,class_tag=self._route_scope(),
                             symmetric=bool(edit.get('symmetric',False)) if edit else self._default_route_symmetry(),
-                            points=copy.deepcopy(edit['points'] if edit else source['waypoints']))
+                            points=copy.deepcopy(route_geometry.display_points(edit['points'] if edit else source['waypoints'],self.graph_cache[self.map_name],self.team)))
                 if edit:
                     for key in ('tier','node_ids','defense'):
                         if key in edit:result[key]=copy.deepcopy(edit[key])
@@ -874,6 +875,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             for spawn,base,radius in zip(spawns,bases,radii)))
 
     def _load_map(self):
+        self.network_mode='';self.network_link='';self.wait_edit=False;self.selected_wait=None;self.drag=None
         meta=contract.MAPS[self.map_name]
         self.baseline_entry=contract.default_map(self.map_name)
         self.view=storage.ViewTransform(meta['bounds'],700,600)
@@ -1595,8 +1597,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             for i,p in enumerate(pts):
                 self.route_hit_targets.append((('builtin',identity),i,self.view.screen(p)))
                 self._draw_route_node(p,i,color,chosen,4,chosen)
-        # Route endpoints use validated spawn anchors, not capture objectives.
-        # Spawn areas and capture circles are separate on several maps.
+        # Ordinary travel starts at spawn and ends at the enemy capture base.
         bases=(self.graph_cache.get(self.map_name) or {}).get('spawn_anchors') or ()
         for i,p in enumerate(bases,1):
             x,y=self.view.screen(p);c.create_polygon(x,y-9,x+9,y,x,y+9,x-9,y,outline='#8de3cf' if i==self.team else '#ddaaaa',fill='',width=2,tags=('spawn_anchor','spawn_anchor_'+str(i)))
@@ -1777,6 +1778,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return not self.dirty() or messagebox.askyesno(self.tr('未保存','Unsaved changes'),self.tr('放弃未保存的草稿？','Discard unsaved draft?'),parent=self.root)
 
     def adopt(self,doc,*,unsaved=False,imported=False):
+        doc=copy.deepcopy(doc);route_geometry.migrate_legacy_ends(doc)
         self.document=copy.deepcopy(doc);self.original=copy.deepcopy(doc);self.profile_name.set(doc['name'])
         self.saved_name=None if unsaved else doc['name'];self.unsaved_new=unsaved
         self.builtin=doc['name']=='Default' and not imported

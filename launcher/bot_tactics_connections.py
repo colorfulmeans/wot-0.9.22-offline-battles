@@ -123,9 +123,8 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
             target['points']=copy.deepcopy(list(reversed(source['points'])) if mirror else source['points'])
             target['node_ids']=list(reversed(route_network.nodes(source))) if mirror else list(route_network.nodes(source))
             if mirror:
-                starts=self.graph_cache[self.map_name]['spawn_anchors']
-                target['points'][0]=list(starts[target['team']-1])+[0]
-                target['points'][-1]=list(starts[2-target['team']])+[0]
+                from bot_tactics_geometry import anchors
+                target['points'][0],target['points'][-1]=anchors(self.graph_cache[self.map_name],target['team'])
             junction=branch['junction'] if branch else None
             for index,point in enumerate(target['points']):
                 prior=old.get(tuple(point[:2]))
@@ -183,11 +182,12 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         self.network_mode = '';self.selection = None;self._refresh_items();self.mark()
 
     def _draw_connection_set(self,item,color,selected=False):
+        if item['team']!=self.team:return
         paths=[]
         if item.get('defense'):paths.append(('defense','',item['defense']['points'],color,(5,4),self.tr('回防','Defense')))
         for mode,identity,points,color,dash,caption in paths:
             coords=[v for p in points for v in self.view.screen(p)]
-            if len(coords)>=4:self.canvas.create_line(*coords,fill=color,width=3 if selected else 2,dash=dash,arrow='last',tags=('authored_connection',))
+            if len(coords)>=4:self.canvas.create_line(*coords,fill=color,width=3 if selected else 2,dash=dash,arrow='last',tags=('authored_connection','connection_team_'+str(item['team'])))
             x,y=self.view.screen(points[len(points)//2]);self.canvas.create_text(x,y-10,text=caption,fill=color)
             if selected and self.network_mode==mode and self.network_link==identity:
                 for index,p in enumerate(points):self._draw_route_node(p,index,color,True,5,True)

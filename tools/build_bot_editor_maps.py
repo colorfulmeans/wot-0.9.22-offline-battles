@@ -23,6 +23,9 @@ def build():
         name = graph['map']
         entries[name] = dict(bounds=list(TACTICAL_MAPS[name]['bounds']),
                              bases=graph['bases'],
+                             spawn_anchors=graph['spawn_anchors'],
+                             objective_bases=graph['objective_bases'],
+                             objective_base_radii=graph['objective_base_radii'],
                              route_ids=dict((team, [r['id'] for r in routes])
                                             for team, routes in graph['routes'].items()),
                              resource_sha256=hashlib.sha256(raw).hexdigest())

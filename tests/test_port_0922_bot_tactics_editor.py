@@ -143,7 +143,8 @@ class TacticsContractTests(unittest.TestCase):
                 entry['routes'].append(dict(id='r_%d'%i,label='测试路线',team=1,
                     classes=list(cfg.CLASSES[:-1]),points=copy.deepcopy(points)))
                 entry['routes'][-1]['points'][0][:2]=graph_data(name)['spawn_anchors'][0]
-                entry['routes'][-1]['points'][-1][:2]=graph_data(name)['spawn_anchors'][1]
+                from bot_tactics_geometry import anchors
+                entry['routes'][-1]['points'][-1][:2]=anchors(graph_data(name),1)[-1][:2]
             for i in range(48):
                 entry['positions'].append(dict(id='p_%d'%i,label='测试炮位',team=1,
                     point=[x,z],radius=16,heading=0,priority=5))

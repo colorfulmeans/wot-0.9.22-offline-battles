@@ -57,7 +57,7 @@ def inventory(profile, name, graph, contract):
     for row in rows:
         own=base_radii[row['team']-1];enemy=base_radii[2-row['team']]
         radius=parking_by_id.get(row['identity'],{}).get('radius',0.)
-        row['area_radii']=({'sortie':{0:own,-1:enemy},'defense':{-1:own},
+        row['area_radii']=({'route':{-1:enemy},'sortie':{0:own,-1:enemy},'defense':{-1:own},
             'parking':{0:radius}}.get(row['kind'],{}))
     return rows
 

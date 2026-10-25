@@ -43,7 +43,7 @@
       "routes": 18
     },
     "100_thepit": {
-      "digest": "b2b119c5a0a7d3e0778b633c26ed5af5bc2af072ee0112cfbf41a05ea31d1efc",
+      "digest": "74040183cc0e97be84419db3a061817d1bdee5b3454e7990b52e17495b9f7836",
       "parking_groups": 6,
       "points": 313,
       "routes": 30
@@ -85,7 +85,7 @@
       "routes": 20
     },
     "13_erlenberg": {
-      "digest": "4e4ccc7792d0ff2368203e2a62f8bb3423560c92ee46395f4c4dcd52d862ab14",
+      "digest": "273350bfcaca5cbf6f9949948e61fdf41297b4efb7ad673c3078a9f460383a42",
       "parking_groups": 6,
       "points": 449,
       "routes": 30
@@ -205,7 +205,7 @@
       "routes": 22
     },
     "63_tundra": {
-      "digest": "04f1d2b869899fe8bacb3aca41a26f58b8db137df6b905298ab92de2137cf205",
+      "digest": "8f350b4ac39422568051b6a54c0db8b821284b725b5664d170d94bf115fd268a",
       "parking_groups": 6,
       "points": 409,
       "routes": 30
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "6eec0d45aee3b85d7392c1fea6507218e68fc021e33d4af314d8ada50d3f8762",
-  "source": "Owner-approved shared Default with requested artillery corridors and profile 1 Ruinberg central streets, 2026-10-25"
+  "profile_digest": "b3870806f2709d026a9f9a00f8b43fc3da158fa113fdf6a21e56f630a6f42a8d",
+  "source": "Owner-approved corridors, Tundra defense and enemy-base endpoint corrections, 2026-10-25"
 }

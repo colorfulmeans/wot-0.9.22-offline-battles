@@ -118,11 +118,74 @@ class RouteControlsTests(unittest.TestCase):
         e.items.selection_set(key); e.select_item()
         before=copy.deepcopy(e._selected()['points']); e.duplicate_item()
         self.assertEqual(before,e._selected()['points'][:-1])
-        self.assertEqual(e.graph_cache[e.map_name]['spawn_anchors'][1],e._selected()['points'][-1][:2])
+        self.assertTrue(ui.route_geometry.same_point(e.graph_cache[e.map_name]['objective_bases'][1],e._selected()['points'][-1]))
         e.save(False); self.errors.assert_not_called()
+
+    def test_offset_spawn_new_route_and_copy_end_at_enemy_objective(self):
+        e=self.editor;e.map_var.set(storage.MAP_LABELS['63_tundra']);e.change_map()
+        e.new_route();graph=e.graph_cache[e.map_name]
+        self.assertEqual(graph['spawn_anchors'][0],e._selected()['points'][0][:2])
+        self.assertTrue(ui.route_geometry.same_point(graph['objective_bases'][1],e._selected()['points'][-1]))
+        self.assertNotEqual(graph['spawn_anchors'][1],e._selected()['points'][-1][:2])
+        e.duplicate_item();e.save(False);self.errors.assert_not_called()
+
+    def test_symmetric_map_keeps_both_spawn_anchors_even_with_offset_base_center(self):
+        e=self.editor;e.map_var.set(storage.MAP_LABELS['13_erlenberg']);e.change_map()
+        e.new_route();graph=e.graph_cache[e.map_name]
+        self.assertTrue(ui.route_geometry.symmetry_allowed(graph))
+        self.assertEqual(graph['spawn_anchors'][0],e._selected()['points'][0][:2])
+        self.assertEqual(graph['spawn_anchors'][1],e._selected()['points'][-1][:2])
+        self.assertNotEqual(graph['objective_bases'][1],e._selected()['points'][-1][:2])
+        e.save(False);self.errors.assert_not_called()
+
+    def test_team_switch_clears_connection_edit_state_and_drawing_is_team_scoped(self):
+        e=self.editor;e.adopt(storage.contract.default_profile('Editable'))
+        e.map_var.set(storage.MAP_LABELS['63_tundra']);e.change_map()
+        e.route_class_var.set('total');e.change_route_class()
+        e.selection=('builtin','village@heavyTank');e.network_mode='defense';e.selected_point=1
+        e.redraw()
+        self.assertTrue(e.canvas.find_withtag('connection_team_1'))
+        self.assertFalse(e.canvas.find_withtag('connection_team_2'))
+        e.team_var.set('2');e.change_map();e.redraw()
+        self.assertEqual('',e.network_mode);self.assertIsNone(e.selection)
+        self.assertFalse(e.canvas.find_withtag('connection_team_1'))
+        self.assertTrue(e.canvas.find_withtag('connection_team_2'))
+        foreign=next(r for r in e.entry()['default_routes'] if r['team']==1 and r.get('defense'))
+        before=e.canvas.find_all();e._draw_connection_set(foreign,'black',True)
+        self.assertEqual(before,e.canvas.find_all())
+        e.team_var.set('1');e.change_map();e.redraw()
+        self.assertFalse(e.canvas.find_withtag('connection_team_2'))
 
 
 class SharedRouteDataTests(unittest.TestCase):
+    def test_capture_goal_snap_admits_the_circle_without_hiding_bad_intermediate_node(self):
+        graph=storage.graph_data('100_thepit');profile=storage.contract.default_profile()
+        row=copy.deepcopy(next(r for r in profile['maps']['100_thepit']['default_routes'] if r['team']==1 and r['id']=='pit' and r.get('class_tag')=='AT-SPG'))
+        grid=storage.runtime.graph_view('100_thepit',graph)
+        self.assertIsNone(grid.closest((row['points'][-1][0],0,row['points'][-1][1])))
+        self.assertIsNone(storage.runtime.validate_route(grid,row))
+        row['points'].insert(1,row['points'][-1][:])
+        self.assertEqual('waypoint_unusable',storage.runtime.validate_route(grid,row))
+
+    def test_legacy_enemy_spawn_endpoint_migrates_once_without_changing_interior(self):
+        import bot_tactics_geometry as geometry
+        with tempfile.TemporaryDirectory() as temp:
+            store=storage.Store(temp);profile=storage.contract.default_profile('Legacy ends')
+            graph=storage.graph_data('63_tundra')
+            row=next(r for r in profile['maps']['63_tundra']['default_routes'] if r['team']==1 and r.get('class_tag','all')=='all')
+            row['points'][-1]=graph['spawn_anchors'][1]+[0]
+            old=copy.deepcopy(row['points']);store.profile_path(profile['name']).parent.mkdir(parents=True)
+            store.profile_path(profile['name']).write_text(storage.contract.dumps(profile))
+            result=store.read(profile['name'])
+            updated=next(r for r in result['maps']['63_tundra']['default_routes'] if r['team']==1 and r['id']==row['id'] and r.get('class_tag','all')=='all')
+            self.assertEqual(old[:-1],updated['points'][:-1])
+            self.assertTrue(geometry.same_point(graph['objective_bases'][1],updated['points'][-1]))
+            self.assertEqual(result,store.read(profile['name']))
+            geometry.validate(result,storage.contract,storage.graph_data)
+            invalid=copy.deepcopy(result)
+            bad=next(r for r in invalid['maps']['63_tundra']['default_routes'] if r['team']==1 and r['id']==row['id'] and r.get('class_tag','all')=='all')
+            bad['points'][-1]=old[-1]
+            with self.assertRaises(storage.contract.TacticsError):store.save(invalid)
     def test_old_default_with_retired_identity_refreshes_before_validation(self):
         with tempfile.TemporaryDirectory() as temp:
             store=storage.Store(temp)

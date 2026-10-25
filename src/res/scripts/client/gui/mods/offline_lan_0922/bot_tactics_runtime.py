@@ -23,7 +23,10 @@ def graph_view(name, graph):
     # may open the original bake; _Graph.usable applies these same bounds.
     view = dict(graph)
     view['bounds'] = config.MAPS[name]['bounds']
-    return spg_positions._Graph(view, config.MAPS[name]['bounds'])
+    grid=spg_positions._Graph(view, config.MAPS[name]['bounds'])
+    grid._objective_bases=graph.get('objective_bases',())
+    grid._objective_base_radii=graph.get('objective_base_radii',())
+    return grid
 
 
 def _route_reachable(grid, position, target):
@@ -74,10 +77,37 @@ def _route_reachable(grid, position, target):
     return False
 
 
+def _route_target(grid, point, route, index):
+    target=grid.closest((point[0],0,point[1]))
+    if target is not None:return target
+    bases=getattr(grid,'_objective_bases',())
+    radii=getattr(grid,'_objective_base_radii',())
+    if len(bases)!=2 or len(radii)!=2 or 'team' not in route:return None
+    team=route['team']
+    if index==len(route['points'])-1:side=2-team
+    elif index==0 and route.get('purpose')=='spg_attack':side=team-1
+    else:return None
+    base=bases[side];radius=radii[side]
+    if math.hypot(point[0]-base[0],point[1]-base[1])>radius:return None
+    # Capture objectives are area goals. Match the bounded local endpoint snap,
+    # never move an ordinary intermediate point or search across the whole map.
+    col=int(round((point[0]-grid.origin[0])/grid.cell))
+    row=int(round((point[1]-grid.origin[1])/grid.cell))
+    candidates=[]
+    for z in range(max(0,row-3),min(grid.height,row+4)):
+        for x in range(max(0,col-3),min(grid.width,col+4)):
+            cell=z*grid.width+x
+            if not grid.usable(cell):continue
+            p=grid.point(cell)
+            if math.hypot(p[0]-base[0],p[2]-base[1])<=radius:
+                candidates.append(((p[0]-point[0])**2+(p[2]-point[1])**2,cell))
+    return min(candidates)[1] if candidates else None
+
+
 def validate_route(grid, route):
     previous = None
-    for point in route['points']:
-        target = grid.closest((point[0], 0, point[1]))
+    for index,point in enumerate(route['points']):
+        target = _route_target(grid,point,route,index)
         if target is None:
             return 'waypoint_unusable'
         if previous is not None and not _route_reachable(grid, previous, target):
@@ -424,7 +454,7 @@ def route_issues(grid, route):
     """Report every unusable node and every disconnected adjacent pair."""
     issues, previous = [], None
     for index, point in enumerate(route['points']):
-        target = grid.closest((point[0], 0, point[1]))
+        target = _route_target(grid,point,route,index)
         if target is None:
             x, z = point[:2]
             reason = 'outside_bounds'
@@ -449,7 +479,7 @@ def route_issues(grid, route):
                                    points=[list(place[:2])], wait_slot=slot + 1))
             if parked is not None and index + 1 < len(route['points']):
                 following = route['points'][index + 1]
-                exit_target = grid.closest((following[0], 0, following[1]))
+                exit_target = _route_target(grid,following,route,index+1)
                 if exit_target is not None and not _route_reachable(grid, grid.point(parked), exit_target):
                     issues.append(dict(status='wait_place_exit_disconnected',
                         nodes=[index + 1, index + 2],

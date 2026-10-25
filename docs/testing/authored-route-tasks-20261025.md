@@ -355,3 +355,43 @@ passage or artillery combat/performance improvement is established by this
 data-only change. The existing editable profile 1 retains unrelated edits and
 receives the same requested routes for immediate owner review; do not delete it
 or change the selected applied profile.
+
+### Map-dependent ordinary endpoints and Tundra follow-up (2026-10-26)
+
+Endpoint policy is a map property, not the route's symmetry checkbox. On maps
+whose two spawn anchors are inside their respective capture circles, ordinary
+routes keep the two fixed spawn endpoints. On unsupported asymmetric maps,
+ordinary routes start at the own spawn and end at the enemy capture objective.
+Preserve existing valid packaged class endpoints inside that circle; remove
+the old enemy-spawn exception when it lies outside the circle. Artillery
+attacks retain own-base to enemy-base endpoints under both map policies.
+
+Fix the 19 stale ordinary/default endpoints in Mittengard team 1 and Tundra
+both teams, including shared rows hidden by class overrides. Keep intermediate
+geometry. Migrate the same old enemy-spawn ends on owned profile read, import
+and editor adoption, using generated lightweight spawn/objective/radius data
+rather than loading every navigation mesh. New/copy/mirrored roads use the same
+policy, including untouched baked fallback roads and sixteen-point copies.
+Canonical four-decimal anchors must survive save/reopen without false changes.
+
+Capture objectives are area goals: a missing center cell can use a bounded
+three-cell usable endpoint inside the same capture circle. Directed graph
+connectivity is still required; ordinary intermediate nodes stay strict.
+Admission and detailed route diagnostics must agree. No steering, collision,
+combat, worker cadence or recovery laws change.
+
+Promote profile 1's current Tundra team-1 artillery attack and its reversed
+team-2 version to shared Default. Both Erlenberg attacks use each team's Light
+north_bridge road. Tundra team-2 village and plateau defense paths for all
+ordinary classes use the owner's current Heavy defense geometry. Align the
+plateau TD junction to the Heavy's first intermediate point, preserving other
+main nodes, stable junction references and own-base defense ends. Retain profile
+1, unrelated edits and its applied selection.
+
+Team switches clear connection/drag/wait editing state. Connection drawing
+rejects a foreign-team row and tags each line with its actual team; real Tk
+tests switch 1 -> 2 -> 1 in Total view and assert no opposite-team lines.
+Regression coverage also checks symmetric Erlenberg endpoints, offset Tundra
+endpoints, old-file migration, full-map save/reopen and a missing capture center
+that cannot legitimize an invalid ordinary intermediate point. The actual
+source/frozen editor smoke requires `map_endpoint_policy_and_team_connections`.

@@ -106,6 +106,7 @@ with tempfile.TemporaryDirectory(prefix='release-editor-') as temp:
     assert editor.get('automatic_parking_navigation'),editor
     assert editor.get('shared_defense_transactions'),editor
     assert editor.get('common_route_reset'),editor
+    assert editor.get('map_endpoint_policy_and_team_connections'),editor
     assert editor.get('route_tree_class_colors'),editor
     assert editor.get('route_toolbar_and_restore_menu'),editor
     assert editor.get('native_gameplay_tested') is False, editor

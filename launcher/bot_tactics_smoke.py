@@ -308,6 +308,19 @@ def run(destination):
             ui.save(True);assert not ui.dirty()
             report['shared_defense_transactions']=True
             report['common_route_reset']=True
+            import bot_tactics_geometry as geometry
+            for name in ('13_erlenberg','63_tundra'):
+                graph=storage.graph_data(name);ends=geometry.anchors(graph,1)
+                expected=graph['spawn_anchors'][1] if geometry.symmetry_allowed(graph) else graph['objective_bases'][1]
+                assert geometry.same_point(ends[-1],expected)
+            ui.adopt(storage.contract.default_profile('Endpoint verification'))
+            ui.map_var.set('Tundra');ui.change_map();ui.route_class_var.set('total');ui.change_route_class()
+            for team in (1,2,1):
+                ui.team_var.set(str(team));ui.change_map();ui.redraw()
+                assert ui.canvas.find_withtag('connection_team_'+str(team))
+                assert not ui.canvas.find_withtag('connection_team_'+str(3-team))
+                assert ui.network_mode==''
+            report['map_endpoint_policy_and_team_connections']=True
             report.update(ok=True, pillow=PIL.__version__, tk=tk.TkVersion,
                           map_count=41, canvas_route_points=len(active['maps']['08_ruinberg']['routes'][0]['points']),
                           manual_plan=plans[11], profile_sha256=storage.contract.digest(active),
