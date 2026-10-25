@@ -55,7 +55,7 @@
     {
       "file": "14_siegfried_line.json",
       "map": "14_siegfried_line",
-      "sha256": "4a691aae1d82c2f5239e502fdfbf73dda688ae91b1600f6f9df9ea40281192b0"
+      "sha256": "4d563490bf11f58af2ce0d018045352e981a46ff47120b4fd3a97cdcc2f29c85"
     },
     {
       "file": "17_munchen.json",
@@ -175,7 +175,7 @@
     {
       "file": "92_stalingrad.json",
       "map": "92_stalingrad",
-      "sha256": "b60f551fc037d91e59d2d46ab41251026941753f164be4e01f8dbfe1b8b1ff64"
+      "sha256": "09ffe7ac949d197070a02b15047543bd7e85ca01edae6e589c754bd6491ec42d"
     },
     {
       "file": "95_lost_city.json",

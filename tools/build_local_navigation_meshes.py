@@ -33,9 +33,11 @@ def geometry(client, name):
         baker.compiled_navigation_obstacles=original_obstacles
 
 
-def bake_patch(region, terrain, obstacles, legacy):
+def bake_patch(region, terrain, obstacles, legacy, cell_size=1.):
     import bake_navigation_0922 as baker
-    left,bottom,right,top=region;size=1.
+    left,bottom,right,top=region;size=float(cell_size)
+    if size not in (1., 2.):
+        raise ValueError('Reviewed local meshes use one or two metre cells')
     width=int((right-left)/size)+1;height=int((top-bottom)/size)+1
     patch=dict(origin=[left,bottom],cell_size=size,width=width,height=height,
                heights_mm=[None]*(width*height),links=[0]*(width*height),hazards=[0]*(width*height))

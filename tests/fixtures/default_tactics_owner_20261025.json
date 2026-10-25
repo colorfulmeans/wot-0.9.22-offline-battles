@@ -67,9 +67,9 @@
       "routes": 20
     },
     "112_eiffel_tower_ctf": {
-      "digest": "44ba338d666a9d4ed21c23b9d9750300d9bb70f125065bbd34c04240d91011f1",
+      "digest": "86d5ad8c88cc7f316d3b51219b96a5ede0602e0d6e4b9ec00f64a5619ee745aa",
       "parking_groups": 6,
-      "points": 160,
+      "points": 162,
       "routes": 16
     },
     "114_czech": {
@@ -91,10 +91,10 @@
       "routes": 30
     },
     "14_siegfried_line": {
-      "digest": "fcf0e6aa5686773d548fde43f1b5b2df8100dc3808eab203453f87e391848b5a",
+      "digest": "2d546c4c6c4ec9a213c1a5e291c2b8d525c20c513332d6c44a9eff3126096353",
       "parking_groups": 6,
-      "points": 182,
-      "routes": 18
+      "points": 234,
+      "routes": 22
     },
     "17_munchen": {
       "digest": "833309525ecb5fe80e7d34b3a15fef9c8619e848648563a18c816a8023f3abfd",
@@ -121,7 +121,7 @@
       "routes": 10
     },
     "23_westfeld": {
-      "digest": "b53360bfb562125a4bedb9562792c73c3e22f166e2c2f05fb1a92de78aa5b5a3",
+      "digest": "9d912254ecb23f9aaafc591cc604d0147b7e2c37ad12e8e7f547c2faa4caa73f",
       "parking_groups": 6,
       "points": 242,
       "routes": 22
@@ -211,7 +211,7 @@
       "routes": 30
     },
     "73_asia_korea": {
-      "digest": "24163387dba2c10a8be38007b830696de943ddf92cecf7f638cad42e6cb2a930",
+      "digest": "da8b2a2634456dcf6bdcb8294d82f6280bce7b5d09a347c7e7991006d1e582be",
       "parking_groups": 6,
       "points": 200,
       "routes": 16
@@ -235,9 +235,9 @@
       "routes": 14
     },
     "92_stalingrad": {
-      "digest": "3781f99a7b95c9965664494a5d74328b06a27c2d8e04484f07fdf1a93cf3b3f5",
+      "digest": "36e0ecf42f76659a5d0f073487e911740d3bb4d960429b01a63a5525be9eda11",
       "parking_groups": 6,
-      "points": 238,
+      "points": 240,
       "routes": 16
     },
     "95_lost_city": {
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "a148be4f7d5ef563493bab48c58fb1ce4dc7fe9b320db12a1a5d629ce51e46b3",
-  "source": "Owner-reviewed three maps and all Mittengard west class alignment, 2026-10-26"
+  "profile_digest": "2aaa97fcede060946a47511267870d92f63312a343183d290747803ba10b6cc5",
+  "source": "Complete owner profile-1 map promotion with reviewed local Stalingrad navigation, 2026-10-26"
 }

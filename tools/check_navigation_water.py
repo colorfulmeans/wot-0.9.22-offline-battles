@@ -28,7 +28,20 @@ def main():
         receipts=new['bake']['water_policy_rebake']
         before_layers=[old]+old.get('local_meshes',[])
         after_layers=[new]+new.get('local_meshes',[])
-        assert len(before_layers)==len(after_layers)
+        assert len(before_layers)<=len(after_layers)
+        # Later screenshot-local meshes do not replace a water-rebaked layer.
+        # Keep every original receipt comparison, then validate the additive
+        # layers separately using their exact-client measurement contract.
+        extra=after_layers[len(before_layers):]
+        if extra:
+            meta=new['bake']['local_meshes']
+            assert meta['base_geometry_unchanged'] is True
+            assert meta['water_depth_limit']==1.2
+            assert meta['source']=='exact_0922_client_compiled_geometry'
+            assert meta['collision_edge_sample_metres']==.25
+            assert meta['measured_local_cells']==sum(len(p['heights_mm']) for p in new['local_meshes'])
+            from gui.mods.offline_lan_0922.navigation_graph_schema import validate_graph
+            validate_graph(new,path.stem)
         for before,after,receipt in zip(before_layers,after_layers,[receipts['base']]+receipts['local_layers']):
             assert receipt['cells_measured']==len(after['heights_mm'])
             assert all(h is None or h==after['heights_mm'][i] for i,h in enumerate(before['heights_mm']))

@@ -463,3 +463,61 @@ Heavy/TD 1:6->7 / 2:7->8; Westfield east_fields TD and SPG attack 1:5->6 /
 1:8->9 / 2:6->7 and Medium 1:11->12 / 2:4->5. Re-audit after node insertion
 or deletion because later indexes change. A flagged edge does not identify
 which of its two nodes is wrong; terrain/obstacle necessity needs review.
+
+### Screenshot-local Stalingrad navigation and complete profile promotion (2026-10-26)
+
+The requested yellow samples are navigation mesh nodes, not the numbered
+authored road anchors. Preserve every Stalingrad road coordinate, ordering,
+stable identity, wait and defense branch. The complete map content, excluding
+its refreshed graph fingerprint, is pinned by the new regression digest.
+
+Decode pinned #1513 collision and terrain offline. Add fourteen bounded two
+metre patches at the screenshot circles while retaining the original four
+metre base arrays, routes, spawns and objectives. The 17,048 local samples
+include 11,448 supported nodes; unsupported samples remain closed. Retain the
+original 2.15m node clearance disk, body-height collision clipping, slope,
+water, reciprocal links and diagonal support checks. The old base grid is not
+globally refined and no collision restriction is relaxed. The baker accepts
+an explicit output candidate and does not silently install it.
+
+Require complete paths in both directions through all fourteen circles, with
+bounded costs rather than merely testing nonempty planner frontiers. The
+former Light city edge around (-168.75,-210.64) to (-167.48,-245.49) now plans
+35.8m forward instead of 716m; the Medium edge around (-375.86,-294.86) to
+(-293.84,-315.84) plans 86.5m instead of 365.9m. The authored anchors are unchanged.
+`check_stalingrad_local_meshes.py` submits all 150 unique current authored and
+passage forward/reverse edges three times to the compiled worker. CI builds
+that executable from current source and retains its completion/timing report.
+Local benchmark timing is diagnostic evidence, not a claim about live ping.
+
+Promote map configuration only after auditing all 41 effective maps, including
+both teams/classes, ordinary roads, parking, defense and artillery attacks.
+Preserve shared Default behavior parameters. First-run, reset, save/reopen,
+profile deletion and independent-profile regressions must retain the adopted
+shared map baseline. Delete local profile 1 only after successful promotion
+and switch its applied snapshot to Default; package both server source and
+Python-2 client bytecode with matching maps and fingerprints. A packaged editor
+smoke and independent archive verification supplement source tests; native
+physical passage remains a separate match acceptance boundary.
+
+The final Siegfried scope is the four circled town groups and their street
+entrances: four 2m patches plus one 16x18m, 1m corner pocket. The original
+(80.8441,-67.0406) anchor is physically clear, but its nearest 2m centre falls
+on the wall; the tiny pocket preserves the authored point without opening the
+wall or refining the whole town. All 23,559 local samples retain the original
+clearance/grade/water checks. Both teams' Heavy fortification_line adopts the
+current same-team TD geometry and stable references, preserving tier metadata.
+
+Read the owner's latest Westfield TD symmetry before copying artillery. Keep
+both TD roads exactly as edited; both artillery attacks use those intermediate
+coordinates without TD waits and retain own/enemy base endpoints. Audit the
+complete candidate after copying, not an earlier owner snapshot. The final
+41-map inventory contains 1,384 configured/correct entries, no nonadjacent
+node repetitions and no former large-detour screen flags. These checks do not
+prove that all native vehicle hulls can pass in a live battle.
+
+Keep the existing water-rebake receipt comparisons for every original layer.
+Later additive local meshes are checked separately against their measurement
+count, 1.2m water policy, exact-client collision provenance and graph schema;
+they must not replace or weaken the old water-layer assertions. The existing
+41-map static water audit passes with the new additive layers.

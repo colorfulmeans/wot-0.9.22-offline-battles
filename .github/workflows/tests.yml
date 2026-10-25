@@ -40,6 +40,24 @@ jobs:
         with:
           name: navigation-resolution-evidence
           path: build/navigation-resolution/report.json
+      - name: Verify Stalingrad local passages and all authored forward/reverse edges
+        run: >-
+          python tools/check_stalingrad_local_meshes.py
+          --native-executable /tmp/navigation-resolution
+          --output build/stalingrad-resolution
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stalingrad-resolution-evidence
+          path: build/stalingrad-resolution/report.json
+      - name: Verify Siegfried town routes and preserved corner anchors
+        run: >-
+          python tools/check_stalingrad_local_meshes.py --map 14_siegfried_line
+          --native-executable /tmp/navigation-resolution
+          --output build/siegfried-resolution
+      - uses: actions/upload-artifact@v4
+        with:
+          name: siegfried-resolution-evidence
+          path: build/siegfried-resolution/report.json
       - name: Verify all 41 water-rebaked graphs with the shipping search
         env:
           PYTHONDONTWRITEBYTECODE: '1'
