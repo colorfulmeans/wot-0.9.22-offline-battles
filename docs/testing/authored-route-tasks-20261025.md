@@ -109,33 +109,52 @@ A defense junction cannot be a waiting place, endpoint or parking zone. A defens
 junction also cannot be converted into a waiting place. Connection editing has
 its own selected geometry and fixed ends; insertion, dragging, deletion, copying,
 import and map undo preserve or remove stable references. All-classes branch edits
-rebind to each class's actual matching ordinary node, even when its index differs.
+retain each existing class junction; new bindings match coordinates, not indices.
 A missing/ambiguous matching junction rejects the edit atomically rather than
 silently attaching a different road. Tier edits do not overwrite independent
 class defense branches.
 
-SPG parking has optional red solid base-to-parking and parking-to-parking
-connections, editable in the same connection panel. A reciprocal relocation can
-reverse the existing link. New parking creates its base connection. Red dashed
-SPG attack routes have fixed own/enemy base ends and are separate from parking.
-Up to three endgame SPGs first return along their connection to base, then follow
-the authored sortie. Defense during a sortie reverses its already passed nodes;
-defense retains the actual interrupted task/parking and returns there afterward.
-Existing unconfigured parking retains its prior automatic path until an authored
-connection is supplied. These new two-point outlines require map authoring;
-they do not claim to have authored bridge detours automatically.
+Parking deployment, relocation and return to a remembered parking position use
+existing automatic navigation. Remove authored parking connection controls,
+tree children and red solid connection lines. Legacy parking `travel`/`links`
+remain accepted input keys only: canonical reads discard them, owned launcher
+files are migrated, and stale deployment/relocation task caches cannot control
+automatic movement. New/copy/reset/import do not recreate these connections.
+The offline draft builder no longer generates them. Map inventory does not
+report these automatic legs as missing authored configurations.
 
-Missing deployment, relocation, defense and sortie connections each retain the
-existing automatic destination for that purpose. A missing relocation link does
-not invent a connection through base. A missing sortie cannot retain a cached
-deployment. Present authored connections retain their points when join proof is
-unavailable and continue through the existing physical checks and retries.
+Only independent red dashed artillery attacks remain authored. They have fixed
+own/enemy base endpoints, no tiers or ordinary route-capacity use, and no defense
+branch. Up to three endgame artillery Bots automatically return to their own
+base circle before following the attack from its next point. Spawn anchors are
+not substitutes for the base. Combat cannot rejoin past the mandatory return.
+Defense during attack reverses the passed attack nodes; at parking it retains
+automatic base navigation. Remember the actual interrupted attack or parking
+and resume that owner after defense. Missing attacks retain the old automatic
+endgame fallback. Existing combat/fire gates and ordinary navigation/recovery
+remain unchanged. Authored attack geometry still requires owner review.
 
-Optional schema-1 fields are `tier`, `family`, `node_ids`, `defense`, route
-`purpose=spg_attack`, and parking `travel`/`links`. Exact map resource identities,
-endpoint ownership and bounds remain checked. Packaging includes the new client
-modules, server task owner, launcher connection editor and the server's zipfile
-runtime import.
+All-classes is the black common-editing view. A defense edit updates only the
+selected map/team/route family. Existing class junction identities and main
+geometry remain local; later branch bends are shared. A class without an existing
+branch needs an unambiguous matching ordinary junction; otherwise roll back the
+entire edit and history. Total view and individual class views edit only their
+selected class. Later common edits overwrite earlier individual branch edits;
+view selection itself never edits data. Main/reserve states and artillery are
+excluded. Add/delete/insert/move/remove and map undo/redo all use the same scope.
+
+When route symmetry is enabled and the map permits it, copy branch bends to the
+corresponding opposite-team route as well, keeping that team's stable junction
+and fixed own base endpoint. This follows the editor's world-coordinate reversed
+road semantics; it is not a new terrain-mirroring algorithm. Failure on either
+team rolls back both. Unsupported maps keep symmetry disabled. Tier changes do
+not overwrite defense geometry. A list refresh/queued selection event preserves
+active defense editing; map-check location also enters the correct branch.
+
+Optional schema-1 fields remain `tier`, `family`, `node_ids`, `defense` and route
+`purpose=spg_attack`. Endpoint ownership, bounds, stable junctions, waits and
+Default read-only restrictions remain checked. Parking legacy keys are discarded
+rather than treated as executable authoring data.
 
 ## Verification and limitations
 
@@ -169,8 +188,8 @@ runtime import.
 
 - `test_port_0922_route_task_rules.py` covers command admission, guard phases,
   task ownership, frozen turnback, circle handoff, pressure commitment/expiry,
-  class-family occupancy, directed rejoin, stable junctions and SPG deployment,
-  relocation, defense and sortie sequencing.
+  class-family occupancy, directed rejoin, stable junctions and automatic SPG
+  parking, defense and authored sortie sequencing.
 - `test_port_0922_capture_protection.py` reproduces the ebb19501b480 circle and
   contact positions, including lost firing lanes, reload, six arrivals with
   three human contributors, displacement, owner changes and network cache
@@ -213,156 +232,53 @@ runtime import.
   laws or weaken the departure bound to make packaging appear fully validated.
 
 
-## Shared reviewed connections and complete map checks
+## Current shared baseline and complete map checks
 
-The owner approved `Route review 20261025` and requested its complete adoption
-into the immutable shared Default on 2026-10-25. The same data now ships to
-every installation, rather than requiring a personal profile import. It contains 246
-base-to-parking deployment paths, 492 explicitly directed parking-to-parking
-paths, and 82 artillery endgame routes across all 41 maps. Endgame paths use
-an existing authored road with base-circle ends; deployment and relocation
-paths retain the shipping planner's supported bends, dry support, clearance
-and climb approach within the sixteen-point editor contract. Existing Default
-materializations refresh to the shared baseline; independent user plans remain
-independent. The standalone review JSON is retired from source and packaging.
+The owner-approved Default remains shared by all installations, with all 41 maps,
+82 independent artillery attacks and ordinary defense branches only on
+Mittengard, Tundra and Ghost Town. Retire the 246 deployment and 492 directed
+parking relocation paths; retain every parking position, ordinary route point,
+wait, tier, defense branch and attack point exactly as reviewed. Do not simplify
+or re-route those retained geometries during this editor task. Existing Default
+materializations refresh; independent custom geometry remains independent.
+The standalone review profile is not shipped or recreated.
 
-Only Mittengard, Tundra and Ghost Town gain ordinary-route defense branches.
-Each enabled class variant is considered independently. The nearest original
-approach to the own base identifies the reverse-travel divergence from the
-spawn-bound leg. An appropriate ordinary node owns the stable junction; a
-new ordinary point can be inserted on the original segment when space permits.
-Existing points, waits, disabled flags, lane tiers and parking positions remain.
-Full sixteen-node variants use the closest existing eligible ordinary node;
-the reviewer must inspect these coarse junctions as well as all draft paths.
+The map check expands effective team/class routes, reserve lanes, waiting places,
+parking regions, artillery attacks and configured/required defense branches.
+Configured/correct, configured/incorrect and unconfigured are distinct; disabled
+lanes are listed separately. Use the shipping navigation checks in both directions
+and bounded area-goal snapping for base/parking circles. Ordinary intermediate
+nodes remain strict. Passing results say navigation-data checks passed, not live
+physics acceptance. Locate selects the exact branch/node without editing;
+changed geometry/profile invalidates old reports and location requests.
 
-`launcher/bot_tactics_inventory.py` enumerates effective team/class routes,
-reserve routes, parking, deployment, relocation, sorties and the three maps'
-defense branches. It distinguishes configured/correct, configured/incorrect
-and unconfigured. Disabled lanes are listed separately, never counted as a
-successful or failed active configuration. A single reciprocal parking link
-is not reported missing; distinct explicit paths in both directions are both
-checked. All path segments are checked in both directions. Existing ordinary
-node, waiting-place entry/exit and generic parking-envelope checks remain.
-Fixed base and parking centers use only the shipping bounded endpoint snap
-inside their actual area radius; missing intermediate support is still an error.
+Tree text and map geometry share the class palette; All-classes is black,
+artillery is red. Language/view changes preserve pending edits and selection.
 
-The check window labels passing data as navigation-data checks, not live
-physics acceptance. Double-click or Locate selects the team/class, route,
-connection and offending node/wait place without changing the draft. Editing
-or changing profiles expires old results and prevents stale node indexing.
-Closing the report cancels its refresh callback. Complete receipts are written
-to the existing collected launcher log.
+Regression gates: run all launcher tests, especially artillery, connection,
+inventory, adopted-default, route-control and localization tests. Connection
+regressions exercise shared -> individual -> shared edits, Total-view edits,
+independent stable junctions, unchanged main geometry, symmetry, deletion,
+transaction rollback and undo/redo. Artillery tests cover old-file migration,
+no retired controls/data, all-map display and retained attacks. Route-task tests
+cover automatic parking even with stale caches, offset spawn/base sequencing,
+base-circle handoff, at-most-three sorties, defense return/resume, and unchanged
+combat ownership. Frozen editor smoke requires both class colors and automatic
+parking receipts; inspect downloaded client bytecode/server/frozen launcher sources
+against the exact pushed commit. Compile all client sources with CPython 2.7.18.
 
-Reproduce draft generation with `python tools/build_route_review_draft.py
-OUTPUT.json`; its evidence sidecar records paths which could not be generated.
-The shared baseline has no unconfigured connections. Generation preserves
-existing authored deployment, relocation, sortie and defense paths, adding only
-missing data; rerunning it cannot overwrite reviewed geometry or duplicate
-sorties. Generation is an authoring aid, not native passage evidence.
+Keep the existing Airfield 15 FPS departure and opposed Great Wall gate failure
+assertions. Editor/static navigation/package checks do not establish native
+bridge, slope, wall passage or worker performance. Real-client tests must use
+START_DIAGNOSTIC_TEST to collect the existing diagnostic logs.
 
-Regression: run all `launcher/tests`, including `test_bot_tactics_inventory.py`.
-The new tests check every map in both directions, effective class overrides,
-reciprocal links, disabled families, missing-vs-invalid separation, preserved
-original geometry/waits, save/reopen without applying, report location and
-stale-result refusal. Existing navigation report tests now assert the three
-categories and retain node/wait-place coordinates and failure explanations.
-The seven authored-route/default-editor/recovery/task/wait/terminal test files
-remain enabled. On a Windows Python 3 host without the game Python 2 native
-extension, the runtime integration file requires the documented engine-free
-reference test mode; it is not native worker acceptance.
-
-
-Local candidate evidence: all 33 launcher test files passed (1,093 discovered
-checks, 15 existing environment/catalog skips); the final inventory/navigation/
-localization rerun includes the additional wait-slot receipt regression.
-All 41 draft maps produced 2,122 active configured/correct inventory entries,
-zero configured/incorrect entries and zero missing required connections.
-There are 86 stored defense branches including shared/class rows, projecting
-to 72 active class-route branches across exactly the three approved maps.
-The seven relevant route test files cover 140 tests. Six files passed on the
-Windows source runner; the runtime-integration file initially refused its
-missing Python-3-host native extension, then all 31 passed in explicit
-engine-free reference mode. No missing-native failure was hidden or weakened.
-All 209 client sources compile with CPython 2.7.18. These results do not replace
-the owner's native-client review of the new geometry.
-
-## Independent artillery editing and visible connections
-
-The route-view selector separates ordinary class/shared routes, artillery
-parking and artillery attack routes. Total view includes all effective routes;
-All classes edits only ordinary shared travel. Both the legend and the left
-tree place artillery parking before artillery attack. Parking and connections
-use red solid lines; attacks always use red dashed lines, even in Total view.
-The parking caption does not carry a literal color suffix. A scrollable left
-tree lists each authored deployment/relocation connection below its parking
-position. Selecting a child edits that connection's nodes without moving the
-parking or rewriting another path.
-
-Defense and artillery controls use separate, contextual panels. Attack routes
-are ordinary node-editing objects with fixed own/enemy base ends, but have no
-editable class priority, policy, slots, weight, tier, waiting places or class
-scope. Their copy/delete actions work in the independent view and Total view.
-The explanation retains the existing runtime law: once the own team has only
-artillery alive, up to three artillery Bots return to base and take an authored
-attack route. No runtime selection or combat law changes in this editor fix.
-
-New parking creates its own deployment connection. Connect all parking is a
-one-shot check-shaped action, not a persisted switch. It resets its check,
-connects only the current map/team and leaves existing directed or reciprocally
-reusable paths intact. Missing pairs receive straight connections for manual
-editing/checking. Repeated clicks do not alter paths or create undo entries;
-later parking creation does not automatically join the graph. Fewer than two
-positions or immutable Default disables the action. All added pairs share one
-undo checkpoint, and an exception restores the entire document and history.
-
-Moving a parking position updates its deployment endpoint, outgoing starts and
-incoming ends, including inherited incoming connections not yet materialized
-in the editable profile. Middle nodes remain authored. Copies get independent
-IDs/deployment geometry without the original's relocation references. Deleting
-parking removes all incoming references; deleting a connection child removes
-the child, not its parking. Node editing still protects connection endpoints.
-Check-map location selects the right independent view and tree child; language
-changes preserve the selected connection and unsaved geometry.
-
-`test_bot_tactics_artillery.py` exercises actual Tk lists and canvas objects for
-all 41 maps and both teams, independent attack controls, connection child
-editing, single undo/redo, repeat/failure/default boundaries, inherited reference
-updates, copying/deleting, save/reopen, localization and check-result location.
-All 34 launcher test files pass; the final focused run covers the additional
-inherited-link and check-result-location regressions. The packaged editor smoke
-now requires the separate artillery category, red attack canvas object,
-one-shot connect/undo/redo and child-node editing through the frozen executable.
-The downloadable review profile and public Default geometry are unchanged.
-
-
-## Approved shared Default adoption and class-colored route entries
-
-The complete reviewed document is embedded in `bot_tactics_default_data.py`.
-The 20261025 adoption fixture locks the whole profile and each map, including
-all ordinary points/waits, artillery parking/travel/relocation/attack paths,
-defense junctions, tiers and behavior overrides. First installation, refresh of
-an older Default, deletion of an applied review copy and creation of a new
-editable Default copy must retain the exact shared contents. Independent custom
-profiles are preserved. The old standalone review file is no longer packaged.
-
-Tree entries use the same class palette as the map: light green, medium ochre,
-heavy gray, tank destroyer blue, artillery red, shared All-classes black. Total
-view colors each effective class separately. Filter changes and language
-switching preserve geometry, selection and colors; reserve tiers keep their
-existing map dashes. No combat, steering or worker scheduling code changes.
-
-Validation runs all launcher test files, all 41 effective navigation inventories,
-relevant route/runtime tests, CPython 2.7 compilation and the frozen editor smoke.
-The downloaded package must contain the exact shared baseline in its client and
-server payload and must omit the retired review JSON. Static navigation checks
-do not guarantee native bridge, slope or gate passage. Previously reported
-Airfield departure and opposed Great Wall gate simulation failures remain
-separate from this data/editor change; do not weaken those assertions.
-
-Local focused evidence for the adoption: five complete-default/storage checks,
-ten inventory checks (all 41 maps plus generator idempotence), fourteen actual
-Tk artillery/color tests, and 116 route/runtime checks across seven files pass.
-All 209 client modules compile with CPython 2.7.18. The actual source editor
-smoke passes and records `route_tree_class_colors`; the frozen verifier now
-requires that receipt as well. Full launcher and exact-package results are
-recorded by their test/build jobs.
+Local validation of this change: all 34 launcher test files pass after final
+transaction/UI/route-control reruns (1,111 discovered checks, existing local
+environment skips retained). Nineteen connection tests exercise the complete
+shared/single-class/symmetry/rollback contract. Seven route/runtime files pass
+119 checks; 31 additional editor/runtime integration checks pass in explicitly
+engine-free reference mode. All 209 client sources compile under CPython 2.7.18.
+Exact Default comparison against the previous commit proves that only parking
+travel/links were removed, preserving every other field on all 41 maps. Source
+editor smoke exercises automatic parking UI and real shared defense edits with
+undo/redo; the frozen-package verifier requires these receipts too.

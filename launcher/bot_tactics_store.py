@@ -177,7 +177,11 @@ class Store:
                 current=contract.default_profile()
                 if raw!=current:_atomic(path,current)
                 return contract.canonical(current)
-        return contract.load(str(path))
+        document=contract.load(str(path))
+        if any('travel' in zone or 'links' in zone for entry in (raw or {}).get('maps',{}).values()
+               for zone in entry.get('positions',())):
+            _atomic(path,document)
+        return document
 
     def ensure_active(self):
         if not self.active_path.exists():
@@ -233,7 +237,7 @@ class Store:
     def read(self, name):
         if name.casefold() == 'default':
             return contract.default_profile()
-        return contract.load(str(self.profile_path(name)))
+        return self._load_owned(self.profile_path(name))
 
     def check_name(self,name,previous_name=None):
         name=contract._text(name,48)

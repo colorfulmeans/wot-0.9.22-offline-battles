@@ -49,16 +49,3 @@ def validate(document, contract, graph_loader):
                     raise contract.TacticsError('Route endpoints are fixed: %s / %s' % (name, route['id']))
                 if route.get('symmetric') and not symmetry_allowed(graph):
                     raise contract.TacticsError('Route symmetry is unavailable on this map: '+name)
-
-        positions=settings.get('positions',())
-        by_id=dict((p['id'],p) for p in positions)
-        for parking in positions:
-            if parking.get('travel') and not same_point(parking['travel'][0],graph['objective_bases'][parking['team']-1]):
-                raise contract.TacticsError('SPG deployment connection must start at the own base')
-            for identity,points in parking.get('links',{}).items():
-                if identity in settings.get('deleted_positions',()):raise contract.TacticsError('Detached SPG parking connection')
-                peer=by_id.get(identity)
-                if peer is None:
-                    peer=next((p for p in contract.default_map(name).get('positions',()) if p['id']==identity),None)
-                if peer is None or peer['team']!=parking['team'] or not same_point(points[-1],peer['point']):
-                    raise contract.TacticsError('Detached SPG parking connection')

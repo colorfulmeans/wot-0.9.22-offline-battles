@@ -119,17 +119,112 @@ class ConnectionTests(unittest.TestCase):
         e.adopt(storage.contract.empty('Editable again'))
         self.assertEqual('normal',str(e.route_restore_button.cget('state')))
 
-    def test_spg_deploy_connection_and_attack_endpoints_are_separate(self):
+    def test_spg_parking_is_automatic_and_attack_remains_separate(self):
         e=self.editor;e.route_class_var.set('SPG');e.change_route_class();e.new_position()
-        e.press(SimpleNamespace(x=e.view.screen((20,20))[0],y=e.view.screen((20,20))[1],state=0))
-        zone=e._selected_parent()
-        self.assertEqual(zone['point'],zone['travel'][-1][:2])
-        e.network_choices=[('deploy','travel','')];e.network_box.configure(values=['deploy']);e.network_box.current(0)
-        e.choose_network();e.selected_point=0;e.insert_point()
-        self.assertEqual(3,len(e._selected()['points']))
-        e.network_mode='';e.new_route()
-        self.assertEqual('spg_attack',e._selected_parent()['purpose'])
-        self.assertEqual(['SPG'],e._selected_parent()['classes'])
+        self.assertNotIn('travel',e._selected_parent());self.assertNotIn('links',e._selected_parent())
+        self.assertFalse(hasattr(e,'network_box'))
+        e.new_route();self.assertEqual('spg_attack',e._selected_parent()['purpose'])
+        self.assertEqual('disabled',str(e.defense_add.cget('state')))
+
+    def shared_routes(self, separate_junction=False):
+        e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route();e.insert_point()
+        source=e._editable_parent();source['family']=source['id']
+        peer=route_network.clone_route(source);peer.update(id='heavy_variant',classes=['heavyTank'],family=source['id'])
+        source['classes'].remove('heavyTank')
+        if separate_junction:peer['points'][1][0]+=12
+        for row in (source,peer):
+            ids=route_network.ensure_nodes(row)
+            base=e.graph_cache[e.map_name]['objective_bases'][e.team-1]
+            row['defense']=dict(junction=ids[1],points=[row['points'][1][:2]+[0],list(base)+[0]])
+        e.entry()['routes'].append(peer);e.network_mode='defense';e.selected_point=0;e._refresh_items()
+        return e,source['id'],peer['id']
+
+    def test_shared_then_total_single_class_then_shared_last_edit_wins(self):
+        e,source_id,peer_id=self.shared_routes()
+        before=copy.deepcopy(e.document);e.insert_point();self.root.update()
+        self.assertEqual('defense',e.network_mode)
+        self.assertFalse(self.errors.called)
+        source=next(r for r in e.entry()['routes'] if r['id']==source_id)
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        self.assertEqual(source['defense']['points'],peer['defense']['points'])
+        shared=copy.deepcopy(e.document);e.undo('maps');self.assertEqual(before,e.document)
+        e.redo('maps');self.assertEqual(shared,e.document)
+        e.route_class_var.set('total');e.change_route_class();e.selection=('routes',peer_id+'@heavyTank')
+        e.network_mode='defense';e.selected_point=0;e._refresh_items();e.insert_point()
+        source=next(r for r in e.entry()['routes'] if r['id']==source_id)
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        self.assertEqual(3,len(source['defense']['points']));self.assertEqual(4,len(peer['defense']['points']))
+        e.route_class_var.set('all');e.change_route_class();e.selection=('routes',source_id)
+        e.network_mode='defense';e.selected_point=0;e._refresh_items();e.insert_point()
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        self.assertEqual(e._selected_parent()['defense']['points'],peer['defense']['points'])
+        e.save(True);self.assertFalse(self.errors.called);self.assertEqual(e.document,self.store.active())
+
+    def test_individual_class_edit_splits_shared_custom_route_without_losing_selection(self):
+        e,source_id,peer_id=self.shared_routes()
+        before=copy.deepcopy(e.entry()['routes'])
+        e.route_class_var.set('lightTank');e.change_route_class()
+        e.selection=('routes',source_id);e.network_mode='defense';e.selected_point=0;e._refresh_items()
+        e.insert_point();self.root.update()
+        self.assertIsNotNone(e.selection);self.assertEqual('defense',e.network_mode)
+        self.assertEqual(['lightTank'],e._selected_parent()['classes'])
+        self.assertEqual(3,len(e._selected_parent()['defense']['points']))
+        original=next(r for r in e.entry()['routes'] if r['id']==source_id)
+        self.assertEqual(2,len(original['defense']['points']))
+        self.assertNotIn('lightTank',original['classes'])
+        self.assertFalse(self.errors.called)
+
+    def test_shared_edit_keeps_each_stable_junction_and_other_main_geometry(self):
+        e,source_id,peer_id=self.shared_routes(True)
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id)
+        original=copy.deepcopy(peer);e.insert_point()
+        self.assertEqual(original['points'],peer['points'])
+        self.assertEqual(original['defense']['junction'],peer['defense']['junction'])
+        self.assertEqual(peer['points'][1][:2],peer['defense']['points'][0][:2])
+        self.assertEqual(e._selected_parent()['defense']['points'][1:],peer['defense']['points'][1:])
+
+    def test_shared_delete_and_undo_cover_every_variant(self):
+        e,source_id,peer_id=self.shared_routes();before=copy.deepcopy(e.document)
+        e.delete_defense();self.assertTrue(all('defense' not in r for r in e.entry()['routes']))
+        e.undo('maps');self.assertEqual(before,e.document)
+        e.redo('maps');self.assertTrue(all('defense' not in r for r in e.entry()['routes']))
+
+    def test_shared_failure_restores_entire_draft_history_and_selection(self):
+        e,source_id,peer_id=self.shared_routes(True)
+        peer=next(r for r in e.entry()['routes'] if r['id']==peer_id);peer.pop('defense')
+        before=copy.deepcopy(e.document);history=copy.deepcopy(e.histories);selection=e.selection
+        e.insert_point()
+        self.assertTrue(self.errors.called);self.assertEqual(before,e.document)
+        self.assertEqual(history,e.histories);self.assertEqual(selection,e.selection)
+
+    def test_symmetry_copies_defense_to_other_team_only_when_enabled(self):
+        e,source_id,peer_id=self.shared_routes();source=e._editable_parent()
+        counterpart=route_network.clone_route(source);counterpart.update(id='team_two',team=2,family='other_family',mirror_id=source_id)
+        source['mirror_id']=counterpart['id'];e.entry()['routes'].append(counterpart)
+        base=e.graph_cache[e.map_name]['objective_bases'][1]
+        counterpart['defense']['points'][-1]=list(base)+[0]
+        before=copy.deepcopy(counterpart);e.insert_point();self.assertEqual(before,counterpart)
+        source['symmetric']=True;e._refresh_properties();e.selected_point=0;e.insert_point()
+        self.assertEqual(len(source['defense']['points']),len(counterpart['defense']['points']))
+        self.assertEqual(list(base),counterpart['defense']['points'][-1][:2])
+        after=copy.deepcopy(e.document);e.undo('maps');e.redo('maps');self.assertEqual(after,e.document)
+        self.assertFalse(self.errors.called)
+
+    def test_unexpected_shared_sync_failure_rolls_back_the_whole_transaction(self):
+        e,source_id,peer_id=self.shared_routes();before=copy.deepcopy(e.document)
+        history=copy.deepcopy(e.histories)
+        with mock.patch.object(e,'_copy_defense',side_effect=RuntimeError('fixture sync failed')):
+            e.insert_point()
+        self.assertEqual(before,e.document);self.assertEqual(history,e.histories)
+        self.assertTrue(self.errors.called)
+
+    def test_view_switch_is_read_only_and_default_remains_locked(self):
+        e,source_id,peer_id=self.shared_routes();before=copy.deepcopy(e.document)
+        for scope in ('all','total','heavyTank','all'):
+            e.route_class_var.set(scope);e.change_route_class()
+        self.assertEqual(before,e.document)
+        e.adopt(storage.contract.default_profile())
+        self.assertEqual('disabled',str(e.defense_add.cget('state')))
 
 
 if __name__=='__main__':unittest.main()

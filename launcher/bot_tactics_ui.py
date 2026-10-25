@@ -556,6 +556,11 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return self.histories[self._history_scope()][1]
 
     def checkpoint(self, scope='maps'):
+        self._connection_snapshot=None
+        if scope=='maps' and self.selection and self.selection[0] in ('builtin','routes'):
+            self._connection_snapshot=(copy.deepcopy(self.document),{key:(list(pair[0]),list(pair[1])) for key,pair in self.histories.items()},
+                self.selection,self.network_mode,self.network_link,self.selected_point,
+                copy.deepcopy((self._selected_parent() or {}).get('defense')))
         undo,redo=self.histories[scope]
         undo.append(copy.deepcopy(self.document[scope]));del undo[:-50];redo.clear()
 
@@ -573,7 +578,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.delete_button.configure(state='disabled' if locked else 'normal')
         self._refresh_history()
         if not locked:return
-        allowed={self.network_box,self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
+        allowed={self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
         view_labels={self.tr('检查本图','Check map'),self.tr('适应窗口','Fit view'),
                      self.tr('导入地图','Load image'),self.tr('显示所选范围生效参数','Effective values'),
                      self.tr('显示导航网格','Show navigation grid'),self.tr('显示危险区网格','Show danger grid')}
@@ -590,8 +595,15 @@ class BotTacticsEditor(ConnectionEditorMixin):
         return self.unsaved_new or self.document!=self.original
 
     def mark(self, sync=True):
-        if sync and self.network_mode and self.route_class_var.get()=='all' and self.selection and self.selection[0] in ('builtin','routes'):
-            self._sync_connection_scope()
+        snapshot=getattr(self,'_connection_snapshot',None)
+        self._connection_snapshot=None
+        if sync and snapshot and self.selection and self.selection[0] in ('builtin','routes'):
+            current=(self._selected_parent() or {}).get('defense')
+            if current!=snapshot[-1]:
+                try:self._sync_connection_scope()
+                except Exception as error:
+                    self.document,self.histories,self.selection,self.network_mode,self.network_link,self.selected_point=snapshot[:6]
+                    self._refresh_items();self.error(error);return False
         self.status.set(self.tr('尚未保存。','Unsaved changes.') if self.dirty() else self.tr('已保存。','Saved.'))
         self._refresh_history();self.redraw()
 
@@ -764,7 +776,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                     other['family']=peer.get('family',peer['id']);peer.setdefault('family',peer['id'])
                     peer['classes'].remove(scope)
                     other['mirror_id']=new['id'];new['mirror_id']=other['id'];entries.append(other)
-                entries.append(new);self.selection=('routes',new['id']+'@'+scope);item=new
+                entries.append(new);self.selection=('routes',new['id']+('@'+scope if self.route_class_var.get()=='total' else ''));item=new
             return item
         edits=self._ensure_entry().setdefault('default_routes',[])
         edit=next((r for r in edits if r['id']==item['id'] and r['team']==self.team and
@@ -1003,6 +1015,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         values=self.items.selection();key=values[0] if values else None
         connection=getattr(self,'tree_connections',{}).get(key)
         selected,mode,link=connection if connection else (tuple(key.split(':',1)) if key else None,'','')
+        if not connection and selected==self.selection and self.network_mode=='defense':mode='defense'
         if (selected,mode,link)!=(self.selection,self.network_mode,self.network_link):
             self.selection=selected;self.network_mode=mode;self.network_link=link
             self.selected_point=0 if mode else None;self.selected_wait=None;self.wait_edit=False
@@ -1038,7 +1051,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if parking or attack or self.route_class_var.get() in ('SPG','spg_attack'):self.symmetry_var.set(False)
         elif route or builtin:self.symmetry_var.set(bool(item.get('symmetric',False)))
         if self.wait_edit:self.symmetry_var.set(False)
-        self.symmetry_check.config(state='normal' if (route or builtin) and not attack and not self.network_mode and not self.wait_edit and self._symmetry_allowed() else 'disabled',
+        self.symmetry_check.config(state='normal' if (route or builtin) and not attack and not self.wait_edit and self._symmetry_allowed() else 'disabled',
             text=self.tr('路线对称','Route symmetry'))
         for key,var in self.item_vars.items():
             val=(item or {}).get(key,'')
@@ -1087,7 +1100,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         other=contract.MAPS[self.map_name]['bases'][2-self.team]
         heading=math.degrees(math.atan2(other[0]-base[0],other[1]-base[1]))
         self._ensure_entry()['positions'].append(dict(id=identity,label=self.tr('新炮位','New SPG zone'),team=self.team,
-            point=list(base),radius=16.0,heading=heading,priority=5,travel=[list(base)+[0],list(base)+[0]]))
+            point=list(base),radius=16.0,heading=heading,priority=5))
         self.selection=('positions',identity);self._refresh_items();self.mark()
 
     def duplicate_item(self):
@@ -1119,11 +1132,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if self.selection[0]=='routes' and self.route_class_var.get()=='total':new['classes']=[self._route_scope()]
         new['id']=('r_' if self.selection[0]=='routes' else 'p_')+uuid.uuid4().hex[:12];new['label']+=self.tr(' 副本',' copy')
         new.pop('mirror_id',None);new.pop('symmetric',None);new.pop('family',None)
-        if 'point' in new:
-            new.pop('links',None)
-            if not new.get('travel'):
-                base=self.graph_cache[self.map_name]['objective_bases'][self.team-1]
-                new['travel']=[list(base)+[0],list(new['point'])+[0]]
+        new.pop('travel',None);new.pop('links',None)
         kind='positions' if self.selection[0]=='builtin_positions' else self.selection[0]
         self._ensure_entry()[kind].append(new)
         identity=new['id']+'@'+new['classes'][0] if kind=='routes' and self.route_class_var.get()=='total' else new['id']
@@ -1131,8 +1140,6 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def delete_item(self):
         if self.builtin:return
-        if self.network_mode=='link':return self.delete_spg_link()
-        if self.network_mode=='travel':return self.delete_deployment()
         if self.network_mode=='defense':return self.delete_defense()
         item=self._selected_parent()
         if item is None:return

@@ -250,7 +250,7 @@ def run(destination):
             ui.route_class_var.set('SPG');ui.change_route_class();ui.new_route();ui.save(True)
             active=ui.store.active()
             assert any(r.get('purpose')=='spg_attack' for r in active['maps']['08_ruinberg']['routes'])
-            assert any(p.get('travel') for p in active['maps']['08_ruinberg']['positions'])
+            assert all(not p.get('travel') and not p.get('links') for p in active['maps']['08_ruinberg']['positions'])
             report['authored_connections_and_route_tiers']=True
             assert ui.route_class_var.get()=='spg_attack'
             assert ui.canvas.find_withtag('artillery_attack')
@@ -260,20 +260,11 @@ def run(destination):
             ui.route_class_var.set('all');ui.change_route_class()
             assert not ui.canvas.find_withtag('artillery_attack')
             ui.route_class_var.set('SPG');ui.change_route_class()
-            before_connections=copy.deepcopy(ui.document)
-            ui.connect_all_button.invoke();root.update()
-            assert not ui.connect_all_var.get() and ui.document!=before_connections
-            connected=copy.deepcopy(ui.document)
-            ui.connect_all_button.invoke();assert ui.document==connected
-            ui.undo('maps');assert ui.document==before_connections
-            ui.redo('maps');assert ui.document==connected
-            child=next(key for key,value in ui.tree_connections.items() if value[1]=='travel')
-            ui.items.selection_set(child);ui.select_item();root.update()
-            assert ui.network_mode=='travel'
-            count=len(ui._selected()['points']);ui.selected_point=0;ui.insert_point()
-            assert len(ui._selected()['points'])==count+1
+            assert not hasattr(ui,'connect_all_button') and not hasattr(ui,'network_box')
+            assert not ui.tree_connections
             ui.save(True);assert not ui.dirty()
             assert ui.defense_panel!=ui.artillery_panel
+            report['automatic_parking_navigation']=True
             report['separate_artillery_editor']=True
             # Verify translations from the real frozen executable, not just
             # source tests, while retaining the active canonical document.
@@ -297,6 +288,22 @@ def run(destination):
             report.update(localization_checked=True, translated_map_count=len(labels.MAP_NAMES),
                           translated_route_count=len(labels.ROUTE_NAMES),
                           language_switch_preserves_active=True)
+            # Exercise shared defense ownership in the actual frozen widgets.
+            from gui.mods.offline_lan_0922 import route_network
+            ui.map_var.set('Ruinberg');ui.change_map()
+            ui.route_class_var.set('all');ui.change_route_class();root.update()
+            source=next(r for r in ui.entry()['routes'] if r['team']==ui.team and 'heavyTank' in r['classes'])
+            source['symmetric']=False;source.pop('mirror_id',None);source['family']=source['id']
+            peer=route_network.clone_route(source);peer.update(id='smoke_shared_peer',classes=['mediumTank'],family=source['id'])
+            ui.entry()['routes'].append(peer)
+            ui.selection=('routes',source['id']);ui.network_mode='defense';ui.selected_point=0;ui._refresh_items()
+            before=copy.deepcopy(ui.document);ui.insert_point();root.update()
+            assert ui.network_mode=='defense',(ui.selection,ui.map_name,ui.route_class_var.get(),ui.items.selection(),source['id'])
+            assert [[round(v,4) for v in p] for p in source['defense']['points']]==[[round(v,4) for v in p] for p in peer['defense']['points']]
+            shared=copy.deepcopy(ui.document);ui.undo('maps');assert ui.document==before
+            ui.redo('maps');assert ui.document==shared
+            ui.save(True);assert not ui.dirty()
+            report['shared_defense_transactions']=True
             report.update(ok=True, pillow=PIL.__version__, tk=tk.TkVersion,
                           map_count=41, canvas_route_points=len(active['maps']['08_ruinberg']['routes'][0]['points']),
                           manual_plan=plans[11], profile_sha256=storage.contract.digest(active),

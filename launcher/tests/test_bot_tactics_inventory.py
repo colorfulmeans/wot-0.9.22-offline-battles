@@ -50,20 +50,17 @@ class InventoryTests(unittest.TestCase):
         for name in storage.contract.MAPS:
             rows=inv.inventory(p,name,storage.graph_data(name),storage.contract)
             self.assertEqual(name in inv.DEFENSE_MAPS,any(x['kind']=='defense' for x in rows))
-            self.assertEqual(6,sum(x['kind']=='deployment' and not x['points'] for x in rows))
-            self.assertEqual(6,sum(x['kind']=='relocation' and not x['points'] for x in rows))
+            self.assertFalse(any(x['kind']=='deployment' for x in rows))
+            self.assertFalse(any(x['kind']=='relocation' for x in rows))
             self.assertEqual(2,sum(x['kind']=='sortie' and not x['points'] for x in rows))
 
-    def test_reciprocal_link_is_not_missing_and_distinct_directed_paths_are_checked(self):
-        name='04_himmelsdorf';p=unconfigured();g=storage.graph_data(name)
+    def test_retired_parking_connections_are_not_missing_or_drawn_as_authored(self):
+        name='04_himmelsdorf';p=review();g=storage.graph_data(name)
         peers=[x for x in p['maps'][name]['positions'] if x['team']==1];a,b=peers[:2]
         a['links']={b['id']:[a['point']+[0],b['point']+[0]]}
+        a['travel']=[[0,0,0],a['point']+[0]]
         rows=inv.inventory(p,name,g,storage.contract)
-        pair=[x for x in rows if x['kind']=='relocation' and {x['identity'],x['link']}=={a['id'],b['id']}]
-        self.assertEqual(1,len(pair));self.assertTrue(pair[0]['points'])
-        b['links']={a['id']:[b['point']+[0],[0,0,0],a['point']+[0]]}
-        pair=[x for x in inv.inventory(p,name,g,storage.contract) if x['kind']=='relocation' and {x['identity'],x['link']}=={a['id'],b['id']}]
-        self.assertEqual(2,len(pair))
+        self.assertFalse(any(x['kind'] in ('deployment','relocation') for x in rows))
 
     def test_directional_failure_cannot_be_reported_as_pass_and_check_is_read_only(self):
         name='04_himmelsdorf';p=unconfigured();g=storage.graph_data(name)
@@ -101,7 +98,7 @@ class InventoryTests(unittest.TestCase):
                     self.assertTrue(0<index<len(ids)-1);self.assertFalse(current['points'][index][2])
                     self.assertEqual(current['points'][index][:2],branch['points'][0][:2])
                     self.assertTrue(geometry.same_point(g['objective_bases'][current['team']-1],branch['points'][-1]))
-        self.assertEqual(246,counts['deployment']);self.assertEqual(492,counts['relocation']);self.assertEqual(82,counts['sortie'])
+        self.assertEqual(0,counts['deployment']);self.assertEqual(0,counts['relocation']);self.assertEqual(82,counts['sortie'])
         with tempfile.TemporaryDirectory() as folder:
             store=storage.Store(folder);before=store.active();store.save(p,False)
             self.assertEqual(before,store.active());self.assertEqual(p,store.read(p['name']))
@@ -143,7 +140,8 @@ class ReportUITests(unittest.TestCase):
             root=tk.Tk();root.withdraw()
             try:
                 e=ui.BotTacticsEditor(root,store=store);e.book.select(1)
-                name=e.map_name;row=next(x for x in inv.inventory(p,name,e.graph_cache[name],storage.contract) if x['kind']=='deployment')
+                e.map_name='100_thepit';e._load_map()
+                name=e.map_name;row=next(x for x in inv.inventory(p,name,e.graph_cache[name],storage.contract) if x['kind']=='defense')
                 row.update(category='correct',issues=[],proofs=[])
                 import bot_tactics_check_ui as report
                 with mock.patch.object(report.inventory,'inspect',return_value=[row]):window=report.show(e)
@@ -153,7 +151,7 @@ class ReportUITests(unittest.TestCase):
                 tree.selection_set('row0')
                 locate=next(x for x in window.winfo_children() if isinstance(x,ttk.Button) and x.cget('text') in ('Locate selection','定位选中项'))
                 before=copy.deepcopy(e.document);locate.invoke();root.update()
-                self.assertEqual('travel',e.network_mode);self.assertEqual(row['identity'],e._selected_parent()['id'])
+                self.assertEqual('defense',e.network_mode);self.assertEqual(row['identity'],e._selected_parent()['id'])
                 self.assertEqual(before,e.document)
                 e.document['maps'][name]['positions'][0]['priority']=9
                 selection=e.selection;locate.invoke();self.assertEqual(selection,e.selection)

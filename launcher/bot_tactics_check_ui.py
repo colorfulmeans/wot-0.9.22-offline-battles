@@ -23,8 +23,7 @@ def show(editor):
     scroll=ttk.Scrollbar(window,command=tree.yview);tree.configure(yscrollcommand=scroll.set)
     scroll.pack(side='right',fill='y');tree.pack(fill='both',expand=True,padx=8)
     kinds={'route':('路线（双向）','Route (both directions)'), 'sortie':('火炮残局出击','SPG sortie'),
-        'parking':('炮位','Parking'),'deployment':('火炮部署','SPG deployment'),
-        'relocation':('火炮换位','SPG relocation'),'defense':('回防线','Defense connection')}
+        'parking':('炮位','Parking'),'defense':('回防线','Defense connection')}
     for key,zh,en in (('correct','配置且正确','Configured and correct'),('incorrect','配置但是错误','Configured but incorrect'),('unconfigured','未配置','Unconfigured')):
         group=[r for r in rows if r['category']==key and not r['disabled']]
         tree.insert('', 'end',iid=key,text=e.tr(zh,en)+' (%d)'%len(group),open=True)

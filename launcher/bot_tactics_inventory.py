@@ -1,7 +1,6 @@
 """Read-only effective route inventory, including absent optional connections."""
 import copy
 import math
-from itertools import combinations
 
 DEFENSE_MAPS = ('100_thepit', '63_tundra', '95_lost_city')
 
@@ -51,13 +50,6 @@ def inventory(profile, name, graph, contract):
         for item in peers:
             selection=('builtin_positions' if item['id'] in default_ids else 'positions',item['id'])
             add('parking', item, [item['point']], 'SPG', selection=selection)
-            add('deployment', item, item.get('travel'), 'SPG', 'travel', selection=selection)
-        for first, last in combinations(peers, 2):
-            paths=[(owner,target,owner.get('links',{}).get(target['id'])) for owner,target in ((first,last),(last,first))]
-            existing=[path for path in paths if path[2]]
-            for owner,target,points in existing or paths[:1]:
-                selection=('builtin_positions' if owner['id'] in default_ids else 'positions',owner['id'])
-                add('relocation', owner, points, 'SPG', 'link', target['id'], selection)
         if not any(r['kind']=='sortie' and r['team']==team for r in rows):
             add('sortie', dict(id='spg_attack',team=team,label='SPG attack'), None, 'SPG')
     parking_by_id={p['id']:p for p in positions}
@@ -66,8 +58,7 @@ def inventory(profile, name, graph, contract):
         own=base_radii[row['team']-1];enemy=base_radii[2-row['team']]
         radius=parking_by_id.get(row['identity'],{}).get('radius',0.)
         row['area_radii']=({'sortie':{0:own,-1:enemy},'defense':{-1:own},
-            'deployment':{0:own,-1:radius},'parking':{0:radius},
-            'relocation':{0:radius,-1:parking_by_id.get(row['link'],{}).get('radius',0.)}}.get(row['kind'],{}))
+            'parking':{0:radius}}.get(row['kind'],{}))
     return rows
 
 

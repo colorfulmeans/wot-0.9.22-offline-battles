@@ -42,12 +42,11 @@ def _task(runtime,state,kind,points,identity,index=None):
 def _return_points(active,zone,pose):
     if active and active['kind']=='sortie_return':
         return active['points'][active['index']:]
-    if active and active['kind'] in ('attack','deploy'):
+    if active and active['kind'] == 'attack':
         # The cursor names the pending goal, not the last passed node.
         index=active['index']
         if separation(pose,xy(active['points'][index]))>bot_tactics.ROUTE_ARRIVAL_RADIUS:index-=1
         return list(reversed(active['points'][:max(0,index)+1]))
-    if zone and zone.get('travel'):return list(reversed(zone['travel']))
     return []
 
 
@@ -58,9 +57,12 @@ def apply(runtime,state,order,now):
     mode=order.get('combat_mode')
     pose=(float(state['x']),float(state['z']))
     active=state.get('_authored_spg_travel')
+    if active and active.get('kind') in ('deploy','relocate','link','travel'):
+        state.pop('_authored_spg_travel',None);active=None
     defense=bool(order.get('defense_base_id')) or mode in ('base_defense','team_back_to_base','team_guard')
     if defense:
-        if not active or active['kind']!='defense':
+        if not state.get('_authored_spg_defending'):
+            state['_authored_spg_defending']=True
             state['_authored_spg_resume']=copy.deepcopy(active)
             state['_authored_spg_return_zone']=copy.deepcopy(state.get('_authored_spg_zone') or zone)
             used=state.get('_authored_spg_zone') or zone
@@ -70,14 +72,12 @@ def apply(runtime,state,order,now):
             points=_return_points(active,zone,pose)
             active=_task(runtime,state,'defense',points,('defense',))
             state['_authored_spg_travel']=active
-    elif active and active['kind']=='defense':
+    elif state.pop('_authored_spg_defending',False):
         # Resume the actual interrupted sortie or return to the actual old zone.
         resume=state.pop('_authored_spg_resume',None)
         zone=state.pop('_authored_spg_return_zone',None) or zone
         if resume and resume['kind'] in ('attack','sortie_return'):
             active=_task(runtime,state,resume['kind'],resume['points'],resume['identity'])
-        elif zone and zone.get('travel'):
-            active=_task(runtime,state,'deploy',zone['travel'],('deploy',zone['id']))
         else:active=None
         original=state.pop('_authored_spg_return_initial',None)
         if original is not None:
@@ -111,43 +111,17 @@ def apply(runtime,state,order,now):
                 attack=copy.deepcopy(min(routes,key=lambda r:(usage[r['id']],r['id'])))
                 state['_authored_spg_attack']=attack
             if not active or active['kind'] not in ('sortie_return','attack'):
-                points=_return_points(active,zone,pose)
-                active=_task(runtime,state,'sortie_return',points,('sortie_return',attack['id'])) if points else None
-                if active is None:
-                    active=_task(runtime,state,'attack',attack['points'],('attack',attack['id']),0)
+                base=runtime.baked_graph['objective_bases'][state['team']-1]
+                # Automatic navigation to the own base must precede any route join.
+                active=_task(runtime,state,'sortie_return',[list(base)+[0]],('sortie_return',attack['id']),0)
                 state['_authored_spg_travel']=active
-        elif zone and mode in ('artillery_deploy','artillery_hold','artillery_relocate'):
-            previous=state.get('_authored_spg_zone')
-            relocating=bool(previous and previous['id']!=zone['id'])
-            if not relocating and not zone.get('travel'):
-                state.pop('_authored_spg_travel', None)
-                if separation(pose,zone['point'])<=zone['radius']:
-                    state['_authored_spg_zone']=copy.deepcopy(zone)
+        elif mode in ('artillery_deploy','artillery_hold','artillery_relocate'):
+            state.pop('_authored_spg_travel',None)
+            if zone and separation(pose,zone['point'])<=zone['radius']:
+                if state.get('_authored_spg_zone')!=zone:state['_authored_spg_zone']=copy.deepcopy(zone)
+                if state.get('_authored_spg_used_initial')!=state.get('_spg_initial'):
                     state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
-                return order
-            identity=('deploy',zone['id'])
-            if active is None or active['identity']!=identity:
-                points=zone.get('travel')
-                if relocating:
-                    points=previous.get('links',{}).get(zone['id']) or list(reversed(zone.get('links',{}).get(previous['id'],())))
-                    if not points:
-                        # A missing link is an automatic navigation leg,
-                        # not permission to invent an authored trip via base.
-                        state.pop('_authored_spg_travel', None)
-                        if separation(pose,zone['point'])<=zone['radius']:
-                            state['_authored_spg_zone']=copy.deepcopy(zone)
-                            state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
-                        return order
-                if not points:
-                    state.pop('_authored_spg_travel', None)
-                    if separation(pose,zone['point'])<=zone['radius']:
-                        state['_authored_spg_zone']=copy.deepcopy(zone)
-                        state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
-                    return order
-                entry=len(points)-1 if separation(pose,zone['point'])<=zone['radius'] else 0
-                active=_task(runtime,state,'deploy',points,identity,entry)
-                state['_authored_spg_travel']=active
-                if active:active['parking']=copy.deepcopy(zone)
+            return order
     if not active:return order
     if not defense and active['kind']=='defense':return order
     if defense and order.get('throttle_override')==0.:return order
@@ -158,8 +132,9 @@ def apply(runtime,state,order,now):
     if 'paused_at' in active:
         pause=now-active.pop('paused_at')
         if 'since' in active:active['since']+=pause
-        join=_join(runtime,state,active['points'])
-        if join is not None:active['index']=join
+        if active['kind']!='sortie_return':
+            join=_join(runtime,state,active['points'])
+            if join is not None:active['index']=join
     points=active['points']
     while active['index']<len(points)-1 and separation(pose,xy(points[active['index']]))<=bot_tactics.ROUTE_ARRIVAL_RADIUS:
         active['index']+=1
@@ -176,22 +151,15 @@ def apply(runtime,state,order,now):
             destination=xy(points[active['index']])
             episode.update(index=active['index'],since=now,best=separation(pose,destination))
     arrived=active['index']==len(points)-1 and separation(pose,destination)<=bot_tactics.ROUTE_ARRIVAL_RADIUS
-    if active['kind']=='deploy' and active['index']==len(points)-1:
-        used=active.get('parking') or zone
-        if used and separation(pose,used['point'])<=used['radius']:active['arrived']=True
-        arrived=active.get('arrived',False)
+    if active['kind']=='sortie_return':
+        base=runtime.baked_graph['objective_bases'][state['team']-1]
+        radii=runtime.baked_graph.get('objective_base_radii',(30.,30.))
+        arrived=separation(pose,base)<=radii[state['team']-1]
     if arrived and active['kind']=='sortie_return':
         attack=state['_authored_spg_attack']
-        active=_task(runtime,state,'attack',attack['points'],('attack',attack['id']),0)
+        active=_task(runtime,state,'attack',attack['points'],('attack',attack['id']),min(1,len(attack['points'])-1))
         state['_authored_spg_travel']=active
-        destination=xy(active['points'][0]);arrived=False
-    if arrived and active['kind']=='deploy':
-        used=active.get('parking') or zone
-        if not active.get('parking_recorded'):
-            state['_authored_spg_zone']=copy.deepcopy(used)
-            state['_authored_spg_used_initial']=copy.deepcopy(state.get('_spg_initial'))
-            active['parking_recorded']=True
-        return order
+        destination=xy(active['points'][active['index']]);arrived=False
     if arrived and active['kind']=='defense':return order
     if active['kind']=='attack':
         graph=runtime.baked_graph

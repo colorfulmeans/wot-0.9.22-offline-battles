@@ -283,12 +283,11 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         order.update(extra)
         return self.travel.apply(self.runtime,self.state,order,1.)
 
-    def test_deploy_keeps_authored_detour_and_fire_fields(self):
+    def test_deploy_keeps_automatic_goal_and_fire_fields_even_with_legacy_travel(self):
         result=self.apply(target_id=9,fire_allowed=True)
-        self.assertEqual((30,0.,50),result['move_position'])
+        self.assertEqual((0,0,100),result['move_position'])
         self.assertEqual(9,result['target_id']);self.assertTrue(result['fire_allowed'])
-        self.state.update(x=30,z=50)
-        self.assertEqual((0,0.,100),self.apply()['move_position'])
+        self.assertNotIn('authored_spg_connection',result)
 
     def test_parking_region_hands_off_to_actual_off_center_native_goal(self):
         self.apply();self.state.update(x=30,z=50);self.apply()
@@ -313,13 +312,12 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertEqual('artillery_hold',result['combat_mode'])
         self.assertEqual(0.,result['throttle_override'])
 
-    def test_relocation_uses_authored_parking_link(self):
-        self.apply();self.state.update(x=0,z=100)
+    def test_relocation_ignores_legacy_parking_links(self):
         self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
-        self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
-        self.state['_spg_initial']['zone']='b'
-        result=self.apply('artillery_relocate')
-        self.assertEqual((50,0.,150),result['move_position'])
+        self.state.update(x=0,z=100);self.state['_spg_initial']['zone']='b'
+        result=self.apply('artillery_relocate',move_position=(100,0,100))
+        self.assertEqual((100,0,100),result['move_position'])
+        self.assertNotIn('authored_spg_connection',result)
 
     def test_missing_link_uses_automatic_goal_not_invented_trip_via_base(self):
         self.state.update(x=0,z=100)
@@ -331,13 +329,10 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=100,z=100);self.apply('artillery_hold')
         self.assertEqual('b',self.state['_authored_spg_zone']['id'])
 
-    def test_present_relocation_link_does_not_require_destination_deployment(self):
-        self.peer.pop('travel')
-        self.zone['links']={'b':[[0,100,0],[50,150,0],[100,100,0]]}
-        self.state.update(x=0,z=100)
-        self.state['_authored_spg_zone']=copy.deepcopy(self.zone)
-        self.state['_spg_initial']['zone']='b'
-        self.assertEqual((50,0.,150),self.apply('artillery_relocate')['move_position'])
+    def test_stale_deployment_task_is_discarded_even_when_legacy_paths_still_exist(self):
+        self.state['_authored_spg_travel']=dict(kind='deploy',identity=('deploy','a'),points=self.zone['travel'],index=1)
+        result=self.apply(move_position=(12,0,98))
+        self.assertEqual((12,0,98),result['move_position']);self.assertNotIn('_authored_spg_travel',self.state)
 
     def test_missing_deployment_keeps_native_goal_and_drops_stale_connection(self):
         self.apply()
@@ -360,41 +355,33 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.assertEqual((0,0,0),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)
 
-    def test_missing_attack_route_keeps_present_deployment_for_regular_team(self):
-        self.assertEqual((30,0.,50),self.apply()['move_position'])
+    def test_regular_team_uses_automatic_parking_navigation(self):
+        self.assertEqual((0,0,100),self.apply()['move_position'])
+        self.assertNotIn('_authored_spg_travel',self.state)
 
-    def test_unproved_join_retains_existing_connection_and_retries(self):
+    def test_unproved_join_does_not_block_automatic_parking_or_defense(self):
         self.join.return_value=None
-        self.state.update(x=90,z=100)
-        result=self.apply('base_defense',move_position=(0,0,-300))
-        self.assertEqual('defense',result['authored_spg_connection'])
-        self.assertEqual((0,0.,100),result['move_position'])
-        self.assertNotEqual((0,0,-300),result['move_position'])
-        for now in (2.,100.,300.):
-            result=self.travel.apply(self.runtime,self.state,
-                dict(combat_mode='base_defense',move_position=(0,0,-300)),now)
-            self.assertEqual('defense',result['authored_spg_connection'])
-            self.assertIsNone(result['throttle_override'])
+        for now in (1.,30.,60.):
+            result=self.travel.apply(self.runtime,self.state,dict(combat_mode='base_defense',move_position=(0,0,0)),now)
+            self.assertEqual((0,0,0),result['move_position'])
+            self.assertNotIn('authored_spg_connection',result)
 
-    def test_defense_preserves_actual_parking_and_resumes_deployment(self):
-        self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100)
-        result=self.apply('base_defense')
-        self.assertEqual((30,0.,50),result['move_position'])
+    def test_defense_preserves_actual_parking_and_resumes_automatic_navigation(self):
+        self.state.update(x=0,z=100);self.apply('artillery_hold')
+        result=self.apply('base_defense',move_position=(0,0,0))
+        self.assertEqual((0,0,0),result['move_position'])
         self.assertEqual('a',self.state['_authored_spg_return_zone']['id'])
-        self.state.update(x=0,z=0);self.apply('base_defense')
-        resumed=self.apply()
-        self.assertEqual('deploy',self.state['_authored_spg_travel']['kind'])
-        self.assertEqual((30,0.,50),resumed['move_position'])
+        resumed=self.apply(move_position=(5,0,100))
+        self.assertEqual((5,0,100),resumed['move_position'])
+        self.assertIsNone(self.state.get('_authored_spg_travel'))
 
-    def test_defense_during_relocation_returns_to_last_arrived_parking(self):
-        self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100);self.apply()
-        self.assertEqual('a',self.state['_authored_spg_zone']['id'])
+    def test_defense_during_automatic_relocation_remembers_last_arrived_parking(self):
+        self.state.update(x=0,z=100);self.apply('artillery_hold')
         self.state['_spg_initial']['zone']='b';self.apply('artillery_relocate')
-        self.assertEqual('a',self.state['_authored_spg_zone']['id'])
         self.apply('base_defense');self.state.update(x=0,z=0)
         self.apply('artillery_hold')
         self.assertEqual('a',self.state['_spg_initial']['zone'])
-        self.assertEqual(('deploy','a'),self.state['_authored_spg_travel']['identity'])
+        self.assertIsNone(self.state.get('_authored_spg_travel'))
 
     def test_sortie_returns_home_before_starting_authored_attack_and_holds_circle(self):
         self.apply();self.state.update(x=30,z=50);self.apply();self.state.update(x=0,z=100);self.regular['alive']=False
@@ -406,6 +393,35 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=100,z=200);self.apply()
         self.state.update(x=0,z=280)
         self.assertEqual('base_capture',self.apply()['combat_mode'])
+
+    def test_offset_spawn_does_not_skip_own_base_before_attack(self):
+        self.regular['alive']=False;self.state.update(x=100,z=100)
+        self.runtime.baked_graph.update(objective_bases=[[40,20],[0,300]],spawn_anchors=[[0,0],[0,300]])
+        self.settings['routes']=[dict(id='attack',team=1,purpose='spg_attack',points=[[40,20,0],[100,200,0],[0,300,0]])]
+        result=self.apply('base_capture');self.assertEqual((40,0.,20),result['move_position'])
+        self.assertEqual('sortie_return',result['authored_spg_connection'])
+        self.state.update(x=40,z=45)
+        result=self.apply('base_capture');self.assertEqual((100,0.,200),result['move_position'])
+        self.assertEqual('attack',result['authored_spg_connection'])
+
+    def test_combat_pause_cannot_join_past_mandatory_return_to_base(self):
+        self.regular['alive']=False;self.state.update(x=0,z=100)
+        self.settings['routes']=[dict(id='attack',team=1,purpose='spg_attack',points=[[0,0,0],[0,100,0],[0,300,0]])]
+        self.apply('base_capture')
+        self.travel.apply(self.runtime,self.state,dict(combat_mode='engage',target_id=7,fire_allowed=False),2.)
+        self.join.return_value=2
+        result=self.travel.apply(self.runtime,self.state,dict(combat_mode='base_capture'),3.)
+        self.assertEqual('sortie_return',result['authored_spg_connection'])
+        self.assertEqual((0,0.,0),result['move_position'])
+
+    def test_attack_return_with_unproved_join_keeps_authored_retry_targets(self):
+        self.state.update(x=100,z=220)
+        self.state['_authored_spg_travel']=dict(kind='attack',identity=('attack','a'),points=[[0,0,0],[100,200,0],[0,300,0]],index=2)
+        self.join.return_value=None
+        for now in (1.,30.,60.):
+            result=self.travel.apply(self.runtime,self.state,dict(combat_mode='base_defense'),now)
+            self.assertEqual('defense',result['authored_spg_connection'])
+            self.assertIsNone(result['throttle_override'])
 
     def test_sortie_occupancy_uses_only_artillery_attack_routes(self):
         self.regular['alive']=False

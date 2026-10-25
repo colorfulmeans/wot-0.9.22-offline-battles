@@ -69,7 +69,7 @@ def copy_fields(raw, result, contract, bounds):
         if result.get('classes')!=['SPG']:
             raise contract.TacticsError('SPG attack routes require only artillery')
         result['purpose'] = raw['purpose']
-    if 'defense' in raw:
+    if 'defense' in raw and result.get('purpose')!='spg_attack':
         branch = raw['defense']
         contract._keys(branch, ('junction', 'points'), ('junction', 'points'))
         identity = contract._id(branch['junction'])
@@ -100,18 +100,12 @@ def travel_points(raw, contract, bounds):
 
 
 def position_fields(raw, result, contract, bounds):
-    if 'travel' in raw:
-        points = travel_points(raw['travel'], contract, bounds)
-        if points[-1][:2] != result['point']:
-            raise contract.TacticsError('SPG connection must end at its parking point')
-        result['travel'] = points
-    if 'links' in raw:
-        if not isinstance(raw['links'], dict) or len(raw['links']) > 48:
-            raise contract.TacticsError('Invalid SPG connections')
-        result['links'] = dict((contract._id(key), travel_points(value, contract, bounds))
-                               for key, value in raw['links'].items())
-        if any(points[0][:2] != result['point'] for points in result['links'].values()):
-            raise contract.TacticsError('SPG link must start at its parking point')
+    """Retired parking travel/links are discarded when old profiles are read.
+
+    Parking stays editable; deployment and relocation belong to automatic
+    navigation. Do not resurrect legacy connections on import, reset or save.
+    """
+    return
 
 
 def migrate_default_rows(rows):

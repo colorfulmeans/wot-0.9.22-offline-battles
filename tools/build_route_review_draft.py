@@ -76,15 +76,6 @@ def build(name='Route review 20261025', loader=graph_data, progress=print):
                 return None
         for team in (1,2):
             base=graph['objective_bases'][team-1];enemy=graph['objective_bases'][2-team]
-            peers=sorted([p for p in entry['positions'] if p['team']==team],key=lambda p:p['id'])
-            for p in peers:
-                path=p.get('travel') or create('deployment',p['id'],base,p['point'])
-                if path:p['travel']=path
-                # Directed connections avoid assuming downhill also permits uphill.
-                for other in peers:
-                    if p['id']==other['id']:continue
-                    path=p.get('links',{}).get(other['id']) or create('relocation',p['id']+'->'+other['id'],p['point'],other['point'])
-                    if path:p.setdefault('links',{})[other['id']]=path
             if any(r.get('purpose')=='spg_attack' and r['team']==team for r in entry['routes']):continue
             # An endgame route follows an already authored road, rather than
             # forcing a long arbitrary A* path into sixteen strategic nodes.
