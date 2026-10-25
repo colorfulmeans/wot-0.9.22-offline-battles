@@ -112,10 +112,8 @@ class InitialRouteLotteryTests(unittest.TestCase):
                 first_six=[plans[team*100+i] for i in range(6)]
                 self.assertTrue(all(r.get('_route_tier','main')=='main' for r in first_six),seed)
                 self.assertEqual('reserve',plans[team*100+6]['_route_tier'])
-                self.assertIsNotNone(plans[team*100+50])
-            # Keep SPG deployment plans, separate class-local receipts and
-            # symmetric draws; only ordinary lane occupancy excludes them.
-            self.assertEqual(16,sum(usage.values()))
+                self.assertIsNone(plans[team*100+50])
+            self.assertEqual(14,sum(usage.values()))
 
     def test_redshire_roster_class_variant_waits_for_real_main_capacity(self):
         catalog=lanes()
@@ -137,7 +135,17 @@ class InitialRouteLotteryTests(unittest.TestCase):
             for state in states:
                 if state['profile']['class_tag']=='heavyTank':
                     self.assertEqual('main',plans[state['id']].get('_route_tier','main'),seed)
-            self.assertEqual(16,sum(usage.values()))
+            self.assertEqual(14,sum(usage.values()))
+
+    def test_artillery_does_not_borrow_ordinary_routes_even_when_weights_allow_it(self):
+        catalog=lanes()
+        for side in catalog.values():
+            for route in side:route['class_weights']={'SPG':1.}
+        for seed in range(40):
+            plans,outcomes,usage=self.assign(catalog,actors(3,'SPG'),seed)
+            self.assertTrue(all(p is None for p in plans.values()),seed)
+            self.assertEqual({'artillery_connections_or_auto'},set(outcomes.values()))
+            self.assertEqual({},usage)
 
     def test_class_variants_have_independent_capacity(self):
         catalog=lanes(1)
@@ -186,7 +194,8 @@ class InitialRouteLotteryTests(unittest.TestCase):
         states=actors(1)+actors(1,'SPG')
         for state in states[2:]:state['id']+=10
         plans,unused,usage=self.assign(catalog,states)
-        self.assertTrue(all(p is not None for p in plans.values()))
+        self.assertTrue(all(plans[s['id']] is None if s['profile']['class_tag']=='SPG'
+                            else plans[s['id']] is not None for s in states))
         catalog[1][0]['_editor_disabled_classes']=['lightTank']
         self.assertIsNone(self.assign(catalog,actors(1))[0][100])
 
@@ -272,7 +281,7 @@ class ParkingLotteryTests(unittest.TestCase):
         routes,unused=planning.default_routes(raw,'31_airfield',graph)
         raw['maps']['31_airfield']=dict(deleted_positions=['spg_1_'+r['id'] for r in routes['1']])
         plans,unused,unused_usage=planning.assign_initial_routes(raw,'31_airfield',graph,_states(graph,1),routes,4)
-        self.assertIsNone(plans[10]);self.assertIsNotNone(plans[20])
+        self.assertIsNone(plans[10]);self.assertIsNone(plans[20])
 
     def test_default_parking_shared_family_draws_use_each_sides_own_points(self):
         raw=profile();graph=_graph();entry=raw['maps']['08_ruinberg'];entry['positions']=[]

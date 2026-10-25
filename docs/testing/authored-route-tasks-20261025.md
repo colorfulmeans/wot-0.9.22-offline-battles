@@ -26,9 +26,12 @@ the existing automatic fallback. Pressure reservations count an in-transit
 recipient separately from force which has actually arrived; protect existing
 recovery/transfer owners from repeated dispatch.
 
-Parking artillery keeps its initial route/deployment receipt but does not consume
-ordinary road occupancy. Its independent parking assignment must not make a
-two-vehicle main road appear full or send the next ordinary vehicle to reserve.
+Artillery never enters the ordinary road allocator or consumes its occupancy.
+Parking connections and sortie routes own SPG travel and count their own users.
+Missing purpose-specific authoring retains automatic navigation to the task's
+destination, including the enemy circle during a sortie, without borrowing an
+ordinary class road. An empty ordinary SPG route is not a completed attack lane
+and cannot send artillery forward while regular teammates are still active.
 This matches the existing pressure-dispatch exclusion of stationary artillery.
 
 Pressure evaluation is every 180 seconds. A donor reverses its old nodes to the
@@ -141,6 +144,10 @@ runtime import.
   40 seeds, and covers the reported mixed TD/heavy roster with a class-specific
   reserve variant. Keep whole-team class-family occupancy, fixed routes,
   symmetric draws, reserve admission and overflow tests enabled.
+  A third 40-seed check excludes SPGs even when ordinary class weights permit
+  them. Own sortie usage and unconfigured automatic attack are tested separately. The
+  unchanged Fjords/Airfield departure simulation must still pass at 15/24 FPS;
+  preserve all departure, physical-retry, traffic and premature-arrival bounds.
 - Windows connection tests verify every toolbar row/column, translations,
   Restore menu invocation and Default/editable state changes. The frozen-editor
   smoke and downloaded-package verifier require the same toolbar/menu receipt.
@@ -182,3 +189,9 @@ runtime import.
 - Engine-free simulations and baked graph timings do not establish native
   Windows physics, live FPS/ping or map gameplay acceptance. Final acceptance
   still requires the diagnostic entrance on the exact CN HD #1513 client.
+- The expanded flat-world Fjords/Airfield departure simulation currently has
+  an unresolved Airfield 15 FPS one-minute departure failure after ordinary SPG
+  assignments are removed. Keep the original assertion and failure evidence;
+  allocation/own-route checks passing does not establish traffic acceptance.
+  This candidate must disclose that failure rather than silently change motion
+  laws or weaken the departure bound to make packaging appear fully validated.

@@ -10576,9 +10576,19 @@ its logged initial family choices reproduces all 29 published assignments. Befor
 the third heavy, east_ridge has three ordinary vehicles; west_fields has two
 ordinary vehicles plus an SPG receipt. The latter already owns a separate parking
 assignment but incorrectly consumes the road's third slot. This opens the reserve
-variant early. Exclude SPGs from the ordinary lane_usage increment, retaining
-plans, class-local usage receipts, symmetric lottery and independent parking.
+variant early. Exclude SPGs from the ordinary route allocator entirely, retaining
+the independent parking, connections and sortie owners and their own occupancy.
 The existing server pressure dispatcher already excludes SPGs from road force.
+
+The intermediate build 514 only removed the occupancy increment. Its retained
+ordinary SPG assignments exposed a 15 FPS Airfield departure failure. The user
+then clarified that artillery must use only its own authored routes, or automatic
+navigation when absent. Remove ordinary SPG choices rather than adding a shadow
+ordinary-road ledger. Keep the full four-case departure test and original
+assertions. Build 514 is superseded, not a candidate for user acceptance.
+An empty ordinary SPG route must not count as completed capture travel while
+regular teammates remain. Tests separately exercise own-sortie occupancy and
+automatic enemy-circle approach after the regular team is eliminated.
 
 The new regression fails on the parent and passes after this fix. Forty-seed
 checks require identical ordinary assignments with/without parking SPGs and no
@@ -10592,3 +10602,11 @@ and map-local undo/redo occupy the first; main/reserve, map check, fit and the
 existing image importer occupy the second. The spare cell groups both existing
 restore actions. Real Tk tests and frozen-editor verification cover exact order,
 translations, draft preservation, menu invocation and read-only Default fences.
+
+Known remaining validation failure: with the clarified SPG-only route policy,
+the unchanged flat-world 15 FPS Airfield departure test reports an unexplained
+one-minute stall (Bots 18/19/27 remain near spawn; Bot 19 lacks the expected
+physical-neighbour refusal receipt). This is not fixed or converted into a pass.
+Keep its timing/occupancy assertions and diagnostics. Focused allocation, own
+sortie/automatic fallback and toolbar results must be reported separately from
+this unresolved traffic regression; native match acceptance remains unproved.

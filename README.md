@@ -718,8 +718,10 @@ assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage
 and bundled runtimes.
 
-Parking artillery no longer consumes ordinary road capacity during initial
-allocation. Ordinary class variants still share each road's three-vehicle main
+Artillery uses its own parking connections and attack routes, or automatic
+navigation when the corresponding route is absent. It is never assigned another
+vehicle class's ordinary road or counted against its capacity. Ordinary class
+variants still share each road's three-vehicle main
 threshold before reserve/overflow admission. The route editor toolbar uses two
 rows of six aligned cells, with Restore route/default operations grouped in the
 last cell's Restore menu; Default protection and independent undo/redo remain.

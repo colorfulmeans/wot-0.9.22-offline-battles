@@ -176,7 +176,6 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
     """
     settings = config.map_settings(profile, name)
     authored = settings.get('routes', ())
-    deleted_positions = set(settings.get('deleted_positions', ()))
     grid = graph_view(name, graph) if authored else None
     errors = dict((r['id'], validate_route(grid, r)) for r in authored)
     usage, plans, outcomes = {}, {}, {}
@@ -184,7 +183,10 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
 
     def candidates(state):
         tag = (state.get('profile') or {}).get('class_tag')
-        if tag not in config.CLASSES:
+        # SPGs own parking connections and spg_attack routes separately.
+        # Missing artillery authoring means automatic travel, never borrowing
+        # an ordinary class road or its capacity.
+        if tag not in config.CLASSES or tag == 'SPG':
             return []
         rows = catalog.get(state['team'], catalog.get(str(state['team']), ())) or ()
         variants = dict((r['_editor_source'], r) for r in rows
@@ -194,8 +196,6 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
         fixed = any(r['policy'] == 'fixed' for r in custom)
         for base in rows:
             if base.get('_editor_source') or fixed:
-                continue
-            if tag == 'SPG' and 'spg_%d_%s' % (state['team'], base['id']) in deleted_positions:
                 continue
             route = variants.get(base['id'], base)
             weights = route.get('class_weights') or {}
@@ -232,17 +232,16 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
     def reserve(state, selected):
         if selected is None:
             plans[state['id']] = None
-            outcomes[state['id']] = 'full_or_unusable_routes_auto'
+            outcomes[state['id']] = ('artillery_connections_or_auto' if
+                (state.get('profile') or {}).get('class_tag') == 'SPG' else
+                'full_or_unusable_routes_auto')
             return
         route, key, status = selected[3]
         plans[state['id']] = route
         usage[key] = usage.get(key, 0) + 1
         outcomes[state['id']] = status
-        # Artillery keeps its deployment plan/receipt but stages at a parking
-        # zone, not on the ordinary road. Match pressure-dispatch occupancy.
-        if (state.get('profile') or {}).get('class_tag') != 'SPG':
-            lane = route.get('_route_family') or route.get('_editor_source') or route['id']
-            lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
+        lane = route.get('_route_family') or route.get('_editor_source') or route['id']
+        lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
 
     lane_usage = {}
     original_candidates = candidates

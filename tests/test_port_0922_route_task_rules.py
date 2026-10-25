@@ -101,6 +101,21 @@ class CommandCooldownTests(unittest.TestCase):
 
 
 class RouteTaskTests(unittest.TestCase):
+    def test_unconfigured_spg_does_not_finish_an_ordinary_route_at_start(self):
+        planner=BotPlanner()
+        manifest=[_bot(11,1,0,_route('normal',[(0,0,False),(0,300,False)]),'heavyTank'),
+                  _bot(12,1,1,{},'SPG')]
+        states=[_state(11,1,0,0),_state(12,1,20,0)]
+        defense=dict(capture_bases={'2':[dict(id='enemy',x=0.,z=300.,radius=50.)]})
+        orders=planner.build_orders(manifest,states,[],1.,defense)['orders']
+        spg=next(o for o in orders if o['id']==12)
+        self.assertEqual('artillery_hold',spg['combat_mode'])
+        states[0]['alive']=False
+        spg=planner.build_orders(manifest,states,[],2.,defense)['orders'][0]
+        self.assertEqual('base_capture',spg['combat_mode'])
+        self.assertEqual(dict(x=0.,y=0.,z=300.),spg['move_position'])
+        self.assertFalse(spg['route_join'])
+
     def scene(self):
         p=BotPlanner();route=_route('old',[(0,0,False),(0,100,False),(0,200,False),(0,300,False)])
         manifest=[_bot(11,1,0,route,'mediumTank')]
@@ -391,6 +406,15 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.state.update(x=100,z=200);self.apply()
         self.state.update(x=0,z=280)
         self.assertEqual('base_capture',self.apply()['combat_mode'])
+
+    def test_sortie_occupancy_uses_only_artillery_attack_routes(self):
+        self.regular['alive']=False
+        peer=copy.deepcopy(self.state);peer['id']=13;self.states.append(peer)
+        self.settings['routes']=[dict(id='north',team=1,purpose='spg_attack',points=[[0,0,0],[50,150,0],[0,300,0]]),
+                                 dict(id='south',team=1,purpose='spg_attack',points=[[0,0,0],[-50,150,0],[0,300,0]])]
+        self.apply('base_capture',move_position=(0,0,300))
+        self.travel.apply(self.runtime,peer,dict(combat_mode='base_capture',move_position=(0,0,300)),1.)
+        self.assertEqual({'north','south'},set(s['_authored_spg_attack']['id'] for s in (self.state,peer)))
 
     def test_sortie_defense_reverses_its_own_attack_nodes(self):
         self.regular['alive']=False

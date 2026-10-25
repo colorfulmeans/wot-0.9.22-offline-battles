@@ -12,8 +12,9 @@ another mod copy manually; the launcher installs its matching client payload.
 The route toolbar groups creation, copy/delete and undo/redo on its first row;
 main/reserve, map checks, view and background-image import are on the second.
 Restore contains the existing Reset route and Restore default routes commands.
-These remain unavailable for the read-only Default profile. Parking artillery
-does not consume ordinary road capacity when initial routes are allocated.
+These remain unavailable for the read-only Default profile. Artillery uses its
+own authored connections/sorties or automatic travel when absent. It is not
+assigned ordinary class roads and does not consume their capacity.
 
 All LAN participants must update together and restart the room/server. A room
 explicitly hosted by the launcher remains open until Stop room or launcher exit;
