@@ -151,7 +151,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         def refresh(widget):
             if isinstance(widget, (LocalizedCombobox,SlotsDropdown)):
                 widget.set_language(language)
-            if isinstance(widget, (ttk.Label, ttk.Button, ttk.Checkbutton, ttk.LabelFrame)):
+            if isinstance(widget, (ttk.Label, ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.LabelFrame)):
                 text = str(widget.cget('text'))
                 widget.configure(text=self._translated_text(text))
             if isinstance(widget, ttk.Notebook):
@@ -160,6 +160,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
             for child in widget.winfo_children():
                 refresh(child)
         refresh(self.root)
+        self.route_restore_menu.entryconfigure(0,label=self.tr('恢复本路线','Reset route'))
+        self.route_restore_menu.entryconfigure(1,label=self.tr('恢复默认路线','Restore default routes'))
         self.root.title(self.tr('Bot 配置与地图战术', 'Bot configuration and map tactics'))
         for key in ('team', 'class', 'slot', 'values'):
             self.rules.heading(key, text=self._translated_text(self.rules.heading(key, 'text')))
@@ -400,22 +402,26 @@ class BotTacticsEditor(ConnectionEditorMixin):
             ttk.Label(legend,text=self.tr(*labels.ENUM_NAMES['class_tag'][tag])).pack(side='left',padx=(0,8))
         tk.Label(legend,text='■',foreground=CLASS_COLORS['SPG']).pack(side='left',padx=(6,2))
         ttk.Label(legend,text=self.tr('火炮驻炮点（红色）','SPG parking (red)')).pack(side='left')
-        tools=ttk.Frame(parent);tools.pack(fill='x')
+        tools=ttk.Frame(parent);tools.pack(fill='x');self.route_toolbar=tools
         for tool_index,(zh,en,command) in enumerate([('新建路线','New route',self.new_route),('新建炮位','New SPG',self.new_position),
                               ('复制','Duplicate',self.duplicate_item),('删除','Delete',self.delete_item),
-                              ('恢复本路线','Reset route',self.reset_builtin),
-                              ('恢复默认路线','Restore default routes',self.restore_default_routes),
+                              ('撤销','Undo',lambda:self.undo('maps')),('重做','Redo',lambda:self.redo('maps')),
                               ('转换为主要路线','Make main',lambda:self.set_tier('main')),
                               ('转换为备用路线','Make reserve',lambda:self.set_tier('reserve')),
-                              ('撤销','Undo',lambda:self.undo('maps')),('重做','Redo',lambda:self.redo('maps')),
                               ('检查本图','Check map',self.check_map),('适应窗口','Fit view',self.fit_view),
-                              ('导入底图','Load image',self.load_background)]):
-            button=ttk.Button(tools,text=self.tr(zh,en),command=command);button.grid(row=tool_index//7,column=tool_index%7,sticky='ew',padx=1,pady=2);tools.columnconfigure(tool_index%7,weight=1,uniform='tools')
+                              ('导入地图','Load image',self.load_background)]):
+            button=ttk.Button(tools,text=self.tr(zh,en),command=command);button.grid(row=tool_index//6,column=tool_index%6,sticky='ew',padx=1,pady=2);tools.columnconfigure(tool_index%6,weight=1,uniform='tools')
             if en=='Delete':self.route_delete_button=button
             if en in ('Make main','Make reserve'):
                 if not hasattr(self,'tier_buttons'):self.tier_buttons={}
                 self.tier_buttons['main' if en=='Make main' else 'reserve']=button
             if en in ('Undo','Redo'):self.history_buttons.append(('maps',en=='Redo',button))
+        self.route_restore_button=ttk.Menubutton(tools,text=self.tr('恢复','Restore'))
+        self.route_restore_menu=tk.Menu(self.route_restore_button,tearoff=False)
+        self.route_restore_menu.add_command(label=self.tr('恢复本路线','Reset route'),command=self.reset_builtin)
+        self.route_restore_menu.add_command(label=self.tr('恢复默认路线','Restore default routes'),command=self.restore_default_routes)
+        self.route_restore_button.configure(menu=self.route_restore_menu)
+        self.route_restore_button.grid(row=1,column=5,sticky='ew',padx=1,pady=2)
         body=ttk.Panedwindow(parent,orient='horizontal');body.pack(fill='both',expand=True)
         left=ttk.Frame(body,width=185);centre=ttk.Frame(body);right=ttk.Frame(body,width=280)
         body.add(left,weight=0);body.add(centre,weight=1);body.add(right,weight=0)
@@ -562,11 +568,11 @@ class BotTacticsEditor(ConnectionEditorMixin):
         if not locked:return
         allowed={self.network_box,self.map_box,self.team_box,self.route_class_box,self.points,self.wait_list,self.rule_boxes['team'],self.rule_boxes['class_tag'],self.rule_boxes['slot']}
         view_labels={self.tr('检查本图','Check map'),self.tr('适应窗口','Fit view'),
-                     self.tr('导入底图','Load image'),self.tr('显示所选范围生效参数','Effective values'),
+                     self.tr('导入地图','Load image'),self.tr('显示所选范围生效参数','Effective values'),
                      self.tr('显示导航网格','Show navigation grid'),self.tr('显示危险区网格','Show danger grid')}
         def walk(parent):
             for widget in parent.winfo_children():
-                if widget not in allowed and isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button,SlotsDropdown)):
+                if widget not in allowed and isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button,ttk.Menubutton,SlotsDropdown)):
                     if str(widget.cget('text')) not in view_labels if 'text' in widget.configure() else True:
                         self._default_disabled.append((widget,str(widget.cget('state'))));widget.configure(state='disabled')
                 walk(widget)

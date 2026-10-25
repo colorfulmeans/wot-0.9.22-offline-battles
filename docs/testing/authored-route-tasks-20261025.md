@@ -26,6 +26,11 @@ the existing automatic fallback. Pressure reservations count an in-transit
 recipient separately from force which has actually arrived; protect existing
 recovery/transfer owners from repeated dispatch.
 
+Parking artillery keeps its initial route/deployment receipt but does not consume
+ordinary road occupancy. Its independent parking assignment must not make a
+two-vehicle main road appear full or send the next ordinary vehicle to reserve.
+This matches the existing pressure-dispatch exclusion of stationary artillery.
+
 Pressure evaluation is every 180 seconds. A donor reverses its old nodes to the
 old start, reaches the selected new road's start, then commits that new road.
 If the transfer expires before commitment, resume from the last passed old-road
@@ -79,6 +84,15 @@ attention, stop and follow expiry rejoin the same original route.
 
 ## Authoring and storage
 
+The route toolbar has six equal columns: New route, New SPG, Duplicate, Delete,
+Undo, Redo on the first row; Make main, Make reserve, Check map, Fit view, Load
+image on the second. The remaining cell holds a Restore menu for Reset route and
+Restore default routes. These operations retain their existing scope and prompts;
+Default remains read-only. Chinese labels follow the requested order, including
+Import map for the existing background-image loader, whose calibration dialog
+still distinguishes images from exported route data. Language changes preserve
+the current draft and translate both restore commands.
+
 Main routes are solid and reserve routes dashed in their vehicle-class color.
 Capacity explanations are in help text. Class/overview scopes cannot delete a
 lane. All-classes deletion disables a built-in family; a user-created family and
@@ -121,6 +135,15 @@ modules, server task owner, launcher connection editor and the server's zipfile
 runtime import.
 
 ## Verification and limitations
+
+- `test_port_0922_initial_allocation.py` reproduces the parking-artillery
+  capacity defect, checks unchanged ordinary draws with/without SPGs across
+  40 seeds, and covers the reported mixed TD/heavy roster with a class-specific
+  reserve variant. Keep whole-team class-family occupancy, fixed routes,
+  symmetric draws, reserve admission and overflow tests enabled.
+- Windows connection tests verify every toolbar row/column, translations,
+  Restore menu invocation and Default/editable state changes. The frozen-editor
+  smoke and downloaded-package verifier require the same toolbar/menu receipt.
 
 - `test_port_0922_route_task_rules.py` covers command admission, guard phases,
   task ownership, frozen turnback, circle handoff, pressure commitment/expiry,

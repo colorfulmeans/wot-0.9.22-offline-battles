@@ -10568,3 +10568,27 @@ screen-toggle regression was updated to require uninterrupted terminal travel;
 its original failure is retained in the local audit evidence. All 209 client
 modules compile under CPython 2.7. Engine-free tests are separate
 from native extension/packaging checks and do not establish live match acceptance.
+
+## Redshire 140914: parking artillery and route capacity
+
+The 513 report pins both heavy-class river_town variants as reserve. Replaying
+its logged initial family choices reproduces all 29 published assignments. Before
+the third heavy, east_ridge has three ordinary vehicles; west_fields has two
+ordinary vehicles plus an SPG receipt. The latter already owns a separate parking
+assignment but incorrectly consumes the road's third slot. This opens the reserve
+variant early. Exclude SPGs from the ordinary lane_usage increment, retaining
+plans, class-local usage receipts, symmetric lottery and independent parking.
+The existing server pressure dispatcher already excludes SPGs from road force.
+
+The new regression fails on the parent and passes after this fix. Forty-seed
+checks require identical ordinary assignments with/without parking SPGs and no
+reserve before six ordinary slots on two main roads fill. A separate mixed
+TD/heavy fixture covers the report's class-specific reserve variant. Existing
+fixed-route, symmetric-family, cross-class occupancy, overflow and SPG placement
+checks remain enabled. These checks establish allocation law, not native travel.
+
+The route toolbar now has six equal columns over two rows. Creation/copy/delete
+and map-local undo/redo occupy the first; main/reserve, map check, fit and the
+existing image importer occupy the second. The spare cell groups both existing
+restore actions. Real Tk tests and frozen-editor verification cover exact order,
+translations, draft preservation, menu invocation and read-only Default fences.

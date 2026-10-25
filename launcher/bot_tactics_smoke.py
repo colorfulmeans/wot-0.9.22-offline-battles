@@ -70,15 +70,31 @@ def run(destination):
             readonly=copy.deepcopy(ui.document)
             ui.new_route();ui.rule_vars['skill'].set('elite');ui.save_rule();ui.undo()
             assert ui.document==readonly and str(ui.save_button.cget('state'))=='disabled'
+            toolbar=sorted(ui.route_toolbar.winfo_children(),key=lambda w:(int(w.grid_info()['row']),int(w.grid_info()['column'])))
+            assert [str(w.cget('text')) for w in toolbar]==[
+                'New route','New SPG','Duplicate','Delete','Undo','Redo',
+                'Make main','Make reserve','Check map','Fit view','Load image','Restore']
+            assert [(int(w.grid_info()['row']),int(w.grid_info()['column'])) for w in toolbar]==[(i//6,i%6) for i in range(12)]
+            assert str(ui.route_restore_button.cget('state'))=='disabled'
+            ui.set_language('zh')
+            assert ui.route_restore_button.cget('text')=='恢复'
+            assert ui.route_restore_menu.entrycget(0,'label')=='恢复本路线'
+            assert ui.route_restore_menu.entrycget(1,'label')=='恢复默认路线'
+            ui.set_language('en')
+            assert ui.route_restore_menu.entrycget(0,'label')=='Reset route'
+            assert ui.route_restore_menu.entrycget(1,'label')=='Restore default routes'
+            assert ui.document==readonly
             report['default_readonly']=True
             ui.adopt(storage.contract.default_profile('Baseline verification'))
+            assert str(ui.route_restore_button.cget('state'))=='normal'
             ui.map_var.set('Ruinberg');ui.change_map()
             ui.route_class_var.set('AT-SPG');ui.change_route_class()
             original=next(r for r in storage.contract.default_map('08_ruinberg')['default_routes']
                 if r['team']==ui.team and r.get('class_tag')=='AT-SPG' and not r.get('disabled'))
             ui.selection=('builtin',original['id']);ui._refresh_properties()
-            ui._editable_item()['points'][1][0]+=8;ui.reset_builtin()
+            ui._editable_item()['points'][1][0]+=8;ui.route_restore_menu.invoke(0)
             assert ui._editable_item()==original
+            report['route_toolbar_and_restore_menu']=True
             report['baseline_route_restore']=True
             ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())

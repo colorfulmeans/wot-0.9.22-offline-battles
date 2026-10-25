@@ -238,8 +238,11 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
         plans[state['id']] = route
         usage[key] = usage.get(key, 0) + 1
         outcomes[state['id']] = status
-        lane = route.get('_route_family') or route.get('_editor_source') or route['id']
-        lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
+        # Artillery keeps its deployment plan/receipt but stages at a parking
+        # zone, not on the ordinary road. Match pressure-dispatch occupancy.
+        if (state.get('profile') or {}).get('class_tag') != 'SPG':
+            lane = route.get('_route_family') or route.get('_editor_source') or route['id']
+            lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
 
     lane_usage = {}
     original_candidates = candidates

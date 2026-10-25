@@ -94,6 +94,51 @@ class InitialRouteLotteryTests(unittest.TestCase):
             self.assertTrue(all(plans[team*100+i] is not None for i in range(8)))
             self.assertEqual([4,4],sorted(n for (t,lane,tag),n in usage.items() if t==team))
 
+    def test_parking_artillery_cannot_change_ordinary_route_draws_or_fill_main(self):
+        catalog=lanes()
+        for side in catalog.values():
+            for route in side:
+                route['class_weights']={'heavyTank':1.,'SPG':1.}
+            side[-1]['_route_tier']='reserve'
+        ordinary=actors(7,'heavyTank')
+        artillery=actors(1,'SPG')
+        for state in artillery:state['id']+=50
+        for seed in range(40):
+            without=self.assign(catalog,ordinary,seed)[0]
+            plans,unused,usage=self.assign(catalog,ordinary+artillery,seed)
+            self.assertEqual({s['id']:without[s['id']]['id'] for s in ordinary},
+                             {s['id']:plans[s['id']]['id'] for s in ordinary},seed)
+            for team in (1,2):
+                first_six=[plans[team*100+i] for i in range(6)]
+                self.assertTrue(all(r.get('_route_tier','main')=='main' for r in first_six),seed)
+                self.assertEqual('reserve',plans[team*100+6]['_route_tier'])
+                self.assertIsNotNone(plans[team*100+50])
+            # Keep SPG deployment plans, separate class-local receipts and
+            # symmetric draws; only ordinary lane occupancy excludes them.
+            self.assertEqual(16,sum(usage.values()))
+
+    def test_redshire_roster_class_variant_waits_for_real_main_capacity(self):
+        catalog=lanes()
+        for side in catalog.values():
+            for route in side:
+                route['class_weights']={'AT-SPG':1.,'heavyTank':1.,'SPG':1.}
+            variant=copy.deepcopy(side[2])
+            variant.update(id='class_ht_lane_2',_editor_source='lane_2',
+                           _editor_class='heavyTank',_route_family='lane_2',
+                           _route_tier='reserve',class_weights={'heavyTank':1.})
+            side.append(variant)
+        states=actors(3,'heavyTank')+actors(4,'AT-SPG')+actors(1,'SPG')
+        for state in states:
+            tag=state['profile']['class_tag']
+            if tag=='AT-SPG':state['id']+=20
+            elif tag=='SPG':state['id']+=50
+        for seed in range(40):
+            plans,unused,usage=self.assign(catalog,states,seed)
+            for state in states:
+                if state['profile']['class_tag']=='heavyTank':
+                    self.assertEqual('main',plans[state['id']].get('_route_tier','main'),seed)
+            self.assertEqual(16,sum(usage.values()))
+
     def test_class_variants_have_independent_capacity(self):
         catalog=lanes(1)
         for team in (1,2):

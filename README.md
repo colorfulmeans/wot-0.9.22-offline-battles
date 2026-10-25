@@ -718,6 +718,12 @@ assets are not included; this project is not affiliated with or endorsed by
 Wargaming. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for lineage
 and bundled runtimes.
 
+Parking artillery no longer consumes ordinary road capacity during initial
+allocation. Ordinary class variants still share each road's three-vehicle main
+threshold before reserve/overflow admission. The route editor toolbar uses two
+rows of six aligned cells, with Restore route/default operations grouped in the
+last cell's Restore menu; Default protection and independent undo/redo remain.
+
 Enemy-base approach now follows ordinary routes without a selected capture squad
 or peripheral screening group. Every actual circle arrival retains capture while
 aiming and reloading; worker-local pursuit cannot replace it with an outside goal.

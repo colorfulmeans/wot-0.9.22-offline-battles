@@ -59,7 +59,7 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual('reserve',e._selected_parent()['tier'])
         self.assertEqual('disabled',str(e.tier_buttons['reserve'].cget('state')))
         original=copy.deepcopy(e.entry()['routes'])
-        with mock.patch('bot_tactics_connections.messagebox.askyesno',return_value=True):e.restore_default_routes()
+        with mock.patch('bot_tactics_connections.messagebox.askyesno',return_value=True):e.route_restore_menu.invoke(1)
         self.assertEqual(original,e.entry()['routes'])
         self.assertEqual(storage.contract.default_map(e.map_name)['default_routes'],e.entry()['default_routes'])
 
@@ -94,6 +94,30 @@ class ConnectionTests(unittest.TestCase):
         for button in (e.route_delete_button,e.tier_buttons['main'],e.tier_buttons['reserve']):
             self.assertTrue(button.winfo_ismapped())
             self.assertLessEqual(button.winfo_rootx()+button.winfo_width(),self.root.winfo_rootx()+self.root.winfo_width()+2)
+
+    def test_toolbar_order_languages_and_restore_default_lock(self):
+        e=self.editor
+        expected=[('新建路线','New route'),('新建炮位','New SPG'),('复制','Duplicate'),
+                  ('删除','Delete'),('撤销','Undo'),('重做','Redo'),
+                  ('转换为主要路线','Make main'),('转换为备用路线','Make reserve'),
+                  ('检查本图','Check map'),('适应窗口','Fit view'),('导入地图','Load image'),
+                  ('恢复','Restore')]
+        widgets=sorted(e.route_toolbar.winfo_children(),key=lambda w:(int(w.grid_info()['row']),int(w.grid_info()['column'])))
+        self.assertEqual(12,len(widgets))
+        before=copy.deepcopy(e.document)
+        for language in ('en','zh'):
+            e.set_language(language)
+            self.assertEqual([pair[0 if language=='zh' else 1] for pair in expected],
+                             [str(w.cget('text')) for w in widgets])
+            self.assertEqual([(i//6,i%6) for i in range(12)],
+                             [(int(w.grid_info()['row']),int(w.grid_info()['column'])) for w in widgets])
+            self.assertEqual(e.tr('恢复本路线','Reset route'),e.route_restore_menu.entrycget(0,'label'))
+            self.assertEqual(e.tr('恢复默认路线','Restore default routes'),e.route_restore_menu.entrycget(1,'label'))
+        self.assertEqual(before,e.document)
+        e.adopt(storage.contract.default_profile())
+        self.assertEqual('disabled',str(e.route_restore_button.cget('state')))
+        e.adopt(storage.contract.empty('Editable again'))
+        self.assertEqual('normal',str(e.route_restore_button.cget('state')))
 
     def test_spg_deploy_connection_and_attack_endpoints_are_separate(self):
         e=self.editor;e.route_class_var.set('SPG');e.change_route_class();e.new_position()

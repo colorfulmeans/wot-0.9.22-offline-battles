@@ -121,6 +121,7 @@ class EditorProtectionTests(unittest.TestCase):
         self.assertEqual(0,bot_tactics_smoke.run(destination),destination.read_text() if destination.exists() else 'no report')
         report=json.loads(destination.read_text())
         self.assertTrue(report['default_readonly']);self.assertTrue(report['independent_presets_and_empty_ammo'])
+        self.assertTrue(report['route_toolbar_and_restore_menu'])
 
     def test_stock_only_offers_no_equipment_and_restores_choices_after_leaving_stock(self):
         e=self.editor;e.adopt(storage.contract.default_profile('Custom'))
