@@ -1,5 +1,80 @@
 # Authored route tasks and editor connections
 
+## Build 539 diagnostic acceptance (2026-10-27)
+
+The tested runtime is `1677b51f11f5c3a138dc6bc9961af8ff4918f3ad`,
+identity `colorfulmeans-40356954664-1`. Build run `40356954664` passes
+all three packaging jobs. Independent inspection verifies 37 frozen launcher
+modules, 220 staged server sources, 213 client bytecode modules, native source
+stamps, unchanged navigation bytes, archive integrity, packaged-editor smoke
+and all 1,224 delivered files. Final source CI `40356909264` still fails the
+opposed Great Wall gate and Fjord 24-FPS spawn-departure assertions; full CI is
+not green. These are not the historical Airfield subcase.
+
+Four independent diagnostic-entry sessions used lineup 30. The assistant
+issued launcher, room, close and report inputs, without driving or firing.
+Each report was separately copied to Desktop, compared byte-for-byte and
+passed ZIP CRC inspection. All multipart diagnostic records reconstructed
+without pending fragments. Default was restored after the tests.
+
+| Configuration / map | Session suffix | Result |
+| --- | --- | --- |
+| Default / Prokhorovka | `eb0f82c1053c` | Team 2, team eliminated |
+| Default / Ghost Town | `b234742dd5f5` | Failed: worker disconnected |
+| 2, one total round / Ghost Town | `678c2add95a9` | Team 1, base captured |
+| 1, zero total rounds / Ghost Town | `54e60286f5d5` | Team 1, base captured |
+
+Inventory boundaries have positive native evidence. All 29 initial inventories
+in configuration 2 total one. Eight distinct Bots publish sequence 1 and all
+eight projectiles have server terminal receipts; no Bot publishes sequence 2.
+Four exhausted Bots have subsequent fire-gate samples showing `[0, 0]`,
+`fire_seq=1` and `spg_route_travel`. Samples with positive stock while reloading
+retain armed behavior. All 29 configuration-1 inventories total zero; fire-gate
+samples cover all 29 Bots with zero stock and travel/capture modes, with no
+launch or server projectile terminal receipt. Zero stock is independent of
+reload and magazine readiness; unknown stock cannot establish this state.
+These samples do not establish every route reservation or every first-entry
+transition. They do not prove all vehicles reached the enemy circle.
+
+The requested verification resumed after the earlier interruption. Six focused
+reference files / 104 tests pass in `build/spg-modes-ammo-539-followup/`:
+empty navigation, ammunition transitions, late projectile results, allocation,
+artillery modes and artillery recovery. This is engine-free reference evidence,
+not a substitute for the failures observed below.
+
+Confirmed/open findings from the new reports:
+
+- Default / Ghost Town fails at 00:55:32 with `KeyError: 'catalog'` in
+  `spg_positions.plan_identity`, reached through `_navigation_target_impl`.
+  Source inspection finds a defense-resume path that can restore an empty
+  dictionary as `_spg_initial`; the identity consumer requires a complete plan.
+  This is a Python task-state failure, not a diagnosed native crash. The report
+  records no model-refresh refusal or native assertion.
+- Both restricted-ammunition sessions record 65 `BOT STATE rebased` messages,
+  all `bot clip changed outside reload`, involving the partial/empty magazine
+  startup boundary. The ordinary-stock sessions record none. The source tests
+  passing does not dismiss this native lifecycle mismatch; its exact transition
+  needs reproduction before claiming a correction. It is separate from the
+  confirmed all-shells-zero admission rule.
+- The zero-stock session remains expensive: three approximately 30-second
+  profiling windows contain 206, 215 and 150 worker callbacks (about 6.87,
+  7.20 and 5.02 Hz). The other three sessions' corresponding windows are about
+  30.37--37.92 Hz. These scenes have different numbers of moving vehicles;
+  the comparison does not establish a version regression or a particular
+  optimization. Selected slow traces reach about 346 ms, predominantly Bot
+  update work. Do not represent selected traces as whole-match averages or
+  visible-client ping.
+- All four sessions retain the same sound resource error
+  `2967843034 / ErrorCode 15`, once in each native role. Ten passive sound hooks
+  install per role and record calls/callers, but no receipt directly maps that
+  resource ID. Nearby `gun_damaged` creation precedes the asynchronous error;
+  temporal proximity alone does not identify the failing sound. No sound fix
+  or model-refresh fix is claimed.
+
+The four requested sessions and report audit are complete; build 539 is not a
+clean gameplay acceptance. This follow-up records evidence only and does not
+silently change gameplay policy or rebuild the already tested runtime.
+
 ## Artillery mode ownership and sound receipts (2026-10-26)
 
 The build-537 findings below led to an explicitly approved artillery policy
@@ -92,13 +167,14 @@ Native argument identities, return values and exceptions are preserved. No
 extra playback, native object retention, sound-bank alteration, worker probe
 or callback is introduced. Normal entry installs no wrappers. These receipts
 may correlate the unresolved resource-ID/code-15 error with its caller; they
-do not decode or repair that native loading error. Their value still needs
-diagnostic-entry Windows acceptance.
+do not decode or repair that native loading error. Build-539 acceptance above
+confirms hook installation and caller receipts, while the failing resource's
+event identity remains unresolved.
 
-Build-537 native evidence remains historical. The new artillery rules require
-new-package Windows matches before claiming successful real-game acceptance.
-The known Airfield 15-FPS departure and opposed Great Wall gate CI failures
-remain separate open findings; no assertion or safety budget is relaxed here.
+Build-537 native evidence remains historical. Build-539 acceptance above records
+the new-package Windows matches and their remaining failures. The final source
+CI retains the Fjord 24-FPS departure and opposed Great Wall gate failures;
+no assertion or safety budget is relaxed here.
 
 ## Empty ammunition and artillery recovery follow-up (2026-10-26)
 
