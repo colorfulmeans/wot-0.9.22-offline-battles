@@ -58,6 +58,7 @@ for directory in stage_payload.PAYLOAD_TREES['0.9.22']:
                           for path in (ROOT / directory).rglob('*.py'))
 assert 'server/server_route_recovery.py' in server_sources
 assert 'server/server_route_tasks.py' in server_sources
+assert 'server/server_empty_ammo.py' in server_sources
 for relative in server_sources:
     bundled = app / '_internal/servers/0.9.22' / relative
     assert bundled.read_bytes().replace(b'\r\n', b'\n') == (ROOT / relative).read_bytes().replace(b'\r\n', b'\n'), relative

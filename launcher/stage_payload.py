@@ -20,6 +20,7 @@ PAYLOAD_FILES = {
         "server/server_bot_ai.py",
         "server/server_route_recovery.py",
         "server/server_route_tasks.py",
+        "server/server_empty_ammo.py",
         "server/vehicle_overlay_store.py",
         "server/windows_server.py",
     ),

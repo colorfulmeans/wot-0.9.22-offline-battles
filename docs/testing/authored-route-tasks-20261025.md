@@ -37,6 +37,11 @@ preview, canonical storage and manifest sanitization share it. Zero and one
 provide reproducible saved configurations for the requested empty/last-shot
 native acceptance, including partially filled native magazines.
 
+The first package startup gate exposed a missing explicit server staging entry
+for the new mixin. Include it in the payload and verify a cold staged-server
+import with isolated Python paths, in addition to the actual packaged protocol
+startup gate. Do not use the rejected package for native acceptance.
+
 Coverage includes inventory negatives and round lifecycle, once-only handoff,
 external-command rejection versus own recovery, timed/permanent waits, retained
 aim with navigation hull facing, circle hold/re-entry, no-route fallback, exact
