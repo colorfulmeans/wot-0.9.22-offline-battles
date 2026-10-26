@@ -12,15 +12,17 @@ _SEEN = set()
 _SERIAL = 0
 _BUSY = False
 MAX_CALLS = 256
+try:
+    _NUMBERS = (bool, int, long, float)
+    _STRINGS = (basestring,)
+except NameError:
+    _NUMBERS = (bool, int, float)
+    _STRINGS = (str,)
 
 
 def _scalar(value):
-    try:
-        strings = (basestring,)
-    except NameError:
-        strings = (str,)
-    if value is None or isinstance(value, (bool, int, float) + strings):
-        return value[:180] if isinstance(value, strings) else value
+    if value is None or isinstance(value, _NUMBERS + _STRINGS):
+        return value[:180] if isinstance(value, _STRINGS) else value
     return {'type': type(value).__name__}
 
 
@@ -43,7 +45,7 @@ def _wrap(owner, name, label, skip_self):
             _BUSY = True
             values = [_scalar(v) for v in args[int(skip_self):int(skip_self)+4]]
             named = dict((str(k)[:60], _scalar(v)) for k,v in list(kwargs.items())[:8])
-            key = (label, json.dumps(values,sort_keys=True), json.dumps(named,sort_keys=True))
+            key = (label, json.dumps(values), json.dumps(sorted(named.items())))
             if key not in _SEEN and len(_SEEN) < MAX_CALLS:
                 _SEEN.add(key);_SERIAL += 1
                 stack = traceback.extract_stack(limit=7)[:-1]

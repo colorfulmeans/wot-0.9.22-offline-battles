@@ -139,14 +139,15 @@ class BaseCircleArrivalTests(unittest.TestCase):
 
 
 
-    def test_capture_without_route_still_stops_inside_circle(self):
+    def test_artillery_without_route_leaves_capture_admission_to_worker(self):
         scene = self.helper.scene((32., -250.))
         scene[1][0]['route'] = {}
         scene[1][0]['profile']['class_tag'] = 'SPG'
         order = self.helper.order(scene, contact=False)
-        self.assertEqual('base_capture', order['combat_mode'])
-        self.assertEqual(0., order['throttle_override'])
-        self.assertTrue(order['tactical_evidence']['route_terminal']['inside_capture'])
+        self.assertEqual('artillery_hold', order['combat_mode'])
+        self.assertEqual('no_route',order['tactical_evidence']['route_terminal']['outcome'])
+        self.assertTrue(order['tactical_evidence']['capture_hold']['inside'])
+        self.assertEqual(0.,order['throttle_override'])
 
     def test_capture_does_not_consume_explicit_terminal_parking(self):
         from test_port_0922_authored_route_waits import AuthoredRouteWaitTests

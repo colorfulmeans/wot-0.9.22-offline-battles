@@ -32,6 +32,12 @@ class ModeTests(unittest.TestCase):
         self.assertEqual(3,len(self.runtime._spg_mode_slots))
         self.assertEqual('automatic',self.states[3]['_spg_deployment'])
 
+    def test_pre_battle_none_round_initializes_without_requiring_any_bots(self):
+        self.runtime.round_id=None;self.states[:]=[]
+        spg_modes.update(self.runtime,0)
+        self.assertEqual({},self.runtime._spg_mode_slots)
+        self.assertEqual(set(),self.runtime._spg_endgame_teams)
+
     def test_dead_parking_owner_has_one_replacement_and_no_duplicate_reservation(self):
         spg_modes.update(self.runtime,0);self.states[0]['alive']=False
         spg_modes.update(self.runtime,1)

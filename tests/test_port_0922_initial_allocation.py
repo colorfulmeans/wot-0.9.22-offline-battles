@@ -344,8 +344,13 @@ class ParkingLotteryTests(unittest.TestCase):
             for actor,plan in plans.items():
                 state=next(s for s in states if s['id']==actor)
                 self.assertIsNotNone(spg_positions.canonical_plan(plan,name,state['vehicle'],team=state['team']))
-            self.assertEqual('outside_three_spg_initial_capacity',outcomes[13])
-            self.assertEqual('outside_three_spg_initial_capacity',outcomes[23])
+            for team,actor in ((1,13),(2,23)):
+                selected=[p for actor_id,p in plans.items()
+                          if next(s for s in states if s['id']==actor_id)['team']==team]
+                self.assertLessEqual(len(selected),3)
+                self.assertEqual(len(selected),len({p['zone'] for p in selected}))
+                self.assertEqual('outside_three_spg_initial_capacity' if len(selected)==3
+                    else 'no_reachable_unreserved_sourced_cell',outcomes[actor])
 
 
 class RuntimeLotteryTests(unittest.TestCase):

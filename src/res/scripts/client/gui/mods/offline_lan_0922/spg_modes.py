@@ -37,7 +37,7 @@ def update(runtime, now):
     runtime._spg_modes_tick = token
     states = list(runtime._ordered_states())
     round_id = token[0]
-    if getattr(runtime, '_spg_modes_round', None) != round_id:
+    if not hasattr(runtime, '_spg_modes_round') or runtime._spg_modes_round != round_id:
         runtime._spg_modes_round = round_id
         runtime._spg_mode_slots = {}
         runtime._spg_endgame_teams = set()

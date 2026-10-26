@@ -211,6 +211,12 @@ class TacticsContractTests(unittest.TestCase):
 
     def test_manual_positions_are_mass_independent_but_size_checked_and_reserved(self):
         raw=profile();graph=_graph();states=_states(graph,3);old=copy.deepcopy(states)
+        # Three authored regions per team, with overlapping candidate areas,
+        # still need both distinct region reservations and physical clearance.
+        zones=raw['maps']['08_ruinberg']['positions']
+        for zone in list(zones):
+            for suffix in ('_two','_three'):
+                zones.append(dict(copy.deepcopy(zone),id=zone['id']+suffix))
         plans,outcomes=planning.assign_manual_positions(raw,'08_ruinberg',graph,states)
         self.assertEqual(6,len(plans),outcomes);self.assertEqual(old,states)
         for a in states:

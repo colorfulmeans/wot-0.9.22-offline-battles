@@ -46,6 +46,9 @@ class SoundDiagnosticsTests(unittest.TestCase):
             sys.modules['WWISE'].WW_eventGlobal('bad_event')
         self.assertEqual('raised',self.records[-1]['stage'])
 
+    def test_unsigned_resource_identifier_remains_numeric(self):
+        self.assertEqual(2967843034,sound._scalar(2967843034))
+
     def test_diagnostic_failure_cannot_prevent_audio(self):
         sound.install()
         with mock.patch.object(sound.traceback,'extract_stack',side_effect=RuntimeError('diagnostic only')):

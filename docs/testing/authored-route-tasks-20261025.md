@@ -48,13 +48,39 @@ cleanup. Existing artillery firing/launch, ordinary combat, withdrawal,
 bootstrap and server tests remain in the regression scope. These engine-free
 checks do not establish native gameplay or a reduction in worker frame time.
 
-Final isolated engine-free reference validation passes 25 files / 1,141 tests
+Initial isolated engine-free reference validation passes 25 files / 1,141 tests
 using CPython 3.11.9 and the non-Windows reference path (`sys.platform='linux'`
 inside each test subprocess; no fake native motion acceptance). Logs are in
 `build/spg-modes-final-reference/`. Launcher core passes 188 tests with the
 existing Windows symlink skip. All 213 client sources compile with CPython
 2.7.18. Direct Windows source tests cannot load the x86 embedded-game native
 module into the x64 audit interpreter; native/package gates remain separate.
+
+The expanded CI follow-up fixes pre-battle initialization when `round_id` is
+`None` and removes `sort_keys` from sound receipts to retain the CPython 2.7
+C encoder. Unsigned sound resource IDs remain numeric under Python 2.7 `long`.
+Old service-wide artillery capture and multi-vehicle/single-region assertions
+now validate worker-owned sortie admission and one reservation per region.
+Physical spacing, vehicle-size and source-catalog validity checks remain.
+Expanded isolated reference validation passes 35 files / 1,328 tests; the final
+sound/encoder checks pass 12 tests, including the added unsigned-ID assertion.
+An explicit CPython 2.7 probe preserves the numeric unsigned ID and compiles
+all 213 client sources. Inventory lifecycle tests confirm that reloading,
+changing shell or emptying a magazine with reserves does not mean total stock
+is zero. Only a successfully consumed round decrements the finite inventory.
+
+The first pushed CI run (`40352968500`, source `14a3556d`) caught the defects
+above before delivery. Its retained traffic findings are the opposed Great
+Wall gate and the Fjord 24-FPS spawn-departure case; the earlier Airfield case
+must not be used as the identity of this run's departure failure. The source
+fixes and adapted contracts require a new CI run. Build 538 stayed queued and
+was not delivered. A local assembly may retain the build-537 frozen launcher
+only after confirming that all launcher source is unchanged and verifying its
+frozen modules against the checkout. Its standalone server, staged server
+sources and Python-2 client payload are rebuilt. Retained x86 native assets
+must match current C++ source stamps, and all package contents and startup
+gates are checked independently. Such an assembly has an explicit local build
+identity and is not represented as a successful GitHub build.
 
 The exact Chinese HD #1513 client inspection passes. Python 2.7 bytecode of
 `SoundGroups` confirms the wrapped method signatures and its direct

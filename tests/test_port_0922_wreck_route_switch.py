@@ -200,14 +200,14 @@ class WreckRouteSwitchTests(unittest.TestCase):
         self.assertEqual(('rail',1),(order['route_id'],order['route_index']))
         self.assertNotIn(0,self.planner._route_states[17].get('parking_completed',()))
 
-    def test_artillery_only_capturer_does_not_wait_for_a_stationary_route_cursor(self):
+    def test_artillery_only_server_order_cannot_bypass_worker_sortie_reservations(self):
         bot=self.planner._alive_bots(self.manifest,self.states)[0]
         bot['profile']['class_tag']='SPG'
         target=dict(id='enemy',point=dict(x=0,y=0,z=-280),radius=50)
         order=self.planner._order_for(bot,0,1,None,[],0,team_bots=[bot],
             capture_target=target,no_known_enemies=True)
-        self.assertEqual('base_capture',order['combat_mode'])
-        self.assertEqual(target['point'],order['move_position'])
+        self.assertEqual('artillery_deploy',order['combat_mode'])
+        self.assertNotEqual(target['point'],order['move_position'])
 
     def test_artillery_with_living_regulars_retains_its_staging_policy(self):
         bots=self.planner._alive_bots(self.manifest,self.states)
