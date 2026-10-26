@@ -180,6 +180,9 @@ class EmptyTravelTests(unittest.TestCase):
 
 class EmptyArtilleryTests(unittest.TestCase):
     def setUp(self):
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(spg_route_travel.bot_tactics_runtime,'graph_view',return_value=object()).start()
+        mock.patch.object(spg_route_travel.bot_tactics_runtime,'validate_route',return_value=None).start()
         self.state = dict(id=19,team=1,alive=True,x=0.,y=0.,z=100.,profile={'class_tag':'SPG'})
         self.routes = [dict(id='attack',team=1,purpose='spg_attack',points=[[0,0,0],[0,200,0],[0,400,0]])]
         others = [dict(id=i,team=1,alive=True,profile={'class_tag':'SPG'}) for i in (11,12,13)]

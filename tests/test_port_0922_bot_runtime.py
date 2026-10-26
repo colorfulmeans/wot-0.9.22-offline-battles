@@ -149,6 +149,10 @@ class _Adapter(object):
     def __init__(self, *unused):
         self.director = _Director(); self.calls = []; self.server_orders = []
     def register(self, *args): self.director.registered.append(args)
+    def plan_order(self, state):
+        target_id = state['contacts'][0]['id'] if state.get('contacts') else None
+        return dict(target_id=target_id, fire_allowed=True, shell_index=2,
+                    fire_range=500.0)
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
         target_id = (state['contacts'][0]['id']
@@ -175,6 +179,9 @@ class _FixedAdapter(_Adapter):
 
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
+        return dict(self.command)
+
+    def plan_order(self, state):
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):

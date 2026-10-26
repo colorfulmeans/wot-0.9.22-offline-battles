@@ -489,7 +489,7 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         reachable = grid.distances(origin)
         choices = []
         for zone, cell, index, point in candidates:
-            if zone['id'] in excluded_zones:
+            if zone['id'] in excluded_zones or zone['id'] in used_zones[team]:
                 continue
             if 'spg_%d_%s' % (team, zone['id']) in deleted_positions:
                 continue

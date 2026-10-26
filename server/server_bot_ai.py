@@ -4178,16 +4178,13 @@ class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
             self._apply_base_defense_order(order, bot, travel_override)
             self._firing_holds.pop(bot["id"], None)
             return order
-        artillery_only = (str(profile.get('class_tag') or '') == 'SPG' and
-            team_bots and all(str(b.get('profile', {}).get('class_tag') or '') == 'SPG'
-                              for b in team_bots))
         route_state = self._route_states.get(bot['id']) or {}
         capture_wait = (route_state.get('holding') or
                         route_state.get('parking_phase') in ('approach', 'waiting', 'queue'))
         # Missing ordinary SPG routes are intentional, not completed attack
         # corridors. Only the artillery endgame admits its capture approach.
         if (no_known_enemies and capture_target is not None and not capture_wait and
-                (artillery_only or str(profile.get('class_tag') or '') != 'SPG' and
+                (str(profile.get('class_tag') or '') != 'SPG' and
                  self._capture_staged(bot, route_index, capture_target))):
             self._apply_base_capture_order(order, bot, capture_target)
             self._firing_holds.pop(bot["id"], None)

@@ -175,8 +175,9 @@ class RouteTaskTests(unittest.TestCase):
         self.assertEqual('artillery_hold',spg['combat_mode'])
         states[0]['alive']=False
         spg=planner.build_orders(manifest,states,[],2.,defense)['orders'][0]
-        self.assertEqual('base_capture',spg['combat_mode'])
-        self.assertEqual(dict(x=0.,y=0.,z=300.),spg['move_position'])
+        # The worker owns sortie admission/travel; the server cannot send all SPGs to capture.
+        self.assertEqual('artillery_hold',spg['combat_mode'])
+        self.assertNotEqual(dict(x=0.,y=0.,z=300.),spg['move_position'])
         self.assertFalse(spg['route_join'])
 
     def scene(self):
@@ -340,11 +341,15 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.runtime=SimpleNamespace(_bot_tactics={'maps':{'08_ruinberg':self.settings}},_navigation_map_name='08_ruinberg',
             _ordered_states=lambda:self.states,baked_graph=dict(objective_bases=[[0,0],[0,300]],objective_base_radii=[30,30]))
         self.join=mock.patch.object(self.travel,'_join',return_value=0).start();self.addCleanup(mock.patch.stopall)
+        mock.patch.object(self.travel.bot_tactics_runtime,'graph_view',return_value=object()).start()
+        mock.patch.object(self.travel.bot_tactics_runtime,'validate_route',return_value=None).start()
+        self.clock=0.
 
     def apply(self,mode='artillery_deploy',**extra):
         order=dict(combat_mode=mode,target_id=None,move_position=(0,0,100),fire_allowed=False)
         order.update(extra)
-        return self.travel.apply(self.runtime,self.state,order,1.)
+        self.clock+=1.
+        return self.travel.apply(self.runtime,self.state,order,self.clock)
 
     def test_deploy_keeps_automatic_goal_and_fire_fields_even_with_legacy_travel(self):
         result=self.apply(target_id=9,fire_allowed=True)
@@ -506,13 +511,13 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.apply('artillery_hold')
         self.assertEqual('attack',self.state['_authored_spg_travel']['kind'])
 
-    def test_live_non_artillery_player_prevents_premature_sortie(self):
+    def test_live_non_artillery_player_does_not_count_in_bot_only_sortie_admission(self):
         self.regular['alive']=False
         self.settings['routes']=[dict(id='attack',team=1,purpose='spg_attack',points=[[0,0,0],[0,300,0]])]
         human=dict(team=1,alive=True,class_tag='heavyTank')
         self.runtime._contact_players=[human]
         self.assertNotIn('_authored_spg_attack',self.state)
-        self.apply();self.assertNotIn('_authored_spg_attack',self.state)
+        self.apply();self.assertIn('_authored_spg_attack',self.state)
         human['alive']=False;self.apply()
         self.assertIn('_authored_spg_attack',self.state)
 

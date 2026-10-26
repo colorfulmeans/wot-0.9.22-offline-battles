@@ -36,7 +36,7 @@ from gui.mods.offline_lan_0922 import gun_pitch_limits
 from gui.mods.offline_lan_0922 import hull_aiming
 from gui.mods.offline_lan_0922 import prebaked_navigation
 from gui.mods.offline_lan_0922 import spg_positions
-from gui.mods.offline_lan_0922 import spg_route_travel, bot_tactics, bot_tactics_runtime, empty_ammo
+from gui.mods.offline_lan_0922 import spg_route_travel, bot_tactics, bot_tactics_runtime, empty_ammo, spg_modes
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -171,7 +171,7 @@ def _order_evidence(order):
         value = order.get(key)
         result[key] = dict(value) if isinstance(value, dict) else (
             tuple(value) if isinstance(value, (list, tuple)) else value)
-    for key in ('authored_spg_connection', 'authored_spg_recovery', 'empty_ammo', 'movement_priority'):
+    for key in ('authored_spg_connection', 'authored_spg_recovery', 'empty_ammo', 'movement_priority', 'spg_mode', 'spg_deployment'):
         if key in order:
             value = order[key]
             result[key] = dict(value) if isinstance(value, dict) else value
@@ -14834,6 +14834,8 @@ class BotRuntime(object):
         identity = spg_positions.plan_identity(initial)
         progress = state.get('_spg_deployment_progress')
         obstructed = occupied is not None
+        if state.get('_spg_replacement_zone'):
+            obstructed=False
         if not obstructed and (progress is None or progress['identity'] != identity):
             state['_spg_deployment_progress'] = dict(
                 identity=identity, best=distance, since=now)
@@ -14843,6 +14845,10 @@ class BotRuntime(object):
         if not obstructed and now - progress['since'] < 20.0:
             return initial
         if not obstructed:progress['since'] = now
+        if state.get('_spg_replacement_zone'):
+            spg_modes.release_parking(self,state,failed=True)
+            state['_spg_position_event']='replacement_failed_region_closed'
+            return None
         retries = int(state.get('_spg_parking_retries', 0))
         if not obstructed:state['_spg_parking_retries'] = retries + 1
         failed = state.setdefault('_spg_failed_parking', [])
@@ -14852,7 +14858,7 @@ class BotRuntime(object):
         if occupied is None:occupied = self._physical_parking_occupancy(state)
         kwargs = dict(actor_ids=(state['id'],), excluded=failed +
             [point for point, until in state.get('_spg_fire_failed_parking', ()) if until > now],
-            occupied=occupied)
+            occupied=occupied, excluded_zones=spg_modes.parking_exclusions(self,state))
         states = list(self._ordered_states())
         try:
             origin = state.get('_spg_selection_origin')
@@ -14989,12 +14995,13 @@ class BotRuntime(object):
         zone = initial['zone']
         failures[zone] = failures.get(zone, 0) + 1
         exhausted = sorted(z for z, count in failures.items() if count >= 2)
+        reserved = spg_modes.parking_exclusions(self,state)
         retry_receipt = dict(round=self.round_id, bot=state['id'], at=now,
             previous_zone=zone, failures=dict(failures), excluded_zones=list(exhausted),
             failed_points=excluded, cycle_restarted=False, attempts=[])
         kwargs = dict(actor_ids=(state['id'],), excluded=excluded,
             occupied=self._physical_parking_occupancy(state),
-            preferred_zone=zone, excluded_zones=exhausted)
+            preferred_zone=zone, excluded_zones=sorted(set(exhausted+reserved)))
         def select():
             if initial['source'] == 'launcher_manual_v1':
                 return bot_tactics_runtime.assign_manual_positions(
@@ -15011,7 +15018,7 @@ class BotRuntime(object):
                 # Every reachable region may be obstructed in a city. Start a
                 # new bounded cycle rather than permanently blacklisting it.
                 failures.clear()
-                kwargs['excluded_zones'] = ()
+                kwargs['excluded_zones'] = reserved
                 retry_receipt['cycle_restarted'] = True
                 plans, outcomes = select()
                 retry_receipt['attempts'].append(dict(excluded_zones=[], outcomes=outcomes))
@@ -15049,6 +15056,8 @@ class BotRuntime(object):
         """
         if str((state.get('profile') or {}).get('class_tag') or '') != 'SPG':
             return order
+        if state.get('_spg_mode') in ('sortie','empty') or state.get('_spg_deployment') in ('automatic','waiting'):
+            return order
         mode = order.get('combat_mode')
         if mode not in ('artillery_hold', 'artillery_deploy'):
             state.pop('_spg_deployment_progress', None)
@@ -15085,6 +15094,7 @@ class BotRuntime(object):
                         state['_spg_occupied_retry_at'] = now + 5.0
                         initial = self._retry_spg_deployment(state, initial,
                             _distance(_position(state), destination), now, occupied)
+                        if initial is None:return spg_route_travel.automatic(self,state,order)
                         destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
                         identity = spg_positions.plan_identity(initial)
                         state['_spg_parking_occupied'] = not spg_positions.parking_point_available(
@@ -15112,6 +15122,7 @@ class BotRuntime(object):
             else:
                 initial = self._retry_spg_deployment(
                     state, initial, _distance(_position(state), destination), now)
+                if initial is None:return spg_route_travel.automatic(self,state,order)
                 destination = tuple(initial['point'][axis] for axis in ('x', 'y', 'z'))
                 arrived = _distance(_position(state), destination) <= initial['radius']
             result = dict(order)
@@ -16547,6 +16558,7 @@ class BotRuntime(object):
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
             self._prepare_planning_deadlines(planning_now)
+            spg_modes.update(self, now)
         # Canonical player mechanics are immutable within this bounded slice.
         # Keep their source objects alive so every observer shares one result.
         pose_cache = {}
@@ -17117,10 +17129,17 @@ class BotRuntime(object):
                 else:
                     if diagnostic is not None:
                         diagnostic.count('decision_local_planner')
-                    command = timed_call(
-                        self._combat_diagnostics, 'bot.planner_driver',
-                        self.adapter.decide,
-                        decision_state, sample_clear)
+                    if (state.get('profile') or {}).get('class_tag') == 'SPG':
+                        strategic = self.adapter.plan_order(decision_state)
+                        strategic = spg_route_travel.apply(self,state,strategic,now)
+                        strategic = self._artillery_position_order(state,strategic,targets,now)
+                        command = timed_call(self._combat_diagnostics,'bot.planner_driver',
+                            self.adapter.decide_with_order,decision_state,strategic,sample_clear)
+                    else:
+                        command = timed_call(
+                            self._combat_diagnostics, 'bot.planner_driver',
+                            self.adapter.decide,
+                            decision_state, sample_clear)
                     command['order_evidence'] = dict(sampled_at=now,
                         source='local_planner', final_order=_order_evidence(command),
                         reason='server_order_or_order_adapter_unavailable')

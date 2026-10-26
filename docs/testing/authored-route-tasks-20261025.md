@@ -1,5 +1,79 @@
 # Authored route tasks and editor connections
 
+## Artillery mode ownership and sound receipts (2026-10-26)
+
+The build-537 findings below led to an explicitly approved artillery policy
+change. The worker now owns round-scoped deployment, armed endgame sortie and
+empty-ammunition sortie identities. The service no longer independently sends
+every artillery vehicle to capture when it has no known enemy.
+
+- Deployment reserves at most three distinct parking regions per side, one
+  vehicle per region including vehicles en route. Other artillery drives and
+  shoots automatically. Dead parking owners admit a replacement. A replacement
+  that makes no progress for the existing 20-second deployment interval closes
+  only that region's replacement admission until the next battle. Parking
+  retries cannot select another owner's region or a closed region.
+- When only artillery Bots remain, excluding humans from this test, reserve
+  three persistent armed sortie identities. Prefer automatic/free artillery,
+  then randomly choose parked artillery. Returning home, combat, recovery and
+  temporary automatic base defense retain the reservation. Death or transition
+  to empty ammunition admits another eligible Bot. Nonselected artillery waits
+  and can shoot; parking replacement admission stops in this phase.
+- A selected Bot first returns to its own capture circle and then follows its
+  attack road. A firing opportunity pauses movement at the actual pose rather
+  than restoring the old parking destination. Defense resumes the interrupted
+  sortie, not its old parking plan. Weapon ballistics, range, reload, aiming,
+  launch validation and ordinary-vehicle combat retain their existing owners.
+- Confirmed empty inventory enters once, retires old task controls and bypasses
+  the armed three-sortie admission cap. The first three attack-road claims use
+  the authored artillery road; subsequent claims select ordinary effective
+  main/reserve roads with the least physical occupancy, randomly breaking ties.
+  Claims include vehicles returning home. Disabled roads are excluded and
+  equal geometry shares occupancy. Unknown inventory does not trigger empty.
+- Missing artillery roads use the same ordinary-road selection after returning
+  home. A borrowed road with a defense connector reverses that connector from
+  base to its stable junction, then follows the main road forward. Without a
+  connector it visits the actual first point before advancing. Automatic travel
+  remains the fallback when no usable authored road can be proved. Existing
+  C/D/reverse-B/A/home/switch recovery remains unlimited. Selection rejects
+  proved disconnections and avoids the failed geometry when alternatives exist.
+  Navigation is checked only on acquisition; once a valid preference/occupancy
+  tier exists, higher-occupancy candidates cannot win and are not rechecked.
+
+`spg_modes`, `spg_route_travel`, `spg_route_recovery` and the runtime parking
+tests cover admission, replacement failure, same-round reservations, human
+exclusion, empty transitions, shooting/defense ownership, offset-base entry,
+stable-node defense connectors, route tiers, occupancy, retries and new-round
+cleanup. Existing artillery firing/launch, ordinary combat, withdrawal,
+bootstrap and server tests remain in the regression scope. These engine-free
+checks do not establish native gameplay or a reduction in worker frame time.
+
+Final isolated engine-free reference validation passes 25 files / 1,141 tests
+using CPython 3.11.9 and the non-Windows reference path (`sys.platform='linux'`
+inside each test subprocess; no fake native motion acceptance). Logs are in
+`build/spg-modes-final-reference/`. Launcher core passes 188 tests with the
+existing Windows symlink skip. All 213 client sources compile with CPython
+2.7.18. Direct Windows source tests cannot load the x86 embedded-game native
+module into the x64 audit interpreter; native/package gates remain separate.
+
+The exact Chinese HD #1513 client inspection passes. Python 2.7 bytecode of
+`SoundGroups` confirms the wrapped method signatures and its direct
+`WWISE.WW_eventGlobal` consumer. Only the diagnostic entrance installs passive
+wrappers around already-loaded sound APIs. Receipts record method, scalar event
+or bank arguments, caller, role, wall time and returned/raised outcome. The
+first 256 distinct calls per process are recorded; repeats are deduplicated.
+Native argument identities, return values and exceptions are preserved. No
+extra playback, native object retention, sound-bank alteration, worker probe
+or callback is introduced. Normal entry installs no wrappers. These receipts
+may correlate the unresolved resource-ID/code-15 error with its caller; they
+do not decode or repair that native loading error. Their value still needs
+diagnostic-entry Windows acceptance.
+
+Build-537 native evidence remains historical. The new artillery rules require
+new-package Windows matches before claiming successful real-game acceptance.
+The known Airfield 15-FPS departure and opposed Great Wall gate CI failures
+remain separate open findings; no assertion or safety budget is relaxed here.
+
 ## Empty ammunition and artillery recovery follow-up (2026-10-26)
 
 ### Build 537 native acceptance

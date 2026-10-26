@@ -488,6 +488,13 @@ class BotAdapter(object):
         ``dt``, ``now`` and optionally ``health``, ``max_health``, ``contacts``
         and ``neighbours``.  ``direction_clear(yaw)`` is the sole runtime probe.
         """
+        strategic=self.plan_order(state)
+        return self._drive_order(int(state.get('id', 0)), state,
+                                 _position(state.get('position')),
+                                 strategic, direction_clear)
+
+    def plan_order(self,state):
+        """Select a local macro order before class-specific travel ownership."""
         state = state if isinstance(state, dict) else {}
         bot_id = int(state.get('id', 0))
         position = _position(state.get('position'))
@@ -507,8 +514,7 @@ class BotAdapter(object):
             bot_id, position, float(state.get('yaw', 0.0)),
             speed,
             state.get('health', 1.0), state.get('max_health', 1.0), now)
-        return self._drive_order(
-            bot_id, state, position, strategic, direction_clear)
+        return strategic
 
     def decide_with_order(self, state, strategic, direction_clear):
         """Apply a server macro order through the same local terrain driver."""

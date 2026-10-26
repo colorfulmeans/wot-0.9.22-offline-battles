@@ -4,7 +4,7 @@ import copy
 import math
 import random
 
-from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime
+from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime, route_network
 
 ATTEMPT_SECONDS = 20.
 
@@ -47,57 +47,76 @@ def _catalog(runtime, team):
     return result
 
 
-def select_route(runtime, state, failed):
-    """Run navigation checks only at home, then reserve the least occupied road."""
+def _road(runtime, state, row):
+    points = [[p[0], p[1], 0] for p in row['waypoints']]
+    source = bot_tactics.route_config(runtime._bot_tactics, runtime._navigation_map_name,
+                                     row['id'], state['team'], row['waypoints'])
+    branch = (source or {}).get('defense')
+    if branch:
+        junction = route_network.nodes(source).index(branch['junction'])
+        # Reverse the home connector, then continue forward after its junction.
+        points = [list(p[:2])+[0] for p in reversed(branch['points'])] + points[junction+1:]
+    return points
+
+
+def select_route(runtime, state, failed, prefer_spg=False):
+    """At home, reserve an attack lane or a least occupied effective road."""
     rows = _catalog(runtime, state['team'])
-    if not rows:
-        return copy.deepcopy(failed)
-    graph = bot_tactics_runtime.graph_view(runtime._navigation_map_name, runtime.baked_graph)
+    settings = bot_tactics.map_settings(runtime._bot_tactics, runtime._navigation_map_name)
+    artillery = [dict(id=r['id'], points=copy.deepcopy(r['points']), artillery=True,
+                      road_ids=[r['id']]) for r in settings.get('routes', ())
+                 if r['team'] == state['team'] and r.get('purpose') == 'spg_attack' and not r.get('disabled')]
     groups = {}
     for row in rows:
-        points = [[p[0], p[1], 0] for p in row['waypoints']]
-        key = geometry(points)
-        group = groups.setdefault(key, dict(id=row['id'], points=points, ids=set()))
-        group['ids'].update((row['id'], row.get('_route_family') or row.get('_editor_source') or row['id']))
-    valid = []
-    for key, group in groups.items():
-        if bot_tactics_runtime.validate_route(graph, dict(team=state['team'], points=group['points'])) is not None:
-            continue
-        # Check the entry, not the nearest later node: switching must not cut
-        # across the map to the middle of a newly selected road.
-        entry = [[state['x'], state['z'], 0], group['points'][0]]
-        if bot_tactics_runtime.validate_route(graph, dict(team=state['team'], points=entry)) is not None:
-            continue
-        valid.append((key, group))
-    alternatives = [(key, group) for key, group in valid if key != geometry(failed['points'])]
-    if not alternatives:
-        return copy.deepcopy(failed)
+        key = geometry(row['waypoints'])
+        group = groups.setdefault(key, dict(id=row['id'], points=_road(runtime,state,row),
+                                            road_geometry=key, ids=set()))
+        group['ids'].update(value for value in (row['id'], row.get('_route_family'),
+                           row.get('_editor_source')) if value)
+    candidates = artillery + [dict(id=g['id'], points=g['points'], borrowed=True,
+                        road_geometry=g['road_geometry'], road_ids=sorted(g['ids'])) for g in groups.values()]
     orders = getattr(runtime, '_server_orders', {})
-    director = getattr(getattr(runtime, 'adapter', None), 'director', None)
-    agents = getattr(director, 'agents', {})
+    agents = getattr(getattr(getattr(runtime, 'adapter', None), 'director', None), 'agents', {})
     occupied = []
     for other in runtime._ordered_states():
-        if other['id'] == state['id'] or other['team'] != state['team'] or not other.get('alive', True):
-            continue
+        if other['id'] == state['id'] or other['team'] != state['team'] or not other.get('alive', True):continue
         attack = other.get('_authored_spg_attack')
         if attack:
-            occupied.append((geometry(attack['points']), set(attack.get('road_ids', ()))))
-            continue
-        order = orders.get(other['id']) or {}
-        agent = agents.get(other['id']) or {}
-        route = (next((r for r in rows if r['id'] == order.get('route_id')), None)
-                 or other.get('route') or agent.get('route') or {})
-        ids = set(value for value in (order.get('route_id'), route.get('id'),
-                  route.get('_route_family'), route.get('_editor_source')) if value)
-        occupied.append((geometry(route.get('waypoints', ())), ids))
-    ranked = []
-    for key, group in alternatives:
-        used = sum(key == shape or bool(group['ids'] & ids) for shape, ids in occupied)
-        ranked.append((used, group))
-    minimum = min(used for used, group in ranked)
-    selected = random.choice([group for used, group in ranked if used == minimum])
-    return dict(id=selected['id'], points=copy.deepcopy(selected['points']), borrowed=True,
-                road_ids=sorted(selected['ids']))
+            occupied.append((tuple(tuple(p) for p in attack.get('road_geometry', geometry(attack['points']))),
+                             set(attack.get('road_ids', (attack['id'],)))))
+        else:
+            order = orders.get(other['id']) or {}
+            route = (next((r for r in rows if r['id'] == order.get('route_id')),None)
+                     or other.get('route') or (agents.get(other['id']) or {}).get('route') or {})
+            occupied.append((geometry(route.get('waypoints', ())),set(v for v in
+                (order.get('route_id'),route.get('id'),route.get('_route_family'),route.get('_editor_source')) if v)))
+    def usage(r):
+        shape=tuple(tuple(p) for p in r.get('road_geometry', geometry(r['points'])))
+        return sum(shape == old or bool(set(r.get('road_ids', ())) & ids) for old,ids in occupied)
+    # Navigation is checked on acquisition, not on every driving update.
+    graph = None
+    candidates=[r for r in candidates if not (r.get('artillery') and usage(r)>=3)
+                and (not failed or geometry(r['points'])!=geometry(failed['points']))]
+    def rank(r):return (0 if prefer_spg and r.get('artillery') else 1,usage(r))
+    candidates.sort(key=rank)
+    valid = []
+    selected_rank=None
+    for candidate in candidates:
+        # Higher-occupancy roads cannot win once this tier has a valid road.
+        # Check ties to retain uniform random selection without proving every
+        # road again for every arriving artillery vehicle.
+        if selected_rank is not None and rank(candidate)!=selected_rank:break
+        if graph is None:
+            try:graph=bot_tactics_runtime.graph_view(runtime._navigation_map_name,runtime.baked_graph)
+            except (KeyError,ValueError,TypeError):return copy.deepcopy(failed) if failed else None
+        if bot_tactics_runtime.validate_route(graph,dict(team=state['team'],points=candidate['points'])) is not None:continue
+        base=runtime.baked_graph.get('objective_bases',((state['x'],state['z']),)*2)[state['team']-1]
+        entry=[[base[0],base[1],0],candidate['points'][0]]
+        if bot_tactics_runtime.validate_route(graph,dict(team=state['team'],points=entry)) is not None:continue
+        valid.append(candidate)
+        selected_rank=rank(candidate)
+    if not valid:return copy.deepcopy(failed) if failed else None
+    return copy.deepcopy(random.choice(valid))
 
 
 def pause(active, now):

@@ -463,6 +463,7 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
                         all(any(z['id'] == 'spg_%d_%s' % (side, family) and z['team'] == side
                                 for z in zones) for side in (1, 2))):
                     paired_families.add(family)
+    used_zones={1:set(),2:set()}
     ordinals = {}
     for unused_tag, ordinal, pair in initial_allocation.ordered_pairs(states):
         for actor in pair:
@@ -475,12 +476,15 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
         choices = [z for z in zones if z['team'] == state['team']]
         if not choices:
             continue
+        if len(reservations[state['team']])>=3:
+            outcomes[state['id']]='manual_capacity_full'
+            continue
         shape = state['collision_shape']
         clearance = math.hypot(float(shape[0]), float(shape[1])) + 2.0
         distances = grid.distances((state['x'], state['y'], state['z']))
         candidates = []
         for zone in choices:
-            if zone['id'] in excluded_zones:
+            if zone['id'] in excluded_zones or zone['id'] in used_zones[state['team']]:
                 continue
             key = (zone['id'], clearance)
             if key not in cache:
@@ -528,6 +532,7 @@ def assign_manual_positions(profile, name, graph, states, mode='regular',
                     geometry='baked_checked', fire_validation='runtime_required')
         if config.canonical_manual_plan(plan, profile, name, state['vehicle'], state['team']) is None:
             raise config.TacticsError('Generated manual plan failed its own contract')
+        used_zones[state['team']].add(zone['id'])
         plans[state['id']] = plan
         outcomes[state['id']] = 'manual_selected'
         reservations[state['team']].append((p, clearance))

@@ -115,7 +115,7 @@ class CatalogSchemaTests(unittest.TestCase):
         self.assertNotIn('manifest', {row['map'] for row in report['maps']})
         self.assertEqual(39, sum(row['status'] == 'source_not_catalogued'
                                  for row in report['maps']))
-        self.assertEqual(12, sum(len(row.get('plans', {})) for row in report['maps']))
+        self.assertEqual(8, sum(len(row.get('plans', {})) for row in report['maps']))
 
     def test_generated_runtime_module_matches_authoring_json(self):
         spec=importlib.util.spec_from_file_location('spg_catalog_tool',ROOT/'tools/spg_position_catalog.py')
@@ -135,13 +135,16 @@ class RealGraphInitialSelectionTests(unittest.TestCase):
             plans,outcomes=positions.assign_initial_positions(name,graph,states)
             cls.cases[name]=(graph,states,plans,outcomes,old)
 
-    def test_both_real_graphs_allocate_three_distinct_plans_per_side(self):
+    def test_both_real_graphs_reserve_distinct_reachable_regions_per_side(self):
         for name,(graph,states,plans,outcomes,old) in self.cases.items():
-            self.assertEqual({s['id']:'assigned' for s in states},outcomes,name)
-            self.assertEqual(6,len(plans))
+            self.assertEqual({s['id']:('assigned' if s['id'] in plans else 'no_reachable_unreserved_sourced_cell') for s in states},outcomes,name)
+            self.assertEqual(4,len(plans))
             self.assertEqual(old,states,'selection must not move spawns or mutate routes')
             for team in (1,2):
-                group=[plans[s['id']] for s in states if s['team']==team]
+                group=[plans[s['id']] for s in states if s['team']==team and s['id'] in plans]
+                self.assertGreater(len(group),0)
+                self.assertLessEqual(len(group),3)
+                self.assertEqual(len(group),len({p['zone'] for p in group}))
                 for i,a in enumerate(group):
                     for b in group[i+1:]:
                         self.assertGreaterEqual(math.hypot(a['point']['x']-b['point']['x'],a['point']['z']-b['point']['z']),
