@@ -7443,6 +7443,7 @@ class BotRuntime(object):
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
+            name=state.get('name'), vehicle=state.get('vehicle'), team=state.get('team'),
             position=position, origin=previous[0], age=now-previous[1],
             yaw=state.get('yaw'), speed=state.get('speed'),
             requested_controls=[command.get('throttle'), command.get('turn')],
@@ -7452,6 +7453,10 @@ class BotRuntime(object):
             blockers=[command.get('forward_blocked_by'), command.get('reverse_blocked_by')],
             last_execution={key:outcome.get(key) for key in (
                 'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
+            last_execution_age=(now-outcome['at']) if isinstance(outcome.get('at'), (int,float)) else None,
+            last_execution_clock='authority_time',
+            travel_task={key:(order.get('travel_task') or {}).get(key)
+                for key in ('kind', 'index', 'route_id')},
             recovery_count=driver.get('recovery_count'),
             driver_clock=driver.get('clock'),
             short_escape_observation=ai_driver.LocalDriver.short_escape_diagnostics(driver),

@@ -40,7 +40,8 @@ class RecoveryPocketLogTests(unittest.TestCase):
         harness.setUp()
         self.addCleanup(harness.doCleanups)
         runtime = harness.runtime
-        state = dict(id=7, x=0., y=0., z=0., yaw=1., speed=2.,
+        state = dict(id=7, name='Recovery test', vehicle='ussr:R81_IS8', team=2,
+            x=0., y=0., z=0., yaw=1., speed=2.,
             _execution_window={'actions': [{'outcome': {
                 'at': 29., 'yaw': 0.5, 'final': [0., 0., 1.],
                 'unbounded_history': list(range(10000))}}]})
@@ -48,6 +49,7 @@ class RecoveryPocketLogTests(unittest.TestCase):
                        throttle=-1., turn=1., forward_blocked_by=19,
                        planning_receipt=dict(id=[1,7,3,10.],sampled_at=10.),
                        partial_pivot_search=dict(reason='all_arcs_refused', candidates=[]))
+        runtime._server_orders[7] = dict(travel_task=dict(kind='defense',index=2,route_id='old'))
         from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
         with mock.patch.object(harness.module, 'detailed_enabled', return_value=False), \
                 mock.patch.object(logs, 'write_json_record') as writer:
@@ -66,6 +68,10 @@ class RecoveryPocketLogTests(unittest.TestCase):
             self.assertEqual([0., 0.], row['applied_controls'])
             self.assertEqual([19, None], row['blockers'])
             self.assertEqual(0.5, row['last_execution']['yaw'])
+            self.assertEqual(1., row['last_execution_age'])
+            self.assertEqual('authority_time', row['last_execution_clock'])
+            self.assertEqual(('Recovery test','ussr:R81_IS8',2),(row['name'],row['vehicle'],row['team']))
+            self.assertEqual(dict(kind='defense',index=2,route_id='old'),row['travel_task'])
             self.assertNotIn('unbounded_history', row['last_execution'])
             self.assertEqual([1,7,3,10.], row['decision_id'])
             self.assertEqual(10., row['decision_sampled_at'])

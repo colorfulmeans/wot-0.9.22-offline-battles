@@ -32,6 +32,7 @@ class RouteTasksMixin:
         self._previous_combat = set()
         self._previous_player = {}
         self._travel_graph_cache = {}
+        self._empty_task_reports = 0
 
     def _task_route(self, bot):
         return (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
@@ -109,7 +110,9 @@ class RouteTasksMixin:
         if config and config.get('defense'):
             junction = route_network.nodes(config).index(config['defense']['junction'])
         end = junction if kind in ('defense', 'guard') and index >= junction >= 0 else 0
-        path = [point(source[i]) for i in range(index, end-1, -1)]
+        # Unconfigured artillery legitimately has no ordinary route. It still
+        # receives a base target below, using the existing local navigation.
+        path = [point(source[i]) for i in range(index, end-1, -1)] if source else []
         if kind in ('defense', 'guard'):
             if end == junction and config:
                 path += [point(p) for p in config['defense']['points'][1:]]
@@ -117,6 +120,17 @@ class RouteTasksMixin:
         elif target_route:
             path.append(point(target_route['waypoints'][0]))
         if not path:path = [point(bot['state'])]
+        if (not source and os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1'
+                and self._empty_task_reports < 64):
+            self._empty_task_reports += 1
+            try:
+                print('[Offline LAN 0.9.22] ROUTE TASK EMPTY SOURCE '+json.dumps(dict(
+                    round=self._round_id, map=self.tactics_map, bot=bot['id'], team=bot['team'],
+                    class_tag=bot['profile'].get('class_tag'), kind=kind,
+                    route_id=route.get('id'), source_count=0, points=path,
+                    base_id=(base or {}).get('base_id'), policy='existing_target_navigation'),sort_keys=True))
+            except Exception:
+                pass  # Diagnostic output must not prevent a valid task.
         task = dict(kind=kind, route_id=str(route.get('id') or ''), route=route,
             source_index=index, points=path, index=0, since=now, best=float('inf'),
             target_route=target_route, until=now+180., base=copy.deepcopy(base), root_index=max(0,index-end), last_source=index,

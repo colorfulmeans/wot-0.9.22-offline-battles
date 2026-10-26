@@ -14,6 +14,40 @@ from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     set_ground_decal_visibility, stop_ground_effects, stop_bound_visual_effects)
 
 
+def _observe_model_refresh_callback(compatibility, appearance, model_state):
+    """Retain scalar async ordering evidence only at the diagnostic entrance."""
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+        if not detailed_enabled():
+            return None
+        sequence = getattr(compatibility, '_model_refresh_sequence', 0)+1
+        compatibility._model_refresh_sequence = sequence
+        vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
+        damage = getattr(appearance, '_CompoundAppearance__currentDamageState', None)
+        row = dict(sequence=sequence, appearance_identity=id(appearance),
+            vehicle_identity=id(vehicle), vehicle=getattr(vehicle, 'id', None),
+            callback_state=str(model_state),
+            before_state=str(getattr(damage, 'modelState', None)), result='entered')
+        history = getattr(compatibility, '_model_refresh_callbacks', [])
+        compatibility._model_refresh_callbacks = (history+[row])[-16:]
+        return row
+    except Exception:
+        return None
+
+
+def _run_model_refresh_callback(compatibility, appearance, model_state, resources):
+    row = _observe_model_refresh_callback(compatibility, appearance, model_state)
+    try:
+        result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
+    except AssertionError:
+        if row is not None:row['result'] = 'assertion'
+        _report_model_refresh_failure(compatibility, appearance, model_state, resources)
+        raise
+    else:
+        if row is not None:row['result'] = 'returned'
+        return result
+
+
 def _report_model_refresh_failure(compatibility, appearance, model_state, resources):
     """Observe a stock async refusal; do not hide or reinterpret its assertion."""
     try:
@@ -32,7 +66,12 @@ def _report_model_refresh_failure(compatibility, appearance, model_state, resour
                                            'isCurrentModelDamaged',None),
             appearance_type=type(appearance).__name__,
             resource_count=len(resources) if resources is not None else None,
-            battle_active=compatibility._battle_active))
+            battle_active=compatibility._battle_active,
+            appearance_identity=id(appearance), vehicle_identity=id(vehicle),
+            callback_history=[dict(row) for row in getattr(
+                compatibility, '_model_refresh_callbacks', ())],
+            assertion_frames=[dict(file=frame[0], line=frame[1], function=frame[2])
+                for frame in traceback.extract_tb(sys.exc_info()[2])[-8:]]))
     except Exception:
         pass  # A failed diagnostic must never replace the original assertion.
 
@@ -2550,10 +2589,7 @@ class OfflineCompatibility(object):
             outer_appearance = compatibility._compound_refreshing_models
             compatibility._compound_refreshing_models = appearance
             try:
-                return original(appearance, model_state, resource_list)
-            except AssertionError:
-                _report_model_refresh_failure(compatibility,appearance,model_state,resource_list)
-                raise
+                return _run_model_refresh_callback(compatibility, appearance, model_state, resource_list)
             finally:
                 compatibility._compound_refreshing_models = outer_appearance
 

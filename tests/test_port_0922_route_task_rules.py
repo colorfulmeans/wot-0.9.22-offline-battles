@@ -1,5 +1,8 @@
 """Confirmed task ownership, soft lane capacity and command admission."""
 import copy
+import contextlib
+import io
+import json
 import unittest
 from unittest import mock
 
@@ -101,6 +104,66 @@ class CommandCooldownTests(unittest.TestCase):
 
 
 class RouteTaskTests(unittest.TestCase):
+    def test_empty_source_diagnostic_is_opt_in_bounded_and_resets_per_round(self):
+        planner=BotPlanner()
+        bot=planner._alive_bots([_bot(11,1,0,{},'SPG')],[_state(11,1,100.,100.)])[0]
+        base=dict(base_id='own',point=dict(x=0.,y=0.,z=0.),radius=30.)
+        output=io.StringIO()
+        with mock.patch.dict('os.environ',WOT_OFFLINE_DIAGNOSTICS='0'),contextlib.redirect_stdout(output):
+            planner._task_begin(bot,'defense',base,now=0.)
+        self.assertEqual('',output.getvalue())
+        with mock.patch.dict('os.environ',WOT_OFFLINE_DIAGNOSTICS='1'),contextlib.redirect_stdout(output):
+            for unused in range(70):planner._task_begin(bot,'defense',base,now=0.)
+        rows=[json.loads(line.split('ROUTE TASK EMPTY SOURCE ',1)[1]) for line in output.getvalue().splitlines()]
+        self.assertEqual(64,len(rows))
+        self.assertEqual([base['point']],rows[-1]['points'])
+        planner.reset(8)
+        self.assertEqual(0,planner._empty_task_reports)
+        with mock.patch.dict('os.environ',WOT_OFFLINE_DIAGNOSTICS='1'), \
+                mock.patch('builtins.print',side_effect=OSError('log unavailable')):
+            task=planner._task_begin(bot,'defense',base,now=1.)
+        self.assertEqual([base['point']],task['points'])
+
+    def test_empty_route_defense_replays_all_four_failure_sites(self):
+        for map_name, actor, team, slot in (
+                ('95_lost_city',30,2,14), ('63_tundra',30,2,14),
+                ('112_eiffel_tower_ctf',30,2,14), ('92_stalingrad',14,1,13)):
+            with self.subTest(map=map_name):
+                planner=BotPlanner();planner.tactics_map=map_name
+                manifest=[_bot(actor,team,slot,dict(id='map_route',waypoints=[]),'SPG')]
+                states=[_state(actor,team,100.,100.)]
+                base=dict(base_id='own',point=dict(x=0.,y=0.,z=0.),radius=30.)
+                with mock.patch.object(planner,'_update_base_defense',return_value={team:{actor:base}}):
+                    orders=planner.build_orders(manifest,states,[],1.)['orders']
+                self.assertEqual(1,len(orders))
+                self.assertEqual(base['point'],orders[0]['move_position'])
+                self.assertEqual('base_defense',orders[0]['combat_mode'])
+                self.assertEqual([base['point']],planner._travel_tasks[actor]['points'])
+
+    def test_missing_empty_and_single_point_sources_keep_base_task_lifecycle(self):
+        for tag in ('SPG','heavyTank'):
+            for route in ({},dict(id='map_route'),dict(id='map_route',waypoints=[]),
+                          _route('one',[(50,50,False)])):
+                for kind in ('defense','guard'):
+                    with self.subTest(tag=tag,route=route,kind=kind):
+                        planner=BotPlanner()
+                        bot=planner._alive_bots([_bot(11,1,0,route,tag)],[_state(11,1,100.,100.)])[0]
+                        base=dict(base_id='own',point=dict(x=0.,y=0.,z=0.),radius=30.)
+                        task=planner._task_begin(bot,kind,base,now=1.)
+                        self.assertEqual(base['point'],task['points'][-1])
+                        if not route.get('waypoints'):
+                            self.assertEqual([base['point']],task['points'])
+                        bot['state'].update(x=0.,z=0.)
+                        order=dict(combat_mode='engage',target_id=99,fire_allowed=True)
+                        planner._task_publish(order,bot,task,2.)
+                        self.assertTrue(task['arrived'])
+                        self.assertEqual('engage',order['combat_mode'])
+                        self.assertEqual(99,order['target_id'])
+                        self.assertTrue(order['fire_allowed'])
+                        self.assertEqual(0.,order['throttle_override'])
+                        planner._task_apply(self.order(),bot,3.)
+                        self.assertNotIn(11,planner._travel_tasks)
+
     def test_unconfigured_spg_does_not_finish_an_ordinary_route_at_start(self):
         planner=BotPlanner()
         manifest=[_bot(11,1,0,_route('normal',[(0,0,False),(0,300,False)]),'heavyTank'),

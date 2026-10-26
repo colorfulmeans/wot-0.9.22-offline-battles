@@ -594,3 +594,53 @@ with native-simulation-unavailable errors; retain that result separately from
 the Linux-semantics reference run. All 209 client modules compile under pinned
 Python 2.7.18. CI and independent final-package evidence are recorded in the
 delivery handoff rather than inferred from these local reference checks.
+
+## Build 532 eight-match reproduction and empty-route correction (2026-10-26)
+
+Diagnostic session `20261026T050318Z-ead8c7d38067` retested the seven maps
+previously terminated by the server and Stalingrad. El Hallouf, Canada,
+Prokhorovka and Cliff finished normally. Lost City, Tundra, Paris and Stalingrad
+terminated in `RouteTasksMixin._task_begin` at the reverse source comprehension.
+All four complete traces show `map_route`, zero waypoints and `base_defense`:
+bot 30/team 2 in the first three, bot 14/team 1 in Stalingrad. The failure is
+an empty-source indexing defect, not evidence that these four meshes are wrong.
+
+Skip only the nonexistent reverse-source leg. Keep the existing base target,
+circle arrival, local navigation, safe-time release and artillery return owners.
+Configured ordinary roads still reverse their authored points and defense
+branches. Do not borrow another vehicle class's road or catch/retry a failed
+server tick. Replay all four captured map/actor combinations through the real
+planner's order-building path; first demonstrate the old IndexError, then
+assert a nonempty direct-base task. Cover absent/empty/single-point sources,
+artillery and ordinary vehicles, automatic defense and player guard, arrival,
+combat preservation and release. The empty-source diagnostic is opt-in, capped
+at 64 reports per round and cannot prevent task creation if output fails.
+
+Paris also recorded a WZ132-1 model-refresh AssertionError at 13:46:40:
+callback `destroyed`, current state `exploded`. This preceded, but did not cause,
+the 13:49:59 server indexing failure. Preserve the native callback and exception;
+record the last 16 callback entries, sequence, scalar appearance/vehicle identity,
+state before entry, return/assertion outcome and assertion frames. No reference
+to a native appearance/entity is retained. The existing eight-refusal report cap
+remains. Basic entry retains no diagnostic history. Test return values, original
+exception identity, bounded history and formatter failure without changing the
+appearance or suppressing assertions.
+
+The Stalingrad T-10 died early in this run, so its previous persistent wreck
+pocket was not reproduced. Existing 15-second recovery receipts now also identify
+the vehicle/name/team, travel-task owner and age/clock of the last execution
+receipt. Old execution displacement must not be mistaken for this decision's
+movement. Read existing receipts only; do not add a physical query or alter
+recovery/combat rules. The eight captured worst worker frames range from
+175.696 to 295.172 ms, not average ping. The latter contains 275.86 ms of Bot
+update and 124.121 ms oldest queue wait. These samples do not justify speculative
+cadence, collision-budget or native-migration changes. No live performance gain
+is claimed. Subsequent owner roof-crush testing confirmed no cross-round blue
+name; team-killer behavior is outside this correction.
+
+Validation starts with focused task/model/recovery/diagnostic tests, then the
+existing route, artillery, capture, command, combat and lifecycle regressions.
+All client sources must compile under Python 2.7.18. Exact-commit CI, downloaded
+package byte comparisons and the next native-client acceptance are separate
+evidence boundaries; retain the known Airfield 15-FPS and opposed Great Wall
+failures rather than weakening assertions or describing full CI as green.
