@@ -42,6 +42,12 @@ for the new mixin. Include it in the payload and verify a cold staged-server
 import with isolated Python paths, in addition to the actual packaged protocol
 startup gate. Do not use the rejected package for native acceptance.
 
+Adapt the older disabled-vehicle handoff test to supply actual destroyed
+engine/left-track/right-track state instead of mocking pressure-donor
+eligibility. Recovery and donor admission are intentionally separate now:
+an empty but mobile vehicle must recover, while real motor damage still pauses
+its clock. This is a test-only correction; retain all hold/command assertions.
+
 Coverage includes inventory negatives and round lifecycle, once-only handoff,
 external-command rejection versus own recovery, timed/permanent waits, retained
 aim with navigation hull facing, circle hold/re-entry, no-route fallback, exact

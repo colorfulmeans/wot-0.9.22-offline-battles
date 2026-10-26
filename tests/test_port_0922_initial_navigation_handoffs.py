@@ -124,15 +124,16 @@ class InitialNavigationHandoffTests(unittest.TestCase):
                                      {key: waypoint[key] for key in ('x', 'y', 'z')})
 
     def test_holds_commands_and_disabled_vehicles_do_not_accrue_stall(self):
-        for override, command, disabled in ((0., False, False), (-1., False, False),
-                                            (1., True, False), (1., False, True)):
+        for override, command, disabled in ((0., False, None), (-1., False, None),
+                                            (1., True, None), (1., False, 'engineHealth'),
+                                            (1., False, 'leftTrackHealth'), (1., False, 'rightTrackHealth')):
             planner, bot = self.route_scene()
+            if disabled:bot['state']['critical']={'destroyed':[disabled]}
             for now in range(25):
                 order = self.route_order(planner, bot, now, 'advance', override)
                 if command:
                     order['team_command'] = 'move'
-                with mock.patch.object(planner, '_route_donor_eligible', return_value=not disabled):
-                    planner._reroute_wreck_stall(order, bot, [bot], now)
+                planner._reroute_wreck_stall(order, bot, [bot], now)
                 self.assertNotIn('route_point_skip_reason', order)
             self.assertNotIn(1, planner._wreck_route_progress)
 
