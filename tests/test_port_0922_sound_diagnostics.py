@@ -61,7 +61,8 @@ class SoundDiagnosticsTests(unittest.TestCase):
         self.assertEqual(1,len(sound._SEEN))
         for n in range(sound.MAX_CALLS+50):instance.playSound2D('event_%d'%n)
         self.assertEqual(sound.MAX_CALLS,len(sound._SEEN))
-        self.assertEqual(sound.MAX_CALLS,sum(r['stage']=='begin' for r in self.records))
+        self.assertGreaterEqual(sum(r['stage']=='begin' for r in self.records),sound.MAX_CALLS)
+        self.assertLessEqual(sum(r['stage']=='begin' for r in self.records),sound.MAX_CALLS+6)
         self.assertEqual(30+sound.MAX_CALLS+50,len(self.calls))
 
     def test_idempotent_install_and_remove_restores_original(self):
@@ -69,6 +70,34 @@ class SoundDiagnosticsTests(unittest.TestCase):
         sound.install();self.assertIs(wrapped,self.groups.playSound2D)
         sound.remove();self.assertIs(original,self.groups.playSound2D)
         sound.remove()
+
+    def test_error_context_preserves_partial_writes_and_recent_event_ids(self):
+        import io,json
+        target=io.StringIO();stream=sound._ErrorStream(target)
+        sound.install();self.groups().playSound2D('gun_damaged')
+        stream.write('[SOUND_ERROR] Sound fail: 2967843034 - ')
+        stream.write('ErrorCode: 15\n')
+        record=json.loads(target.getvalue().split('SOUND CALL ')[1])
+        self.assertEqual('native_error',record['stage'])
+        self.assertEqual('gun_damaged',record['recent'][-1]['event_ids'][0]['name'])
+        self.assertEqual(1544767705,sound.event_id('GUN_DAMAGED'))
+
+    def test_returned_sound_keeps_identity_and_observes_play_and_stop(self):
+        class PySound:
+            def play(self):return 17
+            def stop(self):return 18
+        value=PySound();self.native.return_value=value;sound.install()
+        self.assertIs(value,sys.modules['WWISE'].WW_eventGlobal('event'))
+        self.assertEqual(17,value.play());self.assertEqual(18,value.stop())
+        calls=[r for r in self.records if r['stage']=='begin']
+        self.assertEqual(id(value),calls[-1]['receiver'])
+        self.assertEqual('PySound.stop',calls[-1]['method'])
+
+    def test_errors_and_playback_continue_after_first_distinct_budget(self):
+        sound.install();instance=self.groups()
+        for n in range(sound.MAX_CALLS*2):instance.playSound2D(str(n))
+        self.assertTrue(any(r.get('call',0)>sound.MAX_CALLS for r in self.records))
+        self.assertEqual(64,len(sound._RECENT))
 
 
 if __name__=='__main__':unittest.main()

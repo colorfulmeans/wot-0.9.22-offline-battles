@@ -7037,7 +7037,15 @@ class BattleState:
                 raise ValueError("bot reload started without a shot")
             if loaded != previous_loaded and not fresh and clip_size > 1:
                 raise ValueError("bot loaded shell changed inside magazine")
-            expected_ready_clip = min(clip_size, after[loaded]) if full_boundary else previous_clip
+            # Initial full reload publishes the descriptor clip until the
+            # first load completes, including zero/partial total inventory.
+            # Both ready and still-loading checkpoints must conserve stock.
+            initial_loading = (fresh and fire_delta == 0 and
+                               int(previous.get('fire_seq', 0)) == 0 and
+                               float(previous.get('reload_time', 0.0)) > 0.0 and
+                               reload_time > 0.0 and loaded == previous_loaded)
+            expected_ready_clip = (previous_clip if initial_loading else
+                min(clip_size, after[loaded]) if full_boundary else previous_clip)
             if clip_size > 1 and clip != expected_ready_clip:
                 raise ValueError("bot clip changed outside reload")
         elif pending:

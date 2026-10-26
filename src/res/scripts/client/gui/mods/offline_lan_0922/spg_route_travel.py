@@ -3,7 +3,7 @@
 import copy
 import math
 
-from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime, route_network, spg_route_recovery, spg_modes, empty_ammo
+from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime, route_network, spg_route_recovery, spg_modes, empty_ammo, spg_positions
 
 
 def xy(value):
@@ -80,7 +80,7 @@ def apply(runtime,state,order,now):
             used=state.get('_authored_spg_zone') or zone
             initial=state.get('_spg_initial') or {}
             prior=initial if used and initial.get('zone')==used['id'] else state.get('_authored_spg_used_initial') or initial
-            state['_authored_spg_return_initial']=copy.deepcopy(prior)
+            state['_authored_spg_return_initial']=copy.deepcopy(prior) if prior else None
             points=_return_points(active,zone,pose)
             active=_task(runtime,state,'defense',points,('defense',))
             state['_authored_spg_travel']=active
@@ -95,8 +95,14 @@ def apply(runtime,state,order,now):
             else:active=_task(runtime,state,resume['kind'],resume['points'],resume['identity'])
         else:active=None
         original=state.pop('_authored_spg_return_initial',None)
-        if original is not None and state['_spg_mode'] == 'deployment':
-            state['_spg_initial']=original;state.pop('_spg_arrived_identity',None)
+        if state['_spg_mode'] == 'deployment':
+            original = spg_positions.canonical_plan(original,
+                map_name=runtime._navigation_map_name, vehicle=state.get('vehicle'),
+                team=state['team'], tactics=runtime._bot_tactics)
+            if original is not None:
+                state['_spg_initial']=original;state.pop('_spg_arrived_identity',None)
+            elif state.get('_spg_initial') is not None:
+                spg_modes.release_parking(runtime,state)
         state['_authored_spg_travel']=active
     if not defense:
         if state['_spg_mode'] == 'deployment':

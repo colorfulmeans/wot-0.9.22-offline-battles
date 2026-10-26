@@ -13692,7 +13692,8 @@ class BotRuntime(object):
         live_sources = dict((team, []) for team in (1, 2))
         for state in self._ordered_states():
             team = int(state.get('team', 0))
-            if state.get('alive', True) and team in live_sources:
+            if (state.get('alive', True) and team in live_sources and
+                    not empty_ammo.confirmed(state, state.get('profile'))):
                 live_sources[team].append(int(state['id']))
         source_signature = tuple(
             (team, tuple(live_sources[team])) for team in (1, 2))
@@ -13723,7 +13724,8 @@ class BotRuntime(object):
         source_id, target_kind, target_id = key
         source = self.states.get(int(source_id))
         if (not isinstance(source, dict) or
-                not source.get('alive', True)):
+                not source.get('alive', True) or
+                empty_ammo.confirmed(source, source.get('profile'))):
             return None, None, None
         source_team = int(source.get('team', 0))
         target_key = (source_team, target_kind, int(target_id))
@@ -13764,6 +13766,8 @@ class BotRuntime(object):
         This is scheduling only. A house still denies the static lane and
         final fire retains its independent native check.
         """
+        if empty_ammo.confirmed(source, source.get('profile')):
+            return None
         close = [target for target in contacts or ()
                  if target.get('direct_visible') and target.get('alive', True)
                  and int(target.get('team', 0)) != int(source.get('team', 0))
@@ -14088,6 +14092,9 @@ class BotRuntime(object):
             reason=('target_record_unavailable' if command.get('target_id') is not None
                 else 'no_selected_target') if target is None else 'spg_ballistic_owner')
         source['_target_execution_evidence'] = evidence
+        if empty_ammo.confirmed(source, source.get('profile')):
+            evidence['reason'] = 'confirmed_empty_tracking_only'
+            return command, target
         if (target is None or
                 (source.get('profile') or {}).get('class_tag') == 'SPG'):
             return command, target
@@ -17252,7 +17259,7 @@ class BotRuntime(object):
                     target_id, targets[target_id], live_players)
             else:
                 target = None
-            if target is not None:
+            if target is not None and not empty_ammo.confirmed(state, state.get('profile')):
                 selected_key = (
                     int(state['id']), target.get('kind'),
                     int(target.get('network_id', target.get('id', 0))))

@@ -20943,6 +20943,28 @@ class BotRuntimeTests(unittest.TestCase):
             1.1, 0.0, team_visibility, [], {}, set((11, 25)), {}, [16])
         self.assertNotIn(key, runtime._shot_lane_work_set)
 
+    def test_confirmed_empty_source_retires_lane_but_reload_and_unknown_do_not(self):
+        runtime = self.module.BotRuntime(1, firing_lane_probe=lambda *args:
+            self.fail('empty inventory cannot require a firing lane'))
+        runtime.states = {11:dict(id=11,team=1,alive=True,ammo_remaining=[0,0]),
+                          25:dict(id=25,team=2,alive=True)}
+        visibility={(1,'bot',25):True}
+        key=(11,'bot',25)
+        runtime._prepare_shot_lane_work(0.,visibility,0.)
+        self.assertNotIn(key,runtime._shot_lane_work_set)
+        runtime._queue_shot_lane_identity(key,0.,0.)
+        runtime._service_shot_lane_work(1.,0.,visibility,[],{},set((11,25)),{},[16])
+        self.assertNotIn(key,runtime._shot_lane_work_set)
+        command=dict(target_id=25,fire_allowed=False,move_position=(50,0,50))
+        target=dict(id=25)
+        with mock.patch.object(runtime,'_shot_clear',side_effect=AssertionError('no empty firing probe')):
+            result,retained=runtime._apply_blocked_direct_aim(runtime.states[11],command,target,1.,[16])
+        self.assertIs(command,result);self.assertIs(target,retained)
+        for inventory in ([1,0],None):
+            runtime.states[11].update(ammo_remaining=inventory,clip=0,reload_time=50.)
+            runtime._prepare_shot_lane_work(2.,visibility,2.)
+            self.assertIn(key,runtime._shot_lane_work_set)
+
     def test_lane_range_rejects_leave_service_slots_for_nearby_targets(self):
         calls = []
         runtime = self.module.BotRuntime(

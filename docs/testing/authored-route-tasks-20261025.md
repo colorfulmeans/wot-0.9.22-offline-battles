@@ -1,5 +1,59 @@
 # Authored route tasks and editor connections
 
+## Build-539 failure corrections and complete audio receipts (2026-10-27)
+
+The Ghost Town worker failure is reproduced by an unassigned artillery Bot
+entering and leaving base defense: the old owner restored `{}` as its initial
+parking plan. Defense return now restores only a canonical plan for the current
+map, vehicle, team and pinned tactics; absence remains absence. Optional plan
+identity extraction contains malformed records. Sortie/empty task ownership and
+ordinary combat are unchanged. Parking-return tests now use complete real-shape
+manual plans rather than a zone-only fake.
+
+The 65 restricted-ammunition rebases per match are reproduced independently:
+the service expected a reduced clip before the first full reload completed.
+Initial still-loading checkpoints now retain their published descriptor clip
+until the first reload completes; ready state uses the actual finite inventory.
+Stock conservation, subsequent magazine boundaries and fire gates remain
+enforced. Zero/one/partial/full inventories cover this boundary explicitly.
+
+Confirmed-empty sources no longer acquire or service firing-lane jobs, close
+fire priorities or stale blocked-fire reprobes. Unknown inventory and stocked
+reloads remain eligible. Targets, turret aim, ballistic aiming, movement,
+recovery, capture and already launched projectiles keep their existing owners.
+This removes demonstrated unused work without reducing motion/shot safety;
+no native frame-time improvement is assumed before the new acceptance matches.
+
+Diagnostic-only sound receipts now include parent calls, object identities,
+event-name short IDs, bank operations, callback requests, continued repeat
+sampling and a bounded recent-call buffer. Returned native objects are not
+replaced or retained. Available play/stop/event/callback methods are observed
+where the native type allows it; readonly methods are reported as a coverage
+limitation. Stream interception records asynchronous errors with recent context;
+the report collector separately scans raw native log writes that bypass Python.
+Every new event name is indexed independently of the first-call detail budget.
+Native exceptions, returns and playback arguments are preserved.
+
+Generated diagnostic reports add `sound-analysis.json`, containing session-only
+per-role errors, context, hook coverage, event-ID mappings and exact HIRC bank
+membership. Bank inspection runs during report generation, never on the worker
+frame loop. It distinguishes actual HIRC IDs from incidental binary byte hits.
+Malformed/unavailable audio resources are described without losing primary logs.
+An end-to-end report test excludes prior-session sound errors. The real #1513
+resource identifies `2967843034` as an event in `hangar_v2.bnk`; `gun_damaged`
+maps to a different event in `damaged_modules.bnk`. This establishes resource
+ownership, not the asynchronous error's root cause or a sound fix.
+
+Reference regression passes 35 files / 1,335 tests, with final targeted audio
+checks after diagnostic coverage additions. Launcher core passes 188 tests
+(one existing Windows symlink skip); report/audio tests pass 60 tests. The
+213 client scripts compile with CPython 2.7.18 and exact-client inspection
+passes. Logs are under `build/followup-540-*`. Final source/package CI and new
+five-match Windows acceptance are pending; the prior Great Wall/Fjord findings
+remain explicit. The requested match order is Default/Prokhorovka,
+Default/Ghost Town, one-round/Ghost Town, one-round/Prokhorovka,
+zero-round/Ghost Town, all with lineup 30 and diagnostic entry.
+
 ## Build 539 diagnostic acceptance (2026-10-27)
 
 The tested runtime is `1677b51f11f5c3a138dc6bc9961af8ff4918f3ad`,

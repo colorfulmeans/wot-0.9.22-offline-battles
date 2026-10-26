@@ -29,6 +29,11 @@ try:
 except ImportError:
     import report_environment
 
+try:
+    from . import sound_report
+except ImportError:
+    import sound_report
+
 
 SESSION_SCHEMA = 1
 SESSION_STATE_FILENAME = "latest-error-report-session.json"
@@ -1036,6 +1041,7 @@ def create_report(now=None):
     included_roles = []
     included_files = []
     collected = []
+    sound_scanners = {}
     try:
         with zipfile.ZipFile(
                 temporary, "w", compression=zipfile.ZIP_DEFLATED,
@@ -1050,7 +1056,9 @@ def create_report(now=None):
                 stream, length = opened
                 try:
                     archive_name = _ARCHIVE_FILENAMES[role]
-                    _write_slice(archive, archive_name, stream, length)
+                    scanner = sound_report.SoundScanner() if role in ('visible-client', 'hidden-worker') else None
+                    _write_slice(archive, archive_name, stream, length, observer=scanner)
+                    if scanner is not None:sound_scanners[role] = scanner
                 finally:
                     stream.close()
                 included_roles.append(role)
@@ -1093,6 +1101,13 @@ def create_report(now=None):
             # Generated last so that a failure inside them cannot cost the
             # logs and dumps that are already in the archive.
             if collected:
+                try:
+                    sound_text = sound_report.describe(sound_scanners, session.get('gameRoot'))
+                except Exception as error:
+                    sound_text = json.dumps(dict(error=str(error), stage='sound_report_collection'))
+                if sound_text:
+                    written = _write_text(archive, 'sound-analysis.json', sound_text)
+                    if written:included_files.append(written)
                 for archive_name, text in _describe_environment(
                         session, session.get("gameRoot")):
                     written = _write_text(archive, archive_name, text)

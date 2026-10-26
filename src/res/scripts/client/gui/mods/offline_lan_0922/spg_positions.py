@@ -206,8 +206,12 @@ def canonical_plan(raw, map_name=None, vehicle=None, catalog=None, team=None, ta
 def plan_identity(plan):
     if plan is None:
         return None
-    return (plan['catalog'], plan['map'], plan['zone'], plan['cell'],
-            tuple(plan['point'][axis] for axis in ('x', 'y', 'z')))
+    try:
+        return (plan['catalog'], plan['map'], plan['zone'], plan['cell'],
+                tuple(plan['point'][axis] for axis in ('x', 'y', 'z')))
+    except (KeyError, TypeError):
+        # An optional task receipt cannot terminate the simulation round.
+        return None
 
 
 class _Graph(object):

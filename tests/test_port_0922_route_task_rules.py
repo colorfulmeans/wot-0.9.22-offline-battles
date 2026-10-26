@@ -340,6 +340,13 @@ class AuthoredArtilleryTravelTests(unittest.TestCase):
         self.states=[self.state,self.regular]
         self.runtime=SimpleNamespace(_bot_tactics={'maps':{'08_ruinberg':self.settings}},_navigation_map_name='08_ruinberg',
             _ordered_states=lambda:self.states,baked_graph=dict(objective_bases=[[0,0],[0,300]],objective_base_radii=[30,30]))
+        from gui.mods.offline_lan_0922 import bot_tactics
+        self.state['vehicle']='test:artillery'
+        self.state['_spg_initial']=dict(schema=1,catalog=bot_tactics.digest(self.runtime._bot_tactics),
+            map='08_ruinberg',mode='regular',side='team1',zone='a',cell='manual',
+            source='launcher_manual_v1',vehicle=self.state['vehicle'],
+            point=dict(x=0,y=0,z=100),face=dict(x=0,y=0,z=200),radius=2.,clearance=4.,
+            geometry='baked_checked',fire_validation='runtime_required')
         self.join=mock.patch.object(self.travel,'_join',return_value=0).start();self.addCleanup(mock.patch.stopall)
         mock.patch.object(self.travel.bot_tactics_runtime,'graph_view',return_value=object()).start()
         mock.patch.object(self.travel.bot_tactics_runtime,'validate_route',return_value=None).start()

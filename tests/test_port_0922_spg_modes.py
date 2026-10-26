@@ -11,6 +11,16 @@ from gui.mods.offline_lan_0922 import spg_modes, spg_route_travel as travel, spg
 
 
 class ModeTests(unittest.TestCase):
+    def test_unassigned_defense_resume_never_restores_empty_parking(self):
+        mock.patch.object(travel,'_join',return_value=0).start()
+        state=self.states[3]
+        travel.apply(self.runtime,state,dict(combat_mode='base_defense',defense_base_id=1),0)
+        travel.apply(self.runtime,state,dict(combat_mode='artillery_deploy'),1)
+        self.assertNotIn('_spg_initial',state)
+        from gui.mods.offline_lan_0922 import spg_positions
+        for invalid in ({}, {'zone':'old'}, None):
+            self.assertIsNone(spg_positions.plan_identity(invalid))
+
     def setUp(self):
         self.states=[dict(id=i,team=1,alive=True,x=0.,y=0.,z=100.,vehicle='test',
                          profile={'class_tag':'SPG'},ammo_remaining=[10,0]) for i in range(1,7)]

@@ -365,6 +365,21 @@ class BotAmmunitionTests(unittest.TestCase):
         not_ready = dict(ready, reload_time=0.05)
         self.assertTrue(BattleState._validate_bot_ammo_transition(previous, not_ready))
 
+    def test_initial_partial_and_empty_magazine_waits_for_first_full_reload(self):
+        for inventory in ([1,0],[0,0],[2,0],[3,0]):
+            previous=dict(fire_seq=0,shell_index=0,next_shell_index=0,
+                ammo_remaining=inventory,ammo_reload_pending=False,
+                ammo_magazine_started=False,clip=3,clip_size=3,
+                reload_time=60.,reload_duration=60.)
+            for remaining in (59.,30.,.1):
+                current=dict(previous,reload_time=remaining)
+                self.assertTrue(BattleState._validate_bot_ammo_transition(previous,current))
+            ready=dict(previous,reload_time=0.,clip=min(3,sum(inventory)))
+            self.assertTrue(BattleState._validate_bot_ammo_transition(previous,ready))
+            illegal=dict(previous,ammo_remaining=[4,0],reload_time=59.)
+            with self.assertRaises(ValueError):
+                BattleState._validate_bot_ammo_transition(previous,illegal)
+
     def test_server_accepts_autoloader_shell_exhaustion_full_reload(self):
         previous = {
             'fire_seq': 0, 'shell_index': 0, 'next_shell_index': 0,
