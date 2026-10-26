@@ -111,6 +111,15 @@ def apply(runtime,state,order,now):
             # override the existing automatic capture/combat destination.
             state.pop('_authored_spg_travel', None)
             state.pop('_authored_spg_attack', None)
+            if empty and not state.get('_empty_spg_home_reached'):
+                base=runtime.baked_graph['objective_bases'][state['team']-1]
+                radius=runtime.baked_graph.get('objective_base_radii',(30.,30.))[state['team']-1]
+                if separation(pose,base)<=radius:state['_empty_spg_home_reached']=True
+                else:
+                    return dict(order,move_position=(base[0],state['y'],base[1]),
+                        face_position=(base[0],state['y'],base[1]),throttle_override=None,
+                        combat_mode='spg_route_travel',route_join=True,
+                        route_anchor=(pose[0],state['y'],pose[1]),authored_spg_connection='sortie_return')
             return order
         if routes and (empty or alone and state['id'] in sorties):
             if not empty and order.get('target_id') is not None and order.get('fire_allowed'):

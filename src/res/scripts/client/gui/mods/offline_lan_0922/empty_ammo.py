@@ -26,7 +26,8 @@ def handoff(runtime, state, order):
                 '_gun_angle_adjustment', '_gun_angle_pivot_refusal',
                 '_authored_spg_travel', '_authored_spg_attack',
                 '_authored_spg_defending', '_authored_spg_resume',
-                '_authored_spg_return_zone', '_authored_spg_return_initial'):
+                '_authored_spg_return_zone', '_authored_spg_return_initial',
+                '_empty_spg_home_reached'):
         state.pop(key, None)
     adapter = getattr(runtime, 'adapter', None)
     driver = getattr(adapter, 'driver', None)

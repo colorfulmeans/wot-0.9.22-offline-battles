@@ -206,8 +206,14 @@ class EmptyArtilleryTests(unittest.TestCase):
     def test_missing_sortie_uses_automatic_enemy_goal(self):
         self.routes[:] = []
         result = self.tick()
+        self.assertEqual((0,0.,0),result['move_position'])
+        self.assertEqual('sortie_return',result['authored_spg_connection'])
+        self.state['z']=0.
+        result=self.tick(1)
         self.assertEqual((0,0,400),result['move_position'])
         self.assertNotIn('authored_spg_connection',result)
+        self.state['z']=100.
+        self.assertEqual((0,0,400),self.tick(2)['move_position'])
 
 
 if __name__ == '__main__':unittest.main()
