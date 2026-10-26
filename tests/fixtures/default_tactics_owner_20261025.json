@@ -241,12 +241,12 @@
       "routes": 16
     },
     "95_lost_city": {
-      "digest": "1db3e1b4a8f6112b5bbbcfafd67d34adb3be0e5368ad9da0c7a980e32afa0936",
+      "digest": "e29678d0cc528aae9f1d24fe4be8c092d20881a37114f00286aab1711197f177",
       "parking_groups": 6,
       "points": 301,
       "routes": 26
     }
   },
-  "profile_digest": "2aaa97fcede060946a47511267870d92f63312a343183d290747803ba10b6cc5",
+  "profile_digest": "81bb51683223ef9deaba92eefac6b0122551a124fddbf8c3406bdc5b91280ac7",
   "source": "Complete owner profile-1 map promotion with reviewed local Stalingrad navigation, 2026-10-26"
 }

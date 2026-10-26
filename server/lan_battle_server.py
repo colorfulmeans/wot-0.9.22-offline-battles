@@ -14661,6 +14661,12 @@ class BattleState:
         else:
             return False
         if delta < 0:
+            if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+                _server_log('TEAM KILLER ' + json.dumps(dict(stage='frag_committed',
+                    actor_kind=attacker_kind, actor_id=int(attacker_id),
+                    victim_kind=victim_kind, victim_id=int(victim_id),
+                    actor_team=actor_team, victim_team=int(victim_team),
+                    team_killer=bool(team_killer), projectile=projectile_id)))
             actor_identity = (str(attacker_kind), int(attacker_id))
             self.team_kills[actor_identity] = int(
                 self.team_kills.get(actor_identity, 0)) + 1

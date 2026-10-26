@@ -16,6 +16,9 @@ from read_native_evidence import parse_lines
 
 class RuntimeReceiptTests(unittest.TestCase):
     def setUp(self):
+        from unittest import mock
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.dict('os.environ', WOT_OFFLINE_DIAGNOSTICS='1').start()
         self.fixture = runtime_fixture.BotRuntimeTests()
         self.fixture.setUp()
         self.runtime = self.fixture.runtime

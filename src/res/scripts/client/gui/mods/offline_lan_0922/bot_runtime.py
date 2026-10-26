@@ -164,6 +164,8 @@ _PUBLICATION_EDGE_MISSING = object()
 
 def _order_evidence(order):
     """Freeze the bounded tactical inputs, without another decision or probe."""
+    if not detailed_enabled():
+        return {}
     result = {}
     for key in ('combat_mode', 'move_position', 'face_position', 'aim_position',
                 'throttle_override', 'fire_allowed', 'target_id', 'target_kind', 'route_id',
@@ -958,6 +960,7 @@ def _copy_runtime_state(state):
     copied = dict(state)
     copied.pop(_CRITICAL_PARTS_TICK_CACHE, None)
     copied.pop(_GUN_PITCH_LIMIT_CACHE, None)
+    copied.pop('_spg_control_observation', None)
     return copied
 
 
@@ -1902,6 +1905,10 @@ def _overlay_live_target_pose(command, target, source_position=None):
     if any(math.isnan(value) or math.isinf(value) for value in position):
         raise ValueError('canonical live target position must be finite')
     result['aim_position'] = position
+    if result.get('empty_ammo'):
+        # Live gun tracking must not reclaim the navigation-facing owner.
+        # Unknown/reloading inventory never sets this explicit task flag.
+        return result
     stable_hull_face = result.get('stable_hull_face', False)
     if not isinstance(stable_hull_face, bool):
         raise ValueError('stable hull face flag is invalid')
@@ -7537,6 +7544,9 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        from . import artillery_diagnostics
+        artillery_diagnostics.observe(self, state, command, throttle, turn,
+                                      path_clear, motion_probe, now)
         self._log_spg_position_state(state, command, now)
         self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
         # This compact outcome has its own per-hull cadence. Bulk histories

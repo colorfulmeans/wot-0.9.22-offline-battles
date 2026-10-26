@@ -11983,6 +11983,11 @@ class BattleRuntime(object):
         except (TypeError, ValueError):
             return False
         record = self._records.get('%s:%s' % (actor_kind, actor_id))
+        if event.get('team_killer'):
+            native_input_diagnostics.team_killer_receipt('event_received',
+                round=(getattr(self, '_start_message', None) or {}).get('round_id'),
+                actor_kind=actor_kind, actor_id=actor_id,
+                record_found=record is not None, worker=self._worker_mode)
         if record is None:
             return False
         state = dict(record.get('state') or {})
@@ -13329,6 +13334,8 @@ class BattleRuntime(object):
         if team_killer and not record.get('presented_team_killer'):
             self._binding.arena_team_killer(record['engine_id'])
             record['presented_team_killer'] = True
+            native_input_diagnostics.team_killer_receipt('binding_returned',
+                engine_id=record['engine_id'], frags=frags)
             changed = True
         return changed
 

@@ -1,5 +1,58 @@
 # Authored route tasks and editor connections
 
+## Build 541 follow-up scope (2026-10-27)
+
+Live enemy-pose refresh used to overwrite `face_position` even on an explicit
+empty-ammunition travel order. It now updates gun aim while preserving the
+existing movement/facing, recovery and capture owners. Stocked and reloading
+combat retain the original live-target transformations. This fixes a proved
+ownership violation; native acceptance must still determine whether it explains
+the reported circling. Ordinary combat logic is otherwise unchanged.
+
+Tactical order witnesses are only read by diagnostic logs. Ordinary entry now
+avoids their repeated field copies; diagnostic entry preserves the witnesses.
+This is bounded allocation cleanup, not a claimed fix for the measured 6-Hz
+all-empty worker workload. Navigation, physics, collision, target selection,
+gun solving and weapon safety budgets are unchanged.
+
+Diagnostic entry adds compact SPG control histories at a 0.25-second sample
+cadence, publishing eight scalar samples every two seconds per SPG. The records
+include actual versus planned controls, hull/turret angles, stock/reload,
+target/aim versus navigation goal, task/recovery/pause, path/probe and physical
+gates, plus pending fire-proof ownership. These records have an independent
+bounded cadence so bulk geometry quota exhaustion cannot hide the symptom.
+Ordinary entry constructs no history. Team-killer receipts link server allied
+frag commitment, client receipt/missing mapping, binding return and native arena
+state after update. They change no blue-name rule or display policy. Existing
+model-refresh failure receipts and the complete sound diagnostics remain active;
+no new model or sound fix is inferred from the prior five matches.
+
+Ghost Town exchanges the two SPG attack corridors in the shared first-run/reset
+Default, retaining each team's own-base to enemy-base direction. This reverses
+the other team's point/node sequence rather than swapping team ownership and
+leaving invalid endpoints. All other map/route data remains unchanged. Local
+test profiles 1/2 must copy the new Default map data while retaining their zero/
+one-round behavior rules before native acceptance.
+
+Local validation passes 8 focused reference files / 1,655 tests, 4 final
+diagnostic/ownership files / 57 tests, and 3 Windows editor files / 23 tests.
+All 214 client sources compile under CPython 2.7.18; exact #1513 client
+inspection passes. Reference tests use the existing engine-free Linux seam,
+not a loaded Windows x86 extension. The initial direct Windows/embeddable
+interpreter attempts lack that native extension or Tk and are not acceptance
+evidence. Logs are retained under `build/followup-541-*`. Broader regressions,
+exact-commit CI, package inspection and the requested new matches remain to
+be recorded after completion.
+
+Next Windows acceptance uses lineup 30: Default/Prokhorovka,
+Default/Ghost Town, two one-round Ghost Town matches, two one-round
+Prokhorovka matches and zero-round Ghost Town. An additional Prokhorovka
+sample is allowed for hull-yaw observation. In restricted Ghost Town matches,
+the assistant may drive the player to enemy spawn as explicitly requested;
+these are active interaction tests rather than pure AFK. If killed before the
+post-last-shot behavior can be observed, repeat that sample. Preserve each
+diagnostic report separately on Desktop and restore Default afterwards.
+
 ## Build 540 Windows acceptance and next-work handoff (2026-10-27)
 
 Runtime commit: `c01b72c4bbc7b183393db93df6702effb76268e9`, identity

@@ -113,6 +113,7 @@ jobs:
             'test_bot_tier_consumables.py'
             'test_bot_fittings.py'
             'test_artillery_motion_reference.py'
+            'test_artillery_acceptance_followup.py'
             'test_port_0922_contact*.py'
             'test_port_0922_recovery_return_budget.py'
             'test_port_0922_spg_position_diagnostics.py'

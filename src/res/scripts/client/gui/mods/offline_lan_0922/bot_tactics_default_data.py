@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Owner-reviewed initial routes shared by fresh installs and resets."""
-SOURCE_SHA256 = '2aaa97fcede060946a47511267870d92f63312a343183d290747803ba10b6cc5'
+SOURCE_SHA256 = '81bb51683223ef9deaba92eefac6b0122551a124fddbf8c3406bdc5b91280ac7'
 PROFILE_JSON = (
     '{"behavior":[],"client":"0.9.22.0.1-cn-1513","maps":{"01_karelia":{"default_routes":[{"class_tag":"AT-SPG","id":'
     '"east_shelf","points":[[398.0,402.0,0],[478.0,278.0,0],[490.7187,175.2988,0],[446.3411,71.8501,0],[441.4004,-103'
@@ -3457,13 +3457,13 @@ PROFILE_JSON = (
     ',"label":"\\u57fa\\u5730\\u540e\\u65b9","point":[291.0835,-352.1458],"priority":5,"radius":16.0,"team":1},{"heading"'
     ':180.0,"id":"p_b700978891a0","label":"\\u57fa\\u5730\\u540e\\u65b9","point":[-271.1992,327.4678],"priority":5,"radiu'
     's":16.0,"team":2}],"resource_sha256":"68707ee802849976b8a33863a72dedf6c0d594913cd5051081f360736cd76a8a","routes"'
-    ':[{"capacity":3,"classes":["SPG"],"id":"spg_attack_1","label":"SPG endgame attack","node_ids":["node_0","n_ca8e9'
-    'e88ad6640e7","node_1","node_2","node_3","node_4","node_5","node_6"],"points":[[290.9787,-100.3112,0],[253.5032,-'
-    '264.4781,0],[7.3453,-290.9238,0],[-217.2426,-268.011,0],[-269.4745,-172.5012,0],[-274.6977,-67.2911,0],[-283.262'
-    '5,7.0335,0],[-291.095,100.01,0]],"policy":"preferred","purpose":"spg_attack","slots":[],"team":1,"weight":1.0},{'
-    '"capacity":3,"classes":["SPG"],"id":"spg_attack_2","label":"SPG endgame attack","node_ids":["node_0","n_161406d0'
-    'cac24378","node_1","node_2","node_3","node_4","node_5","node_6"],"points":[[-291.095,100.01,0],[-260.5323,264.61'
-    '53,0],[92.1326,319.7298,0],[196.7345,264.4684,0],[264.8245,210.1938,0],[290.4815,117.4336,0],[296.9601,-32.2236,'
+    ':[{"capacity":3,"classes":["SPG"],"id":"spg_attack_1","label":"SPG endgame attack","node_ids":["node_6","node_5"'
+    ',"node_4","node_3","node_2","node_1","n_161406d0cac24378","node_0"],"points":[[290.9787,-100.3112,0],[296.9601,-'
+    '32.2236,0],[290.4815,117.4336,0],[264.8245,210.1938,0],[196.7345,264.4684,0],[92.1326,319.7298,0],[-260.5323,264'
+    '.6153,0],[-291.095,100.01,0]],"policy":"preferred","purpose":"spg_attack","slots":[],"team":1,"weight":1.0},{"ca'
+    'pacity":3,"classes":["SPG"],"id":"spg_attack_2","label":"SPG endgame attack","node_ids":["node_6","node_5","node'
+    '_4","node_3","node_2","node_1","n_ca8e9e88ad6640e7","node_0"],"points":[[-291.095,100.01,0],[-283.2625,7.0335,0]'
+    ',[-274.6977,-67.2911,0],[-269.4745,-172.5012,0],[-217.2426,-268.011,0],[7.3453,-290.9238,0],[253.5032,-264.4781,'
     '0],[290.9787,-100.3112,0]],"policy":"preferred","purpose":"spg_attack","slots":[],"team":2,"weight":1.0}]}},"nam'
     'e":"Default","schema":1}'
 )

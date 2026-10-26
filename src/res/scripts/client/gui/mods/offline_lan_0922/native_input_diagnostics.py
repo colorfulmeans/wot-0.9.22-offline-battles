@@ -45,6 +45,17 @@ def detailed_enabled():
     return os.environ.get(DETAIL_ENV) == '1'
 
 
+def team_killer_receipt(stage, **values):
+    """One-shot event chain; never inspect models or influence arena state."""
+    if not detailed_enabled():
+        return
+    try:
+        values['stage'] = stage
+        write_json_record('TEAM KILLER', values)
+    except Exception:
+        pass
+
+
 def _detail_window():
     now = time.time()
     budget = _detail_budget
