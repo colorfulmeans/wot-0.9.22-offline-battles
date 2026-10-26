@@ -2,6 +2,66 @@
 
 ## Empty ammunition and artillery recovery follow-up (2026-10-26)
 
+### Build 537 native acceptance
+
+The delivered runtime source is `cef470eb713d0d81ea7542ce60ac52c0e28ebe1b`;
+`8f20b3badeccabc52a6db3918c516924f6027649` adds only validation documentation
+and the disabled-vehicle test adaptation. Build run `40329210315` passes all
+three package jobs, including packaged server startup. Independent inspection
+checks 211 client bytecode modules, 218 staged server sources, 37 frozen launcher
+modules, native identity and 1,222 delivered files. Navigation data is unchanged.
+The latter commit's CI run `40331567034` retains only the known Airfield 15-FPS
+departure and opposed Great Wall assertions; the adapted immobility assertion
+now passes. Full CI is not green.
+
+Three diagnostic sessions completed and their separately named report copies
+passed SHA-256 equality and ZIP CRC checks. Configuration 1 and 2 both ran
+`63_tundra`; lineup 30 with Default ran `05_prohorovka`. The requested AFK
+conditions were not exclusive: player actions occurred in the sessions. The
+owner explicitly accepted the first match as case 1. Do not describe these as
+three uncontaminated AFK trials. The assistant issued launch/room/close/report
+inputs, not vehicle driving or firing inputs.
+
+- Zero stock: all 29 initial Bot inventories total zero, no Bot fire-alignment
+  launch records, both teams reach capture and team 1 wins by capture. Empty
+  artillery also reaches capture; recovery remains active for obstructed units.
+- One shell: all 29 initial inventories total one; 26 Bots publish one launch
+  each, with no second sequence. Sampled exhausted vehicles have numeric zero
+  inventory, `empty_ammo=true`, `travel_before_aim` and route movement. Team 2
+  wins by capture. This does not prove every Bot fired or every recovery ended.
+- Default/all artillery: all 29 Bot identities in the firing-gate observations
+  are artillery. Fourteen Bots fire 22 shots; the battle reaches its 15-minute
+  timeout without capture. Keep this as a failed artillery acceptance case.
+
+The third session exposes an ownership defect: received `base_capture`/authored
+sortie travel alternates with `artillery_deploy` back toward the old firing
+position when shootable contacts appear. At 22:11:30, Bots 2 (GW E), 16 (GW E)
+and 17 (Bat.-Chatillon 155 58) receive fire-enabled deployment orders toward
+their own parking areas. At 22:12:29 Bot 2 again receives capture and resumes
+sortie travel. The local sortie code returns the incoming order when a target
+admits an attempt; that incoming order can still own the old deployment goal.
+Recorded tactical samples use `server_order`, so this is not evidence of the
+legacy local planner's retreat branch being exercised.
+
+The server's artillery-only/no-known-enemy capture branch also admits Bots
+outside the local three-artillery authored-sortie selection. For example,
+Bot 5 receives `base_capture` without `spg_route_travel`. Server and worker
+admission must be reviewed together before changing this behavior. Initial
+placement selected eight manual plans and left 21 with automatic fallback;
+per-vehicle deployment/fire retries are not a continuing vacant-position
+replacement scheduler. No new combat, replacement or retreat rule is approved
+by these observations alone.
+
+No model-refresh refusal, Python traceback, assertion or native exception is
+recorded in these reports. Exception files contain session headers only. Both
+roles log the same sound resource loading error (2967843034 / code 15); it is
+not evidence of navigation or ammunition failure. Sampled worker callback
+execution peaks are 240.049, 214.724 and 272.839 ms. Bot update dominates; the
+third peak includes 169.447 ms in `bot.planner_driver` across 25 calls. These
+bounded triggered samples are not whole-match averages or ping measurements,
+and do not yet establish a safe optimization. Preserve the existing physics,
+combat and query budgets pending a separately approved fix.
+
 An explicit, nonempty, shape-valid inventory of numeric zeros enters a
 round-owned empty-ammunition state. Missing inventory, reload, empty magazine
 with reserves, invalid data and a depleted selected shell with another shell
