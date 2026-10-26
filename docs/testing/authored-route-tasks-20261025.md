@@ -1,6 +1,6 @@
 # Authored route tasks and editor connections
 
-## Build 541 follow-up scope (2026-10-27)
+## Build 542 follow-up scope (2026-10-27)
 
 Live enemy-pose refresh used to overwrite `face_position` even on an explicit
 empty-ammunition travel order. It now updates gun aim while preserving the
@@ -19,7 +19,9 @@ Diagnostic entry adds compact SPG control histories at a 0.25-second sample
 cadence, publishing eight scalar samples every two seconds per SPG. The records
 include actual versus planned controls, hull/turret angles, stock/reload,
 target/aim versus navigation goal, task/recovery/pause, path/probe and physical
-gates, plus pending fire-proof ownership. These records have an independent
+gates, desired gun angles/aim intents, plus pending fire-proof ownership. Turn
+sign reversals are counted on every control update, including updates between
+timed samples. These records have an independent
 bounded cadence so bulk geometry quota exhaustion cannot hide the symptom.
 Ordinary entry constructs no history. Team-killer receipts link server allied
 frag commitment, client receipt/missing mapping, binding return and native arena
@@ -40,9 +42,12 @@ All 214 client sources compile under CPython 2.7.18; exact #1513 client
 inspection passes. Reference tests use the existing engine-free Linux seam,
 not a loaded Windows x86 extension. The initial direct Windows/embeddable
 interpreter attempts lack that native extension or Tk and are not acceptance
-evidence. Logs are retained under `build/followup-541-*`. Broader regressions,
-exact-commit CI, package inspection and the requested new matches remain to
-be recorded after completion.
+evidence. Logs are retained under `build/followup-541-*`. The broader 38-file / 1,380-test regression passes. Build 541 package
+preflight exposed a standalone binding import regression in full source CI;
+the diagnostic import now uses the canonical package path. The standalone
+binding, diagnostic/ownership and log-mode regressions pass after correction.
+Build 541 is superseded before native acceptance. Exact-commit CI, replacement
+package inspection and requested new matches remain to be recorded after completion.
 
 Next Windows acceptance uses lineup 30: Default/Prokhorovka,
 Default/Ghost Town, two one-round Ghost Town matches, two one-round

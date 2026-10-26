@@ -56,6 +56,7 @@ class FollowupTests(unittest.TestCase):
         self.assertEqual(.4,rows[-1][1]['controls'][-1][5])
         self.assertEqual([0,0],rows[-1][1]['stock'])
         self.assertEqual(3,rows[-1][1]['task']['index'])
+        self.assertEqual(16,rows[-1][1]['turn_flips'])
         self.assertEqual((0,0,100),command['move_position'])
         self.assertNotIn('_spg_control_observation',self.module._copy_runtime_state(state))
         with mock.patch.dict(os.environ,WOT_OFFLINE_DIAGNOSTICS='1'), \
@@ -64,6 +65,17 @@ class FollowupTests(unittest.TestCase):
         with mock.patch.dict(os.environ,WOT_OFFLINE_DIAGNOSTICS='0'), \
              mock.patch.object(d.diagnostics,'write_json_record',side_effect=AssertionError('ordinary entry')):
             d.observe(None,state,command,0,0,True,None,10.)
+
+    def test_turn_flips_between_samples_are_counted_without_extra_output(self):
+        from gui.mods.offline_lan_0922 import artillery_diagnostics as d
+        state=dict(id=23,profile=dict(class_tag='SPG'))
+        rows=[]
+        with mock.patch.dict(os.environ,WOT_OFFLINE_DIAGNOSTICS='1'), \
+             mock.patch.object(d.diagnostics,'write_json_record',side_effect=lambda k,v:rows.append(v)):
+            for n in range(22):
+                d.observe(SimpleNamespace(round_id=1),state,{},0,(-1)**n*.1,True,None,n*.1)
+        self.assertEqual(2,len(rows))
+        self.assertEqual(21,rows[-1]['turn_flips'])
 
     def test_team_killer_receipts_are_diagnostic_only_and_do_not_throw(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as d

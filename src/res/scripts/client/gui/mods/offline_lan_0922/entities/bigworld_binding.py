@@ -387,7 +387,7 @@ class BigWorldVehicleBinding(object):
         self._avatar.updateArena(
             self._constants.ARENA_UPDATE.TEAM_KILLER,
             _pickle.dumps(int(entity_id)))
-        from .. import native_input_diagnostics as diagnostics
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
         if diagnostics.detailed_enabled():
             try:
                 row = self._avatar.arena.vehicles.get(int(entity_id), {})
