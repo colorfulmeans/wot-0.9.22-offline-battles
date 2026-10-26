@@ -744,6 +744,19 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
                                key=lambda value: value["id"])
             team_axis = team_axes[team]
             protected_ids = set(defenders.get(team, {}))
+            # Pressure transfer must never retire an active capture hold.
+            # Include physical arrivals before this tick creates their hold,
+            # and retained holds while a shoved vehicle re-enters its circle.
+            target = capture_targets[team]
+            contributors = self._defense_contributor_keys(defense, 3-team)
+            for bot in team_bots:
+                pose = bot['state']
+                if (('bot', bot['id']) in contributors or
+                        (target is not None and
+                         (self._capture_arrivals.get(bot['id']) == target or
+                          (pose.get('world_pose') and not pose.get('airborne') and
+                           capture_orders.inside(pose, target))))):
+                    protected_ids.add(bot['id'])
             self._rebalance_routes(
                 team, team_bots, contacts[team], now, protected_ids)
             assignments = self._assign_targets(team_bots, contacts[team], now)

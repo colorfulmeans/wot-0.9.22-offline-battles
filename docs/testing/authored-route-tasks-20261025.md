@@ -638,6 +638,52 @@ cadence, collision-budget or native-migration changes. No live performance gain
 is claimed. Subsequent owner roof-crush testing confirmed no cross-round blue
 name; team-killer behavior is outside this correction.
 
+## Build 533 follow-up: capture donors, friendly kills and diagnostic gaps
+
+Session `20261026T073700Z-bb978d495a87` completed eight maps without the previous
+empty-route exception. A successful result did not prove every tactical order
+was correct: on Canada at 16:03:35, pressure rebalancing selected bot 17 while
+it contributed 28 capture points. Its order changed to `route_transfer`, cleared
+the capture hold, and reduced total points from 59 to 34 after leaving alive.
+Exclude canonical contributors, physical first-tick arrivals and retained
+circle re-entry holds before donor admission. Keep ordinary pressure transfers,
+explicit defense/player tasks and combat behavior unchanged.
+
+On Stalingrad at 16:48:25, bot 28/team 2 killed the same-team player with shell
+`8:b:28:2`; the client reported destroyed ammunition storage and the server
+committed 1,497 HP loss. Bot `_record_frag` failed to set `team_killer`, unlike
+the player branch. Set it for the shared friendly-kill path and publish the
+actual Bot flag in public result rows. Test both actor and victim kinds,
+nonlethal damage, player splash/reflected terminal retries, both result flag
+values and next-round cleanup. This does not introduce cumulative-damage
+thresholds, new blue-victim exemptions or friendly ram damage. Replaying the
+three new regression cases against the old methods fails four assertions:
+both Bot victim kinds, the Bot result flag, and capture-donor admission.
+
+The El Hallouf IS-7 callback at 15:45:41 still asserted with current `exploded`
+and callback `destroyed`. Preserve its native callback, return and exception.
+At the diagnostic entrance only, observe state reads and callback entry/return/
+assertion in a per-appearance scalar ring: at most 64 appearances, 24 entries
+each, cleared at battle start. Include observed caller and wall time; a state
+read is not proof of a load request. Keep the existing global callback ring and
+eight-refusal output cap. Test unrelated global traffic, bounded storage,
+disabled mode and diagnostic failures without retaining engine objects.
+
+The 437.434-ms Lost City worker frame contains many motion/ground queries.
+Opt-in detailed frames now retain at most eight repeated geometry signatures
+from the existing bounded 2,048-key observer, including actor, slice, stage and
+count. Truncated keys identify candidates for investigation, not safe cache
+reuse: scene state may change. Do not add collision queries or change physical
+budgets, navigation, control cadence, combat or native laws. A repeat count is
+not a native error, average ping, or a claimed performance improvement.
+
+Validate the focused cases, existing capture/defense/pressure/task/projectile
+and lifecycle regressions, Python 2.7 compilation and exact-commit CI. Inspect
+the downloaded package independently. Native acceptance must still reproduce
+the original T-10 wreck pocket; this session's different-team T-10 used the
+railway road and was destroyed after making progress. Keep model/performance
+issues open until their new receipts establish the cause.
+
 Validation starts with focused task/model/recovery/diagnostic tests, then the
 existing route, artillery, capture, command, combat and lifecycle regressions.
 All client sources must compile under Python 2.7.18. Exact-commit CI, downloaded

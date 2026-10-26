@@ -16,6 +16,23 @@ spec.loader.exec_module(diagnostics)
 
 
 class WorkerCombatDiagnosticsTests(unittest.TestCase):
+    def test_repeat_geometry_samples_are_bounded_opt_in_and_observational(self):
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        for enabled in (False, True):
+            trace=diagnostics.WorkerCombatDiagnostics(lambda:1.)
+            trace.begin_frame(1,20.,'combat')
+            for i in range(12):
+                for unused in range(i+1):trace.geometry('motion.ray',(i,(0.,0.,0.),(1.,0.,0.)))
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=enabled):
+                row=trace.finish_frame()
+            if enabled:
+                self.assertEqual(8,len(row['repeated_geometry']))
+                self.assertEqual(12,row['repeated_geometry'][0]['count'])
+            else:
+                self.assertNotIn('repeated_geometry',row)
+            self.assertEqual(78,row['counts']['motion.ray_queries'])
+
     def test_residual_partition_excludes_children_and_does_not_double_count_stages(self):
         now = [0.]
         trace = diagnostics.WorkerCombatDiagnostics(lambda: now[0])
@@ -315,7 +332,7 @@ class WorkerCombatDiagnosticsTests(unittest.TestCase):
         self.assertGreater(row['counts']['geometry_tracking_overflow'], 0)
         trace.begin_frame(2, 20.1)
         self.assertEqual({}, trace._actors)
-        self.assertEqual(set(), trace._geometry)
+        self.assertFalse(trace._geometry)
         trace.finish_frame()
         trace.close()
         self.assertEqual(diagnostics.MAX_CAPTURE_ACTORS,

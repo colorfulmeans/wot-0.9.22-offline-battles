@@ -6,6 +6,29 @@ from gui.mods.offline_lan_0922 import compat, native_input_diagnostics as logs
 
 
 class ModelRefreshDiagnosticsTests(unittest.TestCase):
+    def test_instance_history_survives_unrelated_global_callback_traffic(self):
+        owner=types.SimpleNamespace(_battle_active=True,
+            _original_compound_models_refresh=lambda *a:42)
+        def appearance(vehicle):
+            return types.SimpleNamespace(_CompoundAppearance__vehicle=types.SimpleNamespace(id=vehicle),
+                _CompoundAppearance__currentDamageState=types.SimpleNamespace(modelState='normal'))
+        subject=appearance(23)
+        with mock.patch.object(logs,'detailed_enabled',return_value=True):
+            compat._observe_model_lifecycle(owner,subject,'state_observed','destroyed','requestModels')
+            for i in range(40):
+                compat._run_model_refresh_callback(owner,appearance(100+i),'destroyed',[])
+            subject._CompoundAppearance__currentDamageState.modelState='exploded'
+            owner._original_compound_models_refresh=mock.Mock(side_effect=AssertionError())
+            with mock.patch.object(logs,'write_json_record') as writer:
+                with self.assertRaises(AssertionError):
+                    compat._run_model_refresh_callback(owner,subject,'destroyed',[])
+        history=writer.call_args.args[1]['appearance_history']
+        self.assertEqual('destroyed',history[0]['state'])
+        self.assertEqual('requestModels',history[0]['caller'])
+        self.assertEqual('callback_assertion',history[-1]['phase'])
+        self.assertTrue(all(row['vehicle']==23 for row in history))
+        self.assertLessEqual(len(owner._model_lifecycle_histories),64)
+
     def test_failed_diagnostic_preserves_original_native_exception(self):
         for error in (AssertionError('native assertion'),RuntimeError('native failure')):
             owner=types.SimpleNamespace(_battle_active=True,

@@ -1,6 +1,7 @@
 """Report ebb19501b480: contact pursuit must not abandon 69 capture points."""
 import copy
 import unittest
+from unittest import mock
 
 from gui.mods.offline_lan_0922 import capture_orders
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
@@ -8,6 +9,31 @@ from test_port_0922_server_bot_ai import BotPlanner, _bot, _state, _route, _bot_
 
 
 class CaptureProtectionTests(unittest.TestCase):
+    def test_pressure_admission_cannot_take_current_or_reentering_capturers(self):
+        scene = self.scene()
+        planner = scene[0]
+        self.orders(scene)
+        # The report had a 28-point contributor still inside the circle when
+        # pressure scheduling admitted a transfer. Cover a zero-point arrival
+        # and a retained hold shoved just outside, before the next order pass.
+        scene[3]['contributors'] = {'1': [dict(kind='bot', id=22, points=28)]}
+        scene[2][1].update(x=140.3506, z=318.0734)
+        with mock.patch.object(planner, '_rebalance_routes',
+                               wraps=planner._rebalance_routes) as rebalance:
+            orders = self.orders(scene, 181.)
+        team_call = next(c for c in rebalance.call_args_list if c.args[0] == 2)
+        self.assertTrue({22, 23}.issubset(team_call.args[4]))
+        self.assertTrue(all('capture_area' in o for o in orders))
+        self.assertFalse(set((22, 23)).intersection(planner._travel_tasks))
+        # First-tick physical arrivals also need protection before any cached
+        # capture hold or capture-point contributor is available.
+        fresh = self.scene(1)
+        with mock.patch.object(fresh[0], '_rebalance_routes',
+                               wraps=fresh[0]._rebalance_routes) as rebalance:
+            self.orders(fresh)
+        team_call = next(c for c in rebalance.call_args_list if c.args[0] == 2)
+        self.assertIn(22, team_call.args[4])
+
     def scene(self, count=2):
         planner=BotPlanner()
         route=_route('lane',[(198.,-350.,False),(144.845,285.836,False),(198.,354.,False)])

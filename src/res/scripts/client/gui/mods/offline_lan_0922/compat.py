@@ -3,6 +3,7 @@ from __future__ import print_function
 import hashlib
 import sys
 import traceback
+import time
 
 try:
     import cPickle as _pickle
@@ -12,6 +13,40 @@ except ImportError:
 from gui.mods.offline_lan_0922.entities.remote_vehicle import (
     clear_ground_decal_visibility_state, close_stock_presentation_extras,
     set_ground_decal_visibility, stop_ground_effects, stop_bound_visual_effects)
+
+
+def _observe_model_lifecycle(compatibility, appearance, phase, state, caller=None):
+    """Bound scalar history per appearance; never retain engine objects."""
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+        if not detailed_enabled():
+            return
+        read = getattr(compatibility, '_original_compound_getattribute', getattr)
+        vehicle = read(appearance, '_CompoundAppearance__vehicle')
+        if state is None:
+            state = getattr(read(appearance, '_CompoundAppearance__currentDamageState'),
+                            'modelState', None)
+        key = (id(appearance), id(vehicle))
+        histories = getattr(compatibility, '_model_lifecycle_histories', None)
+        if histories is None:
+            histories = {}
+            compatibility._model_lifecycle_histories = histories
+        history = histories.get(key)
+        if history is None:
+            if len(histories) >= 64:
+                oldest = min(histories, key=lambda value: histories[value][-1]['sequence'])
+                del histories[oldest]
+            history = histories[key] = []
+        if (phase == 'state_observed' and history and
+                history[-1]['state'] == str(state)):
+            return
+        sequence = getattr(compatibility, '_model_lifecycle_sequence', 0)+1
+        compatibility._model_lifecycle_sequence = sequence
+        history.append(dict(sequence=sequence, wall_time=time.time(), phase=phase,
+            state=str(state), caller=str(caller), vehicle=getattr(vehicle, 'id', None)))
+        del history[:-24]
+    except Exception:
+        pass
 
 
 def _observe_model_refresh_callback(compatibility, appearance, model_state):
@@ -24,6 +59,8 @@ def _observe_model_refresh_callback(compatibility, appearance, model_state):
         compatibility._model_refresh_sequence = sequence
         vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
         damage = getattr(appearance, '_CompoundAppearance__currentDamageState', None)
+        _observe_model_lifecycle(compatibility, appearance, 'callback_entered',
+                                 getattr(damage, 'modelState', None), str(model_state))
         row = dict(sequence=sequence, appearance_identity=id(appearance),
             vehicle_identity=id(vehicle), vehicle=getattr(vehicle, 'id', None),
             callback_state=str(model_state),
@@ -41,10 +78,15 @@ def _run_model_refresh_callback(compatibility, appearance, model_state, resource
         result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
     except AssertionError:
         if row is not None:row['result'] = 'assertion'
+        _observe_model_lifecycle(compatibility, appearance, 'callback_assertion',
+                                 None, str(model_state))
         _report_model_refresh_failure(compatibility, appearance, model_state, resources)
         raise
     else:
         if row is not None:row['result'] = 'returned'
+        if row is not None:
+            _observe_model_lifecycle(compatibility, appearance, 'callback_returned',
+                                     None, str(model_state))
         return result
 
 
@@ -62,6 +104,8 @@ def _report_model_refresh_failure(compatibility, appearance, model_state, resour
             report=count+1,vehicle=getattr(vehicle,'id',None),
             vehicle_type=getattr(getattr(vehicle,'typeDescriptor',None),'name',None),
             callback_state=str(model_state), current_state=str(getattr(damage,'modelState',None)),
+            appearance_history=list(getattr(compatibility, '_model_lifecycle_histories', {}).get(
+                (id(appearance), id(vehicle)), ())),
             is_current_model_damaged=getattr(getattr(appearance,'damageState',None),
                                            'isCurrentModelDamaged',None),
             appearance_type=type(appearance).__name__,
@@ -2463,6 +2507,14 @@ class OfflineCompatibility(object):
         def compound_getattribute(appearance, name):
             value = compatibility._original_compound_getattribute(
                 appearance, name)
+            if (name == '_CompoundAppearance__currentDamageState' and compatibility._battle_active and
+                    getattr(compatibility, '_model_lifecycle_enabled', False)):
+                try:
+                    caller = sys._getframe(1).f_code.co_name
+                    _observe_model_lifecycle(compatibility, appearance, 'state_observed',
+                                             getattr(value, 'modelState', None), caller)
+                except Exception:
+                    pass
             if (name == '_CompoundAppearance__filter' and
                     compatibility._battle_active and
                     compatibility._compound_refreshing_models is appearance):
@@ -3595,6 +3647,10 @@ class OfflineCompatibility(object):
             self._battle_arena_type_id = int(arena_type_id)
         self.install()
         self._battle_active = True
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+        self._model_lifecycle_enabled = detailed_enabled()
+        self._model_lifecycle_histories = {}
+        self._model_lifecycle_sequence = 0
         self._strategic_camera_failure_reported = False
         self._vehicle_property_overlays = {}
         self._battle_player_vehicle_id = 0

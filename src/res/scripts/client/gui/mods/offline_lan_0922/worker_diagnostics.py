@@ -209,7 +209,7 @@ class WorkerCombatDiagnostics(object):
         self._slices = []
         self._slice = 0
         self._control_selected = False
-        self._geometry = set()
+        self._geometry = {}
 
     def _fail(self):
         self.enabled = False
@@ -316,9 +316,10 @@ class WorkerCombatDiagnostics(object):
         try:
             signature = (self._slice, self._actor_key, name, key)
             if signature in self._geometry:
+                self._geometry[signature] += 1
                 self.count(name + '_same_geometry_in_slice')
             elif len(self._geometry) < MAX_GEOMETRY_KEYS:
-                self._geometry.add(signature)
+                self._geometry[signature] = 1
             else:
                 self.count('geometry_tracking_overflow')
         except Exception:
@@ -686,6 +687,15 @@ class WorkerCombatDiagnostics(object):
                 'selected_completed_wait': self._wait_summary(
                     self._selected_waits),
             }
+            from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+            if self.detail_active and detailed_enabled():
+                # Observed duplicate geometry is not permission to reuse a
+                # collision answer: obstacles and poses may have changed.
+                repeated = sorted(((count, signature) for signature, count in
+                    self._geometry.items() if count > 1), key=lambda row: -row[0])[:8]
+                result['repeated_geometry'] = [dict(count=count,
+                    slice=key[0], actor=key[1], stage=key[2],
+                    geometry=repr(key[3])[:384]) for count, key in repeated]
             if self._native_frame is not None:
                 result['native_frontier'] = self._native_rows(self._native_frame)
                 self._sum_native_frame()

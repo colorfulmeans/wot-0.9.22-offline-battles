@@ -12,6 +12,69 @@ from offline_rewards import compute_offline_rewards
 
 
 class FriendlyFireProjectileTests(unittest.TestCase):
+    def test_friendly_kill_blue_flag_has_actor_and_victim_parity(self):
+        for actor_kind in ('player', 'bot'):
+            for victim_kind in ('player', 'bot'):
+                with self.subTest(actor=actor_kind, victim=victim_kind):
+                    state = shots._state(players=3)
+                    state.bot_states[7] = dict(id=7, team=1, frags=0,
+                        health=1000, max_health=1000, alive=True)
+                    state.bot_states[8] = dict(id=8, team=1, frags=0,
+                        health=1000, max_health=1000, alive=True)
+                    actor = (actor_kind, 1 if actor_kind == 'player' else 7)
+                    victim = (victim_kind, 3 if victim_kind == 'player' else 8)
+                    state._record_damage(actor, victim, 10, None)
+                    self.assertFalse(state._is_blue_target(actor))
+                    self.assertTrue(state._record_frag(*actor, 1, *victim))
+                    self.assertTrue(state._is_blue_target(actor))
+                    event = state.pending_events[-1]
+                    self.assertEqual(-1, event['frags'])
+                    self.assertTrue(event['team_killer'])
+                    self.assertEqual(1, state._statistics_row(*actor)['team_kills'])
+
+    def test_bot_result_preserves_true_and_false_blue_flags(self):
+        state = shots._state()
+        for bot_id, blue in ((7, True), (8, False)):
+            state.bot_states[bot_id] = dict(id=bot_id, team=1, frags=0,
+                vehicle='ussr:R11_MS-1', name='Bot-%d' % bot_id,
+                health=100, max_health=100, alive=True, team_killer=blue)
+        state.bot_manifest = list(state.bot_states.values())
+        rows = state._public_result_roster(1, [])
+        self.assertEqual({7: True, 8: False}, dict(
+            (r['actor_id'], r['is_team_killer']) for r in rows))
+
+    def test_next_round_retires_bot_blue_and_resets_player_blue(self):
+        state=shots._state(players=3)
+        state.players[1].team_killer=True
+        state.bot_states[7]=dict(id=7,team=1,team_killer=True)
+        state._reset_round()
+        self.assertFalse(state.players[1].team_killer)
+        self.assertEqual({},state.bot_states)
+
+    def test_splash_and_reflected_friendly_deaths_keep_original_shooter_once(self):
+        for splash in (True, False):
+            with self.subTest(splash=splash):
+                state = shots._state(players=3)
+                state.players[3].health = 50
+                self.assertTrue(shots._launch_authority(state, shots._launch(
+                    is_he=splash, splash_radius=20.0 if splash else 0.0)))
+                if splash:
+                    terminal = shots._resolve(state, '1:p:1:1', direct=None,
+                        splash=[shots._effect(target_id=3, damage=100, x=20.,
+                            target_pose=(20., 1., 0.), high_explosive=True, shot_result=1)])
+                else:
+                    self.assertTrue(state.ricochet_projectile(
+                        1, shots._ricochet(state, '1:p:1:1')))
+                    terminal = shots._resolve(state, '1:p:1:1',
+                        base_checked_ms=100, resolved_time_ms=150,
+                        checked_distance=20., impact=[20., 1., 0.],
+                        direct=shots._effect(target_id=3, damage=100, x=20.))
+                for unused in range(2):
+                    self.assertTrue(state.resolve_projectile(1, copy.deepcopy(terminal)))
+                self.assertTrue(state.players[1].team_killer)
+                row = state._statistics_row('player', 1)
+                self.assertEqual((50, 1), (row['team_damage'], row['team_kills']))
+
     def test_unverifiable_self_splash_cannot_reapply_the_direct_ally_hit(self):
         state = shots._state(players=3)
         ally = {

@@ -11446,7 +11446,7 @@ class BattleState:
                     state.get("death_attacker_kind", "") or ""),
                 "killer_id": max(0, int(
                     state.get("death_attacker_id", 0) or 0)),
-                "is_team_killer": False,
+                "is_team_killer": bool(state.get("team_killer", False)),
                 "xp": int(xp), "stats": statistics,
             })
         return rows
@@ -14640,6 +14640,8 @@ class BattleState:
             actor_team = int(actor.get("team", 0))
             delta = -1 if actor_team == int(victim_team) else 1
             actor["frags"] = int(actor.get("frags", 0)) + delta
+            if delta < 0:
+                actor["team_killer"] = True
             frags = actor["frags"]
             team_killer = bool(actor.get('team_killer', False))
         else:
