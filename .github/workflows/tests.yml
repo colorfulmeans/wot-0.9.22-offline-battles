@@ -113,6 +113,8 @@ jobs:
             'test_artillery_motion_reference.py'
             'test_port_0922_contact*.py'
             'test_port_0922_recovery_return_budget.py'
+            'test_port_0922_spg_position_diagnostics.py'
+            'test_port_0922_server_tick_supervision.py'
             'test_port_0922_capture_contact_launch.py'
             'test_port_0922_capture_protection.py'
             'test_port_0922_base_circle_arrival.py'

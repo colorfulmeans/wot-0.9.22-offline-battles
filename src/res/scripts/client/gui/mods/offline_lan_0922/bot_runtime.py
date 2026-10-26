@@ -7438,6 +7438,8 @@ class BotRuntime(object):
         actions = (state.get('_execution_window') or {}).get('actions') or ()
         outcome = actions[-1].get('outcome', {}) if actions else {}
         handoff = state.get('_planner_blocked_handoff') or {}
+        planning = command.get('planning_receipt') or {}
+        nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
         from .native_input_diagnostics import write_json_record
         write_json_record('BOT RECOVERY POCKET', dict(
             round=self.round_id, bot=state['id'], at=now,
@@ -7451,6 +7453,18 @@ class BotRuntime(object):
             last_execution={key:outcome.get(key) for key in (
                 'at', 'final', 'yaw', 'speed', 'displacement', 'support_rollback', 'pose_rollback')},
             recovery_count=driver.get('recovery_count'),
+            driver_clock=driver.get('clock'),
+            short_escape_observation=ai_driver.LocalDriver.short_escape_diagnostics(driver),
+            control_sampled_at=(command.get('control_trace') or {}).get('sampled_at'),
+            decision_id=planning.get('id'), decision_sampled_at=planning.get('sampled_at'),
+            partial_pivot_search=command.get('partial_pivot_search'),
+            driver_blocked_observation=driver.get('blocked_observation'),
+            driver_alignment=driver.get('alignment_observation'),
+            failed_yaws=sorted((driver.get('failed_yaws') or {}).items())[:24],
+            local_target_retired=nav_state.get('local_target_retired'),
+            private_replans=nav_state.get('blocked_step_replans'),
+            received_mode=order.get('combat_mode'),
+            received_goal=order.get('move_position'),
             short_escape_denials=[{key:row.get(key) for key in (
                 'sign', 'distance', 'clear', 'reason', 'blocker')}
                 for row in (driver.get('short_escape_probes') or ())[:6]],
@@ -7465,6 +7479,25 @@ class BotRuntime(object):
             water_depth=state.get('_water_depth'),
             probe={key:probe.get(key) for key in
                 ('clear', 'reason', 'collision', 'water', 'slope')} if isinstance(probe, dict) else None))
+
+    def _log_spg_position_state(self, state, command, now):
+        """Keep effective parking ownership visible when bulk logs are full."""
+        if not detailed_enabled() or state.get('_spg_initial') is None:
+            return
+        if now < state.get('_spg_position_state_log_at', -1e30):
+            return
+        state['_spg_position_state_log_at'] = now + 30.0
+        initial = state['_spg_initial']
+        server = self._server_orders.get(state['id']) or {}
+        from .native_input_diagnostics import write_json_record
+        write_json_record('SPG POSITION STATE', dict(round=self.round_id,
+            bot=state['id'], at=now, position=_position(state),
+            received_mode=server.get('combat_mode'), received_goal=server.get('move_position'),
+            final_mode=command.get('combat_mode'), final_goal=command.get('move_position'),
+            movement_intent=command.get('movement_intent'),
+            zone=initial.get('zone'), parking_point=initial.get('point'),
+            radius=initial.get('radius'), occupied=state.get('_spg_parking_occupied'),
+            position_event=state.get('_spg_position_event'), query_policy='existing_state_only'))
 
     @detailed_observed('bot.motion_diagnostics')
     def _log_motion_stall(self, state, command, throttle, turn,
@@ -7494,6 +7527,7 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        self._log_spg_position_state(state, command, now)
         self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
         # This compact outcome has its own per-hull cadence. Bulk histories
         # must not hide the actual controls when the shared quota is full.
@@ -8216,7 +8250,11 @@ class BotRuntime(object):
         """Do not wait for movement when the driver already proved a wall."""
         report = getattr(self.navigator, 'report_blocked_plan', None)
         target = command.get('move_position')
-        if state is not None:
+        diagnostic = detailed_enabled()
+        if state is not None and not diagnostic:
+            state.pop('_planner_blocked_handoff', None)
+            state.pop('_planner_blocked_last_replan', None)
+        if state is not None and diagnostic:
             state['_planner_blocked_handoff'] = dict(at=now, target=target,
                 recovery_mode=command.get('recovery_mode'),
                 reason='no_blocked_movement', hard_body_refusals=0,
@@ -8331,7 +8369,7 @@ class BotRuntime(object):
             if callable(feedback):
                 private = bool(feedback(state['id'], position, target, heading, now,
                                         observation_interval))
-        if state is not None:
+        if state is not None and diagnostic:
             nav_state = getattr(self.navigator, 'bot_states', {}).get(int(state['id']), {})
             refusal_counts = {}
             for row in verdicts or ():

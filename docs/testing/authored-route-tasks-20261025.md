@@ -533,3 +533,64 @@ points must own a safe sampled cell; only existing capture-circle endpoints
 retain bounded area snapping. Negative regressions reject an identical anchor
 after marking its fine cell hazardous or disconnecting its local links. The
 six shared-default regressions include a complete no-fallback check and now pass.
+
+## Build 531 live audit and diagnostic follow-up (2026-10-26)
+
+The ordered diagnostic session `20261025T205441Z-18046da53777` exercised
+23/41 maps, not the full inventory: 12 ordinary wins/losses, four timeouts and
+seven `IndexError` server-tick terminations. The owner later closed the game
+normally; that exit is not a crash. Preserve the remaining 18-map coverage gap.
+
+The tick supervisor now emits opt-in `SERVER TICK TRACE` JSON parts before
+handling the original failure. Reassemble ordered `data` parts by round/tick;
+retain the throw-site traceback, map/phase and whitelisted actor, task, route
+index and point-count context. Do not log arbitrary locals or actor rosters.
+Basic mode must not construct a traceback. A failed formatter must not replace
+the gameplay exception. The existing terminal barrier, no-settlement policy,
+reset and fixed-step catch-up remain unchanged. The original array/throw site
+is still unproved until the next diagnostic reproduction; do not blanket-catch
+`IndexError`, clamp an unrelated cursor, or retry a partially consumed tick.
+
+Stalingrad T-10 entity 19 remained at approximately (51.7272,59.9369) for the
+last 180 seconds. Worker receipts show nearby wrecks 7/9/14/22, rejected reverse
+world sweeps and forward vehicle occupancy. Recovery counts reached 161 and
+macro cursors still changed. This proves repeated attempts without movement,
+not a stopped retry loop or a proved viable exit. Keep existing collision and
+combat laws. The compact 15-second `BOT RECOVERY POCKET` now retains decision
+and control sample times, driver-clock short-escape observation age, complete
+pivot outcomes, alignment, failed headings and local target retirement even
+when the large motion-history budget is exhausted. No extra geometry query is
+allowed for this diagnostic.
+
+The five suspected artillery deployment stalls on Arctic and Sacred Valley
+were false positives: worker receipts show `artillery_hold` within two metres
+of replacement positions while server records retain the old deployment goal.
+Diagnostic-only `SPG POSITION STATE` reports received and effective modes/goals,
+adopted parking position, radius and occupancy every 30 seconds, independently
+of the bulk-history budget. Do not change deployment or firing behavior.
+
+Worker captures establish significant Bot-update cost and queue age, but do
+not establish local mesh density as the cause. One sampled Kharkiv callback
+took 340.641ms, including 317.552ms in Bot update; another queue capture recorded
+2489.014ms oldest wait. Captured slow frames are not a full-session average.
+The confirmed optimization avoids constructing diagnostic-only collision and
+refusal copies in normal-mode `_report_blocked_planner`; local-action feedback
+and private replans still run. No physical query, simulation interval, contact
+proof, target selection, combat policy or queue cadence is removed or relaxed.
+Do not promise a live-ping improvement from static tests.
+
+Run server tick supervision, recovery-return/pocket, SPG-position diagnostics,
+complete-pivot handoff, combat manoeuvre and diagnostic-mode regressions first;
+then the existing navigation, motion, recovery, capture, artillery, worker and
+postbattle suites. Validate Python-2 client compilation, inspect the downloaded
+frozen launcher/server/client bytes, and carry this precise coverage boundary
+into the delivery handoff. Native T-10 exit and server throw-site acceptance
+remain next-run tasks, not claims made by this diagnostic package.
+
+Local follow-up validation: six focused files / 61 tests pass. The wider
+62-file / 1,030-test reference run also passes. Running that wider set directly
+under Windows Python 3 without its matching native extension leaves 13 files
+with native-simulation-unavailable errors; retain that result separately from
+the Linux-semantics reference run. All 209 client modules compile under pinned
+Python 2.7.18. CI and independent final-package evidence are recorded in the
+delivery handoff rather than inferred from these local reference checks.

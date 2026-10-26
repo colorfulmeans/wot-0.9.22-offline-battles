@@ -19,6 +19,7 @@ from lan_battle_server import (  # noqa: E402
     ThreadedTCPServer,
     _TCPShutdownController,
     _run_tick_loop,
+    _log_tick_failure_trace,
 )
 
 
@@ -46,6 +47,58 @@ class _SyntheticClock(object):
 
 
 class TickLoopSupervisionTest(unittest.TestCase):
+    def test_diagnostic_trace_preserves_throw_site_and_route_counts(self):
+        state = BattleState(map_name='01_karelia')
+        state.round_id = 23
+        state.tick = 42
+
+        def broken_route():
+            bot = dict(id=19, team=2, slot=3, secret='not-for-logs')
+            route = dict(id='embankment', waypoints=[(1, 2)])
+            points = route['waypoints']
+            index = 7
+            return points[index]
+
+        with mock.patch.dict('os.environ', {'WOT_OFFLINE_DIAGNOSTICS': '1'}), \
+                mock.patch('lan_battle_server._server_log') as logger:
+            try:
+                broken_route()
+            except IndexError as error:
+                _log_tick_failure_trace(state, error)
+        parts = [json.loads(call.args[0].split('SERVER TICK TRACE ', 1)[1])
+                 for call in logger.call_args_list]
+        self.assertEqual(list(range(1, len(parts)+1)), [p['part'] for p in parts])
+        record = json.loads(''.join(p['data'] for p in parts))
+        self.assertEqual((23, 42, '01_karelia'),
+                         (record['round'], record['tick'], record['map']))
+        frame = record['frames'][-1]
+        self.assertEqual('broken_route', frame['function'])
+        self.assertEqual(7, frame['index'])
+        self.assertEqual(1, frame['points_count'])
+        self.assertEqual(19, frame['bot']['id'])
+        self.assertEqual(1, frame['route']['waypoints_count'])
+        self.assertNotIn('secret', json.dumps(record))
+        self.assertIn('IndexError', record['traceback'])
+        self.assertIn('broken_route', record['traceback'])
+        self.assertTrue(all(len(call.args[0]) < 8192 for call in logger.call_args_list))
+        self.assertIsNone(state.battle_result)
+
+    def test_normal_entry_does_not_construct_traceback(self):
+        with mock.patch.dict('os.environ', {'WOT_OFFLINE_DIAGNOSTICS': '0'}), \
+                mock.patch('lan_battle_server.traceback.format_exception',
+                           side_effect=AssertionError('normal entry formatted trace')), \
+                mock.patch('lan_battle_server._server_log') as logger:
+            _log_tick_failure_trace(object(), IndexError('bad index'))
+        logger.assert_not_called()
+
+    def test_trace_formatting_failure_cannot_replace_tick_error(self):
+        with mock.patch.dict('os.environ', {'WOT_OFFLINE_DIAGNOSTICS': '1'}), \
+                mock.patch('lan_battle_server.traceback.format_exception',
+                           side_effect=ValueError('bad formatter')), \
+                mock.patch('lan_battle_server._server_log') as logger:
+            _log_tick_failure_trace(object(), IndexError('original failure'))
+        self.assertIn('TRACE unavailable', logger.call_args.args[0])
+
     def test_one_failure_publishes_terminal_then_resets_normally(self):
         state = BattleState(map_name='01_karelia')
         connection = _CaptureConnection()

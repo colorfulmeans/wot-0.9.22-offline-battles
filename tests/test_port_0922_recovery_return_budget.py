@@ -45,7 +45,9 @@ class RecoveryPocketLogTests(unittest.TestCase):
                 'at': 29., 'yaw': 0.5, 'final': [0., 0., 1.],
                 'unbounded_history': list(range(10000))}}]})
         command = dict(movement_intent=True, recovery_mode='reverse_turn',
-                       throttle=-1., turn=1., forward_blocked_by=19)
+                       throttle=-1., turn=1., forward_blocked_by=19,
+                       planning_receipt=dict(id=[1,7,3,10.],sampled_at=10.),
+                       partial_pivot_search=dict(reason='all_arcs_refused', candidates=[]))
         from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
         with mock.patch.object(harness.module, 'detailed_enabled', return_value=False), \
                 mock.patch.object(logs, 'write_json_record') as writer:
@@ -65,4 +67,33 @@ class RecoveryPocketLogTests(unittest.TestCase):
             self.assertEqual([19, None], row['blockers'])
             self.assertEqual(0.5, row['last_execution']['yaw'])
             self.assertNotIn('unbounded_history', row['last_execution'])
+            self.assertEqual([1,7,3,10.], row['decision_id'])
+            self.assertEqual(10., row['decision_sampled_at'])
+            self.assertEqual('all_arcs_refused', row['partial_pivot_search']['reason'])
+            self.assertEqual('driver_elapsed_seconds', row['short_escape_observation']['clock_basis'])
+
+    def test_basic_feedback_skips_diagnostic_copy_but_preserves_replan(self):
+        import test_port_0922_bot_combat_manoeuvre as fixture
+        harness = fixture.LocalActionFeedbackTests()
+        harness.setUp()
+        self.addCleanup(harness.doCleanups)
+        runtime = harness.runtime
+        module = __import__(runtime.__class__.__module__, fromlist=['detailed_enabled'])
+
+        class NoDiagnosticCopy(dict):
+            def keys(self):
+                raise AssertionError('basic entry copied diagnostic collision history')
+
+        proof = dict(kind='local_sweep', yaw=0., native_sweep=dict(
+            clear=False, proved=True, status='hard', source='authoritative_body_sweep'))
+        command = dict(move_position=(0.,0.,20.), movement_intent=True,
+                       recovery_mode='blocked')
+        state = dict(id=7, yaw=0., _rotation_contact_trace=NoDiagnosticCopy(x=1),
+                     _translation_motion_receipt=NoDiagnosticCopy(x=1))
+        runtime.navigator.report_blocked_local_action = mock.Mock(return_value=True)
+        with mock.patch.object(module, 'detailed_enabled', return_value=False):
+            self.assertTrue(runtime._report_blocked_planner((0.,0.,0.), command,
+                {}, state, 10., [proof]))
+        runtime.navigator.report_blocked_local_action.assert_called_once()
+        self.assertNotIn('_planner_blocked_handoff', state)
 

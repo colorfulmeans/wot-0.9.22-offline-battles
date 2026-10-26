@@ -28,6 +28,7 @@ import socket
 import socketserver
 import threading
 import time
+import traceback
 import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -568,6 +569,68 @@ def _tick_failure_diagnostic(error):
     diagnostic = "%s: %s" % (
         error_type, detail.replace("\r", " ").replace("\n", " "))
     return diagnostic[:MAX_TICK_FAILURE_DIAGNOSTIC_CHARS]
+
+
+def _log_tick_failure_trace(state, error):
+    """Capture failure-time ownership without inspecting arbitrary locals.
+
+    This opt-in path runs only on failure. Never retry the partially applied
+    tick, serialize an actor roster, or let diagnostic work mask its error.
+    """
+    if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
+        return
+    try:
+        frames = []
+        current = error.__traceback__
+        while current is not None:
+            local = current.tb_frame.f_locals
+            row = dict(file=current.tb_frame.f_code.co_filename,
+                       function=current.tb_frame.f_code.co_name,
+                       line=current.tb_lineno)
+            for name in ('index', 'route_id', 'bot_id', 'actor', 'phase'):
+                value = local.get(name)
+                if type(value) in (int, float, str, bool) or value is None:
+                    row[name] = value[:160] if type(value) is str else value
+            for name in ('points', 'waypoints'):
+                value = local.get(name)
+                if type(value) in (list, tuple):
+                    row[name + '_count'] = len(value)
+            for name in ('bot', 'order', 'route', 'task', 'recovery'):
+                value = local.get(name)
+                if type(value) is not dict:
+                    continue
+                fields = {}
+                for key in ('id', 'team', 'slot', 'kind', 'route_id',
+                            'route_index', 'index', 'source_index', 'phase',
+                            'combat_mode', 'failed'):
+                    item = value.get(key)
+                    if type(item) in (int, float, str, bool):
+                        fields[key] = item[:160] if type(item) is str else item
+                for key in ('points', 'waypoints'):
+                    if type(value.get(key)) in (list, tuple):
+                        fields[key + '_count'] = len(value[key])
+                row[name] = fields
+            frames.append(row)
+            current = current.tb_next
+        text = ''.join(traceback.format_exception(type(error), error,
+                                                  error.__traceback__))
+        envelope = dict(round=getattr(state, 'round_id', None),
+            tick=getattr(state, 'tick', None), map=getattr(state, 'map_name', None),
+            phase=getattr(state, 'phase', None), error=_tick_failure_diagnostic(error),
+            frames=frames[-48:], frames_dropped=max(0, len(frames)-48),
+            traceback=text[:65536], traceback_truncated=len(text) > 65536)
+        payload = json.dumps(envelope, ensure_ascii=True, separators=(',', ':'))
+        # Re-encoding a JSON chunk can double backslashes/quotes. Keep even
+        # an all-escaped part below the launcher's bounded line reader.
+        chunks = [payload[i:i+2048] for i in range(0, len(payload), 2048)]
+        for index, chunk in enumerate(chunks):
+            _server_log('SERVER TICK TRACE ' + json.dumps(dict(
+                round=envelope['round'], tick=envelope['tick'],
+                part=index+1, parts=len(chunks), data=chunk), ensure_ascii=True))
+    except Exception as diagnostic_error:
+        _server_log_limited('server-tick-trace-unavailable',
+            'SERVER TICK TRACE unavailable diagnostic=%s' %
+            _tick_failure_diagnostic(diagnostic_error), interval=1.0)
 
 
 def _valid_capability_subset(value, required):
@@ -17248,6 +17311,7 @@ def _run_tick_loop(state, tick_clock=None, sleeper=None,
                     state.tick_once(interval)
                 except Exception as error:
                     consecutive_failures += 1
+                    _log_tick_failure_trace(state, error)
                     _server_log_limited(
                         "server-tick-failure:%d" % consecutive_failures,
                         "SERVER TICK failure consecutive=%d diagnostic=%s" % (
