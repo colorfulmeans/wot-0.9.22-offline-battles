@@ -1,5 +1,95 @@
 # Authored route tasks and editor connections
 
+## Build 540 Windows acceptance and next-work handoff (2026-10-27)
+
+Runtime commit: `c01b72c4bbc7b183393db93df6702effb76268e9`, identity
+`colorfulmeans-40374935928-1`. Build run `40374935928` passes all three
+packaging jobs. Independent package inspection verifies 38 frozen launcher
+modules, 220 server sources, 213 client bytecode modules, native source identity,
+unchanged navigation bytes, archive CRCs and packaged-editor smoke. All 1,224
+delivered files match the inspected archive. The source CI run `40374947240`
+still fails Great Wall opposed-gate and Fjord 24-FPS spawn-departure assertions
+(425/427 general test files pass); full source CI is not green.
+
+Five diagnostic-entry sessions completed in the requested order with lineup 30.
+The assistant only operated launch, room, close and report controls, without
+driving or firing. The user manually tested case 3; it must not be described as
+an uninterrupted, controlled AFK sample. Each report was separately copied to
+Desktop, compared byte-for-byte and checked for ZIP integrity. All multipart
+records reconstruct without remaining fragments. Default was reapplied after
+the final match; configuration 1/2 and lineup 30 remain available.
+
+| Case / configuration / map | Session suffix | Result | Bot launches / terminal receipts |
+| --- | --- | --- | --- |
+| 1 / Default / Prokhorovka | `dd5dd5f57d30` | Team 2, team eliminated | 73 / 73 |
+| 2 / Default / Ghost Town | `224721bdd8b7` | Team 2, base captured | 2 / 2 |
+| 3 / 2, one round / Ghost Town | `3dba908196a1` | Team 1, base captured | 20 / 20 |
+| 4 / 2, one round / Prokhorovka | `327adc3a9e10` | Team 2, base captured | 23 / 23 |
+| 5 / 1, zero rounds / Ghost Town | `454f215cba09` | Team 1, base captured | 0 / 0 |
+
+Both restricted cases publish 29 initial inventories totaling one each; all
+launch identities have sequence 1 and exactly matching server projectile
+terminal identities. No sequence 2 occurs. Case 3's server startup has rolled
+out of the report's server tail, but its full launcher log retains all 29 ammo
+plans. Subsequent confirmed-zero route/capture samples cover 19 Bots in case 3
+and 21 in case 4. The zero-round case publishes 29 true-zero inventories and
+all 29 have route/capture-mode fire-gate evidence; no Bot launches a projectile.
+Reload samples with positive inventory are distinguished from exhausted stock.
+All five cases have zero magazine rebase warnings, no Python traceback or
+model-refresh assertion/refusal in the retained report logs, and no worker
+disconnect before the battle result. This establishes the tested boundaries,
+not absence of gameplay bugs.
+
+Performance is still an open issue. Worker callback sample rates, in capture
+order, are: case 1 37.32/25.41/35.27 Hz; case 2 32.04/38.66/37.27 Hz;
+case 3 30.07/36.47/11.04 Hz; case 4 38.19/14.39/13.89 Hz;
+case 5 6.91/5.93/6.11 Hz. These are worker callbacks, not displayed client FPS
+or network ping, and are not a controlled before/after benchmark. In case 5,
+Bot slices consume 25.99/26.57/26.45 seconds in approximately 30-second captures;
+planner/driver, physics translation, ground probes and hull rotation remain
+substantial. The empty firing-lane queue cleanup does not solve this motion
+workload. Preserve collision/height checks and combat while investigating;
+do not infer a safe optimization solely from an expensive stage name.
+
+All five reports contain `sound-analysis.json`. Each records one native
+`2967843034 / ErrorCode 15` error per process role, 20 installed initial hooks,
+event definitions and recent calls. The new ID mapping identifies the event as
+`hangar_v2_music_lobby`; exact HIRC membership confirms an event in
+`audioww/hangar_v2.bnk`, without bank-scan failures. This is a useful positive
+identification, not proof that a nearby `gun_damaged` call caused it or that the
+native playback/loading error is fixed. Native readonly method limitations
+still apply; no undocumented native hook should be claimed observed.
+
+Keep these user-observed issues open for the next diagnostic/fix iteration:
+
+- Case 1, Bot 23 Object 261: repeated small alternating hull corrections on a
+  slope before firing at the player at 02:27:51.279, from approximately
+  (-75.370, 7.473, 249.044). Existing detailed motion receipts end before this
+  interval. Progress and a successful shot do not disprove a control loop.
+  Capture continuous, bounded yaw request/output, task owner and aim/navigation
+  arbitration around the symptom before changing ordinary combat.
+- Case 3, GC Bot 25 kills allied Object 261 Bot 23 at 02:54:10 with 44 damage.
+  The user reports no visible blue name. The shared server frag handler sets
+  `team_killer` and publishes vehicle statistics for allied kills; the retained
+  report does not prove this event's end-to-end native display. Trace event
+  production, both client consumers and native team-killer/color presentation;
+  do not dismiss the observation or declare a new artillery exception.
+- Case 3, exhausted artillery circles the player, while some artillery ignore
+  the player and Bat.-Chatillon 155/T92 aim. Exhausted inventories and
+  `spg_route_travel` are confirmed, with later positions substantially changed;
+  retained targets are allowed. These facts alone do not prove movement goals
+  are correct or explain the reported circling/aim differences. Correlate
+  actual route goal/progress, control owner and aim selection for the specific
+  Bots. Do not assume gun traverse caused it: the user explicitly checked that.
+- The user requests swapping Ghost Town team-1/team-2 SPG attack paths and
+  adopting them as the shared Default in the **next package**. Do not mutate
+  build 540 or rewrite these five matches as testing the proposed swap.
+
+Local evidence: `work/acceptance540.json`, `work/acceptance540-audit.json` and
+`work/acceptance540/case1` through `case5` in the parent workspace. Desktop
+copies are in `C:/Users/USER/Desktop/WoT_540_火炮五场诊断_20261027`.
+No main push, merge, tag or public release was performed.
+
 ## Build-539 failure corrections and complete audio receipts (2026-10-27)
 
 The Ghost Town worker failure is reproduced by an unassigned artillery Bot
@@ -48,11 +138,9 @@ Reference regression passes 35 files / 1,335 tests, with final targeted audio
 checks after diagnostic coverage additions. Launcher core passes 188 tests
 (one existing Windows symlink skip); report/audio tests pass 60 tests. The
 213 client scripts compile with CPython 2.7.18 and exact-client inspection
-passes. Logs are under `build/followup-540-*`. Final source/package CI and new
-five-match Windows acceptance are pending; the prior Great Wall/Fjord findings
-remain explicit. The requested match order is Default/Prokhorovka,
-Default/Ghost Town, one-round/Ghost Town, one-round/Prokhorovka,
-zero-round/Ghost Town, all with lineup 30 and diagnostic entry.
+passes. Logs are under `build/followup-540-*`. Final package inspection, source
+CI limitations and all five Windows acceptance results are recorded above;
+the prior Great Wall/Fjord findings remain explicit.
 
 ## Build 539 diagnostic acceptance (2026-10-27)
 
