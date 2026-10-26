@@ -154,11 +154,11 @@ class RouteRecoveryMixin:
         travel_modes = ('route', 'advance', 'parking_approach', 'base_capture')
         # Distant-contact advance still travels the authored leg. Only actual
         # combat ownership pauses it; retaining/changing aim is not a hold.
-        aiming_owns_motion = (order.get('target_id') is not None and
+        aiming_owns_motion = (not order.get('empty_ammo') and order.get('target_id') is not None and
                               bot_tactics.route_motion_identity(order) is None)
         paused = (aiming_owns_motion or order.get('team_command')
                   or order.get('defense_base_id') or order.get('combat_mode') not in travel_modes
-                  or not self._route_donor_eligible(bot)
+                  or not self._route_mobile(bot)
                   or not bot['state'].get('world_pose') or bot['state'].get('airborne')
                   or order.get('throttle_override') is not None and _number(order['throttle_override']) <= 0.)
         if paused:

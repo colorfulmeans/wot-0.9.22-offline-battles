@@ -19,7 +19,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual([(2,'heavyTank',7)],special['scopes'])
         text=str(preview.rows(special,'zh'))
         self.assertIn('100% 全部满技能',text);self.assertNotIn('75%',text)
-        self.assertEqual(12,len(preview.rows(special,'zh')))
+        self.assertEqual(13,len(preview.rows(special,'zh')))
         self.assertIn('槽位 8',text)
 
     def test_inherited_room_difficulty_is_never_fabricated_as_regular(self):
@@ -36,5 +36,16 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(values,storage.contract.effective(document,1,'heavyTank',0))
         rows=preview.rows(group,'zh')
         self.assertEqual('0 : 0 : 0（不携带炮弹）',rows[3][1])
-        self.assertIn('3 紫色',rows[2][1]);self.assertIn('全部满技能',rows[6][1])
-        self.assertEqual('%g'%bot_gunnery.skill_parameters('regular')['reaction_seconds'],rows[7][1])
+        self.assertIn('3 紫色',rows[2][1]);self.assertIn('全部满技能',rows[7][1])
+        self.assertEqual('%g'%bot_gunnery.skill_parameters('regular')['reaction_seconds'],rows[8][1])
+
+    def test_zero_and_one_limits_have_their_own_saved_source_in_both_languages(self):
+        for limit in (0,1):
+            document=storage.contract.empty()
+            document['behavior']=[dict(team=0,class_tag='all',slot=-1,values=dict(ammo_limit=limit))]
+            group=preview.grouped(document,1,'SPG','')[0]
+            for language in ('zh','en'):
+                row=next(row for row in preview.rows(group,language)
+                         if row[0]==preview.labels.parameter_label('ammo_limit',language))
+                self.assertEqual(str(limit),row[1])
+                self.assertNotIn('Difficulty default',row[2])

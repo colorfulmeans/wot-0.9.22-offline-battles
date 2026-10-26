@@ -106,18 +106,22 @@ def run(destination):
             report['route_tree_class_colors']=True
             ui.store.save(storage.contract.empty('Smoke fixture'),apply=True)
             ui.adopt(ui.store.active())
-            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all',outfit='off').items():ui.rule_vars[key].set(value)
+            for key,value in dict(skill='regular',development='full',equipment='improved',consumables='large',crew_preset='all',outfit='off',ammo_limit='0').items():ui.rule_vars[key].set(value)
             for var in ui.ammo_vars:var.set('0')
             ui.save_rule()
             report['independent_presets_and_empty_ammo']=True
             preview=ui.preview_rule();root.update()
             rendered=[preview.table.item(i,'values') for i in preview.table.get_children()]
-            assert len(rendered)==12 and any('0 : 0 : 0' in str(row) for row in rendered)
+            assert len(rendered)==13 and any('0 : 0 : 0' in str(row) for row in rendered)
             assert sum(row[0]=='Crew preset' for row in rendered)==1
+            assert any(row[0]=='Ammunition count limit' and row[1]=='0' for row in rendered)
             ui.set_language('zh');root.update()
             assert preview.root.title()=='生效值预览'
             assert any('成员配置' in str(preview.table.item(i,'values')) for i in preview.table.get_children())
             ui.set_language('en');root.update();preview.root.destroy()
+            ui.rule_vars['ammo_limit'].set('1');ui.save_rule()
+            assert any(row['values'].get('ammo_limit')==1 for row in ui.document['behavior'])
+            report['zero_one_ammo_limit']=True
             report['scoped_effective_preview']=True
             import save_slots
             slots_root=Path(temp)/'isolated-saves'

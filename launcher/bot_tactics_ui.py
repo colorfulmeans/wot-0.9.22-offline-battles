@@ -262,7 +262,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
             box.bind('<<ComboboxSelected>>',lambda e:self._behavior_help('ammo_ratios'),add='+')
         for row,key in enumerate(contract.PARAMETERS,len(fields)+1):
             ttk.Label(form,text=labels.parameter_label(key,self.language)).grid(row=row,column=0,sticky='w',pady=3)
-            lo,hi=contract.PARAMETERS[key];scale=100 if key=='lead_error' else 10
+            lo,hi=contract.PARAMETERS[key];scale=1 if key=='ammo_limit' else 100 if key=='lead_error' else 10
             values=('',)+tuple(format(i/scale,'.6g') for i in range(round(lo*scale),round(hi*scale)+1))
             var=tk.StringVar();self.rule_vars[key]=var
             box=LocalizedCombobox(form,variable=var,kind='number',values=values,language=self.language,width=35)
@@ -344,6 +344,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         }
         fallback=labels.parameter_label(key,self.language)+'：'+self.tr('继承上级设置不覆盖上级；0 是有效值。','Inherit does not override; zero is a value.')
         text=explanations.get(key,fallback) if self.zh else fallback
+        if key=='ammo_limit':text=self.tr('继承原携弹容量；整数 0—1800，只限制 BOT 携弹总数，不增加车辆容量，也不改变弹夹大小。0 为无弹，1 为总共一发；弹种仍按比例分配。','Inherit the original capacity; integer 0–1800 limits total Bot ammunition without increasing capacity or changing magazine size. Zero carries none; one carries one round. Ratios still select shell types.')
         if key=='outfit' and not self.zh:
             text='Use the existing native seasonal rented styles (F/M series), without a 100-battle expiry or a style picker. Locked outfits remain unchanged. Inherit follows the parent/difficulty; off and on override it independently.'
         if key=='development':
@@ -665,7 +666,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 value=self.rule_vars[key].get().strip()
                 if value:
                     if key=='crew_preset' and value.startswith('legacy'):values['crew_level']=int(value[6:])
-                    else:values[key]=value if key=='skill' or key in contract.PRESETS else float(value)
+                    else:values[key]=value if key=='skill' or key in contract.PRESETS else int(value) if key=='ammo_limit' else float(value)
             preview=self._refresh_ammunition()
             ratios=[v.get() for v in self.ammo_vars[:len(preview['shells']) if preview else 3]]
             if any(v!='' for v in ratios):

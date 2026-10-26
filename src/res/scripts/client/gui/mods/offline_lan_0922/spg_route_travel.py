@@ -3,7 +3,7 @@
 import copy
 import math
 
-from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime, route_network
+from gui.mods.offline_lan_0922 import bot_tactics, bot_tactics_runtime, route_network, spg_route_recovery
 
 
 def xy(value):
@@ -43,6 +43,9 @@ def _return_points(active,zone,pose):
     if active and active['kind']=='sortie_return':
         return active['points'][active['index']:]
     if active and active['kind'] == 'attack':
+        if active.get('recovery_phase') == 'home':return []
+        if active.get('recovery_phase') in ('return','return_skip'):
+            return list(reversed(active['points'][:active['index']+1]))
         # The cursor names the pending goal, not the last passed node.
         index=active['index']
         if separation(pose,xy(active['points'][index]))>bot_tactics.ROUTE_ARRIVAL_RADIUS:index-=1
@@ -57,13 +60,16 @@ def apply(runtime,state,order,now):
     mode=order.get('combat_mode')
     pose=(float(state['x']),float(state['z']))
     active=state.get('_authored_spg_travel')
+    empty=bool(order.get('empty_ammo'))
     if active and active.get('kind') in ('deploy','relocate','link','travel'):
         state.pop('_authored_spg_travel',None);active=None
-    defense=bool(order.get('defense_base_id')) or mode in ('base_defense','team_back_to_base','team_guard')
+    defense=not empty and (bool(order.get('defense_base_id')) or mode in ('base_defense','team_back_to_base','team_guard'))
     if defense:
         if not state.get('_authored_spg_defending'):
             state['_authored_spg_defending']=True
             state['_authored_spg_resume']=copy.deepcopy(active)
+            if state['_authored_spg_resume']:
+                spg_route_recovery.pause(state['_authored_spg_resume'],now)
             state['_authored_spg_return_zone']=copy.deepcopy(state.get('_authored_spg_zone') or zone)
             used=state.get('_authored_spg_zone') or zone
             initial=state.get('_spg_initial') or {}
@@ -77,7 +83,10 @@ def apply(runtime,state,order,now):
         resume=state.pop('_authored_spg_resume',None)
         zone=state.pop('_authored_spg_return_zone',None) or zone
         if resume and resume['kind'] in ('attack','sortie_return'):
-            active=_task(runtime,state,resume['kind'],resume['points'],resume['identity'])
+            if resume.get('recovery_phase'):
+                active=resume
+                spg_route_recovery.resume(active,now)
+            else:active=_task(runtime,state,resume['kind'],resume['points'],resume['identity'])
         else:active=None
         original=state.pop('_authored_spg_return_initial',None)
         if original is not None:
@@ -97,14 +106,16 @@ def apply(runtime,state,order,now):
                 if tag!='SPG':alone=False;break
         sorties=sorted(s['id'] for s in alive if s['team']==state['team'])[:3]
         routes=[r for r in settings.get('routes',()) if r.get('purpose')=='spg_attack' and r['team']==state['team']]
-        if alone and not routes:
+        if (alone or empty) and not routes:
             # No authored sortie exists. Do not let a cached deployment
             # override the existing automatic capture/combat destination.
             state.pop('_authored_spg_travel', None)
             state.pop('_authored_spg_attack', None)
             return order
-        if alone and routes and state['id'] in sorties:
-            if order.get('target_id') is not None and order.get('fire_allowed'):return order
+        if routes and (empty or alone and state['id'] in sorties):
+            if not empty and order.get('target_id') is not None and order.get('fire_allowed'):
+                if active:spg_route_recovery.pause(active,now)
+                return order
             attack=state.get('_authored_spg_attack')
             if attack is None:
                 usage=dict((r['id'],sum((s.get('_authored_spg_attack') or {}).get('id')==r['id'] for s in alive)) for r in routes)
@@ -126,19 +137,30 @@ def apply(runtime,state,order,now):
     if not defense and active['kind']=='defense':return order
     if defense and order.get('throttle_override')==0.:return order
     # Existing local combat keeps ownership; defense alone owns the moving hull.
-    if not defense and mode not in ('artillery_deploy','artillery_hold','artillery_relocate','route','advance','base_capture','spg_route_travel'):
-        active.setdefault('paused_at',now)
+    if not empty and not defense and mode not in ('artillery_deploy','artillery_hold','artillery_relocate','route','advance','base_capture','spg_route_travel'):
+        spg_route_recovery.pause(active,now)
         return order
     if 'paused_at' in active:
-        pause=now-active.pop('paused_at')
+        pause=now-active['paused_at']
+        spg_route_recovery.resume(active,now)
         if 'since' in active:active['since']+=pause
-        if active['kind']!='sortie_return':
+        if active['kind'] not in ('sortie_return','attack'):
             join=_join(runtime,state,active['points'])
             if join is not None:active['index']=join
     points=active['points']
-    while active['index']<len(points)-1 and separation(pose,xy(points[active['index']]))<=bot_tactics.ROUTE_ARRIVAL_RADIUS:
-        active['index']+=1
-    destination=xy(points[active['index']])
+    if active['kind']=='attack':
+        bases=runtime.baked_graph.get('objective_bases',())
+        radii=runtime.baked_graph.get('objective_base_radii',())
+        if len(bases)==len(radii)==2 and separation(pose,xy(bases[2-state['team']]))<=radii[2-state['team']]:
+            active.update(index=len(active['points'])-1)
+            for key in ('recovery_phase','failed_index','attack_attempt'):active.pop(key,None)
+            return dict(order,move_position=(state['x'],state['y'],state['z']),throttle_override=0.,combat_mode='base_capture')
+        destination=spg_route_recovery.advance(runtime,state,active,now)
+        points=active['points']
+    else:
+        while active['index']<len(points)-1 and separation(pose,xy(points[active['index']]))<=bot_tactics.ROUTE_ARRIVAL_RADIUS:
+            active['index']+=1
+        destination=xy(points[active['index']])
     if defense:
         episode=active.setdefault('attempt',dict(index=active['index'],since=now,best=separation(pose,destination),failures=0))
         current=separation(pose,destination)
@@ -174,4 +196,9 @@ def apply(runtime,state,order,now):
         route_anchor=(pose[0],state['y'],pose[1]),route_join=True,route_index=active['index'],
         throttle_override=None,combat_mode='base_defense' if defense else 'spg_route_travel')
     result['authored_spg_connection']=active['kind']
+    if empty:result['face_position']=result['move_position']
+    if active['kind']=='attack':
+        result['route_id']=active['identity'][1]
+        result['authored_spg_recovery']=dict(phase=active.get('recovery_phase','forward'),
+            route_id=active['identity'][1],index=active['index'],failed_index=active.get('failed_index'))
     return result

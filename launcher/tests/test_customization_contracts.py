@@ -45,6 +45,10 @@ class ProfileProtectionTests(unittest.TestCase):
             self.assertEqual([16,4],inherited['counts'])
             empty=storage.ammunition_preview('fixture','ussr:R77_KV2',{},[0,0])
             self.assertEqual([0,0],empty['counts'])
+            one=storage.ammunition_preview('fixture','ussr:R77_KV2',{'ammo_limit':1},[0,9])
+            self.assertEqual([0,1],one['counts'])
+            limited_empty=storage.ammunition_preview('fixture','ussr:R77_KV2',{'ammo_limit':0})
+            self.assertEqual([0,0],limited_empty['counts'])
 
     def test_burst_nodes_are_materialized_only_for_the_requested_gun(self):
         f=fixture.VehicleOverlayTest();f.setUp();self.addCleanup(f.doCleanups)

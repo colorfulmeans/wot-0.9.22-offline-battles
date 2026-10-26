@@ -211,6 +211,7 @@ class RouteTasksMixin:
             self._apply_base_capture_order(order,bot,target)
 
     def _task_apply(self, order, bot, now, defense_record=None, player_order=None, defense=None):
+        if bot.get('empty_ammo'):return
         actor = bot['id']
         combat = self._task_combat(order)
         previous=self._previous_player.get(actor)

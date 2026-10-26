@@ -332,6 +332,7 @@ def ammunition_preview(game_root, vehicle, values, ratios=None):
     ordered=ammo_policy.ordered(profile)
     if ratios is None:profile.pop('ammo_ratios')
     else:profile['ammo_ratios']=list(ratios)
+    if 'ammo_limit' in values:profile['ammo_limit']=values['ammo_limit']
     counts=ammo_policy.allocation(profile,int(float(gun['maxAmmo'])),len(shells))
     listed=read(nation+'/list.xml')[name]
     return dict(vehicle=vehicle,gun=modules['gun'],shells=ordered,counts=counts,clip_size=profile['clip_size'],fixed=isinstance(listed.get('price'),dict) and 'gold' in listed['price'])

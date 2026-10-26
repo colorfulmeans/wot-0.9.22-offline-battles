@@ -36,6 +36,7 @@ PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
     'converged_factor': (1.0, 5.0), 'aim_bias_factor': (0.0, 4.0),
     'lead_error': (0.0, 1.0),
+    'ammo_limit': (0, 1800),
 }
 TEXT = (str, type(u''))
 ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,47}$')
@@ -115,6 +116,8 @@ def normalize_values(raw):
             if value not in PRESETS[key]:
                 raise TacticsError('Unsupported %s preset' % key)
             out[key] = value
+        elif key == 'ammo_limit':
+            out[key] = integer(value, 0, 1800)
         elif key == 'ammo_ratios':
             if not isinstance(value, (tuple, list)) or not 1 <= len(value) <= 8:
                 raise TacticsError('Ammunition ratios require 1..8 digits')

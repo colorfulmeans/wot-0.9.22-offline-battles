@@ -1,5 +1,55 @@
 # Authored route tasks and editor connections
 
+## Empty ammunition and artillery recovery follow-up (2026-10-26)
+
+An explicit, nonempty, shape-valid inventory of numeric zeros enters a
+round-owned empty-ammunition state. Missing inventory, reload, empty magazine
+with reserves, invalid data and a depleted selected shell with another shell
+available do not enter it. The state retires old player, defense, pressure,
+combat, parking and recovery ownership once, then retains its own route and
+recovery progress. It overrides ordinary task admission without changing
+armed-vehicle combat. Aim and existing launch checks remain active; hull travel
+has priority over firing pivots. Already launched shots retain their ledgers.
+
+Ordinary vehicles resume their original effective road, skip all waits and
+capture the opposing circle. Hits and contacts do not pause travel. Arrivals
+hold the circle and re-enter after a shove. Empty vehicles are excluded from
+player-command recipients, defense and pressure donors; physical road occupancy
+is retained. Their own mobility/recovery checks are separate from donor
+eligibility. State is cleared for a new round and pruned for departed vehicles.
+
+Empty artillery returns home and follows its authored endgame road even in a
+mixed team and beyond the normal three-artillery selection limit. Missing
+authoring retains automatic enemy-base navigation. Authored attacks now use
+C timeout -> D -> reverse B/A -> old first node -> own base -> another road's
+first node. Returning and transfer remain recovery; combat pauses the clock
+only for armed artillery. Include effective ordinary main/reserve roads,
+deduplicate equal geometry, reject failed route/entry navigation checks, prefer
+least occupancy and randomly choose equal candidates. Avoid the failed geometry
+when any other valid road exists; otherwise retry it without a stop counter.
+Reserve a switched road before another artillery chooses. Preserve existing
+local avoidance, steering, collision and navigation laws.
+
+The optional behavior `ammo_limit` is an integer 0..1800, inherited when absent.
+It caps initial Bot stock at the installed gun capacity without changing that
+capacity, player inventory, magazine size or shell-ratio policy. Allocation,
+preview, canonical storage and manifest sanitization share it. Zero and one
+provide reproducible saved configurations for the requested empty/last-shot
+native acceptance, including partially filled native magazines.
+
+Coverage includes inventory negatives and round lifecycle, once-only handoff,
+external-command rejection versus own recovery, timed/permanent waits, retained
+aim with navigation hull facing, circle hold/re-entry, no-route fallback, exact
+zero/one stock and one-round exhaustion, mixed-team/fourth-SPG admission,
+blocked return loops, combat pause, base/spawn offsets, immediate road claims,
+reserve admission and disconnected entry rejection through the real graph.
+Run the focused source and launcher tests, Python 2.7 compilation, the isolated
+reference suite and exact-commit CI. Native acceptance is three separate AFK
+matches: configuration 1 (zero), configuration 2 (one round), then lineup 30
+(all artillery) with Default. Generate and preserve one report per session on
+the Desktop; only after all three finish compare their reports. These tests do
+not establish native motion or performance before those matches.
+
 ## Approved behavior
 
 The task priority is automatic base defense, existing combat (including its

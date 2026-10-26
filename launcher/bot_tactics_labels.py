@@ -155,6 +155,7 @@ PARAM_NAMES = {
     'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),
     'aim_bias_factor': ('瞄准点偏差系数', 'Aim-point bias factor'),
     'lead_error': ('移动目标提前量误差', 'Lead error fraction'),
+    'ammo_limit': ('携弹数量上限', 'Ammunition count limit'),
 }
 VALIDATION_NAMES = {
     'navigation_cells_clear': ('导航格检查：节点及直线连接未发现问题', 'Grid check: nodes and straight connections clear'),

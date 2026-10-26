@@ -93,6 +93,7 @@ def apportion(total, proportions):
 
 
 def allocation(profile, maximum, shell_count):
+    if 'ammo_limit' in profile:maximum = min(int(maximum), int(profile['ammo_limit']))
     shells = stages(profile)
     size = clip_size(profile)
     units, remainder = divmod(int(maximum), size)

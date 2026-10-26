@@ -517,6 +517,8 @@ class BotAdapter(object):
         bot_id = int(state.get('id', 0))
         position = _position(state.get('position'))
         strategic = capture_orders.constrain(strategic, position)
+        if strategic.get('empty_ammo'):
+            strategic = dict(strategic, face_position=strategic.get('move_position'))
         return self._drive_order(
             bot_id, state, position, strategic, direction_clear)
 
@@ -810,7 +812,8 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
-                    progress_identity=(bot_tactics.route_motion_identity(strategic) or
+                    progress_identity=(('empty_ammo', strategic.get('route_id'), strategic.get('route_index'))
+                        if strategic.get('empty_ammo') else bot_tactics.route_motion_identity(strategic) or
                         (('combat', strategic.get('target_kind'), strategic['target_id'])
                         if strategic.get('target_id') is not None and
                         not strategic.get('parking_phase') and strategic.get('combat_mode') not in
@@ -904,6 +907,9 @@ class BotAdapter(object):
             flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
+        if strategic.get('empty_ammo'):
+            result['empty_ammo'] = True
+            result['movement_priority'] = 'empty_ammo_capture'
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))

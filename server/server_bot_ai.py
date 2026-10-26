@@ -24,6 +24,8 @@ from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
 from gui.mods.offline_lan_0922 import capture_orders
 from server_route_recovery import RouteRecoveryMixin, ROUTE_ATTEMPT_SECONDS, MIN_ROUTE_AFFINITY
 from server_route_tasks import RouteTasksMixin
+from server_empty_ammo import EmptyAmmoMixin
+from gui.mods.offline_lan_0922 import empty_ammo
 from gui.mods.offline_lan_0922.ai.cover import (
     normalize_candidate,
     score_candidates,
@@ -173,7 +175,7 @@ def _order_signature(order):
     return signature
 
 
-class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
+class BotPlanner(EmptyAmmoMixin, RouteTasksMixin, RouteRecoveryMixin):
     """Server-side route, focus-fire, and last-contact order coordinator."""
 
     def __init__(self):
@@ -196,6 +198,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._task_init()
+        self._empty_ammo_bots = set()
         self._engage_anchors = {}
         self._firing_holds = {}
         self._affordances = {}
@@ -236,6 +239,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         self._route_balance_receipts = {}
         self._next_route_rebalance = {1: 0.0, 2: 0.0}
         self._task_init()
+        self._empty_ammo_bots = set()
         self._engage_anchors = {}
         self._firing_holds = {}
         self._affordances = {}
@@ -523,7 +527,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
                 if (bot is None or
                         bot["team"] != _integer(raw.get("team"))):
                     continue
-                result[bot_id] = dict(raw)
+                if not empty_ammo.active(bot):result[bot_id] = dict(raw)
         return result
 
     @staticmethod
@@ -729,6 +733,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         contacts = self._prune_contacts(known_targets, now)
         bots = self._alive_bots(manifest, bot_states, self.tactics)
         self._prune_tactical_state(bots, known_targets, now)
+        self._empty_ammo_update(bots)
         defenders = self._update_base_defense(
             bots, contacts, defense, now)
         self._cover_reservations = set()
@@ -787,7 +792,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
                 combat = self._task_combat(order)
                 automatic = (bot['id'] in defenders.get(team,{}) or bot['id'] in self._route_recoveries or
                     (self._travel_tasks.get(bot['id']) or {}).get('kind') in ('defense','pressure'))
-                if combat or automatic:
+                if combat or automatic or bot.get('empty_ammo'):
                     if player_order:order['player_command_cancelled'] = True
                     player_order = None
                 else:
@@ -1066,6 +1071,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
 
     @staticmethod
     def _base_defense_eligible(bot):
+        if empty_ammo.active(bot):return False
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         if not bool(state.get("world_pose", True)):
             return False
@@ -1079,6 +1085,11 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
     @staticmethod
     def _route_donor_eligible(bot):
         """Require current pose and mobility for a route reassignment."""
+        return not empty_ammo.active(bot) and BotPlanner._route_mobile(bot)
+
+    @staticmethod
+    def _route_mobile(bot):
+        """Physical travel eligibility also applies to empty-ammo recovery."""
         state = bot.get("state") if isinstance(bot.get("state"), dict) else {}
         if state.get("world_pose") is not True:
             return False
@@ -2659,7 +2670,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
                 catalog[str(route.get('id') or '')] = route
                 protected_ids.add(bot['id'])
         for bot in bots:
-            if bot["id"] in self._route_recoveries or bot['id'] in self._travel_tasks:
+            if bot["id"] in self._route_recoveries or bot['id'] in self._travel_tasks or empty_ammo.active(bot):
                 continue
             route = bot.get("route") if isinstance(bot.get("route"), dict) else {}
             route_id = str(route.get("id") or "")
@@ -3242,7 +3253,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         route_id = str(route.get("id") or "uploaded_route")
         authored = bot_tactics.route_config(
             self.tactics, self.tactics_map, route_id, bot['team'], waypoints)
-        scripted = authored is not None and (not authored.get('default') or
+        scripted = not bot.get('empty_ammo') and authored is not None and (not authored.get('default') or
                     any(len(p) > 3 for p in authored['points']))
         route_limit = len(waypoints) - 1
         state = self._route_states.get(bot["id"])
@@ -3315,7 +3326,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
             if not history and scripted:
                 index = 0
                 entry['source'] = 'first_scripted_instruction'
-            if authored is not None and not history and len(waypoints)>1 and not authored['points'][0][2]:
+            if not bot.get('empty_ammo') and authored is not None and not history and len(waypoints)>1 and not authored['points'][0][2]:
                 index=min(1,route_limit)
                 entry['source']='fixed_spawn_next_node'
             entry.update(selected_index=index, selected_point=_point(waypoints[index]))
@@ -3354,7 +3365,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
         state.pop('parking_slot', None)
         while True:
             authored_point = authored['points'][index] if authored is not None else ()
-            places = bot_tactics.waiting_positions(authored_point)
+            places = [] if bot.get('empty_ammo') else bot_tactics.waiting_positions(authored_point)
             if places:
                 completed, parking = self._wait_parking(bot, state, route_id, index, places, now)
                 if not completed:
@@ -3394,6 +3405,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
 
     def _handoff_route_terminal(self, order, bot, capture_target, now):
         """Retire completed macro travel, without consuming local path corners."""
+        if bot.get('empty_ammo'):return
         route = (self._route_assignments.get(bot['id']) or {}).get('route') or bot.get('route') or {}
         points = route.get('waypoints') or []
         route_state = self._route_states.get(bot['id'])
@@ -3599,6 +3611,7 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
 
     def _apply_authored_route_order(self, order, bot, route_point, now=None):
         """Apply explicit parking/travel instructions without suppressing aim."""
+        if bot.get('empty_ammo'):return
         if bot['id'] in self._route_recoveries or bot['id'] in self._travel_tasks:
             return
         if order.get('defense_base_id') or order.get('combat_mode') == 'base_capture':
@@ -4151,6 +4164,8 @@ class BotPlanner(RouteTasksMixin, RouteRecoveryMixin):
             health_fraction=health_fraction,
             weapon_ready=self._weapon_ready(bot),
             retreat_before=retreat_before)
+        if bot.get('empty_ammo'):
+            return self._empty_ammo_order(order, bot, contacts, capture_target, now)
         if travel_override is not None:
             if focus is not None:
                 observers = focus.get("shootable_by_bot_ids")

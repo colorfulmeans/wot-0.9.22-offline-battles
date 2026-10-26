@@ -5351,6 +5351,9 @@ class BattleState:
         profile["burst_size"] = max(1, min(64, int(_finite_float(raw.get("burst_size"), 1))))
         profile["clip_size"] = max(1, min(MAX_PLAYER_CLIP_SIZE, int(_finite_float(raw.get("clip_size"), 1))))
         profile["shells"] = []
+        if 'ammo_limit' in raw:
+            from gui.mods.offline_lan_0922.bot_tactics import normalize_values
+            profile['ammo_limit'] = normalize_values({'ammo_limit':raw['ammo_limit']})['ammo_limit']
         if 'ammo_ratios' in raw:
             from gui.mods.offline_lan_0922.bot_tactics import normalize_values
             profile['ammo_ratios'] = normalize_values({'ammo_ratios':raw['ammo_ratios']})['ammo_ratios']
@@ -6074,6 +6077,9 @@ class BattleState:
     @staticmethod
     def _team_command_bot_can_respond(bot, current_order, command):
         """Keep only Bots that can move to answer a broadcast radio call."""
+        from gui.mods.offline_lan_0922 import empty_ammo
+        if empty_ammo.confirmed(bot) or (current_order or {}).get('empty_ammo'):
+            return False
         try:
             has_pose = bool(bot.get("world_pose", True))
             finite_pose = all(math.isfinite(float(bot.get(name)))

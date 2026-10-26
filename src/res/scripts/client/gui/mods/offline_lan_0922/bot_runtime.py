@@ -36,7 +36,7 @@ from gui.mods.offline_lan_0922 import gun_pitch_limits
 from gui.mods.offline_lan_0922 import hull_aiming
 from gui.mods.offline_lan_0922 import prebaked_navigation
 from gui.mods.offline_lan_0922 import spg_positions
-from gui.mods.offline_lan_0922 import spg_route_travel, bot_tactics, bot_tactics_runtime
+from gui.mods.offline_lan_0922 import spg_route_travel, bot_tactics, bot_tactics_runtime, empty_ammo
 from gui.mods.offline_lan_0922 import shot_geometry
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
@@ -171,6 +171,10 @@ def _order_evidence(order):
         value = order.get(key)
         result[key] = dict(value) if isinstance(value, dict) else (
             tuple(value) if isinstance(value, (list, tuple)) else value)
+    for key in ('authored_spg_connection', 'authored_spg_recovery', 'empty_ammo', 'movement_priority'):
+        if key in order:
+            value = order[key]
+            result[key] = dict(value) if isinstance(value, dict) else value
     return result
 
 
@@ -4061,6 +4065,7 @@ class BotRuntime(object):
             profile = agent.get('profile', {})
             if 'ammo_ratios' in values:
                 profile['ammo_ratios'] = list(values['ammo_ratios'])
+            if 'ammo_limit' in values:profile['ammo_limit'] = values['ammo_limit']
             route = agent.get('route') or {}
             max_health = max(1, int(getattr(descriptor, 'maxHealth',
                                             raw.get('max_health', 1000))))
@@ -15418,6 +15423,7 @@ class BotRuntime(object):
 
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
+        if order.get('empty_ammo'):return order
         followup = self._magazine_followup_order(state, order, targets, now)
         if followup is not None:
             state['_rear_motion_observation'] = dict(at=now,
@@ -15604,7 +15610,7 @@ class BotRuntime(object):
         """
         approach_speed, speed_basis = self._mechanical_approach_speed(state)
         blocked_contact = (speed_basis == 'realised_player_contact' and abs(approach_speed) <= 1.0)
-        eligible = ((state.get('profile') or {}).get('class_tag') != 'SPG' and
+        eligible = (not order.get('empty_ammo') and (state.get('profile') or {}).get('class_tag') != 'SPG' and
                     not order.get('parking_phase') and
                     (order.get('combat_mode') in ('engage', 'support_hold', 'cover_hold', 'hold') or
                      (order.get('combat_mode') == 'advance_contact' and blocked_contact)))
@@ -17059,6 +17065,9 @@ class BotRuntime(object):
                 }
                 reposition_order, reposition_expired = \
                     self._friendly_reposition_order(state, targets, now)
+                if (server_order or {}).get('empty_ammo'):
+                    empty_ammo.handoff(self,state,server_order)
+                    reposition_order=None
                 if (reposition_order is not None and
                         callable(decide_with_order)):
                     if diagnostic is not None:
@@ -17390,6 +17399,7 @@ class BotRuntime(object):
                 state['yaw'], hull_aim_yaw, minimum_yaw, maximum_yaw,
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
+                not command.get('empty_ammo') and
                 command.get('combat_mode') != 'base_defense' and
                 # Parking releases rear laying in _rear_laying_order. Do not
                 # recreate that episode later in the same control update and

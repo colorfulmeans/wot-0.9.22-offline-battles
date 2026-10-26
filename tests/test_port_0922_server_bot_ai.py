@@ -462,7 +462,7 @@ class ServerBotTacticsTests(unittest.TestCase):
             (True, _weapon_state(
                 _state(11, 1, 0, 0), reload_time=20.0,
                 clip=0, clip_size=3, reload_pending=True)),
-            (False, _weapon_state(
+            (True, _weapon_state(
                 _state(11, 1, 0, 0), ammunition=(0,))),
             (True, _weapon_state(_state(11, 1, 0, 0))),
         )
@@ -546,7 +546,10 @@ class ServerBotTacticsTests(unittest.TestCase):
                       planner.build_orders(
                           manifest, states, players, 1.5)['orders'])
 
-        self.assertIsNone(orders[11]['target_id'])
+        self.assertEqual(2, orders[11]['target_id'])
+        self.assertTrue(orders[11]['empty_ammo'])
+        self.assertFalse(orders[11]['fire_allowed'])
+        self.assertIsNone(orders[11]['throttle_override'])
         self.assertNotIn(11, planner._target_assignments)
         self.assertEqual(2, orders[12]['target_id'])
         self.assertTrue(orders[12]['fire_allowed'])

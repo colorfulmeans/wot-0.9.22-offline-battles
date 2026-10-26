@@ -7,7 +7,7 @@ import bot_tactics_labels as labels
 import bot_tactics_store as storage
 from gui.mods.offline_lan_0922 import bot_gunnery
 
-FIELDS = ('skill','development','equipment','ammo_ratios','consumables','outfit',
+FIELDS = ('skill','development','equipment','ammo_ratios','ammo_limit','consumables','outfit',
           'crew_preset','reaction_seconds','patience_seconds','converged_factor',
           'aim_bias_factor','lead_error')
 DEFAULTS = {
@@ -68,6 +68,9 @@ def rows(group, language):
         elif key=='crew_preset' and 'crew_level' in values:
             value=tr('%s%%（旧方案等级；技能跟随难度）','%s%% (legacy level; skills follow difficulty)')%values['crew_level']
             origin=source('crew_level')
+        elif key=='ammo_limit':
+            value=tr('继承车辆原携弹容量','Inherit vehicle ammunition capacity')
+            origin=tr('现有装弹规则','Current ammunition rules')
         elif key=='ammo_ratios':
             value=tr('按实际主炮及弹种白名单自动配比','Automatic ratios for the actual gun and shell whitelist')
             origin=tr('现有装弹规则','Current ammunition rules')
