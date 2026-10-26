@@ -36,20 +36,35 @@ leaving invalid endpoints. All other map/route data remains unchanged. Local
 test profiles 1/2 must copy the new Default map data while retaining their zero/
 one-round behavior rules before native acceptance.
 
-Local validation passes 8 focused reference files / 1,655 tests, 4 final
-diagnostic/ownership files / 57 tests, and 3 Windows editor files / 23 tests.
-All 214 client sources compile under CPython 2.7.18; exact #1513 client
-inspection passes. Reference tests use the existing engine-free Linux seam,
-not a loaded Windows x86 extension. The initial direct Windows/embeddable
-interpreter attempts lack that native extension or Tk and are not acceptance
-evidence. Logs are retained under `build/followup-541-*`. The broader 38-file / 1,380-test regression passes. Build 541 package
-preflight exposed a standalone binding import regression in full source CI;
-the diagnostic import now uses the canonical package path. The standalone
-binding, diagnostic/ownership and log-mode regressions pass after correction.
-Build 541 is superseded before native acceptance. Exact-commit CI, replacement
-package inspection and requested new matches remain to be recorded after completion.
+Final committed-source validation passes 39 reference files / 1,428 tests,
+4 focused files / 86 tests and 3 Windows editor files / 23 tests. All 214
+client sources compile under CPython 2.7.18; exact #1513 inspection passes.
+Reference tests use the existing engine-free Linux seam, not a loaded Windows
+x86 extension. Initial interpreter attempts without native extensions or Tk
+are retained but are not product acceptance evidence. Build 541 preflight
+exposed a standalone binding import regression; the canonical absolute import
+fix is included in replacement runtime commit
+`ec73c4d8dbb03c0a5a2a8f95ec7ad178a1da420f`.
 
-Next Windows acceptance uses lineup 30: Default/Prokhorovka,
+Build 542 run `40393572785` passes all three packaging jobs, identity
+`colorfulmeans-40393572785-1`. Independent inspection verifies 38 frozen
+launcher modules, 221 server source files, 214 client bytecode modules, native
+source identity, unchanged navigation graph bytes, archive CRCs and packaged
+editor smoke. All 1,225 delivered files match the inspected archive. Source CI
+`40393580992` passes Windows server/editor, navigation-resolution and native
+geometry jobs. General tests pass 426/428 files; only the retained Great Wall
+opposed-gate and Fjord 24-FPS departure assertions fail. Bot tests pass 147/148
+files, with the same Fjord failure. Full source CI is not green.
+
+Exact #1513 client disassembly establishes that
+`VehicleArenaInfoVO.isTeamKiller(playerTeam)` returns false for the other team;
+`ArenaDataProvider` supplies the player's team. Thus an enemy GC killing an
+enemy 261 can remain enemy-colored by native UI policy. That observation alone
+is not a missing accounting defect. New server/client/native receipts still
+need to establish actual accounting independently; no blue-name rule changed.
+Primary evidence: `work/blue-542-client-contract.txt`.
+
+Windows acceptance uses lineup 30: Default/Prokhorovka,
 Default/Ghost Town, two one-round Ghost Town matches, two one-round
 Prokhorovka matches and zero-round Ghost Town. An additional Prokhorovka
 sample is allowed for hull-yaw observation. In restricted Ghost Town matches,
@@ -57,6 +72,90 @@ the assistant may drive the player to enemy spawn as explicitly requested;
 these are active interaction tests rather than pure AFK. If killed before the
 post-last-shot behavior can be observed, repeat that sample. Preserve each
 diagnostic report separately on Desktop and restore Default afterwards.
+
+### Build 542 native acceptance and next-work handoff
+
+All seven sessions completed on the inspected package. Each generated report
+is separately copied to Desktop, compared byte-for-byte and ZIP-CRC checked;
+multipart diagnostic reconstruction has no pending fragments.
+
+| Case / configuration / map | Session suffix | Result | Bot launches / terminal receipts |
+| --- | --- | --- | --- |
+| 1 / Default / Prokhorovka | 07a68aa6a520 | 15-minute draw | 68 / 68 |
+| 2 / Default / Ghost Town | 2a56aaed5f3d | Team 2 elimination | 65 / 65 |
+| 3 / one round / Ghost Town | 10b008d1b762 | Team 1 capture | 23 / 23 |
+| 4 / one round / Ghost Town | 4590ba45297e | Team 1 capture | 20 / 20 |
+| 5 / one round / Prokhorovka | 4a7c51ada7d5 | Team 2 capture | 21 / 21 |
+| 6 / one round / Prokhorovka | 20ee50880fdc | Team 1 capture | 19 / 19 |
+| 7 / zero rounds / Ghost Town | bb2676feecbf | Team 2 capture | 0 / 0 |
+
+All 29 BOT inventories in each one-round session start at exactly one, and no
+BOT launches sequence 2. Case 3 compact controls cover all 23 shooters after
+depletion: 1,841 travel and 84 capture records, with no empty `engage` records.
+1,312 empty records retain distinct gun aim and navigation-facing positions.
+Positive reload timers coexist with actual zero stock in 381 samples; the
+trigger is stock exhaustion, not merely reloading.
+
+No model-refresh assertion/refusal or Python traceback appears in these seven
+reports. The known sound error remains once in each process role per session;
+it is identified as `hangar_v2_music_lobby` / event 2967843034 / error 15 and is
+not declared fixed. No team-killer receipt occurs, so these sessions do not
+independently exercise an allied-kill accounting transition.
+
+Case 7 proves all 29 BOT inventories start with every shell type at zero,
+with no launch or terminal projectile. Both the bulk and compact diagnostic
+streams cover all 29 depleted BOTs. The compact stream contains 2,886 travel and
+45 capture records, no empty `engage` records, and 1,206 distinct gun-aim versus
+navigation-facing positions. All four one-round samples conserve every launch
+through its terminal receipt, never launch sequence 2 and retain zero stock;
+there is no observed stock rebase. Death before firing explains why not every
+initial BOT necessarily produces a shot.
+
+Worker 30-second callback samples are 38.12/26.51/34.31 Hz (case 1),
+30.76/36.59/27.49 (2), 30.92/35.72/24.03 (3), 31.78/36.02/18.97 (4),
+35.37/14.41/10.67 (5), 35.54/14.82/9.82 (6), and 6.77/7.89/5.94 (7).
+The all-empty workload remains slow. These are observational samples, not a
+paired performance benchmark or a claimed overall speedup. Case 5's last
+window spends 24.70 of 29.90 seconds inside `bot.slice` (inclusive); its completed
+wait sample has p50 565 ms and p95 913 ms. This warrants further stage profiling,
+not speculative removal of collision, physics or combat checks.
+
+Case 1 still exposes a stocked-SPG late-game stall: five surviving SPGs remain
+in `engage` until timeout after firing stops. Low alignment/collision-probe
+records and old aim-intent timestamps are evidence for continued audit, not a
+proved cause. Existing ordinary combat remains unchanged. Turn-direction
+reversals also occur while vehicles make substantial progress; no sampled
+window in case 1 with at least eight reversals over ten seconds has under two
+metres of endpoint displacement. This does not rule out moving hull oscillation.
+The same screen across cases 2/3/4/5/6/7 finds 16/5/0/1/0/2 overlapping windows
+under two metres; these are windows, not distinct incidents. Case 5 BOT 29 at
+worker time 749.693 has 11 reversals in 11.04 seconds, 0.435 m displacement,
+empty stock and `base_capture`; actual control samples have `hull_aiming=false`
+and retain the navigation-facing owner. Case 7 BOT 17 has eight reversals in
+11.182 seconds, 0.88 m displacement during `sortie_return`; BOT 4 has eight
+in 10.637 seconds, 1.875 m during attack recovery `skip`. Thus repeated small
+steering is not declared solved or dismissed as ordinary progress. The reports
+contain the needed control/traffic/path context for the next audit; no new
+ordinary-combat behavior was changed during these acceptance matches.
+
+Active driving to enemy spawn is not completed: injected game driving/menu
+keys produced no observed response, although mouse UI and OS close work. A
+manual-driving request is pending. Case 2 includes unsuccessful driving-input
+attempts; cases 3-7 are AFK. These samples must not be represented as successful
+close-range enemy-spawn interaction tests. The remaining acceptance gap is the
+requested active enemy-spawn observation after the last shot, not the seven
+completed match runs. No assistant shot was fired. Default was reapplied via
+the editor and verified in `active.json` after case 7. Profiles 1/2 retain their
+zero/one-round rules and their complete map data still equals the new Default;
+lineup 30 and the selected Object 260 remain available.
+
+Local evidence inventory: `work/acceptance542.json`,
+`work/acceptance542-audit.json`, and per-case `summary.json`, `decoded.jsonl`,
+`sound-analysis.json`, `turn-windows-review.json` under `work/acceptance542/`.
+Desktop reports are in `C:/Users/USER/Desktop/WoT_542_火炮七场诊断_20261027`.
+The test package is `WoT-0.10.2-test-542-artillery-control`; runtime remains
+`ec73c4d8dbb03c0a5a2a8f95ec7ad178a1da420f`. The subsequent handoff commit
+only documents acceptance and does not change shipped runtime bytes.
 
 ## Build 540 Windows acceptance and next-work handoff (2026-10-27)
 
