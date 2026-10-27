@@ -34,7 +34,8 @@ Diagnostic-entry lifecycle receipts now include controller/slot state before
 and after music controller init/destroy/stopMusic and SoundGroups unload/preload.
 These rare transition receipts bypass the ordinary distinct-call logging cap;
 normal entrance installs no sound wrappers. Native bank auto-load is still
-unobserved; only native acceptance can establish whether this fixes error 15.
+unobserved. Final 548 acceptance below verifies the stale-slot repair in ten
+process roles without claiming a global audio-device/bank repair.
 
 Fjord worker callbacks fall to about 7.5 Hz for two 30-second windows, then
 recover as the round progresses. A captured 30-second interval spends 26.25
@@ -61,12 +62,74 @@ diagnostic-presence assertions; the final rerun uses the intended diagnostic
 entrance and passes. Sound/report suites pass 61 tests (five Windows symlink
 cases skipped). The source-derived native drive validator is updated to receive
 the same slice roster; its initial omitted local failed CI rather than runtime.
-Full native pipeline parity and downloaded-package checks remain required before
-delivery. Exact #1513 inspection passes; all 215 client modules
-compile with CPython 2.7.18. Native plan is five diagnostic-entry random matches
-with Default BOT/lineup and player vehicles Object 260, T-34-3, KV-220-2, Sexton I
-and MS-1, in that order. Reports must be preserved separately on Desktop and
-audited before this task is complete.
+Full native state/query/effect pipeline parity passes final source CI
+`40456326811`, together with Windows server/editor and navigation-resolution.
+The general gate retains Great Wall opposed-gate cleanup and Fjord 24-FPS
+departure failures (428/430 files pass); BOT regressions retain the same Fjord
+failure (147/148 files pass). The whole workflow is not green. Exact #1513
+inspection passes; all 215 client modules compile with CPython 2.7.18.
+
+Final runtime commit `9966eb70435227ef62ddfe0009be8144e4de31e4`, build 548 run
+`40456319473`, identity `colorfulmeans-40456319473-1`. All three packaging jobs
+pass. Independent inspection of the downloaded artifact verifies 38 frozen
+launcher modules, 222 server sources, 215 client bytecode modules, x64 launcher,
+native source identity, unchanged navigation bytes, outer/nested archive CRCs
+and packaged editor smoke. All 1,226 delivered files match the inspected package.
+Download: `WoT-0.10.2-test-548-sound-worker.zip`.
+
+Native acceptance is five diagnostic-entry random matches with Default BOT,
+Automatic lineup, random map/level/difficulty/classes/team and player vehicles
+Object 260, T-34-3, KV-220-2, Sexton I and MS-1, in that order. Each match must
+finish naturally with no assistant driving/firing. Reports are independently
+copied and byte/CRC checked in Desktop `WoT_548_随机五车诊断_20261027`.
+All five complete and all five reports are audited. Initial build 547's Prague
+match is excluded from this acceptance.
+
+| Player | Random map | Session suffix | Natural result | Accepted BOT shots / terminals | Worker callback Hz (three captured windows) |
+| --- | --- | --- | --- | --- | --- |
+| Object 260 | `08_ruinberg` | `b438a76f7961` | Team 2 capture | 244 / 244 | 7.83, 7.14, 19.45 |
+| T-34-3 | `59_asia_great_wall` | `2a8677c21767` | Team 2 capture | 195 / 195 | 8.28, 9.59, 14.99 |
+| KV-220-2 | `22_slough` | `a8cec82b59ec` | Team 2 capture | 230 / 230 | 9.04, 9.27, 21.78 |
+| Sexton I | `01_karelia` | `31703b58960e` | Team 2 capture | 219 / 219 | 8.76, 9.94, 26.23 |
+| MS-1 | `38_mannerheim_line` | `e1e9bf4989d5` | Team 1 elimination | 229 / 229 | 10.07, 10.43, 42.54 |
+
+Both visible client and hidden worker clear the remembered lobby slot before
+each map preload; all ten roles report zero sound errors. No model-refresh
+assertion/refusal, Python failure, BOT state rebase or pending multipart residue
+appears. All 1,117 accepted BOT projectiles settle. MS-1 sample additionally has
+one aligned worker fire request (`1:b:26:8`) rejected by canonical authority
+after BOT 26 dies: `BOT SHOT SUPPRESSED`, `canonical_vehicle_dead`, health 0.
+It never creates a projectile and must not be counted as a missing terminal.
+The report analysis now distinguishes aligned requests, suppressed requests and
+accepted projectiles. The T-34-3 report's bounded server tail omits startup;
+its launcher log retains all 29 initial ammo plans, matching the live capture.
+
+Short-turn screening is evidence, not a stuck-loop verdict. Karelia SU-26 / BOT
+30 has one overlapping deployment-to-hold window with ten sign changes in
+10.55 seconds and 1.20 m displacement. It then holds stably; the control history
+contains a sustained one-direction turn toward the authored emplacement heading.
+Mannerheim SU-18 / BOT 13 has five overlapping deployment windows below 2 m,
+including nine sign changes in 10.85 seconds / 0.38 m. It later reaches its
+emplacement, holds and enters sortie travel. These samples do not establish a
+persistent combat-control loop or permanent blockage; retain current behavior
+and the existing driver/navigation/traffic/rotation evidence for follow-up.
+No unsupported combat or physics change is made from a turn-counter heuristic.
+
+Worker low-frequency windows persist under detailed diagnostics, especially
+with the full roster alive. Different maps, tiers, survivors and combat load
+prevent an uncontrolled before/after speedup claim. The measured result does
+not show that the performance issue is solved or isolate diagnostic overhead.
+The shipped optimization removes confirmed preparation allocations only; it
+does not reduce probe counts, precision, update cadence or safety checks.
+Other retained startup warnings concern unsupported offline Vivox, RSS and
+Scaleform/settings containers; none is the former lobby WWISE error 15.
+
+Evidence: workspace `work/acceptance548.json`, `work/acceptance548-audit.json`,
+`work/acceptance548-music-audit.json`, each extracted case's
+`turn-windows-review.json`, `work/followup-548-package-verification.json` and
+`work/followup-548-delivery-proof.json`. No raw user logs are uploaded to the PR.
+The final evidence-only documentation commit is newer than the tested runtime
+commit above and does not change the delivered package.
 
 ## Build 545 adapter acceptance correction (2026-10-27)
 
