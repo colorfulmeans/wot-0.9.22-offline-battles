@@ -19,6 +19,17 @@ music slot still remembers lobby music. Loading/combat/result music, ambient
 events, audio banks and native sound identity are not replaced. No Vivox or
 global-device initialization repair is claimed.
 
+Initial build 547 native acceptance exposes a binding error: compatibility and
+battle runtimes are different adapters, so attaching the module to the former
+leaves the latter's boundary inactive. Prague sample `04cb007d61f5` still restores
+lobby music and reports error 15. The final boundary resolves the process-global
+`MusicControllerWWISE` module directly, matching the native owner rather than
+injecting a field into the wrong adapter. Its integration regression now uses
+that actual module lookup with a battle runtime that has no such field. The
+corrected boundary passes four affected files / 1,033 tests; full BOT runtime
+and worker-law validation remain unchanged. Build 547 is diagnostic evidence,
+not final acceptance; the corrected package requires five fresh native matches.
+
 Diagnostic-entry lifecycle receipts now include controller/slot state before
 and after music controller init/destroy/stopMusic and SoundGroups unload/preload.
 These rare transition receipts bypass the ordinary distinct-call logging cap;

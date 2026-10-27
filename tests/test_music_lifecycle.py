@@ -55,9 +55,10 @@ class MusicLifecycleTests(unittest.TestCase):
         def show():
             calls.append(event.getEventId()); state[0]=2; return True
         runtime=SimpleNamespace(gui_global_space_id=SimpleNamespace(LOBBY=1,BATTLE_LOADING=2),
-            app_loader=SimpleNamespace(showBattleLoading=show), music_controller_module=module)
+            app_loader=SimpleNamespace(showBattleLoading=show))
         owner=SimpleNamespace(_runtime=runtime,_actual_gui_space_id=lambda:state[0])
-        NativeBattleRuntime._enter_battle_loading(owner)
+        with mock.patch.dict(sys.modules,MusicControllerWWISE=module):
+            NativeBattleRuntime._enter_battle_loading(owner)
         self.assertEqual([2],calls)
         self.assertIsNone(event.getEventId())
 

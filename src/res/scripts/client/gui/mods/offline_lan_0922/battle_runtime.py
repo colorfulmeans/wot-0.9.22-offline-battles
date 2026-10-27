@@ -3081,7 +3081,9 @@ class BattleRuntime(object):
         # Stock map init replays remembered event IDs after resource reload.
         # A lobby event belongs to the retired GUI, not the new battle space.
         from .music_lifecycle import retire_lobby_music
-        retire_lobby_music(getattr(self._runtime, 'music_controller_module', None))
+        # MusicControllerWWISE owns one process-global controller. The lobby
+        # compatibility runtime and battle runtime are different adapters.
+        retire_lobby_music(sys.modules.get('MusicControllerWWISE'))
 
     def _create_native_battle_map(self, map_name):
         """Use stock map bookkeeping without starting its viewer UI.

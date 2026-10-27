@@ -501,7 +501,6 @@ def _load_runtime():
     import CustomEffectManager
     import ProjectileMover
     import SoundGroups
-    import MusicControllerWWISE
     import Vehicle
     import VehicleGunRotator
     from AvatarInputHandler.DynamicCameras import AccelerationSmoother
@@ -580,7 +579,6 @@ def _load_runtime():
     runtime.remote_filter_type = _RemoteFilter
     runtime.segment_collision_result_type = Vehicle.SegmentCollisionResult
     runtime.sound_groups_module = SoundGroups
-    runtime.music_controller_module = MusicControllerWWISE
     runtime.sniper_camera_type = SniperCamera
     runtime.strategic_camera_type = StrategicCamera
     runtime.steady_vehicle_matrix = SteadyVehicleMatrix
