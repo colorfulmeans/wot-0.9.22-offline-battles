@@ -1,5 +1,32 @@
 # Authored route tasks and editor connections
 
+## 1.0.0 publication preparation (2026-10-27)
+
+The owner approved publication as 1.0.0 with an English release body, one
+Windows x64 launcher ZIP and eighteen independent UTF-8 text guides: nine in
+English and nine in Chinese. Runtime behavior remains the reviewed build-556
+baseline; this change aligns launcher/server/mod/replay/PE version pins and
+adds the bilingual documentation and publication-asset contract. The guide
+inventories retain all 33 preferred-gun vehicles, 43 weapon shell policies and
+206 explicitly classified interior-coverage/reconstruction entries from the
+read-only 680-definition scan. No private reports, saves, tokens or audit scratch
+files are publication assets.
+
+Local release/version/server/guide checks pass 218 tests; all 215 client source
+modules compile under CPython 2.7.18. The isolated local launcher suite executes
+154 tests but five require tkinter, absent from that minimal interpreter. The
+Windows packaging workflow runs that suite in its configured full environment
+and verifies frozen launcher/server sources, x64 EXE versions, x86 native source
+identity, embedded 1.0.0 mod metadata, editor smoke and the actual downloaded
+artifact before publication can proceed.
+
+The pre-existing general-suite Great Wall opposed-gate failure is retained;
+no physics, timeout or assertion is altered to label complete CI green. The
+1.0.0 publication workflow depends on the verified full packaging workflow and
+checks the exact main commit, one launcher plus eighteen guide assets, uploaded
+sizes and the release tag before publishing. It does not make the historical
+unpublished 0.10.2 workflow's all-general-CI success claim.
+
 ## Consumed steering target and compact maintenance follow-up (2026-10-27)
 
 Build 555's Fjord 24-FPS reference failure is SPG bot 29/team 2, not an ordinary

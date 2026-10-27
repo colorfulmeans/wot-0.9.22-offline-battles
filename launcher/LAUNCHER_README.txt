@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.10.2
+wot-0.9.22-offline-battles v1.0.0
 
 Supported client: Chinese HD World of Tanks 0.9.22.0.1 #1513 (32-bit).
 The launcher and bundled server require 64-bit Windows.
@@ -12,9 +12,11 @@ another mod copy manually; the launcher installs its matching client payload.
 The route toolbar groups creation, copy/delete and undo/redo on its first row;
 main/reserve, map checks, view and background-image import are on the second.
 Restore contains the existing Reset route and Restore default routes commands.
-These remain unavailable for the read-only Default profile. Artillery uses its
-own authored connections/sorties or automatic travel when absent. It is not
-assigned ordinary class roads and does not consume their capacity.
+These remain unavailable for the read-only Default profile.
+Artillery deployment and relocation use automatic navigation. Endgame and
+empty-ammunition sorties use the authored attack route and may borrow valid
+ordinary main/reserve roads when necessary. Deployment does not consume ordinary
+road capacity; borrowed sortie roads count their actual occupancy.
 
 All LAN participants must update together and restart the room/server. A room
 explicitly hosted by the launcher remains open until Stop room or launcher exit;
@@ -89,7 +91,7 @@ Fully unlocked saves receive one copy per compatible vehicle on their first styl
 stock initialization, including existing saves; later use/sales are not replenished.
 
 English release notes:
-https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v0.10.2
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.0.0
 
 This mod is free; resale is prohibited. World of Tanks game assets are not
 included. This unofficial project is not endorsed by Wargaming.

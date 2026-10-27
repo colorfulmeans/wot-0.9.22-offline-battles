@@ -7,11 +7,11 @@ You supply your own client. The client still provides the maps, vehicles,
 rendering, HUD and physics. This repository provides the client mod, the bot
 and battle logic, a small LAN server and a launcher.
 
-Current release: **v0.10.1**. **v0.10.2 is an unpublished test candidate** —
-[candidate notes](docs/releases/v0.10.2.md) and
-[verification audit](docs/testing/release0102-failure-audit.md).
-Its fixes remain in pull-request review until repeated automated checks and
-the owner's Windows gameplay acceptance are complete. Do not publish it yet.
+Current release: **v1.0.0** — [release notes](docs/releases/v1.0.0.md).
+
+Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
+and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows
+launcher and all eighteen guide files as separate downloads.
 
 ## Play
 
