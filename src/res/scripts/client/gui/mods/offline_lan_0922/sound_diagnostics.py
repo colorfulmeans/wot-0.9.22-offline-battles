@@ -103,8 +103,17 @@ def _install_music_owner():
     _MUSIC_INSTALLED = True
     for name in ('replace', 'play', 'stop', 'mute', 'destroy'):
         _wrap(owner, name, 'MusicController.MusicEvent.' + name, True)
+    for name in ('init', 'destroy', 'stopMusic'):
+        _wrap(module.MusicController, name, 'MusicController.' + name, True)
     _emit(dict(stage='playback_owner_coverage', owner='MusicController.MusicEvent',
         native_identity_preserved=True, bank_coverage='Python requests only; engine auto-load is not observed'))
+
+
+def _controller_context():
+    module = sys.modules.get('MusicControllerWWISE')
+    controller = getattr(module, 'g_musicController', None)
+    return dict(controller=_scalar(controller), events=[_music_context(event)
+        for event in getattr(controller, '_MusicController__musicEvents', ())])
 
 
 def _wrap(owner, name, label, skip_self):
@@ -137,6 +146,11 @@ def _wrap(owner, name, label, skip_self):
                 summary['music'] = music
                 if isinstance(music.get('name'), _STRINGS):
                     summary['event_ids'].append(dict(name=music['name'], id=event_id(music['name'])))
+            lifecycle = (label.startswith('MusicController.') and
+                         not label.startswith('MusicController.MusicEvent.') or
+                         label in ('SoundGroups.unloadAll', 'SoundGroups.preloadSoundGroups'))
+            if lifecycle:
+                summary['controller_state'] = _controller_context()
             _RECENT.append(summary)
             for event in summary['event_ids']:
                 if event['name'] not in _EVENT_NAMES and len(_EVENT_NAMES)<4096:
@@ -144,7 +158,7 @@ def _wrap(owner, name, label, skip_self):
                     _emit(dict(summary,stage='event_definition'))
             # First distinct calls plus a continuing sampled timeline: repeated
             # playback remains observable after the first-call budget fills.
-            if key not in _SEEN and len(_SEEN) < MAX_CALLS or _SERIAL % 64 == 0:
+            if lifecycle or key not in _SEEN and len(_SEEN) < MAX_CALLS or _SERIAL % 64 == 0:
                 if len(_SEEN)<MAX_CALLS:_SEEN.add(key)
                 stack = traceback.extract_stack(limit=7)[:-1]
                 record = dict(summary,stage='begin',kwargs=named,
@@ -173,6 +187,7 @@ def _wrap(owner, name, label, skip_self):
             try:
                 returned = dict(record,stage='returned',wall=time.time(),result=_scalar(result))
                 if music is not None:returned['music'] = _music_context(args[0])
+                if lifecycle:returned['controller_state'] = _controller_context()
                 _emit(returned)
             except Exception:pass
         return result
@@ -203,7 +218,8 @@ def install():
     owner = getattr(module,'SoundGroups',None)
     for name in ('getSound2D','playSound2D','getSound3D','playSound3D','playSoundPos',
                  'WWgetSound','WWgetSoundObject','WWgetSoundCallback','WWgetSoundPos',
-                 'playCameraOriented','getCameraOriented','loadSoundBank','unLoadSoundBank'):
+                 'playCameraOriented','getCameraOriented','loadSoundBank','unLoadSoundBank',
+                 'unloadAll','preloadSoundGroups'):
         if owner is not None:_wrap(owner,name,'SoundGroups.'+name,True)
     # Verified #1513 SoundGroups consumers call these module functions directly.
     wwise = sys.modules.get('WWISE')

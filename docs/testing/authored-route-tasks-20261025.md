@@ -1,5 +1,56 @@
 # Authored route tasks and editor connections
 
+## Lobby music and worker preparation follow-up (2026-10-27)
+
+Report `b9aafa2749ce` runs build 545 on Fjord and supplies a real terminal
+boundary: player projectile `1:p:2:10` launches at 299877 ms and is cancelled
+with `battle_finished` at 300000 ms. The other nine player projectiles and all
+189 BOT projectiles have terminal receipts. The round ends by Team 2 capture;
+there is no model/Python failure, motion rebase or multipart residue.
+
+The music failure is narrowed to map reload. In both 545 Ghost Town samples,
+each visible/worker process rebinds the remembered `MUSIC_EVENT_LOBBY` after
+`game.onGeometryMapped` -> `SoundGroups.preloadSoundGroups` -> music `init`;
+error 15 follows 0.25-0.66 seconds later, before GUI loading music takes over.
+Exact #1513 bytecode shows `MusicEvent.stop` preserves its event ID, while
+`stopMusic` calls `MusicEvent.destroy` and clears the ID and native reference.
+The battle-loading boundary now uses stock `stopMusic` only when the active
+music slot still remembers lobby music. Loading/combat/result music, ambient
+events, audio banks and native sound identity are not replaced. No Vivox or
+global-device initialization repair is claimed.
+
+Diagnostic-entry lifecycle receipts now include controller/slot state before
+and after music controller init/destroy/stopMusic and SoundGroups unload/preload.
+These rare transition receipts bypass the ordinary distinct-call logging cap;
+normal entrance installs no sound wrappers. Native bank auto-load is still
+unobserved; only native acceptance can establish whether this fixes error 15.
+
+Fjord worker callbacks fall to about 7.5 Hz for two 30-second windows, then
+recover as the round progresses. A captured 30-second interval spends 26.25
+seconds in BOT updates, including 25.48 seconds in physical slices. Rotation,
+ground/support and per-actor preparation dominate; projectile update is 0.08
+seconds and navigation service 0.04 seconds. These are inclusive scopes, not
+additive costs. The 2.07-second completed-wait P95 is specifically the shot-lane
+identity queue, not all BOT work or network RTT. Detailed native frontiers cover
+seven selected frames per capture and must not be compared to full-window
+totals as if they covered the same interval. Diagnostic overhead is not isolated.
+
+Safe preparation changes share only roster membership across one physical
+slice, retaining mutable state references so every sequential collision query
+reads current poses. Actual native/fallback collision work is unchanged.
+Ordinary entrance skips construction of unused tactical diagnostic snapshots;
+diagnostic entrance retains those records. Physics, combat, probe precision,
+planning/publication frequency and navigation data are unchanged. No general
+worker speedup or lower native-query cost is claimed before measurement.
+
+Validation and delivery: targeted music/controller receipts and roster-current-
+pose regressions pass; larger runtime suites and downloaded-package checks are
+required before delivery. Exact #1513 inspection passes; all 215 client modules
+compile with CPython 2.7.18. Native plan is five diagnostic-entry random matches
+with Default BOT/lineup and player vehicles Object 260, T-34-3, KV-220-2, Sexton I
+and MS-1, in that order. Reports must be preserved separately on Desktop and
+audited before this task is complete.
+
 ## Build 545 adapter acceptance correction (2026-10-27)
 
 ### Corrected package and native acceptance

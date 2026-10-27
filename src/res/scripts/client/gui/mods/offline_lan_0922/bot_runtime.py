@@ -6802,7 +6802,8 @@ class BotRuntime(object):
             })
         return result
 
-    def _rotation_fraction_for(self, state, position, yaw, candidate, supplied):
+    def _rotation_fraction_for(self, state, position, yaw, candidate, supplied,
+                               current_roster=None):
         # Fresh sequential poses: never freeze an earlier actor's geometry.
         supplied = tuple(supplied or ())
         shape = state.get('collision_shape') or tank_collision.DEFAULT_SHAPE
@@ -6810,7 +6811,8 @@ class BotRuntime(object):
         result = None
         if callable(getattr(native_math._load(), 'rotation_current', None)):
             result = native_math.call('rotation_current', position, yaw, candidate,
-                shape, supplied, tuple(self.states.items()), state.get('id'))
+                shape, supplied, (tuple(self.states.items()) if current_roster is None
+                                  else current_roster), state.get('id'))
         if result is not None:
             return result
         return tank_collision.rotation_fraction(position, yaw, candidate,
@@ -16564,6 +16566,7 @@ class BotRuntime(object):
         self._local_sweep_cache.clear()
         publish = bool(self._publish_control_this_step)
         refresh_control = bool(self._refresh_control_this_step)
+        record_orders = detailed_enabled()
         diagnostic = self._combat_diagnostics
         if diagnostic is not None and diagnostic.active:
             diagnostic.begin_slice(frame_step, refresh_control, publish)
@@ -16694,6 +16697,9 @@ class BotRuntime(object):
         drive_targets = {}
         siege_locked_poses = {}
         integrated = set()
+        # Membership is stable during this slice. Keep mutable state references
+        # so each sequential native query still reads the latest peer poses.
+        rotation_roster = tuple(self.states.items())
         if residual is not None:
             residual.residual_checkpoint('preparation')
         for state in self.states.values():
@@ -17135,14 +17141,15 @@ class BotRuntime(object):
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
                         decision_state, reposition_order, sample_clear)
-                    command['order_evidence'] = dict(sampled_at=now,
-                        source='friendly_reposition', final_order=_order_evidence(reposition_order),
-                        server_selection=(server_order or {}).get('tactical_evidence'))
+                    if record_orders:
+                        command['order_evidence'] = dict(sampled_at=now,
+                            source='friendly_reposition', final_order=_order_evidence(reposition_order),
+                            server_selection=(server_order or {}).get('tactical_evidence'))
                 elif server_order is not None and callable(decide_with_order):
                     if diagnostic is not None:
                         diagnostic.count('decision_server_order')
                     server_order = dict(server_order)
-                    received_order = _order_evidence(server_order)
+                    received_order = _order_evidence(server_order) if record_orders else None
                     if (server_order.get('target_kind') == 'human' and
                             server_order.get('target_id') is not None):
                         server_order['target_id'] = self._human_planner_id(
@@ -17151,28 +17158,33 @@ class BotRuntime(object):
                         server_order,
                         targets.get(server_order.get('target_id')),
                         position)
-                    order_steps = [dict(stage='server_live_target', order=_order_evidence(server_order))]
+                    order_steps = ([dict(stage='server_live_target', order=_order_evidence(server_order))]
+                                   if record_orders else None)
                     server_order = spg_route_travel.apply(self, state, server_order, now)
-                    if (state.get('profile') or {}).get('class_tag') == 'SPG':
+                    if record_orders and (state.get('profile') or {}).get('class_tag') == 'SPG':
                         order_steps.append(dict(stage='artillery_task', order=_order_evidence(server_order)))
                     server_order = self._rear_laying_order(
                         state, server_order, targets, now)
-                    order_steps.append(dict(stage='rear_laying', order=_order_evidence(server_order)))
+                    if record_orders:
+                        order_steps.append(dict(stage='rear_laying', order=_order_evidence(server_order)))
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
-                    order_steps.append(dict(stage='artillery_position', order=_order_evidence(server_order)))
+                    if record_orders:
+                        order_steps.append(dict(stage='artillery_position', order=_order_evidence(server_order)))
                     server_order = self._gun_angle_order(
                         state, server_order, targets, now, sample_clear)
-                    order_steps.append(dict(stage='gun_angle', order=_order_evidence(server_order)))
+                    if record_orders:
+                        order_steps.append(dict(stage='gun_angle', order=_order_evidence(server_order)))
                     command = timed_call(
                         self._combat_diagnostics, 'bot.planner_driver',
                         decide_with_order,
                         decision_state, server_order,
                         sample_clear)
-                    command['order_evidence'] = dict(sampled_at=now,
-                        stages=order_steps, final_order=_order_evidence(server_order),
-                        source='server_order', received_order=received_order,
-                        server_selection=server_order.get('tactical_evidence'))
+                    if record_orders:
+                        command['order_evidence'] = dict(sampled_at=now,
+                            stages=order_steps, final_order=_order_evidence(server_order),
+                            source='server_order', received_order=received_order,
+                            server_selection=server_order.get('tactical_evidence'))
                 else:
                     if diagnostic is not None:
                         diagnostic.count('decision_local_planner')
@@ -17187,9 +17199,10 @@ class BotRuntime(object):
                             self._combat_diagnostics, 'bot.planner_driver',
                             self.adapter.decide,
                             decision_state, sample_clear)
-                    command['order_evidence'] = dict(sampled_at=now,
-                        source='local_planner', final_order=_order_evidence(command),
-                        reason='server_order_or_order_adapter_unavailable')
+                    if record_orders:
+                        command['order_evidence'] = dict(sampled_at=now,
+                            source='local_planner', final_order=_order_evidence(command),
+                            reason='server_order_or_order_adapter_unavailable')
                 if command.pop('navigation_replan', False):
                     self.navigator.request_replan(state['id'], position, now)
                 self._report_blocked_planner(
@@ -17971,7 +17984,7 @@ class BotRuntime(object):
                 if abs(_angle_delta(candidate_hull_yaw, old_hull_yaw)) > 1.0e-9:
                     allowed = self._rotation_fraction_for(
                         state, position, old_hull_yaw, candidate_hull_yaw,
-                        neighbours)
+                        neighbours, current_roster=rotation_roster)
                     if allowed < 1.0:
                         candidate_hull_yaw = old_hull_yaw + _angle_delta(
                             candidate_hull_yaw, old_hull_yaw)*allowed

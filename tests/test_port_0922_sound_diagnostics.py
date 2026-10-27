@@ -99,6 +99,30 @@ class SoundDiagnosticsTests(unittest.TestCase):
         self.assertTrue(any(r.get('call',0)>sound.MAX_CALLS for r in self.records))
         self.assertEqual(64,len(sound._RECENT))
 
+    def test_map_reload_receipts_capture_controller_before_and_after_without_changing_banks(self):
+        class Event:
+            _MusicEvent__event=None
+            _MusicEvent__eventID=2
+            _MusicEvent__muted=False
+        event=Event()
+        class Controller:
+            def __init__(self):self._MusicController__musicEvents=(event,)
+            def init(self,path=None):event._MusicEvent__eventID=4; return path
+            def destroy(self):return 23
+        Controller.MusicEvent=type('MusicEvent',(object,),{})
+        module=SimpleNamespace(MusicController=Controller,g_musicController=Controller())
+        with mock.patch.dict(sys.modules,MusicControllerWWISE=module):
+            sound.install()
+            # Space transitions must remain observable after the ordinary
+            # distinct-sound budget is exhausted.
+            for index in range(sound.MAX_CALLS):self.groups().playSound2D(str(index))
+            self.assertEqual('map',module.g_musicController.init('map'))
+            rows=[r for r in self.records if r.get('method')=='MusicController.init'
+                  and r.get('stage') in ('begin','returned')]
+            self.assertEqual(2,rows[0]['controller_state']['events'][0]['event_id'])
+            self.assertEqual(4,rows[1]['controller_state']['events'][0]['event_id'])
+            self.native.assert_not_called()
+
     def test_python_music_owner_observes_readonly_native_play_without_proxy(self):
         class Native:
             name='hangar_v2_music_lobby'

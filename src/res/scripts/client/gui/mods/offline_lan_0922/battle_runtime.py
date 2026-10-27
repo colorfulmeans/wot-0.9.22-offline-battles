@@ -3078,6 +3078,10 @@ class BattleRuntime(object):
             raise RuntimeError('battle loading GUI transition was rejected')
         if self._actual_gui_space_id() != space_ids.BATTLE_LOADING:
             raise RuntimeError('battle loading GUI transition did not finish')
+        # Stock map init replays remembered event IDs after resource reload.
+        # A lobby event belongs to the retired GUI, not the new battle space.
+        from .music_lifecycle import retire_lobby_music
+        retire_lobby_music(getattr(self._runtime, 'music_controller_module', None))
 
     def _create_native_battle_map(self, map_name):
         """Use stock map bookkeeping without starting its viewer UI.
