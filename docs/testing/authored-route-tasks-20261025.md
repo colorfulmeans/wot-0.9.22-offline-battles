@@ -8,7 +8,8 @@ an equal two-by-two grid: Repair mod installation / Reset all offline client
 settings; Clear all offline saves / Delete all data and restore factory defaults.
 All four confirmations identify the game folder and bundled build, default to
 No, and explain affected data. Running game/worker/room or report collection
-blocks maintenance. Factory completion closes the launcher without writing
+blocks maintenance. Other frozen launcher/server processes also block it so
+older packages cannot save shared settings back after reset. Factory completion closes the launcher without writing
 its old settings; failures cannot use the success path.
 
 The replay report `8fcd63a2cd30` fails before launching a client: the launcher
@@ -35,7 +36,7 @@ volume, rebuild failures restore prior files, and cleanup failures are errors.
 A successful reset leaves no automatic old-data backup in the managed roots.
 
 Local validation: seven launcher/save/preferences/replay/overlay files execute
-720 tests (567 unique test IDs; replay wiring reuses WindowTest), with nine
+721 tests (568 unique test IDs; replay wiring reuses WindowTest), with nine
 Windows symlink skips. The local embedded Python lacks Tkinter, so messagebox
 imports are stubbed for fake-widget unit tests; real packaged Tk geometry is a
 separate artifact smoke gate. Five replay-capacity tests also pass, including a

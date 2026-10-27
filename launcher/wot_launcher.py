@@ -434,6 +434,7 @@ _CHINESE = {
         "存档。可以把存档备份成 ZIP 文件，也可以打开存档文件夹自行复制文件。",
     "Maintenance failed. Reopen the launcher before retrying.": "维护失败。请重新打开启动器后重试。",
     "Repair": "修复",
+    "Close other offline launchers and LAN servers before maintenance.": "维护前请关闭其他离线启动器和局域网服务端，避免旧配置重新写回。",
     "Repair mod installation": "修复模组安装",
     "Reset all offline client settings": "重置全部离线客户端设置",
     "Clear all offline saves": "清空全部离线存档",
@@ -2598,6 +2599,13 @@ class LauncherWindow(object):
                 (self._worker is not None and self._worker.poll() is None) or
                 core.game_is_running()):
             self._log("Close the game, worker and LAN room before maintenance.")
+            return False
+        try:
+            if core.other_launcher_is_running():
+                self._log(self._t('Close other offline launchers and LAN servers before maintenance.'))
+                return False
+        except core.LauncherError as error:
+            self._log(str(error))
             return False
         if self._refresh_client().get('client') != core.PORT_0_9_22:
             self._log('Select the supported 0.9.22 game folder first.')

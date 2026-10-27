@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest import mock
 
@@ -81,6 +82,16 @@ class MaintenanceTest(unittest.TestCase):
             with self.assertRaisesRegex(core.LauncherError, 'Close World of Tanks'):
                 action(self.game, is_running=lambda: True)
         self.assertEqual('old', path.read_text())
+
+    def test_old_launcher_and_external_server_cannot_resurrect_shared_settings(self):
+        launcher = 'wot-0.9.22-offline-battles.exe'
+        with mock.patch.object(sys, 'frozen', True, create=True), \
+                mock.patch.object(sys, 'executable', 'C:/package/' + launcher):
+            self.assertFalse(core.other_launcher_is_running(lambda: [launcher]))
+            self.assertTrue(core.other_launcher_is_running(lambda: [launcher, launcher]))
+            self.assertTrue(core.other_launcher_is_running(lambda: [launcher, 'WoT-0.9.22-LAN-Server.exe']))
+            with self.assertRaisesRegex(core.LauncherError, 'Could not check'):
+                core.other_launcher_is_running(mock.Mock(side_effect=OSError('denied')))
 
     def test_failed_save_rebuild_restores_all_old_data(self):
         old = self.put(self.external / 'saves/custom/save.json')

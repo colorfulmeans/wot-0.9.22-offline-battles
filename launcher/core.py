@@ -1420,7 +1420,24 @@ def _require_0_9_22_maintenance_target(game_root, is_running=None):
     if is_running():
         raise LauncherError(
             "Close World of Tanks before repairing or resetting offline data.")
+    if other_launcher_is_running():
+        raise LauncherError('Close other offline launchers and LAN servers before maintenance.')
     return status
+
+
+def other_launcher_is_running(enumerator=None):
+    """Older launcher windows can write shared settings back after a reset."""
+    if not getattr(sys, 'frozen', False):
+        return False
+    try:
+        names = [str(name).lower() for name in (enumerator or _running_process_names)()]
+    except Exception as error:
+        raise LauncherError('Could not check other offline launcher processes: %s' % error)
+    own = os.path.basename(sys.executable).lower()
+    for name in {own, 'wot-0.9.22-offline-battles.exe', 'wot-0.9.22-lan-server.exe'}:
+        if names.count(name) > (1 if name == own else 0):
+            return True
+    return False
 
 
 def ensure_0_9_22_preferences_isolation(game_root):

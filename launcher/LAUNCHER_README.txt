@@ -33,8 +33,8 @@ original vehicle profile. Playback does not award battle rewards.
 Maintenance (Repair tab)
 ------------------------
 Four equally spaced buttons use a two-by-two layout. Every action requires
-confirmation, with No selected by default. Close the game, worker and LAN room
-first. Repair mod installation reinstalls the files bundled with this launcher;
+confirmation, with No selected by default. Close the game, worker, LAN room
+and other offline launcher windows first. Repair mod installation reinstalls the files bundled with this launcher;
 it does not download a newer version and keeps usable saved data and profiles.
 Reset all offline client settings resets graphics, sound, input and account
 settings in the isolated client preferences, without resetting saves or touching
