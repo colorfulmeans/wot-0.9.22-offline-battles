@@ -43,9 +43,15 @@ diagnostic entrance retains those records. Physics, combat, probe precision,
 planning/publication frequency and navigation data are unchanged. No general
 worker speedup or lower native-query cost is claimed before measurement.
 
-Validation and delivery: targeted music/controller receipts and roster-current-
-pose regressions pass; larger runtime suites and downloaded-package checks are
-required before delivery. Exact #1513 inspection passes; all 215 client modules
+Validation: final engine-free reference coverage passes 16 files / 1,948 tests,
+including the complete BOT runtime (550) and battle runtime (1,016). Initial
+reference invocation omitted diagnostic-entry enablement and failed twelve
+diagnostic-presence assertions; the final rerun uses the intended diagnostic
+entrance and passes. Sound/report suites pass 61 tests (five Windows symlink
+cases skipped). The source-derived native drive validator is updated to receive
+the same slice roster; its initial omitted local failed CI rather than runtime.
+Full native pipeline parity and downloaded-package checks remain required before
+delivery. Exact #1513 inspection passes; all 215 client modules
 compile with CPython 2.7.18. Native plan is five diagnostic-entry random matches
 with Default BOT/lineup and player vehicles Object 260, T-34-3, KV-220-2, Sexton I
 and MS-1, in that order. Reports must be preserved separately on Desktop and
