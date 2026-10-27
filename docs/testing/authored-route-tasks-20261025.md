@@ -32,10 +32,84 @@ Final-source engine-free reference validation: 41 files / 1,457 tests pass using
 the explicit Linux seam. Focused five-file regression passes; both sound/error
 report suites pass. All 214 client sources compile with CPython 2.7.18 and exact
 Chinese HD #1513 inspection passes. Package inspection and native acceptance
-are pending at this source commit. Planned Windows acceptance is lineup 30 plus
-Default, one AFK Prokhorovka match and one AFK Ghost Town match, launched through
-the diagnostic entry. Preserve reports and audit sound coverage, worker timing,
-SPG control/firing and projectile terminal conservation before final handoff.
+were pending at the runtime source commit. They are now completed below.
+
+### Build 543 package and native acceptance
+
+Runtime commit `7c81633c34b4b7ac92541cfdd1f8bdc56eb7374b`, build run
+`40433507169`, identity `colorfulmeans-40433507169-1`. All three packaging jobs
+pass. Independent inspection verifies 38 frozen launcher modules, 221 bundled
+server sources, 214 client bytecode modules, x64 launcher, native source identity,
+unchanged navgraph bytes, outer/nested CRCs, diagnostic launch entries and packaged
+editor smoke. All 1,225 delivered files match the inspected archive. Download:
+`WoT-0.10.2-test-543-artillery-aim.zip`.
+
+Source CI `40433501522` passes Windows server/editor, navigation-resolution and
+native-geometry jobs. General tests pass 426/428 files, retaining the Great Wall
+opposed-gate and Fjord 24-FPS departure failures. Bot regressions pass 147/148
+files, retaining that same Fjord failure. No new failing file appears against the
+previous handoff; full source CI remains red. Final committed focused validation
+passes 5 files / 1,082 tests. Reference validation uses the explicit engine-free
+Linux seam; it does not claim native x86 execution.
+
+Both requested matches ran on the exact #1513 client through the diagnostic
+entry with lineup 30 and Default. The user changed the second sample to active
+player driving for depression testing; the assistant did not drive or fire.
+Each report is separately preserved on Desktop, compared byte-for-byte and
+ZIP-CRC checked; both contain complete sound-analysis output and reconstruct
+without pending multipart records. Default and lineup 30 remain selected.
+
+| Map / session suffix | Result | BOT launch / settled-shot receipts | Worker callback Hz, three windows |
+| --- | --- | --- | --- |
+| Prokhorovka / a3d605ff86b5 | Team 2 elimination win | 71 / 71 | 35.71, 23.68, 33.52 |
+| Ghost Town / f9cc6a4acf9c | Team 2 elimination win | 56 / 55, plus one final in-flight shot | 30.64, 19.78, 34.40 |
+
+The remaining Ghost Town identity is `1:b:19:4`, emitted at 10:13:35.882 and
+presented at 10:13:36.103; the match ends at 10:13:36. The existing server result
+branch assigns `battle_finished` tombstones and clears in-flight shots without
+printing individual terminal receipts. This is an end-of-match evidence limit,
+not proof of a lost mid-match shell. Do not report 56 impacts or an independently
+observed per-shot cancellation. All recorded launches retain aligned gun angles.
+
+No model-refresh assertion/refusal or Python traceback occurs in either report.
+The user observed Object 261 firing successfully at close range in Ghost Town.
+The new model-sample fallback is exercised in native logs: 90 sampled candidate
+rows in Prokhorovka remain outside actual gun limits; Ghost Town has 16 sampled
+rows, including two legal model-part candidates after the low-point refusal.
+These records prove mechanical fallback and continued refusal of illegal points;
+they do not prove every close-range target has a safe ballistic path.
+
+The known `hangar_v2_music_lobby` error remains once per process role in each
+session. Both visible and worker reports include MusicEvent owner coverage and
+before/after playback state; playback changes from false to true before the
+later native error. Missing event creation or an uncalled play method therefore
+does not explain these samples. Engine-owned bank loading/media failure remains
+unproved. Preserve `sound-analysis.json` and the original logs; no audio fix is
+claimed and broad extra hook installation is not the next diagnostic step.
+
+The Prokhorovka record contains no 10-13-second window with at least eight turn
+reversals and less than two metres displacement. Ghost Town contains four
+overlapping windows for BOT 30 (Conqueror GC, around 10:07:43) and BOT 24 (T92,
+around 10:11:50), both in `sortie_return`. Navigation is safe and sampled rotation
+receipts show no hull/peer blocker; control histories show driver/gunner-facing
+changes as well as reverse/forward movement. Both advance more than 39 metres
+and enter their attack route within roughly 27 seconds of the cited sample.
+This is temporary low progress, not a proved permanent deadlock or a proved
+pitch-only cause. Retain the new steering-stage receipts for a scoped follow-up.
+
+User-reported loss-of-spot turns are a distinct observation. Existing logs show
+unassigned/sortie vehicles changing between engagement, waiting and route travel
+as targets disappear/reappear. A waiting vehicle may retain a server anchor face
+without actually reserving or moving to that parking place. Do not describe all
+such turns as a parking refill or as a regression. Inspect each actual task,
+move goal, face goal, target and throttle before changing ordinary combat.
+
+Worker saturation is not fixed or conclusively absent: these six windows are
+about 20-36 Hz and do not reproduce the prior severe slowdown, but scene and BOT
+survival differ. No physics/query/cadence budget is reduced in this build.
+Evidence helpers: `work/acceptance543.json`, `work/acceptance543-audit.json`,
+`work/acceptance543/case1`, `case2`, package/delivery verification JSON and retained
+CI failure logs. Desktop reports are under `WoT_543_火炮两场诊断_20261027`.
 
 ## Build 542 follow-up scope (2026-10-27)
 
