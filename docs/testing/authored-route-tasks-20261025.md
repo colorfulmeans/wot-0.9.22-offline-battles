@@ -2,6 +2,69 @@
 
 ## Build 545 adapter acceptance correction (2026-10-27)
 
+### Corrected package and native acceptance
+
+Runtime commit `cda4599f024f7b94090c2c3f4fbec7a2a1df2814`, package run
+`40444684044`, identity `colorfulmeans-40444684044-1`. All three packaging jobs
+pass. Independent downloaded-package inspection verifies 38 frozen launcher
+modules, 221 server sources, 214 client bytecode modules, x64 launcher, native
+source identity, unchanged navigation bytes, archive CRCs and packaged editor
+smoke. All 1,225 delivered files match the inspected archive. Download:
+`WoT-0.10.2-test-545-artillery-travel.zip`.
+
+Final source CI `40444688664` passes Windows server/editor, navigation-resolution
+and native-geometry jobs. General tests pass 426/428 files, retaining the same
+Great Wall opposed-gate and Fjord 24-FPS departure failures. BOT regressions pass
+147/148, retaining that same Fjord failure; the full workflow is not green.
+The existing positive-class selection suite also passes after the user raises
+the tier-one/missing-class boundary. Preflight refuses unavailable selected
+classes and impossible all-SPG fill before loading; no matching rule is changed.
+
+The first corrected-package diagnostic Ghost Town sample `90e4a105364a` runs
+to the fifteen-minute timeout with lineup 30 and Default, without assistant
+driving or firing. All 71 BOT launches have settled receipts. There is no
+multipart residue, model-refresh assertion/refusal, Python traceback or BOT
+motion rebase. Worker callback windows are 34.70, 36.05 and 24.00 Hz; this is
+sample evidence, not a general performance improvement. No 10-13-second
+turn-reversal window below two metres displacement appears.
+
+BOT 14 (Object 261) records 21 actual defense samples: nine moving samples
+retain the new hull owner, twelve stationary-hold samples do not. No current
+control row has combat hull aim during these defense samples or the 1,460
+travel-owner samples. Older rows in an eight-row control history can belong to
+the preceding combat state and must not be attributed to its new task marker.
+Defense preserves the interrupted `spg_attack_1` task. In the final two minutes,
+Object 261, G.W. E and T92 each move more than 480 horizontal metres between
+sample endpoints; Object 261 returns to defense, G.W. E follows its authored
+return cursor and T92 reaches base capture. All retain ammunition. The draw
+alone is not a proved permanent deadlock or a reason to alter ordinary combat.
+The user observes that this sample resembles normal late-match play.
+
+The known lobby music error remains once per role; actual report resource
+inspection confirms its event/action reference and forty valid embedded-media
+index entries. Native engine auto-load remains unobserved, so no audio cure is
+claimed. The first report is copied to Desktop with exact-byte and ZIP-CRC
+verification.
+
+The second corrected-package diagnostic sample `c57568cc952d` finishes normally
+by Team 2 elimination. All 47 BOT launches settle, with no unmatched or unknown
+terminal identity, multipart residue, model-refresh assertion/refusal, Python
+traceback or BOT motion rebase. Worker callback windows are 33.95, 38.17 and
+32.81 Hz. The 117 reviewed 10-13-second turn-reversal windows contain none below
+two metres displacement. All 1,099 travel-owner samples have current-row combat
+hull aim disabled. This sample does not exercise actual base defense;
+the first sample supplies that acceptance evidence. Known music error 15 still
+appears once per role. Neither match proves an audio cure or a general worker
+speedup. Neither finishes with an in-flight projectile, so individual
+`battle_finished` cancellation receipts remain covered by tests, not by these
+two native endings.
+
+Both final-package sessions use lineup 30 + Default on `95_lost_city`, with no
+assistant driving or firing. Both reports are preserved separately under
+`C:/Users/USER/Desktop/WoT_545_火炮回防两场诊断_20261027`; exact-byte copy and ZIP
+CRC checks pass. The game is closed after the second result and the launcher
+is left available. No further runtime change follows this acceptance.
+
 Build 544 native acceptance exposed an omitted producer-consumer boundary:
 `BotAdapter.decide_with_order` did not retain `spg_mode` or the explicit
 `throttle_override` hold boundary. Consequently moving base-defense commands
@@ -31,9 +94,13 @@ samples and progresses along the return route, but its false hull-owner marker
 exposes the adapter omission above; do not count this as full guard acceptance.
 No 10-13-second turn-reversal window with less than two metres displacement
 appears. Known music error remains once per role, with valid event/action and
-embedded-media structure; native auto-load remains unobserved. A second 544
-sample is running while the correction is prepared. The final corrected package
-requires fresh native acceptance, not reassignment of the first package's logs.
+embedded-media structure; native auto-load remains unobserved. The second 544
+sample `8fbdbb21163f` finishes by Team 2 elimination, with 69/69 BOT shots
+settled, no model/Python errors or multipart residue, and worker windows of
+33.73, 38.07 and 18.17 Hz. It has no actual base-defense sample or turn-reversal
+window below two metres. Both 544 reports are preserved separately. Their logs
+are not reassigned to the corrected package: fresh 545 acceptance is recorded
+above.
 
 ## Build 544 follow-up scope (2026-10-27)
 
@@ -62,9 +129,10 @@ Linux seam. Final diagnostic and projectile tests were rerun after their last
 changes; the final projectile file passes 129 tests. Sound/report suites pass
 61 tests (five unavailable Windows symlink cases skipped). All 214 client files
 compile with CPython 2.7.18; exact Chinese HD #1513 inspection passes. Independent
-package inspection and two diagnostic-entry Ghost Town matches with lineup 30
-and Default are pending at this runtime source commit. Native observations must
-separate exercised return-to-base behavior from any untriggered defense branch.
+package inspection and native acceptance were pending at this historical
+runtime source commit; completed 544 observations and corrected 545 acceptance
+are recorded above. Native observations separate exercised return-to-base
+behavior from any untriggered defense branch.
 
 ## Build 543 follow-up scope (2026-10-27)
 
