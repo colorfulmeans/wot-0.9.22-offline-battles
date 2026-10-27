@@ -40,8 +40,37 @@ Fjord/Airfield four-scene departure test passes with no far-goal arrived
 episodes captured. Real Windows Tk imports pass eight affected launcher suites,
 736 executions / 582 unique tests with nine symlink skips, including translated
 scope text and resize checks. These reference/UI checks do not constitute a
-new native battle acceptance. Exact-source CI and final package inspection are
-recorded after build completion. No routes or user's saved data are changed.
+new native battle acceptance. No routes or user's saved data are changed.
+
+Final runtime source `af6020ad14ae020d23339c6a4a83d825fc0145a0`, build 556 run
+`40497273357`, identity `colorfulmeans-40497273357-1`, artifact `12731522580`.
+All three packaging jobs pass. Exact-source CI `40497278940` passes all 148 BOT
+test files, Windows editor/server, native geometry and navigation. The general
+suite passes 429/430 files and launcher tests 36/36. Only the existing opposed
+Great Wall gate allocation-cleanup assertion remains; Fjord passes. Dependent
+CI packaging is skipped after that general failure, while the independent full
+packaging workflow passes. Do not describe full CI as green.
+
+Independent downloaded-package inspection verifies 38 frozen launcher modules,
+222 server sources, all 215 current Python-2 client bytecode modules, native
+source identity, unchanged navigation bytes, ZIP CRC and actual packaged
+maintenance resize/language smoke. All 1,226 delivered files match. A full real
+Tk launcher checks four 26-pixel buttons against the other tab's normal button
+height; Chinese and English help fit without overlap. Final 556 is also opened
+on the user's desktop and its compact Chinese Repair tab is visually checked;
+the final shared-data sentence matches the requested wording. No destructive
+maintenance operation or new battle is run in this follow-up.
+
+Download: `WoT-0.10.2-test-556-fjord-maintenance.zip`. Evidence: workspace
+`work/fjord-arrival-audit.json` (before), `work/fjord-arrival-fixed-audit.json`
+(four fixed reference scenes), `work/fjord-old-regression-proof.log`,
+`work/fjord-followup-reference/summary.json`,
+`work/followup-556-launcher-tests.log`, `work/followup-556-full-launcher-ui.json`,
+`work/followup-556-package-verification.json`,
+`work/followup-556-packaged-editor-smoke.json`,
+`work/followup-556-delivery-proof.json`, and exact-run CI logs. Update PR 113;
+no merge, tag or public release is authorized. The final documentation-only
+commit does not change the independently verified runtime source above.
 
 ## Maintenance and replay preflight follow-up (2026-10-27)
 
