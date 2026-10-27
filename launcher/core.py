@@ -1738,12 +1738,29 @@ def _maintenance_replace(targets, rebuild):
     return actions
 
 
+def _offline_preferences_targets(game_root):
+    """Cover active role configs as well as the older isolated profile path."""
+    targets = [os.path.join(os.path.dirname(settings_path()), 'client_profiles')]
+    path = _isolated_0_9_22_preferences_path()
+    if path is not None:
+        targets.append(path)
+    normal = _normal_client_preferences_path()
+    roots = [game_root]
+    if normal is not None:
+        roots.append(os.path.dirname(normal))
+    for root in roots:
+        _maintenance_safe_path(root, recursive=False)
+        for name in ('playerprefs.xml', 'workerprefs.xml'):
+            targets.append(os.path.join(root, name))
+            if os.path.isdir(root):
+                targets.extend(os.path.join(root, entry) for entry in os.listdir(root)
+                               if entry.startswith(name + '.'))
+    return targets
+
+
 def reset_offline_preferences(game_root, is_running=None):
     _require_0_9_22_maintenance_target(game_root, is_running)
-    path = _isolated_0_9_22_preferences_path()
-    if path is None:
-        raise LauncherError('The offline client preferences path could not be resolved.')
-    return _maintenance_replace([path], lambda: [
+    return _maintenance_replace(_offline_preferences_targets(game_root), lambda: [
         'Reset all offline client preferences; new defaults are created on next start.'])
 
 
@@ -1805,6 +1822,7 @@ def factory_reset_offline(game_root, base_dir=None, is_running=None):
     targets = [state, application, external,
                os.path.join(game_root, 'replays', 'offline'),
                os.path.join(game_root, 'res_mods', '0.9.22.0.1', 'engine_config.xml')]
+    targets.extend(_offline_preferences_targets(game_root))
     for name in ('offline-player-python.log', 'offline-worker-python.log',
                  WORKER_FAILURE_LOG_FILENAME_0922, WORKER_READY_MARKER_FILENAME_0922):
         targets.append(os.path.join(game_root, name))

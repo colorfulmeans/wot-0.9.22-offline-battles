@@ -234,6 +234,14 @@ class WindowTest(unittest.TestCase):
     def setUp(self):
         self.settings_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.settings_dir, True)
+        # A fake game directory does not isolate APPDATA save/profile paths.
+        # Guard both roots before building any window or exercising callbacks.
+        environment = mock.patch.dict(os.environ, {
+            'APPDATA': os.path.join(self.settings_dir, 'roaming'),
+            'LOCALAPPDATA': os.path.join(self.settings_dir, 'local'),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         self.addCleanup(setattr, core, "settings_path", core.settings_path)
         self.addCleanup(setattr, core, "discover_game_folders",
                         core.discover_game_folders)

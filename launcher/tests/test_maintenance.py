@@ -70,10 +70,14 @@ class MaintenanceTest(unittest.TestCase):
 
     def test_preferences_reset_keeps_saves_and_normal_client_preferences(self):
         prefs = self.put(core._isolated_0_9_22_preferences_path(), '<preferences>all accounts</preferences>')
+        normal_root = Path(core._normal_client_preferences_path()).parent
+        role_preferences = [self.put(root / name) for root in (normal_root, Path(self.game))
+                            for name in ('playerprefs.xml', 'workerprefs.xml', 'playerprefs.xml.bak')]
         kept = [self.put(self.external / 'saves/custom/save.json'),
                 self.put(core._normal_client_preferences_path())]
         core.reset_offline_preferences(self.game, is_running=lambda: False)
         self.assertFalse(prefs.exists())
+        self.assertFalse(any(p.exists() for p in role_preferences))
         self.assertTrue(all(p.exists() for p in kept))
 
     def test_running_game_blocks_every_destructive_operation(self):
@@ -108,6 +112,8 @@ class MaintenanceTest(unittest.TestCase):
             self.external / 'saves/custom/save.json', self.app / 'launcher.json',
             self.app / 'reports/report.zip', self.app / 'bot_tactics/custom.json',
             self.app / 'client_profiles/0.9.22/preferences.xml',
+            Path(core._normal_client_preferences_path()).parent / 'playerprefs.xml',
+            Path(core._normal_client_preferences_path()).parent / 'workerprefs.xml',
             Path(self.game) / 'replays/offline/last.wotlanreplay',
             Path(self.game) / 'offline-worker-python.log',
             Path(self.game) / '.wot-offline-reset-interrupted/save-backup.zip')]

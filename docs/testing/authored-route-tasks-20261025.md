@@ -23,6 +23,11 @@ footer/count, gzip integrity and unchanged-file checks. Capacity regression
 now streams a real recording above the former limit through the launcher too;
 restoring the old limit must reject that same valid stream.
 
+Installed role configs use APPDATA `playerprefs.xml` / `workerprefs.xml`, not
+just the older LOCALAPPDATA isolated `preferences.xml`. Preferences reset and
+factory reset cover both role files, their rotated copies, game-folder fallback
+files and legacy isolated client profiles; stock `preferences.xml` is kept.
+
 Clear-saves removes both game-folder and external saves/legacy state, rotated
 copies and pending grant inboxes, rebuilds default metadata with legacy import
 disabled and preserves schemes/preferences. Factory additionally removes the
@@ -42,7 +47,14 @@ imports are stubbed for fake-widget unit tests; real packaged Tk geometry is a
 separate artifact smoke gate. Five replay-capacity tests also pass, including a
 real compressed stream above 768 MiB through all readers and preflight. The
 user's existing 1.05-GiB logical recording passes the fixed source preflight.
-No destructive action is run against the user's real data as acceptance.
+An initial WindowTest run exposed an unsafe test-fixture boundary: the fake
+game root did not isolate APPDATA, and an old reset callback mock missed the
+new cleanup function. Real external saves were cleared before live-test
+authorization (default metadata timestamp 2026-10-27 17:07:11 +08:00). The user
+was informed and subsequently authorized clearing/rebuilding actual data. The
+fixture now isolates both APPDATA and LOCALAPPDATA before window construction.
+Subsequent automated tests use those temporary roots; explicit live acceptance
+will create a new save and exercise cleanup on the user's actual installation.
 Windows build/artifact status is recorded after independent package inspection.
 
 ## Lobby music and worker preparation follow-up (2026-10-27)

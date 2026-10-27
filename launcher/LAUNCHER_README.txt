@@ -37,7 +37,8 @@ confirmation, with No selected by default. Close the game, worker, LAN room
 and other offline launcher windows first. Repair mod installation reinstalls the files bundled with this launcher;
 it does not download a newer version and keeps usable saved data and profiles.
 Reset all offline client settings resets graphics, sound, input and account
-settings in the isolated client preferences, without resetting saves or touching
+settings in playerprefs.xml / workerprefs.xml and older isolated profiles,
+without resetting saves or touching
 the normal client profile. Clear all offline saves deletes every offline save,
 including legacy copies and pending grants, then creates a fresh fully unlocked
 default save; tactics, vehicle profiles and client preferences are preserved.
