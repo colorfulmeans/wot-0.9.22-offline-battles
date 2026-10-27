@@ -27,6 +27,7 @@ from gui.mods.offline_lan_0922 import config as port_config
 from gui.mods.offline_lan_0922 import friendly_fire
 from gui.mods.offline_lan_0922 import offline_services
 from gui.mods.offline_lan_0922 import personal_campaign
+from gui.mods.offline_lan_0922 import crew_recruits
 from gui.mods.offline_lan_0922.account_rpc import data, economy
 from gui.mods.offline_lan_0922.account_rpc.garage import (
     STOCKED_ITEM_TYPES, mirror_shells_layout)
@@ -250,6 +251,8 @@ def _ledger_payload(snapshot):
         'slots': max(0, int(snapshot.get('accountSlots', 0) or 0)),
         'berths': max(0, int(snapshot.get('accountBerths', 0) or 0)),
         'barracks': sorted(barracks),
+        crew_recruits.RECEIPTS: crew_recruits.identities(snapshot.get(crew_recruits.RECEIPTS)),
+        crew_recruits.crew_skills.CREDITS: crew_recruits.crew_skills.saved_credits(snapshot.get(crew_recruits.crew_skills.CREDITS)),
         'recycleBin': sorted(recycled),
         'premiumExpiryTime': max(
             0, _int_value(snapshot.get('premiumExpiryTime'))),
@@ -389,6 +392,8 @@ def _apply_ledger(staged, stored):
             staged[key] = max(_int_value(ledger[name]),
                               int(staged.get(key, 0) or 0))
     barracks = ledger.get('barracks')
+    staged[crew_recruits.RECEIPTS] = crew_recruits.identities(ledger.get(crew_recruits.RECEIPTS))
+    staged[crew_recruits.crew_skills.CREDITS] = crew_recruits.crew_skills.saved_credits(ledger.get(crew_recruits.crew_skills.CREDITS))
     if isinstance(barracks, (list, tuple)):
         staged['barracksTankmen'] = _restored_barracks(staged, barracks)
     recycled = ledger.get('recycleBin')

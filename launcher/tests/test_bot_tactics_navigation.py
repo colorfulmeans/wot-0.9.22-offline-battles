@@ -26,6 +26,36 @@ def graph():
 
 
 class NavigationDataTests(unittest.TestCase):
+    def test_red_danger_overlay_reads_worker_shore_flags_and_preserves_raw_graph(self):
+        data=graph();data['hazards'][12]=1;data['hazards'][11]=2
+        data['bake']=dict(water_depth_limit=1.2,edge_clearance_radii=[3.,6.],max_grade=.38)
+        before=copy.deepcopy(data)
+        classified=nav.classified_hazards(data)
+        self.assertEqual(10,classified['hazards'][11])
+        image=nav.danger_overlay_image(data,(0,0,16,16))
+        self.assertEqual(nav.DANGER_COLOR,image.getpixel((4,7)))
+        self.assertEqual(0,image.getpixel((1,1))[3])
+        self.assertEqual(10,nav.hazard_at(classified,(4.,8.)))
+        self.assertEqual(1.2,nav.danger_parameters(data)['water_depth'])
+        self.assertEqual(before,data)
+
+    def test_local_safe_cell_replaces_parent_hazard_but_unknown_cannot_hide_it(self):
+        data=graph();data['hazards'][12]=1
+        patch=dict(width=3,height=3,origin=[7.,7.],cell_size=1.,
+            heights_mm=[0]*9,links=[0]*9,hazards=[0]*9)
+        data['local_meshes']=[patch]
+        self.assertEqual(0,nav.hazard_at(data,(8.,8.)))
+        patch['heights_mm'][4]=None
+        self.assertEqual(1,nav.hazard_at(data,(8.,8.)))
+        patch['hazards'][4]=2
+        self.assertEqual(2,nav.hazard_at(data,(8.,8.)))
+
+    def test_local_exact_base_alias_retains_any_real_motion_grid_flag(self):
+        data=graph();data['hazards'][12]=4
+        data['local_meshes']=[dict(width=1,height=1,origin=[8.,8.],cell_size=1.,
+            heights_mm=[0],links=[0],hazards=[0])]
+        self.assertEqual(4,nav.hazard_at(data,(8.,8.)))
+
     def test_local_only_passage_is_visible_and_checked_by_shipping_planner(self):
         data=storage.graph_data('04_himmelsdorf');bounds=storage.contract.MAPS[data['map']]['bounds']
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
@@ -126,7 +156,27 @@ class NavigationDataTests(unittest.TestCase):
 @unittest.skipUnless(HAS_PIL and (os.name == 'nt' or os.environ.get('DISPLAY')),
                      'requires Pillow and Tk display')
 class NavigationUITests(unittest.TestCase):
-    def test_shared_geometry_clears_class_waits_and_class_edit_wins_later(self):
+    def test_danger_switch_is_right_of_navigation_independent_and_read_only(self):
+        e=self.editor;before=copy.deepcopy(e.document)
+        self.assertFalse(e.danger_grid_var.get())
+        self.assertGreaterEqual(e.danger_grid_check.winfo_x(),
+            e.navigation_grid_check.winfo_x()+e.navigation_grid_check.winfo_width())
+        with mock.patch.object(ui.navigation_view,'danger_overlay_image',wraps=nav.danger_overlay_image) as render:
+            e.danger_grid_check.invoke();self.root.update()
+            self.assertIsNotNone(e.danger_photo)
+            self.assertIsNone(e.navigation_photo)
+            self.assertTrue(e.canvas.find_withtag('danger_grid'))
+            e.wheel(SimpleNamespace(x=300,y=300),delta=1);e.fit_view()
+            e.navigation_grid_check.invoke();self.root.update()
+            self.assertIsNotNone(e.navigation_photo)
+            self.assertIsNotNone(e.danger_photo)
+            e.danger_grid_check.invoke();self.assertIsNone(e.danger_photo)
+            self.assertIsNotNone(e.navigation_photo)
+            self.assertEqual(1,render.call_count)
+        self.assertIn('水深上限',e.danger_parameters_var.get())
+        self.assertEqual(before,e.document)
+
+    def test_shared_geometry_replaces_class_points_and_later_class_edit_is_independent(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('AT-SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -136,10 +186,11 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         self.assertEqual('disabled',str(e.wait_button.cget('state')))
         e.selected_point=1;e.edit_point_condition();self.assertFalse(e.wait_edit)
-        e.checkpoint();shared=e._editable_item();shared['points'][0][0]+=8
-        e._sync_symmetry(geometry=True,item=shared)
-        self.assertEqual(shared['points'],scoped['points'])
-        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+        before=copy.deepcopy(scoped);e.checkpoint();shared=e._editable_item();shared['points'][1][0]+=8
+        e._sync_symmetry(geometry=True,item=shared);e.mark()
+        self.assertNotEqual(before['points'],scoped['points'])
+        self.assertEqual([p[:2] for p in shared['points']],[p[:2] for p in scoped['points']])
+        self.assertFalse(ui.contract.waiting_positions(scoped['points'][1]))
         e.route_class_var.set('AT-SPG');e.change_route_class();e.items.selection_set(key);e.select_item()
         e.selected_point=1;e.edit_point_condition();point=e._wait_point()
         e._store_wait_places([[point[0]+12,point[1],45]])
@@ -150,7 +201,8 @@ class NavigationUITests(unittest.TestCase):
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         e.reset_builtin()
         scoped=next(r for r in e.entry()['default_routes'] if r.get('class_tag')=='AT-SPG' and r['team']==1)
-        self.assertTrue(all(len(p)==3 and p[2]==0 for p in scoped['points']))
+        self.assertEqual([p[:2] for p in e._selected()['points']],[p[:2] for p in scoped['points']])
+        self.assertFalse(any(place[2]==45 for p in scoped['points'] for place in ui.contract.waiting_positions(p)))
     def test_wait_clearance_ring_heading_save_and_auto_reset(self):
         e=self.editor;e.route_class_var.set('AT-SPG');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -171,12 +223,29 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('-90.0°',e.wait_heading_preview.get())
         e.selected_point=None;e.redraw();self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
 
+    def test_selected_route_node_draws_actual_arrival_disk_only_when_selected(self):
+        e=self.editor
+        for point in ([0.,0.,0], [0.,0.,1,0,[[12.,0.,60.]]]):
+            e.selected_point=0;e.canvas.delete('all')
+            e._draw_route_node(point,0,'red',True,5)
+            rings=e.canvas.find_withtag('route_arrival')
+            self.assertEqual(1,len(rings))
+            bounds=e.canvas.coords(rings[0])
+            self.assertAlmostEqual(12.*e.view.frame()[2],bounds[2]-bounds[0])
+            self.assertEqual(bool(len(point)>3),bool(e.canvas.find_withtag('wait_avoidance')))
+            e.selected_point=None;e.canvas.delete('all')
+            e._draw_route_node(point,0,'red',True,5)
+            self.assertFalse(e.canvas.find_withtag('route_arrival'))
+            self.assertFalse(e.canvas.find_withtag('wait_avoidance'))
+
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        patcher=mock.patch.object(ui.messagebox,'showerror',side_effect=lambda *a,**kw: (_ for _ in ()).throw(AssertionError(str(a))))
+        patcher.start();self.addCleanup(patcher.stop)
         # Exercise the historical source-graph fixture independently of the adopted baseline.
         patcher=mock.patch.object(storage.contract,'default_map',return_value={})
         patcher.start();self.addCleanup(patcher.stop)
-        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
+        storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root=tk.Tk();self.root.withdraw();self.addCleanup(self.root.destroy)
         self.editor=ui.BotTacticsEditor(self.root,store=storage.Store(self.temp.name),language='zh')
         self.editor.book.select(1)
@@ -220,36 +289,33 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual(before,editor.document)
 
     def test_check_map_uses_shipping_graph_checker_without_writing_profile(self):
+        import bot_tactics_inventory as inventory
         editor=self.editor;before=copy.deepcopy(editor.document)
         editor.map_var.set('阿拉曼机场');editor.map_name='31_airfield';editor._load_map()
-        with mock.patch.object(nav,'check_map',return_value=[]) as shipping_check:
-            editor.check_map();self.root.update()
-        shipping_check.assert_called_once_with(storage.contract.canonical(editor.document),
+        with mock.patch.object(inventory,'inspect',return_value=[]) as shipping_check:
+            window=editor.check_map();self.root.update()
+        shipping_check.assert_called_once_with(editor.document,
             editor.map_name,editor.graph_cache[editor.map_name],storage.contract,receipt=nav.persist_receipt)
-        texts=[]
-        def collect(widget):
-            if isinstance(widget,tk.Text):texts.append(widget.get('1.0','end'))
-            for child in widget.winfo_children():collect(child)
-        collect(editor.root)
-        self.assertTrue(texts)
-        self.assertTrue(all('导航格检查' not in text and '涉及' not in text for text in texts))
-        self.assertTrue(any('本图没有自定义数据' in text for text in texts))
+        tree=next(child for child in window.winfo_children() if isinstance(child,ttk.Treeview))
+        self.assertEqual(('correct','incorrect','unconfigured'),tree.get_children())
         self.assertEqual(before,editor.document)
+        window.destroy()
 
     def test_check_map_names_wait_place_parent_coordinates_and_reason(self):
+        import bot_tactics_inventory as inventory
         e=self.editor;before=copy.deepcopy(e.document)
-        result=[('wait-test','wait_place_unusable',[dict(status='wait_place_unusable',
-            nodes=[3],points=[[12.5,-34.5]],wait_slot=2)])]
-        with mock.patch.object(nav,'check_map',return_value=result):
-            e.check_map();self.root.update()
-        texts=[]
-        def collect(widget):
-            if isinstance(widget,tk.Text):texts.append(widget.get('1.0','end'))
-            for child in widget.winfo_children():collect(child)
-        collect(e.root)
-        self.assertTrue(any('节点 3 / 等待点 2' in text and 'X 12.5, Z -34.5' in text
-                            and '等待点不可用' in text for text in texts))
+        result=[dict(kind='route',team=1,scope='heavyTank',label='wait-test',identity='wait-test',
+            points=[[0,0,0]],mode='',link='',selection=None,disabled=False,category='incorrect',
+            issues=[dict(reason='wait_place_unusable',nodes=[3],points=[[12.5,-34.5]],wait_slot=2)])]
+        with mock.patch.object(inventory,'inspect',return_value=result):
+            window=e.check_map();self.root.update()
+        tree=next(child for child in window.winfo_children() if isinstance(child,ttk.Treeview))
+        issue=tree.item('row0_0')
+        self.assertIn('等待点不可用',issue['text'])
+        self.assertIn('节点 3 / 等待点 2',issue['values'])
+        self.assertTrue(any('X 12.5 Z -34.5' in str(v) for v in issue['values']))
         self.assertEqual(before,e.document)
+        window.destroy()
 
     def test_total_view_lists_effective_classes_and_parking_without_generic_line(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
@@ -288,16 +354,16 @@ class NavigationUITests(unittest.TestCase):
 
     def test_total_shared_custom_route_edit_splits_class_and_its_mirror(self):
         e=self.editor;e.route_class_var.set('all');e.new_route()
-        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];e._sync_symmetry()
+        item=e._selected();item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];e._sync_symmetry()
         old_id=item['id'];e.route_class_var.set('total');e.change_route_class()
         e.selection=('routes',old_id+'@lightTank')
-        e.checkpoint();e._editable_points()[0][0]+=7;e._sync_symmetry();e._refresh_items()
+        e.checkpoint();e._editable_points()[1][0]+=7;e._sync_symmetry();e._refresh_items()
         entries=e.entry()['routes'];self.assertEqual(4,len(entries))
         for r in entries:
             if r['id']==old_id:
-                self.assertNotIn('lightTank',r['classes']);self.assertEqual(-100.,r['points'][0][0])
+                self.assertNotIn('lightTank',r['classes']);self.assertEqual(-100.,r['points'][1][0])
         selected=e._selected();self.assertEqual(['lightTank'],selected['classes'])
-        self.assertEqual(-93.,selected['points'][0][0])
+        self.assertEqual(-93.,selected['points'][1][0])
         other=next(r for r in entries if r['id']==selected['mirror_id'])
         self.assertEqual(selected['points'],list(reversed(other['points'])))
         storage.contract.canonical(e.document)
@@ -330,7 +396,7 @@ class NavigationUITests(unittest.TestCase):
         e.item_vars['route_priority'].set('9');e.update_properties()
         self.assertEqual(saved,e.document['maps']['31_airfield']['default_routes'])
         e.route_class_var.set('total');e.change_route_class();e.selection=('builtin',identity+'@lightTank');e._refresh_properties()
-        self.assertEqual('normal',str(e.item_fields['route_priority'][1].cget('state')))
+        self.assertEqual('readonly',str(e.item_fields['route_priority'][1].cget('state')))
         self.assertEqual('8',e.item_vars['route_priority'].get())
         self.assertTrue(e.items.item('builtin:'+identity+'@lightTank','text').startswith('[优先级 8]'))
         self.assertIn('优先级 5',e.items.item('builtin:'+identity+'@heavyTank','text'))
@@ -338,7 +404,7 @@ class NavigationUITests(unittest.TestCase):
 
     def test_custom_route_priority_values_are_independent_for_each_class(self):
         e=self.editor;e.route_class_var.set('all');e.new_route();item=e._selected()
-        item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];identity=item['id']
         for tag,value in (('lightTank',8),('heavyTank',2)):
             e.route_class_var.set(tag);e.change_route_class();e.selection=('routes',identity);e._refresh_properties()
             e.item_vars['route_priority'].set(str(value));self.assertTrue(e.update_properties())
@@ -347,7 +413,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('优先级 8',e.items.item('routes:'+identity+'@lightTank','text'))
         self.assertIn('优先级 2',e.items.item('routes:'+identity+'@heavyTank','text'))
 
-    def test_shared_drag_after_class_edit_wins_without_losing_priorities(self):
+    def test_shared_drag_replaces_class_geometry_but_preserves_priorities(self):
         e=self.editor;e.map_name='31_airfield';e._load_map()
         e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'))
@@ -372,7 +438,7 @@ class NavigationUITests(unittest.TestCase):
         e.press(SimpleNamespace(x=x,y=y,state=0));e.motion(SimpleNamespace(x=x+5,y=y));e.release(None)
         self.assertNotEqual(shared_geometry,e._selected()['points'])
         e.route_class_var.set('heavyTank');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
-        self.assertEqual(shared_geometry,e._selected()['points'])
+        self.assertEqual([[round(v,4) for v in p[:2]]+[0] for p in shared_geometry],e._selected()['points'])
 
     def test_shared_wait_reset_and_single_team_changes_preserve_class_priorities(self):
         e=self.editor;e.map_name='31_airfield';e._load_map();e.route_class_var.set('heavyTank');e.change_route_class()
@@ -410,10 +476,10 @@ class NavigationUITests(unittest.TestCase):
         self.assertFalse(e.canvas.find_withtag('route_node'))
         self.assertEqual(before,e.document)
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
-        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：大车参考半径6米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
+        self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：抵达半径6米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
         self.assertEqual('Node legend',e.node_legend.cget('text'))
-        self.assertIn('Square: wait place; ring: 6 m radius large-hull guide',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
+        self.assertIn('Square: wait place; ring: 6 m arrival radius',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
         self.assertTrue(radii());self.assertTrue(all(r==7. for r in radii()))
         self.assertFalse(e.canvas.find_withtag('route_node'))
@@ -432,18 +498,15 @@ class NavigationUITests(unittest.TestCase):
         self.assertEqual([7.,7.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
 
-    def test_delete_default_route_scopes_total_class_and_shared_views(self):
+    def test_delete_default_route_requires_all_and_class_tier_remains_visible(self):
         e=self.editor;e.route_class_var.set('total');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:') and k.endswith('@lightTank'))
         identity=key.split(':',1)[1].split('@',1)[0]
-        e.items.selection_set(key);e.select_item()
-        with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
-        self.assertFalse(e.items.exists(key))
+        e.items.selection_set(key);e.select_item();before=copy.deepcopy(e.document)
+        e.delete_item();self.assertEqual(before,e.document)
         e.route_class_var.set('lightTank');e.change_route_class()
-        self.assertFalse(e.items.exists('builtin:'+identity))
-        e.team=2;e._refresh_items();self.assertFalse(e.items.exists('builtin:'+identity))
-        e.team=1;e._refresh_items();e.route_class_var.set('heavyTank');e.change_route_class()
-        self.assertTrue(e.items.exists('builtin:'+identity))
+        e.selection=('builtin',identity);e._refresh_properties();e.set_tier('reserve')
+        self.assertEqual('reserve',e._selected()['tier']);self.assertTrue(e.items.exists('builtin:'+identity))
         e.route_class_var.set('all');e.change_route_class();e.items.selection_set('builtin:'+identity);e.select_item()
         with mock.patch.object(ui.messagebox,'askyesno',return_value=True):e.delete_item()
         e.route_class_var.set('heavyTank');e.change_route_class();self.assertFalse(e.items.exists('builtin:'+identity))
@@ -454,7 +517,7 @@ class NavigationUITests(unittest.TestCase):
         e=self.editor;e.route_class_var.set('lightTank');e.change_route_class()
         key=next(k for k in e.items.get_children() if k.startswith('builtin:'));e.items.selection_set(key);e.select_item()
         # Shipped default lanes can already contain sixteen nodes.
-        item=e._editable_item();item['points']=copy.deepcopy(item['points'][:3])
+        item=e._editable_item();item['points']=copy.deepcopy(item['points'][:2]+item['points'][-1:])
         old=copy.deepcopy(item['points']);e.selected_point=0;e._refresh_properties()
         self.assertEqual('normal',str(e.insert_button.cget('state')))
         e.insert_button.invoke();current=e._selected()['points']
@@ -498,7 +561,7 @@ class NavigationUITests(unittest.TestCase):
 
     def test_total_priorities_update_only_selected_class_and_parking(self):
         e=self.editor;e.route_class_var.set('all');e.change_route_class();e.new_route()
-        item=e._selected();item['points']=[[-100.,-100.,0],[100.,100.,0]];identity=item['id']
+        item=e._selected();item['points']=[item['points'][0],[-100.,-100.,0],item['points'][-1]];identity=item['id']
         before=copy.deepcopy(item);e.route_class_var.set('total');e.change_route_class()
         key='routes:'+identity+'@lightTank';e.items.selection_set(key);e.select_item()
         e.item_vars['route_priority'].set('9');self.assertTrue(e.update_properties())
@@ -514,7 +577,7 @@ class NavigationUITests(unittest.TestCase):
         self.assertIn('优先级 6',e.items.item(key,'text'))
         key=next(k for k in e.items.get_children() if k.startswith('builtin_positions:'))
         e.items.selection_set(key);e.select_item();point=copy.deepcopy(e._selected()['point'])
-        self.assertEqual('normal',str(e.item_fields['priority'][1].cget('state')))
+        self.assertEqual('readonly',str(e.item_fields['priority'][1].cget('state')))
         e.item_vars['priority'].set('8');self.assertTrue(e.update_properties())
         self.assertEqual(8,e._selected()['priority']);self.assertEqual(point,e._selected()['point'])
         e.save(True);self.assertEqual(e.document,e.store.active())

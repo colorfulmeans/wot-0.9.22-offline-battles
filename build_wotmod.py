@@ -30,7 +30,7 @@ import navigation_graph_schema as _navigation_schema
 
 
 MOD_ID = 'org.colorfulmeans.offline_lan_0922'
-MOD_VERSION = '0.10.2'
+MOD_VERSION = '1.0.0'
 BUILD_IDENTITY_ENV = 'WOT_OFFLINE_BUILD_IDENTITY'
 BUILD_IDENTITY_FILENAME = 'build_identity.json'
 BUILD_IDENTITY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$')
@@ -721,12 +721,45 @@ def _stage_depot_style_ui(staging_root):
         stream.write(raw)
 
 
+def _validate_waiting_room_ui(repo_root):
+    root = os.path.join(repo_root, 'src', 'res', 'gui', 'flash')
+    with open(os.path.join(root, 'offlineWaitingRoom.swf'), 'rb') as stream:
+        raw = stream.read()
+    with open(os.path.join(root, 'offlineWaitingRoom.swf.json'), 'r') as stream:
+        proof = json.load(stream)
+    if (raw[:3] not in (b'FWS', b'CWS') or
+            proof.get('output_sha256') != hashlib.sha256(raw).hexdigest() or
+            proof.get('source_sha256') !=
+            'aeaf9efe4ef1180ed8c65cd7d1c2d9d2e7ddfa8297e5cf1e0819c34c7281a019'):
+        raise ValueError('Invalid stock-component waiting-room movie')
+    for key, source in (
+            ('actionscript_sha256', 'tools/actionscript/OfflineWaitingRoom.as'),
+            ('builder_sha256', 'tools/build_waiting_room_swf.py')):
+        with open(os.path.join(repo_root, source), 'rb') as stream:
+            digest = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
+        if proof.get(key) != digest:
+            raise ValueError('Rebuild waiting-room movie after changing ' + source)
+    with open(os.path.join(root, 'offlineMapPicker.swf'), 'rb') as stream:
+        picker = stream.read()
+    with open(os.path.join(root, 'offlineMapPicker.swf.json'), 'r') as stream:
+        picker_proof = json.load(stream)
+    with open(os.path.join(repo_root, 'tools', 'actionscript', 'OfflineMapPicker.as'), 'rb') as stream:
+        source_hash = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
+    if (picker[:3] not in (b'FWS', b'CWS') or
+            picker_proof.get('output_sha256') != hashlib.sha256(picker).hexdigest() or
+            picker_proof.get('actionscript_sha256') != source_hash or
+            picker_proof.get('source_sha256') != proof.get('source_sha256') or
+            picker_proof.get('builder_sha256') != proof.get('builder_sha256')):
+        raise ValueError('Rebuild scoped native map picker')
+
+
 def build():
     _validate_python()
     repo_root = os.path.abspath(os.path.dirname(__file__))
     sys.path.insert(0, os.path.join(repo_root, 'tools'))
     from verify_native_payload import verify_file
     verify_file(repo_root, os.path.join(repo_root, 'native', NATIVE_MATH_FILENAME))
+    _validate_waiting_room_ui(repo_root)
     source_root = os.path.join(repo_root, 'src')
     dist_root = os.path.join(repo_root, 'dist')
     if not os.path.isdir(dist_root):

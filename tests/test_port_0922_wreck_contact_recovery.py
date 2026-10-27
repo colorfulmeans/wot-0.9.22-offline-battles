@@ -356,6 +356,25 @@ class WreckContactRecoveryTests(unittest.TestCase):
         self.state['neighbours'].remove(live)
         self.assertNotEqual('wreck_push', self.decide(lambda *args: False)['recovery_mode'])
 
+    def test_live_push_blocker_receipt_is_fresh_and_names_the_peer(self):
+        self.route()
+        live = dict(self.peer, id=3, team=1, alive=True, position=(0., 0., 7.))
+        self.state['neighbours'].append(live)
+        self.state['now'] = 12.
+        command = self.decide()
+        receipt = command['wreck_push']
+        self.assertEqual('live_hull_blocked', receipt['phase'])
+        self.assertEqual(3, receipt['live_blocker'])
+        self.assertEqual(12., receipt['sampled_at'])
+        self.assertEqual([3], receipt['live_hull_check']['checked_peers'])
+        self.state['neighbours'].remove(live)
+        self.state['now'] = 13.
+        receipt = self.decide()['wreck_push']
+        self.assertNotEqual('live_hull_blocked', receipt['phase'])
+        self.assertNotIn('live_blocker', receipt)
+        self.assertEqual(13., receipt['sampled_at'])
+        self.assertEqual([], receipt['live_hull_check']['checked_peers'])
+
     def test_navigation_evidence_is_published_even_during_push(self):
         self.route()
         calls=[]

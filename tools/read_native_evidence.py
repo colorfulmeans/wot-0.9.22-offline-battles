@@ -9,6 +9,9 @@ LABELS = ('SPG PROOF', 'BOT LOCAL HANDOFF', 'BOT GUN SOLUTION', 'BOT RECOVERY CO
           'TREE DESCRIPTOR', 'ENV MODULE CONTACT', 'ENV MODULE DAMAGE', 'RAM TRACK CONTACT', 'RAM CONTACT GEOMETRY', 'BOT VERTICAL SUPPORT', 'BOT SLOPE POSE', 'BOT MOTION PRESENT', 'BOT MOTION')
 
 
+LABELS += ('KILLER CAMERA',)
+
+
 def parse_lines(lines, source='log'):
     records, issues, pending = [], [], {}
     for number, line in enumerate(lines, 1):

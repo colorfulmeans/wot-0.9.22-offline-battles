@@ -418,6 +418,8 @@ class AuthorityWorkerClientTests(unittest.TestCase):
             'player_id': 2, 'input_seq': 17, 'level': 2,
         }], 9))
 
+        self.assertEqual('enqueued', client._player_environment_send_receipt['reason'])
+        self.assertEqual(9, client._player_environment_send_receipt['sample_seq'])
         client._send.assert_called_once_with({
             'type': 'player_environment', 'round_id': 7,
             'authority_epoch': 4, 'sample_seq': 9,
@@ -425,6 +427,22 @@ class AuthorityWorkerClientTests(unittest.TestCase):
                 'player_id': 2, 'input_seq': 17, 'level': 2,
             }],
         })
+
+    def test_worker_water_rejections_and_transport_keep_local_reason_receipts(self):
+        client = self._active_client()
+        client.authority_epoch = 4
+        client.capabilities = tuple(CLIENT_CAPABILITIES) + (SIMULATION_WORKER_CAPABILITY,)
+        client.server_capabilities = tuple(CLIENT_CAPABILITIES)
+        client._send = mock.Mock(return_value=False)
+        self.assertFalse(client.send_player_environment([dict(player_id=2,input_seq=1,level=2)],1))
+        self.assertEqual('transport_not_enqueued',client._player_environment_send_receipt['reason'])
+        for row, reason in [({'wrong':1},'invalid_row_shape'),
+                            (dict(player_id=0,input_seq=1,level=2),'invalid_row_fields'),
+                            (dict(player_id=2,input_seq=1,level=0,drowning_critical={}), 'invalid_critical_shape')]:
+            with self.subTest(reason=reason):
+                self.assertFalse(client.send_player_environment([row],2))
+                self.assertEqual(reason,client._player_environment_send_receipt['reason'])
+        self.assertEqual(1,client._send.call_count)
 
     def test_visible_client_cannot_publish_player_environment(self):
         client = LANClient(
@@ -439,6 +457,8 @@ class AuthorityWorkerClientTests(unittest.TestCase):
         client._send = mock.Mock(return_value=True)
 
         self.assertFalse(client.send_player_environment([], 1))
+        self.assertEqual('authority_phase_capability_or_batch_gate',
+                         client._player_environment_send_receipt['reason'])
         client._send.assert_not_called()
 
     def test_worker_bot_state_is_encoded_once_and_frozen_as_queue_bytes(self):

@@ -4,6 +4,7 @@ import copy
 import json
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import types
@@ -466,7 +467,8 @@ class CompiledSpace0922Test(unittest.TestCase):
         self.assertLess(data['bake']['maximum_route_projection'], 8.0)
         self.assertEqual([], data['bake']['soft_route_fallbacks'])
         self.assertGreater(data['bake']['rejected_obstacle_nodes'], 0)
-        self.assertGreater(data['bake']['rejected_water_nodes'], 0)
+        self.assertEqual(sum(bool(v&1) for v in data['hazards']),data['bake']['rejected_water_nodes'])
+        self.assertEqual(1.2,data['bake']['water_depth_limit'])
         self.assertEqual(90, data['validation']['route_segments'])
         for team, start, finish in (
                 ('1', data['spawn_anchors'][0], data['spawn_anchors'][1]),
@@ -527,7 +529,9 @@ class CompiledSpace0922Test(unittest.TestCase):
         # census so a return to the falsely sparse obstacle raster cannot pass
         # behind the old 90 percent retained-node threshold.
         self.assertEqual(29888, data['bake']['source_navigable_nodes'])
-        self.assertEqual(24418, data['bake']['retained_nodes'])
+        self.assertEqual(24418+data['bake']['continuous_terrain_nodes_added']+
+                         data['bake']['water_policy_rebake']['base']['revived_cells'],
+                         data['bake']['retained_nodes'])
         self.assertEqual(5470, data['bake']['pruned_nodes'])
         self.assertEqual(384, data['bake']['source_components'])
         self.assertEqual(287775, data['bake']['obstacle_raster_cells'])
@@ -670,12 +674,13 @@ class CompiledSpace0922Test(unittest.TestCase):
             with self.subTest(map=record['map']):
                 self.assertEqual(record['map'], graph_path.stem)
                 graph = json.loads(graph_path.read_text())
-                # The retained coarse batch was baked at .9 m. A new
-                # runtime limit must not relabel or unblock its old cells;
-                # only the measured Windstorm local patch is rebaked here.
-                self.assertEqual(.9, graph['bake']['shallow_water_threshold'])
-                self.assertLessEqual(graph['bake']['shallow_water_threshold'],
-                                     baker.SHALLOW_WATER_THRESHOLD)
+                # All retained layers now carry a real all-cell water rebake,
+                # rather than relabelling the old .9 m catalog as 1.2 m.
+                self.assertEqual(baker.SHALLOW_WATER_THRESHOLD,
+                                 graph['bake']['shallow_water_threshold'])
+                proof=graph['bake']['water_policy_rebake']
+                self.assertTrue(proof['all_cells_measured'])
+                self.assertEqual(graph['width']*graph['height'],proof['base']['cells_measured'])
                 self.assertEqual(
                     record['sha256'],
                     hashlib.sha256(graph_path.read_bytes()).hexdigest())
@@ -692,8 +697,18 @@ class CompiledSpace0922Test(unittest.TestCase):
         for path in paths:
             with self.subTest(map=path.stem):
                 data = json.loads(path.read_text())
-                self.assertEqual(1, data['validation']['components'])
-                self.assertEqual(1.0, data['validation']['largest_fraction'])
+                # Railway pruning already left some disconnected static
+                # pockets in the retained input. Compare actual topology,
+                # not its stale pre-pruning "one component" summary.
+                legacy=load_module('bake_navigation_0922')._legacy_baker()
+                prior=json.loads(subprocess.check_output(['git','show',
+                    '100bac61:navgraphs/'+path.name],cwd=ROOT))
+                before=legacy._connected_components(prior)
+                after=legacy._connected_components(data)
+                self.assertEqual(len(before),len(after),(path.stem,'new disconnected pocket'))
+                self.assertEqual(len(after),data['validation']['components'])
+                self.assertGreaterEqual(data['validation']['largest_fraction'],
+                    round(before[0]/float(sum(before)),5))
                 self.assertEqual(
                     sum(len(route['waypoints']) - 1
                         for team in ('1', '2')

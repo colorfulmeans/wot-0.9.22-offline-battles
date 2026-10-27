@@ -500,10 +500,20 @@ class TrafficCoordinator(object):
             shape = body.get('shape') or (
                 body['half_width'], body['half_length'], -0.8, 2.0)
             steer_sign = -1.0 if result['throttle'] < 0.0 else 1.0
-            if tank_collision.rotation_fraction(
+            candidate_yaw = body['yaw'] + turn * steer_sign * max(step, 0.1)
+            fraction = tank_collision.rotation_fraction(
                     body['position'], body['yaw'],
-                    body['yaw'] + turn * steer_sign * max(step, 0.1),
-                    shape, peers) < 1.0:
+                    candidate_yaw, shape, peers)
+            blocked = fraction < 1.0
+            result['rotation_safety'] = dict(at=now, queried=True, blocked=blocked,
+                reason='hull_sweep_blocked' if blocked else 'hull_sweep_clear',
+                origin=tuple(body['position']), yaw=body['yaw'],
+                candidate_yaw=candidate_yaw, shape=tuple(shape), fraction=fraction,
+                requested_turn=turn, step=step,
+                peers=[dict(id=peer['id'], position=peer.get('position'),
+                    yaw=peer.get('yaw', 0.0), shape=peer.get('shape'))
+                    for peer in peers] if blocked else [])
+            if blocked:
                 result.update(turn=0.0, traffic_mode='vehicle_brake')
         # A stopped follower can request clearance before physical contact.
         # Preserve raw movement intent so the driver's stuck clock still runs.

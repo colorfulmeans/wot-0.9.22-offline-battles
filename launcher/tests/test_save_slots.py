@@ -315,6 +315,23 @@ class SaveBackupTests(unittest.TestCase):
         self.assertEqual(record["id"], described["id"])
         self.assertEqual("Career", described["name"])
 
+    def test_pending_crew_travels_with_backup_and_restore_replaces_foreign_requests(self):
+        inbox = save_slots.LAUNCHER_CREW_INBOX_NAME
+        original = {'schema': 1, 'crew': [{'id': 'original request'}]}
+        source = self._slot_with_state('Source', **{inbox: original})
+        backup = save_slots.backup_slot(source['id'], self._archive(), root=self.root)
+        self.assertIn(inbox, backup['files'])
+        target = self._slot_with_state('Target', **{inbox: {'schema': 1, 'crew': [{'id':'foreign'}]}})
+        save_slots.restore_slot(target['id'], self._archive(), root=self.root,is_running=lambda:False)
+        with open(os.path.join(target['path'],inbox),encoding='utf8') as stream:
+            self.assertEqual(original,json.load(stream))
+        clean = self._slot_with_state('Clean')
+        clean_backup = self._archive('clean.zip')
+        save_slots.backup_slot(clean['id'],clean_backup,root=self.root)
+        leftover = self._slot_with_state('Leftover', **{inbox: original})
+        save_slots.restore_slot(leftover['id'],clean_backup,root=self.root,is_running=lambda:False)
+        self.assertFalse(os.path.exists(os.path.join(leftover['path'],inbox)))
+
     def test_a_backup_keeps_the_copies_the_client_left_behind(self):
         """The evidence is part of the save a player wants back.
 
@@ -450,3 +467,74 @@ class SaveBackupTests(unittest.TestCase):
         self.assertEqual(1, len(asked))
         self.assertEqual("explorer.exe", asked[0][0])
         self.assertTrue(os.path.isdir(directory))
+
+
+class InitializeSaveTests(unittest.TestCase):
+    setUp = SaveSlotsTests.setUp
+    def test_initialization_preserves_identity_type_and_multiplier_clears_only_owned_state(self):
+        import pathlib
+        for mode in save_slots.MODES:
+            record=save_slots.create_slot(mode,mode,root=self.root,earnings_percent=250)
+            folder=pathlib.Path(record['path'])
+            for name in save_slots.STATE_FILE_NAMES+(save_slots.LAUNCHER_INBOX_NAME,save_slots.LAUNCHER_CREW_INBOX_NAME):
+                (folder/name).write_text('{}')
+                (folder/(name+'.backup1')).write_text('{}')
+                (folder/(name+'.tmp')).write_text('unfinished')
+            (folder/'unrelated.txt').write_text('keep')
+            result=save_slots.initialize_slot(record['id'],root=self.root,is_running=lambda:False)
+            self.assertEqual((record['id'],mode,250),(result['record']['id'],result['record']['mode'],result['record']['earnings_percent']))
+            self.assertFalse(result['record']['has_state'])
+            self.assertEqual({'save.json','unrelated.txt',os.path.basename(result['recovery'])},set(os.listdir(folder)))
+            self.assertTrue(json.loads((folder/'save.json').read_text())['skip_legacy_import'])
+            self.assertIn('launcher_crew_inbox.json',save_slots.read_backup(result['backup'])['files'])
+            save_slots.restore_slot(record['id'],result['backup'],root=self.root,is_running=lambda:False)
+            self.assertTrue((folder/'garage_state.json').is_file())
+
+    def test_game_running_refuses_without_writes(self):
+        record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        before=os.listdir(record['path'])
+        with self.assertRaises(save_slots.SaveSlotError):
+            save_slots.initialize_slot(record['id'],root=self.root,is_running=lambda:True)
+        self.assertEqual(before,os.listdir(record['path']))
+
+    def test_metadata_failure_rolls_back_live_state_and_pending_requests(self):
+        from unittest.mock import patch
+        from pathlib import Path
+        record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        folder=Path(record['path']);(folder/'garage_state.json').write_text('original')
+        (folder/'launcher_crew_inbox.json').write_text('pending')
+        before={p.name:p.read_bytes() for p in folder.iterdir()}
+        with patch.object(save_slots,'_write_metadata',side_effect=OSError('disk full')):
+            with self.assertRaises(save_slots.SaveSlotError):
+                save_slots.initialize_slot(record['id'],root=self.root,is_running=lambda:False)
+        self.assertEqual(before,{p.name:p.read_bytes() for p in folder.iterdir() if p.is_file()})
+
+    def test_default_reset_does_not_reimport_legacy_ledger(self):
+        from pathlib import Path
+        import save_ledger
+        root=Path(self.root);root.mkdir(parents=True)
+        legacy=root.parent/'garage_state.json';legacy.write_text('legacy')
+        save_slots.initialize_slot('default',root=self.root,is_running=lambda:False)
+        self.assertEqual(str(root/'default/garage_state.json'),save_ledger.ledger_path('default',root=self.root))
+        self.assertEqual('legacy',legacy.read_text())
+
+
+    def test_locked_partial_metadata_still_attempts_to_restore_old_files(self):
+        from unittest.mock import patch
+        from pathlib import Path
+        record=save_slots.create_slot('Career',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        folder=Path(record['path']);(folder/'garage_state.json').write_text('original')
+        before=(folder/'save.json').read_bytes()
+        def broken_write(path,value):
+            Path(path).write_text('partial')
+            raise OSError('interrupted write')
+        unlink=save_slots.os.unlink
+        def locked(path,*args,**kwargs):
+            if str(path)==str(folder/'save.json'):raise PermissionError('locked partial file')
+            return unlink(path,*args,**kwargs)
+        with patch.object(save_slots,'_write_metadata',side_effect=broken_write), \
+             patch.object(save_slots.os,'unlink',side_effect=locked):
+            with self.assertRaises(save_slots.SaveSlotError):
+                save_slots.initialize_slot(record['id'],root=self.root,is_running=lambda:False)
+        self.assertEqual(before,(folder/'save.json').read_bytes())
+        self.assertEqual('original',(folder/'garage_state.json').read_text())

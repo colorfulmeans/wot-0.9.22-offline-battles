@@ -116,6 +116,17 @@ class VehiclePhysicsDescriptorTests(unittest.TestCase):
                     engine_name: {'smplEnginePower': native_power}}}}),
             chassis=_Strict1513Component(rotationSpeed=0.75))
 
+    def test_contact_drive_limits_match_full_derivation_and_read_live_changes(self):
+        descriptor=types.SimpleNamespace(physics={'speedLimits':(17.,8.),'weight':21000.})
+        for limits in ((17.,8.),(25.,3.),(0.,0.)):
+            descriptor.physics['speedLimits']=limits
+            full=vehicle_physics.derive_params(descriptor)
+            self.assertEqual({k:full[k] for k in ('speedFwd','speedBwd')},
+                             vehicle_physics.descriptor_drive_limits(descriptor))
+        descriptor.physics={}
+        full=vehicle_physics.derive_params(descriptor)
+        self.assertEqual(full,vehicle_physics.descriptor_drive_limits(descriptor))
+
     def test_rotation_speed_reads_native_1513_chassis_attribute(self):
         descriptor = types.SimpleNamespace(
             physics={},

@@ -1,0 +1,64 @@
+name: Build and publish v1.0.0
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-100
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/build-launcher.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wot-0.9.22-offline-battles-windows-*
+          merge-multiple: true
+          path: verified-launcher
+      - name: Prepare one launcher and eighteen verified guide files
+        run: python tools/prepare_release100_assets.py --launcher verified-launcher --output release-assets
+      - name: Publish the exact main build with English release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" --jq .object.sha > release-tag.txt; then
+            test "$(cat release-tag.txt)" = "$GITHUB_SHA"
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref=refs/tags/v1.0.0 -f sha="$GITHUB_SHA" > /dev/null
+          fi
+          if gh release view v1.0.0 --json isDraft --jq .isDraft > release-draft.txt; then
+            test "$(cat release-draft.txt)" = true
+            gh release edit v1.0.0 --notes-file docs/releases/v1.0.0.md
+          else
+            gh release create v1.0.0 --target "$GITHUB_SHA" --draft \
+              --title 'v1.0.0 — Bot tactics, crew editor and navigation improvements' \
+              --notes-file docs/releases/v1.0.0.md
+          fi
+          gh release upload v1.0.0 release-assets/* --clobber
+          gh release view v1.0.0 --json assets > uploaded-assets.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          expected = {p.name: p.stat().st_size for p in Path('release-assets').iterdir() if p.is_file()}
+          actual = {a['name']: a['size'] for a in json.loads(Path('uploaded-assets.json').read_text())['assets']}
+          assert len(expected) == 19 and actual == expected, (actual, expected)
+          PY
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.0" --jq .object.sha)" = "$GITHUB_SHA"
+          gh release edit v1.0.0 --draft=false --prerelease=false --latest

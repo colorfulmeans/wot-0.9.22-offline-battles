@@ -1420,7 +1420,24 @@ def _require_0_9_22_maintenance_target(game_root, is_running=None):
     if is_running():
         raise LauncherError(
             "Close World of Tanks before repairing or resetting offline data.")
+    if other_launcher_is_running():
+        raise LauncherError('Close other offline launchers and LAN servers before maintenance.')
     return status
+
+
+def other_launcher_is_running(enumerator=None):
+    """Older launcher windows can write shared settings back after a reset."""
+    if not getattr(sys, 'frozen', False):
+        return False
+    try:
+        names = [str(name).lower() for name in (enumerator or _running_process_names)()]
+    except Exception as error:
+        raise LauncherError('Could not check other offline launcher processes: %s' % error)
+    own = os.path.basename(sys.executable).lower()
+    for name in {own, 'wot-0.9.22-offline-battles.exe', 'wot-0.9.22-lan-server.exe'}:
+        if names.count(name) > (1 if name == own else 0):
+            return True
+    return False
 
 
 def ensure_0_9_22_preferences_isolation(game_root):
@@ -1638,6 +1655,243 @@ def reset_0_9_22_state(game_root, base_dir=None, is_running=None):
         shutil.rmtree(directory, ignore_errors=True)
     actions.insert(0, "Deleted %d offline saved-data file(s)." % len(targets))
     return actions
+
+
+def _maintenance_safe_path(path, recursive=True):
+    """Reject redirects before a maintenance operation moves or removes data."""
+    import stat
+    path = os.path.abspath(path)
+    current = path
+    while True:
+        if os.path.lexists(current):
+            info = os.lstat(current)
+            if (stat.S_ISLNK(info.st_mode) or
+                    getattr(info, 'st_file_attributes', 0) & 0x400):
+                raise LauncherError('Maintenance refuses a redirected path: %s' % current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    if recursive and os.path.isdir(path):
+        for root, directories, files in os.walk(path, followlinks=False):
+            for name in directories + files:
+                child = os.path.join(root, name)
+                info = os.lstat(child)
+                if (stat.S_ISLNK(info.st_mode) or
+                        getattr(info, 'st_file_attributes', 0) & 0x400):
+                    raise LauncherError('Maintenance refuses a redirected path: %s' % child)
+    return path
+
+
+def _maintenance_replace(targets, rebuild):
+    """Stage exact owned targets, rebuild, then permanently discard old data.
+
+    Staging stays on each target's volume. Failed rebuilds retain the old data;
+    failed cleanup is reported rather than described as a clean reset.
+    """
+    import shutil
+    import tempfile
+    paths = []
+    for path in sorted(set(os.path.abspath(p) for p in targets), key=len):
+        _maintenance_safe_path(path)
+        if not any(_path_is_covered(path, [parent]) for parent in paths):
+            paths.append(path)
+    staged = []
+    try:
+        for path in paths:
+            if not os.path.lexists(path):
+                staged.append((path, None, None))
+                continue
+            holder = tempfile.mkdtemp(prefix='.wot-maintenance-', dir=os.path.dirname(path))
+            backup = os.path.join(holder, 'previous')
+            try:
+                os.replace(path, backup)
+            except Exception:
+                os.rmdir(holder)
+                raise
+            staged.append((path, backup, holder))
+        actions = rebuild()
+    except Exception as error:
+        failures = []
+        for path, backup, holder in reversed(staged):
+            try:
+                _maintenance_safe_path(path)
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                elif os.path.lexists(path):
+                    os.unlink(path)
+                if backup is not None:
+                    os.replace(backup, path)
+                    os.rmdir(holder)
+            except Exception as failure:
+                failures.append('%s: %s' % (holder, failure))
+        raise LauncherError('Maintenance failed: %s%s' % (
+            error, '; recovery retained at ' + '; '.join(failures) if failures else ''))
+    for unused, backup, holder in staged:
+        if holder is None:
+            continue
+        try:
+            _maintenance_safe_path(holder)
+            shutil.rmtree(holder)
+        except OSError as error:
+            raise LauncherError('Rebuild completed, but old data cleanup failed at %s: %s' % (holder, error))
+    return actions
+
+
+def _offline_preferences_targets(game_root):
+    """Cover active role configs as well as the older isolated profile path."""
+    targets = [os.path.join(os.path.dirname(settings_path()), 'client_profiles')]
+    path = _isolated_0_9_22_preferences_path()
+    if path is not None:
+        targets.append(path)
+    normal = _normal_client_preferences_path()
+    roots = [game_root]
+    if normal is not None:
+        roots.append(os.path.dirname(normal))
+    for root in roots:
+        _maintenance_safe_path(root, recursive=False)
+        for name in ('playerprefs.xml', 'workerprefs.xml'):
+            targets.append(os.path.join(root, name))
+            if os.path.isdir(root):
+                targets.extend(os.path.join(root, entry) for entry in os.listdir(root)
+                               if entry.startswith(name + '.'))
+    return targets
+
+
+def reset_offline_preferences(game_root, is_running=None):
+    _require_0_9_22_maintenance_target(game_root, is_running)
+    return _maintenance_replace(_offline_preferences_targets(game_root), lambda: [
+        'Reset all offline client preferences; new defaults are created on next start.'])
+
+
+def _fresh_default_save(game_root):
+    try:
+        from . import save_slots
+    except ImportError:
+        import save_slots
+    directory = save_slots.slot_dir(save_slots.DEFAULT_SLOT_ID, game_root)
+    os.makedirs(directory, exist_ok=True)
+    _write_json(os.path.join(directory, save_slots.METADATA_NAME), {
+        'schema': save_slots.METADATA_SCHEMA, 'id': save_slots.DEFAULT_SLOT_ID,
+        'name': save_slots.DEFAULT_SLOT_ID, 'mode': save_slots.MODE_UNLOCKED,
+        'skip_legacy_import': True,
+    })
+
+
+def _save_reset_targets(game_root):
+    try:
+        from . import save_slots
+    except ImportError:
+        import save_slots
+    game_state = _relative_path(game_root, 'mods/configs/offline_lan_0922')
+    roots = {game_state, os.path.dirname(save_slots.saves_root(game_root))}
+    targets = [save_slots.saves_root(game_root), os.path.join(game_state, 'saves')]
+    for root in roots:
+        _maintenance_safe_path(root)
+        if os.path.isdir(root):
+            targets.extend(os.path.join(root, name) for name in os.listdir(root)
+                           if save_slots._belongs_to_state(name) or
+                           (name.endswith('.tmp') and save_slots._belongs_to_state(name[:-4])))
+    return targets
+
+
+def clear_offline_saves(game_root, is_running=None):
+    _require_0_9_22_maintenance_target(game_root, is_running)
+    config = _relative_path(game_root, 'mods/configs/offline_lan_0922/config.json')
+    saved_config = _read_json(config) or {}
+    if not isinstance(saved_config, dict):
+        raise LauncherError('The offline startup configuration is invalid; repair installation first.')
+    saved_config['save_slot'] = 'default'
+    def rebuild():
+        _fresh_default_save(game_root)
+        _write_json(config, saved_config)
+        return ['Deleted all offline saves and rebuilt the default save.']
+    return _maintenance_replace(_save_reset_targets(game_root) + [config], rebuild)
+
+
+def _offline_shared_cache_targets(game_root):
+    """Identify only offline #1513 namespaces in shared cache folders."""
+    roots = [game_root]
+    normal = _normal_client_preferences_path()
+    if normal is not None:
+        roots.append(os.path.dirname(normal))
+    targets = []
+    for root in roots:
+        for folder in ('dossier_cache', 'account_caches'):
+            directory = os.path.join(root, folder)
+            _maintenance_safe_path(directory, recursive=False)
+            if not os.path.isdir(directory):
+                continue
+            for name in os.listdir(directory):
+                stem, suffix = os.path.splitext(name)
+                if suffix != '.dat':
+                    continue
+                try:
+                    identity = base64.b32decode(stem).decode('utf-8')
+                except (ValueError, UnicodeError):
+                    continue
+                if folder == 'dossier_cache':
+                    # Native offline BigWorld.server() is None. Never remove
+                    # retail dossiers using a similar account name.
+                    owned = re.fullmatch(r'None;offline_account(?:#[0-9a-f]{32})?;PlayerAccount', identity)
+                else:
+                    owned = identity in ('CN_offline_account_PlayerAccount_data',
+                                         'CN_offline_account_PlayerAccount_shop')
+                if owned:
+                    targets.append(os.path.join(directory, name))
+    return targets
+
+
+def factory_reset_offline(game_root, base_dir=None, is_running=None):
+    """Clean project-owned data, overlays, recordings and diagnostics; reinstall."""
+    _require_0_9_22_maintenance_target(game_root, is_running)
+    try:
+        from . import save_slots, vehicle_overlays
+    except ImportError:
+        import save_slots, vehicle_overlays
+    state = _relative_path(game_root, 'mods/configs/offline_lan_0922')
+    application = os.path.dirname(os.path.abspath(settings_path()))
+    external = os.path.dirname(save_slots.saves_root(game_root))
+    targets = [state, application, external,
+               os.path.join(game_root, 'replays', 'offline'),
+               os.path.join(game_root, 'res_mods', '0.9.22.0.1', 'engine_config.xml')]
+    targets.extend(_offline_preferences_targets(game_root))
+    targets.extend(_offline_shared_cache_targets(game_root))
+    for name in ('offline-player-python.log', 'offline-worker-python.log',
+                 WORKER_FAILURE_LOG_FILENAME_0922, WORKER_READY_MARKER_FILENAME_0922):
+        targets.append(os.path.join(game_root, name))
+    targets.append(server_log_path())
+    # Interrupted reset/install directories must not retain old user data.
+    for parent in {game_root, os.path.dirname(application), os.path.dirname(external)}:
+        _maintenance_safe_path(parent, recursive=False)
+        if os.path.isdir(parent):
+            targets.extend(os.path.join(parent, name) for name in os.listdir(parent)
+                           if name.startswith(('.wot-maintenance-', '.wot-offline-reset-',
+                                               '.wot-offline-install-', '.wot-vehicle-')))
+    # Never remove a launcher/runtime installed inside its own data directory.
+    for path in targets:
+        _maintenance_safe_path(path)
+        if _path_is_covered(os.path.abspath(sys.executable), [path]):
+            raise LauncherError('The running executable is inside a reset target: %s' % path)
+    # Validate ownership before removing the engine overlay; another tool's
+    # engine settings must never be silently classified as project data.
+    ensure_0_9_22_preferences_isolation(game_root)
+    if vehicle_overlays.has_pending_vehicle_recovery(game_root):
+        vehicle_overlays.recover_vehicle_profile_transactions(game_root, is_running=is_running)
+    targets.extend(path for path, unused_member in
+                   vehicle_overlays.default_restore_targets(game_root, is_running=is_running))
+    def rebuild():
+        actions = install_client_mod(game_root, PORT_0_9_22, base_dir, force=True)
+        actions.append(ensure_0_9_22_preferences_isolation(game_root))
+        _fresh_default_save(game_root)
+        # Ensure the public default tactics are usable immediately after reset.
+        try:
+            from . import bot_tactics_store
+        except ImportError:
+            import bot_tactics_store
+        bot_tactics_store.Store().ensure_active()
+        return actions + ['Factory reset completed; all project data, replays and reports were removed.']
+    return _maintenance_replace(targets, rebuild)
 
 
 def server_script(port_version, base_dir=None):

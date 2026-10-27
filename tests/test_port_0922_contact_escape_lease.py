@@ -154,3 +154,13 @@ class ContactEscapeLeaseTests(unittest.TestCase):
         self.assertIsNotNone(self.adapter._retained_contact_escape(self.state, self.state['position'], clear))
         self.assertAlmostEqual(.2+math.pi, queries[-1][0])
         self.assertAlmostEqual(.2+2.*math.pi, self.blocker.call_args.args[1])
+
+    def test_pivot_and_return_cannot_clear_failed_world_direction(self):
+        self.plan()
+        self.plan(clear=lambda *unused: False)
+        self.state['yaw'] = 1.
+        self.adapter._contact_escape_memory(23, self.state['position'], self.contact, 3.5, 1.)
+        self.state['yaw'] = 0.
+        unused, command = self.plan()
+        self.assertEqual(1., command['throttle'])
+        self.assertIn(-1., self.adapter._contact_attempts[23]['failed'])

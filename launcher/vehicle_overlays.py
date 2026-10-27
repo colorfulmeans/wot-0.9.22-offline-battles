@@ -313,6 +313,8 @@ _MAX_AMMO = _rule(
 _CLIP_COUNT = _rule(
     "clip-count", "magazine capacity must be a positive integer",
     1, True, True)
+_CLIP_COUNT["bounded"] = (1, 255)
+_CLIP_COUNT["description"] += "; maximum 255 rounds"
 _MAX_HEALTH = _rule(
     "max-health", "device maximum health must be at least one", 1, True)
 _MAX_REGEN = _rule(
@@ -374,8 +376,10 @@ def _gun_value_rule(parts):
     if (len(parts) == 2 and parts[0] == "shotDispersionFactors" and
             parts[-1] in ("turretRotation", "afterShot")):
         return _NONNEGATIVE
-    if len(parts) == 2 and parts == ["clip", "rate"]:
+    if len(parts) == 2 and parts[0] in ("clip", "burst") and parts[1] == "rate":
         return _POSITIVE
+    if len(parts) == 2 and parts == ["burst", "count"]:
+        return _CLIP_COUNT
     if len(parts) == 2 and parts == ["clip", "count"]:
         return _CLIP_COUNT
     if len(parts) == 1 and parts[-1] == "invisibilityFactorAtShot":
@@ -559,6 +563,12 @@ def _read_source_member(package_path, member):
             "The original Packed XML member is unreadable: %s" % error)
 
 
+def _add_default_burst(element):
+    children=[(b'count',packed_xml.PackedValue(packed_xml.TYPE_INTEGER,1)),
+              (b'rate',packed_xml.PackedValue(packed_xml.TYPE_STRING,b'60'))]
+    element.children.append((b'burst',packed_xml.PackedValue(packed_xml.TYPE_ELEMENT,packed_xml.PackedElement(children=children))))
+
+
 def _find_value(root, field_path):
     parts = _field_parts(field_path)
     element = root
@@ -567,6 +577,11 @@ def _find_value(root, field_path):
         matches = [(index, value)
                    for index, (name, value) in enumerate(element.children)
                    if name == encoded]
+        if not matches and part == 'burst' and parts[offset:] in (['burst','count'], ['burst','rate']) and any(n==b'clip' for n,v in element.children):
+            # #1513 defaults missing burst to one round. Materialize the exact
+            # native structure only for an explicitly requested burst edit.
+            _add_default_burst(element)
+            matches=[(len(element.children)-1,element.children[-1][1])]
         if len(matches) != 1:
             raise VehicleOverlayError(
                 "Field path component %s must exist exactly once." % part)
@@ -1021,6 +1036,10 @@ def _editable_fields_from_root(member, root):
         })
 
     def visit(element, prefix=()):
+        if any(n==b'clip' for n,v in element.children) and not any(n==b'burst' for n,v in element.children):
+            try:_field_rule(member, '/'.join(prefix+('burst','count')))
+            except VehicleOverlayError:pass
+            else:_add_default_burst(element)
         for raw_name, value in element.children:
             try:
                 name = raw_name.decode("utf-8")
@@ -1245,6 +1264,10 @@ def _field_label(category, field_path):
         parts[-1] = "gunElevationSpeed"
     elif category == "turret" and parts[-1:] == ["rotationSpeed"]:
         parts[-1] = "turretTraverseSpeed"
+    if category=='guns' and parts[-2:]==['clip','rate']:
+        return ' / '.join([_FIELD_LABELS.get(part,part) for part in parts[:-2]]+['Magazine','Short reload time (seconds)'])
+    if category=='guns' and parts[-2:-1]==['burst']:
+        return ' / '.join([_FIELD_LABELS.get(part,part) for part in parts[:-2]]+['Magazine', 'Rounds per trigger' if parts[-1]=='count' else 'Within-trigger reload time (seconds)'])
     return " / ".join(_FIELD_LABELS.get(part, part) for part in parts)
 
 
@@ -1519,7 +1542,10 @@ def list_vehicle_field_choices(game_root, vehicle_member):
                 component, users))
 
     return sorted(records, key=lambda record: (
-        _CATEGORY_ORDER[record["category"]], record["fieldLabel"],
+        _CATEGORY_ORDER[record["category"]],
+        re.sub(r" / Magazine / (?:Short reload time \(seconds\)|Rounds per trigger|Within-trigger reload time \(seconds\))$", " / Magazine / Timing", record['fieldLabel']),
+        0 if record['fieldPath'].endswith('/clip/rate') else 1 if record['fieldPath'].endswith('/burst/count') else 2,
+        record['fieldLabel'],
         record["member"], record["fieldPath"]))
 
 
@@ -1845,6 +1871,12 @@ def _validate_health_relations(member, element, prefix=()):
                 member, value.value, prefix + (name.decode("utf-8"),))
 
 
+def _element_child_value(element, name):
+    values=[v for n,v in element.children if n==name.encode('utf8')]
+    if len(values)!=1:raise VehicleOverlayError('Trigger field must exist exactly once')
+    return values[0]
+
+
 def _validate_clip_relations(element, prefix=()):
     """Keep #1513 burst size within the installed magazine capacity."""
     direct = {}
@@ -1852,6 +1884,11 @@ def _validate_clip_relations(element, prefix=()):
         direct.setdefault(name.decode("utf-8"), []).append(value)
     clip = direct.get("clip", ())
     burst = direct.get("burst", ())
+    if len(burst)==1 and burst[0].value_type==packed_xml.TYPE_ELEMENT:
+        count=_numeric_value(_element_child_value(burst[0].value,'count'))
+        rate=_numeric_value(_element_child_value(burst[0].value,'rate'))
+        if count<1 or count>64 or int(count)!=count or rate<=0 or (count>1 and 60.0/rate>10.0):
+            raise VehicleOverlayError('Trigger count must be 1..64 and trigger interval must be positive and at most 10 seconds')
     if (len(clip) == 1 and len(burst) == 1 and
             clip[0].value_type == packed_xml.TYPE_ELEMENT and
             burst[0].value_type == packed_xml.TYPE_ELEMENT):
@@ -2578,18 +2615,28 @@ def apply_vehicle_edit(game_root, member, field_path, replacement_value,
         status["path"], member, field_path)
 
 
-def restore_vehicle_defaults(game_root, is_running=None):
-    """Remove only complete members proven to be owned by this manifest."""
+def default_restore_targets(game_root, is_running=None):
+    """Read-only ownership check shared by restoration and factory reset."""
     status, unused_package = _require_target(
         game_root, require_closed=True, is_running=is_running)
     manifest, exists = _load_manifest(status["path"])
     if not exists:
-        return 0
+        return []
     entries = _entry_map(manifest)
     for member, entry in entries.items():
         problem = _ownership_problem(status["path"], member, entry)
         if problem and not problem.startswith("Owned overlay is missing"):
             raise VehicleOverlayError(problem)
+    return [(_overlay_path(status['path'], member), member)
+            for member in sorted(entries)] + [(manifest_path(status['path']), MANIFEST_NAME)]
+
+
+def restore_vehicle_defaults(game_root, is_running=None):
+    """Remove only complete members proven to be owned by this manifest."""
+    targets = default_restore_targets(game_root, is_running=is_running)
+    if not targets:
+        return 0
+    status = core.inspect_game_root(game_root)
 
     try:
         transaction_root = tempfile.mkdtemp(
@@ -2603,9 +2650,6 @@ def restore_vehicle_defaults(game_root, is_running=None):
     moved = []
     preserve_recovery = False
     try:
-        targets = [(_overlay_path(status["path"], member), member)
-                   for member in sorted(entries)]
-        targets.append((manifest_path(status["path"]), MANIFEST_NAME))
         _write_staged(
             _game_owned_path(
                 status["path"], os.path.join(
@@ -2653,7 +2697,7 @@ def restore_vehicle_defaults(game_root, is_running=None):
     finally:
         if not preserve_recovery:
             _retire_transaction_root(status["path"], transaction_root)
-    return len(entries)
+    return len(targets) - 1
 
 
 def _empty_profile_store():

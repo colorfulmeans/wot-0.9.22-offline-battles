@@ -206,8 +206,12 @@ def canonical_plan(raw, map_name=None, vehicle=None, catalog=None, team=None, ta
 def plan_identity(plan):
     if plan is None:
         return None
-    return (plan['catalog'], plan['map'], plan['zone'], plan['cell'],
-            tuple(plan['point'][axis] for axis in ('x', 'y', 'z')))
+    try:
+        return (plan['catalog'], plan['map'], plan['zone'], plan['cell'],
+                tuple(plan['point'][axis] for axis in ('x', 'y', 'z')))
+    except (KeyError, TypeError):
+        # An optional task receipt cannot terminate the simulation round.
+        return None
 
 
 class _Graph(object):
@@ -489,7 +493,7 @@ def assign_initial_positions(map_name, graph, states, mode='regular', catalog=No
         reachable = grid.distances(origin)
         choices = []
         for zone, cell, index, point in candidates:
-            if zone['id'] in excluded_zones:
+            if zone['id'] in excluded_zones or zone['id'] in used_zones[team]:
                 continue
             if 'spg_%d_%s' % (team, zone['id']) in deleted_positions:
                 continue

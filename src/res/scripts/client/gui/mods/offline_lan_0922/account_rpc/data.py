@@ -1287,6 +1287,12 @@ def account_dossier(postbattle_progress=None, dossier_factory=None,
             battles, wins, losses = _dossier_battle_counts(stats)
             dossier['a15x15Cut'][type_cd] = (
                 battles, wins, max(0, int(stats.get('xp', 0) or 0)))
+            # ProfileTechnique reads this account-level cut, not the separate
+            # per-vehicle achievements block used by the detail/reward tab.
+            mastery = stats.get('markOfMastery')
+            if (isinstance(mastery, int) and not isinstance(mastery, bool)
+                    and mastery > 0):
+                dossier['markOfMasteryCut'][type_cd] = min(mastery, 4)
             for name, value in (('battles', battles), ('wins', wins),
                                 ('losses', losses)):
                 totals[name] = totals.get(name, 0) + value

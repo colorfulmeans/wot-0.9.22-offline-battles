@@ -640,6 +640,19 @@ def save_slot_initial_wallet(slot=None, user_data_dir=None):
     return result
 
 
+def save_slot_initial_berths(slot=None, user_data_dir=None):
+    """Launcher-selected initial capacity; a saved garage ledger wins later."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            value = json.load(stream).get('initial_berths')
+        if type(value) not in (int, type(2 ** 32)) or not 0 <= value <= 2 ** 31 - 1:
+            return None
+        return value
+    except (IOError, OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def save_slot_initial_customizations(slot=None, user_data_dir=None):
     """Launcher-edited initial inventory; a persisted garage takes priority."""
     path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
@@ -733,6 +746,13 @@ def save_slot_state_path(file_name, slot=None, user_data_dir=None):
         save_slot_dir(slot, user_data_dir), str(file_name))
     if (active_save_slot() if slot is None else slot) != DEFAULT_SAVE_SLOT:
         return path
+    try:
+        with open(os.path.join(os.path.dirname(path), SAVE_METADATA_FILE_NAME), 'rb') as stream:
+            metadata = json.load(stream)
+        if isinstance(metadata, dict) and metadata.get('skip_legacy_import') is True:
+            return path
+    except (IOError, OSError, TypeError, ValueError):
+        pass
     if user_data_dir is not None:
         legacy_dirs = (user_data_dir,)
     else:
@@ -850,6 +870,11 @@ def _normalise_waiting_room_state(value):
     if not isinstance(value, dict) or value.get('schema') != 1:
         raise ValueError('LAN waiting room settings are invalid')
     state = _empty_waiting_room_state()
+    skill = value.get('bot_skill_mode')
+    if skill is not None:
+        if skill not in ('mixed', 'easy', 'relaxed', 'hard', 'brutal'):
+            raise ValueError('LAN waiting room Bot difficulty is invalid')
+        state['bot_skill_mode'] = skill
     selected_map = value.get('map')
     if selected_map is not None:
         if not isinstance(selected_map, string_types) or not selected_map:
@@ -908,7 +933,7 @@ def load_waiting_room_state(path=WAITING_ROOM_STATE_PATH):
 
 
 def save_waiting_room_state(value, path=WAITING_ROOM_STATE_PATH):
-    """Persist the last map, capacities and player team atomically."""
+    """Persist acknowledged difficulty and existing room choices atomically."""
     try:
         state = _normalise_waiting_room_state(value)
         payload = {
@@ -919,6 +944,8 @@ def save_waiting_room_state(value, path=WAITING_ROOM_STATE_PATH):
             'team_sizes': dict((str(team), size) for team, size in
                                state['team_sizes'].items()),
         }
+        if 'bot_skill_mode' in state:
+            payload['bot_skill_mode'] = state['bot_skill_mode']
         write_json(path, payload)
     except (IOError, OSError, OverflowError, TypeError, ValueError):
         return False

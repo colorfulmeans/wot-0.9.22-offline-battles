@@ -15,6 +15,7 @@
 int main(int argc, char **argv) {
     if (argc != 2 && argc != 3) return 2;
     const bool include_paths=argc==3 && std::string(argv[2])=="--paths";
+    const bool complete=argc==3 && std::string(argv[2])=="--complete";
     if(include_paths)std::cout << std::setprecision(17);
     std::ifstream input(argv[1]);
     offline_navigation::MapInput map;
@@ -40,12 +41,14 @@ int main(int argc, char **argv) {
         map.local_meshes.push_back(std::move(p));
     }
     int count; input >> count;
+    unsigned complete_budget=map.width*map.height+1;
+    for(const auto &p:map.local_meshes)complete_budget+=p.width*p.height;
     std::vector<offline_navigation::SearchInput> cases(count);
     for (int i=0; i<count; ++i) {
         auto &s=cases[i];
         input >> s.start[0] >> s.start[2] >> s.goal[0] >> s.goal[2];
         s.start[1]=s.goal[1]=1.1;
-        s.max_expansions=4096; s.prefer_clearance=true;
+        s.max_expansions=complete ? complete_budget : 4096; s.prefer_clearance=true;
         s.has_route_corridor=true; s.route_start=s.start; s.route_end=s.goal;
     }
     if (!input) throw std::runtime_error("incomplete benchmark input");

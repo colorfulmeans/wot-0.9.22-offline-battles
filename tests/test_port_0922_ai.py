@@ -350,9 +350,9 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(18.0, profile['speed'])
         self.assertEqual(180.0, profile['armor'])
         self.assertEqual((
-            {'index': 0, 'kind': 'ARMOR_PIERCING',
+            {'index': 0, 'kind': 'ARMOR_PIERCING', 'name': '',
              'penetration': 160.0, 'damage': 320.0, 'speed': 900.0},
-            {'index': 1, 'kind': 'HIGH_EXPLOSIVE',
+            {'index': 1, 'kind': 'HIGH_EXPLOSIVE', 'name': '',
              'penetration': 50.0, 'damage': 430.0, 'speed': 640.0},
         ), profile['shells'])
 

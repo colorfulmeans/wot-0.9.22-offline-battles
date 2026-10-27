@@ -28,8 +28,8 @@ class _Widget(object):
     def pack(self, **unused):
         pass
 
-    def grid(self, **unused):
-        pass
+    def grid(self, **options):
+        self.grid_options = options
 
     def grid_columnconfigure(self, *unused, **unused_options):
         pass
@@ -111,7 +111,7 @@ class _Notebook(_Widget):
 
 
 class _StringVar(object):
-    def __init__(self, value=""):
+    def __init__(self, value="", master=None):
         self._value = value
         self._callbacks = []
 
@@ -234,6 +234,14 @@ class WindowTest(unittest.TestCase):
     def setUp(self):
         self.settings_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.settings_dir, True)
+        # A fake game directory does not isolate APPDATA save/profile paths.
+        # Guard both roots before building any window or exercising callbacks.
+        environment = mock.patch.dict(os.environ, {
+            'APPDATA': os.path.join(self.settings_dir, 'roaming'),
+            'LOCALAPPDATA': os.path.join(self.settings_dir, 'local'),
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
         self.addCleanup(setattr, core, "settings_path", core.settings_path)
         self.addCleanup(setattr, core, "discover_game_folders",
                         core.discover_game_folders)
@@ -271,7 +279,7 @@ class WindowTest(unittest.TestCase):
             "offerKinds": ("gold", "reward")}))
 
     def test_layout_separates_play_vehicle_and_repair_controls(self):
-        self.assertEqual("0.10.2", wot_launcher.LAUNCHER_VERSION)
+        self.assertEqual("1.0.0", wot_launcher.LAUNCHER_VERSION)
         self.assertEqual(
             "Single player",
             self.window.battle_tabs.tab(self.window.single_panel).get("text"))
@@ -292,8 +300,16 @@ class WindowTest(unittest.TestCase):
             self.window.bot_lineup_profile_box.master,
             self.window.bot_lineup_panel)
         self.assertIs(self.window.repair_button.master, self.window.repair_panel)
+        buttons = (self.window.repair_button, self.window.offline_preferences_button,
+                   self.window.reset_button, self.window.factory_reset_button)
+        for button, (row, column) in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
+            self.assertEqual(row, button.grid_options['row'])
+            self.assertEqual(column, button.grid_options['column'])
+            self.assertEqual(3, button.grid_options['padx'])
+            self.assertEqual(3, button.grid_options['pady'])
+            self.assertEqual('ew', button.grid_options['sticky'])
         self.assertIs(
-            self.window.normal_preferences_button.master,
+            self.window.offline_preferences_button.master,
             self.window.repair_panel)
         self.assertIs(self.window.report_button.master, self.window.game_panel)
         self.assertEqual(
@@ -319,12 +335,12 @@ class WindowTest(unittest.TestCase):
 
     def test_launcher_session_identity_is_visible_and_persisted(self):
         self.assertIn(
-            "Launcher session: version=0.10.2 build=unknown role=launcher",
+            "Launcher session: version=1.0.0 build=unknown role=launcher",
             self._log_text())
         with open(core.launcher_log_path(), encoding="utf-8") as stream:
             persisted = stream.read()
         self.assertIn(
-            "Launcher session: version=0.10.2 build=unknown role=launcher",
+            "Launcher session: version=1.0.0 build=unknown role=launcher",
             persisted)
 
     def test_first_run_prompts_once_when_the_launcher_starts(self):
@@ -1033,7 +1049,7 @@ class WindowTest(unittest.TestCase):
         self._game("0.9.22.0.1", "1513")
         self.assertEqual("normal", self.window.repair_button.cget("state"))
         self.assertEqual(
-            "normal", self.window.normal_preferences_button.cget("state"))
+            "normal", self.window.offline_preferences_button.cget("state"))
         self.assertEqual("normal", self.window.reset_button.cget("state"))
         self.assertEqual(
             "readonly", self.window.vehicle_profile_box.cget("state"))
@@ -1288,6 +1304,26 @@ class WindowTest(unittest.TestCase):
             }, stream)
         return path
 
+    def test_initialize_save_requires_confirmation_defaults_to_no_and_keeps_selection(self):
+        self._saves_root();self.window._refresh_save_slots()
+        record=self.window._selected_save_slot_record()
+        with mock.patch('tkinter.messagebox.askyesno',return_value=False) as confirm, \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False), \
+                mock.patch.object(wot_launcher.save_slots,'initialize_slot') as reset:
+            self.assertFalse(self.window._initialize_save_slot())
+            reset.assert_not_called();self.assertEqual('no',confirm.call_args.kwargs['default'])
+            self.assertIn(record['name'],confirm.call_args.args[1])
+        with mock.patch('tkinter.messagebox.askyesno',return_value=True), \
+                mock.patch.object(wot_launcher.core,'game_is_running',return_value=False):
+            self.assertTrue(self.window._initialize_save_slot())
+        self.assertEqual(record['id'],self.window._save_slot_id)
+        self.assertFalse(self.window._selected_save_slot_record()['has_state'])
+
+    def test_initialize_button_refuses_running_game_without_prompt(self):
+        with mock.patch.object(wot_launcher.core,'game_is_running',return_value=True), \
+                mock.patch('tkinter.messagebox.askyesno') as confirm:
+            self.assertFalse(self.window._initialize_save_slot());confirm.assert_not_called()
+
     def test_customize_opens_a_modal_for_the_selected_save(self):
         self._saves_root()
         self.assertNotIn(self.window.account_panel, self.window.tools_tabs.tabs)
@@ -1295,6 +1331,10 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(self.window.save_tabs, self.window.account_panel.master)
         self.assertEqual(self.window.save_dialog, self.window.save_tabs.master)
         self.assertIn(self.window.customizations_panel, self.window.save_tabs.tabs)
+        tabs = self.window.save_tabs.tabs
+        self.assertEqual(tabs.index(self.window.customizations_panel) + 1,
+                         tabs.index(self.window.crew_panel))
+        self.assertEqual(self.window.crew_panel, self.window.crew_editor.frame)
         self.assertEqual(self.window._open_customizations,
                          self.window.edit_customizations_button.options['command'])
         self.assertTrue(self.window._open_save_dialog())
@@ -1509,11 +1549,22 @@ class WindowTest(unittest.TestCase):
         self.addCleanup(patch.stop)
         self.window._gold_catalogue_cache = (None, None)
 
+    def test_garage_nations_follow_shared_display_order_and_keep_selection_across_language(self):
+        self._saves_root();self._with_shop();self.window._refresh_gold_shop()
+        self.assertEqual(('All','China','Germany'),tuple(self.window.gold_nation_box.cget('values')))
+        self.window.gold_nation.set('Germany');self.window.gold_class.set('Heavy tank');self.window._filter_gold_shop()
+        self.window.language='zh';self.window._refresh_gold_shop()
+        self.assertEqual(('全部','中国','德国'),tuple(self.window.gold_nation_box.cget('values')))
+        self.assertEqual('德国',self.window.gold_nation.get())
+        self.assertEqual('germany:G51_Lowe',self.window._gold_offer_by_label[self.window.gold_vehicle.get()])
+        self.window.language='en';self.window._refresh_gold_shop()
+        self.assertEqual('Germany',self.window.gold_nation.get())
+
     def test_gold_filters_intersect_and_empty_results_disable_add(self):
         self._saves_root()
         self._with_shop()
         self.window._refresh_gold_shop()
-        self.window.gold_nation.set("germany")
+        self.window.gold_nation.set("Germany")
         self.window.gold_class.set("Heavy tank")
         self.assertEqual(("Lowe - tier 8",), self.window._filter_gold_shop())
         self.window.gold_class.set("Medium tank")
@@ -1530,13 +1581,13 @@ class WindowTest(unittest.TestCase):
         self._saves_root()
         self._with_shop()
         self.window._refresh_save_slots()
-        self.window.gold_nation.set("china")
+        self.window.gold_nation.set("China")
         self.window._filter_gold_shop()
         self.window.balance_entries["gold"].delete(0, "end")
         self.window.balance_entries["gold"].insert(0, "1234")
         with mock.patch.object(core, "game_is_running", return_value=False):
             self.assertTrue(self.window._buy_gold_vehicle())
-        self.assertEqual("china", self.window.gold_nation.get())
+        self.assertEqual("China", self.window.gold_nation.get())
         self.assertEqual("Type 59 - tier 8 (queued)", self.window.gold_vehicle.get())
         self.assertEqual("disabled", self.window.buy_gold_vehicle_button.cget("state"))
         self.assertEqual("1234", self.window.balance_entries["gold"].get())
@@ -2153,7 +2204,7 @@ class WindowTest(unittest.TestCase):
         game_root = self._game("0.9.22.0.1", "1513")
         with mock.patch(
                 "core.repair_0_9_22_startup",
-                return_value=["repair complete"]) as repair:
+                return_value=["repair complete"]) as repair, mock.patch.object(self.window, "_confirm_maintenance", return_value=True):
             self.assertTrue(self.window._repair_startup())
             for unused in range(200):
                 if not self.window._maintenance_busy:
@@ -2164,15 +2215,90 @@ class WindowTest(unittest.TestCase):
         self.assertIn("repair complete", self._log_text())
         self.assertEqual("normal", self.window.start_button.cget("state"))
 
+    def test_all_four_maintenance_actions_cancel_without_changing_data(self):
+        self._game('0.9.22.0.1', '1513')
+        for method in (self.window._repair_startup, self.window._reset_offline_client_settings,
+                       self.window._reset_all_state, self.window._factory_reset):
+            with mock.patch.object(self.window, '_confirm_maintenance', return_value=False) as confirm, \
+                    mock.patch.object(self.window, '_start_maintenance') as start:
+                self.assertFalse(method())
+                confirm.assert_called_once()
+                start.assert_not_called()
+
+    def test_maintenance_help_tracks_language_and_describes_shared_cleanup_scope(self):
+        for language in ('en', 'zh'):
+            self.window.language = language
+            self.window._apply_language(refresh=False)
+            expected = '\n'.join(self.window._t(line) for line in wot_launcher._MAINTENANCE_HELP)
+            self.assertEqual(expected, self.window.maintenance_help.cget('text'))
+        self.assertTrue(expected.endswith('这些离线数据由不同版本启动器共享，清空会影响其他版本；手动复制到其他位置的文件不会删除。'))
+        self.assertNotIn('桌面', expected)
+
+    def test_maintenance_confirmation_is_translated_and_defaults_to_no(self):
+        self._game('0.9.22.0.1', '1513')
+        self.window.language = 'zh'
+        with mock.patch('tkinter.messagebox.askyesno', return_value=False) as ask:
+            for kind, title in (('repair', '修复模组安装'), ('preferences', '重置全部离线客户端设置'),
+                                ('saves', '清空全部离线存档'), ('factory', '删除全部数据并恢复出厂')):
+                self.assertFalse(self.window._confirm_maintenance(kind))
+                self.assertEqual(title, ask.call_args.args[0])
+                self.assertEqual('no', ask.call_args.kwargs['default'])
+                self.assertIn('游戏目录', ask.call_args.args[1])
+
+    def test_live_worker_room_and_report_block_maintenance_before_prompt(self):
+        self._game('0.9.22.0.1', '1513')
+        for attribute, value in (('_room_worker', _Process()), ('_server', _Process()), ('_report_busy', True)):
+            previous = getattr(self.window, attribute)
+            setattr(self.window, attribute, value)
+            try:
+                with mock.patch.object(self.window, '_confirm_maintenance') as confirm:
+                    self.assertFalse(self.window._factory_reset())
+                    confirm.assert_not_called()
+            finally:
+                setattr(self.window, attribute, previous)
+
+    def test_factory_reset_never_saves_stale_settings_and_closes_after_completion(self):
+        import threading
+        self._game('0.9.22.0.1', '1513')
+        closed = threading.Event()
+        with mock.patch.object(self.window, '_confirm_maintenance', return_value=True), \
+                mock.patch('core.factory_reset_offline', return_value=['clean reset']) as reset, \
+                mock.patch('tkinter.messagebox.showinfo') as info, \
+                mock.patch.object(self.window.root, 'destroy', side_effect=closed.set), \
+                mock.patch('core.save_settings') as save:
+            self.assertTrue(self.window._factory_reset())
+            self.assertTrue(closed.wait(5))
+            self.window._save_settings()
+            save.assert_not_called()
+            reset.assert_called_once()
+            info.assert_called_once()
+
+    def test_factory_failure_cannot_report_success_or_write_stale_settings(self):
+        import threading
+        self._game('0.9.22.0.1', '1513')
+        closed = threading.Event()
+        with mock.patch.object(self.window, '_confirm_maintenance', return_value=True), \
+                mock.patch('core.factory_reset_offline', side_effect=core.LauncherError('locked old data')), \
+                mock.patch('tkinter.messagebox.showinfo') as info, \
+                mock.patch('tkinter.messagebox.showerror') as error, \
+                mock.patch.object(self.window.root, 'destroy', side_effect=closed.set), \
+                mock.patch('core.save_settings') as save:
+            self.assertTrue(self.window._factory_reset())
+            self.assertTrue(closed.wait(5))
+            self.window._save_settings()
+            save.assert_not_called()
+            info.assert_not_called()
+            self.assertIn('locked old data', error.call_args.args[1])
+
     def test_normal_preferences_cleanup_runs_after_confirmation(self):
         game_root = self._game("0.9.22.0.1", "1513")
         with mock.patch.object(
-                self.window, "_confirm_normal_preferences_cleanup",
+                self.window, "_confirm_maintenance",
                 return_value=True), mock.patch(
                 "core.game_is_running", return_value=False), mock.patch(
-                "core.backup_normal_client_preferences",
+                "core.reset_offline_preferences",
                 return_value=["normal preferences backed up"]) as cleanup:
-            self.assertTrue(self.window._clean_normal_client_preferences())
+            self.assertTrue(self.window._reset_offline_client_settings())
             for unused in range(200):
                 if not self.window._maintenance_busy:
                     break
@@ -2185,7 +2311,7 @@ class WindowTest(unittest.TestCase):
         self._game("0.9.22.0.1", "1513")
         with mock.patch.object(
                 self.window, "_confirm_reset", return_value=False), \
-                mock.patch("core.reset_0_9_22_state") as reset:
+                mock.patch("core.clear_offline_saves") as reset:
             self.assertFalse(self.window._reset_all_state())
 
         reset.assert_not_called()
@@ -2197,7 +2323,7 @@ class WindowTest(unittest.TestCase):
                 self.window, "_confirm_reset", return_value=True), \
                 mock.patch("core.game_is_running", return_value=False), \
                 mock.patch(
-                    "core.reset_0_9_22_state",
+                    "core.clear_offline_saves",
                     return_value=["reset complete"]) as reset:
             self.assertTrue(self.window._reset_all_state())
             for unused in range(200):
@@ -2215,7 +2341,7 @@ class WindowTest(unittest.TestCase):
             self.assertFalse(self.window._reset_all_state())
 
         confirm.assert_not_called()
-        self.assertIn("Close World of Tanks", self._log_text())
+        self.assertIn("Close the game", self._log_text())
 
     def test_the_test_button_probes_the_typed_address(self):
         probed = []

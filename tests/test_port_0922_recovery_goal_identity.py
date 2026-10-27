@@ -6,6 +6,44 @@ from test_port_0922_driver_arrival import BotAdapter, LocalDriver
 
 
 class RecoveryGoalIdentityTests(unittest.TestCase):
+    def test_route_identity_excludes_parking_commands_and_defense(self):
+        from gui.mods.offline_lan_0922 import bot_tactics
+        base = dict(combat_mode='advance', route_id='banana', route_index=3)
+        for override in (dict(parking_phase='waiting'), dict(team_command='ATTACK'),
+                         dict(defense_base_id='own'), dict(combat_mode='engage'),
+                         dict(combat_mode='flank'), dict(route_id=None)):
+            self.assertIsNone(bot_tactics.route_motion_identity(dict(base, **override)))
+        self.assertNotEqual(bot_tactics.route_motion_identity(base),
+                            bot_tactics.route_motion_identity(dict(base, route_index=4)))
+
+    def test_route_progress_identity_survives_aim_target_change_and_loss(self):
+        adapter = BotAdapter('test', 1)
+        state = dict(id=20, slot=4, team=2, position=self.position,
+                     yaw=0., speed=0., dt=.1)
+        identities = []
+        progress = None
+        for target in (None, 26, 27, None):
+            order = dict(combat_mode='advance' if target else 'route',
+                         route_id='banana', route_index=3, move_position=self.goal,
+                         throttle_override=1., target_id=target, target_kind='bot')
+            with mock.patch.object(adapter.driver, 'drive', wraps=adapter.driver.drive) as drive:
+                adapter._drive_order_controls(20, state, self.position, order, lambda *args: True)
+            identities.append(drive.call_args.kwargs['progress_identity'])
+            current = adapter.driver.states[20]['objective_progress']
+            if progress is not None:
+                self.assertIs(progress, current)
+            progress = current
+        self.assertEqual([('route', 'banana', 3)] * 4, identities)
+
+    def test_real_combat_retains_target_progress_identity(self):
+        adapter = BotAdapter('test', 1)
+        state = dict(id=20, slot=4, team=2, position=self.position, yaw=0., speed=0., dt=.1)
+        with mock.patch.object(adapter.driver, 'drive', wraps=adapter.driver.drive) as drive:
+            adapter._drive_order_controls(20, state, self.position,
+                dict(combat_mode='flank', route_id='banana', route_index=3,
+                     target_id=26, target_kind='bot', move_position=self.goal), lambda *args: True)
+        self.assertEqual(('combat', 'bot', 26), drive.call_args.kwargs['progress_identity'])
+
     goal=(-106.189,0.,-105.493)
     position=(-155.64,.25,-16.38)
 

@@ -387,6 +387,15 @@ class BigWorldVehicleBinding(object):
         self._avatar.updateArena(
             self._constants.ARENA_UPDATE.TEAM_KILLER,
             _pickle.dumps(int(entity_id)))
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
+        if diagnostics.detailed_enabled():
+            try:
+                row = self._avatar.arena.vehicles.get(int(entity_id), {})
+                diagnostics.team_killer_receipt('native_arena_updated',
+                    engine_id=int(entity_id), found=bool(row),
+                    team=row.get('team'), isTeamKiller=row.get('isTeamKiller'))
+            except Exception:
+                diagnostics.team_killer_receipt('native_arena_unavailable', engine_id=int(entity_id))
 
     def avatar_select_vehicle(self, entity_id):
         """Select the local id before stock PlayerAvatar enter handling."""

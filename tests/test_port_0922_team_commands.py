@@ -70,6 +70,7 @@ class TeamCommandTests(unittest.TestCase):
         self.sender.offer_reliable = lambda message: sent.append(message) or True
         with mock.patch('lan_battle_server.TEAM_COMMAND_HISTORY', 1):
             self.assertTrue(self.state.submit_team_command(1, self._message('HELPME'))['accepted'])
+            self.state.tick += int(10*TICK_HZ)
             self.assertTrue(self.state.submit_team_command(1, self._message('ATTACK', sequence=2))['accepted'])
         self.assertEqual('superseded', sent[-1]['code'])
         self.assertEqual(1, sent[-1]['command_seq'])
@@ -79,16 +80,17 @@ class TeamCommandTests(unittest.TestCase):
         self.assertFalse(ack['accepted'])
         self.assertEqual('unknown_command', ack['code'])
 
-    def test_same_tick_commands_keep_admission_order_across_sequence_digits(self):
+    def test_same_tick_new_sequence_cannot_bypass_command_cooldown(self):
         from server_bot_ai import BotPlanner
         first = self.state.submit_team_command(1, self._message('HELPME', sequence=9))
         second = self.state.submit_team_command(1, self._message('ATTACK', sequence=10))
-        self.assertTrue(first['accepted'] and second['accepted'])
+        self.assertTrue(first['accepted']);self.assertFalse(second['accepted'])
+        self.assertEqual('cooldown',second['code'])
         orders = self.state._active_team_commands_locked()
         bots = [{'id': 11, 'team': 1}, {'id': 12, 'team': 1}]
         selected = BotPlanner._team_orders_by_bot(orders, bots)
-        self.assertEqual('ATTACK', selected[11]['command'])
-        self.assertEqual(10, selected[11]['command_seq'])
+        self.assertEqual('HELPME', selected[11]['command'])
+        self.assertEqual(9, selected[11]['command_seq'])
 
     def test_accepts_stock_cell_command_for_nearest_bounded_bots(self):
         ack = self.state.submit_team_command(
@@ -151,7 +153,7 @@ class TeamCommandTests(unittest.TestCase):
         self.state.tick += 16 * TICK_HZ
         self.assertEqual([ack['command_seq']], [order['command_seq']
                          for order in self.state._active_team_commands_locked()])
-        self.assertEqual(120 * TICK_HZ, ack['expires_tick'] - issued)
+        self.assertEqual(90 * TICK_HZ, ack['expires_tick'] - issued)
         self.state.tick = ack['expires_tick']
         self.assertEqual([], self.state._active_team_commands_locked())
 
@@ -238,7 +240,7 @@ class TeamCommandTests(unittest.TestCase):
             1, self._message('BACKTOBASE', sequence=2))
 
         self.assertEqual([], attack['recipient_bot_ids'])
-        self.assertEqual([11], return_to_base['recipient_bot_ids'])
+        self.assertEqual([], return_to_base['recipient_bot_ids'])
 
     def test_broadcast_needs_the_issuer_world_pose(self):
         self.sender.client_position = False

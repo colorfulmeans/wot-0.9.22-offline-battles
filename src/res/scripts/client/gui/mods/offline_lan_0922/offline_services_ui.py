@@ -823,6 +823,15 @@ class _DailySurface(NativeSurface):
 
 
 class ServicePanel(WaitingRoomUI):
+    # Waiting-room restyling does not repaint the independent daily panel.
+    panel_size = (680, 340)
+    panel_font = 'system/fonts/offline_lan_cjk.font'
+    control_text_colour = CONTROL_TEXT_COLOUR
+    control_hover_colour = (14, 82, 140, 255)
+
+    def _control_texture(self, role):
+        return 'system/maps/col_white.dds'
+
     """Daily missions on an empty native page, with no stock tab below it."""
     def __init__(self, page='daily', on_close=None, surface=None):
         WaitingRoomUI.__init__(self, lambda unused: False, lambda: (),
@@ -1034,6 +1043,21 @@ def _install_exchange_dialog_limits(meta_type=None):
     _patch(meta_type, 'makeVO', make_vo)
 
 
+def _install_crew_skill_counter():
+    from gui.shared.gui_items.Tankman import Tankman
+    from gui.mods.offline_lan_0922.crew_skills import CREDITS
+    if any(owner is Tankman and name=='newSkillCount' for owner,name,original in _patches):return
+    original=Tankman.newSkillCount
+    def count(member):
+        value=original.fget(member)
+        row=(snapshot().get(CREDITS) or {}).get(str(member.invID),{})
+        remaining=row.get('remaining',0)
+        if remaining and member.hasNewSkill(useCombinedRoles=True):
+            return min(remaining,len(member.availableSkills(useCombinedRoles=True))),100
+        return value
+    _patch(Tankman,'newSkillCount',property(count))
+
+
 def install():
     if _patches:
         return
@@ -1049,6 +1073,7 @@ def install():
         _install_mission_results()
         _install_settings()
         _install_exchange_dialog_limits()
+        _install_crew_skill_counter()
         from gui.mods.offline_lan_0922 import crew_voice
         crew_voice.install(_patch)
         _schedule_daily_rollover()

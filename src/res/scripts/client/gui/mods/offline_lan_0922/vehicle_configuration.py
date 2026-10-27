@@ -324,7 +324,9 @@ def _require_installed(unused_result, descriptor, expected, attribute,
 
 def install_top_modules(descriptor):
     """Fit the top module of every slot in the order #1513 accepts."""
+    from gui.mods.offline_lan_0922.default_loadouts import gun_override
     vehicle_type = descriptor.type
+    preferred_gun = gun_override(vehicle_type.name)
     chassis_candidates = tuple(getattr(vehicle_type, 'chassis', ()) or ())
     chassis = top_component(
         chassis_candidates, vehicle_type, 'chassis',
@@ -340,7 +342,9 @@ def install_top_modules(descriptor):
     # the compatible turret/gun pair and resolves the final hull correctly.
     for position, turrets in enumerate(
         getattr(vehicle_type, 'turrets', ()) or ()):
-        remaining_turrets = list(turrets)
+        remaining_turrets = [turret for turret in turrets
+                             if not preferred_gun or any(
+                                 gun.name == preferred_gun for gun in turret.guns)]
         installed = False
         while remaining_turrets:
             turret = top_component(
@@ -348,7 +352,9 @@ def install_top_modules(descriptor):
             if turret is None:
                 break
             gun = top_component(
-                getattr(turret, 'guns', ()), vehicle_type, 'gun', descriptor,
+                [candidate for candidate in getattr(turret, 'guns', ())
+                 if not preferred_gun or candidate.name == preferred_gun],
+                vehicle_type, 'gun', descriptor,
                 lambda component: _turret_may_install(
                     descriptor, turret, component, position))
             if gun is not None:

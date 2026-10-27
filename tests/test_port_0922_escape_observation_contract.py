@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import sys
+import subprocess
 import types
 import unittest
 
@@ -49,8 +50,10 @@ class EscapeEndpointTests(unittest.TestCase):
         fixture = worker_fixture.BotRuntimeTests(); fixture.setUp()
         try:
             runtime = fixture.runtime
-            graph = with_shore_hazards(json.loads(
-                (ROOT/'navgraphs/45_north_america.json').read_text()))
+            # Preserve the recorded pre-1.2 m hazard when testing endpoint
+            # accounting; the water-rebake suite covers the new real map.
+            graph = with_shore_hazards(json.loads(subprocess.check_output(
+                ['git','show','100bac61:navgraphs/45_north_america.json'],cwd=ROOT)))
             runtime.baked_graph = graph
             runtime.navigator.grid = TerrainGrid(lambda *args: None, baked_graph=graph)
             origin = (-157.94161115478047, -13.256248474121094, -241.96019255325092)
@@ -111,8 +114,8 @@ class EscapeEndpointTests(unittest.TestCase):
             fixture.tearDown()
 
     def test_recorded_caernarvon_and_edelweiss_have_the_same_horizon_mismatch(self):
-        graph = with_shore_hazards(json.loads(
-            (ROOT/'navgraphs/45_north_america.json').read_text()))
+        graph = with_shore_hazards(json.loads(subprocess.check_output(
+            ['git','show','100bac61:navgraphs/45_north_america.json'],cwd=ROOT)))
         grid = TerrainGrid(lambda *args: None, baked_graph=graph)
         cases = [((-147.678998616346,-12.94148063659668,383.7186671942012),
                   4.550603872527937,.2635838600024083),

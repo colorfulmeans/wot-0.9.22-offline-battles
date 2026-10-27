@@ -1,0 +1,32 @@
+{
+  "client": "Chinese HD 0.9.22.0.1 #1513",
+  "data_members": {
+    "arenaVOIPLabel": "TextField",
+    "arenaVoipSettings": "ArenaVoipSettings",
+    "battleIcon": "BattleTypeIcon",
+    "closeButton": "SoundButtonEx",
+    "comment": "TextField",
+    "description": "TextAreaSimple",
+    "inviteButton": "SoundButtonEx",
+    "map": "TextField",
+    "maxPlayers": "TextFieldShort",
+    "minimap": "MinimapPresentation",
+    "observerButton": "ObserverButtonComponent",
+    "other": "DropTileList",
+    "otherLabel": "TextField",
+    "owner": "UserNameField",
+    "settingsButton": "SoundButtonEx",
+    "startButton": "SoundButtonEx",
+    "swapButton": "IButtonIconLoader",
+    "team1": "DropList",
+    "team1Label": "TextField",
+    "team2": "DropList",
+    "team2Label": "TextField",
+    "timeout": "TextFieldShort",
+    "titleField": "TextField",
+    "typeField": "TextField"
+  },
+  "declaring_class": "net.wg.gui.lobby.training.TrainingRoom",
+  "movie": "trainingRoom.swf",
+  "movie_sha256": "98277d3948af2c9b71082438abb4ea6e69e2a2b2977c29e5f78f6d745818b037"
+}

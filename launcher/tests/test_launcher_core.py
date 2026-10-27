@@ -1545,6 +1545,23 @@ class PayloadStagingTest(unittest.TestCase):
             self.assertTrue(
                 os.path.isfile(core.server_script(port_version, self.target)),
                 port_version)
+            self.assertTrue(os.path.isfile(os.path.join(
+                os.path.dirname(core.server_script(port_version,self.target)),
+                'server_route_recovery.py')))
+            self.assertTrue(os.path.isfile(os.path.join(
+                os.path.dirname(core.server_script(port_version,self.target)),
+                'server_empty_ammo.py')))
+
+    def test_staged_server_imports_without_the_repository_on_its_path(self):
+        import subprocess
+        import sys
+        source=os.path.dirname(core.server_script(core.PORT_0_9_22,self.target))
+        result=subprocess.run([sys.executable,'-I','-S','-c',
+            "import sys;sys.path.insert(0,sys.argv[1]);from server_bot_ai import BotPlanner;"
+            "from server_empty_ammo import EmptyAmmoMixin;"
+            "assert isinstance(BotPlanner(),EmptyAmmoMixin)",source],
+            cwd=self.target,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        self.assertEqual(0,result.returncode,result.stderr)
 
     def test_windows_distribution_guard_rejects_map_studio_paths(self):
         script_path = os.path.join(

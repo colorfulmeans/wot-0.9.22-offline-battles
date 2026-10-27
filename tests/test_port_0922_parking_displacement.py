@@ -93,6 +93,21 @@ class SPGDisplacementTests(unittest.TestCase):
     tearDown = spgs.InitialPositionIntegrationTests.tearDown
     _runtime = spgs.InitialPositionIntegrationTests._runtime
     _fixture_bot = spgs.InitialPositionIntegrationTests._fixture_bot
+    def test_replacement_closes_region_after_sustained_failure_not_first_occupancy(self):
+        runtime=self._runtime()
+        initial=dict(zone='home',catalog='test',cell=0,map='08_ruinberg',source='launcher_manual_v1',
+                     point=dict(x=0.,y=0.,z=50.),radius=12.,vehicle='test')
+        state=dict(id=1,team=1,_spg_initial=initial,
+                   _spg_replacement_zone=(1,'home'))
+        runtime._spg_mode_slots={(1,'home'):dict(owner=1,disabled=False,plan=initial)}
+        for now in (0.,10.,19.9):
+            self.assertIs(initial,runtime._retry_spg_deployment(state,initial,50.,now,occupied=[(0,0,50)]))
+            self.assertFalse(runtime._spg_mode_slots[(1,'home')]['disabled'])
+        self.assertIsNone(runtime._retry_spg_deployment(state,initial,50.,20.,occupied=[(0,0,50)]))
+        self.assertTrue(runtime._spg_mode_slots[(1,'home')]['disabled'])
+        self.assertIsNone(runtime._spg_mode_slots[(1,'home')]['owner'])
+        self.assertNotIn('_spg_initial',state)
+
     def test_occupied_manual_zone_tries_same_zone_before_another(self):
         runtime = self._runtime()
         runtime.baked_graph = spgs._graph()

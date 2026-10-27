@@ -56,7 +56,7 @@ class CatalogTests(unittest.TestCase):
     def test_behavior_and_policy_catalogs_cover_runtime_identifiers(self):
         self.assertEqual({'total', 'all'} | set(storage.contract.CLASSES), set(labels.ENUM_NAMES['class_tag']))
         self.assertEqual({''} | set(storage.contract.SKILLS), set(labels.ENUM_NAMES['skill']))
-        self.assertEqual(set(storage.contract.PARAMETERS) | {'skill', 'crew_level'}, set(labels.PARAM_NAMES))
+        self.assertEqual(set(storage.contract.PARAMETERS) | set(storage.contract.PRESETS) | {'skill','crew_level','ammo_ratios'}, set(labels.PARAM_NAMES))
         self.assertEqual({'preferred', 'fixed'}, set(labels.ENUM_NAMES['policy']))
 
 
@@ -67,7 +67,7 @@ class LanguageUITests(unittest.TestCase):
         # Exercise the historical source-graph fixture independently of the adopted baseline.
         patcher=mock.patch.object(storage.contract,'default_map',return_value={})
         patcher.start();self.addCleanup(patcher.stop)
-        storage.Store(self.temp.name).save(storage.contract.empty(),apply=True)
+        storage.Store(self.temp.name).save(storage.contract.empty('Editable fixture'),apply=True)
         self.root = tk.Tk(); self.root.withdraw(); self.addCleanup(self.root.destroy)
         patch = mock.patch.object(ui_module.messagebox, 'showerror')
         self.errors = patch.start(); self.addCleanup(patch.stop)
@@ -103,7 +103,7 @@ class LanguageUITests(unittest.TestCase):
 
     def test_programmatic_canonical_values_remain_supported(self):
         self.ui.rule_vars['class_tag'].set('AT-SPG')
-        self.assertEqual('坦克歼击车', self.ui.rule_boxes['class_tag'].get())
+        self.assertEqual('自行反坦克炮', self.ui.rule_boxes['class_tag'].get())
         self.ui.set_language('en'); self.root.update()
         self.assertEqual('Tank destroyer', self.ui.rule_boxes['class_tag'].get())
         self.assertEqual('AT-SPG', self.ui.rule_vars['class_tag'].get())
@@ -158,10 +158,15 @@ class LanguageUITests(unittest.TestCase):
         row=' '.join(self.ui.rules.item('0','values'))
         self.assertIn('重型坦克',row);self.assertIn('反应时间',row);self.assertIn('普通',row)
         self.assertNotIn('reaction_seconds',row);self.assertNotIn('heavyTank',row)
-        with mock.patch.object(ui_module.messagebox,'showinfo') as show:
-            self.ui.preview_rule()
-            self.assertIn('反应时间',show.call_args.args[1])
-            self.assertNotIn('regular',show.call_args.args[1])
+        preview=self.ui.preview_rule();self.root.update()
+        text=str([preview.table.item(i,'values') for i in preview.table.get_children()])
+        self.assertIn('反应时间',text);self.assertNotIn('reaction_seconds',text)
+        self.assertNotIn('regular',text)
+        self.ui.set_language('en');self.root.update()
+        self.assertEqual('Effective settings preview',preview.root.title())
+        self.assertEqual('disabled',str(preview.ammo_note.cget('state')))
+        self.assertEqual(3,int(preview.ammo_note.cget('height')))
+        self.assertGreater(preview.table.winfo_height(),200)
 
     def test_language_switch_preserves_pending_selected_rule(self):
         self.ui.rule_vars['skill'].set('elite');self.ui.save_rule()
@@ -180,7 +185,7 @@ class LanguageUITests(unittest.TestCase):
 
     def test_policy_captions_round_trip_without_localized_json(self):
         self.ui.new_route();self.root.update()
-        self.ui._selected()['points']=[[-66.,306.,0],[-126.,246.,0]]
+        self.ui._selected()['points']=[[-66.,306.,0],[-126.,246.,0],[-86.,-290.,0]]
         self.choose(self.ui.item_fields['policy'][1],1)
         self.ui.update_properties();self.ui.save(True)
         self.assertEqual('fixed',self.ui.store.active()['maps']['08_ruinberg']['routes'][0]['policy'])

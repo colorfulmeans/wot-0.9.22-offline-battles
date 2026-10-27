@@ -7,7 +7,7 @@ for visibility, collision probes, and applying commands to any client entity.
 """
 
 from gui.mods.offline_lan_0922.worker_diagnostics import observed
-from gui.mods.offline_lan_0922 import tank_collision
+from gui.mods.offline_lan_0922 import tank_collision, capture_orders, bot_tactics
 
 import math
 
@@ -114,7 +114,8 @@ class BotAdapter(object):
         peer_position = contact.get('peer_position') or position
         if (memory is None or memory['peer'] != contact.get('peer_id') or
                 memory['peer_alive'] != contact.get('peer_alive', True) or
-                abs((yaw-memory['yaw']+math.pi) % (2.0*math.pi)-math.pi) > 0.30 or
+                (contact.get('peer_alive', True) and
+                 abs((yaw-memory['yaw']+math.pi) % (2.0*math.pi)-math.pi) > .30) or
                 math.hypot(position[0]-memory['position'][0],
                            position[2]-memory['position'][2]) >=
                 2.0*half_length + WAYPOINT_ARRIVAL_RADIUS or
@@ -122,8 +123,15 @@ class BotAdapter(object):
                            peer_position[2]-memory['peer_position'][2]) >= 1.0):
             memory = dict(peer=contact.get('peer_id'), position=tuple(position),
                           peer_alive=contact.get('peer_alive', True), yaw=yaw,
-                          peer_position=tuple(peer_position), failed=set())
+                          peer_position=tuple(peer_position), failed=set(), failed_headings=[])
             self._contact_attempts[bot_id] = memory
+        # Signs are local to the current hull heading. Preserve world-space
+        # failed exits when pivoting instead of clearing the whole encounter.
+        if not contact.get('peer_alive', True):
+            memory['failed'] = set(sign for sign in (-1., 1.)
+                if any(abs((yaw+(math.pi if sign < 0 else 0.)-heading+math.pi) %
+                           (2.*math.pi)-math.pi) <= .30
+                       for heading in memory.get('failed_headings', ())))
         return memory
 
     @staticmethod
@@ -175,10 +183,13 @@ class BotAdapter(object):
                 reason = 'vehicle_withdrawn'
         if reason is not None:
             self._contact_escapes.pop(bot_id, None)
-            if reason not in ('completed', 'peer_changed', 'heading_changed'):
+            if (reason not in ('completed', 'peer_changed') and
+                    (reason != 'heading_changed' or not escape['peer_alive'])):
                 memory = self._contact_attempts.get(bot_id)
                 if memory is not None and memory['peer'] == escape['peer']:
                     memory['failed'].add(escape['sign'])
+                    memory.setdefault('failed_headings', []).append(heading)
+                    del memory['failed_headings'][:-32]
             self._contact_escape_evidence(state, escape, reason, progress)
             return None
         self._contact_escape_evidence(state, escape, 'active', progress)
@@ -312,6 +323,7 @@ class BotAdapter(object):
             if active is not None:
                 state['_wreck_push_evidence'] = dict(
                     peer_id=active['key'], phase='candidate_missing',
+                    sampled_at=state.get('now'), origin=position,
                     elapsed=active['elapsed'], best_progress=active['best_progress'])
             self._wreck_attempts.pop(bot_id, None)
             return None
@@ -342,7 +354,8 @@ class BotAdapter(object):
         self._wreck_attempts[bot_id] = attempt
         progress = ((position[0]-attempt['origin'][0])*math.sin(attempt['heading']) +
                     (position[2]-attempt['origin'][2])*math.cos(attempt['heading']))
-        evidence = dict(peer_id=key, phase=phase, elapsed=attempt['elapsed'],
+        evidence = dict(peer_id=key, phase=phase, sampled_at=state.get('now'),
+                        origin=position, elapsed=attempt['elapsed'],
                         progress=progress, best_progress=attempt['best_progress'],
                         wreck_displacement=wreck_displacement,
                         own_elapsed=attempt['own_elapsed'],
@@ -356,6 +369,13 @@ class BotAdapter(object):
         # Ordinary recovery movement must not resurrect a spent motor attempt.
         if attempt['exhausted']:
             evidence['phase'] = 'exhausted'
+            return None
+        # A broken track/engine or overturned hull cannot spend a motor
+        # attempt. The runtime's same mobility gate also suppresses the final
+        # pedals; preserve this encounter's budget until it can execute again.
+        if state.get('wreck_push_motor_hold'):
+            evidence.update(phase='mobility_paused',
+                motor_hold=dict(state['wreck_push_motor_hold']))
             return None
         if progress >= attempt['best_progress'] + 0.5:
             attempt['best_progress'] = progress
@@ -382,14 +402,46 @@ class BotAdapter(object):
             evidence.update(phase='own_stalled', elapsed=attempt['elapsed'])
             self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             return None
+        driver_state = self.driver.states.get(bot_id) or {}
+        navigation_wait = driver_state.get('navigation_wait') or {}
+        if phase == 'resumed' and (driver_state.get('recovery_time', 0.0) > 0.0 or
+                (navigation_wait.get('active') and not navigation_wait.get('completed'))):
+            evidence.update(phase='driver_recovery_active',
+                recovery_time=driver_state.get('recovery_time'),
+                navigation_wait=dict(navigation_wait))
+            return None
         reach = 2.0 * length + WAYPOINT_ARRIVAL_RADIUS
         if not self.driver._clear(direction_clear, yaw, reach):
+            proof = dict(self.driver._last_direction_receipt)
+            evidence['direction_receipt'] = proof
+            reason = str(proof.get('reason') or '')
+            if any(token in reason for token in ('deferred', 'unavailable', 'exception')):
+                # Unknown native work can pause an attempt but cannot prove a
+                # permanent obstacle. Keep its original elapsed motor budget.
+                evidence['phase'] = 'world_probe_pending'
+                return None
+            # A denied push hands ownership back to checked recovery. Keeping
+            # this episode live used to interrupt each reverse as soon as the
+            # rotating forward probe briefly cleared again (E5, 2026-10-21).
+            # Retain the encounter receipt exactly like a refused world turn;
+            # only the existing departure/wreck-displacement laws renew it.
+            attempt.update(exhausted=True, exhausted_position=position)
+            attempt['terminal'] = dict(reason='world_corridor_refused',
+                at=state.get('now'), position=position, yaw=yaw,
+                direction_receipt=proof,
+                elapsed=attempt['elapsed'], own_elapsed=attempt['own_elapsed'])
+            evidence['terminal'] = dict(attempt['terminal'])
+            self._wreck_last_terminal[bot_id] = dict(attempt['terminal'], peer_id=key)
             evidence['phase'] = 'world_blocked'
             return None
         living = [peer for peer in neighbours if peer.get('alive', True)]
-        if self.driver._reverse_blocked_by_vehicle(
-                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state)) is not None:
-            evidence['phase'] = 'live_hull_blocked'
+        blocker = self.driver._reverse_blocked_by_vehicle(
+                position, yaw+math.pi, living, length, width, body=self.driver.collision_body(state))
+        evidence['live_hull_check'] = dict(
+            self.driver._last_reverse_receipt,
+            sampled_at=state.get('now'), checked_peers=[peer.get('id') for peer in living])
+        if blocker is not None:
+            evidence.update(phase='live_hull_blocked', live_blocker=blocker)
             return None
         # Keep forward torque throughout one admitted episode. Side contact
         # requires steering towards the wreck, not translating parallel to it.
@@ -436,6 +488,13 @@ class BotAdapter(object):
         ``dt``, ``now`` and optionally ``health``, ``max_health``, ``contacts``
         and ``neighbours``.  ``direction_clear(yaw)`` is the sole runtime probe.
         """
+        strategic=self.plan_order(state)
+        return self._drive_order(int(state.get('id', 0)), state,
+                                 _position(state.get('position')),
+                                 strategic, direction_clear)
+
+    def plan_order(self,state):
+        """Select a local macro order before class-specific travel ownership."""
         state = state if isinstance(state, dict) else {}
         bot_id = int(state.get('id', 0))
         position = _position(state.get('position'))
@@ -455,8 +514,7 @@ class BotAdapter(object):
             bot_id, position, float(state.get('yaw', 0.0)),
             speed,
             state.get('health', 1.0), state.get('max_health', 1.0), now)
-        return self._drive_order(
-            bot_id, state, position, strategic, direction_clear)
+        return strategic
 
     def decide_with_order(self, state, strategic, direction_clear):
         """Apply a server macro order through the same local terrain driver."""
@@ -464,6 +522,9 @@ class BotAdapter(object):
         strategic = strategic if isinstance(strategic, dict) else {}
         bot_id = int(state.get('id', 0))
         position = _position(state.get('position'))
+        strategic = capture_orders.constrain(strategic, position)
+        if strategic.get('empty_ammo'):
+            strategic = dict(strategic, face_position=strategic.get('move_position'))
         return self._drive_order(
             bot_id, state, position, strategic, direction_clear)
 
@@ -583,7 +644,7 @@ class BotAdapter(object):
                 state['neighbours'] = original_neighbours
 
     def _drive_order_controls(self, bot_id, state, position, strategic,
-                              direction_clear):
+                                       direction_clear):
         # Navigation waits, withdrawal and contact plans do not execute drive.
         # Their receipts must not reuse the previous drive call's distances.
         self.driver.states.get(bot_id, {}).pop('arrival_trace', None)
@@ -625,6 +686,8 @@ class BotAdapter(object):
                 self._contact_escape_evidence(state, escape, 'parking_cancelled')
         combat_hold = (strategic.get('target_id') is not None and
             strategic.get('combat_mode') in ('engage', 'support_hold', 'cover_hold') and
+            strategic.get('throttle_override') == 0.0)
+        combat_hold = combat_hold or bool(strategic.get('capture_area') and
             strategic.get('throttle_override') == 0.0)
         if combat_hold:
             escape = self._contact_escapes.pop(bot_id, None)
@@ -755,10 +818,12 @@ class BotAdapter(object):
                     pose_clear=state.get('pose_clear'),
                     rotation_refused=bool(state.get('native_rotation_refused')),
                     recovery_goal=move_position,
-                    progress_identity=(('combat', strategic.get('target_kind'), strategic['target_id'])
+                    progress_identity=(('empty_ammo', strategic.get('route_id'), strategic.get('route_index'))
+                        if strategic.get('empty_ammo') else bot_tactics.route_motion_identity(strategic) or
+                        (('combat', strategic.get('target_kind'), strategic['target_id'])
                         if strategic.get('target_id') is not None and
                         not strategic.get('parking_phase') and strategic.get('combat_mode') not in
-                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None),
+                        ('base_defense', 'artillery_deploy', 'artillery_relocate') else None)),
                     arrival_radius=strategic.get('arrival_radius') if stop_at_target else None)
         # Preserve the mature face-position intent which is separate from the
         # gun target.  At a route/cover stop it gives armoured turreted tanks
@@ -848,12 +913,20 @@ class BotAdapter(object):
             flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
+        if strategic.get('spg_mode') is not None:
+            # The final runtime gun/reproof gates need the same SPG task owner
+            # and explicit hold boundary as the strategic order.
+            result['spg_mode'] = strategic['spg_mode']
+            result['throttle_override'] = strategic.get('throttle_override')
+        if strategic.get('empty_ammo'):
+            result['empty_ammo'] = True
+            result['movement_priority'] = 'empty_ammo_capture'
         if strategic.get('hull_angle_degrees') is not None:
             result['hull_angle_degrees'] = float(
                 strategic.get('hull_angle_degrees'))
         for name in ('forward_blocked_by', 'reverse_blocked_by', 'recovery_probe_distance',
                      'recovery_probe_origin', 'recovery_probe_yaw', 'recovery_probe_length',
-                     'navigation_recovery', 'navigation_replan'):
+                     'navigation_recovery', 'navigation_replan', 'partial_pivot_search'):
             if name in local:
                 result[name] = local[name]
         if state.get('_contact_escape_evidence') is not None:

@@ -333,6 +333,17 @@ def reentrant_dispatch(opcode, rows):
     return clear_dispatch(opcode, rows)
 assert backend.world_run(snapshot, reentrant_dispatch) == 0 and nested[0]
 checks += 1
+
+# The shipping bridge leaves immutable descriptor spans separate. Native
+# assembly must preserve the flat reference law and every callback, including
+# the failure boundary before any engine effect.
+segmented = (snapshot[:9], snapshot[9:13], snapshot[13:15], snapshot[15:])
+assert backend.world_run(segmented, clear_dispatch) == backend.world_run(snapshot, clear_dispatch)
+bad_segment = (snapshot[:8], snapshot[9:13], snapshot[13:15], snapshot[15:])
+def no_effects(*args):
+    raise AssertionError('Malformed snapshot reached engine effects')
+assert backend.world_run(bad_segment, no_effects) is None
+checks += 1
 gc.collect()
 references = sys.getrefcount(snapshot), sys.getrefcount(clear_dispatch)
 for unused in range(100):

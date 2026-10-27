@@ -13,7 +13,7 @@ import time
 FILE_ENV = 'WOT_OFFLINE_REPLAY_FILE'
 AUTO_ENV = 'WOT_OFFLINE_REPLAY_AUTOSTART'
 MAX_LINE = 2 * 1024 * 1024
-MAX_TOTAL = 768 * 1024 * 1024
+MAX_TOTAL = 8 * 1024 * 1024 * 1024
 MAX_DURATION = 14400.0
 WIRE_TYPES = frozenset((
     'battle_live', 'snapshot', 'events', 'bot_observation', 'team_chat',

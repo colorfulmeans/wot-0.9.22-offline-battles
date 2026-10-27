@@ -68,6 +68,20 @@ def observed_ray(stage, function, space, start, end, *args):
     return _invoke(diagnostic, stage, function, (space, start, end) + args, {})
 
 
+def detailed_observed(stage):
+    """Extra investigation boundaries are exclusive to the diagnostic entry."""
+    def decorate(function):
+        @functools.wraps(function)
+        def measured(*args, **kwargs):
+            from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+            diagnostic = current() if detailed_enabled() else None
+            if diagnostic is None:
+                return function(*args, **kwargs)
+            return _invoke(diagnostic, stage, function, args, kwargs)
+        return measured
+    return decorate
+
+
 def observed(stage):
     """Observe a pure helper only inside its synchronous worker owner."""
     def decorate(function):
@@ -116,6 +130,15 @@ def timed(stage):
 
 class WorkerCombatDiagnostics(object):
     """Capture three combat windows without retaining native objects."""
+
+    @classmethod
+    def audit_sample(cls, clock):
+        """Sample one complete control callback in 32, for three windows.
+
+        This changes no control budget or cadence. A normal report must carry
+        measured stage contents, including preparation/writing of diagnostics.
+        """
+        return cls(clock, detail_stride=32)
 
     @classmethod
     def spike_test(cls, clock):
@@ -177,6 +200,7 @@ class WorkerCombatDiagnostics(object):
         self._reset_actor_frame()
 
     def _reset_actor_frame(self):
+        self._residual_slice = None
         self._actor_key = None
         self._actor_token = None
         self._phase_token = None
@@ -185,7 +209,7 @@ class WorkerCombatDiagnostics(object):
         self._slices = []
         self._slice = 0
         self._control_selected = False
-        self._geometry = set()
+        self._geometry = {}
 
     def _fail(self):
         self.enabled = False
@@ -222,6 +246,29 @@ class WorkerCombatDiagnostics(object):
                 'publish_requested': bool(publish),
                 'detail': self.detail_active,
             })
+
+    def begin_residual_slice(self):
+        """Diagnostic-entry checkpoints partition only the parent's self time."""
+        if self.active and self._stack:
+            token = self._stack[-1]
+            self._residual_slice = [token, token[0], token[1]]
+
+    def residual_checkpoint(self, name):
+        if self.active and self._residual_slice is not None:
+            try:
+                self._residual_checkpoint(name, self._finite(self.clock()))
+            except Exception:
+                self._fail()
+
+    def _residual_checkpoint(self, name, now):
+        anchor = self._residual_slice
+        if anchor is None or not self._stack or self._stack[-1] is not anchor[0]:
+            return
+        token, previous, children = anchor
+        own = max(0., now - previous - (token[1] - children))
+        # These are subdivisions of bot.slice self_ms, NOT additional work.
+        self.count('slice_residual_' + name + '_us', int(round(own * 1000000.)))
+        anchor[1:] = [now, token[1]]
 
     def actor(self, bot_id):
         """Attribute a synchronous Bot work block, including its residual time.
@@ -269,9 +316,10 @@ class WorkerCombatDiagnostics(object):
         try:
             signature = (self._slice, self._actor_key, name, key)
             if signature in self._geometry:
+                self._geometry[signature] += 1
                 self.count(name + '_same_geometry_in_slice')
             elif len(self._geometry) < MAX_GEOMETRY_KEYS:
-                self._geometry.add(signature)
+                self._geometry[signature] = 1
             else:
                 self.count('geometry_tracking_overflow')
         except Exception:
@@ -458,6 +506,9 @@ class WorkerCombatDiagnostics(object):
             elapsed = max(0.0, self._finite(self.clock()) - token[0])
             if not self._stack or self._stack[-1] is not token:
                 raise ValueError('diagnostic scope ownership changed')
+            if self._residual_slice is not None and self._residual_slice[0] is token:
+                self._residual_checkpoint('tail', token[0] + elapsed)
+                self._residual_slice = None
             self._stack.pop()
             if self._stack:
                 self._stack[-1][1] += elapsed
@@ -636,6 +687,15 @@ class WorkerCombatDiagnostics(object):
                 'selected_completed_wait': self._wait_summary(
                     self._selected_waits),
             }
+            from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+            if self.detail_active and detailed_enabled():
+                # Observed duplicate geometry is not permission to reuse a
+                # collision answer: obstacles and poses may have changed.
+                repeated = sorted(((count, signature) for signature, count in
+                    self._geometry.items() if count > 1), key=lambda row: -row[0])[:8]
+                result['repeated_geometry'] = [dict(count=count,
+                    slice=key[0], actor=key[1], stage=key[2],
+                    geometry=repr(key[3])[:384]) for count, key in repeated]
             if self._native_frame is not None:
                 result['native_frontier'] = self._native_rows(self._native_frame)
                 self._sum_native_frame()
@@ -714,6 +774,8 @@ class WorkerCombatDiagnostics(object):
     def _complete_capture(self, reason):
         self._completed.append({
             'capture': self.capture, 'trigger': self._reason,
+            'queue_kind': 'shot_lane_identity',
+            'slice_residual_basis': 'microseconds_partitioning_bot.slice_self_ms',
             'end_reason': reason,
             'authority_start': self._capture_started,
             'authority_last_frame': self._capture_last,

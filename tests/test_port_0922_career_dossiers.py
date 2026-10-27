@@ -20,6 +20,23 @@ class Dossier:
 
 
 class CareerDossierTests(unittest.TestCase):
+    def test_account_vehicle_mastery_cut_matches_vehicle_badges_on_every_read(self):
+        self.progress['vehicles']['ussr:R11_MS-1']['markOfMastery'] = 3
+        self.progress['vehicles']['germany:G04_PzVI_Tiger_I']['markOfMastery'] = 4
+        for unused in range(2):
+            result = data.account_dossier(self.progress, Dossier, self.resolve)
+            self.assertEqual({101: 3, 202: 4}, result['markOfMasteryCut'])
+            unused, rows = data.dossiers(postbattle_progress=self.progress,
+                dossier_factory=Dossier, vehicle_type_resolver=self.resolve)
+            for cd, unused, value in rows:
+                self.assertEqual(result['markOfMasteryCut'][cd], value['achievements']['markOfMastery'])
+        for invalid in (None, 0, -1, True, '4'):
+            self.progress['vehicles']['ussr:R11_MS-1']['markOfMastery'] = invalid
+            result = data.account_dossier(self.progress, Dossier, self.resolve)
+            self.assertEqual({202: 4}, result['markOfMasteryCut'])
+        self.progress['vehicles']['ussr:R11_MS-1']['markOfMastery'] = 99
+        self.assertEqual(4, data.account_dossier(self.progress, Dossier, self.resolve)['markOfMasteryCut'][101])
+
     def setUp(self):
         self.progress = {'vehicles': {
             'ussr:R11_MS-1': {

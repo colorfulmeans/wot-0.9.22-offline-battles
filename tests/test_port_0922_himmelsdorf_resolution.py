@@ -40,7 +40,9 @@ class ResolutionTests(unittest.TestCase):
                 self.assertEqual(a[field],b[field],field)
         a=bot_tactics.default_map('04_himmelsdorf')['default_routes']
         b=bot_tactics.default_map('86_himmelsdorf_winter')['default_routes']
-        self.assertEqual([r for r in a if r['id']!='rear_guard'],b)
+        # Independent class exclusions may differ; retained enabled travel agrees.
+        self.assertEqual([r for r in a if r['id']!='rear_guard' and not r.get('disabled') and r.get('tier')!='reserve'],
+                         [r for r in b if not r.get('disabled') and r.get('tier')!='reserve'])
 
     def test_local_exact_collision_keeps_width_and_does_not_inflate_wall_cells(self):
         import test_port_0922_navigation_collision_bake as fixture

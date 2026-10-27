@@ -13,6 +13,7 @@ import io
 import json
 import math
 import re
+from gui.mods.offline_lan_0922 import route_network
 
 from gui.mods.offline_lan_0922.bot_editor_maps import MAPS
 
@@ -24,10 +25,18 @@ DEFAULT_ROUTE_PRIORITY = 5
 MAX_ENTRIES = sum(128 + sum(len(routes) for routes in meta['route_ids'].values()) *
                   (len(CLASSES) + 1) for meta in MAPS.values())
 SKILLS = ('rookie', 'regular', 'veteran', 'elite')
+PRESETS = {
+    'development': ('stock', 'intermediate', 'full'),
+    'equipment': ('none', 'single', 'standard', 'improved'),
+    'consumables': ('none', 'once', 'repeat', 'large'),
+    'outfit': ('off', 'on'),
+    'crew_preset': ('50', '75', 'repair', 'all'),
+}
 PARAMETERS = {
     'reaction_seconds': (0.0, 5.0), 'patience_seconds': (0.0, 10.0),
     'converged_factor': (1.0, 5.0), 'aim_bias_factor': (0.0, 4.0),
     'lead_error': (0.0, 1.0),
+    'ammo_limit': (0, 1800),
 }
 TEXT = (str, type(u''))
 ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,47}$')
@@ -35,6 +44,15 @@ ID = re.compile(r'^[A-Za-z][A-Za-z0-9_-]{0,47}$')
 
 class TacticsError(ValueError):
     pass
+
+
+def route_motion_identity(order):
+    """An aiming target does not own an unchanged authored travel leg."""
+    if (order.get('combat_mode') not in ('route', 'advance') or
+            not order.get('route_id') or order.get('parking_phase') or
+            order.get('team_command') or order.get('defense_base_id')):
+        return None
+    return ('route', order['route_id'], order.get('route_index'))
 
 
 def _keys(raw, allowed, required=()):
@@ -81,6 +99,8 @@ def default_profile(name='Default'):
     from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
     document = json.loads(PROFILE_JSON)
     document['name'] = name
+    for settings in document['maps'].values():
+        route_network.migrate_default_rows(settings.get('default_routes', ()))
     return document
 
 
@@ -89,10 +109,20 @@ def default_map(name):
 
 
 def normalize_values(raw):
-    _keys(raw, tuple(PARAMETERS) + ('skill', 'crew_level'))
+    _keys(raw, tuple(PARAMETERS) + tuple(PRESETS) + ('skill', 'crew_level', 'ammo_ratios'))
     out = {}
     for key, value in raw.items():
-        if key == 'skill':
+        if key in PRESETS:
+            if value not in PRESETS[key]:
+                raise TacticsError('Unsupported %s preset' % key)
+            out[key] = value
+        elif key == 'ammo_limit':
+            out[key] = integer(value, 0, 1800)
+        elif key == 'ammo_ratios':
+            if not isinstance(value, (tuple, list)) or not 1 <= len(value) <= 8:
+                raise TacticsError('Ammunition ratios require 1..8 digits')
+            out[key] = [integer(v, 0, 9) for v in value]
+        elif key == 'skill':
             if value not in SKILLS:
                 raise TacticsError('Unsupported Bot skill')
             out[key] = value
@@ -112,7 +142,36 @@ def point(raw, bounds):
             round(number(raw[1], bounds[1], bounds[3]), 4)]
 
 
-WAIT_AVOIDANCE_RADIUS = 6.0
+ROUTE_ARRIVAL_RADIUS = 6.0
+WAIT_AVOIDANCE_RADIUS = ROUTE_ARRIVAL_RADIUS
+
+
+def route_disk_reached(position, point, following=None, previous=None):
+    """Shared two-dimensional macro disk/crossing/forward-passage contract."""
+    bx, bz = position
+    px, pz = point
+    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
+        return True
+    if previous is not None:
+        ax, az = previous
+        dx, dz = bx-ax, bz-az
+        length = dx*dx + dz*dz
+        if length > 0.000001:
+            fraction = max(0., min(1., ((px-ax)*dx+(pz-az)*dz)/length))
+            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
+                return True
+    # A convoy can shove a hull past the gate along its finite outgoing lane.
+    if following is None:
+        return False
+    dx, dz = following[0]-px, following[1]-pz
+    length = dx*dx + dz*dz
+    if length <= 0.000001:
+        return False
+    fraction = ((bx-px)*dx+(bz-pz)*dz)/length
+    if fraction <= 0.0:
+        return False
+    fraction = min(1., fraction)
+    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
 
 
 def waiting_heading(place, following=None):
@@ -175,6 +234,11 @@ NAVIGATION_ROLLBACK_IDENTITIES = {'04_himmelsdorf': 'f03b9a8a6f706e055198185b393
  '92_stalingrad': 'a91c83e470a7cb790b85014ba0f99f815e56dcb3e3cbfcb7b165042fbb604a76'}
 
 
+def sys_contract():
+    import sys
+    return sys.modules[__name__]
+
+
 def canonical(raw):
     _keys(raw, ('schema', 'client', 'name', 'behavior', 'maps'),
           ('schema', 'client', 'name', 'behavior', 'maps'))
@@ -235,8 +299,8 @@ def canonical(raw):
             seen = set()
             for item in settings[kind]:
                 common = ('id', 'label', 'team')
-                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric', 'class_priorities')
-                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority'))
+                allowed = common + (('classes', 'slots', 'policy', 'capacity', 'weight', 'points', 'mirror_id', 'symmetric', 'class_priorities', 'tier', 'node_ids', 'defense', 'purpose', 'family')
+                                    if kind == 'routes' else ('point', 'radius', 'heading', 'priority', 'travel', 'links'))
                 _keys(item, allowed, common)
                 identity = _id(item['id'])
                 if identity in seen:
@@ -281,16 +345,18 @@ def canonical(raw):
                                   radius=number(item.get('radius', 12.0), 3.0, 80.0),
                                   heading=number(item.get('heading', 0.0), -180.0, 180.0),
                                   priority=integer(item.get('priority', 5), 0, 9))
+                if kind == 'routes':route_network.copy_fields(item, result, sys_contract(), meta['bounds'])
+                else:route_network.position_fields(item, result, sys_contract(), meta['bounds'])
                 entry[kind].append(result)
                 total += 1
             entry[kind].sort(key=lambda a: a['id'])
-        defaults = settings.get('default_routes', [])
+        defaults = route_network.migrate_default_rows(copy.deepcopy(settings.get('default_routes', [])))
         if not isinstance(defaults, list) or len(defaults) > sum(
                 len(v) for v in meta['route_ids'].values()) * (len(CLASSES) + 1):
             raise TacticsError('Invalid default route collection')
         seen = set()
         for route in defaults:
-            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled', 'label'), ('id', 'team', 'points'))
+            _keys(route, ('id', 'team', 'points', 'class_tag', 'symmetric', 'priority', 'disabled', 'label', 'tier', 'node_ids', 'defense'), ('id', 'team', 'points'))
             team = integer(route['team'], 1, 2)
             identity = _id(route['id'])
             tag = route.get('class_tag', 'all')
@@ -324,10 +390,24 @@ def canonical(raw):
             if 'symmetric' in route:
                 if type(route['symmetric']) is not bool:raise TacticsError('Symmetry must be boolean')
                 if route['symmetric']:result['symmetric'] = True
+            route_network.copy_fields(route, result, sys_contract(), meta['bounds'])
             entry.setdefault('default_routes', []).append(result)
             total += 1
         if defaults:
             entry['default_routes'].sort(key=lambda r: (r['team'], r['id'], r.get('class_tag', 'all')))
+            for route in entry['default_routes']:
+                if not route.get('disabled'):
+                    continue
+                shared = next((r for r in entry['default_routes']
+                    if r['team'] == route['team'] and r['id'] == route['id']
+                    and r.get('class_tag', 'all') == 'all'), None)
+                if shared is None:
+                    shared = next((r for r in default_map(name).get('default_routes', ())
+                        if r['team'] == route['team'] and r['id'] == route['id']
+                        and r.get('class_tag', 'all') == 'all'), None)
+                route['points'] = [p[:2]+[0] for p in
+                    (shared or route)['points']]
+                route.pop('node_ids',None);route.pop('defense',None)
         if entry['routes'] or entry['positions'] or defaults or deleted:
             out['maps'][name] = entry
     if total > MAX_ENTRIES or len(dumps(out).encode('utf8')) > MAX_BYTES:
@@ -446,3 +526,10 @@ def for_round(profile, map_name):
     if len(dumps(selected).encode('ascii')) > 64 * 1024:
         raise TacticsError('This round tactics payload exceeds 64 KiB')
     return selected
+
+
+def team_class_choices(value=None, sizes=None):
+    """Canonical room selection; low-size artillery is a manual-only exception."""
+    from gui.mods.offline_lan_0922 import team_class_policy
+    try:return team_class_policy.canonical(value)
+    except ValueError as error:raise TacticsError(str(error))

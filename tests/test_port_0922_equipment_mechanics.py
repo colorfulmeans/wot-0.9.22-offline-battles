@@ -227,17 +227,16 @@ class EquipmentStateTests(unittest.TestCase):
                                  'hp': 40.0, 'max_hp': 100.0}],
                     'destroyed': []}
 
-        # A Bot holds one charge, so a functional but damaged gun, engine or
-        # ammo bay earns it and a track, radio or observation device does not.
-        for name in ('gunHealth', 'engineHealth', 'ammoBayHealth'):
+        # Elite kits repair eligible yellow devices, but a yellow track alone
+        # never earns a charge under the reviewed tier policy.
+        for name in ('gunHealth', 'engineHealth', 'ammoBayHealth', 'radioHealth',
+                     'surveyingDeviceHealth', 'turretRotatorHealth', 'fuelTankHealth'):
             state = equipment_mechanics.EquipmentState(contract)
             self.assertIsNone(state.poll_bot(5.0, yellow(name)), name)
             self.assertEqual(
                 'repair_devices',
                 state.poll_bot(5.01, yellow(name))['action'], name)
-        for name in ('leftTrackHealth', 'rightTrackHealth', 'radioHealth',
-                     'surveyingDeviceHealth', 'turretRotatorHealth',
-                     'fuelTankHealth'):
+        for name in ('leftTrackHealth', 'rightTrackHealth'):
             state = equipment_mechanics.EquipmentState(contract)
             self.assertIsNone(state.poll_bot(5.0, yellow(name)), name)
             self.assertIsNone(state.poll_bot(5.01, yellow(name)), name)

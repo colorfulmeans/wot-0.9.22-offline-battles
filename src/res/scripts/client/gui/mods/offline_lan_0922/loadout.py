@@ -309,7 +309,11 @@ def attribute_factors(
         return None
     (utils, tankmen, vehicles_module, aspects, qualifier_type, crew_class,
      qualifiers_class) = modules
-    compact_descrs = crew_compact_descrs(crew)
+    from gui.mods.offline_lan_0922 import bot_fittings
+    fitting = bot_fittings.context(descriptor) if crew is None else None
+    compact_descrs = fitting['crew'] if fitting is not None else crew_compact_descrs(crew)
+    if fitting is not None:
+        equipments = tuple(equipments or ()) + fitting['directives']
     level = default_crew_level(tankmen, crew_level)
     try:
         roles = descriptor.type.crewRoles
@@ -334,7 +338,7 @@ def attribute_factors(
                 utils, descriptor, compact_descrs, mounted, flags, is_fire,
                 aspects, qualifier_type, crew_class, qualifiers_class)
         except Exception as error:
-            if (not uses_existing_crew or
+            if (fitting is not None or not uses_existing_crew or
                     not _is_wrong_tankman_nation(error)):
                 raise
             default_crew = utils.generateDefaultCrew(
@@ -490,6 +494,10 @@ def modifiers(descriptor=None, equipments=(), crew_skills=None, factors=None):
     and artefact contribution below comes from it, including the level a Bot
     skill tier trained the generated default crew to.
     """
+    from gui.mods.offline_lan_0922 import bot_fittings
+    fitting = bot_fittings.context(descriptor)
+    if crew_skills is None and fitting is not None:
+        crew_skills = fitting['crew_skills']
     devices = device_names(descriptor) if descriptor is not None else ()
     consumables = equipment_names(equipments)
 

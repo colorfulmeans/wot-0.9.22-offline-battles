@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('0.10.2', packager.MOD_VERSION)
+        self.assertEqual('1.0.0', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '0.10.2')", source)
-            self.assertIn("StringStruct('ProductVersion', '0.10.2')", source)
-            self.assertIn('filevers=(0, 10, 2, 0)', source)
-            self.assertIn('prodvers=(0, 10, 2, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '1.0.0')", source)
+            self.assertIn("StringStruct('ProductVersion', '1.0.0')", source)
+            self.assertIn('filevers=(1, 0, 0, 0)', source)
+            self.assertIn('prodvers=(1, 0, 0, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -493,7 +493,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('0.10.2', identity['semanticVersion'])
+            self.assertEqual('1.0.0', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -816,6 +816,20 @@ class PortConfigTests(unittest.TestCase):
                 {'career': True},
                 json.loads(
                     (Path(directory) / surviving[0]).read_text()))
+
+    def test_waiting_difficulty_roundtrip_does_not_replace_the_mixed_default(self):
+        config_module = _load_port_source('config')
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / 'waiting_room_state.json')
+            self.assertNotIn('bot_skill_mode', config_module.load_waiting_room_state(path))
+            for mode in ('mixed', 'easy', 'relaxed', 'hard', 'brutal'):
+                choices = config_module.load_waiting_room_state(path)
+                choices['bot_skill_mode'] = mode
+                self.assertTrue(config_module.save_waiting_room_state(choices, path))
+                self.assertEqual(mode, config_module.load_waiting_room_state(path)['bot_skill_mode'])
+            choices['bot_skill_mode'] = 'unrecognized'
+            self.assertFalse(config_module.save_waiting_room_state(choices, path))
+            self.assertEqual('brutal', config_module.load_waiting_room_state(path)['bot_skill_mode'])
 
     def test_waiting_room_choices_round_trip_in_player_owned_state(self):
         config_module = _load_port_source('config')
@@ -3656,6 +3670,8 @@ class OfflineCompatibilityTests(unittest.TestCase):
                     self._CompoundAppearance__filter = replacement
                 self.nested_filter = self._readFilterDuringRefresh()
                 self._CompoundAppearance__filter.syncGunAngles(0.5, -0.1)
+                if getattr(self, 'fail_models_refresh', False) == 'assertion':
+                    raise AssertionError('stale native model state')
                 if getattr(self, 'fail_models_refresh', False):
                     raise RuntimeError('models refresh failed')
                 operations.append(('compound_refresh_after',))
@@ -5157,6 +5173,11 @@ class OfflineCompatibilityTests(unittest.TestCase):
         self.assertIs(
             replacement,
             appearance._CompoundAppearance__filter)
+
+        appearance.fail_models_refresh = 'assertion'
+        with self.assertRaisesRegex(AssertionError, 'stale native model state'):
+            getattr(appearance, method_name)('stale', {})
+        self.assertIsNone(compatibility._compound_refreshing_models)
 
         appearance.fail_models_refresh = True
         with self.assertRaisesRegex(RuntimeError, 'models refresh failed'):

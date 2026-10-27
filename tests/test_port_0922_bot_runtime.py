@@ -149,6 +149,10 @@ class _Adapter(object):
     def __init__(self, *unused):
         self.director = _Director(); self.calls = []; self.server_orders = []
     def register(self, *args): self.director.registered.append(args)
+    def plan_order(self, state):
+        target_id = state['contacts'][0]['id'] if state.get('contacts') else None
+        return dict(target_id=target_id, fire_allowed=True, shell_index=2,
+                    fire_range=500.0)
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
         target_id = (state['contacts'][0]['id']
@@ -175,6 +179,9 @@ class _FixedAdapter(_Adapter):
 
     def decide(self, state, clear):
         self.calls.append((state, clear(state['yaw'])))
+        return dict(self.command)
+
+    def plan_order(self, state):
         return dict(self.command)
 
     def decide_with_order(self, state, strategic, clear):
@@ -211,7 +218,7 @@ def _combat_descriptor(reload_time=0.5, clip=(2, 0.2),
                        turret_speed=10.0, gun_speed=10.0,
                        dispersion=0.03, max_ammo=None):
     gun = types.SimpleNamespace(
-        shots=({'shell': {'effectsIndex': 0}, 'speed': 1000.0,
+        shots=({'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'}, 'speed': 1000.0,
                 'gravity': 10.0, 'maxDistance': 5000.0},),
         reloadTime=reload_time,
         clip=clip, turretYawLimits=turret_yaw_limits,
@@ -1720,6 +1727,12 @@ class BotRuntimeTests(unittest.TestCase):
         self._modules = dict((key, value) for key, value in sys.modules.items()
                              if key == 'gui' or key.startswith('gui.'))
         self.module = _load(); self.adapters = []
+        # Each case is an independent diagnostic session. A preceding long
+        # motion test must not consume the next case's trace evidence budget.
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
+        budget = mock.patch.object(diagnostics, '_detail_budget', dict(
+            start=None, window=0, session=0, dropped=0, notice=False))
+        budget.start(); self.addCleanup(budget.stop)
         # Detailed support is an explicitly disabled experiment in production.
         if self._testMethodName in frozenset((
                 'test_bot_drive_uses_contacted_plane_instead_of_corridor_grade',
@@ -1809,6 +1822,77 @@ class BotRuntimeTests(unittest.TestCase):
             if key == 'gui' or key.startswith('gui.'):
                 sys.modules.pop(key, None)
         sys.modules.update(self._modules)
+
+    def test_selected_motion_probe_receives_grounded_attitude_in_both_directions(self):
+        for sign in (1., -1.):
+            for airborne in (False, True):
+                calls = []
+                command = dict(self._stationary_command(), throttle=sign,
+                    turn=0., combat_mode='route', recovery_mode='drive',
+                    movement_intent=True, move_position=(0., 0., sign*100.))
+                def probe(position, yaw, speed, descriptor, distance=None,
+                          width=None, capability=None, body_pose=None):
+                    calls.append((yaw, body_pose))
+                    return {'clear': True, 'slope': 0., 'body_pose': body_pose}
+                runtime = self.module.BotRuntime(1,
+                    descriptor_resolver=lambda unused: _combat_descriptor(),
+                    adapter_factory=lambda *args, **kwargs: _FixedAdapter(command),
+                    direction_probe=probe, ground_probe=lambda *args: 0.,
+                    physics_ground_probe=lambda *args: 0.,
+                    spawn_resolver=_spawn_resolver, baked_graph=_graph())
+                runtime.battle_start(self.start)
+                state = runtime.states[11]
+                starting_yaw = state['yaw']
+                state.update(pitch=-.0368, terrain_pitch=-.0368, roll=.3857,
+                             airborne=airborne)
+                runtime.update(.04, 1.)
+                self.assertTrue(calls)
+                pose = calls[0][1]
+                if airborne:
+                    self.assertIsNone(pose)
+                else:
+                    self.assertAlmostEqual(-.0368, pose[1])
+                    self.assertAlmostEqual(.3857, pose[2])
+                    # Reverse changes travel heading, never the occupied hull pose.
+                    self.assertAlmostEqual(starting_yaw, pose[0])
+                self.assertEqual(pose, runtime._motion_probe_cache[11]['result']['body_pose'])
+
+    def test_banked_motion_reprobes_changed_plane_without_flat_exact_receipt(self):
+        poses, exact = [], []
+        command = dict(self._stationary_command(), throttle=1., turn=0.,
+            combat_mode='route', recovery_mode='drive', movement_intent=True,
+            move_position=(0., 0., -100.))
+        def probe(position, yaw, speed, descriptor, distance=None,
+                  width=None, capability=None, body_pose=None):
+            poses.append(body_pose)
+            return {'clear': True, 'slope': 0.}
+        runtime = self.module.BotRuntime(1,
+            descriptor_resolver=lambda unused: _combat_descriptor(),
+            adapter_factory=lambda *args, **kwargs: _FixedAdapter(command),
+            direction_probe=probe, world_receipt_probe=lambda *args: exact.append(args) or False,
+            ground_probe=lambda *args: 0., physics_ground_probe=lambda *args: 0.,
+            spawn_resolver=_spawn_resolver, baked_graph=_graph())
+        runtime.battle_start(self.start)
+        state = runtime.states[11]
+        state.update(pitch=0., terrain_pitch=0., roll=.38)
+        runtime.update(.04, 1.)
+        self.assertTrue(poses)
+        first_count = len(poses)
+        state.update(pitch=0., terrain_pitch=0., roll=.28)
+        runtime.update(.04, 1.04)
+        self.assertGreater(len(poses), first_count)
+        self.assertAlmostEqual(.28, poses[-1][2])
+        self.assertEqual([], exact)
+
+    def test_support_plane_cache_change_is_not_a_flat_yaw_change(self):
+        same = self.module.BotRuntime._same_probe_support_plane
+        self.assertTrue(same((0., 0., 0.), (2., 0., 0.)))
+        self.assertTrue(same((0., .03, .38), (0., .0301, .3801)))
+        self.assertFalse(same((0., 0., 0.), (0., .03, .38)))
+        self.assertFalse(same((0., .03, .38), (.5, .03, .38)))
+        self.assertTrue(same(None, None))
+        self.assertFalse(same(None, (0., 0., 0.)))
+        self.assertFalse(same((0., 0., 0.), None))
 
     def test_runtime_owned_numeric_helpers_do_not_reparse_state(self):
         state = {
@@ -4829,7 +4913,7 @@ class BotRuntimeTests(unittest.TestCase):
                 result['fire_allowed'] = False
                 return result
 
-        def exercise(mode):
+        def exercise_unbounded(mode):
             reads = [0]
             def clock():
                 reads[0] += 1
@@ -4889,6 +4973,18 @@ class BotRuntimeTests(unittest.TestCase):
                     runtime.probe_totals(), runtime._shot_lane_work,
                     runtime._shot_los_cache), traces
 
+        def exercise(mode, exhausted=False):
+            from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
+            # This parity check compares diagnostic histories too. Give each
+            # run its own budget; otherwise an earlier run changes which
+            # histories the following run is intentionally allowed to retain.
+            with mock.patch.object(logs, '_detail_budget', dict(
+                    start=None,window=0,session=0,dropped=0,notice=False)), \
+                    mock.patch.object(logs, 'DETAIL_WINDOW_BYTES', 64*1024*1024), \
+                    mock.patch.object(logs, 'DETAIL_SESSION_BYTES',
+                                      0 if exhausted else 128*1024*1024):
+                return exercise_unbounded(mode)
+
         baseline, unused = exercise(None)
         measured, traces = exercise('active')
         sampled, sampled_traces = exercise('sampled')
@@ -4896,6 +4992,16 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual(baseline, measured)
         self.assertEqual(baseline, sampled)
         self.assertEqual(baseline, failed)
+        exhausted, unused = exercise('active', exhausted=True)
+        # Byte admission may omit diagnostic histories, never gameplay, wire
+        # events, native queries, ammunition or shot-lane service order.
+        self.assertEqual(baseline[0], exhausted[0])
+        self.assertEqual(baseline[2:], exhausted[2:])
+        gameplay = ('id','x','y','z','yaw','pitch','roll','speed','health',
+                    'alive','fire_seq','reload_time','shell_index','critical')
+        for before, after in zip(baseline[1], exhausted[1]):
+            self.assertEqual({k:before.get(k) for k in gameplay},
+                             {k:after.get(k) for k in gameplay})
         detailed_frames = sum(row['detail_sampled'] for row in sampled_traces)
         self.assertGreater(detailed_frames, 0)
         self.assertLess(detailed_frames, len(sampled_traces))
@@ -4906,6 +5012,9 @@ class BotRuntimeTests(unittest.TestCase):
             'lane_service_cover_blocked', 0) for row in traces), 0)
         self.assertGreater(max(row['completed_wait']['max_kept_ms']
                                for row in traces), 1000.0)
+        residual = sum(row['counts'].get('slice_residual_actors_us', 0)
+                       for row in traces)
+        self.assertEqual(self.module.detailed_enabled(), residual > 0)
 
     def _suspension_case(self, terrain):
         descriptor = _suspension_descriptor()
@@ -7082,8 +7191,9 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts,
+            bot_equipment_resolver=lambda skill: contracts,
             control_seconds=self.module.WORKER_CONTROL_SECONDS)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         repair = runtime._equipment_states[11][2]
@@ -7200,7 +7310,7 @@ class BotRuntimeTests(unittest.TestCase):
         codec = self.module.bot_state_codec
         carried = set(name for name, unused in codec.SCALARS
                       if not name.startswith('_'))
-        carried |= set(('alive', 'world_pose', 'ammo_reload_pending',
+        carried |= set(('alive', 'world_pose', 'ammo_reload_pending', 'ammo_magazine_started',
                         'burst_active', 'movement_dir', 'rotation_dir',
                         'route_wreck_blocked', 'local_combat_manoeuvre', 'push_x', 'push_z'))
         carried |= represented
@@ -7658,6 +7768,27 @@ class BotRuntimeTests(unittest.TestCase):
                 self.assertTrue(all(args[2] == 0.0 and args[8] is True
                                     for args in motion))
                 self.assertLess(state['speed'], 8.0)
+
+    def test_artillery_reproof_does_not_brake_priority_travel(self):
+        for mode in ('spg_route_travel', 'base_defense'):
+            with self.subTest(mode=mode):
+                runtime=self._drive_runtime(lambda *a:dict(clear=True,collision=False,slope=0.))
+                state=runtime.states[11];state['profile']['class_tag']='SPG'
+                command=dict(self._stationary_command(),combat_mode=mode,spg_mode='sortie',
+                    move_position=(0.,0.,400.),face_position=(0.,0.,400.),
+                    throttle=1.,brake=False,movement_intent=True,fire_allowed=True)
+                runtime.adapter.decide=lambda *a:dict(command)
+                runtime._active_artillery_intent=lambda *a:None
+                runtime._active_artillery_reproof=lambda *a:dict(
+                    hold_solution=dict(aim_position=(100.,2.,0.)))
+                runtime._refresh_control_this_step=True;runtime._publish_control_this_step=True
+                original=self.module.vehicle_physics.longitudinal_step
+                with mock.patch.object(self.module.vehicle_physics,'longitudinal_step',wraps=original) as step:
+                    runtime._update_once(.1,1.1)
+                motion=[c.args for c in step.call_args_list if c.args[5]==.1]
+                self.assertTrue(motion)
+                self.assertTrue(all(a[2]==1. and not a[8] for a in motion))
+                self.assertFalse(state['hull_aiming'])
 
     def test_deferred_probe_keeps_the_proved_corridor(self):
         """A budget deferral is not evidence of a wall, so the cache stays."""
@@ -10058,8 +10189,8 @@ class BotRuntimeTests(unittest.TestCase):
         self.runtime.battle_start(dict(self.start, bot_skill_mode='easy'))
 
         self.assertEqual('rookie', self.runtime.bot_skill(11))
-        self.assertEqual(75, self.runtime.bot_crew_level(11))
-        self.assertIn(75, self.crew_levels)
+        self.assertEqual(50, self.runtime.bot_crew_level(11))
+        self.assertIn(50, self.crew_levels)
         self.assertNotIn(None, self.crew_levels)
 
     def test_a_weaker_crew_aims_more_slowly_and_scatters_further(self):
@@ -10094,6 +10225,43 @@ class BotRuntimeTests(unittest.TestCase):
             bot_lineup=[{'team': 1, 'slot': 4, 'skill': 'rookie'}]))
 
         self.assertEqual('elite', self.runtime.bot_skill(11))
+
+    def test_fitted_manifest_is_immutable_and_survives_server_projection(self):
+        import base64
+        from gui.mods.offline_lan_0922 import bot_fittings
+        manifest = self.runtime.battle_start(dict(self.start, bot_skill_mode='brutal'))[0]
+        raw = bot_state_rows.bots(manifest)[0]
+        plan = bot_fittings.plan(raw['vehicle'], raw['skill'])
+        raw['fitting'] = bot_fittings.canonical(dict(schema=1, vehicle=raw['vehicle'],
+            tier=raw['skill'], crew_level=plan['crew'], descriptor=base64.b64encode(b'native fitting').decode(),
+            devices=plan['devices'], directive=plan['directive'], style=plan['style']))
+        server = BattleState(map_name='01_karelia')
+        server.client_build = CLIENT_BUILD_0922
+        server.phase = 'battle'
+        server.players[1] = Player(1, _CaptureSocket(), ('127.0.0.1', 1), team=1, slot=0)
+        server.bot_authority_id = 1
+        server.bot_roster = [dict(id=raw['id'],team=raw['team'],slot=raw['slot'],name='Bot')]
+        message = dict(round_id=server.round_id,bots=[raw])
+        self.assertTrue(server.update_bot_manifest(1,message))
+        self.assertEqual(server.bot_manifest[0]['fitting'],raw['fitting'])
+        self.assertEqual(server.bot_states[raw['id']]['fitting'],raw['fitting'])
+        self.assertEqual(server.current_battle_message()['bot_manifest'][0]['fitting'],raw['fitting'])
+        changed = copy.deepcopy(message)
+        changed['bots'][0]['fitting']['crew_level'] = 75
+        self.assertFalse(server.update_bot_manifest(1,changed))
+        replacement = copy.deepcopy(message)
+        vehicle = 'ussr:R04_T-34' if raw['vehicle'] != 'ussr:R04_T-34' else 'ussr:R11_MS-1'
+        plan = bot_fittings.plan(vehicle,raw['skill'])
+        replacement['bots'][0]['vehicle'] = vehicle
+        replacement['bots'][0]['fitting'].update(vehicle=vehicle,devices=plan['devices'],
+            directive=plan['directive'],style=plan['style'])
+        self.assertFalse(server.update_bot_manifest(1,replacement))
+        del changed['bots'][0]['fitting']
+        self.assertFalse(server.update_bot_manifest(1,changed))
+        changed = copy.deepcopy(raw)
+        changed['fitting']['crew_level'] = 50
+        projected = server._sanitize_bot_state(changed,server.bot_manifest[0],server.bot_states[raw['id']])
+        self.assertEqual(projected['fitting'],raw['fitting'])
 
     def test_the_manifest_publishes_each_bot_gunnery_tier(self):
         messages = self.runtime.battle_start(
@@ -10615,6 +10783,7 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_spg_final_proof_pending_does_not_consume_fire_sequence(self):
         descriptor = _combat_descriptor(dispersion=0.03)
+        descriptor.type = types.SimpleNamespace(tags={'SPG'})
         descriptor.gun.shots = descriptor.gun.shots * 2
         descriptor.gun.maxAmmo = 60
         command = {
@@ -10704,20 +10873,20 @@ class BotRuntimeTests(unittest.TestCase):
         pending = bot_state_rows.bots(runtime.update(
             0.40, 1.40, players=[player])[0])[0]
         self.assertEqual(0, pending['fire_seq'])
-        self.assertEqual((0, 1), (
+        self.assertEqual((1, 1), (
             pending['shell_index'], pending['next_shell_index']))
         self.assertNotIn('shot_origin', pending)
         self.assertEqual(1, calls[0][3])
-        self.assertEqual(0, calls[0][2])
+        self.assertEqual(1, calls[0][2])
 
         fired_message = runtime.update(0.04, 1.44, players=[player])[0]
         fired = bot_state_rows.bots(fired_message)[0]
         launch = fired_message['launches'][0]
         self.assertEqual(1, fired['fire_seq'])
-        self.assertEqual((0, 1), (
+        self.assertEqual((1, 1), (
             fired['shell_index'], fired['next_shell_index']))
         self.assertEqual(1, calls[1][3])
-        self.assertEqual(0, calls[1][2])
+        self.assertEqual(1, calls[1][2])
         self.assertNotEqual(0.0, fired['shot_yaw'])
         self.assertNotEqual(0.1, fired['shot_pitch'])
         self.assertEqual(proofs[0]['origin'], launch['shot_origin'])
@@ -11106,6 +11275,7 @@ class BotRuntimeTests(unittest.TestCase):
             'yaw': math.pi * 0.5, 'speed': 8.0,
         }
         stale = {
+            'target_motion_reference': dict(position=(0.0, 0.0, 100.0), velocity=(0.0, 0.0, 0.0)),
             'aim_position': (0.0, 1.0, 100.0),
             'yaw': 0.0, 'pitch': -0.1,
             'flight_time': 0.5, 'arc': 'low',
@@ -11190,6 +11360,8 @@ class BotRuntimeTests(unittest.TestCase):
                 }
                 intent = {
                     'source': {'id': 11}, 'created': 1.0,
+                    'target_motion_reference': dict(position=(0.0, 0.0, 100.0),
+                        velocity=(8.0, 0.0, 0.0) if name != 'height_changed' else (0.0, 0.0, 0.0)),
                     'solution': {
                         'arc': 'low', 'aim_position': intended_impact,
                     },
@@ -11234,6 +11406,7 @@ class BotRuntimeTests(unittest.TestCase):
                 }
                 intent = {
                     'source': {'id': 11}, 'created': 1.0,
+                    'target_motion_reference': dict(position=(0.0, 0.0, 100.0), velocity=(0.0, 0.0, 0.0)),
                     'solution': {
                         'arc': 'low', 'aim_position': (0.0, 1.0, 100.0),
                     },
@@ -11267,7 +11440,7 @@ class BotRuntimeTests(unittest.TestCase):
                     controller = ArtilleryController(maximum_step=0.12)
                     descriptor = _combat_descriptor(dispersion=0.03)
                     descriptor.gun.shots = ({
-                        'shell': {'effectsIndex': 0},
+                        'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'},
                         'speed': 425.0, 'gravity': 143.0,
                         'maxDistance': 10000.0,
                     },)
@@ -11417,7 +11590,7 @@ class BotRuntimeTests(unittest.TestCase):
         # configured downhill envelope; keep this stress case tied to the
         # running physics rather than its former 1.05 multiplier.
         descriptor.gun.shots = ({
-            'shell': {'effectsIndex': 0},
+            'shell': {'effectsIndex': 0, 'kind': 'HIGH_EXPLOSIVE'},
             'speed': 440.0, 'gravity': 146.0,
             'maxDistance': 10000.0,
         },)
@@ -13169,7 +13342,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, bots=[
             {'id': 11, 'team': 2, 'slot': 0, 'name': 'First'},
             {'id': 12, 'team': 2, 'slot': 1, 'name': 'Second'},
@@ -13233,7 +13407,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         runtime._advance_equipment_clock(10.0)
@@ -13291,7 +13466,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         initial_wire = state['equipment_states']
@@ -13315,7 +13491,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         initial_wire = state['equipment_states']
@@ -13343,7 +13520,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         equipment = self.module.equipment_mechanics.EquipmentState(limiter)
@@ -13369,7 +13547,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
         repair = runtime._equipment_states[11][2]
@@ -13410,7 +13589,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
         state = runtime.states[11]
 
@@ -13479,7 +13659,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, server_time_ms=1000))
         runtime.apply_snapshot({
             'server_tick': 1, 'server_time_ms': 1000,
@@ -13515,7 +13696,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(dict(self.start, server_time_ms=1000))
         runtime.apply_snapshot({
             'server_tick': 1, 'server_time_ms': 1000,
@@ -13545,7 +13727,7 @@ class BotRuntimeTests(unittest.TestCase):
                 ground_probe=lambda *unused: 0.0,
                 physics_ground_probe=lambda *unused: 0.0,
                 spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-                bot_equipment_resolver=lambda: contracts)
+                bot_equipment_resolver=lambda skill: contracts)
 
         first = new_runtime()
         first.battle_start(self.start)
@@ -13585,7 +13767,8 @@ class BotRuntimeTests(unittest.TestCase):
             ground_probe=lambda *unused: 0.0,
             physics_ground_probe=lambda *unused: 0.0,
             spawn_resolver=_spawn_resolver, baked_graph=_graph(),
-            bot_equipment_resolver=lambda: contracts)
+            bot_equipment_resolver=lambda skill: contracts)
+        runtime.bot_skill = lambda unused_id: 'elite'
         runtime.battle_start(self.start)
 
         factor = runtime._bot_repair_factor(11, descriptor)
@@ -13689,6 +13872,14 @@ class BotRuntimeTests(unittest.TestCase):
 
         self.assertEqual([1.0, 0.0], drive_inputs)
         self.assertEqual([1.0, 0.0], turn_inputs)
+        # The adapter must receive the same physical hold before it advances
+        # its wreck-push clocks, not learn about it after pedals were zeroed.
+        runtime.update(.04, 1.5)
+        self.assertEqual(['leftTrackHealth'],
+            runtime.adapter.calls[-1][0]['wreck_push_motor_hold']['destroyed'])
+        state['critical'] = yellow
+        runtime.update(.04, 2.)
+        self.assertEqual({}, runtime.adapter.calls[-1][0]['wreck_push_motor_hold'])
 
     def test_explicit_yellow_state_applies_above_the_hp_threshold(self):
         descriptor = _critical_descriptor()
@@ -19508,7 +19699,7 @@ class BotRuntimeTests(unittest.TestCase):
         self.assertEqual('base_defense', planner.build_orders(
             manifest, states, [], 4.9, defense)['orders'][0]['combat_mode'])
         self.assertEqual('route', planner.build_orders(
-            manifest, states, [], 5.0, defense)['orders'][0]['combat_mode'])
+            manifest, states, [], 32.0, defense)['orders'][0]['combat_mode'])
 
     def test_base_defender_keeps_visible_target_and_moving_order(self):
         planner = BotPlanner()
@@ -19615,7 +19806,7 @@ class BotRuntimeTests(unittest.TestCase):
         planner.clear_observations()
         unchanged = planner.build_orders(
             manifest, states, [], 2.0, defense)
-        self.assertEqual(first['revision'], unchanged['revision'])
+        self.assertEqual([o['id'] for o in first['orders']],[o['id'] for o in unchanged['orders']])
         self.assertEqual([11, 12, 13], sorted(
             order['id'] for order in unchanged['orders']
             if order['combat_mode'] == 'base_defense'))
@@ -19708,16 +19899,19 @@ class BotRuntimeTests(unittest.TestCase):
         orders = planner.build_orders(
             manifest, states, enemies, 1.0, defense)['orders']
         defenders = [order for order in orders
-                     if order['combat_mode'] == 'base_defense']
+                     if order.get('defense_base_id') == '1:0']
 
         self.assertEqual([11, 12], sorted(
             order['id'] for order in defenders))
         self.assertEqual({2, 3}, set(
             order['target_id'] for order in defenders))
         self.assertTrue(all(order['fire_allowed'] for order in defenders))
-        self.assertTrue(all(
-            order['move_position'] == {'x': 0.0, 'y': 0.0, 'z': 0.0}
-            for order in defenders))
+        self.assertTrue(all(order['combat_mode'] == 'engage' for order in defenders))
+        self.assertTrue(all(order['throttle_override'] == 0.0 for order in defenders))
+        positions = {state['id']: {axis: state[axis] for axis in ('x', 'y', 'z')}
+                     for state in states}
+        self.assertTrue(all(order['move_position'] == positions[order['id']]
+                            for order in defenders))
 
     def test_json_route_anchor_is_normalized_before_terrain_navigation(self):
         # Keep the live hull inside the graph and outside the near-goal
@@ -19798,7 +19992,7 @@ class BotRuntimeTests(unittest.TestCase):
             'visible_by_player_ids' in contact
             for contact in observation['contacts']))
 
-    def test_human_vehicle_profiles_drive_server_shell_selection_once(self):
+    def test_human_armor_profiles_do_not_override_result_based_ammunition(self):
         descriptor_calls = []
 
         def target_descriptor(vehicle_name):
@@ -19874,10 +20068,10 @@ class BotRuntimeTests(unittest.TestCase):
         weapon_profile = BattleState._sanitize_bot_profile(weapon_profile)
         personality = {'aggression': 0.5}
         remaining = {'ammo_remaining': [30, 20, 10]}
-        self.assertEqual(2, planner._shell_index(
+        self.assertEqual(0, planner._shell_index(
             weapon_profile, planner._contacts[1][('human', 2)],
             personality, remaining))
-        self.assertEqual(1, planner._shell_index(
+        self.assertEqual(0, planner._shell_index(
             weapon_profile, planner._contacts[1][('human', 3)],
             personality, remaining))
 
@@ -20769,6 +20963,28 @@ class BotRuntimeTests(unittest.TestCase):
         runtime._service_shot_lane_work(
             1.1, 0.0, team_visibility, [], {}, set((11, 25)), {}, [16])
         self.assertNotIn(key, runtime._shot_lane_work_set)
+
+    def test_confirmed_empty_source_retires_lane_but_reload_and_unknown_do_not(self):
+        runtime = self.module.BotRuntime(1, firing_lane_probe=lambda *args:
+            self.fail('empty inventory cannot require a firing lane'))
+        runtime.states = {11:dict(id=11,team=1,alive=True,ammo_remaining=[0,0]),
+                          25:dict(id=25,team=2,alive=True)}
+        visibility={(1,'bot',25):True}
+        key=(11,'bot',25)
+        runtime._prepare_shot_lane_work(0.,visibility,0.)
+        self.assertNotIn(key,runtime._shot_lane_work_set)
+        runtime._queue_shot_lane_identity(key,0.,0.)
+        runtime._service_shot_lane_work(1.,0.,visibility,[],{},set((11,25)),{},[16])
+        self.assertNotIn(key,runtime._shot_lane_work_set)
+        command=dict(target_id=25,fire_allowed=False,move_position=(50,0,50))
+        target=dict(id=25)
+        with mock.patch.object(runtime,'_shot_clear',side_effect=AssertionError('no empty firing probe')):
+            result,retained=runtime._apply_blocked_direct_aim(runtime.states[11],command,target,1.,[16])
+        self.assertIs(command,result);self.assertIs(target,retained)
+        for inventory in ([1,0],None):
+            runtime.states[11].update(ammo_remaining=inventory,clip=0,reload_time=50.)
+            runtime._prepare_shot_lane_work(2.,visibility,2.)
+            self.assertIn(key,runtime._shot_lane_work_set)
 
     def test_lane_range_rejects_leave_service_slots_for_nearby_targets(self):
         calls = []

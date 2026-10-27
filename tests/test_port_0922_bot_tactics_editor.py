@@ -22,7 +22,9 @@ def profile():
     raw=cfg.empty('Editor regression')
     raw['behavior']=[dict(team=0,class_tag='all',slot=-1,values={'reaction_seconds':2.5,'lead_error':0.0})]
     graph=_graph()
-    points=graph['routes']['1'][0]['waypoints'][:4]
+    points=[list(p) for p in graph['routes']['1'][0]['waypoints'][:4]]
+    points[0]=graph['spawn_anchors'][0]+[0]
+    points.append(graph['spawn_anchors'][1]+[0])
     raw['maps']['08_ruinberg']={
         'mode':'regular','resource_sha256':cfg.MAPS['08_ruinberg']['resource_sha256'],
         'routes':[dict(id='west',label='West city',team=1,classes=['heavyTank'],slots=[],policy='fixed',capacity=6,weight=1,
@@ -132,9 +134,17 @@ class TacticsContractTests(unittest.TestCase):
                     for tag in ('all',)+cfg.CLASSES:
                         entry['default_routes'].append(dict(id=identity,team=int(team),class_tag=tag,
                             label='测试路线',points=copy.deepcopy(points)))
+                        route=entry['default_routes'][-1]
+                        route['points'][0][:2]=graph_data(name)['spawn_anchors'][int(team)-1]
+                        references=[r for r in cfg.default_map(name)['default_routes'] if r['team']==int(team) and r['id']==identity]
+                        baseline=next((r for r in references if r.get('class_tag','all')==tag),next(r for r in references if r.get('class_tag','all')=='all'))
+                        route['points'][-1][:2]=baseline['points'][-1][:2]
             for i in range(32):
                 entry['routes'].append(dict(id='r_%d'%i,label='测试路线',team=1,
                     classes=list(cfg.CLASSES[:-1]),points=copy.deepcopy(points)))
+                entry['routes'][-1]['points'][0][:2]=graph_data(name)['spawn_anchors'][0]
+                from bot_tactics_geometry import anchors
+                entry['routes'][-1]['points'][-1][:2]=anchors(graph_data(name),1)[-1][:2]
             for i in range(48):
                 entry['positions'].append(dict(id='p_%d'%i,label='测试炮位',team=1,
                     point=[x,z],radius=16,heading=0,priority=5))
@@ -201,6 +211,12 @@ class TacticsContractTests(unittest.TestCase):
 
     def test_manual_positions_are_mass_independent_but_size_checked_and_reserved(self):
         raw=profile();graph=_graph();states=_states(graph,3);old=copy.deepcopy(states)
+        # Three authored regions per team, with overlapping candidate areas,
+        # still need both distinct region reservations and physical clearance.
+        zones=raw['maps']['08_ruinberg']['positions']
+        for zone in list(zones):
+            for suffix in ('_two','_three'):
+                zones.append(dict(copy.deepcopy(zone),id=zone['id']+suffix))
         plans,outcomes=planning.assign_manual_positions(raw,'08_ruinberg',graph,states)
         self.assertEqual(6,len(plans),outcomes);self.assertEqual(old,states)
         for a in states:
@@ -387,8 +403,14 @@ class PragueRouteResourceIdentityTests(unittest.TestCase):
                 normalized = cfg.canonical(raw)['maps'][name]
                 self.assertEqual(cfg.MAPS[name]['resource_sha256'],
                                  normalized['resource_sha256'])
-                self.assertEqual(settings['default_routes'],
-                                 normalized['default_routes'])
+                expected=copy.deepcopy(settings['default_routes'])
+                for row in expected:
+                    if row.get('disabled'):
+                        shared=next((r for r in expected if r['team']==row['team'] and r['id']==row['id'] and r.get('class_tag','all')=='all'),row)
+                        row['points']=[p[:2]+[0] for p in shared['points']]
+                from gui.mods.offline_lan_0922 import route_network
+                route_network.migrate_default_rows(expected)
+                self.assertEqual(expected,normalized['default_routes'])
 
     def test_previous_exact_route_profile_is_migrated_without_discarding_orders(self):
         raw = cfg.empty('Existing Prague profile')

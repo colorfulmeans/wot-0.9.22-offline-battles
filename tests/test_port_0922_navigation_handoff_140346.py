@@ -194,17 +194,20 @@ class RouteTransferTests(unittest.TestCase):
         p.reset()
         self.assertEqual({},p._route_balance_receipts)
 
-    def test_real_pressure_shift_still_transfers_and_can_later_transfer_back(self):
+    def test_pressure_shift_returns_via_start_and_later_reverse_transfer_is_ordered(self):
         p,bots,contacts=self.scene(.6,3.)
         p._rebalance_routes(1,bots,contacts,1.)
-        self.assertEqual('right',p._route_assignments[41]['route']['id'])
-        receipts=p._route_assignment_receipts
-        self.assertEqual('pressure_rebalance',receipts[41]['reason'])
-        shifted=[dict(position=dict(x=-100.,y=0.,z=z),health=1.,max_health=1.)
-                 for z in (150.,200.,250.,300.)]
-        p._rebalance_routes(1,bots,shifted,61.)
+        task=p._travel_tasks[41];donor=next(b for b in bots if b['id']==41)
         self.assertEqual('left',p._route_assignments[41]['route']['id'])
-        self.assertEqual(2,receipts[41]['sequence'])
+        order=dict(combat_mode='route',target_id=None)
+        for index,point in enumerate(task['points']):
+            donor['state'].update(point);p._task_publish(order,donor,task,2.+index)
+        self.assertEqual('right',p._route_assignments[41]['route']['id'])
+        shifted=[dict(position=dict(x=-100.,y=0.,z=z),health=1.,max_health=1.) for z in (150.,200.,250.,300.)]
+        p._rebalance_routes(1,bots,shifted,181.)
+        self.assertEqual('right',p._route_assignments[41]['route']['id'])
+        self.assertEqual('left',p._travel_tasks[41]['target_route']['id'])
+        self.assertEqual(2,p._route_assignment_receipts[41]['sequence'])
 
 
 if __name__=='__main__':

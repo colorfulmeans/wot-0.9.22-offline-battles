@@ -20,7 +20,7 @@ CLIENT_SCRIPTS = ROOT / 'src' / 'res' / 'scripts' / 'client'
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
 from gui.mods.offline_lan_0922.battle_runtime import (
-    BattleRuntime, ENGINE_MODE_IDLE, ENGINE_MODE_OFF, ENGINE_MODE_RUNNING,
+    BattleRuntime as NativeBattleRuntime, ENGINE_MODE_IDLE, ENGINE_MODE_OFF, ENGINE_MODE_RUNNING,
     FRAME_SECONDS, _FrameDiagnostics, _LANInputSender,
     _MOVEMENT_BACKWARD, _MOVEMENT_FORWARD, _MOVEMENT_ROTATE_LEFT,
     _MOVEMENT_ROTATE_RIGHT, _engine_rotation)
@@ -29,6 +29,41 @@ from gui.mods.offline_lan_0922 import battle_runtime as \
 from gui.mods.offline_lan_0922 import battle_feedback, bot_runtime, \
     combat_rules, critical_damage, equipment_mechanics, gun_mechanics, \
     lan_session, loadout, tank_collision, vehicle_physics
+
+
+class BattleRuntime(NativeBattleRuntime):
+    """Presentation fixtures use synthetic modules, not the native item cache.
+
+    Native fitting installation/serialization is exercised separately by
+    test_bot_fittings. Keep these rendering/lifecycle fixtures independent of
+    the 576-vehicle cache while retaining the new immutable fitting envelope.
+    """
+    def _resolve_bot_fitted_descriptor(self, vehicle, tier, crew_level=None,
+                                       restored=None):
+        import base64
+        from gui.mods.offline_lan_0922 import bot_fittings
+        descriptor = self._resolve_descriptor(vehicle)
+        plan = bot_fittings.plan(vehicle, tier)
+        raw = descriptor.makeCompactDescr()
+        if isinstance(raw, str):
+            raw = raw.encode('ascii')
+        wire = bot_fittings.canonical(dict(schema=1, vehicle=vehicle, tier=tier,
+            crew_level=plan['crew'] if crew_level is None else crew_level,
+            descriptor=base64.b64encode(raw).decode('ascii'),
+            devices=plan['devices'], directive=plan['directive'], style=plan['style']))
+        if restored is not None and bot_fittings.canonical(restored) != wire:
+            raise ValueError('fixture fitting changed')
+        bot_fittings.register(descriptor, dict(wire=wire, crew=(), directives=(),
+            crew_skills=(), camouflages={}, outfits={}, crew_roster=(),
+            factors={}))
+        context = bot_fittings.context(descriptor)
+        plain = _plain_bot_factors(descriptor, crew_level=wire['crew_level'])
+        context['factors'][(id(descriptor), (), False)] = plain
+        context['factors'][(id(descriptor), (), True)] = plain
+        return descriptor
+
+
+BattleRuntime.__module__ = NativeBattleRuntime.__module__
 from gui.mods.offline_lan_0922.entities.remote_vehicle import \
     RemoteVehicle, RemoteVehicleFactory, _RemoteFilter, \
     collide_vehicle_at_matrix
@@ -10145,7 +10180,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             equipments=lambda: descriptors)
         battle = BattleRuntime(runtime)
 
-        contracts = battle._default_bot_equipment_contracts()
+        contracts = battle._default_bot_equipment_contracts('elite')
 
         self.assertEqual(
             equipment_mechanics.DEFAULT_BOT_CONSUMABLE_NAMES,
@@ -10381,6 +10416,53 @@ class BattleRuntimeContractTests(unittest.TestCase):
         record['state'] = {}
         self.assertTrue(battle._install_critical_equipment_effects(record, entity))
         self.assertIs(descriptor, critical_damage._device_td(entity))
+
+    def test_remote_bot_critical_pools_survive_missing_native_crew_context(self):
+        from gui.mods.offline_lan_0922 import critical_damage, device_damage
+        from gui.mods.offline_lan_0922 import bot_fittings
+        from gui.mods.offline_lan_0922.battle_runtime import _ProjectileCollisionTarget
+        battle = BattleRuntime(_runtime())
+        raw = types.SimpleNamespace(
+            hull={'ammoBayHealth': {'maxHealth': 210, 'maxRegenHealth': 105}},
+            engine={'maxHealth': 360, 'maxRegenHealth': 180}, miscAttrs={})
+        fitted = types.SimpleNamespace(**vars(raw))
+        entity = types.SimpleNamespace(typeDescriptor=raw)
+        context = {}
+        fitting = {'tier': 'elite', 'crew_level': 100}
+        record = {'kind': 'bot', 'state': {
+            'vehicle': 'china:Ch19_121', 'fitting': fitting}}
+        # Real wire rows are sparse damage state, never a loadout profile.
+        states = ({}, {'devices': [
+            {'name': 'engineHealth', 'hp': 165.7, 'max_hp': 360.,
+             'state': 'critical'}]}, {'devices': [
+            {'name': 'engineHealth', 'hp': 360., 'max_hp': 360.,
+             'state': 'normal'}]})
+        def fitting_context(descriptor):
+            return context if descriptor is fitted else None
+        with mock.patch.object(battle, '_resolve_bot_fitted_descriptor',
+                               return_value=fitted) as resolve, \
+                mock.patch.object(bot_fittings, 'context',
+                                  side_effect=fitting_context), \
+                mock.patch.object(bot_fittings, 'native_factors', return_value={
+                    'offline/ammoBayHealth': 1.125}):
+            for state in states:
+                record['state']['critical'] = state
+                # Both live targets and frozen views use the accepted fitting,
+                # including untouched devices absent from the damage ledger.
+                for target in (entity, _ProjectileCollisionTarget(
+                        entity, raw, None, None, None, None)):
+                    battle._install_critical_equipment_effects(record, target)
+                    view = critical_damage._device_td(target)
+                    self.assertEqual(236., device_damage.device_max_hp(
+                        view, 'ammoBayHealth'))
+                    self.assertEqual(118., device_damage.device_regen_hp(
+                        view, 'ammoBayHealth'))
+                    self.assertEqual(360., device_damage.device_max_hp(
+                        view, 'engineHealth'))
+                    self.assertIs(raw, target.typeDescriptor)
+            resolve.assert_called_with('china:Ch19_121', 'elite', 100, fitting)
+            self.assertEqual(2, len(context['critical_device_profile']['devices']))
+        self.assertEqual(210, raw.hull['ammoBayHealth']['maxHealth'])
 
     def test_removed_rpm_limiter_toggles_stock_trigger_stage(self):
         runtime = _runtime()
@@ -13116,11 +13198,11 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertTrue(frame_diagnostics.enabled)
         self.assertIs(battle_runtime_module.native_math.thread_cpu_seconds,
                       frame_diagnostics._cpu_clock)
-        self.assertIsNone(battle._combat_diagnostics)
-        self.assertIsNone(battle._bots._combat_diagnostics)
+        self.assertEqual(32, battle._combat_diagnostics.detail_stride)
+        self.assertIs(battle._combat_diagnostics, battle._bots._combat_diagnostics)
 
         # A developer may inject a detailed observer for a bounded experiment.
-        # Normal stop/restart must retire it and keep the next round lightweight.
+        # Normal stop/restart must retire it and start a fresh sparse capture.
         from gui.mods.offline_lan_0922.worker_diagnostics import WorkerCombatDiagnostics
         injected = WorkerCombatDiagnostics(lambda: 0.0)
         self.assertTrue(injected.begin_frame(1, 1.0, 'test_capture'))
@@ -13146,8 +13228,9 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         self.assertEqual('running', battle.state)
         self.assertIsNot(previous_bots, battle._bots)
-        self.assertIsNone(battle._combat_diagnostics)
-        self.assertIsNone(battle._bots._combat_diagnostics)
+        self.assertEqual(32, battle._combat_diagnostics.detail_stride)
+        self.assertEqual(0, battle._combat_diagnostics.capture)
+        self.assertIs(battle._combat_diagnostics, battle._bots._combat_diagnostics)
         self.assertIs(frame_diagnostics, battle._frame_diagnostics)
         self.assertTrue(frame_diagnostics.enabled)
         self.assertEqual(0, frame_diagnostics._frame_id)
@@ -14916,7 +14999,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'engine_id': 10, 'state': {'health': 500, 'alive': True},
                 'kind': 'player', 'network_id': 1, 'local': True}}
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: 2.1 - point[1])
+            side_effect=lambda point, **unused: 2.1 - point[1])
         battle._local_last_attacker = ('player', 9)
         self.assertTrue(battle._tick_drowning(0.3, 1.0))
         self.assertEqual((10, 4, 2, (750.0, 10.0)),
@@ -14951,7 +15034,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                 'kind': 'player', 'network_id': 1, 'local': True}}
         surface = [0.5]
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: surface[0] - point[1])
+            side_effect=lambda point, **unused: surface[0] - point[1])
 
         battle._tick_drowning(0.3, 1.0)
         surface[0] = 2.1
@@ -14999,7 +15082,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
             'kind': 'player', 'network_id': 1, 'local': False}}
 
         battle._water_depth = mock.Mock(
-            side_effect=lambda point: 2.1 - point[1])
+            side_effect=lambda point, **unused: 2.1 - point[1])
         self.assertTrue(battle._publish_player_environment(0.3, 1.0))
 
         sender.assert_called_once_with([{

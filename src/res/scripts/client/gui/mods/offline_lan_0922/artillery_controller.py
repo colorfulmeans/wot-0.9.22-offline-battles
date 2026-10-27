@@ -88,7 +88,7 @@ class ArtilleryController(object):
     """Create low/high candidates and publish only fully checked solutions."""
 
     def __init__(self, queue=None, maximum_step=0.12,
-                 origin_resolver=None):
+                 origin_resolver=None, aim_samples_resolver=None):
         # A strategic job proves only the low/high arc family. Freeze it to the
         # source pose, target identity and shell while the bounded queue works;
         # moving-target pose buckets would restart long shared jobs forever.
@@ -110,10 +110,13 @@ class ArtilleryController(object):
         self.maximum_step = max(0.04, min(0.20, float(maximum_step)))
         self.origin_resolver = (
             origin_resolver if callable(origin_resolver) else None)
+        self.aim_samples_resolver = (
+            aim_samples_resolver if callable(aim_samples_resolver) else None)
         self._planning_keys = {}
         self._launch_keys = {}
         self._launch_receipts = {}
         self._rejected_arcs = {}
+        self._candidate_receipts = {}
 
     def reset(self):
         self.queue.reset()
@@ -122,6 +125,7 @@ class ArtilleryController(object):
         self._launch_keys = {}
         self._launch_receipts = {}
         self._rejected_arcs = {}
+        self._candidate_receipts = {}
 
     @staticmethod
     def _key(source, target, shell_index):
@@ -226,6 +230,7 @@ class ArtilleryController(object):
         previous = self._planning_keys.get(slot)
         if previous == key:
             return
+        self._candidate_receipts.pop(slot, None)
         if previous is not None:
             self.queue._discard_job(previous)
             self.queue._discard_waiting(previous)
@@ -236,9 +241,43 @@ class ArtilleryController(object):
         else:
             self._planning_keys[slot] = key
 
-    def _candidates(self, source, target, descriptor, shell_index):
+    def _candidates(self, source, target, descriptor, shell_index,
+                    diagnostic=None, aim_token=None):
+        evidence = diagnostic if diagnostic is not None else []
+        position = _position(target)
+        default_point = (position[0], position[1] + 1.0, position[2])
+        if aim_token is None:
+            candidates = self._point_candidates(
+                source, target, descriptor, shell_index, default_point, evidence)
+            if candidates or not any(row.get('reason') == 'outside_pitch_limits'
+                                     for row in evidence):
+                return candidates
+        if self.aim_samples_resolver is None:
+            return ()
+        # Only mechanically rejected default points enter this bounded fallback.
+        # Samples come from the current native target descriptor, never from an
+        # invented height or a relaxed gun limit. The arc and final launch queues
+        # still own world obstruction, friendly safety and physical launch proof.
+        try:
+            samples = self.aim_samples_resolver(source, target) or ()
+            for token, point in samples[:9]:
+                if aim_token is not None and token != aim_token:
+                    continue
+                candidates = self._point_candidates(source, target, descriptor,
+                    shell_index, point, evidence, token)
+                if candidates or aim_token is not None:
+                    return candidates
+        except Exception as error:
+            evidence.append(dict(reason='model_aim_samples_unavailable',
+                                 exception=type(error).__name__))
+        return ()
+
+    def _point_candidates(self, source, target, descriptor, shell_index,
+                          target_position, diagnostic=None, aim_token=None):
+        evidence = diagnostic if diagnostic is not None else []
         physical = _shot(descriptor, shell_index)
         if physical is None:
+            evidence.append(dict(reason='missing_shell_physics',shell_index=shell_index))
             return ()
         speed, gravity, maximum = physical
         source_position = _position(source)
@@ -250,29 +289,41 @@ class ArtilleryController(object):
                 start = tuple(float(value) for value in
                               self.origin_resolver(source, descriptor))
             except (TypeError, ValueError, OverflowError):
+                evidence.append(dict(reason='muzzle_resolution_failed'))
                 return ()
             if (len(start) != 3 or
                     any(math.isnan(value) or math.isinf(value)
                         for value in start)):
+                evidence.append(dict(reason='invalid_muzzle',muzzle=start))
                 return ()
-        target_position = _position(target)
-        target_position = (
-            target_position[0], target_position[1] + 1.0,
-            target_position[2])
+        target_position = tuple(float(value) for value in target_position)
+        if len(target_position) != 3 or any(math.isnan(value) or math.isinf(value)
+                                          for value in target_position):
+            evidence.append(dict(reason='invalid_model_aim_point'))
+            return ()
         velocity = _target_velocity(target)
         candidates = []
         for name, prefer_high in (('low', False), ('high', True)):
+            row=dict(arc=name,muzzle=start,target=target_position,velocity=velocity,
+                     aim_token=aim_token,
+                     speed=speed,gravity=gravity,max_distance=maximum)
+            evidence.append(row)
             solution = ballistics.ballistic_intercept(
                 start, target_position, velocity, speed, gravity,
                 -math.pi * 0.5, math.pi * 0.5,
                 prefer_high=prefer_high)
             if solution is None:
+                row['reason']='no_ballistic_intercept'
                 continue
             aim_position, pitch, flight_time = solution
+            row.update(world_pitch=pitch,flight_time=flight_time,
+                       flight_distance=speed*flight_time)
             if (flight_time > ballistics.PROJECTILE_MAX_FLIGHT_SECONDS or
                     speed * flight_time > maximum + 1e-6):
+                row['reason']=('flight_time_limit' if flight_time > ballistics.PROJECTILE_MAX_FLIGHT_SECONDS else 'range_limit')
                 continue
             if candidates and abs(pitch - candidates[-1]['pitch']) < 1e-5:
+                row['reason']='duplicate_arc'
                 continue
             yaw = math.atan2(
                 aim_position[0] - start[0], aim_position[2] - start[2])
@@ -286,20 +337,30 @@ class ArtilleryController(object):
                         _number(source.get('pitch')),
                         _number(source.get('roll')))
             except (TypeError, ValueError, OverflowError):
+                row['reason']='local_angle_conversion_failed'
                 continue
+            row.update(local_yaw=local_turret_yaw,local_pitch=local_pitch)
             pitch_limits = _pitch_limits(descriptor, local_turret_yaw)
             if pitch_limits is None:
+                row['reason']='missing_pitch_limits'
                 continue
+            row['pitch_limits']=pitch_limits
             minimum_pitch, maximum_pitch = pitch_limits
             if (local_pitch < minimum_pitch - 0.0001 or
                     local_pitch > maximum_pitch + 0.0001):
+                row['reason']='outside_pitch_limits'
                 continue
+            row['reason']='candidate'
             candidates.append({
                 'aim_position': aim_position,
+                'target_motion_reference': dict(target.get('_canonical_motion') or
+                    dict(position=_position(target), velocity=_target_velocity(target)),
+                    prediction_seconds=0.0),
                 'yaw': yaw,
                 'pitch': pitch,
                 'flight_time': flight_time,
                 'arc': name,
+                'aim_token': aim_token,
                 'speed': speed,
                 'gravity': gravity,
                 'max_distance': maximum,
@@ -331,8 +392,13 @@ class ArtilleryController(object):
             return ready, result
         if key in self.queue.jobs or key in self.queue.waiting:
             return False, None
+        evidence=[]
         candidates = self._candidates(
-            source, target, descriptor, shell_index)
+            source, target, descriptor, shell_index,evidence)
+        for row in evidence:
+            if row.get('arc') in key[6] and row.get('reason')=='candidate':
+                row['reason']='previous_launch_arc_rejected'
+        self._candidate_receipts[slot]=dict(key=key,at=now,rows=evidence)
         candidates = tuple(candidate for candidate in candidates
                            if candidate.get('arc') not in key[6])
         return self.queue.request(
@@ -364,8 +430,12 @@ class ArtilleryController(object):
         # checked, so return a freshly led solution of the same proved family.
         # The final launch queue still checks every chord of that exact path.
         proved_arc = proved.get('arc')
-        for candidate in self._candidates(
-                source, target, descriptor, shell_index):
+        if proved.get('aim_token') is None:
+            candidates = self._candidates(source, target, descriptor, shell_index)
+        else:
+            candidates = self._candidates(source, target, descriptor, shell_index,
+                                           None, proved['aim_token'])
+        for candidate in candidates:
             if candidate.get('arc') == proved_arc:
                 return candidate
         return None
@@ -584,6 +654,9 @@ class ArtilleryController(object):
                 'previous_job': self.queue.status(active_key, now)}
         else:
             output['planning'] = self.queue.status(key, now)
+        receipt=self._candidate_receipts.get(slot)
+        if receipt is not None and receipt['key']==active_key:
+            output['planning']['candidate_evidence']=receipt
         output['planning'].update(requested_key=key, active_key=active_key,
                                   sampled_at=float(now), slot=slot)
         return output

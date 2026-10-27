@@ -62,7 +62,9 @@ class LocalMeshPoseTests(unittest.TestCase):
         routes=[r for r in rows if r.get('class_tag')=='lightTank' and r['id']=='south_valley']
         self.assertEqual({1,2},{r['team'] for r in routes})
         for r in routes:
-            self.assertIn([68.3691,-7.7268,0],r['points'])
+            # The adopted owner baseline removes a collinear valley sample;
+            # retain both ends of that valley leg and its exact reverse route.
+            self.assertIn([159.894,60.0291,0],r['points'])
             self.assertIn([-5.2176,-55.4219,0],r['points'])
         self.assertEqual(routes[0]['points'],list(reversed(routes[1]['points'])))
 

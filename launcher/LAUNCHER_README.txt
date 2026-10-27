@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v0.10.2
+wot-0.9.22-offline-battles v1.0.0
 
 Supported client: Chinese HD World of Tanks 0.9.22.0.1 #1513 (32-bit).
 The launcher and bundled server require 64-bit Windows.
@@ -8,6 +8,15 @@ beside wot-0.9.22-offline-battles.exe, run the launcher and select the game.
 Use the existing save and vehicle profile. An update does not require resetting
 saves, recordings or settings. Do not mix old and new launcher files or install
 another mod copy manually; the launcher installs its matching client payload.
+
+The route toolbar groups creation, copy/delete and undo/redo on its first row;
+main/reserve, map checks, view and background-image import are on the second.
+Restore contains the existing Reset route and Restore default routes commands.
+These remain unavailable for the read-only Default profile.
+Artillery deployment and relocation use automatic navigation. Endgame and
+empty-ammunition sorties use the authored attack route and may borrow valid
+ordinary main/reserve roads when necessary. Deployment does not consume ordinary
+road capacity; borrowed sortie roads count their actual occupancy.
 
 All LAN participants must update together and restart the room/server. A room
 explicitly hosted by the launcher remains open until Stop room or launcher exit;
@@ -23,8 +32,43 @@ Replay tab. Playback is forward 1x with a manual camera; pause, seeking, speed
 controls and native .wotreplay export are not available. Retain the recording's
 original vehicle profile. Playback does not award battle rewards.
 
+Maintenance (Repair tab)
+------------------------
+Four equally spaced, normal-height buttons use a two-by-two layout. Resizing
+the window does not stretch their height. Explanations below the buttons wrap
+with the available width and follow the selected interface language. Every action requires
+confirmation, with No selected by default. Close the game, worker, LAN room
+and other offline launcher windows first. Repair mod installation reinstalls the files bundled with this launcher;
+it does not download a newer version and keeps usable saved data and profiles.
+Reset all offline client settings resets graphics, sound, input and account
+settings in playerprefs.xml / workerprefs.xml and older isolated profiles,
+without resetting saves or touching
+the normal client profile. Clear all offline saves deletes every offline save,
+including legacy copies and pending grants, then creates a fresh fully unlocked
+default save; tactics, vehicle profiles and client preferences are preserved.
+Delete all data and restore factory defaults removes project-owned external and
+game-folder data, profiles, routes, lineups, settings, caches, recordings, logs,
+reports and interrupted recovery data, restores owned vehicle overlays, then
+reinstalls this launcher's bundled mod and rebuilds defaults. Shared offline
+data affects other launcher packages. Manually copied reports, downloaded
+packages, stock game resources and other mods are not searched or deleted.
+The launcher closes after factory reset to prevent stale in-memory settings
+from being saved again. Reopen it before using the reset installation. A failed
+reset reports the failing operation and never reports factory success.
+
+Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
+and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
+integrity checks still apply. Compressed file size is not the replay size bound.
+
 Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_SPIKE_PROFILE.bat for optional detailed profiling.
+download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
+and START_SPIKE_PROFILE.bat for optional detailed profiling. The normal EXE
+uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
+and 32 MiB per client process, with explicit suppression notices. Exhausted
+budgets skip further JSON encoding; motion histories also skip construction
+until the budget reopens. Test captures split rotation catalog/native costs
+without changing collision queries. Errors and
+lifecycle messages remain enabled after the diagnostic budget is exhausted.
 
 Normal battles use wot-0.9.22-offline-battles.exe. START_ROOF_CRUSH_TEST.bat
 and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.
@@ -32,19 +76,66 @@ Exit both the game and launcher before switching entrances. The fixtures do
 not change saved room presets; the contact fixes also apply in normal battles.
 
 Customize save -> Coatings edits preset-style inventory, including hidden styles.
+Customize save -> Members adds 100% recruits by nation, role, gender, complete
+skill count and trained vehicle. Skills remain unassigned for the client to
+choose; zero gives no secondary-skill XP. Close the game before adding. The next
+startup delivers each recruit to this save's barracks with a system notice.
+Full barracks leave requests pending. Saved retry identities prevent duplicate
+delivery after an interrupted inbox cleanup. The Members tab follows Coatings.
+Bot tactics also has an independent outfit checkbox below consumables: inherit,
+enable or disable the existing seasonal rented styles, keeping locked-outfit
+exceptions. It does not select a style or add a battle-count expiry.
 Select one vehicle or all compatible vehicles, add copies or fill missing styles,
 then Save with the game closed. One rental copy grants its original battle count.
 Fully unlocked saves receive one copy per compatible vehicle on their first style
 stock initialization, including existing saves; later use/sales are not replenished.
 
 English release notes:
-https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v0.10.2
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.0.0
 
 This mod is free; resale is prohibited. World of Tanks game assets are not
 included. This unofficial project is not endorsed by Wargaming.
 See LICENSE, THIRD_PARTY_NOTICES.md and licenses for license terms. The optional
 crash recorder downloads Microsoft ProcDump only with the launcher's consent
 setting. The bundled replay runtime is CPython 3.11.9 from python.org.
+
+Configuration updates
+---------------------
+Bot tactics Default is read-only in both tabs. Create a custom profile to edit.
+Restore default draft resets that custom draft, including pending forms and
+undo history, without applying it. Import/name conflicts receive numeric suffixes.
+Independent development, equipment, ammunition, consumables and coupled crew
+presets inherit from the existing scope hierarchy. Ammunition uses digit ratios;
+all zero carries no ammunition. Magazine ratios count magazines, not rounds.
+Stock development only allows no equipment, in the dropdown and validation.
+
+Both room interfaces default to Random per-team vehicle types. Random shows
+all five class icons checked and disabled, while preserving the manual mask.
+Manual checks guarantee one BOT of each checked class and forbid unchecked
+automatic types. Fixed launcher Bots remain and can satisfy a guarantee;
+players never do. Shrinking drops newer selections first; growth restores none.
+Manual artillery guarantees one BOT even below seven. Random mode retains its
+0 / 0-1 / 0-2 / 0-3 limits at sizes 1-6 / 7-9 / 10-12 / 13-15. Impossible
+SPG-only fills, missing classes or incompatible tier windows refuse start.
+
+Members are selected by nation, tank type, vehicle, actual crew seat, gender,
+training (50/75/100) and skill count. Seat limits include combined roles and
+number duplicate professions separately. Women always have zero-XP Brothers
+in Arms, counted in the total. Below 100% ordinary skills are disabled.
+Full-skill choices are durable member-owned credits; choose skills in the
+native client. Moving seats or restarting never renews credits. Recruits,
+credits and delivery notices commit together to the selected save.
+
+New unlocked saves mount three legal improved devices and the corresponding
+battle directive, with directive auto-resupply checked. Users may change or
+remove them; saved choices are never reapplied as defaults. Career saves remain
+stock. The vehicle editor displays magazine/trigger reload intervals in seconds;
+underlying old rate edits keep their native meaning. Trigger count is limited by
+magazine capacity and the existing runtime limit (64), with within-trigger time
+at most ten seconds. A partial trigger fires only real remaining rounds.
+The open vehicle editor follows the main language selector, including numeric
+limits and validation errors. Switching languages preserves filters, selected
+fields, unsaved input and viewer position without reloading or saving the profile.
 
 CPython 3.11.9 license
 ======================
@@ -330,3 +421,33 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+Female recruits use native passport name/icon groups matching their gender.
+Previously pending female requests retry automatically; do not add duplicates.
+
+Effective settings preview is a read-only table of settings, values and rule
+sources. It includes rules already added to the current draft, not unsubmitted
+form fields. All selected scopes are resolved; inherited difficulty retains
+room rating sampling. Opening this window does not save or apply the profile.
+
+Saves -> Initialize save resets only the selected save after confirmation and
+requires a closed game. Name, save type and earnings multiplier are kept;
+progress and pending rewards return to the current new-save defaults. An
+ordinary ZIP backup is kept inside its pre-initialize recovery folder and can
+be selected with Restore save. Default-save legacy migration is blocked after
+initialization so old progress cannot return automatically.
+
+Member recruitment uses the same standard, loadable vehicle filter as player
+vehicles, including supported retired vehicles. Garage and Members share full
+nation captions in this display order: China, USSR, USA, Germany, Czech,
+France, UK, Japan, Poland, Sweden. This never changes native nation IDs.
+
+Members shows total berths, current barracks occupants, undelivered pending
+recruits and remaining recruit capacity. Crew already serving in vehicles and
+dismissed crew do not occupy barracks berths. Add 16 barracks berths grants one
+free block to the selected save; it requires the game to be closed. Existing
+client purchases retain their normal price. Pending recruits reserve space,
+excluding requests whose durable delivery receipt already exists. A full
+barracks refuses new recruits with a warning; old pending requests are kept.
+Initial berth grants survive the first game startup, backup and restore.
+Initialize save returns capacity to the save type's original default.

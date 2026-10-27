@@ -1899,7 +1899,7 @@ def use_extinguisher(vehicle):
         'repair')
 
 
-def repair_device(vehicle, name=None, repair_all=False):
+def repair_device(vehicle, name=None, repair_all=False, excluded_devices=()):
     if vehicle is None:
         return None
     before = _state(vehicle)
@@ -1918,6 +1918,8 @@ def repair_device(vehicle, name=None, repair_all=False):
         names = [name]
     changed = False
     for device_name in names:
+        if device_name in excluded_devices:
+            continue
         maximum = _device_damage.device_max_hp(descriptor, device_name)
         if maximum is None:
             continue

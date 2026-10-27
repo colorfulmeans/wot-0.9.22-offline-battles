@@ -1,0 +1,84 @@
+{
+  "client": "0.9.22.0.1 #1513",
+  "source_members": {
+    "guiControlsLoginBattle": "9fb688dfc70081610fcde3db3d8d8696875af82f279d581ada78ec5a528c40be",
+    "windows": "93d0e70d891fdbcc9083c70ba3740558c7409728dd5a1626aacff1d6c608ac3d",
+    "guiControlsLobby": "def7e31310aa7fad75732ceb308e4a43ad2fb5c2dbf65229ee4232134c4292b3",
+    "guiControlsLobbyBattle": "f6d12e6e40ab402703c2f4a15449665ed009cbfeab9689a85e745b119d761f92",
+    "guiControlsLogin": "df3b25cbba714522eb79b5d1a86d260cddf9166f6073387e5a87422a0ccbabd0"
+  },
+  "bitmaps": {
+    "frame": {
+      "member": "gui/flash/windows.swf",
+      "character_id": 2,
+      "size": [
+        826,
+        390
+      ]
+    },
+    "body": {
+      "member": "gui/flash/windows.swf",
+      "character_id": 1,
+      "size": [
+        803,
+        340
+      ]
+    },
+    "button": {
+      "member": "gui/flash/guiControlsLoginBattle.swf",
+      "character_id": 108,
+      "size": [
+        160,
+        22
+      ]
+    },
+    "start": {
+      "member": "gui/flash/guiControlsLogin.swf",
+      "character_id": 58,
+      "size": [
+        158,
+        50
+      ]
+    },
+    "field": {
+      "member": "gui/flash/guiControlsLobby.swf",
+      "character_id": 349,
+      "size": [
+        134,
+        28
+      ]
+    }
+  },
+  "native_content_crops": {
+    "frame": [
+      8,
+      8,
+      817,
+      377
+    ],
+    "button": [
+      0,
+      0,
+      160,
+      22
+    ],
+    "field": [
+      3,
+      3,
+      131,
+      24
+    ],
+    "start": [
+      0,
+      0,
+      158,
+      50
+    ]
+  },
+  "operations": {
+    "panel": "Native Window frame/content nine-slice at 640x286",
+    "button": "ButtonNormal bitmap 108; sized faces preserve 5px side and 3px top/bottom bevels",
+    "start": "Native battle button bitmap",
+    "field": "Native recessed field bitmap, transparent padding trimmed"
+  }
+}

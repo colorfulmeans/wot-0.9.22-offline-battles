@@ -18,6 +18,22 @@ class ErrorReportTest(unittest.TestCase):
     SESSION_1 = "20260823T120000Z-111111111111"
     SESSION_2 = "20260823T130000Z-222222222222"
 
+    def test_sound_analysis_is_generated_from_current_session_slices(self):
+        import json
+        visible=self._game_log(error_reports.ROLE_VISIBLE_CLIENT)
+        self._write(visible,b'Sound fail: 999 - ErrorCode: 99\n')
+        session=error_reports.begin_session(self.game,session_id=self.SESSION_1)
+        self._write(visible,b'SOUND CALL {"stage":"installed","hooks":10}\n'
+            b'SOUND CALL {"stage":"begin","call":1,"event_ids":[{"name":"event","id":123}]}\n'
+            b'[SOUND_ERROR] Sound fail: 123 - ErrorCode: 15\n','ab')
+        error_reports.finalize_session(session)
+        result=error_reports.create_report()
+        with zipfile.ZipFile(result['path']) as archive:
+            row=json.loads(archive.read('sound-analysis.json'))['roles']['visible-client']
+        self.assertEqual(1,row['error_count'])
+        self.assertEqual(123,row['retained_errors'][0]['resource_id'])
+        self.assertEqual(['event'],row['event_names']['123'])
+
     def test_retention_keeps_latest_three_without_a_prompt_response(self):
         directory = error_reports._prepare_reports_directory()
         paths = []

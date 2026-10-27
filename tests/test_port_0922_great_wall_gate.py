@@ -14,6 +14,9 @@ from pathlib import Path
 import sys
 import unittest
 from unittest import mock
+import contextlib
+import route_scene_fixture
+from server_bot_ai import BotPlanner
 
 import test_port_0922_bot_runtime as runtime_fixtures
 from effective_params_fixture import bot_default_crew_factors
@@ -112,15 +115,22 @@ class GreatWallGateTests(unittest.TestCase):
         runtime_box['runtime'] = runtime
         # Replay one fixed scene instead of changing the other 27 Bot lanes
         # every time this opposed-gate regression runs.
-        with mock.patch.object(module.random.SystemRandom, 'getrandbits',
-                               return_value=0x0922):
-            runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
-                                  'bot_authority_id': 1, 'bots': _bots()})
+        allocation=(contextlib.nullcontext() if getattr(self,'authoritative',False) else mock.patch.object(module.bot_tactics_runtime,'assign_initial_routes',route_scene_fixture.allocate))
+        with allocation, mock.patch.object(module.random.SystemRandom, 'getrandbits',return_value=0x0922):
+            published=runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
+                                  'bot_authority_id': 1, 'bots': _bots()})[0]
+        if not getattr(self,'authoritative',False):
+            for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
+        planner=BotPlanner();planner.tactics=runtime._bot_tactics;planner.tactics_map=MAP_NAME
         opposed = [bot_id for bot_id, state in runtime.states.items()
                    if int(state.get('team', 0)) == 2 and
                    abs(state['x'] - PASSAGE_X) < 1.0 and
                    -160.0 < state['z'] < -140.0]
         self.assertEqual(2, len(opposed))
+        if getattr(self,'authoritative',False):
+            # These two recorded hulls are already mid-route, not fresh spawns.
+            for actor in planner._alive_bots(published['bots'],list(runtime.states.values())):
+                if actor['id'] in opposed:planner._task_rejoin(actor)
 
         held = dict((bot_id, 0.0) for bot_id in opposed)
         broadside = dict((bot_id, 0.0) for bot_id in opposed)
@@ -139,6 +149,9 @@ class GreatWallGateTests(unittest.TestCase):
 
         for frame in range(1, int(FPS * SECONDS) + 1):
             clock[0] = frame / float(FPS)
+            if getattr(self,'authoritative',False):
+                orders=planner.build_orders(published['bots'],list(runtime.states.values()),[],clock[0])
+                runtime._apply_orders(dict(bot_order_revision=orders['revision'],bot_orders=orders['orders']))
             runtime.update(1.0 / float(FPS), clock[0])
             for bot_id in opposed:
                 state = runtime.states[bot_id]
@@ -158,6 +171,10 @@ class GreatWallGateTests(unittest.TestCase):
         # neither may sit broadside in a passage no hull can turn in.
         self.assertLessEqual(max(held.values()), 5.0)
         self.assertLessEqual(max(broadside.values()), 5.0)
+
+    def test_new_allocation_with_server_recovery_clears_opposed_gate(self):
+        self.authoritative=True
+        self.test_opposed_hulls_in_the_gatehouse_both_leave_the_passage()
 
 
 if __name__ == '__main__':

@@ -511,6 +511,42 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual(1, self.client.start_calls)
         self.assertTrue(self.session._team_status()['size_supported'])
 
+    def test_difficulty_memory_requires_ack_and_restores_once_per_connection(self):
+        session = self.session
+        self.client.ready = True
+        self.client.phase = 'waiting'
+        session.state = 'waiting'
+        self.client.bot_skill_mode = 'mixed'
+        self.client.set_bot_skill_mode = mock.Mock(return_value=True)
+        saved = []
+        self.module.port_config.save_waiting_room_state.side_effect = lambda value: saved.append(dict(value)) or True
+        self.assertTrue(session.set_bot_skill_mode('hard'))
+        self.assertEqual([], saved)
+        session._remember_accepted_bot_skill({'bot_skill_mode': 'mixed'})
+        self.assertEqual([], saved)
+        self.client.bot_skill_mode = 'hard'
+        session._remember_accepted_bot_skill({'bot_skill_mode': 'hard'})
+        self.assertEqual('hard', saved[-1]['bot_skill_mode'])
+        # Reconnecting starts with the server default; restore the saved value once.
+        session._client_generation += 1
+        self.client.bot_skill_mode = 'mixed'
+        self.client.set_bot_skill_mode.reset_mock()
+        session._restore_waiting_preferences()
+        session._restore_waiting_preferences()
+        self.client.set_bot_skill_mode.assert_called_once_with('hard')
+        session._on_event('bot_skill_mode_denied', {'bot_skill_mode': 'mixed', 'code': 'invalid_mode'})
+        self.assertIsNone(session._pending_skill_preference)
+        self.assertEqual('hard', session._room_preferences['bot_skill_mode'])
+        # Stale generation and non-host traffic cannot overwrite the saved choice.
+        session._pending_skill_preference = (session._client_generation-1, 'easy')
+        session._remember_accepted_bot_skill({'bot_skill_mode': 'easy'})
+        self.assertEqual('hard', session._room_preferences['bot_skill_mode'])
+        self.client.host_player_id = 'other-host'
+        session._client_generation += 1
+        self.client.set_bot_skill_mode.reset_mock()
+        session._restore_waiting_preferences()
+        self.client.set_bot_skill_mode.assert_not_called()
+
     def test_saved_room_choices_are_applied_after_the_server_welcome(self):
         self.module.port_config.load_waiting_room_state.return_value = {
             'schema': 1,
@@ -1495,11 +1531,10 @@ class LANSessionTests(unittest.TestCase):
         self.assertEqual(1, screen.open_calls)
         self.assertTrue(self.session._picker_open)
 
-    def test_training_opens_room_over_queue_and_sends_host_options(self):
+    def test_training_bypasses_random_queue_and_sends_host_options(self):
         self.session.join(None, 'training')
         self.emit('welcome', {'phase': 'waiting', 'map_pool': ['01_karelia']})
-        self.assertEqual(1, len(self.queue_screens))
-        self.assertEqual(1, self.queue_screens[0].open_calls)
+        self.assertEqual([], self.queue_screens)
         self.assertTrue(self.session._picker_open)
         calls = []
         self.client.request_start = lambda *args, **kwargs: calls.append((args, kwargs)) or True

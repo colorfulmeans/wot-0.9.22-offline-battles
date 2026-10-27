@@ -101,8 +101,8 @@ jobs:
           with zipfile.ZipFile(target) as archive:
               assert archive.testzip() is None
               assert 'wot-0.9.22-offline-battles.exe' in archive.namelist()
-              for entry in ('START_SPIKE_PROFILE.bat', 'START_ROOF_CRUSH_TEST.bat', 'START_ROOF_SHOT_DROP_TEST.bat'):
-                  assert archive.read(entry) == Path('tools', entry).read_bytes(), entry
+              from tools.verify_launch_entries import verify_archive
+              verify_archive(archive)
           PY
           git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.10.2-Source-and-validation.zip HEAD
           git tag v0.10.2 HEAD

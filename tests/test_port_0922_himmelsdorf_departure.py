@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 import unittest
 from unittest import mock
+import contextlib
+import route_scene_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,7 +102,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 self.assertTrue(order['route_join'])
                 self.assertTrue(agent['route_started'])
 
-    def test_report_roster_parked_route_joins_match_server_contract(self):
+    def test_report_roster_parked_joins_match_disk_and_server_passage_contracts(self):
         """Rebuild the reported map, human slot, Bot slots and baked routes.
 
         The report contains one human in team-2 slot zero, leaving all fifteen
@@ -168,17 +170,30 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 route_counts[(team, route_id)] += 1
                 self.assertEqual(route_id, local_order['route_id'])
                 self.assertEqual(server_route_id, local_order['route_id'])
-                self.assertEqual(server_index, local_order['route_index'])
-                self.assertEqual(
-                    (server_point['x'], server_point['y'], server_point['z']),
-                    local_order['move_position'])
-                self.assertEqual(
-                    (server_anchor['x'], server_anchor['y'],
-                     server_anchor['z']),
-                    spawn)
-                self.assertEqual(spawn, local_order['route_anchor'])
-                self.assertTrue(server_join)
-                self.assertTrue(local_order['route_join'])
+                local_index = local_order['route_index']
+                self.assertLessEqual(local_index, server_index)
+                # Both owners use the six-metre disk. Only the server keeps
+                # its convoy forward-passage rule: every additional consumed
+                # spawn gate must have that precise bounded lane proof.
+                from gui.mods.offline_lan_0922.bot_tactics import route_disk_reached
+                for passed in range(local_index, server_index):
+                    point = route['waypoints'][passed]
+                    following = route['waypoints'][passed+1]
+                    self.assertTrue(route_disk_reached((spawn[0], spawn[2]),
+                        (point['x'], point['z']), (following['x'], following['z'])))
+                local_point = route['waypoints'][local_index]
+                self.assertEqual((local_point['x'],local_point['y'],local_point['z']),
+                                 local_order['move_position'])
+                server_expected = route['waypoints'][server_index]
+                self.assertEqual(server_expected, server_point)
+                for cursor, joined, anchor in (
+                        (local_index,local_order['route_join'],local_order['route_anchor']),
+                        (server_index,server_join,(server_anchor['x'],server_anchor['y'],server_anchor['z']))):
+                    if joined:
+                        self.assertEqual(spawn,anchor)
+                    else:
+                        previous = route['waypoints'][cursor-1]
+                        self.assertEqual((previous['x'],previous['y'],previous['z']),anchor)
 
                 if team == 1 and route_id == 'hill':
                     dx = local_order['move_position'][0] - spawn[0]
@@ -246,7 +261,7 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
         def flat_ground(unused_x, unused_z, unused_hint=0.0):
             return 0.0
 
-        for fps in (15, 24):
+        for fps in getattr(self,"frame_rates",(15,24)):
             with self.subTest(fps=fps):
                 runtime_box = {}
 
@@ -300,14 +315,17 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 runtime_box['runtime'] = runtime
                 # Production chooses fresh entropy; keep the CI traffic scene
                 # replayable and use the same lane draw at both frame rates.
-                with mock.patch.object(module.random.SystemRandom, 'getrandbits',
-                                       return_value=0x0922):
-                    runtime.battle_start({
+                allocation=(contextlib.nullcontext() if getattr(self,'authoritative',False) else mock.patch.object(module.bot_tactics_runtime,'assign_initial_routes',route_scene_fixture.allocate))
+                with allocation,mock.patch.object(module.random.SystemRandom,'getrandbits',return_value=0x0922):
+                    published=runtime.battle_start({
                         'map': '86_himmelsdorf_winter',
                         'round_id': fps,
                         'bot_authority_id': 1,
                         'bots': bots,
-                    })
+                    })[0]
+                if not getattr(self,'authoritative',False):
+                    for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
+                planner=BotPlanner()
                 starts = dict(
                     (bot_id, (state['x'], state['z']))
                     for bot_id, state in runtime.states.items())
@@ -372,6 +390,9 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 # retaining the per-episode parking/recovery limits below.
                 for frame in range(1, fps * 60 + 1):
                     now[0] = frame / float(fps)
+                    if getattr(self,'authoritative',False):
+                        orders=planner.build_orders(published['bots'],list(runtime.states.values()),[],now[0])
+                        runtime._apply_orders(dict(bot_order_revision=orders['revision'],bot_orders=orders['orders']))
                     runtime.update(1.0 / float(fps), now[0])
                     group = {
                         1: {'parked': 0, 'recovery': 0},
@@ -440,6 +461,10 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                     0.5)
                 # Recovery is allowed to chain; every hull must still leave
                 # its spawn OBB within the one-minute run above.
+
+    def test_new_allocation_with_server_route_recovery_departs(self):
+        self.authoritative=True;self.frame_rates=(15,)
+        self.test_flat_report_roster_departs_at_15_and_24_fps()
 
 
 if __name__ == '__main__':

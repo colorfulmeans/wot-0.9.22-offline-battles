@@ -1,0 +1,501 @@
+{
+  "report": "20261021-225005-fa0704843f80",
+  "actor": 29,
+  "vehicle": "france:F25_Lorraine155_51",
+  "release": {
+    "detailed": false,
+    "vertical_speed": -5.073396001779339,
+    "opening": {
+      "sample": {
+        "basis_before": [
+          279.5241410936889,
+          438.2566679880807,
+          5.40307354927063,
+          0.0016506205014525483,
+          -0.2092402043364221
+        ],
+        "grounded_once": true,
+        "projection_distance": 1.703527362562628,
+        "selection_stage": "post_basic_settle",
+        "pose": [
+          0.1640839495373472,
+          0.06663915324275682,
+          -0.006828922414001417
+        ],
+        "reach": [
+          -0.6,
+          0.8
+        ],
+        "projected": false,
+        "detailed_at_sample": false,
+        "projection_root_delta": -0.32735166259519133,
+        "pose_refreshed": false,
+        "airborne_at_sample": true,
+        "projection_reason": "accepted_pose",
+        "support_y": 5.0757218866754386,
+        "position": [
+          279.80240999406993,
+          5.0757218866754386,
+          439.93731426082235
+        ],
+        "sampled_at": 58.132999420166016
+      },
+      "position": [
+        279.80240999406993,
+        5.0757218866754386,
+        439.93731426082235
+      ],
+      "points": [
+        {
+          "column_evidence": null,
+          "basic_follow_y": 5.0757218866754386,
+          "name": "centre",
+          "continuous_rise": false,
+          "gap": 0.15658774666079012,
+          "valid": true,
+          "verdict": "supported",
+          "upper_candidate": null,
+          "expected": 5.0757218866754386,
+          "x": 279.80240999406993,
+          "z": 439.93731426082235,
+          "raw_expected": 5.0757218866754386,
+          "ground": 4.919134140014648
+        },
+        {
+          "column_evidence": {
+            "layers": [
+              {
+                "above_limit": false,
+                "layer": 0,
+                "end": [
+                  280.316162109375,
+                  -1000.0,
+                  443.040283203125
+                ],
+                "normal": [
+                  0.01357380673289299,
+                  0.9640673398971558,
+                  0.26531094312667847
+                ],
+                "start": [
+                  280.316162109375,
+                  6.865816593170166,
+                  443.040283203125
+                ],
+                "hit": [
+                  280.316162109375,
+                  3.8564634323120117,
+                  443.040283203125
+                ],
+                "outcome": "accepted",
+                "ground_facing": true
+              }
+            ],
+            "maximum_y": 5.465816449248333,
+            "x": 280.3161770368487,
+            "z": 443.04028647338845,
+            "hint_y": 4.865816449248333,
+            "upper_query": null,
+            "height": 3.8564634323120117
+          },
+          "basic_follow_y": 5.0757218866754386,
+          "name": "front",
+          "continuous_rise": false,
+          "gap": 1.0093530169363216,
+          "valid": false,
+          "verdict": "outside_reach",
+          "upper_candidate": null,
+          "expected": 4.865816449248333,
+          "x": 280.3161770368487,
+          "z": 443.04028647338845,
+          "raw_expected": 4.865816449248333,
+          "ground": 3.8564634323120117
+        },
+        {
+          "column_evidence": null,
+          "basic_follow_y": 5.0757218866754386,
+          "name": "rear",
+          "continuous_rise": false,
+          "gap": -0.33378795910058123,
+          "valid": true,
+          "verdict": "supported",
+          "upper_candidate": null,
+          "expected": 5.285627324102544,
+          "x": 279.28864295129114,
+          "z": 436.83434204825625,
+          "raw_expected": 5.285627324102544,
+          "ground": 5.619415283203125
+        },
+        {
+          "column_evidence": null,
+          "basic_follow_y": 5.0757218866754386,
+          "name": "right",
+          "continuous_rise": false,
+          "gap": 0.015812626935558072,
+          "valid": true,
+          "verdict": "supported",
+          "upper_candidate": null,
+          "expected": 5.06426595792921,
+          "x": 281.46096887229146,
+          "z": 439.66192747249966,
+          "raw_expected": 5.06426595792921,
+          "ground": 5.048453330993652
+        },
+        {
+          "column_evidence": null,
+          "basic_follow_y": 5.0757218866754386,
+          "name": "left",
+          "continuous_rise": false,
+          "gap": 0.27456766603812177,
+          "valid": true,
+          "verdict": "supported",
+          "upper_candidate": null,
+          "expected": 5.087177815421667,
+          "x": 278.1438511158484,
+          "z": 440.21270104914504,
+          "raw_expected": 5.087177815421667,
+          "ground": 4.812610149383545
+        }
+      ],
+      "pose": [
+        0.1640839495373472,
+        0.06663915324275682,
+        -0.006828922414001417
+      ]
+    },
+    "transition_age_ms": 362.99896240234375,
+    "sample": {
+      "basis_before": [
+        279.5241410936889,
+        438.2566679880807,
+        5.40307354927063,
+        0.0016506205014525483,
+        -0.2092402043364221
+      ],
+      "grounded_once": true,
+      "projection_distance": 4.756178420033084,
+      "pose": [
+        0.18240808924837695,
+        0.13545358796730517,
+        0.08684914639314927
+      ],
+      "reach": [
+        -0.6,
+        0.8
+      ],
+      "projected": false,
+      "detailed_at_sample": true,
+      "projection_root_delta": -1.0890148406541815,
+      "airborne_at_sample": false,
+      "projection_reason": "accepted_pose",
+      "support_y": 4.314058708616448,
+      "position": [
+        280.34066939119253,
+        4.314058708616448,
+        442.942232490098
+      ],
+      "sampled_at": 58.49599838256836
+    },
+    "basic_basis_yaw": 0.18240808924837695,
+    "terrain_pitch": 0.13545358796730517,
+    "support_basis": [
+      280.34066939119253,
+      442.942232490098,
+      4.314058708616448,
+      0.0013545264595363822,
+      -0.24993749671817417
+    ],
+    "phase": "disable",
+    "total": 5,
+    "point_changes": [
+      {
+        "was_valid": true,
+        "ground_delta": -1.0360314846038818,
+        "valid": true,
+        "gap_before": 0.15658774666079012,
+        "name": "centre",
+        "expected_delta": -0.7616631780589902,
+        "gap_after": 0.43095605320568176
+      },
+      {
+        "was_valid": false,
+        "ground_delta": -0.44850993156433105,
+        "valid": true,
+        "gap_before": 1.0093530169363216,
+        "name": "front",
+        "expected_delta": -0.9774319633592068,
+        "gap_after": 0.4804309851414459
+      },
+      {
+        "was_valid": true,
+        "ground_delta": -0.6776189804077148,
+        "valid": true,
+        "gap_before": -0.33378795910058123,
+        "name": "rear",
+        "expected_delta": -0.5458943927587736,
+        "gap_after": -0.20206337145164
+      },
+      {
+        "was_valid": true,
+        "ground_delta": -1.0750043392181396,
+        "valid": true,
+        "gap_before": 0.015812626935558072,
+        "name": "right",
+        "expected_delta": -0.6057066726457636,
+        "gap_after": 0.4851102935079341
+      },
+      {
+        "was_valid": true,
+        "ground_delta": -0.9858322143554688,
+        "valid": true,
+        "gap_before": 0.27456766603812177,
+        "name": "left",
+        "expected_delta": -0.9176196834722168,
+        "gap_after": 0.34278019692137374
+      }
+    ],
+    "valid_count": 5,
+    "episode": 1,
+    "solver": {
+      "before": {
+        "roll_velocity": 0.08468894504400146,
+        "pitch": 0.1264273458540787,
+        "vertical_velocity": -3.6279027160155883,
+        "pitch_velocity": 0.07390248169645855,
+        "roll": 0.08070830654956446,
+        "height": 4.877726839466916
+      },
+      "step": 0.12599945068359375,
+      "after": {
+        "contact_count": 2,
+        "airborne": false,
+        "height": 4.314058708616448,
+        "pitch": 0.13545358796730517,
+        "vertical_velocity": -5.073396001779339,
+        "impact_speed": -4.593570381020319,
+        "rigid_contact_count": 0,
+        "roll": 0.08684914639314927
+      },
+      "sampled_at": 58.369998931884766,
+      "stage": "solver_accepted_before_turret_check"
+    },
+    "yaw": 0.18240808924837695,
+    "bot": 29,
+    "reason": "all_points_restored",
+    "airborne": false,
+    "round": 1,
+    "motion": {
+      "slide_speed": 0.0,
+      "slide_delta": [
+        0.0,
+        0.0
+      ],
+      "detailed_before": true,
+      "after_slide": [
+        280.34066939119253,
+        4.877726839466916,
+        442.942232490098
+      ],
+      "tick_pose": [
+        280.0327053016048,
+        4.877726839466916,
+        441.27267446620186
+      ],
+      "step": 0.12599945068359375,
+      "release_at": 58.49599838256836,
+      "at": 58.369998931884766,
+      "support_motion_pose": null,
+      "release_position": [
+        280.34066939119253,
+        4.314058708616448,
+        442.942232490098
+      ],
+      "speed": 13.47405662794598,
+      "release_stage": "after_contacts_and_pose_guards",
+      "before": [
+        280.34066939119253,
+        4.877726839466916,
+        442.942232490098
+      ]
+    },
+    "points": [
+      {
+        "column_evidence": null,
+        "basic_follow_y": 4.314058708616448,
+        "name": "centre",
+        "continuous_rise": false,
+        "gap": 0.43095605320568176,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 4.314058708616448,
+        "x": 280.34066939119253,
+        "z": 442.942232490098,
+        "raw_expected": 4.314058708616448,
+        "ground": 3.8831026554107666
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 4.314058708616448,
+        "name": "front",
+        "continuous_rise": false,
+        "gap": 0.4804309851414459,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.8883844858891266,
+        "x": 280.9072378175046,
+        "z": 446.0137557430258,
+        "raw_expected": 3.8883844858891266,
+        "ground": 3.4079535007476807
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 4.314058708616448,
+        "name": "rear",
+        "continuous_rise": false,
+        "gap": -0.20206337145164,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 4.73973293134377,
+        "x": 279.77410096488046,
+        "z": 439.87070923717016,
+        "raw_expected": 4.73973293134377,
+        "ground": 4.94179630279541
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 4.314058708616448,
+        "name": "right",
+        "continuous_rise": false,
+        "gap": 0.4851102935079341,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 4.458559285283447,
+        "x": 281.9914217906134,
+        "z": 442.6577632067606,
+        "raw_expected": 4.458559285283447,
+        "ground": 3.9734489917755127
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 4.314058708616448,
+        "name": "left",
+        "continuous_rise": false,
+        "gap": 0.34278019692137374,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 4.16955813194945,
+        "x": 278.68991699177167,
+        "z": 443.22670177343537,
+        "raw_expected": 4.16955813194945,
+        "ground": 3.826777935028076
+      }
+    ],
+    "previous_transition": [
+      "enable",
+      58.132999420166016,
+      [
+        279.80240999406993,
+        5.0757218866754386,
+        439.93731426082235
+      ]
+    ],
+    "position": [
+      280.34066939119253,
+      4.314058708616448,
+      442.942232490098
+    ],
+    "contact_pairs": [],
+    "basic_support_datum": 0.43095605320568176,
+    "roll": 0.08684914639314927
+  },
+  "flat": {
+    "position": [
+      286.6559714614067,
+      3.5439539427244195,
+      476.17042268474887
+    ],
+    "points": [
+      {
+        "column_evidence": null,
+        "basic_follow_y": 3.5439390415632257,
+        "name": "centre",
+        "continuous_rise": false,
+        "gap": 0.43898289150829406,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.5439390415632257,
+        "x": 286.6559714614067,
+        "z": 476.17042268474887,
+        "raw_expected": 3.5439390415632257,
+        "ground": 3.1049561500549316
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 3.5439390415632257,
+        "name": "front",
+        "continuous_rise": false,
+        "gap": 0.43107938500977605,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.549877164093028,
+        "x": 284.7397291451925,
+        "z": 473.6675376408215,
+        "raw_expected": 3.549877164093028,
+        "ground": 3.118797779083252
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 3.5439390415632257,
+        "name": "rear",
+        "continuous_rise": false,
+        "gap": 0.43083224456442926,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.5380009190334234,
+        "x": 288.5722137776209,
+        "z": 478.67330772867626,
+        "raw_expected": 3.5380009190334234,
+        "ground": 3.107168674468994
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 3.5439390415632257,
+        "name": "right",
+        "continuous_rise": false,
+        "gap": 0.4384387106887915,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.546051797389231,
+        "x": 285.32100190782086,
+        "z": 477.1924982696617,
+        "raw_expected": 3.546051797389231,
+        "ground": 3.1076130867004395
+      },
+      {
+        "column_evidence": null,
+        "basic_follow_y": 3.5439390415632257,
+        "name": "left",
+        "continuous_rise": false,
+        "gap": 0.4384050744945447,
+        "valid": true,
+        "verdict": "supported",
+        "upper_candidate": null,
+        "expected": 3.5418262857372205,
+        "x": 287.99094101499253,
+        "z": 475.14834709983603,
+        "raw_expected": 3.5418262857372205,
+        "ground": 3.103421211242676
+      }
+    ],
+    "raw_ground": 3.112997889518738
+  }
+}

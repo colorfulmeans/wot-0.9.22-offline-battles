@@ -53,6 +53,7 @@ FIRE_CLOCK_SCALE = 1000000    # round(v, 6)
 DEVICE_HP_SCALE = 1000        # round(v, 3)
 
 # Flag bits.
+F_AMMO_MAGAZINE_STARTED = 1 << 25
 F_HAS_RAM_MOTION = 1 << 21
 F_LOCAL_COMBAT_MANOEUVRE = 1 << 22
 F_HAS_AIM_FEEDBACK = 1 << 23
@@ -333,6 +334,8 @@ def encode_row(state):
             flags |= F_AIM_FEEDBACK_ALIGNED
     if state.get('airborne', False):
         flags |= F_AIRBORNE
+    if state.get('ammo_magazine_started', False):
+        flags |= F_AMMO_MAGAZINE_STARTED
     if state.get('ammo_reload_pending', False):
         flags |= F_AMMO_RELOAD_PENDING
     if state.get('burst_active', False):
@@ -525,6 +528,7 @@ def decode_row(row, static):
     result['route_wreck_blocked'] = bool(flags & F_ROUTE_WRECK_BLOCKED)
     result['local_combat_manoeuvre'] = bool(flags & F_LOCAL_COMBAT_MANOEUVRE)
     result['ammo_reload_pending'] = bool(flags & F_AMMO_RELOAD_PENDING)
+    result['ammo_magazine_started'] = bool(flags & F_AMMO_MAGAZINE_STARTED)
     result['burst_active'] = bool(flags & F_BURST_ACTIVE)
     result['movement_dir'] = (
         1 if flags & F_MOVING_FORWARD else

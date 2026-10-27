@@ -60,7 +60,7 @@ class DefaultRouteTests(unittest.TestCase):
         first=source['routes']['1'][0];edit=profile['maps']['31_airfield']['default_routes'][0]
         self.assertEqual(edit['points'],routes['1'][0]['waypoints'])
         self.assertEqual({k:v for k,v in first.items() if k!='waypoints'},
-                         {k:v for k,v in routes['1'][0].items() if k not in ('waypoints','_allocation_symmetric')})
+                         {k:v for k,v in routes['1'][0].items() if k not in ('waypoints','_allocation_symmetric','_route_tier')})
         self.assertFalse(routes['1'][0]['_allocation_symmetric'])
         unedited,unused=planning.default_routes(config.empty(),'31_airfield',self.graph)
         self.assertEqual(unedited['2'],routes['2'])

@@ -1,11 +1,13 @@
 import importlib.util
 import itertools
 import threading
+import sys
 from pathlib import Path
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'src/res/scripts/client'))
 PATH = (ROOT / 'src/res/scripts/client/gui/mods/offline_lan_0922' /
         'worker_diagnostics.py')
 spec = importlib.util.spec_from_file_location('worker_diagnostic_test', PATH)
@@ -14,6 +16,79 @@ spec.loader.exec_module(diagnostics)
 
 
 class WorkerCombatDiagnosticsTests(unittest.TestCase):
+    def test_repeat_geometry_samples_are_bounded_opt_in_and_observational(self):
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        for enabled in (False, True):
+            trace=diagnostics.WorkerCombatDiagnostics(lambda:1.)
+            trace.begin_frame(1,20.,'combat')
+            for i in range(12):
+                for unused in range(i+1):trace.geometry('motion.ray',(i,(0.,0.,0.),(1.,0.,0.)))
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=enabled):
+                row=trace.finish_frame()
+            if enabled:
+                self.assertEqual(8,len(row['repeated_geometry']))
+                self.assertEqual(12,row['repeated_geometry'][0]['count'])
+            else:
+                self.assertNotIn('repeated_geometry',row)
+            self.assertEqual(78,row['counts']['motion.ray_queries'])
+
+    def test_residual_partition_excludes_children_and_does_not_double_count_stages(self):
+        now = [0.]
+        trace = diagnostics.WorkerCombatDiagnostics(lambda: now[0])
+        trace.begin_frame(1, 20., 'profile_window')
+
+        def child():
+            now[0] = 3.
+
+        def update():
+            trace.begin_residual_slice()
+            now[0] = 1.
+            trace.residual_checkpoint('preparation')
+            diagnostics.call(trace, 'child', child)
+            now[0] = 4.
+            trace.residual_checkpoint('actors')
+            now[0] = 7.
+
+        diagnostics.call(trace, 'bot.slice', update)
+        row = trace.finish_frame()
+        self.assertEqual(5000., row['stages']['bot.slice']['self_ms'])
+        self.assertEqual(2000., row['stages']['child']['total_ms'])
+        residual = {k:v for k,v in row['counts'].items() if k.startswith('slice_residual_')}
+        self.assertEqual(dict(slice_residual_preparation_us=1000000,
+                              slice_residual_actors_us=1000000,
+                              slice_residual_tail_us=3000000), residual)
+        self.assertIsNone(trace._residual_slice)
+        self.assertFalse(any('residual' in k for k in row['stages']))
+        trace.close()
+        summary = trace.drain_completed()[0]
+        self.assertEqual('shot_lane_identity', summary['queue_kind'])
+        self.assertEqual('microseconds_partitioning_bot.slice_self_ms',
+                         summary['slice_residual_basis'])
+
+    def test_residual_scope_closes_when_slice_raises(self):
+        trace = diagnostics.WorkerCombatDiagnostics(lambda: 1.)
+        trace.begin_frame(1, 20., 'profile_window')
+        def fail():
+            trace.begin_residual_slice()
+            raise ValueError('local failure')
+        with self.assertRaises(ValueError):
+            diagnostics.call(trace, 'bot.slice', fail)
+        self.assertIsNone(trace._residual_slice)
+        self.assertTrue(trace.active)
+        self.assertIsNotNone(trace.finish_frame())
+
+    def test_extra_helper_timings_are_diagnostic_entry_only(self):
+        from unittest import mock
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        measured=diagnostics.detailed_observed('extra.helper')(lambda value:value+1)
+        with mock.patch.object(diagnostics,'current',return_value=object()) as current, \
+             mock.patch.object(diagnostics,'_invoke',return_value=17) as invoke:
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=False):
+                self.assertEqual(4,measured(3));current.assert_not_called();invoke.assert_not_called()
+            with mock.patch.object(native_input_diagnostics,'detailed_enabled',return_value=True):
+                self.assertEqual(17,measured(3));invoke.assert_called_once()
+
     def test_spike_test_keeps_every_actor_after_old_capture_limit(self):
         ticks = iter(i * 0.001 for i in range(10000))
         trace = diagnostics.WorkerCombatDiagnostics.spike_test(
@@ -257,7 +332,7 @@ class WorkerCombatDiagnosticsTests(unittest.TestCase):
         self.assertGreater(row['counts']['geometry_tracking_overflow'], 0)
         trace.begin_frame(2, 20.1)
         self.assertEqual({}, trace._actors)
-        self.assertEqual(set(), trace._geometry)
+        self.assertFalse(trace._geometry)
         trace.finish_frame()
         trace.close()
         self.assertEqual(diagnostics.MAX_CAPTURE_ACTORS,

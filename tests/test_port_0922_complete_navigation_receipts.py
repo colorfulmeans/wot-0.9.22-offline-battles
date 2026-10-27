@@ -16,6 +16,9 @@ from read_native_evidence import parse_lines
 
 class RuntimeReceiptTests(unittest.TestCase):
     def setUp(self):
+        from unittest import mock
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.dict('os.environ', WOT_OFFLINE_DIAGNOSTICS='1').start()
         self.fixture = runtime_fixture.BotRuntimeTests()
         self.fixture.setUp()
         self.runtime = self.fixture.runtime
@@ -396,36 +399,37 @@ class LeaseAndEntryReceiptTests(unittest.TestCase):
         p.reset(4)
         self.assertEqual({},p._target_decisions)
 
-    def test_covered_pressure_exit_updates_evidence_without_extending_deadline(self):
-        f = lease_fixture.RouteLeaseEvidenceTests(); f.setUp()
-        p = f.planner
-        p._route_line_contributor = lambda *args: True
-        # Another mobile defender remains after the temporary donor leaves.
+    def test_covered_pressure_exit_preserves_committed_route_and_evaluation_time(self):
+        f=lease_fixture.RouteLeaseEvidenceTests();f.setUp();p=f.planner
+        p._route_line_contributor=lambda *args:True
         target=p._route_catalog(f.bots)['target']
-        f.bots.extend(p._alive_bots([lease_fixture._bot(44,1,3,target,'mediumTank')],
-                                   [lease_fixture._state(44,1,100.,0.)]))
-        contacts = [dict(position=dict(x=100., y=0., z=250.), health=1., max_health=1000.)]
-        p._rebalance_routes(1, f.bots, contacts, 61.)
-        lease = p._route_assignments[f.donor['id']]
-        self.assertEqual(62., lease['until'])
-        self.assertEqual('pressure_already_covered', lease['_lease_observation']['outcome'])
-        p._rebalance_routes(1, f.bots, contacts, 61.5)
-        self.assertEqual('rebalance_not_due', lease['_lease_check']['outcome'])
-        self.assertEqual(61., lease['_lease_observation']['evaluated_at'])
-        p._rebalance_routes(1, f.bots, contacts, 121.)
-        previous = p._route_assignment_receipts[f.donor['id']]['previous_lease']
-        self.assertEqual('pressure_already_covered', previous['observation']['outcome'])
-        self.assertEqual('rebalance_not_due', previous['check']['outcome'])
+        f.bots.extend(p._alive_bots([lease_fixture._bot(44,1,3,target,'mediumTank')],[lease_fixture._state(44,1,100.,0.)]))
+        contacts=[dict(position=dict(x=100.,y=0.,z=250.),health=1.,max_health=1000.)]
+        p._rebalance_routes(1,f.bots,contacts,181.)
+        before=copy.deepcopy(p._route_balance_receipts[1])
+        self.assertEqual('pressure_already_covered',before['outcome'])
+        p._rebalance_routes(1,f.bots,contacts,181.5)
+        self.assertEqual(before,p._route_balance_receipts[1])
+        self.assertEqual(181.,before['sampled_at'])
+        self.assertEqual('target',p._route_assignments[f.donor['id']]['route']['id'])
+        self.assertEqual(0.,p._route_assignments[f.donor['id']]['until'])
 
-    def test_route_switch_serializes_selected_entry_without_changing_existing_choice(self):
+    def test_recovery_switch_serializes_first_entry_only_after_return_to_start(self):
         f = route_fixture.WreckRouteSwitchTests(); f.setUp()
-        f.orders(0.); f.orders(20.); orders = f.orders(40.)
+        f.orders(0.); f.orders(20.)
+        returned = f.orders(40.)[17]
+        self.assertEqual(('banana', 0), (returned['route_id'], returned['route_index']))
+        f.states[0].update(x=190., z=74.)
+        orders = f.orders(41.)
         order = orders[17]
         self.assertEqual('rail', order['route_id'])
         receipt = order['route_assignment']['entry_selection']
         self.assertEqual('rail', receipt['selected_route'])
         self.assertEqual(order['route_index'], receipt['selected_index'])
         self.assertEqual(order['move_position'], receipt['selected_point'])
+        self.assertEqual(0, receipt['selected_index'])
+        self.assertEqual('least_tried_then_affinity_at_first_point', receipt['policy'])
+        self.assertEqual(41., receipt['sampled_at'])
         self.assertTrue(receipt['candidates'])
         eligible = next(r for r in receipt['candidates'] if r['outcome'] == 'eligible')
         self.assertGreaterEqual(eligible['entry_distance'], 0.)

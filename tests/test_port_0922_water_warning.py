@@ -18,7 +18,7 @@ class WaterWarningTests(unittest.TestCase):
 
     def _surface(self, height):
         self.battle._water_depth = mock.Mock(
-            side_effect=lambda point: height - point[1])
+            side_effect=lambda point, **unused: height - point[1])
 
     def _level(self, position=(0.0, 0.0, 0.0), yaw=0.0,
                pitch=0.0, roll=0.0):

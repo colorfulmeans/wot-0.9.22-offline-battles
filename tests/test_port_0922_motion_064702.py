@@ -163,7 +163,7 @@ class CompleteSlopeReceiptTests(unittest.TestCase):
 
 
 class CaptureProgressTests(unittest.TestCase):
-    def test_screen_toggle_never_rewinds_passed_gate_but_approachers_still_stage(self):
+    def test_route_has_no_screen_gate_and_never_rewinds_passed_terminal(self):
         route=server_fixture._route('class_lt_valley',[
             (float(i)*30.,0.,False) for i in range(10)]+
             [(-187.341,398.242,False),(-340.,386.,False)])
@@ -171,19 +171,23 @@ class CaptureProgressTests(unittest.TestCase):
         bot=server_fixture._bot(28,2,0,route,'lightTank')
         bot['state']=server_fixture._state(28,2,-340.147,385.804)
         planner._route_states[28]=dict(route_id='class_lt_valley',index=11)
-        for now,screen in enumerate((False,True,False,True)):
-            result=planner._route(bot,float(now),stop_before_objective=screen)
+        for now in range(4):
+            result=planner._route(bot,float(now))
             self.assertEqual(11,result[1])
             self.assertEqual(-340.,result[2]['x'])
             receipt=planner._route_states[28]['progress_receipt']
             self.assertEqual(11,receipt['effective_limit'])
-            if screen:self.assertEqual('preserve_passed_screen',receipt['outcome'])
-        # A genuinely new route assignment retains its original staging rule.
+        # An approaching vehicle passes every intermediate gate, then continues
+        # to the terminal rather than being held at a capture screening point.
         planner._route_states[28]=dict(route_id='class_lt_valley',index=9)
         bot['state'].update(x=270.,z=0.)
-        result=planner._route(bot,5.,stop_before_objective=True)
+        result=planner._route(bot,5.)
         self.assertEqual(10,result[1])
         self.assertEqual(-187.341,result[2]['x'])
+        bot['state'].update(x=-187.341,z=398.242)
+        result=planner._route(bot,6.)
+        self.assertEqual(11,result[1])
+        self.assertEqual(-340.,result[2]['x'])
 
     def test_final_order_carries_progress_without_forcing_new_command_revision(self):
         planner=server_fixture.BotPlanner()

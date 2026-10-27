@@ -115,7 +115,7 @@ ENUM_NAMES = {
         'lightTank': ('轻型坦克', 'Light tank'),
         'mediumTank': ('中型坦克', 'Medium tank'),
         'heavyTank': ('重型坦克', 'Heavy tank'),
-        'AT-SPG': ('坦克歼击车', 'Tank destroyer'),
+        'AT-SPG': ('自行反坦克炮', 'Tank destroyer'),
         'SPG': ('自行火炮', 'Self-propelled gun'),
     },
     'skill': {'': ('继承上级设置', 'Inherit'),
@@ -128,13 +128,34 @@ ENUM_NAMES = {
     'team': {'0': ('全部队伍', 'All teams'), '1': ('队伍 1', 'Team 1'), '2': ('队伍 2', 'Team 2')},
     'slot': {'': ('全部槽位', 'All slots')},
 }
+for _key, _choices in {
+    'development': [('stock','白板'),('intermediate','中间配置'),('full','完全体')],
+    'equipment': [('none','无配件'),('single','1 配件'),('standard','3 普通配件'),('improved','3 紫色配件＋对应指令')],
+    'consumables': [('none','无给养'),('once','小急救包＋小修理箱＋手动灭火器·一次'),('repeat','小急救包＋小修理箱＋手动灭火器·重复'),('large','大急救包＋大修理箱＋自动灭火器·重复')],
+    'crew_preset': [('50','50%'),('75','75%'),('repair','100% 满修理满隐蔽'),('all','100% 全部满技能')],
+    'outfit': [('off','不使用涂装'),('on','使用现有涂装')],
+}.items():
+    ENUM_NAMES[_key] = dict([('', ('继承上级设置','Inherit'))] + [(v,(z,v)) for v,z in _choices])
+
+ENUM_NAMES['outfit'].update(off=('不使用涂装','Do not use an outfit'),on=('使用现有涂装','Use existing outfit'))
+
+for _level in (75,90,100):
+    ENUM_NAMES['crew_preset']['legacy'+str(_level)] = (str(_level)+'%（旧方案，原技能）',str(_level)+'% (legacy skills)')
+
+ENUM_NAMES['number'] = ENUM_NAMES['ratio'] = {'': ('继承上级设置','Inherit')}
+
 PARAM_NAMES = {
     'skill': ('难度', 'Difficulty'), 'crew_level': ('乘员等级', 'Crew level'),
+    'development': ('研发配置','Development'), 'equipment': ('配件','Equipment'),
+    'consumables': ('给养','Consumables'), 'crew_preset': ('成员配置','Crew preset'),
+    'ammo_ratios': ('弹药比例','Ammunition ratios'),
+    'outfit': ('BOT 使用涂装','Bot outfit'),
     'reaction_seconds': ('反应时间（秒）', 'Reaction delay (s)'),
     'patience_seconds': ('首次开火缩圈等待上限（秒）', 'Opening aim patience (s)'),
     'converged_factor': ('接受的缩圈倍数', 'Accepted dispersion factor'),
     'aim_bias_factor': ('瞄准点偏差系数', 'Aim-point bias factor'),
     'lead_error': ('移动目标提前量误差', 'Lead error fraction'),
+    'ammo_limit': ('携弹数量上限', 'Ammunition count limit'),
 }
 VALIDATION_NAMES = {
     'navigation_cells_clear': ('导航格检查：节点及直线连接未发现问题', 'Grid check: nodes and straight connections clear'),
@@ -171,6 +192,9 @@ def route_label(key, language):
     return _label(ROUTE_NAMES, key, language)
 
 
+ENUM_NAMES['route_view']=dict(ENUM_NAMES['class_tag'],SPG=('火炮驻炮点','SPG parking'),spg_attack=('火炮进攻路线','Artillery attack routes'))
+
+
 def enum_label(kind, key, language):
     return _label(ENUM_NAMES.get(kind, {}), str(key), language)
 
@@ -180,7 +204,7 @@ def parameter_label(key, language):
 
 
 def parameter_value(key, value, language):
-    if key in ('skill', 'crew_level'):
+    if key in ENUM_NAMES:
         return enum_label(key, value, language)
     return str(value)
 
@@ -199,5 +223,7 @@ def validation_label(value, language):
 TACTIC_NAMES = {'香蕉弯道': ('香蕉弯道', 'Banana bend'), 'banana bend': ('香蕉弯道', 'Banana bend'), '海滩': ('海滩', 'Beach'), 'beach': ('海滩', 'Beach'), '林荫大道': ('林荫大道', 'Boulevard'), 'boulevard': ('林荫大道', 'Boulevard'), '中央区域': ('中央区域', 'Center'), 'center': ('中央区域', 'Center'), '中央街区': ('中央街区', 'Center blocks'), 'center blocks': ('中央街区', 'Center blocks'), '中央盆地': ('中央盆地', 'Central basin'), 'central basin': ('中央盆地', 'Central basin'), '中央洼地': ('中央洼地', 'Central bowl'), 'central bowl': ('中央洼地', 'Central bowl'), '中央旷野': ('中央旷野', 'Central field'), 'central field': ('中央旷野', 'Central field'), '中央峡谷': ('中央峡谷', 'Central gorge'), 'central gorge': ('中央峡谷', 'Central gorge'), '中央丘陵': ('中央丘陵', 'Central hills'), 'central hills': ('中央丘陵', 'Central hills'), '中央低洼地': ('中央低洼地', 'Central hollow'), 'central hollow': ('中央低洼地', 'Central hollow'), '中央山脊': ('中央山脊', 'Central ridges'), 'central ridges': ('中央山脊', 'Central ridges'), '中央道路': ('中央道路', 'Central road'), 'central road': ('中央道路', 'Central road'), '中央街道': ('中央街道', 'Central streets'), 'central streets': ('中央街道', 'Central streets'), '中央村庄': ('中央村庄', 'Central village'), 'central village': ('中央村庄', 'Central village'), '城区': ('城区', 'City'), 'city': ('城区', 'City'), '悬崖': ('悬崖', 'Cliff'), 'cliff': ('悬崖', 'Cliff'), '东侧城区': ('东侧城区', 'East city'), 'east city': ('东侧城区', 'East city'), '东侧海岸': ('东侧海岸', 'East coast'), 'east coast': ('东侧海岸', 'East coast'), '东侧旷野': ('东侧旷野', 'East field'), 'east field': ('东侧旷野', 'East field'), '东侧田野': ('东侧田野', 'East fields'), 'east fields': ('东侧田野', 'East fields'), '东侧山丘环线': ('东侧山丘环线', 'East hill loop'), 'east hill loop': ('东侧山丘环线', 'East hill loop'), '东侧丘陵': ('东侧丘陵', 'East hills'), 'east hills': ('东侧丘陵', 'East hills'), '东侧铁路': ('东侧铁路', 'East rail'), 'east rail': ('东侧铁路', 'East rail'), '东侧山脊': ('东侧山脊', 'East ridge'), 'east ridge': ('东侧山脊', 'East ridge'), '东侧道路': ('东侧道路', 'East road'), 'east road': ('东侧道路', 'East road'), '东侧台地': ('东侧台地', 'East shelf'), 'east shelf': ('东侧台地', 'East shelf'), '东侧岸线': ('东侧岸线', 'East shore'), 'east shore': ('东侧岸线', 'East shore'), '东侧城镇': ('东侧城镇', 'East town'), 'east town': ('东侧城镇', 'East town'), '东侧山谷': ('东侧山谷', 'East valley'), 'east valley': ('东侧山谷', 'East valley'), '东侧村庄': ('东侧村庄', 'East village'), 'east village': ('东侧村庄', 'East village'), '堤岸': ('堤岸', 'Embankment'), 'embankment': ('堤岸', 'Embankment'), '工厂': ('工厂', 'Factory'), 'factory': ('工厂', 'Factory'), '旷野': ('旷野', 'Field'), 'field': ('旷野', 'Field'), '防御工事线': ('防御工事线', 'Fortification line'), 'fortification line': ('防御工事线', 'Fortification line'), '港口外围': ('港口外围', 'Harbor edge'), 'harbor edge': ('港口外围', 'Harbor edge'), '山丘': ('山丘', 'Hill'), 'hill': ('山丘', 'Hill'), '丘陵': ('丘陵', 'Hills'), 'hills': ('丘陵', 'Hills'), '冰面道路': ('冰面道路', 'Ice road'), 'ice road': ('冰面道路', 'Ice road'), '湖泊北岸': ('湖泊北岸', 'Lake north edge'), 'lake north edge': ('湖泊北岸', 'Lake north edge'), '湖边道路': ('湖边道路', 'Lake road'), 'lake road': ('湖边道路', 'Lake road'), '中央渡口': ('中央渡口', 'Middle crossing'), 'middle crossing': ('中央渡口', 'Middle crossing'), '中央低地': ('中央低地', 'Middle low'), 'middle low': ('中央低地', 'Middle low'), '中路': ('中路', 'Middle road'), 'middle road': ('中路', 'Middle road'), '中部村庄': ('中部村庄', 'Middle village'), 'middle village': ('中部村庄', 'Middle village'), '修道院通道': ('修道院通道', 'Monastery lane'), 'monastery lane': ('修道院通道', 'Monastery lane'), '北侧桥梁': ('北侧桥梁', 'North bridge'), 'north bridge': ('北侧桥梁', 'North bridge'), '北侧沙丘': ('北侧沙丘', 'North dunes'), 'north dunes': ('北侧沙丘', 'North dunes'), '北侧山脊': ('北侧山脊', 'North ridge'), 'north ridge': ('北侧山脊', 'North ridge'), '北侧道路': ('北侧道路', 'North road'), 'north road': ('北侧道路', 'North road'), '北侧跑道': ('北侧跑道', 'North runway'), 'north runway': ('北侧跑道', 'North runway'), '城郊': ('城郊', 'Outskirts'), 'outskirts': ('城郊', 'Outskirts'), '公园': ('公园', 'Park'), 'park': ('公园', 'Park'), '深坑': ('深坑', 'Pit'), 'pit': ('深坑', 'Pit'), '高原': ('高原', 'Plateau'), 'plateau': ('高原', 'Plateau'), '铁路线': ('铁路线', 'Rail line'), 'rail line': ('铁路沿线', 'Rail line'), '铁路沿线': ('铁路沿线', 'Rail line'), '铁路': ('铁路', 'Railway'), 'railway': ('铁路', 'Railway'), '后方守备': ('后方守备', 'Rear guard'), 'rear guard': ('后方守备', 'Rear guard'), '山脊': ('山脊', 'Ridge'), 'ridge': ('山脊', 'Ridge'), '东侧边缘': ('东侧边缘', 'Eastern rim'), 'eastern rim': ('东侧边缘', 'Eastern rim'), '西侧边缘': ('西侧边缘', 'Western rim'), 'western rim': ('西侧边缘', 'Western rim'), '河流': ('河流', 'River'), 'river': ('河流', 'River'), '渡河点': ('渡河点', 'River crossing'), 'river crossing': ('渡河点', 'River crossing'), '河畔城镇': ('河畔城镇', 'River town'), 'river town': ('河畔城镇', 'River town'), '南侧桥梁': ('南侧桥梁', 'South bridge'), 'south bridge': ('南侧桥梁', 'South bridge'), '南侧海岸': ('南侧海岸', 'South coast'), 'south coast': ('南侧海岸', 'South coast'), '南侧岩石区': ('南侧岩石区', 'South rocks'), 'south rocks': ('南侧岩石区', 'South rocks'), '南侧城镇': ('南侧城镇', 'South town'), 'south town': ('南侧城镇', 'South town'), '南侧村镇群': ('南侧村镇群', 'South towns'), 'south towns': ('南侧村镇群', 'South towns'), '南侧山谷': ('南侧山谷', 'South valley'), 'south valley': ('南侧山谷', 'South valley'), '西南道路': ('西南道路', 'Southwest road'), 'southwest road': ('西南道路', 'Southwest road'), '广场': ('广场', 'Square'), 'square': ('广场', 'Square'), '寺庙': ('寺庙', 'Temple'), 'temple': ('寺庙', 'Temple'), '铁塔东侧': ('铁塔东侧', 'East of the tower'), 'east of the tower': ('铁塔东侧', 'East of the tower'), '铁塔西侧': ('铁塔西侧', 'West of the tower'), 'west of the tower': ('铁塔西侧', 'West of the tower'), '城镇': ('城镇', 'Town'), 'town': ('城镇', 'Town'), '山谷': ('山谷', 'Valley'), 'valley': ('山谷', 'Valley'), '村庄': ('村庄', 'Village'), 'village': ('村庄', 'Village'), '村庄道路': ('村庄道路', 'Village road'), 'village road': ('村庄道路', 'Village road'), '城墙隘口': ('城墙隘口', 'Wall pass'), 'wall pass': ('城墙隘口', 'Wall pass'), '瀑布': ('瀑布', 'Waterfall'), 'waterfall': ('瀑布', 'Waterfall'), '西侧城区': ('西侧城区', 'West city'), 'west city': ('西侧城区', 'West city'), '西侧海岸': ('西侧海岸', 'West coast'), 'west coast': ('西侧海岸', 'West coast'), '西侧旷野': ('西侧旷野', 'West field'), 'west field': ('西侧旷野', 'West field'), '西侧田野': ('西侧田野', 'West fields'), 'west fields': ('西侧田野', 'West fields'), '西侧丘陵': ('西侧丘陵', 'West hills'), 'west hills': ('西侧丘陵', 'West hills'), '西侧湖滨道路': ('西侧湖滨道路', 'West lake road'), 'west lake road': ('西侧湖滨道路', 'West lake road'), '西侧湖岸': ('西侧湖岸', 'West lakeside'), 'west lakeside': ('西侧湖岸', 'West lakeside'), '西侧山口': ('西侧山口', 'West pass'), 'west pass': ('西侧山口', 'West pass'), '西侧山脊': ('西侧山脊', 'West ridge'), 'west ridge': ('西侧山脊', 'West ridge'), '西侧岩石区': ('西侧岩石区', 'West rocks'), 'west rocks': ('西侧岩石区', 'West rocks'), '西侧街道': ('西侧街道', 'West streets'), 'west streets': ('西侧街道', 'West streets'), '西侧城镇': ('西侧城镇', 'West town'), 'west town': ('西侧城镇', 'West town'), '西侧山谷': ('西侧山谷', 'West valley'), 'west valley': ('西侧山谷', 'West valley'), '西侧树林': ('西侧树林', 'West woods'), 'west woods': ('西侧树林', 'West woods'), '丘陵地带': ('丘陵地带', 'Hilly terrain'), 'hilly terrain': ('丘陵地带', 'Hilly terrain'), '东侧支援': ('东侧支援', 'Eastern support'), 'eastern support': ('东侧支援', 'Eastern support'), '东侧林地': ('东侧林地', 'Eastern woods'), 'eastern woods': ('东侧林地', 'Eastern woods'), '东岛': ('东岛', 'Eastern island'), 'eastern island': ('东岛', 'Eastern island'), '中路后方': ('中路后方', 'Behind the central lane'), 'behind the central lane': ('中路后方', 'Behind the central lane'), '中部山脊': ('中部山脊', 'Central ridge'), 'central ridge': ('中部山脊', 'Central ridge'), '出生后方': ('出生后方', 'Behind the spawn'), 'behind the spawn': ('出生后方', 'Behind the spawn'), '北侧后方': ('北侧后方', 'Northern rear'), 'northern rear': ('北侧后方', 'Northern rear'), '北侧支援': ('北侧支援', 'Northern support'), 'northern support': ('北侧支援', 'Northern support'), '南侧半岛': ('南侧半岛', 'Southern peninsula'), 'southern peninsula': ('南侧半岛', 'Southern peninsula'), '后方支援': ('后方支援', 'Rear support'), 'rear support': ('后方支援', 'Rear support'), '坡道': ('坡道', 'Ramp'), 'ramp': ('坡道', 'Ramp'), '城区后方': ('城区后方', 'Behind the city'), 'behind the city': ('城区后方', 'Behind the city'), '城镇支援': ('城镇支援', 'Town support'), 'town support': ('城镇支援', 'Town support'), '基地后方': ('基地后方', 'Behind the base'), 'behind the base': ('基地后方', 'Behind the base'), '平原': ('平原', 'Plain'), 'plain': ('平原', 'Plain'), '新炮位': ('新炮位', 'Artillery position'), 'artillery position': ('新炮位', 'Artillery position'), '旷野后方': ('旷野后方', 'Behind the fields'), 'behind the fields': ('旷野后方', 'Behind the fields'), '林地': ('林地', 'Woods'), 'woods': ('林地', 'Woods'), '树林': ('树林', 'Forest'), 'forest': ('树林', 'Forest'), '桥梁': ('桥梁', 'Bridge'), 'bridge': ('桥梁', 'Bridge'), '沙滩': ('沙滩', 'Sandy beach'), 'sandy beach': ('沙滩', 'Sandy beach'), '海岸': ('海岸', 'Coast'), 'coast': ('海岸', 'Coast'), '西侧山丘': ('西侧山丘', 'Western hills'), 'western hills': ('西部山丘', 'Western hills'), '西侧山坡': ('西侧山坡', 'Western slope'), 'western slope': ('西侧山坡', 'Western slope'), '西侧支援': ('西侧支援', 'Western support'), 'western support': ('西侧支援', 'Western support'), '西侧桥梁': ('西侧桥梁', 'Western bridge'), 'western bridge': ('西侧桥梁', 'Western bridge'), '西島': ('西島', 'Western island'), 'western island': ('西岛', 'Western island'), '西岛': ('西岛', 'Western island'), '西部山丘': ('西部山丘', 'Western hills'), '铁路后方': ('铁路后方', 'Behind the railway'), 'behind the railway': ('铁路后方', 'Behind the railway')}
 
 def tactic_name(value, language):
+    if value in ('SPG endgame attack', 'SPG attack'):
+        return '火炮残局出击' if language == 'zh' else 'SPG endgame attack'
     pair = TACTIC_NAMES.get(value) or TACTIC_NAMES.get(value.lower())
     return pair[0 if language == "zh" else 1] if pair else value

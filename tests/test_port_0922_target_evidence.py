@@ -97,7 +97,7 @@ class TargetEvidenceTests(unittest.TestCase):
             self.planner.known_targets(self.states, self.players), 1)[1]
         defense = dict(contributors={'1': [dict(kind='human', id=3)]})
         result = self.planner._prioritize_base_invaders(1, [bot], contacts,
-            {11: contacts[0]}, {11: {}}, defense, 1.1)
+            {11: contacts[0]}, {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.1)
         self.assertEqual(3, result[11]['id'])
         decision = self.planner._target_decisions[11]
         self.assertEqual(('human', 3), decision['selected'])
@@ -105,7 +105,7 @@ class TargetEvidenceTests(unittest.TestCase):
         self.assertGreater(self.planner._target_assignments[11]['until'], 1.1)
         lease = copy.deepcopy(self.planner._target_assignments[11])
         self.planner._prioritize_base_invaders(1, [bot], contacts, result,
-            {11: {}}, defense, 1.2)
+            {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.2)
         self.assertEqual(lease, self.planner._target_assignments[11])
 
     def test_capturer_does_not_bypass_wall_or_radio_expiry(self):
@@ -118,10 +118,10 @@ class TargetEvidenceTests(unittest.TestCase):
         selected = next(c for c in contacts if c['id'] == 2)
         defense = dict(contributors={'1': [dict(kind='human', id=3)]})
         result = self.planner._prioritize_base_invaders(1, [bot], contacts,
-            {11: selected}, {11: {}}, defense, 1.1)
+            {11: selected}, {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, defense, 1.1)
         self.assertEqual(2, result[11]['id'])
 
-    def test_base_priority_preserves_existing_recent_attacker_override(self):
+    def test_base_priority_preempts_recent_attacker_only_inside_own_circle(self):
         self.orders(1)
         self.planner.report_damage(11, 'player', 2, 100, 1.1)
         self.orders(1.2)
@@ -130,9 +130,9 @@ class TargetEvidenceTests(unittest.TestCase):
             self.planner.known_targets(self.states, self.players), 1.2)[1]
         current = next(c for c in contacts if c['id'] == 2)
         result = self.planner._prioritize_base_invaders(1, [bot], contacts, {11: current},
-            {11: {}}, dict(contributors={'1': [dict(kind='human', id=3)]}), 1.2)
-        self.assertEqual(2, result[11]['id'])
-        self.assertEqual('recent_attacker_override',
+            {11: dict(point=dict(x=0,y=0,z=0),radius=50)}, dict(contributors={'1': [dict(kind='human', id=3)]}), 1.2)
+        self.assertEqual(3, result[11]['id'])
+        self.assertEqual('proved_capturer_lane',
             self.planner._target_decisions[11]['base_priority']['reason'])
 
     def test_working_defender_stays_but_idle_defender_is_eventually_replaced(self):
@@ -251,6 +251,20 @@ class LanePublicationTests(unittest.TestCase):
         self.assertEqual('published',self.runtime.states[11]['_lane_publication_evidence']['reason'])
         self.assertTrue(self.runtime.states[11]['_lane_publication_evidence']['mechanical_retry_suppressed'])
 
+    def test_expiry_publishes_pending_only_for_selected_positive_lane(self):
+        row = self.pack(4.)
+        self.assertEqual([], row['shootable_by_bot_ids'])
+        self.assertEqual([11], row['pending_lane_by_bot_ids'])
+        self.runtime._shot_los_cache[(11, 'bot', 19)] = (3.9, False)
+        self.assertEqual([], self.pack(4.)['pending_lane_by_bot_ids'])
+        self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.1, True)
+        self.radio_left = 0.
+        self.assertEqual([], self.pack(4.)['pending_lane_by_bot_ids'])
+        self.radio_left = 5.
+        self.assertEqual([], self.pack(30.)['pending_lane_by_bot_ids'])
+        self.runtime._server_orders.clear()
+        self.assertEqual([], self.pack(4.)['pending_lane_by_bot_ids'])
+
     def test_final_native_fire_veto_remains_authoritative(self):
         self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.2, False)
         command, target = self.runtime._apply_blocked_direct_aim(
@@ -271,6 +285,11 @@ class LanePublicationTests(unittest.TestCase):
         self.assertEqual([11], result['contacts'][0]['shootable_by_bot_ids'])
         self.assertFalse(result['contacts'][0]['fresh'])
         self.assertEqual([11], state.bot_planner._contacts[2][('human', 2)]['shootable_by_bot_ids'])
+        contact.update(shootable_by_bot_ids=[], pending_lane_by_bot_ids=[11, -1, 'bad', 999])
+        result = state.update_bot_observation(ai.SIMULATION_WORKER_AUTHORITY_ID, message)
+        self.assertIsInstance(result, dict)
+        self.assertEqual([11], state.bot_planner._contacts[2][('human', 2)]['pending_lane_by_bot_ids'])
+        self.assertEqual([], state.bot_planner._contacts[2][('human', 2)]['shootable_by_bot_ids'])
 
     def test_absent_contact_replaces_old_publication_diagnostic(self):
         self.pack()

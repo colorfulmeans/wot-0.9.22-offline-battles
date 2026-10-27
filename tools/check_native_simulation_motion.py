@@ -45,7 +45,9 @@ def reference_drive(module):
         raise RuntimeError('Physical reference boundary is missing')
     end = start + tail.start()
     body = textwrap.dedent(source[start:end])
-    prefix = '''def drive(self,state,step,now,command,motion_probe,throttle,turn,path_clear,pose_frozen,travel_sign,neighbours,descriptor,siege_motion_locked,maximum_probe_distance=None):
+    prefix = '''def drive(self,state,step,now,command,motion_probe,throttle,turn,path_clear,pose_frozen,travel_sign,neighbours,descriptor,siege_motion_locked,maximum_probe_distance=None,rotation_roster=None):
+    if rotation_roster is None:
+        rotation_roster = tuple(self.states.items())
     position = _position(state)
     travel_yaw = state['yaw'] + (math.pi if travel_sign < 0. else 0.)
     steer_dir = 1 if turn > .01 else -1 if turn < -.01 else 0
@@ -72,6 +74,7 @@ def run_reference(scene, module, commands, step, now, drive):
     runtime._contact_players, runtime._contact_now = players, now
     runtime._consume_human_contact_pushes(players, now)
     ticks, safe, attempted, passive, locked, integrated = {}, {}, {}, {}, {}, set()
+    rotation_roster = tuple(runtime.states.items())
     for state in runtime.states.values():
         if not state.get('alive'):
             continue
@@ -100,7 +103,8 @@ def run_reference(scene, module, commands, step, now, drive):
         state['speed'] = state.get('speed', 0.0)
         f, a = drive(runtime, state, step, now,
             {'move_position': (state['x'], state['y'], state['z']+30.)}, probe,
-            throttle, turn, True, False, 1., (), runtime._descriptors[actor], siege_locked)
+            throttle, turn, True, False, 1., (), runtime._descriptors[actor], siege_locked,
+            rotation_roster=rotation_roster)
         passive.update(f)
         attempted.update(a)
         integrated.add(actor)

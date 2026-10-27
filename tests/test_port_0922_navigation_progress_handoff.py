@@ -33,7 +33,7 @@ class NavigationProgressHandoffTests(unittest.TestCase):
         self.callback()
         modes=[self.adapter.decide_with_order(self.state,self.order,lambda *args: True)
                ['recovery_mode'] for unused in range(120)]
-        self.assertIn('reverse_turn',modes)
+        self.assertTrue(any(mode in ('reverse_turn','short_reverse_escape') for mode in modes))
 
     def test_t49_reported_sideways_leg_is_not_mistaken_for_macro_stall(self):
         # 160923 T49: a proved eastbound connector precedes the southbound

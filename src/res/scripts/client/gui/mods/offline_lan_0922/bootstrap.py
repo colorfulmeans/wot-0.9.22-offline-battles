@@ -565,6 +565,17 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
     return len(delivered)
 
 
+def _deliver_launcher_recruits(snapshot, vehicles, tankmen):
+    from gui.mods.offline_lan_0922 import crew_recruits
+    try:
+        return crew_recruits.deliver(snapshot, vehicles, tankmen, _garage_store(),
+            port_config.save_slot_state_path(crew_recruits.FILE_NAME), crew_recruits.keep_pending,
+            lambda text: sys.stdout.write('[Offline LAN 0.9.22] %s\n' % text))
+    except Exception as error:
+        sys.stdout.write('[Offline LAN 0.9.22] launcher crew remains pending: %s\n' % error)
+        return 0
+
+
 def _settle_launcher_campaign(snapshot, vehicles, tankmen):
     """Deliver edited completion and its reward markers in one durable save."""
     if not (snapshot.get('personalMissionProgress') or
@@ -773,7 +784,10 @@ def _selected_vehicle(config, restore_saved=True):
                                 (selected_descriptor
                                  if type_id == selected_type_id else None)),
                     top_modules=not career,
-                    own_researchable_modules=not career)
+                    own_researchable_modules=not career,
+                    full_crew_skills=not career,
+                    default_elite_equipment=(not career and
+                        _client_mode != port_config.SIMULATION_WORKER_MODE))
             except Exception:
                 if type_id == selected_type_id:
                     raise
@@ -950,6 +964,9 @@ def _selected_vehicle(config, restore_saved=True):
         offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
+            initial_berths = port_config.save_slot_initial_berths()
+            if initial_berths is not None:
+                result['accountBerths'] = initial_berths
             result.update(port_config.save_slot_initial_personal_progress())
             result.update(port_config.save_slot_initial_customizations())
         if not career:
@@ -962,6 +979,7 @@ def _selected_vehicle(config, restore_saved=True):
             _restore_garage(result)
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
+            _deliver_launcher_recruits(result, vehicles, tankmen)
             _settle_launcher_campaign(result, vehicles, tankmen)
         if not career:
             _grant_default_styles(result, customization_cache.styles, style_vehicle_types)
@@ -1583,6 +1601,8 @@ def init():
         # Install this before every worker refusal path. A fresh preferences
         # leaf otherwise selects #1513's compulsory, unskippable intro movie.
         _install_intro_skip()
+        from gui.mods.offline_lan_0922 import sound_diagnostics
+        sound_diagnostics.install()
         if requested_mode != port_config.SIMULATION_WORKER_MODE:
             from gui.mods.offline_lan_0922 import depot_styles
             depot_styles.install()

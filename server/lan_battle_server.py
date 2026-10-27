@@ -28,6 +28,7 @@ import socket
 import socketserver
 import threading
 import time
+import traceback
 import uuid
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
@@ -237,7 +238,7 @@ MODERN_VISIBLE_MESSAGE_TYPES = frozenset((
     "landing_observation", "start_battle",
     "battle_ready", "leave_battle",
     "battle_receipt_ack", "descriptor_catalog", "select_vehicle",
-    "select_team", "set_team_size", "set_bot_tier_mode",
+    "select_team", "set_team_size", "set_team_class", "set_bot_tier_mode",
     "set_bot_skill_mode",
     "ping", "worker_ping", "leave",
     "snapshot_resync",
@@ -265,6 +266,9 @@ TEAM_CHAT_MAX_CHARACTERS = 140
 TEAM_COMMAND_TTL_TICKS = int(15 * TICK_HZ)
 # Travel orders need time to cross the map; short tactical focus stays brief.
 TEAM_COMMAND_MOVEMENT_TTL_TICKS = int(120 * TICK_HZ)
+TEAM_COMMAND_COOLDOWN_TICKS = int(10 * TICK_HZ)
+TEAM_GUARD_TRAVEL_TICKS = int(90 * TICK_HZ)
+TEAM_GUARD_SAFE_TICKS = int(30 * TICK_HZ)
 TEAM_COMMAND_MOVEMENT = frozenset((
     "ATTACK", "BACKTOBASE", "HELPME", "HELPMEEX", "FOLLOWME", "TURNBACK",
     "ATTENTIONTOCELL",
@@ -565,6 +569,68 @@ def _tick_failure_diagnostic(error):
     diagnostic = "%s: %s" % (
         error_type, detail.replace("\r", " ").replace("\n", " "))
     return diagnostic[:MAX_TICK_FAILURE_DIAGNOSTIC_CHARS]
+
+
+def _log_tick_failure_trace(state, error):
+    """Capture failure-time ownership without inspecting arbitrary locals.
+
+    This opt-in path runs only on failure. Never retry the partially applied
+    tick, serialize an actor roster, or let diagnostic work mask its error.
+    """
+    if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
+        return
+    try:
+        frames = []
+        current = error.__traceback__
+        while current is not None:
+            local = current.tb_frame.f_locals
+            row = dict(file=current.tb_frame.f_code.co_filename,
+                       function=current.tb_frame.f_code.co_name,
+                       line=current.tb_lineno)
+            for name in ('index', 'route_id', 'bot_id', 'actor', 'phase'):
+                value = local.get(name)
+                if type(value) in (int, float, str, bool) or value is None:
+                    row[name] = value[:160] if type(value) is str else value
+            for name in ('points', 'waypoints'):
+                value = local.get(name)
+                if type(value) in (list, tuple):
+                    row[name + '_count'] = len(value)
+            for name in ('bot', 'order', 'route', 'task', 'recovery'):
+                value = local.get(name)
+                if type(value) is not dict:
+                    continue
+                fields = {}
+                for key in ('id', 'team', 'slot', 'kind', 'route_id',
+                            'route_index', 'index', 'source_index', 'phase',
+                            'combat_mode', 'failed'):
+                    item = value.get(key)
+                    if type(item) in (int, float, str, bool):
+                        fields[key] = item[:160] if type(item) is str else item
+                for key in ('points', 'waypoints'):
+                    if type(value.get(key)) in (list, tuple):
+                        fields[key + '_count'] = len(value[key])
+                row[name] = fields
+            frames.append(row)
+            current = current.tb_next
+        text = ''.join(traceback.format_exception(type(error), error,
+                                                  error.__traceback__))
+        envelope = dict(round=getattr(state, 'round_id', None),
+            tick=getattr(state, 'tick', None), map=getattr(state, 'map_name', None),
+            phase=getattr(state, 'phase', None), error=_tick_failure_diagnostic(error),
+            frames=frames[-48:], frames_dropped=max(0, len(frames)-48),
+            traceback=text[:65536], traceback_truncated=len(text) > 65536)
+        payload = json.dumps(envelope, ensure_ascii=True, separators=(',', ':'))
+        # Re-encoding a JSON chunk can double backslashes/quotes. Keep even
+        # an all-escaped part below the launcher's bounded line reader.
+        chunks = [payload[i:i+2048] for i in range(0, len(payload), 2048)]
+        for index, chunk in enumerate(chunks):
+            _server_log('SERVER TICK TRACE ' + json.dumps(dict(
+                round=envelope['round'], tick=envelope['tick'],
+                part=index+1, parts=len(chunks), data=chunk), ensure_ascii=True))
+    except Exception as diagnostic_error:
+        _server_log_limited('server-tick-trace-unavailable',
+            'SERVER TICK TRACE unavailable diagnostic=%s' %
+            _tick_failure_diagnostic(diagnostic_error), interval=1.0)
 
 
 def _valid_capability_subset(value, required):
@@ -2236,6 +2302,8 @@ class Player(_EndpointSendMixin):
     equipment_intent_result: dict = field(default_factory=lambda: {
         "intent_seq": 0, "accepted": False, "reason": ""})
     team_command_seq: int = 0
+    team_command_ready_tick: int = 0
+    team_command_refusal_sent: bool = False
     team_command_fingerprints: OrderedDict = field(
         default_factory=OrderedDict, repr=False)
     team_command_acks: OrderedDict = field(
@@ -2381,6 +2449,9 @@ class BattleState:
         team2_size = (legacy_team_size if team2_size is None else
                       _team_capacity(team2_size, "team2_size"))
         self.team_sizes = {1: team1_size, 2: team2_size}
+        self.team_classes = bot_tactics.team_class_choices(sizes=self.team_sizes)
+        self.team_class_notice = None
+        self.last_bot_class_error = None
         self.bot_tier_mode = bot_planner.normalize_bot_tier_mode(
             bot_tier_mode)
         self.bot_skill_mode = bot_gunnery.normalize_skill_mode(
@@ -2414,6 +2485,7 @@ class BattleState:
         self.authority_epoch = 0
         self.bot_manifest_authority_id = None
         self.bot_manifest = []
+        self.bot_ammo_policies = {}
         self.bot_manifest_revision = 0
         self.bot_states = {}
         self.bot_unavailable_checkpoints = set()
@@ -2474,6 +2546,7 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self._player_water_diagnostics = {}
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
@@ -2861,6 +2934,7 @@ class BattleState:
             self.player_environment_seq = -1
             self.player_environment_authority_epoch = -1
             self.player_drowning_seconds = {}
+            self._player_water_diagnostics = {}
             self.environment_pushes = {}
             self.environment_push_sequences = {}
             self.environment_fall_totals = {}
@@ -3134,6 +3208,7 @@ class BattleState:
                 effective_params=effective_params,
             )
             self.players[player_id] = player
+            for side in (1,2):self._trim_team_classes(side)
             if self.host_player_id is None:
                 self.host_player_id = player_id
             self.state_revision += 1
@@ -3186,8 +3261,56 @@ class BattleState:
                 player.slot, player.team)
             player.y = 0.0
             player.aim_yaw = player.yaw
+            for side in (1,2):self._trim_team_classes(side)
             self.state_revision += 1
             return True, None
+
+    def _class_context(self, team, plan=None):
+        from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+        if plan is None:
+            occupied={(p.team,p.slot) for p in self.players.values() if p.connected and p.team in (1,2)}
+            humans=[p for p in self.players.values() if p.connected and p.team==team]
+        else:
+            occupied={(side,slot) for p,side,slot in plan}
+            humans=[p for p,side,slot in plan if side==team]
+        pinned=[r for r in self.bot_lineup if r.get('team')==team and 'vehicle' in r
+                and (team,r.get('slot')) not in occupied and 0<=r.get('slot',-1)<self.team_sizes[team]]
+        tags=[CLASSES.get(r['vehicle']) for r in pinned]
+        return max(0,self.team_sizes[team]-len(humans)-len(pinned)),tags,sum(CLASSES.get(p.vehicle)=='SPG' for p in humans)
+
+    def _trim_team_classes(self, team, keep=None, plan=None):
+        from gui.mods.offline_lan_0922 import team_class_policy as policy
+        automatic,pinned,unused=self._class_context(team,plan)
+        was_random=self.team_classes[str(team)]['random']
+        removed=policy.trim(self.team_classes[str(team)],automatic,pinned,keep)
+        if removed and not was_random:
+            previous=self.team_class_notice
+            changes=list(previous.get('changes',[])) if previous and previous.get('revision')==self.state_revision+1 else []
+            changes.append(dict(team=team,removed=removed))
+            self.team_class_notice=dict(revision=self.state_revision+1,team=team,removed=removed,changes=changes)
+        return removed
+
+    def set_team_class(self, player_id, team, tag, allowed):
+        with self.lock:
+            player=self.players.get(player_id)
+            if player is None or not player.connected or self.phase!='waiting' or player_id!=self.host_player_id:return False
+            try:team=_exact_int(team,1,2)
+            except ValueError:return False
+            if tag not in bot_tactics.CLASSES+('random',) or type(allowed) is not bool:return False
+            row=self.team_classes[str(team)]
+            if tag=='random':
+                row['random']=allowed
+                if not allowed and not row['order']:
+                    row.update(dict((t,True) for t in bot_tactics.CLASSES));row['order']=list(bot_tactics.CLASSES)
+            else:
+                if row['random']:return False
+                row[tag]=allowed
+                if tag in row['order']:row['order'].remove(tag)
+                if allowed:row['order'].append(tag)
+                if not row['order']:row['random']=True
+            self._trim_team_classes(team,tag if tag!='random' and allowed else None)
+            self.state_revision+=1
+            return True
 
     def set_team_size(self, player_id, requested_team, requested_size):
         """Let the waiting-room host change one next-round team capacity."""
@@ -3236,6 +3359,7 @@ class BattleState:
                 participant.y = 0.0
                 participant.aim_yaw = participant.yaw
             self.team_sizes[team] = size
+            self._trim_team_classes(team)
             self.team_size = max(self.team_sizes.values())
             occupied_slots = {
                 (participant.team, participant.slot)
@@ -3540,6 +3664,8 @@ class BattleState:
             player.team_command_fingerprints.clear()
             player.team_command_acks.clear()
             player.team_command_publications.clear()
+            player.team_command_ready_tick = 0
+            player.team_command_refusal_sent = False
             player.team_chat_seq = 0
             player.team_chat_fingerprints.clear()
             player.team_chat_acks.clear()
@@ -3643,6 +3769,7 @@ class BattleState:
         self.authority_epoch = 0
         self.bot_manifest_authority_id = None
         self.bot_manifest = []
+        self.bot_ammo_policies = {}
         self.bot_manifest_revision = 0
         self.bot_states = {}
         self.bot_unavailable_checkpoints = set()
@@ -3687,6 +3814,7 @@ class BattleState:
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
         self.player_drowning_seconds = {}
+        self._player_water_diagnostics = {}
         self.environment_pushes = {}
         self.environment_push_sequences = {}
         self.environment_fall_totals = {}
@@ -3762,6 +3890,8 @@ class BattleState:
                 "bot_authority_id": self.bot_authority_id,
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "players": [self._public_player(p)
@@ -3873,8 +4003,72 @@ class BattleState:
                         raw["vehicle"] not in allowed_names
                         for raw in self.bot_lineup if "vehicle" in raw):
                     return None, "invalid_bot_lineup"
+            connected = [p for p in self.players.values() if p.connected]
+            assignment_plan = self._waiting_assignment_plan(connected)
+            if assignment_plan is None:
+                return None, 'team_full'
+            self.last_bot_class_error=None
+            if any([self._trim_team_classes(side,plan=assignment_plan) for side in (1,2)]):
+                self.state_revision+=1
+            if battle_mode=='regular' or training_bots:
+                from gui.mods.offline_lan_0922 import team_class_policy as policy
+                from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+                catalog=self.vehicle_catalogs.get(self.host_player_id) or ()
+                allowed_names=_bot_lineup_allowed_names(catalog)-set(self.bot_excluded_vehicles)
+                host=self.players[self.host_player_id]
+                host_tier=next((r['level'] for r in catalog if r.get('name')==host.vehicle),1)
+                pool=[r for r in catalog if r.get('name') in allowed_names and
+                      bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
+                # The worker reserves every connected human's tier/class, even
+                # in a mixed-tier room outside the host's ordinary tier band.
+                pool_names=set(r['name'] for r in pool)
+                for participant,side,slot in assignment_plan:
+                    if participant.vehicle in allowed_names and participant.vehicle not in pool_names:
+                        entry=next((r for r in catalog if r['name']==participant.vehicle),None)
+                        if entry is not None:pool.append(entry);pool_names.add(entry['name'])
+                needed=set();groups=[]
+                for side in (1,2):
+                    automatic,pinned,unused=self._class_context(side,assignment_plan)
+                    row=self.team_classes[str(side)]
+                    needed.update(policy.required(row,pinned))
+                    if automatic and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
+                human_tiers=[next((r['level'] for r in catalog if r.get('name')==p.vehicle),host_tier)
+                             for p,side,slot in assignment_plan]
+                proposed=bot_planner.bot_match_tiers(host_tier,self.bot_tier_mode,
+                    available_tiers=[r.get('level',1) for r in pool],required_tiers=human_tiers)
+                proposed=tuple(sorted(set(proposed)|set(human_tiers)))
+                tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r)) for r in pool],
+                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups)
+                if tiers is None:
+                    available=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool)
+                    for team in (1,2):
+                        row=self.team_classes[str(team)]
+                        if row['random']:continue
+                        unused,pinned,unused=self._class_context(team,assignment_plan)
+                        missing=[tag for tag in policy.required(row,pinned) if tag not in available]
+                        if missing:
+                            self.last_bot_class_error=dict(team=team,reason='missing_class',classes=missing)
+                            return None,'bot_class_pool_empty'
+                    self.last_bot_class_error=dict(team=next(t for t in (1,2) if not self.team_classes[str(t)]['random']),
+                        reason='tier_window',classes=sorted(needed))
+                    return None,'bot_class_pool_empty'
+                for team in (1,2):
+                    row=self.team_classes[str(team)]
+                    automatic,pinned,human_spgs=self._class_context(team,assignment_plan)
+                    quota=policy.artillery_limit(self.team_sizes[team],human_spgs,pinned.count('SPG'),row)
+                    classes=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool if r.get('level',1) in (tiers or ()))
+                    # Legacy probes without a native catalog can still use the
+                    # default random mode; explicit guarantees require evidence.
+                    if row['random'] and not catalog:continue
+                    reason=policy.validate(row,automatic,pinned,classes,quota)
+                    if reason:
+                        self.last_bot_class_error=dict(team=team,reason=reason,
+                            classes=policy.required(row,pinned))
+                        return None,'bot_class_pool_empty'
             try:
                 proposed_tactics = bot_tactics.load(self.bot_tactics_path)
+                from gui.mods.offline_lan_0922.bot_fittings import validate_profile
+                validate_profile(proposed_tactics)
             except bot_tactics.TacticsError as error:
                 _server_log("BOT TACTICS refused: %s" % error)
                 return None, "invalid_bot_tactics"
@@ -3896,9 +4090,6 @@ class BattleState:
             for participant in connected:
                 if not self._install_player_equipments(participant):
                     return None, "invalid_player_critical_profile"
-            assignment_plan = self._waiting_assignment_plan(connected)
-            if assignment_plan is None:
-                return None, "team_full"
             self._apply_waiting_assignment_plan(assignment_plan)
             self.round_start_time = int(time.time())
             for participant in connected:
@@ -3938,6 +4129,8 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
@@ -4746,6 +4939,8 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
                 "bot_skill_mode": self.bot_skill_mode,
                 "bot_lineup": list(self.bot_lineup),
@@ -4959,6 +5154,11 @@ class BattleState:
                     round_constants = _validated_bot_round_constants(raw)
                 except ValueError:
                     return False
+                try:
+                    clean_profile=self._sanitize_bot_profile(raw.get('profile'))
+                except bot_tactics.TacticsError:
+                    self.last_bot_manifest_reject_code='invalid_bot_profile'
+                    return False
                 entry = {
                     "id": bot_id,
                     "team": identity["team"],
@@ -4967,7 +5167,7 @@ class BattleState:
                     "vehicle": _safe_vehicle(raw.get("vehicle"), "ussr:R11_MS-1"),
                     "max_health": max_health,
                     "health": health,
-                    "profile": self._sanitize_bot_profile(raw.get("profile")),
+                    "profile": clean_profile,
                     "route": route,
                 }
                 if (self.battle_mode == "regular" and
@@ -5011,11 +5211,46 @@ class BattleState:
                     # canonical identity beside the tier name so a takeover
                     # reinstalls the same Bot rather than re-drawing one.
                     entry['skill_rating'] = rating
+                if 'fitting' in raw:
+                    from gui.mods.offline_lan_0922 import bot_fittings
+                    try:
+                        entry['fitting'] = bot_fittings.canonical(raw['fitting'])
+                        previous_identity = next((item for item in self.bot_manifest
+                            if item['id'] == bot_id), None)
+                        if (entry['fitting']['vehicle'] != entry['vehicle'] or
+                                entry['fitting']['tier'] != entry.get('skill') or
+                                (previous_identity is not None and previous_identity.get('fitting') != entry['fitting'])):
+                            return False
+                    except (ValueError, TypeError, KeyError):
+                        return False
+                elif previous is not None and previous.get('fitting'):
+                    return False
+                from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+                tag=CLASSES.get(entry['vehicle'],entry['profile'].get('class_tag','mediumTank'))
+                pinned=any(row.get('team')==raw_team and row.get('slot')==raw_slot and row.get('vehicle')==entry['vehicle'] for row in self.bot_lineup)
+                from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+                if not pinned and not class_policy.allows(self.team_classes[str(raw_team)],tag):
+                    self.last_bot_manifest_reject_code='bot_class_excluded'
+                    return False
                 manifest.append(entry)
                 states[bot_id] = self._sanitize_bot_state(
                     raw, entry, self.bot_states.get(bot_id))
             if seen != set(roster):
                 return False
+            from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+            for team in (1,2):
+                artillery=[row for row in manifest if row['team']==team and CLASSES.get(row['vehicle'],row['profile'].get('class_tag'))=='SPG']
+                pinned=sum(any(p.get('team')==team and p.get('slot')==row['slot'] and p.get('vehicle')==row['vehicle'] for p in self.bot_lineup) for row in artillery)
+                humans=sum(p.connected and p.team==team and CLASSES.get(p.vehicle)=='SPG' for p in self.players.values())
+                from gui.mods.offline_lan_0922 import team_class_policy as class_policy
+                row=self.team_classes[str(team)]
+                if len(artillery)-pinned>class_policy.artillery_limit(self.team_sizes[team],humans,pinned,row):
+                    self.last_bot_manifest_reject_code='bot_artillery_limit'
+                    return False
+                actual=set(CLASSES.get(r['vehicle'],r['profile'].get('class_tag')) for r in manifest if r['team']==team)
+                if class_policy.required(row,actual):
+                    self.last_bot_manifest_reject_code='bot_class_missing'
+                    return False
             manifest.sort(key=lambda value: value["id"])
             self.bot_manifest = manifest
             self.bot_manifest_revision += 1
@@ -5037,10 +5272,67 @@ class BattleState:
             self.pending_events.append({"kind": "bot_manifest", "bots": list(manifest)})
             return True
 
+    def _bot_ammo_policy(self, bot_id):
+        from gui.mods.offline_lan_0922.ammo_policy import ShotPolicy
+        policy = self.bot_ammo_policies.get(bot_id)
+        if policy is None:
+            identity = next((bot for bot in self.bot_manifest if bot['id'] == bot_id), {})
+            policy = ShotPolicy(identity.get('profile') or {})
+            self.bot_ammo_policies[bot_id] = policy
+        return policy
+
+    def _refresh_bot_ammo_orders(self):
+        for order in self.bot_orders.get('orders', ()):
+            state = self.bot_states.get(order['id'])
+            if state is None:
+                continue
+            policy = self._bot_ammo_policy(order['id'])
+            target = (order.get('target_kind'), order.get('target_id')) if order.get('target_id') else None
+            policy.context(state, target)
+            selected = policy.choose(state)
+            if getattr(policy, 'last_plan', None) != selected:
+                policy.last_plan = selected
+                _server_log('BOT AMMO PLAN ' + json.dumps(dict(
+                    bot=order['id'], round=self.round_id, epoch=policy.epoch,
+                    phase=policy.phase, phase_id=policy.phase_id, desired=policy.desired,
+                    selected=selected, loaded=state.get('shell_index'),
+                    next=state.get('next_shell_index'), clip=state.get('clip'),
+                    pending=state.get('ammo_reload_pending'), reload=state.get('reload_time'),
+                    fire_seq=state.get('fire_seq'), inventory=state.get('ammo_remaining')),
+                    sort_keys=True))
+            state['ammo_policy_shell_index'] = selected
+            order['shell_index'] = selected
+
+    def _bot_ammo_terminal(self, record, known=True):
+        if record.get('shooter_kind') != 'bot':
+            return
+        policy = self._bot_ammo_policy(record['shooter_id'])
+        launch = policy.by_seq.get(record['shot_seq']) or {}
+        policy.resolve(record['shot_seq'], record.get('_ammo_hit', False),
+                       record.get('_ammo_damage', 0), record.get('_ammo_penetrated', False), known)
+        _server_log('BOT AMMO ' + json.dumps(dict(
+            bot=record['shooter_id'], projectile=record['projectile_id'],
+            shot=record['shot_seq'], phase=policy.phase, desired=policy.desired,
+            hit=record.get('_ammo_hit', False), damage=record.get('_ammo_damage', 0),
+            penetrated=record.get('_ammo_penetrated', False), known=known,
+            epoch=policy.epoch, phase_id=policy.phase_id, magazine=policy.magazine,
+            launch_phase_id=launch.get('phase_id'), launch_epoch=launch.get('epoch'),
+            launch_magazine=launch.get('magazine'), shell=launch.get('shell'),
+            pending_results=len(policy.pending), round=self.round_id), sort_keys=True))
+        self._refresh_bot_ammo_orders()
+
     @staticmethod
     def _sanitize_bot_profile(raw):
         raw = raw if isinstance(raw, dict) else {}
         profile = {}
+        # Descriptor identities are protocol keys, not 24-character player names.
+        # Keep dots in native shell names such as _75mm_Sprg.18 as well.
+        def descriptor_name(value):
+            value = str(value or "")
+            return value if (len(value) <= 96 and all(
+                char.isalnum() or char in ":_-." for char in value)) else ""
+        profile["vehicle_name"] = descriptor_name(raw.get("vehicle_name"))
+        profile["gun_name"] = descriptor_name(raw.get("gun_name"))
         for key in ("class_tag", "dominant_role"):
             profile[key] = _safe_name(raw.get(key), "unknown")
         roles = raw.get("roles")
@@ -5056,7 +5348,15 @@ class BattleState:
                                       ("armor", 0.0, 10000.0),
                                       ("parking_radius", math.hypot(3.5, 1.7), 20.0)):
             profile[key] = round(_clamp(_finite_float(raw.get(key), default), 0.0, maximum), 3)
+        profile["burst_size"] = max(1, min(64, int(_finite_float(raw.get("burst_size"), 1))))
+        profile["clip_size"] = max(1, min(MAX_PLAYER_CLIP_SIZE, int(_finite_float(raw.get("clip_size"), 1))))
         profile["shells"] = []
+        if 'ammo_limit' in raw:
+            from gui.mods.offline_lan_0922.bot_tactics import normalize_values
+            profile['ammo_limit'] = normalize_values({'ammo_limit':raw['ammo_limit']})['ammo_limit']
+        if 'ammo_ratios' in raw:
+            from gui.mods.offline_lan_0922.bot_tactics import normalize_values
+            profile['ammo_ratios'] = normalize_values({'ammo_ratios':raw['ammo_ratios']})['ammo_ratios']
         shells = raw.get("shells") or []
         if not isinstance(shells, (list, tuple)):
             shells = []
@@ -5066,6 +5366,7 @@ class BattleState:
             profile["shells"].append({
                 "index": max(0, min(int(_finite_float(shell.get("index"), 0)), 9)),
                 "kind": _safe_name(shell.get("kind"), "unknown"),
+                "name": descriptor_name(shell.get("name")),
                 "penetration": round(_clamp(_finite_float(shell.get("penetration")), 0.0, 10000.0), 3),
                 "damage": round(_clamp(_finite_float(shell.get("damage")), 0.0, 10000.0), 3),
                 "speed": round(_clamp(_finite_float(shell.get("speed")), 0.0, 10000.0), 3),
@@ -5140,8 +5441,8 @@ class BattleState:
         if (shell_count <= 0 or shell_count > 5 or
                 len(remaining) != shell_count):
             raise ValueError("bot ammunition inventory shape is invalid")
-        parsed = [_exact_int(value, 0, 1000) for value in remaining]
-        if sum(parsed) > 1000:
+        parsed = [_exact_int(value, 0, 1800) for value in remaining]
+        if sum(parsed) > 1800:
             raise ValueError("bot ammunition inventory exceeds capacity")
         loaded = _exact_int(raw.get("shell_index"), 0, shell_count - 1)
         planned = _exact_int(
@@ -5475,6 +5776,21 @@ class BattleState:
                     shooter_ids = [identity for identity in shooter_ids
                                    if identity in radio_bots]
                 contact["shootable_by_bot_ids"] = sorted(shooter_ids)
+                pending_ids = set()
+                raw_pending = contact.get("pending_lane_by_bot_ids")
+                if isinstance(raw_pending, (list, tuple)):
+                    for raw_bot_id in raw_pending[:len(known_bots)]:
+                        try:
+                            pending_id = _exact_int(raw_bot_id, 1, PROJECTILE_MAX_ID)
+                        except ValueError:
+                            continue
+                        pending_bot = known_bots.get(pending_id)
+                        if (pending_bot is not None and pending_bot.get("alive") and
+                                int(pending_bot.get("team", 0)) == observing_team and
+                                pending_id not in shooter_ids and
+                                ("radio_recipients" not in contact or pending_id in radio_bots)):
+                            pending_ids.add(pending_id)
+                contact["pending_lane_by_bot_ids"] = sorted(pending_ids)
                 # A threat is advisory native geometry: a malformed row must
                 # not make an otherwise valid observation batch fail or give
                 # a visible client a way to evict the worker.  It is useful
@@ -5599,6 +5915,10 @@ class BattleState:
         return json.dumps(message, sort_keys=True, separators=(",", ":"),
                           ensure_ascii=True)
 
+    @staticmethod
+    def _defense_points_for_guard(context, team):
+        return BotPlanner._defense_points(context.get('capture_bases'), team)
+
     def _active_team_commands_locked(self):
         """Return only current commands whose issuer can still direct Bots."""
         active = []
@@ -5606,16 +5926,31 @@ class BattleState:
         for command_id, command in self.team_commands.items():
             issuer = self.players.get(command["issuer_id"])
             code = None
-            if self.tick >= command["expires_tick"]:
+            if command['command'] == 'BACKTOBASE':
+                phases = command.setdefault('guard_phases', {})
+                context = self._bot_defense_context()
+                base_rows = self._defense_points_for_guard(context, command['team'])
+                keep = []
+                for actor in command['recipient_bot_ids']:
+                    state = self.bot_states.get(actor) or {}
+                    phase = phases.setdefault(str(actor), {})
+                    inside = any(BotPlanner._inside_base(dict(state=state),base) for base in base_rows)
+                    if inside:phase['arrived'] = True
+                    occupied = bool(int((context.get('states', {}).get(str(command['team'])) or {}).get('invaders', 0)) > 0 or BotPlanner._defense_contributor_keys(context,command['team']))
+                    if phase.get('arrived'):
+                        if occupied:phase.pop('safe_tick', None)
+                        else:phase.setdefault('safe_tick', self.tick)
+                        if not occupied and self.tick-phase['safe_tick'] >= TEAM_GUARD_SAFE_TICKS:continue
+                    elif self.tick >= command['expires_tick']:continue
+                    keep.append(actor)
+                command['recipient_bot_ids'] = keep
+                if not keep:code = 'expired'
+            elif self.tick >= command["expires_tick"]:
                 code = "expired"
-            elif issuer is None or not issuer.connected:
-                code = "issuer_disconnected"
-            elif not issuer.participating:
-                code = "issuer_left"
-            elif not issuer.alive:
-                code = "issuer_dead"
-            elif issuer.team != command["team"]:
-                code = "issuer_changed"
+            if issuer is None or not issuer.connected:code='issuer_disconnected'
+            elif not issuer.participating:code='issuer_left'
+            elif not issuer.alive:code='issuer_dead'
+            elif issuer.team!=command['team']:code='issuer_changed'
             if code is not None:
                 expired.append((command_id, issuer, code))
                 continue
@@ -5742,6 +6077,9 @@ class BattleState:
     @staticmethod
     def _team_command_bot_can_respond(bot, current_order, command):
         """Keep only Bots that can move to answer a broadcast radio call."""
+        from gui.mods.offline_lan_0922 import empty_ammo
+        if empty_ammo.confirmed(bot) or (current_order or {}).get('empty_ammo'):
+            return False
         try:
             has_pose = bool(bot.get("world_pose", True))
             finite_pose = all(math.isfinite(float(bot.get(name)))
@@ -5751,7 +6089,11 @@ class BattleState:
         if not has_pose or not finite_pose:
             return False
         combat_mode = str((current_order or {}).get("combat_mode") or "")
+        if (current_order or {}).get('route_attempt', {}).get('phase') not in (None, 'normal', 'complete'):
+            return False
         if (combat_mode in (
+                "magazine_reload_retreat", "magazine_reload_hold", "engage", "flank", "advance_contact", "take_cover", "cover_hold", "cover_peek", "cover_return", "support_hold",
+                "route_transfer", "recovery_return", "base_defense",
                 "low_health_retreat", "low_health_defend",
                 "under_fire_withdraw", "under_fire_hold",
                 "crossfire_withdraw", "crossfire_hold") or
@@ -6046,10 +6388,32 @@ class BattleState:
                 bots.sort(key=sort_key)
                 recipients = [bot["id"]
                               for bot in bots[:recipient_limit]]
+                if recipients and self.tick < player.team_command_ready_tick:
+                    responders = recipients if not player.team_command_refusal_sent else []
+                    player.team_command_refusal_sent = True
+                    ack = self._team_command_ack(player, message, False, 'cooldown', command, responders)
+                    player.team_command_seq = sequence
+                    player.team_command_fingerprints[sequence] = fingerprint
+                    player.team_command_acks[sequence] = dict(ack)
+                    while len(player.team_command_acks)>TEAM_COMMAND_HISTORY:
+                        oldest=min(player.team_command_acks)
+                        player.team_command_acks.pop(oldest,None)
+                        player.team_command_fingerprints.pop(oldest,None)
+                    return ack
                 if recipients:
+                    player.team_command_ready_tick = self.tick + TEAM_COMMAND_COOLDOWN_TICKS
+                    player.team_command_refusal_sent = False
+                    # A covered Bot can never fall back to an older player request.
+                    for previous_id, previous in list(self.team_commands.items()):
+                        terminal_previous = dict(previous)
+                        previous['recipient_bot_ids'] = [actor for actor in previous['recipient_bot_ids'] if actor not in recipients]
+                        if not previous['recipient_bot_ids']:
+                            self.team_commands.pop(previous_id)
+                            self._publish_team_command_terminal(self.players.get(previous['issuer_id']), terminal_previous, 'superseded')
                     ttl = (TEAM_COMMAND_MOVEMENT_TTL_TICKS
                            if command in TEAM_COMMAND_MOVEMENT else
                            TEAM_COMMAND_TTL_TICKS)
+                    if command == 'BACKTOBASE':ttl = TEAM_GUARD_TRAVEL_TICKS
                     expires_tick = self.tick + ttl
                     command_id = "%d:%d:%d" % (
                         self.round_id, player.player_id, sequence)
@@ -6079,8 +6443,7 @@ class BattleState:
                     self._next_bot_planner_tick = min(
                         self._next_bot_planner_tick, self.tick)
             ack = self._team_command_ack(
-                player, message, True, "accepted", command, recipients,
-                expires_tick)
+                player, message, True, "accepted", command, recipients, expires_tick)
             player.team_command_seq = sequence
             player.team_command_fingerprints[sequence] = fingerprint
             player.team_command_acks[sequence] = dict(ack)
@@ -6438,6 +6801,8 @@ class BattleState:
             "next_shell_index": ammunition["next"],
             "ammo_remaining": ammunition["remaining"],
             "ammo_reload_pending": ammunition["pending"],
+            "ammo_magazine_started": bool(raw.get("ammo_magazine_started",
+                gun_clip["clip"] > 0 and gun_clip["clip"] < gun_clip["clip_size"])),
             "clip": gun_clip["clip"],
             "clip_size": gun_clip["clip_size"],
             "health": reported_health,
@@ -6570,6 +6935,8 @@ class BattleState:
             result['stun_factors'] = {}
             result["stun_attacker_kind"] = ""
             result["stun_attacker_id"] = 0
+        if identity.get('fitting') is not None:
+            result['fitting'] = copy.deepcopy(identity['fitting'])
         return result
 
     @staticmethod
@@ -6590,13 +6957,10 @@ class BattleState:
             raise ValueError("bot ammunition fire delta is invalid")
         loaded = int(current.get("shell_index", 0))
         previous_loaded = int(previous.get("shell_index", 0))
-        previous_next = int(previous.get(
-            "next_shell_index", previous_loaded))
         next_shell = int(current.get("next_shell_index", loaded))
         previous_pending = bool(previous.get(
             "ammo_reload_pending", False))
         pending = bool(current.get("ammo_reload_pending", False))
-        previous_reload_time = float(previous.get("reload_time", 0.0))
         reload_time = float(current.get("reload_time", 0.0))
         clip_size = int(current.get("clip_size", 1))
         previous_clip_size = int(previous.get("clip_size", 1))
@@ -6608,21 +6972,25 @@ class BattleState:
         if not 0 <= previous_clip <= clip_size or not 0 <= clip <= clip_size:
             raise ValueError("bot clip checkpoint is invalid")
         expected = list(before)
+        planned_is_usable = (
+            (sum(after) == 0 and next_shell == 0) or
+            (0 <= next_shell < len(after) and after[next_shell] > 0))
+        if not planned_is_usable:
+            raise ValueError("bot planned ammunition is exhausted")
+        # A full, unstarted magazine may change type before its first shot.
+        # A partial magazine or an active trigger keeps its physical shell.
+        fresh = (not previous_pending and not previous.get('burst_active', False)
+                 and not previous.get('ammo_magazine_started', previous_clip < clip_size))
+        full_boundary = clip_size == 1 or (previous_pending and previous_clip == 0) or fresh
         if fire_delta:
             previous_active = bool((previous or {}).get(
                 "burst_active", False))
             if previous_active:
                 expected_loaded = previous_loaded
                 expected_clip = previous_clip - fire_delta
-            elif previous_pending and (
-                    previous_clip == 0 or clip_size == 1):
-                expected_loaded = previous_next
-                # A full reload is capped by the planned shell's remaining
-                # inventory.  If that reload completes and fires in this same
-                # worker publication, consume one round from the partial
-                # refill rather than inventing a full magazine first.
-                expected_clip = min(
-                    clip_size, before[previous_next]) - fire_delta
+            elif full_boundary:
+                expected_loaded = int(current.get("burst_shell_index", loaded))
+                expected_clip = min(clip_size, before[expected_loaded]) - fire_delta
             else:
                 expected_loaded = previous_loaded
                 expected_clip = previous_clip - fire_delta
@@ -6664,64 +7032,36 @@ class BattleState:
                     "bot clip did not consume one round (%d -> %d, "
                     "expected %d)" % (
                         previous_clip, clip, expected_clip))
-            if next_shell != previous_next:
-                # The worker must keep ``next`` usable in every atomic ammo
-                # snapshot.  Consuming the last round of the planned shell
-                # therefore selects its fallback in the same fire update,
-                # before the reload edge.  That is the only legal planned
-                # selection change outside a completed reload.
-                planned_was_consumed = (
-                    previous_next == loaded and
-                    expected[previous_next] == 0)
-                fallback_is_usable = (
-                    (sum(expected) == 0 and next_shell == 0) or
-                    (0 <= next_shell < len(expected) and
-                     expected[next_shell] > 0))
-                initial_reload_completed = (
-                    not previous_active and previous_reload_time > 0.0)
-                if (not fallback_is_usable or not (
-                        planned_was_consumed or
-                        initial_reload_completed)):
-                    raise ValueError(
-                        "bot planned shell changed outside reload")
         elif not previous_pending:
             if pending:
                 raise ValueError("bot reload started without a shot")
-            if loaded != previous_loaded:
-                raise ValueError("bot loaded shell changed outside reload")
-            if clip_size > 1 and clip != previous_clip:
+            if loaded != previous_loaded and not fresh and clip_size > 1:
+                raise ValueError("bot loaded shell changed inside magazine")
+            # Initial full reload publishes the descriptor clip until the
+            # first load completes, including zero/partial total inventory.
+            # Both ready and still-loading checkpoints must conserve stock.
+            initial_loading = (fresh and fire_delta == 0 and
+                               int(previous.get('fire_seq', 0)) == 0 and
+                               float(previous.get('reload_time', 0.0)) > 0.0 and
+                               reload_time > 0.0 and loaded == previous_loaded)
+            expected_ready_clip = (previous_clip if initial_loading else
+                min(clip_size, after[loaded]) if full_boundary else previous_clip)
+            if clip_size > 1 and clip != expected_ready_clip:
                 raise ValueError("bot clip changed outside reload")
-            if next_shell != previous_next:
-                planned_is_usable = (
-                    (sum(expected) == 0 and next_shell == 0) or
-                    (0 <= next_shell < len(expected) and
-                     expected[next_shell] > 0))
-                initial_reload_completed = (
-                    previous_reload_time > 0.0 and reload_time == 0.0)
-                if not initial_reload_completed or not planned_is_usable:
-                    raise ValueError(
-                        "bot planned shell changed outside reload")
         elif pending:
             if loaded != previous_loaded:
                 raise ValueError("bot loaded shell changed before reload")
-            if next_shell != previous_next:
-                raise ValueError("bot planned shell changed before reload")
             if clip_size > 1 and clip != previous_clip:
                 raise ValueError("bot clip changed before reload")
-        elif previous_clip == 0 or clip_size == 1:
-            if loaded != previous_next:
-                raise ValueError(
-                    "bot loaded shell skipped its planned boundary")
+        elif full_boundary:
             refill = min(clip_size, after[loaded])
             if clip_size > 1 and clip != refill:
                 raise ValueError("bot full reload did not refill its clip")
         else:
             if loaded != previous_loaded:
-                raise ValueError(
-                    "bot intra-clip reload changed its loaded shell")
+                raise ValueError("bot intra-clip reload changed its loaded shell")
             if clip_size > 1 and clip != previous_clip:
-                raise ValueError(
-                    "bot intra-clip reload changed its clip")
+                raise ValueError("bot intra-clip reload changed its clip")
         if list(after) != expected:
             raise ValueError("bot ammunition inventory is not conserved")
         return True
@@ -7591,9 +7931,33 @@ class BattleState:
             worker.simulation_progress_frame_seq = frame_seq
             return True
 
+    def _log_player_water(self, stage, player_id, reason, force=False, **fields):
+        """Bound repeated water receipts; preserve reason and level changes."""
+        row = dict(stage=stage, player=player_id, reason=reason,
+                   round=self.round_id, tick=self.tick, epoch=self.authority_epoch,
+                   sample_seq=self.player_environment_seq)
+        row.update(fields)
+        key = (stage, player_id)
+        signature = (reason, fields.get('level'), fields.get('critical_present'))
+        previous = self._player_water_diagnostics.get(key)
+        if (not force and previous is not None and previous[1] == signature and
+                self.tick - previous[0] < TICK_HZ * 2):
+            return
+        self._player_water_diagnostics[key] = (self.tick, signature)
+        try:
+            _server_log('PLAYER WATER ' + json.dumps(row, sort_keys=True))
+        except Exception:
+            # Evidence must not change the existing water rule.
+            pass
+
     def update_player_environment(self, authority_id, message):
         """Accept only internal water observations; never a client verdict."""
         with self.lock:
+            def reject(reason):
+                self._log_player_water('admission', None, reason,
+                    received_seq=message.get('sample_seq') if isinstance(message, dict) else None,
+                    received_round=message.get('round_id') if isinstance(message, dict) else None)
+                return False
             if (not isinstance(message, dict) or
                     set(message) != {
                         "type", "round_id", "authority_epoch",
@@ -7601,10 +7965,10 @@ class BattleState:
                     message.get("type") != "player_environment" or
                     authority_id != self.bot_authority_id or
                     authority_id != SIMULATION_WORKER_AUTHORITY_ID):
-                return False
+                return reject('invalid_envelope_or_authority')
             worker = self.simulation_worker
             if worker is None or not worker.connected:
-                return False
+                return reject('worker_unavailable')
             try:
                 round_id = _exact_int(
                     message.get("round_id"), 1, PROJECTILE_MAX_ID)
@@ -7615,10 +7979,10 @@ class BattleState:
                     message.get("sample_seq"), 1,
                     PROJECTILE_MAX_ID)
             except ValueError:
-                return False
+                return reject('invalid_sequence_fields')
             if (round_id != self.round_id or
                     authority_epoch != self.authority_epoch):
-                return False
+                return reject('round_or_epoch_mismatch')
             terminal_noop = bool(
                 not self._combat_accepting() or
                 self.battle_result is not None)
@@ -7629,7 +7993,7 @@ class BattleState:
             raw_observations = message.get("observations")
             if (not isinstance(raw_observations, list) or
                     len(raw_observations) > self.max_players):
-                return False
+                return reject('invalid_observation_batch')
             observations = {}
             seen_player_ids = set()
             for raw in raw_observations:
@@ -7638,7 +8002,7 @@ class BattleState:
                             {"player_id", "input_seq", "level"},
                             {"player_id", "input_seq", "level",
                              "drowning_critical"})):
-                    return False
+                    return reject('invalid_row_shape')
                 try:
                     player_id = _exact_int(
                         raw.get("player_id"), 1, PROJECTILE_MAX_ID)
@@ -7646,26 +8010,31 @@ class BattleState:
                         raw.get("input_seq"), 0, PROJECTILE_MAX_ID)
                     level = _exact_int(raw.get("level"), 0, 2)
                 except ValueError:
-                    return False
+                    return reject('invalid_row_fields')
                 player = self.players.get(player_id)
                 if player_id in seen_player_ids:
-                    return False
+                    return reject('duplicate_player')
                 seen_player_ids.add(player_id)
                 drowning_critical = None
                 if "drowning_critical" in raw:
                     if level != 2:
-                        return False
+                        return reject('critical_on_non_drowning_row')
                     try:
                         drowning_critical = _critical_payload(
                             raw["drowning_critical"])
-                    except ValueError:
-                        return False
+                    except ValueError as error:
+                        self._log_player_water('critical_admission', player_id,
+                            'invalid_proposal', received_seq=sample_seq,
+                            error=str(error)[:240], level=level)
+                        return reject('invalid_critical_proposal')
                 # The worker may have sampled a player immediately before the
                 # connection was removed from this room.  The row still has to
                 # pass the complete trusted-worker envelope above, but it no
                 # longer has canonical state to update and must not poison live
                 # rows in the same batch.
                 if player is None:
+                    self._log_player_water('row', player_id, 'departed_player',
+                        received_seq=sample_seq, input_seq=input_seq, level=level)
                     continue
                 previous = self.player_environment.get(player_id)
                 # A snapshot can be overtaken independently by player death,
@@ -7676,6 +8045,10 @@ class BattleState:
                         not player.alive or input_seq > player.input_seq or
                         (previous is not None and
                          input_seq < int(previous["input_seq"]))):
+                    self._log_player_water('row', player_id, 'overtaken_or_inactive',
+                        received_seq=sample_seq, input_seq=input_seq, level=level,
+                        canonical_input_seq=player.input_seq, alive=player.alive,
+                        connected=player.connected, participating=player.participating)
                     continue
                 observation = {
                     "input_seq": input_seq,
@@ -7690,10 +8063,21 @@ class BattleState:
             # terminal result. Validate the complete batch first, then retain
             # the last canonical water state as a successful no-op.
             if terminal_noop or stale_noop:
+                self._log_player_water('admission', None,
+                    'terminal_noop' if terminal_noop else 'stale_sequence_noop',
+                    received_seq=sample_seq, rows=len(raw_observations))
                 return True
             self.player_environment = observations
             self.player_environment_seq = sample_seq
             self.player_environment_authority_epoch = authority_epoch
+            for player_id, observation in observations.items():
+                self._log_player_water('accepted', player_id, 'observation_committed',
+                    input_seq=observation.get('input_seq'), level=observation['level'],
+                    critical_present='drowning_critical' in observation,
+                    elapsed=self.player_drowning_seconds.get(player_id, 0.0))
+            if not observations:
+                self._log_player_water('accepted', None, 'empty_batch',
+                    received_rows=len(raw_observations))
             return True
 
     def _remember_environment_push(self, attacker, victim, sequence=None):
@@ -7883,27 +8267,41 @@ class BattleState:
             # fresh worker observation arrives; only a fresh non-drowning
             # sample resets the continuous timer.
             if not fresh:
+                self._log_player_water('timer', player.player_id,
+                    'missing_observation' if observation is None else 'stale_observation',
+                    elapsed=self.player_drowning_seconds.get(player.player_id, 0.0),
+                    observed_tick=observation.get('observed_tick') if observation else None)
                 continue
             if int(observation["level"]) != 2:
                 receipt = self.environment_pushes.get(('player', player.player_id))
                 if receipt is not None and receipt['hazard_tick'] is not None:
                     self.environment_pushes.pop(('player', player.player_id), None)
-                self.player_drowning_seconds.pop(player.player_id, None)
+                previous_elapsed = self.player_drowning_seconds.pop(player.player_id, None)
+                self._log_player_water('timer', player.player_id, 'fresh_safe_reset',
+                    level=observation['level'], previous_elapsed=previous_elapsed,
+                    input_seq=observation.get('input_seq'))
                 continue
             self._environment_pusher(('player', player.player_id), hazard=True)
             elapsed = self.player_drowning_seconds.get(
                 player.player_id, 0.0) + max(0.0, float(dt))
             self.player_drowning_seconds[player.player_id] = elapsed
+            self._log_player_water('timer', player.player_id, 'counting',
+                level=2, elapsed=elapsed, input_seq=observation.get('input_seq'),
+                critical_present=observation.get('drowning_critical') is not None)
             if elapsed <= PLAYER_DROWNING_SECONDS:
                 continue
             critical = observation.get("drowning_critical")
             if critical is None:
+                self._log_player_water('terminal', player.player_id, 'missing_critical_proposal',
+                    elapsed=elapsed, health=player.health, input_seq=observation.get('input_seq'))
                 self.player_drowning_seconds[player.player_id] = (
                     PLAYER_DROWNING_SECONDS)
                 continue
             try:
                 critical = _critical_payload(critical)
-            except ValueError:
+            except ValueError as error:
+                self._log_player_water('terminal', player.player_id, 'invalid_critical_proposal',
+                    elapsed=elapsed, health=player.health, error=str(error)[:240])
                 self.player_drowning_seconds[player.player_id] = (
                     PLAYER_DROWNING_SECONDS)
                 continue
@@ -7941,6 +8339,9 @@ class BattleState:
             self.player_drowning_seconds.pop(player.player_id, None)
             self.player_overturn_state.pop(player.player_id, None)
             deaths += 1
+            self._log_player_water('terminal', player.player_id, 'death_committed',
+                force=True, elapsed=elapsed, health=player.health, alive=player.alive,
+                display_health=player.display_health, death_reason=player.death_reason)
             if self._maybe_finish_battle():
                 break
         return deaths
@@ -8773,13 +9174,22 @@ class BattleState:
                 "last_progress_request_fingerprint": None,
             })
             self.projectiles[projectile_id] = record
+            if shooter_kind == 'bot':
+                policy = self._bot_ammo_policy(shooter_id)
+                state = self.bot_states.get(shooter_id, {})
+                order = next((o for o in self.bot_orders.get('orders', ()) if o['id'] == shooter_id), {})
+                target = (order.get('target_kind'), order.get('target_id')) if order.get('target_id') else None
+                policy.choose(state)
+                policy.launch(shot_seq, shell_index, record['burst_group_seq'], record['burst_count'],
+                              dict(x=range_origin[0], z=range_origin[2]), target)
+                self._refresh_bot_ammo_orders()
             # Freeze whether this was the shooter's final round while the
             # producer that owns the ammunition is still the one reporting it.
             # A shot was drawn from at least one shell, so zero is an
             # invalid report rather than an emptier rack; Fadin's medal wants
             # exactly the final round, which is a total of one.
             shells_before_shot = _optional_exact_int(
-                message.get("shells_before_shot"), 1, 1000)
+                message.get("shells_before_shot"), 1, 1800)
             if shells_before_shot is not None:
                 self.last_shell_shots[str(projectile_id)] = (
                     shells_before_shot == 1)
@@ -9592,6 +10002,11 @@ class BattleState:
 
         shooter = (str(record["shooter_kind"]), int(record["shooter_id"]))
         victim = (str(target_kind), int(target_id))
+        if was_alive and int(record['team']) != int(proposal['target_team']):
+            record['_ammo_damage'] = record.get('_ammo_damage', 0) + applied
+            if not proposal['splash']:
+                record['_ammo_hit'] = True
+                record['_ammo_penetrated'] = bool(record.get('_ammo_penetrated') or proposal['shot_result'] == 2)
         before_fire = bool(
             isinstance(critical_before, dict) and
             critical_before.get("fire", False))
@@ -10032,6 +10447,7 @@ class BattleState:
                         "PROJECTILE EFFECT failed id=%s target=%s:%s error=%s: %s" %
                         (projectile_id, proposal["target_kind"],
                          proposal["target_id"], type(error).__name__, error))
+            self._bot_ammo_terminal(record)
             self._finalize_projectile_mission_health(record)
             self._record_projectile_piercing(
                 record, bool(record.get("piercing_series_qualified")))
@@ -10058,6 +10474,7 @@ class BattleState:
                           record["max_time_ms"] + grace_ms):
                 expired.append((projectile_id, record))
         for projectile_id, record in expired:
+            self._bot_ammo_terminal(record, known=False)
             self.projectiles.pop(projectile_id, None)
             self._record_projectile_piercing(record, False)
             self.projectile_tombstones[projectile_id] = {
@@ -10114,6 +10531,7 @@ class BattleState:
             "shooter_id": record["shooter_id"],
             "shot_seq": record["shot_seq"],
         })
+        self._bot_ammo_terminal(record, known=False)
         self.projectiles.pop(projectile_id, None)
         self._record_projectile_piercing(record, False)
         self.projectile_tombstones[projectile_id] = {
@@ -11042,7 +11460,7 @@ class BattleState:
                     state.get("death_attacker_kind", "") or ""),
                 "killer_id": max(0, int(
                     state.get("death_attacker_id", 0) or 0)),
-                "is_team_killer": False,
+                "is_team_killer": bool(state.get("team_killer", False)),
                 "xp": int(xp), "stats": statistics,
             })
         return rows
@@ -11252,6 +11670,15 @@ class BattleState:
                     "last_progress_request_fingerprint": record.get(
                         "last_progress_request_fingerprint"),
                 }
+                if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+                    try:
+                        _server_log('PROJECTILE TERMINAL id=%s outcome=battle_finished '
+                            'shooter=%s:%s round=%s launch_ms=%s finish_ms=%s' % (
+                                projectile_id, record.get('shooter_kind'),
+                                record.get('shooter_id'), self.round_id,
+                                record.get('launch_server_time_ms'), self._server_time_ms()))
+                    except Exception:
+                        pass  # Diagnostic output cannot interrupt terminal cleanup.
             self.projectiles.clear()
             self.projectile_revision += 1
         self.pending_events.append(dict(self.battle_result, kind="battle_result"))
@@ -14236,11 +14663,19 @@ class BattleState:
             actor_team = int(actor.get("team", 0))
             delta = -1 if actor_team == int(victim_team) else 1
             actor["frags"] = int(actor.get("frags", 0)) + delta
+            if delta < 0:
+                actor["team_killer"] = True
             frags = actor["frags"]
             team_killer = bool(actor.get('team_killer', False))
         else:
             return False
         if delta < 0:
+            if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+                _server_log('TEAM KILLER ' + json.dumps(dict(stage='frag_committed',
+                    actor_kind=attacker_kind, actor_id=int(attacker_id),
+                    victim_kind=victim_kind, victim_id=int(victim_id),
+                    actor_team=actor_team, victim_team=int(victim_team),
+                    team_killer=bool(team_killer), projectile=projectile_id)))
             actor_identity = (str(attacker_kind), int(attacker_id))
             self.team_kills[actor_identity] = int(
                 self.team_kills.get(actor_identity, 0)) + 1
@@ -14940,6 +15375,7 @@ class BattleState:
                         "id": "%d:%d" % (base_team, index),
                         "x": round(bx, 3), "y": 0.0,
                         "z": round(bz, 3),
+                        "radius": radius,
                     })
             self.capture_threat_bases[base_team] = threatened
             invader_keys = sorted(set(
@@ -15019,7 +15455,7 @@ class BattleState:
                     continue
                 if kind not in ("human", "bot") or vehicle_id <= 0:
                     continue
-                values.append({"kind": kind, "id": vehicle_id})
+                values.append({"kind": kind, "id": vehicle_id, "points": int(self.capture_contributors[team].get(key, 0))})
             contributors[str(team)] = values
         capture_bases = {}
         for team in (1, 2):
@@ -15039,6 +15475,8 @@ class BattleState:
                 values.append({
                     "id": "%d:%d" % (team, index),
                     "x": round(x, 3), "y": 0.0, "z": round(z, 3),
+                    "radius": max(1.0, float(point.get('radius', 50.0)))
+                        if isinstance(point, dict) else 50.0,
                 })
             capture_bases[str(team)] = values
         arena_bounds = None
@@ -15104,6 +15542,7 @@ class BattleState:
                 position={axis: bot['state'].get(axis) for axis in ('x', 'y', 'z')})
                 for bot in bots],
             incidents=planner._base_defense,
+            capture_holds=planner._capture_arrivals,
             final_orders=[dict(id=order['id'], mode=order.get('combat_mode'),
                 defense_base_id=order.get('defense_base_id'), goal=order.get('move_position'))
                 for order in self.bot_orders.get('orders', ())]), separators=(',', ':')))
@@ -15220,6 +15659,7 @@ class BattleState:
                      if p.connected and p.participating],
                     planner_now, defense_context,
                     team_orders=team_orders)
+                self._refresh_bot_ammo_orders()
                 self._log_bot_route_assignments()
                 self._log_bot_defense(defense_context, planner_now)
                 for order in self.bot_orders.get('orders', ()):
@@ -15230,6 +15670,13 @@ class BattleState:
                         _server_log('BOT ROUTE ATTEMPT ' + json.dumps(dict(
                             attempt, bot=order['id'], round=self.round_id),
                             sort_keys=True, separators=(',', ':')))
+                cancelled = {o['id'] for o in self.bot_orders.get('orders', ()) if o.get('player_command_cancelled')}
+                for identity, request in list(self.team_commands.items()):
+                    terminal_request=dict(request)
+                    request['recipient_bot_ids'] = [actor for actor in request['recipient_bot_ids'] if actor not in cancelled]
+                    if not request['recipient_bot_ids']:
+                        self.team_commands.pop(identity)
+                        self._publish_team_command_terminal(self.players.get(request['issuer_id']), terminal_request, 'superseded')
                 self._next_bot_planner_tick = (
                     self.tick + BOT_PLANNER_INTERVAL_TICKS)
             # Freeze the one current clock sample shared by this tick's durable
@@ -15905,6 +16352,8 @@ class BattleState:
                     "bots": list(self.bot_roster),
                     "team_size": self.team_size,
                     "team_sizes": self._team_sizes_wire(),
+                    "team_classes": copy.deepcopy(self.team_classes),
+                "team_class_notice": copy.deepcopy(self.team_class_notice),
                     "bot_tier_mode": self.bot_tier_mode,
                     "bot_skill_mode": self.bot_skill_mode,
                     "bot_lineup": list(self.bot_lineup),
@@ -15973,6 +16422,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
             "server_time_ms": state._server_time_ms(),
             "team_size": state.team_size,
             "team_sizes": state._team_sizes_wire(),
+            "team_classes": copy.deepcopy(state.team_classes),
+            "team_class_notice": copy.deepcopy(state.team_class_notice),
             "bot_tier_mode": state.bot_tier_mode,
             "bot_skill_mode": state.bot_skill_mode,
         }
@@ -16408,6 +16859,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         "bot_authority_id": server.state.bot_authority_id,
                         "team_size": server.state.team_size,
                         "team_sizes": server.state._team_sizes_wire(),
+                        "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                         "bot_tier_mode": server.state.bot_tier_mode,
                         "bot_skill_mode": server.state.bot_skill_mode,
                     }
@@ -16625,8 +17078,12 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "round_id": server.state.round_id,
                                     "state_revision": server.state.state_revision,
                                     "code": start_error,
+                                    "class_error": copy.deepcopy(server.state.last_bot_class_error),
                                     "players": len(server.state.players),
                                 })
+                                # Start preflight can trim class guarantees after
+                                # random human assignment, even when it refuses.
+                                server.state.broadcast_current_roster()
                                 _server_log("START denied for id=%d: %s" % (player.player_id, start_error))
                             else:
                                 _server_log("BATTLE LOADING round=%d map=%s players=%d requested_by=%s" % (
@@ -16663,7 +17120,13 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "code": team_error,
                                     "team": message.get("team"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                                    "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
+                        elif message_type == "set_team_class":
+                            if server.state.set_team_class(player.player_id,
+                                    message.get('team'), message.get('class_tag'), message.get('allowed')):
+                                server.state.broadcast_current_roster()
                         elif message_type == "set_team_size":
                             accepted, size_error = server.state.set_team_size(
                                 player.player_id, message.get("team"),
@@ -16684,6 +17147,8 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "team": message.get("team"),
                                     "size": message.get("size"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                                    "team_classes": copy.deepcopy(server.state.team_classes),
+                                    "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
                         elif message_type == "set_bot_skill_mode":
                             accepted, mode_error = \
@@ -16877,6 +17342,7 @@ def _run_tick_loop(state, tick_clock=None, sleeper=None,
                     state.tick_once(interval)
                 except Exception as error:
                     consecutive_failures += 1
+                    _log_tick_failure_trace(state, error)
                     _server_log_limited(
                         "server-tick-failure:%d" % consecutive_failures,
                         "SERVER TICK failure consecutive=%d diagnostic=%s" % (

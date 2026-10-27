@@ -143,8 +143,8 @@ def vehicle_type_guns(descriptor):
         yield gun
 
 
-_DEFAULT_CONSUMABLE_NAMES = ('autoExtinguishers', 'largeMedkit',
-                             'largeRepairkit')
+_DEFAULT_CONSUMABLE_NAMES = ('largeMedkit', 'largeRepairkit',
+                             'autoExtinguishers')
 
 
 def default_consumables(vehicles):
@@ -177,10 +177,34 @@ def _turret_descriptors(vehicle_type):
             yield value
 
 
+def initialize_elite_devices(vehicles, descriptor):
+    """Creation-only fitting; native admission owns compatibility and load."""
+    from gui.mods.offline_lan_0922.vehicle_configuration import _installation_accepted
+    cache = vehicles.g_cache
+    ids = cache.optionalDeviceIDs()
+    priority = ('deluxAimingStabilizer','deluxRammer','deluxEnhancedAimDrives',
+                'deluxImprovedVentilation','deluxCoatedOptics','deluxToolbox')
+    installed = []
+    for name in priority:
+        if name not in ids:continue
+        device = cache.optionalDevices()[ids[name]]
+        slot = len(installed)
+        if not _installation_accepted(descriptor.mayInstallOptionalDevice(device.compactDescr,slot)):continue
+        descriptor.installOptionalDevice(device.compactDescr,slot)
+        installed.append(name)
+        if len(installed)==3:break
+    if len(installed)!=3:
+        raise ValueError('default garage cannot install three improved devices: %s' % descriptor.type.name)
+    boosters = dict(deluxAimingStabilizer='aimingStabilizerBattleBooster',
+                    deluxRammer='rammerBattleBooster',deluxEnhancedAimDrives='enhancedAimDrivesBattleBooster')
+    name = boosters[installed[0]]
+    return cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+
+
 def build_record(vehicles, tankmen, item_type_indices, type_id,
                  inventory_id, next_tankman_id, settings, consumables,
                  descriptor=None, top_modules=True, role_level=None,
-                 own_researchable_modules=True, recruit_crew=True):
+                 own_researchable_modules=True, recruit_crew=True, full_crew_skills=False, default_elite_equipment=False):
     """Return one garage vehicle record and the catalogue it implies.
 
     ``top_modules`` fits the vehicle the way the historical sandbox garage
@@ -210,10 +234,19 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
     if top_modules:
         install_top_modules(descriptor)
 
-    # Fresh crew has no secondary skills or gifted skill experience.
+    consumables = list(consumables)
+    if default_elite_equipment:
+        from AccountCommands import VEHICLE_SETTINGS_FLAG
+        directive = initialize_elite_devices(vehicles, descriptor)
+        consumables.append(directive)
+        settings |= VEHICLE_SETTINGS_FLAG.AUTO_EQUIP_BOOSTER
+
+    # Career recruits retain native secondary-skill defaults.
     if role_level is None:
         role_level = tankmen.MAX_SKILL_LEVEL
-    skills_mask = tankmen.getSkillsMask(())
+    from gui.mods.offline_lan_0922.default_crew import sandbox_skill_mask
+    skills_mask = (sandbox_skill_mask() if full_crew_skills else
+                   tankmen.getSkillsMask(()))
     crew_compact_descrs = (list(tankmen.generateTankmen(
         nation_id, vehicle_type_id, descriptor.type.crewRoles,
         False, role_level, skills_mask, False)) if recruit_crew else [])
@@ -255,6 +288,13 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
             owned = record_inventory_items.setdefault(item_type, {})
             owned[compact_descr] = max(1, int(owned.get(compact_descr, 0)))
 
+    if default_elite_equipment:
+        for device in descriptor.optionalDevices:
+            if device is not None:
+                items = record_inventory_items.setdefault(item_type_indices['optionalDevice'], {})
+                items[device.compactDescr] = items.get(device.compactDescr, 0) + 1
+
+    # Special shell policies belong to Bots; player garages retain native ammo.
     shells = list(vehicles.getDefaultAmmoForGun(descriptor.gun))
     if not shells or len(shells) % 2:
         raise ValueError('default ammo must contain descriptor/count pairs')

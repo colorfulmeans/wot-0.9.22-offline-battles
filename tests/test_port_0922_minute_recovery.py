@@ -95,8 +95,14 @@ class RailwayBirthDataTests(unittest.TestCase):
             if not receipt:continue
             original=json.loads(subprocess.check_output(
                 ['git','show','e87b0108:navgraphs/'+path.name],cwd=root))
+            # Verify the historical railway-only boundary against its retained
+            # pre-water-rebake output. The separate all-map water suite checks
+            # every current changed node/link and preserved gameplay field.
+            historical=json.loads(subprocess.check_output(
+                ['git','show','100bac61:navgraphs/'+path.name],cwd=root))
             for key in ('routes','heights_mm','links','hazards','local_meshes'):
-                self.assertEqual(original.get(key),graph.get(key),(path.name,key))
+                self.assertEqual(original.get(key),historical.get(key),(path.name,key))
+            self.assertEqual(original['routes'],graph['routes'])
             expected=copy.deepcopy(original['spawn_formations'])
             for row in receipt['changes']:
                 self.assertEqual(row['before'],expected[row['team']][row['slot']])
@@ -104,6 +110,20 @@ class RailwayBirthDataTests(unittest.TestCase):
                 self.assertLessEqual(math.hypot(row['after'][0]-row['before'][0],
                     row['after'][2]-row['before'][2]),32.)
                 expected[row['team']][row['slot']]=row['after']
+            # Later, independently evidenced local ground repairs compose with
+            # the railway birth audit; they must not erase its retained receipt.
+            level=graph.get('validation',{}).get('spawn_level_ground_revalidation')
+            if level:
+                self.assertEqual('47_canada_a',path.stem)
+                self.assertEqual(30,level['slots_checked'])
+                for row in level['changes']:
+                    slot=row['slot']-1  # Ground audit uses user-facing slots.
+                    self.assertEqual(row['before'],expected[row['team']][slot])
+                    self.assertEqual(row['before'][3],row['after'][3])
+                    self.assertFalse(row['ground_before']['clear'])
+                    self.assertTrue(row['ground_after']['clear'])
+                    self.assertLessEqual(row['shift'],16.)
+                    expected[row['team']][slot]=row['after']
             self.assertEqual(expected,graph['spawn_formations'])
             checked+=receipt['slots_checked'];changed+=len(receipt['changes'])
             if path.stem=='06_ensk':
@@ -129,4 +149,10 @@ class NavigationResolutionEvidenceTests(unittest.TestCase):
         with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
         altered=copy.deepcopy(new)
         altered['routes']={}
+        with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
+        altered=copy.deepcopy(new)
+        altered['routes']['1'][0]['waypoints'][1][0]+=.1
+        with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
+        altered=copy.deepcopy(new)
+        altered['routes']['1']=[r for r in altered['routes']['1'] if r['id']!='rear_guard']
         with self.assertRaises(AssertionError):checker.verify_retained_gameplay(old,altered,name)
