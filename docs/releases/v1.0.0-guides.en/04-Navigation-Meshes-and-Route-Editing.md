@@ -14,6 +14,8 @@ Cost-aware graph search considers ground height, directed links, hull clearance,
 
 A connection may be directional. A bridge and its underpass are not connected merely because their two-dimensional lines intersect. Clearly unreachable acquisitions may be excluded; pending asynchronous evidence is not automatically a proved obstacle.
 
+At bridge locations, height is always taken from the bridge deck. When editing routes, avoid crossing beneath bridges.
+
 The current water policy uses a 1.2-metre limit with shore support and fall protection. Shallow water can be a high-cost alternative, not permission to open all deep water.
 
 ## 3. Local refinement
