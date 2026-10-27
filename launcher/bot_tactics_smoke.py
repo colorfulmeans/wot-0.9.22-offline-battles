@@ -53,7 +53,10 @@ def _verify_maintenance_controls(root, tk):
     """Exercise the shipped two-by-two layout without invoking destructive work."""
     from types import SimpleNamespace
     import wot_launcher
-    panel = tk.Frame(root)
+    window = tk.Toplevel(root)
+    window.withdraw()
+    panel = tk.Frame(window)
+    panel.pack(fill='both', expand=True)
     owner = SimpleNamespace(_tk=tk, repair_panel=panel,
         _repair_startup=lambda: None, _reset_offline_client_settings=lambda: None,
         _reset_all_state=lambda: None, _factory_reset=lambda: None)
@@ -65,11 +68,12 @@ def _verify_maintenance_controls(root, tk):
     for language in ('en', 'zh'):
         for button, text in zip(buttons, labels):
             button.config(text=wot_launcher._CHINESE[text] if language == 'zh' else text)
-        root.update_idletasks()
+        window.update_idletasks()
         width = panel.winfo_reqwidth()
         height = panel.winfo_reqheight()
-        panel.place(x=0, y=0, width=width, height=height)
-        root.update_idletasks()
+        window.geometry('%dx%d' % (width, height))
+        window.deiconify()
+        window.update()
         for button, position in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
             info = button.grid_info()
             assert (int(info['row']), int(info['column'])) == position
@@ -78,7 +82,7 @@ def _verify_maintenance_controls(root, tk):
         assert min(b.winfo_width() for b in buttons) > 1
         assert max(b.winfo_width() for b in buttons) - min(b.winfo_width() for b in buttons) <= 1
         assert max(b.winfo_height() for b in buttons) - min(b.winfo_height() for b in buttons) <= 1
-    panel.destroy()
+    window.destroy()
 
 
 def run(destination):
