@@ -168,6 +168,15 @@ class MaintenanceTest(unittest.TestCase):
                 name = base64.b32encode(identity.encode()).decode() + '.dat'
                 kept.append(self.put(root / 'dossier_cache' / name))
             kept.append(self.put(root / 'dossier_cache/not-base32.dat'))
+            for identity in ('CN_offline_account_PlayerAccount_data',
+                             'CN_offline_account_PlayerAccount_shop'):
+                name = base64.b32encode(identity.encode()).decode() + '.dat'
+                deleted.append(self.put(root / 'account_caches' / name))
+            for identity in ('CN_real_player_PlayerAccount_data',
+                             'EU_offline_account_PlayerAccount_data',
+                             'CN_offline_account_PlayerAccount_unknown'):
+                name = base64.b32encode(identity.encode()).decode() + '.dat'
+                kept.append(self.put(root / 'account_caches' / name))
         import bot_tactics_store
         with mock.patch.object(core, 'server_log_path', return_value=str(self.root / 'server.log')), \
                 mock.patch.object(vehicle_overlays, 'default_restore_targets', return_value=[]), \

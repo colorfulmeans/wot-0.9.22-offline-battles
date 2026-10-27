@@ -40,22 +40,39 @@ files remain outside the explicit scope. Temporary staging is on each target's
 volume, rebuild failures restore prior files, and cleanup failures are errors.
 A successful reset leaves no automatic old-data backup in the managed roots.
 
-Local validation: seven launcher/save/preferences/replay/overlay files execute
-721 tests (568 unique test IDs; replay wiring reuses WindowTest), with nine
-Windows symlink skips. The local embedded Python lacks Tkinter, so messagebox
-imports are stubbed for fake-widget unit tests; real packaged Tk geometry is a
-separate artifact smoke gate. Five replay-capacity tests also pass, including a
-real compressed stream above 768 MiB through all readers and preflight. The
-user's existing 1.05-GiB logical recording passes the fixed source preflight.
+Final source validation uses real Windows Tk 8.6 imports: eight affected suites
+execute 734 tests (581 unique test IDs; replay wiring reuses WindowTest), with
+nine Windows symlink skips. Five replay-capacity tests pass, including a real
+compressed stream above the former 768-MiB limit. The user's 1.05-GiB logical
+recording also entered native playback on Arctic Region, with no server or
+worker; short playback was observed, not the complete 631-second recording.
+
 An initial WindowTest run exposed an unsafe test-fixture boundary: the fake
 game root did not isolate APPDATA, and an old reset callback mock missed the
 new cleanup function. Real external saves were cleared before live-test
 authorization (default metadata timestamp 2026-10-27 17:07:11 +08:00). The user
 was informed and subsequently authorized clearing/rebuilding actual data. The
 fixture now isolates both APPDATA and LOCALAPPDATA before window construction.
-Subsequent automated tests use those temporary roots; explicit live acceptance
-will create a new save and exercise cleanup on the user's actual installation.
-Windows build/artifact status is recorded after independent package inspection.
+Subsequent automated tests use those temporary roots.
+
+Build 553 live acceptance created a new account save through the actual UI,
+saved credits 123456, repaired the installation without changing that save or
+active tactics, reset actual player/worker preferences while preserving stock
+preferences and save progress, then cleared saves without changing tactics.
+A second custom save was created and factory reset removed it, four managed
+report files and 100 recording/publish/residue files, rebuilt unlocked default
+save metadata and public default tactics, reinstalled the bundled mod and
+closed without writing stale launcher settings. No old-data backup remained
+in the managed staging roots. Reopening showed only the fresh default save.
+
+A final shared-cache audit found offline dossier cache files left outside
+the project directories. Factory reset now decodes native base32 filenames and
+removes only verified offline dossier namespaces on the native None server,
+plus the exact CN offline-account data/shop caches.
+Retail accounts, another server, malformed filenames and unknown accounts
+remain untouched. Cache removal shares the same rollback transaction; tests
+cover both successful cleanup and failed-reinstall recovery. Final package
+identity, CI limits and repeated native acceptance follow below.
 
 ## Lobby music and worker preparation follow-up (2026-10-27)
 
