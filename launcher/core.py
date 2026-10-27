@@ -1809,6 +1809,33 @@ def clear_offline_saves(game_root, is_running=None):
     return _maintenance_replace(_save_reset_targets(game_root) + [config], rebuild)
 
 
+def _offline_dossier_cache_targets(game_root):
+    """Identify only offline #1513 dossier namespaces in shared cache folders."""
+    roots = [game_root]
+    normal = _normal_client_preferences_path()
+    if normal is not None:
+        roots.append(os.path.dirname(normal))
+    targets = []
+    for root in roots:
+        directory = os.path.join(root, 'dossier_cache')
+        _maintenance_safe_path(directory, recursive=False)
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            stem, suffix = os.path.splitext(name)
+            if suffix != '.dat':
+                continue
+            try:
+                identity = base64.b32decode(stem).decode('utf-8')
+            except (ValueError, UnicodeError):
+                continue
+            # Native offline BigWorld.server() is None. Never remove a retail
+            # account's dossier just because it happens to use a similar name.
+            if re.fullmatch(r'None;offline_account(?:#[0-9a-f]{32})?;PlayerAccount', identity):
+                targets.append(os.path.join(directory, name))
+    return targets
+
+
 def factory_reset_offline(game_root, base_dir=None, is_running=None):
     """Clean project-owned data, overlays, recordings and diagnostics; reinstall."""
     _require_0_9_22_maintenance_target(game_root, is_running)
@@ -1823,6 +1850,7 @@ def factory_reset_offline(game_root, base_dir=None, is_running=None):
                os.path.join(game_root, 'replays', 'offline'),
                os.path.join(game_root, 'res_mods', '0.9.22.0.1', 'engine_config.xml')]
     targets.extend(_offline_preferences_targets(game_root))
+    targets.extend(_offline_dossier_cache_targets(game_root))
     for name in ('offline-player-python.log', 'offline-worker-python.log',
                  WORKER_FAILURE_LOG_FILENAME_0922, WORKER_READY_MARKER_FILENAME_0922):
         targets.append(os.path.join(game_root, name))

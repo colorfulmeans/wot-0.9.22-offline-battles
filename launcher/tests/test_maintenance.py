@@ -1,5 +1,6 @@
 """Exercise destructive maintenance exclusively in isolated temporary roots."""
 import os
+import base64
 from pathlib import Path
 import tempfile
 import sys
@@ -152,6 +153,42 @@ class MaintenanceTest(unittest.TestCase):
                 core.factory_reset_offline(self.game, is_running=lambda: False)
         self.assertTrue(all(p.read_text() == 'old' for p in old))
         self.assertEqual('old', overlay.read_text())
+
+    def test_factory_only_removes_verified_offline_dossier_caches(self):
+        normal_root = Path(core._normal_client_preferences_path()).parent
+        deleted, kept = [], []
+        for root in (normal_root, Path(self.game)):
+            for identity in ('None;offline_account;PlayerAccount',
+                             'None;offline_account#' + 'a' * 32 + ';PlayerAccount'):
+                name = base64.b32encode(identity.encode()).decode() + '.dat'
+                deleted.append(self.put(root / 'dossier_cache' / name))
+            for identity in ('retail;offline_account;PlayerAccount',
+                             'None;offline_account#invalid;PlayerAccount',
+                             'None;real_player;PlayerAccount'):
+                name = base64.b32encode(identity.encode()).decode() + '.dat'
+                kept.append(self.put(root / 'dossier_cache' / name))
+            kept.append(self.put(root / 'dossier_cache/not-base32.dat'))
+        import bot_tactics_store
+        with mock.patch.object(core, 'server_log_path', return_value=str(self.root / 'server.log')), \
+                mock.patch.object(vehicle_overlays, 'default_restore_targets', return_value=[]), \
+                mock.patch.object(core, 'install_client_mod', return_value=[]), \
+                mock.patch.object(core, 'ensure_0_9_22_preferences_isolation', return_value='isolated'), \
+                mock.patch.object(bot_tactics_store.Store, 'ensure_active', return_value='default'):
+            core.factory_reset_offline(self.game, is_running=lambda: False)
+        self.assertFalse(any(p.exists() for p in deleted))
+        self.assertTrue(all(p.read_text() == 'old' for p in kept))
+
+    def test_failed_factory_restores_offline_dossier_cache(self):
+        root = Path(core._normal_client_preferences_path()).parent
+        name = base64.b32encode(b'None;offline_account;PlayerAccount').decode() + '.dat'
+        old = self.put(root / 'dossier_cache' / name)
+        with mock.patch.object(core, 'server_log_path', return_value=str(self.root / 'server.log')), \
+                mock.patch.object(vehicle_overlays, 'default_restore_targets', return_value=[]), \
+                mock.patch.object(core, 'ensure_0_9_22_preferences_isolation', return_value='isolated'), \
+                mock.patch.object(core, 'install_client_mod', side_effect=core.LauncherError('bad payload')):
+            with self.assertRaisesRegex(core.LauncherError, 'bad payload'):
+                core.factory_reset_offline(self.game, is_running=lambda: False)
+        self.assertEqual('old', old.read_text())
 
     def test_cleanup_failure_is_not_reported_as_success(self):
         old = self.put(self.app / 'client_profiles/0.9.22/preferences.xml')
