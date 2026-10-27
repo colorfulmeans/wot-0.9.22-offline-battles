@@ -1,5 +1,49 @@
 # Authored route tasks and editor connections
 
+## Maintenance and replay preflight follow-up (2026-10-27)
+
+Scope: launcher-only maintenance and replay entry; no physics, combat, route,
+worker frequency or client playback laws change. Four confirmed actions occupy
+an equal two-by-two grid: Repair mod installation / Reset all offline client
+settings; Clear all offline saves / Delete all data and restore factory defaults.
+All four confirmations identify the game folder and bundled build, default to
+No, and explain affected data. Running game/worker/room or report collection
+blocks maintenance. Factory completion closes the launcher without writing
+its old settings; failures cannot use the success path.
+
+The replay report `8fcd63a2cd30` fails before launching a client: the launcher
+still capped logical bytes at 768 MiB while all recorders/readers already allow
+8 GiB. The existing last-battle recording separately passes full read-only
+validation: 27,907 records, 1,127,919,049 logical bytes, 118,498,974 file bytes,
+631.934 seconds. The report does not identify the selected file, so that file
+is corroborating evidence rather than an asserted path from the report.
+Preflight now matches 8 GiB, retaining streaming, row limits, identity, time,
+footer/count, gzip integrity and unchanged-file checks. Capacity regression
+now streams a real recording above the former limit through the launcher too;
+restoring the old limit must reject that same valid stream.
+
+Clear-saves removes both game-folder and external saves/legacy state, rotated
+copies and pending grant inboxes, rebuilds default metadata with legacy import
+disabled and preserves schemes/preferences. Factory additionally removes the
+project application directory, external legacy root, game config/data root,
+offline recordings, process logs and known interrupted recovery directories.
+Owned vehicle overrides are restored via their existing manifest contract;
+unknown engine overlays and redirected paths are rejected before deletion.
+Original client preferences, other mods/resources and manually copied/downloaded
+files remain outside the explicit scope. Temporary staging is on each target's
+volume, rebuild failures restore prior files, and cleanup failures are errors.
+A successful reset leaves no automatic old-data backup in the managed roots.
+
+Local validation: seven launcher/save/preferences/replay/overlay files execute
+720 tests (567 unique test IDs; replay wiring reuses WindowTest), with nine
+Windows symlink skips. The local embedded Python lacks Tkinter, so messagebox
+imports are stubbed for fake-widget unit tests; real packaged Tk geometry is a
+separate artifact smoke gate. Five replay-capacity tests also pass, including a
+real compressed stream above 768 MiB through all readers and preflight. The
+user's existing 1.05-GiB logical recording passes the fixed source preflight.
+No destructive action is run against the user's real data as acceptance.
+Windows build/artifact status is recorded after independent package inspection.
+
 ## Lobby music and worker preparation follow-up (2026-10-27)
 
 Report `b9aafa2749ce` runs build 545 on Fjord and supplies a real terminal

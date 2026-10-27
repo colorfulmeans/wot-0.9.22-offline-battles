@@ -2615,18 +2615,28 @@ def apply_vehicle_edit(game_root, member, field_path, replacement_value,
         status["path"], member, field_path)
 
 
-def restore_vehicle_defaults(game_root, is_running=None):
-    """Remove only complete members proven to be owned by this manifest."""
+def default_restore_targets(game_root, is_running=None):
+    """Read-only ownership check shared by restoration and factory reset."""
     status, unused_package = _require_target(
         game_root, require_closed=True, is_running=is_running)
     manifest, exists = _load_manifest(status["path"])
     if not exists:
-        return 0
+        return []
     entries = _entry_map(manifest)
     for member, entry in entries.items():
         problem = _ownership_problem(status["path"], member, entry)
         if problem and not problem.startswith("Owned overlay is missing"):
             raise VehicleOverlayError(problem)
+    return [(_overlay_path(status['path'], member), member)
+            for member in sorted(entries)] + [(manifest_path(status['path']), MANIFEST_NAME)]
+
+
+def restore_vehicle_defaults(game_root, is_running=None):
+    """Remove only complete members proven to be owned by this manifest."""
+    targets = default_restore_targets(game_root, is_running=is_running)
+    if not targets:
+        return 0
+    status = core.inspect_game_root(game_root)
 
     try:
         transaction_root = tempfile.mkdtemp(
@@ -2640,9 +2650,6 @@ def restore_vehicle_defaults(game_root, is_running=None):
     moved = []
     preserve_recovery = False
     try:
-        targets = [(_overlay_path(status["path"], member), member)
-                   for member in sorted(entries)]
-        targets.append((manifest_path(status["path"]), MANIFEST_NAME))
         _write_staged(
             _game_owned_path(
                 status["path"], os.path.join(
@@ -2690,7 +2697,7 @@ def restore_vehicle_defaults(game_root, is_running=None):
     finally:
         if not preserve_recovery:
             _retire_transaction_root(status["path"], transaction_root)
-    return len(entries)
+    return len(targets) - 1
 
 
 def _empty_profile_store():

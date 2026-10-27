@@ -432,7 +432,19 @@ _CHINESE = {
     "save to a ZIP file, or open its folder and copy the files out yourself.":
         "每个存档有独立的车库、乘员、账号设置和战斗记录。启动游戏时使用当前选中的"
         "存档。可以把存档备份成 ZIP 文件，也可以打开存档文件夹自行复制文件。",
+    "Maintenance failed. Reopen the launcher before retrying.": "维护失败。请重新打开启动器后重试。",
     "Repair": "修复",
+    "Repair mod installation": "修复模组安装",
+    "Reset all offline client settings": "重置全部离线客户端设置",
+    "Clear all offline saves": "清空全部离线存档",
+    "Delete all data and restore factory defaults": "删除全部数据并恢复出厂",
+    "Game folder: %s\nBundled mod: %s": "游戏目录：%s\n将安装的模组：%s",
+    "Reinstall the mod files supplied by this launcher. Valid saves, profiles and client settings are kept.": "使用此启动器携带的文件，重新安装游戏目录中的离线模组。保留正常存档、各类方案和客户端设置。确定继续？",
+    "Reset graphics, sound, input and account-specific settings for ALL offline client accounts. Saves and profiles are kept. The normal client settings are kept.": "重置全部离线账号的画面、音量、按键及账号专属客户端设置，下次启动时重新生成默认设置。保留存档和各类方案，不影响正式客户端设置。确定继续？",
+    "Permanently delete ALL offline saves, including default, progress, crew, garage and battle history, and create a fresh fully unlocked default save. Profiles, routes and client settings are kept.": "永久删除全部离线存档，包括默认存档、账号进度、成员、车库和战绩及旧存档残留，重新建立全开默认存档。保留各类方案、路线和客户端设置。共享存档的其他启动器也会受到影响。确定继续？",
+    "Permanently delete ALL project-owned saves, profiles, routes, lineups, settings, history, caches, replays, logs and reports. Remove old migration data, reinstall the files supplied by this launcher and rebuild defaults. Shared offline data affects other launcher packages too. Manually copied files, downloaded packages, stock game resources and other mods are kept. The launcher closes on success; reopen it to use fresh defaults.": "永久删除本项目管理的全部存档、方案、路线、阵容、设置、历史、缓存、录像、日志和错误报告，包括旧数据迁移残留；随后重新安装此启动器携带的模组并重建默认数据。共享离线数据的其他启动器也会受到影响。手动复制出去的文件、下载的安装包、原版游戏资源和其他模组保留。成功后启动器关闭，请重新打开使用初始设置。确定继续？",
+    "Factory reset completed. Reopen the launcher to use fresh defaults.": "恢复出厂完成。请重新打开启动器，使用初始设置。",
+    "Close the game, worker and LAN room before maintenance.": "维护前请先关闭游戏、后台 worker 和局域网房间。",
     "Repair startup (keep saved data)": "修复启动问题（保留存档和方案）",
     "Normal client stuck loading? Clean preferences...":
         "备份并重置正式客户端设置…",
@@ -1096,21 +1108,7 @@ class LauncherWindow(object):
             side="left", fill="x", expand=True, padx=(6, 0))
         self.vehicle_panel.grid_columnconfigure(1, weight=1)
 
-        self.repair_button = tk.Button(
-            self.repair_panel, text="",
-            command=self._repair_startup)
-        self.repair_button.grid(row=0, column=0, sticky="we")
-        self.reset_button = tk.Button(
-            self.repair_panel, text="",
-            command=self._reset_all_state)
-        self.reset_button.grid(row=0, column=1, sticky="we", padx=(6, 0))
-        self.normal_preferences_button = tk.Button(
-            self.repair_panel, text="",
-            command=self._clean_normal_client_preferences)
-        self.normal_preferences_button.grid(
-            row=1, column=0, columnspan=2, sticky="we", pady=(6, 0))
-        self.repair_panel.grid_columnconfigure(0, weight=1)
-        self.repair_panel.grid_columnconfigure(1, weight=1)
+        self._build_maintenance_controls()
 
         self.log_panel = tk.LabelFrame(frame, text="", padx=6, pady=6)
         self.log_panel.grid(row=4, column=0, sticky="nsew")
@@ -1147,6 +1145,29 @@ class LauncherWindow(object):
             }
         self._log("Launcher session: %s role=launcher." %
                   core.payload_identity_text(identity))
+
+    def _build_maintenance_controls(self):
+        tk = self._tk
+        self.repair_button = tk.Button(
+            self.repair_panel, text="",
+            command=self._repair_startup)
+        self.repair_button.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+        self.reset_button = tk.Button(
+            self.repair_panel, text="",
+            command=self._reset_all_state)
+        self.reset_button.grid(row=1, column=0, sticky="nsew", padx=3, pady=3)
+        self.offline_preferences_button = tk.Button(
+            self.repair_panel, text="",
+            command=self._reset_offline_client_settings)
+        self.offline_preferences_button.grid(
+            row=0, column=1, sticky="nsew", padx=3, pady=3)
+        self.factory_reset_button = tk.Button(
+            self.repair_panel, text="", command=self._factory_reset)
+        self.factory_reset_button.grid(row=1, column=1, sticky="nsew", padx=3, pady=3)
+        for index in (0, 1):
+            self.repair_panel.grid_columnconfigure(index, weight=1, uniform='maintenance_columns')
+            self.repair_panel.grid_rowconfigure(index, weight=1, uniform='maintenance_rows')
+
 
     def _t(self, text):
         if self.language == i18n.LANGUAGE_CHINESE:
@@ -1239,10 +1260,11 @@ class LauncherWindow(object):
         self.delete_bot_lineup_profile_button.config(
             text=self._t("Delete Bot lineup profile..."))
         self.repair_button.config(
-            text=self._t("Repair startup (keep saved data)"))
-        self.normal_preferences_button.config(text=self._t(
-            "Normal client stuck loading? Clean preferences..."))
-        self.reset_button.config(text=self._t("Reset all offline data..."))
+            text=self._t("Repair mod installation"))
+        self.offline_preferences_button.config(text=self._t(
+            "Reset all offline client settings"))
+        self.reset_button.config(text=self._t("Clear all offline saves"))
+        self.factory_reset_button.config(text=self._t("Delete all data and restore factory defaults"))
         self.report_button.config(text=self._t("Create error report..."))
         self.log_panel.config(text=self._t("Activity log"))
         self._update_action_controls()
@@ -1440,10 +1462,11 @@ class LauncherWindow(object):
             not server_running else "disabled")
         self.initialize_save_button.config(state='disabled' if self._busy or self._maintenance_busy else 'normal')
         self.repair_button.config(state=maintenance_state)
-        self.normal_preferences_button.config(state=maintenance_state)
+        self.offline_preferences_button.config(state=maintenance_state)
         self.reset_button.config(state=maintenance_state)
+        self.factory_reset_button.config(state=maintenance_state)
         self.report_button.config(
-            state="disabled" if self._report_busy else "normal")
+            state="disabled" if self._report_busy or self._maintenance_busy else "normal")
         self.crash_report_check.config(
             state=("normal" if
                    self._selected_client == core.PORT_0_9_22 and
@@ -2205,7 +2228,7 @@ class LauncherWindow(object):
         self.root.after(0, append)
 
     def _create_error_report(self):
-        if self._report_busy:
+        if self._report_busy or self._maintenance_busy:
             return False
         self._report_busy = True
         self._update_action_controls()
@@ -2543,6 +2566,8 @@ class LauncherWindow(object):
         return True
 
     def _save_settings(self):
+        if getattr(self, '_factory_reset_requested', False):
+            return
         core.save_settings({
             "game_root": self.game_root.get().strip(),
             "folders": list(self._folders),
@@ -2565,9 +2590,22 @@ class LauncherWindow(object):
                 bool(self._procdump_download_consent),
         })
 
-    def _start_maintenance(self, action):
-        if self._busy or self._maintenance_busy:
+    def _maintenance_ready(self):
+        if self._busy or self._maintenance_busy or self._report_busy:
             self._log("Wait for the current launcher operation to finish.")
+            return False
+        if (self._server_is_running() or self._room_worker_is_running() or
+                (self._worker is not None and self._worker.poll() is None) or
+                core.game_is_running()):
+            self._log("Close the game, worker and LAN room before maintenance.")
+            return False
+        if self._refresh_client().get('client') != core.PORT_0_9_22:
+            self._log('Select the supported 0.9.22 game folder first.')
+            return False
+        return True
+
+    def _start_maintenance(self, action, completed=None):
+        if not self._maintenance_ready():
             return False
         status = self._refresh_client()
         if status.get("client") != core.PORT_0_9_22:
@@ -2577,16 +2615,30 @@ class LauncherWindow(object):
         self._set_maintenance_busy(True)
 
         def run():
+            succeeded = False
+            failure = ''
             try:
                 for message in action(status["path"]):
                     self._log(message)
+                succeeded = True
             except core.LauncherError as error:
+                failure = str(error)
                 self._log(str(error))
             except Exception as error:
+                failure = str(error)
                 self._log("Launcher maintenance failed: %s" % error)
             finally:
-                self._set_maintenance_busy(False)
-                self.root.after(0, self._refresh_client)
+                def finish():
+                    self._set_maintenance_busy(False)
+                    if getattr(self, '_factory_reset_requested', False) and not succeeded:
+                        from tkinter import messagebox
+                        messagebox.showerror(self._t('Repair'), self._t('Maintenance failed. Reopen the launcher before retrying.') + '\n\n' + failure, parent=self.root)
+                        self.root.destroy()
+                        return
+                    self._refresh_client()
+                    if succeeded and completed:
+                        completed()
+                self.root.after(0, finish)
 
         thread = threading.Thread(target=run)
         thread.daemon = True
@@ -2594,36 +2646,52 @@ class LauncherWindow(object):
         return True
 
     def _repair_startup(self):
+        if not self._maintenance_ready() or not self._confirm_maintenance('repair'):
+            return False
         return self._start_maintenance(core.repair_0_9_22_startup)
 
-    def _confirm_normal_preferences_cleanup(self):
+    def _confirm_maintenance(self, kind):
         from tkinter import messagebox
+        titles = {
+            'repair': 'Repair mod installation',
+            'preferences': 'Reset all offline client settings',
+            'saves': 'Clear all offline saves',
+            'factory': 'Delete all data and restore factory defaults',
+        }
+        bodies = {
+            'repair': 'Reinstall the mod files supplied by this launcher. Valid saves, profiles and client settings are kept.',
+            'preferences': 'Reset graphics, sound, input and account-specific settings for ALL offline client accounts. Saves and profiles are kept. The normal client settings are kept.',
+            'saves': 'Permanently delete ALL offline saves, including default, progress, crew, garage and battle history, and create a fresh fully unlocked default save. Profiles, routes and client settings are kept.',
+            'factory': 'Permanently delete ALL project-owned saves, profiles, routes, lineups, settings, history, caches, replays, logs and reports. Remove old migration data, reinstall the files supplied by this launcher and rebuild defaults. Shared offline data affects other launcher packages too. Manually copied files, downloaded packages, stock game resources and other mods are kept. The launcher closes on success; reopen it to use fresh defaults.',
+        }
+        identity = core.payload_identity_text(core.bundled_payload_identity(core.PORT_0_9_22))
+        detail = self._t('Game folder: %s\nBundled mod: %s') % (self.game_root.get().strip(), identity)
+        return messagebox.askyesno(self._t(titles[kind]),
+            self._t(bodies[kind]) + '\n\n' + detail, icon='warning', default='no', parent=self.root)
 
-        return messagebox.askyesno(
-            self._t("Clean normal client preferences?"),
-            self._t(
-                "This moves the normal World of Tanks preferences.xml aside "
-                "as a backup. Graphics, window, and input settings will reset "
-                "the next time the normal client starts. Offline saved data "
-                "is not changed. Continue?"),
-            icon="warning")
+    def _factory_reset(self):
+        if not self._maintenance_ready() or not self._confirm_maintenance('factory'):
+            return False
+        # Stop every open editor from writing removed profiles back to disk.
+        self._factory_reset_requested = True
+        for child in self.root.winfo_children() if hasattr(self.root, 'winfo_children') else ():
+            if isinstance(child, self._tk.Toplevel):
+                if child is self.save_dialog:
+                    child.withdraw()
+                else:
+                    child.destroy()
+        def completed():
+            from tkinter import messagebox
+            messagebox.showinfo(self._t('Repair'), self._t('Factory reset completed. Reopen the launcher to use fresh defaults.'), parent=self.root)
+            self.root.destroy()
+        return self._start_maintenance(core.factory_reset_offline, completed=completed)
 
-    def _clean_normal_client_preferences(self):
-        if self._busy or self._maintenance_busy:
-            self._log("Wait for the current launcher operation to finish.")
+    def _reset_offline_client_settings(self):
+        if not self._maintenance_ready():
             return False
-        if self._refresh_client().get("client") != core.PORT_0_9_22:
-            self._log("Select the supported 0.9.22 game folder first.")
+        if not self._confirm_maintenance('preferences'):
             return False
-        if core.game_is_running():
-            self._log(
-                "Close World of Tanks before cleaning normal client "
-                "preferences.")
-            return False
-        if not self._confirm_normal_preferences_cleanup():
-            self._log("Normal client preferences cleanup was cancelled.")
-            return False
-        return self._start_maintenance(core.backup_normal_client_preferences)
+        return self._start_maintenance(core.reset_offline_preferences)
 
     def _ask_profile_name(self):
         from tkinter import simpledialog
@@ -2823,20 +2891,10 @@ class LauncherWindow(object):
         return True
 
     def _confirm_reset(self):
-        from tkinter import messagebox
-
-        return messagebox.askyesno(
-            self._t("Reset all offline data?"),
-            self._t(
-                "This deletes this mod's saved address, account settings, "
-                "garage fittings, post-battle results, configuration, and "
-                "isolated client graphics/input preferences. Other mods and "
-                "the normal World of Tanks profile are kept. Continue?"),
-            icon="warning")
+        return self._confirm_maintenance('saves')
 
     def _reset_all_state(self):
-        if self._busy or self._maintenance_busy:
-            self._log("Wait for the current launcher operation to finish.")
+        if not self._maintenance_ready():
             return False
         if self._refresh_client().get("client") != core.PORT_0_9_22:
             self._log("Select the supported 0.9.22 game folder first.")
@@ -2848,7 +2906,11 @@ class LauncherWindow(object):
         if not self._confirm_reset():
             self._log("Offline data reset was cancelled.")
             return False
-        return self._start_maintenance(core.reset_0_9_22_state)
+        def completed():
+            self._save_slot_id = save_slots.DEFAULT_SLOT_ID
+            self._refresh_save_slots()
+            self._save_settings()
+        return self._start_maintenance(core.clear_offline_saves, completed=completed)
 
     def _toggle_lan_server(self):
         if self._busy or self._maintenance_busy:

@@ -30,6 +30,31 @@ Replay tab. Playback is forward 1x with a manual camera; pause, seeking, speed
 controls and native .wotreplay export are not available. Retain the recording's
 original vehicle profile. Playback does not award battle rewards.
 
+Maintenance (Repair tab)
+------------------------
+Four equally spaced buttons use a two-by-two layout. Every action requires
+confirmation, with No selected by default. Close the game, worker and LAN room
+first. Repair mod installation reinstalls the files bundled with this launcher;
+it does not download a newer version and keeps usable saved data and profiles.
+Reset all offline client settings resets graphics, sound, input and account
+settings in the isolated client preferences, without resetting saves or touching
+the normal client profile. Clear all offline saves deletes every offline save,
+including legacy copies and pending grants, then creates a fresh fully unlocked
+default save; tactics, vehicle profiles and client preferences are preserved.
+Delete all data and restore factory defaults removes project-owned external and
+game-folder data, profiles, routes, lineups, settings, caches, recordings, logs,
+reports and interrupted recovery data, restores owned vehicle overlays, then
+reinstalls this launcher's bundled mod and rebuilds defaults. Shared offline
+data affects other launcher packages. Manually copied reports, downloaded
+packages, stock game resources and other mods are not searched or deleted.
+The launcher closes after factory reset to prevent stale in-memory settings
+from being saved again. Reopen it before using the reset installation. A failed
+reset reports the failing operation and never reports factory success.
+
+Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
+and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
+integrity checks still apply. Compressed file size is not the replay size bound.
+
 Use the launcher's built-in vehicle editor and error-report controls. The player
 download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
 and START_SPIKE_PROFILE.bat for optional detailed profiling. The normal EXE

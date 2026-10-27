@@ -28,8 +28,8 @@ class _Widget(object):
     def pack(self, **unused):
         pass
 
-    def grid(self, **unused):
-        pass
+    def grid(self, **options):
+        self.grid_options = options
 
     def grid_columnconfigure(self, *unused, **unused_options):
         pass
@@ -292,8 +292,16 @@ class WindowTest(unittest.TestCase):
             self.window.bot_lineup_profile_box.master,
             self.window.bot_lineup_panel)
         self.assertIs(self.window.repair_button.master, self.window.repair_panel)
+        buttons = (self.window.repair_button, self.window.offline_preferences_button,
+                   self.window.reset_button, self.window.factory_reset_button)
+        for button, (row, column) in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
+            self.assertEqual(row, button.grid_options['row'])
+            self.assertEqual(column, button.grid_options['column'])
+            self.assertEqual(3, button.grid_options['padx'])
+            self.assertEqual(3, button.grid_options['pady'])
+            self.assertEqual('nsew', button.grid_options['sticky'])
         self.assertIs(
-            self.window.normal_preferences_button.master,
+            self.window.offline_preferences_button.master,
             self.window.repair_panel)
         self.assertIs(self.window.report_button.master, self.window.game_panel)
         self.assertEqual(
@@ -1033,7 +1041,7 @@ class WindowTest(unittest.TestCase):
         self._game("0.9.22.0.1", "1513")
         self.assertEqual("normal", self.window.repair_button.cget("state"))
         self.assertEqual(
-            "normal", self.window.normal_preferences_button.cget("state"))
+            "normal", self.window.offline_preferences_button.cget("state"))
         self.assertEqual("normal", self.window.reset_button.cget("state"))
         self.assertEqual(
             "readonly", self.window.vehicle_profile_box.cget("state"))
@@ -2188,7 +2196,7 @@ class WindowTest(unittest.TestCase):
         game_root = self._game("0.9.22.0.1", "1513")
         with mock.patch(
                 "core.repair_0_9_22_startup",
-                return_value=["repair complete"]) as repair:
+                return_value=["repair complete"]) as repair, mock.patch.object(self.window, "_confirm_maintenance", return_value=True):
             self.assertTrue(self.window._repair_startup())
             for unused in range(200):
                 if not self.window._maintenance_busy:
@@ -2199,15 +2207,81 @@ class WindowTest(unittest.TestCase):
         self.assertIn("repair complete", self._log_text())
         self.assertEqual("normal", self.window.start_button.cget("state"))
 
+    def test_all_four_maintenance_actions_cancel_without_changing_data(self):
+        self._game('0.9.22.0.1', '1513')
+        for method in (self.window._repair_startup, self.window._reset_offline_client_settings,
+                       self.window._reset_all_state, self.window._factory_reset):
+            with mock.patch.object(self.window, '_confirm_maintenance', return_value=False) as confirm, \
+                    mock.patch.object(self.window, '_start_maintenance') as start:
+                self.assertFalse(method())
+                confirm.assert_called_once()
+                start.assert_not_called()
+
+    def test_maintenance_confirmation_is_translated_and_defaults_to_no(self):
+        self._game('0.9.22.0.1', '1513')
+        self.window.language = 'zh'
+        with mock.patch('tkinter.messagebox.askyesno', return_value=False) as ask:
+            for kind, title in (('repair', '修复模组安装'), ('preferences', '重置全部离线客户端设置'),
+                                ('saves', '清空全部离线存档'), ('factory', '删除全部数据并恢复出厂')):
+                self.assertFalse(self.window._confirm_maintenance(kind))
+                self.assertEqual(title, ask.call_args.args[0])
+                self.assertEqual('no', ask.call_args.kwargs['default'])
+                self.assertIn('游戏目录', ask.call_args.args[1])
+
+    def test_live_worker_room_and_report_block_maintenance_before_prompt(self):
+        self._game('0.9.22.0.1', '1513')
+        for attribute, value in (('_room_worker', _Process()), ('_server', _Process()), ('_report_busy', True)):
+            previous = getattr(self.window, attribute)
+            setattr(self.window, attribute, value)
+            try:
+                with mock.patch.object(self.window, '_confirm_maintenance') as confirm:
+                    self.assertFalse(self.window._factory_reset())
+                    confirm.assert_not_called()
+            finally:
+                setattr(self.window, attribute, previous)
+
+    def test_factory_reset_never_saves_stale_settings_and_closes_after_completion(self):
+        import threading
+        self._game('0.9.22.0.1', '1513')
+        closed = threading.Event()
+        with mock.patch.object(self.window, '_confirm_maintenance', return_value=True), \
+                mock.patch('core.factory_reset_offline', return_value=['clean reset']) as reset, \
+                mock.patch('tkinter.messagebox.showinfo') as info, \
+                mock.patch.object(self.window.root, 'destroy', side_effect=closed.set), \
+                mock.patch('core.save_settings') as save:
+            self.assertTrue(self.window._factory_reset())
+            self.assertTrue(closed.wait(5))
+            self.window._save_settings()
+            save.assert_not_called()
+            reset.assert_called_once()
+            info.assert_called_once()
+
+    def test_factory_failure_cannot_report_success_or_write_stale_settings(self):
+        import threading
+        self._game('0.9.22.0.1', '1513')
+        closed = threading.Event()
+        with mock.patch.object(self.window, '_confirm_maintenance', return_value=True), \
+                mock.patch('core.factory_reset_offline', side_effect=core.LauncherError('locked old data')), \
+                mock.patch('tkinter.messagebox.showinfo') as info, \
+                mock.patch('tkinter.messagebox.showerror') as error, \
+                mock.patch.object(self.window.root, 'destroy', side_effect=closed.set), \
+                mock.patch('core.save_settings') as save:
+            self.assertTrue(self.window._factory_reset())
+            self.assertTrue(closed.wait(5))
+            self.window._save_settings()
+            save.assert_not_called()
+            info.assert_not_called()
+            self.assertIn('locked old data', error.call_args.args[1])
+
     def test_normal_preferences_cleanup_runs_after_confirmation(self):
         game_root = self._game("0.9.22.0.1", "1513")
         with mock.patch.object(
-                self.window, "_confirm_normal_preferences_cleanup",
+                self.window, "_confirm_maintenance",
                 return_value=True), mock.patch(
                 "core.game_is_running", return_value=False), mock.patch(
-                "core.backup_normal_client_preferences",
+                "core.reset_offline_preferences",
                 return_value=["normal preferences backed up"]) as cleanup:
-            self.assertTrue(self.window._clean_normal_client_preferences())
+            self.assertTrue(self.window._reset_offline_client_settings())
             for unused in range(200):
                 if not self.window._maintenance_busy:
                     break
@@ -2220,7 +2294,7 @@ class WindowTest(unittest.TestCase):
         self._game("0.9.22.0.1", "1513")
         with mock.patch.object(
                 self.window, "_confirm_reset", return_value=False), \
-                mock.patch("core.reset_0_9_22_state") as reset:
+                mock.patch("core.clear_offline_saves") as reset:
             self.assertFalse(self.window._reset_all_state())
 
         reset.assert_not_called()
@@ -2232,7 +2306,7 @@ class WindowTest(unittest.TestCase):
                 self.window, "_confirm_reset", return_value=True), \
                 mock.patch("core.game_is_running", return_value=False), \
                 mock.patch(
-                    "core.reset_0_9_22_state",
+                    "core.clear_offline_saves",
                     return_value=["reset complete"]) as reset:
             self.assertTrue(self.window._reset_all_state())
             for unused in range(200):
@@ -2250,7 +2324,7 @@ class WindowTest(unittest.TestCase):
             self.assertFalse(self.window._reset_all_state())
 
         confirm.assert_not_called()
-        self.assertIn("Close World of Tanks", self._log_text())
+        self.assertIn("Close the game", self._log_text())
 
     def test_the_test_button_probes_the_typed_address(self):
         probed = []

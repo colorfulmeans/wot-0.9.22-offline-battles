@@ -20,21 +20,24 @@ def module(name,path):
 writer=module('capacity_writer',ROOT/'tools/replay/replay_writer_process.py')
 reader=module('capacity_reader',ROOT/'tools/replay/replay_reader_process.py')
 legacy=module('capacity_legacy',CLIENT/'offline_replay.py')
+launcher=module('capacity_launcher',ROOT/'launcher/replay_launch.py')
 
 def start(directory):
     path=str(Path(directory)/'replay_last_battle.wotlanreplay');session='a'*32
     return dict(op='start',seq=0,path=path,temp=path+'.'+session+'.part',
         session=session,mode=1,started_wall=100.,header=dict(welcome={},
-        start={'type':'battle_start'},snapshot={},config={}))
+        start={'type':'battle_start'},snapshot={'type':'snapshot'},config={}))
 
 class ReplayCapacityTests(unittest.TestCase):
     def test_all_stream_limits_match_and_row_bounds_stay_small(self):
         self.assertEqual(8*1024**3,writer.MAX_TOTAL)
         self.assertEqual(writer.MAX_TOTAL,reader.MAX_TOTAL)
         self.assertEqual(writer.MAX_TOTAL,legacy.MAX_TOTAL)
+        self.assertEqual(writer.MAX_TOTAL,launcher.MAX_TOTAL)
         self.assertEqual(2*1024**2,writer.MAX_LINE)
         self.assertEqual(writer.MAX_LINE,reader.MAX_LINE)
         self.assertEqual(writer.MAX_LINE,legacy.MAX_LINE)
+        self.assertEqual(writer.MAX_LINE,launcher.MAX_LINE)
 
     def test_real_compressed_stream_above_old_limit_publishes_and_reads_to_end(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -61,6 +64,10 @@ class ReplayCapacityTests(unittest.TestCase):
                 reader.read(path)
             self.assertEqual(772,len(kinds))
             self.assertEqual(('row','end'),kinds[-1])
+            self.assertEqual(770,launcher.validate(path)['records'])
+            with mock.patch.object(launcher,'MAX_TOTAL',768*1024**2):
+                with self.assertRaisesRegex(ValueError,'decompressed size limit'):
+                    launcher.validate(path)
 
     def test_total_limit_logs_values_and_abort_preserves_previous_complete_recording(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -49,6 +49,38 @@ def _verify_vehicle_editor_language(root, tk, ttk):
         editor.root.destroy()
 
 
+def _verify_maintenance_controls(root, tk):
+    """Exercise the shipped two-by-two layout without invoking destructive work."""
+    from types import SimpleNamespace
+    import wot_launcher
+    panel = tk.Frame(root)
+    owner = SimpleNamespace(_tk=tk, repair_panel=panel,
+        _repair_startup=lambda: None, _reset_offline_client_settings=lambda: None,
+        _reset_all_state=lambda: None, _factory_reset=lambda: None)
+    wot_launcher.LauncherWindow._build_maintenance_controls(owner)
+    buttons = (owner.repair_button, owner.offline_preferences_button,
+               owner.reset_button, owner.factory_reset_button)
+    labels = ('Repair mod installation', 'Reset all offline client settings',
+              'Clear all offline saves', 'Delete all data and restore factory defaults')
+    for language in ('en', 'zh'):
+        for button, text in zip(buttons, labels):
+            button.config(text=wot_launcher._CHINESE[text] if language == 'zh' else text)
+        root.update_idletasks()
+        width = panel.winfo_reqwidth()
+        height = panel.winfo_reqheight()
+        panel.place(x=0, y=0, width=width, height=height)
+        root.update_idletasks()
+        for button, position in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
+            info = button.grid_info()
+            assert (int(info['row']), int(info['column'])) == position
+            assert int(info['padx']) == 3 and int(info['pady']) == 3
+        assert len({b.winfo_width() for b in buttons}) <= 2
+        assert min(b.winfo_width() for b in buttons) > 1
+        assert max(b.winfo_width() for b in buttons) - min(b.winfo_width() for b in buttons) <= 1
+        assert max(b.winfo_height() for b in buttons) - min(b.winfo_height() for b in buttons) <= 1
+    panel.destroy()
+
+
 def run(destination):
     report = {'ok': False, 'native_gameplay_tested': False}
     root = None
@@ -59,6 +91,8 @@ def run(destination):
         import bot_tactics_store as storage
         with tempfile.TemporaryDirectory(prefix='bot-editor-smoke-') as temp:
             root = tk.Tk(); root.withdraw()
+            _verify_maintenance_controls(root, tk)
+            report['maintenance_equal_grid_en_zh'] = True
             ui = bot_tactics_ui.BotTacticsEditor(root, store=storage.Store(temp), language='en')
             def fail(error):
                 raise AssertionError(str(error))
