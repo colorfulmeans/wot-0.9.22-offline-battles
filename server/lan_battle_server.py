@@ -11670,6 +11670,15 @@ class BattleState:
                     "last_progress_request_fingerprint": record.get(
                         "last_progress_request_fingerprint"),
                 }
+                if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+                    try:
+                        _server_log('PROJECTILE TERMINAL id=%s outcome=battle_finished '
+                            'shooter=%s:%s round=%s launch_ms=%s finish_ms=%s' % (
+                                projectile_id, record.get('shooter_kind'),
+                                record.get('shooter_id'), self.round_id,
+                                record.get('launch_server_time_ms'), self._server_time_ms()))
+                    except Exception:
+                        pass  # Diagnostic output cannot interrupt terminal cleanup.
             self.projectiles.clear()
             self.projectile_revision += 1
         self.pending_events.append(dict(self.battle_result, kind="battle_result"))

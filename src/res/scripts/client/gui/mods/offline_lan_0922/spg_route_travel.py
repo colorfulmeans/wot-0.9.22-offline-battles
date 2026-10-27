@@ -14,6 +14,14 @@ def xy(value):
 def separation(a,b):return math.hypot(a[0]-b[0],a[1]-b[1])
 
 
+def owns_hull(order):
+    """Travel owns the chassis; a separate gun may still track its target."""
+    return (order.get('combat_mode') == 'spg_route_travel' or
+            (order.get('spg_mode') in ('deployment', 'sortie', 'empty') and
+             order.get('combat_mode') == 'base_defense' and
+             order.get('throttle_override') != 0.0))
+
+
 def parking(settings,state):
     initial=state.get('_spg_initial') or {}
     rows=[p for p in settings.get('positions',()) if p['team']==state['team']]
@@ -204,7 +212,7 @@ def apply(runtime,state,order,now):
         route_anchor=(pose[0],state['y'],pose[1]),route_join=True,route_index=active['index'],
         throttle_override=None,combat_mode='base_defense' if defense else 'spg_route_travel')
     result['authored_spg_connection']=active['kind']
-    if empty:result['face_position']=result['move_position']
+    result['face_position']=result['move_position']
     if active['kind']=='attack':
         result['route_id']=active['identity'][1]
         result['authored_spg_recovery']=dict(phase=active.get('recovery_phase','forward'),

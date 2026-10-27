@@ -56,6 +56,14 @@ class ArtilleryRecoveryTests(unittest.TestCase):
             self.assertEqual((100, 0., 200), self.tick(47)['move_position'])
             self.assertNotIn('recovery_phase', self.active)
 
+    def test_travel_uses_next_waypoint_not_old_parking_or_enemy_face(self):
+        for mode in ('base_capture','base_defense'):
+            result=self.tick(1.,combat_mode=mode,face_position=(900.,0.,900.),
+                             aim_position=(500.,2.,500.),target_id=9,fire_allowed=False)
+            self.assertEqual(result['move_position'],result['face_position'])
+            self.assertEqual((500.,2.,500.),result['aim_position'])
+            self.assertEqual(9,result['target_id'])
+
     def test_reaching_skipped_point_finishes_recovery_and_keeps_attack(self):
         self.tick(0); self.tick(21)
         self.state['z'] = 300.

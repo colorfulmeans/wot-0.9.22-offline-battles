@@ -1905,7 +1905,7 @@ def _overlay_live_target_pose(command, target, source_position=None):
     if any(math.isnan(value) or math.isinf(value) for value in position):
         raise ValueError('canonical live target position must be finite')
     result['aim_position'] = position
-    if result.get('empty_ammo'):
+    if result.get('empty_ammo') or spg_route_travel.owns_hull(result):
         # Live gun tracking must not reclaim the navigation-facing owner.
         # Unknown/reloading inventory never sets this explicit task flag.
         return result
@@ -15469,6 +15469,17 @@ class BotRuntime(object):
     def _rear_laying_order(self, state, order, targets, now):
         """Finish one bounded mechanical laying attempt before route handoff."""
         if order.get('empty_ammo'):return order
+        if spg_route_travel.owns_hull(order):
+            for key in ('_rear_motion_lease', '_rear_aim_episode', '_rear_hull_aim',
+                        '_rear_contact_refusal'):
+                state.pop(key, None)
+            state['_rear_motion_blocked'] = False
+            if detailed_enabled():
+                state['_rear_motion_observation'] = dict(at=now,
+                    reason='spg_travel_owns_hull', incoming_mode=order.get('combat_mode'))
+            else:
+                state.pop('_rear_motion_observation', None)
+            return order
         followup = self._magazine_followup_order(state, order, targets, now)
         if followup is not None:
             state['_rear_motion_observation'] = dict(at=now,
@@ -17141,10 +17152,12 @@ class BotRuntime(object):
                         targets.get(server_order.get('target_id')),
                         position)
                     order_steps = [dict(stage='server_live_target', order=_order_evidence(server_order))]
+                    server_order = spg_route_travel.apply(self, state, server_order, now)
+                    if (state.get('profile') or {}).get('class_tag') == 'SPG':
+                        order_steps.append(dict(stage='artillery_task', order=_order_evidence(server_order)))
                     server_order = self._rear_laying_order(
                         state, server_order, targets, now)
                     order_steps.append(dict(stage='rear_laying', order=_order_evidence(server_order)))
-                    server_order = spg_route_travel.apply(self, state, server_order, now)
                     server_order = self._artillery_position_order(
                         state, server_order, targets, now)
                     order_steps.append(dict(stage='artillery_position', order=_order_evidence(server_order)))
@@ -17349,6 +17362,7 @@ class BotRuntime(object):
                                          ammo_state.planned_rounds())
             ammo_state.publish(state)
             is_spg = str(profile.get('class_tag') or '') == 'SPG'
+            travel_owns_hull = is_spg and spg_route_travel.owns_hull(command)
             pending_intent = None
             pending_reproof = None
             if is_spg:
@@ -17367,13 +17381,15 @@ class BotRuntime(object):
                 if pending_intent is not None:
                     frozen = pending_intent['solution']
                     command['aim_position'] = frozen['aim_position']
-                    command['face_position'] = frozen['aim_position']
+                    if not travel_owns_hull:
+                        command['face_position'] = frozen['aim_position']
                 elif (pending_reproof is not None and
                       isinstance(pending_reproof.get('hold_solution'), dict)):
                     frozen = pending_reproof['hold_solution']
                     command['aim_position'] = frozen['aim_position']
-                    command['face_position'] = frozen['aim_position']
-                if pending_reproof is not None:
+                    if not travel_owns_hull:
+                        command['face_position'] = frozen['aim_position']
+                if pending_reproof is not None and not travel_owns_hull:
                     command['brake'] = True
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
@@ -17453,6 +17469,7 @@ class BotRuntime(object):
                 turn, throttle, command.get('recovery_mode', 'drive'),
                 target is not None and
                 not command.get('empty_ammo') and
+                not travel_owns_hull and
                 command.get('combat_mode') != 'base_defense' and
                 # Parking releases rear laying in _rear_laying_order. Do not
                 # recreate that episode later in the same control update and

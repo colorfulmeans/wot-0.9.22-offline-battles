@@ -35,6 +35,22 @@ class SoundReportTests(unittest.TestCase):
     def test_normal_entry_does_not_generate_sound_section(self):
         self.assertIsNone(sound_report.describe({'worker':sound_report.SoundScanner()},None))
 
+    def test_event_action_and_embedded_media_structure_is_not_engine_load_proof(self):
+        def obj(kind,identifier,data):
+            return struct.pack('<BII',kind,4+len(data),identifier)+data
+        def chunk(kind,data):return kind+struct.pack('<I',len(data))+data
+        with tempfile.TemporaryDirectory() as root:
+            folder=os.path.join(root,'res','packages');os.makedirs(folder)
+            hirc=struct.pack('<I',2)+obj(4,123,b'\x02'+struct.pack('<II',42,99))+obj(3,42,b'actual-action')
+            blob=chunk(b'BKHD',struct.pack('<I',111))+chunk(b'HIRC',hirc)+chunk(b'DIDX',
+                struct.pack('<IIIIII',7,0,4,8,3,4))+chunk(b'DATA',b'1234')
+            with zipfile.ZipFile(os.path.join(folder,'audioww.pkg'),'w') as z:z.writestr('audioww/test.bnk',blob)
+            row=sound_report.bank_membership(root,{123})['matches'][0]['structure']
+            self.assertEqual(111,row['bkhd_first_u32'])
+            self.assertEqual([True,False],[a['present'] for a in row['actions']])
+            self.assertEqual([8],row['invalid_embedded_ranges'])
+            self.assertFalse(row['engine_load_observed'])
+
     def test_error_retention_is_explicit_and_bounded(self):
         scanner=sound_report.SoundScanner()
         for unused in range(140):scanner.feed(b'Sound fail: 123 - ErrorCode: 15\n')

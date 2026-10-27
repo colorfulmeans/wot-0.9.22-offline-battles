@@ -56,10 +56,12 @@ def bank_membership(game_root, identifiers):
     paths = [os.path.join(packages, name) for name in ('audioww.pkg',)]
     def scan(name, payload, source):
         offset = 0
+        chunks, actions, found = {}, {}, []
         while offset + 8 <= len(payload):
             kind, size = struct.unpack_from('<4sI', payload, offset)
             start, end = offset + 8, offset + 8 + size
             if end > len(payload):raise ValueError('truncated bank chunk')
+            chunks[kind] = (start, end)
             if kind == b'HIRC':
                 count, = struct.unpack_from('<I', payload, start)
                 pos = start + 4
@@ -68,10 +70,41 @@ def bank_membership(game_root, identifiers):
                     object_type, length, identifier = struct.unpack_from('<BII', payload, pos)
                     if length < 4 or pos + 5 + length > end:raise ValueError('invalid HIRC length')
                     if identifier in wanted:
-                        matches.append(dict(bank=name, source=source, resource_id=identifier,
-                                            hirc_type=object_type, event=object_type == 4))
+                        row = dict(bank=name, source=source, resource_id=identifier,
+                                   hirc_type=object_type, event=object_type == 4)
+                        matches.append(row)
+                        found.append((row, payload[pos+9:pos+5+length]))
+                    if object_type == 3:
+                        actions[identifier] = payload[pos+9:pos+5+length]
                     pos += 5 + length
             offset = end
+        # Report-time structural evidence only. Presence does not prove the
+        # engine loaded this bank or resolved its streamed media successfully.
+        for row, event in found:
+            details = dict(engine_load_observed=False)
+            if b'BKHD' in chunks:
+                start, end = chunks[b'BKHD']
+                if end-start >= 4:details['bkhd_first_u32'] = struct.unpack_from('<I', payload, start)[0]
+            if row['event']:
+                count = event[0] if event else 0
+                if event and len(event) == 1+count*4:
+                    refs = [struct.unpack_from('<I', event, 1+n*4)[0] for n in range(count)]
+                    details['action_count'] = count
+                    details['actions'] = [dict(id=value, present=value in actions,
+                        payload_hex=actions[value].hex() if value in actions else None)
+                        for value in refs[:32]]
+                else:details['event_action_layout'] = 'unrecognized'
+            if b'DIDX' in chunks:
+                start, end = chunks[b'DIDX']
+                details['media_index_aligned'] = (end-start) % 12 == 0
+                details['embedded_media_count'] = (end-start)//12
+                size = chunks[b'DATA'][1]-chunks[b'DATA'][0] if b'DATA' in chunks else 0
+                bad = []
+                for pos in range(start, end-11, 12):
+                    media, at, length = struct.unpack_from('<III', payload, pos)
+                    if at+length > size and len(bad)<32:bad.append(media)
+                details['invalid_embedded_ranges'] = bad
+            row['structure'] = details
     try:
         with zipfile.ZipFile(paths[0]) as archive:
             for item in archive.infolist():

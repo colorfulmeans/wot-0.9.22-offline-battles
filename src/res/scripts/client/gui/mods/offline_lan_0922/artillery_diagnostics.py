@@ -1,5 +1,6 @@
 """Compact diagnostic-only control history, independent of bulk trace quota."""
 from . import native_input_diagnostics as diagnostics
+from . import spg_route_travel
 
 
 def observe(runtime, state, command, throttle, turn, path_clear, probe, now,
@@ -65,6 +66,11 @@ def _observe(runtime, state, command, throttle, turn, path_clear, probe, now,
         rotation=dict(state.get('_traffic_rotation_receipt') or {}),
         movement=command.get('movement_intent'), brake=command.get('brake'),
         spg_mode=state.get('_spg_mode'), deployment=state.get('_spg_deployment'),
+        travel_hull_owner=spg_route_travel.owns_hull(command),
+        defense=dict(active=bool(state.get('_authored_spg_defending')),
+            base_id=command.get('defense_base_id'),
+            resume_kind=(state.get('_authored_spg_resume') or {}).get('kind'),
+            resume_identity=(state.get('_authored_spg_resume') or {}).get('identity')),
         task={k:task.get(k) for k in ('kind','identity','index','recovery_phase','paused_at')},
         navigation={k:nav.get(k) for k in ('index','planned_goal','navigation_status','pending_since')},
         path_clear=path_clear, probe={k:(probe or {}).get(k) for k in

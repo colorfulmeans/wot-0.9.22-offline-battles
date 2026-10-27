@@ -11,6 +11,37 @@ class FollowupTests(unittest.TestCase):
     def setUp(self):
         self.module = _load_bot_runtime()
 
+    def test_stocked_spg_travel_tracks_gun_without_reclaiming_route_facing(self):
+        from gui.mods.offline_lan_0922 import spg_route_travel as travel
+        target = dict(alive=True, visible=True, position=(90.,3.,-50.))
+        for mode in ('spg_route_travel', 'base_defense'):
+            command = dict(spg_mode='sortie', combat_mode=mode, target_id=9,
+                face_position=(0.,0.,200.), move_position=(0.,0.,200.),
+                throttle_override=None, fire_allowed=True)
+            self.assertTrue(travel.owns_hull(command))
+            result = self.module._overlay_live_target_pose(command, target)
+            self.assertEqual(target['position'],result['aim_position'])
+            self.assertEqual(command['face_position'],result['face_position'])
+            self.assertEqual(command['move_position'],result['move_position'])
+        for command in (dict(command,combat_mode='engage'),
+                        dict(command,throttle_override=0.)):
+            self.assertFalse(travel.owns_hull(command))
+            result=self.module._overlay_live_target_pose(command,target)
+            self.assertEqual(target['position'],result['face_position'])
+
+    def test_stale_rear_laying_cannot_stop_an_artillery_travel_task(self):
+        runtime=self.module.BotRuntime(1)
+        command=dict(combat_mode='spg_route_travel',target_id=9,
+            move_position=(0.,0.,200.),face_position=(0.,0.,200.),fire_allowed=False)
+        state=dict(id=23,_rear_motion_lease={'old':True},_rear_aim_episode={'old':True},
+                   _rear_hull_aim=('old',1.),_rear_contact_refusal={},_rear_motion_blocked=True)
+        with mock.patch.object(runtime,'_magazine_followup_order',side_effect=AssertionError('old combat owner')):
+            self.assertIs(command,runtime._rear_laying_order(state,command,{},3.))
+        self.assertNotIn('_rear_aim_episode',state)
+        self.assertNotIn('_rear_hull_aim',state)
+        self.assertNotIn('_rear_motion_lease',state)
+        self.assertFalse(state['_rear_motion_blocked'])
+
     def test_empty_live_target_tracks_gun_without_replacing_travel_or_recovery(self):
         target = dict(alive=True, visible=True, position=(90.,3.,-50.))
         for mode in ('spg_route_travel','base_capture','route','advance_contact'):
@@ -60,6 +91,8 @@ class FollowupTests(unittest.TestCase):
         self.assertEqual(16,rows[-1][1]['turn_flips'])
         self.assertEqual([.2,.25,-.1,'vehicle_brake'],rows[-1][1]['controls'][-1][9:])
         self.assertEqual(9,rows[-1][1]['traffic']['forward_blocked_by'])
+        self.assertTrue(rows[-1][1]['travel_hull_owner'])
+        self.assertFalse(rows[-1][1]['defense']['active'])
         self.assertEqual((0,0,100),command['move_position'])
         self.assertNotIn('_spg_control_observation',self.module._copy_runtime_state(state))
         with mock.patch.dict(os.environ,WOT_OFFLINE_DIAGNOSTICS='1'), \

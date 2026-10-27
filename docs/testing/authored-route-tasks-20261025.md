@@ -1,5 +1,36 @@
 # Authored route tasks and editor connections
 
+## Build 544 follow-up scope (2026-10-27)
+
+Ghost Town build 543 proves stale parking/target-facing ownership during SPG
+sortie return. Authored travel now sets chassis facing to its navigation goal
+before rear-laying arbitration; live target pose, pending ballistic reproof and
+late combat hull aim cannot reclaim that chassis. Moving SPG base defense uses
+the same ownership: gun/turret tracking continues within the actual weapon
+limits while the chassis navigates or recovers. Ordinary combat and stationary
+base-defense holding keep their existing behavior. Fire still needs the original
+ballistic, obstruction, friendly-safety and launch proof. No movement or native
+query budget is reduced, and no worker speedup is claimed.
+
+Diagnostic control samples now identify the travel hull owner and defense resume
+identity. Battle finish emits individual diagnostic-only `battle_finished`
+projectile terminal receipts for both player and BOT shots, without changing
+settlement or cleanup. Logging failure cannot block terminal cleanup.
+
+Sound report generation additionally inspects exact event-to-action references
+and embedded-media index bounds. Native bank auto-load remains explicitly
+unobserved. Original bank event presence and playback callbacks do not establish
+why native error 15 occurs; there is no speculative resource/audio fix.
+
+Engine-free reference validation passes 43 files / 1,607 tests using the explicit
+Linux seam. Final diagnostic and projectile tests were rerun after their last
+changes; the final projectile file passes 129 tests. Sound/report suites pass
+61 tests (five unavailable Windows symlink cases skipped). All 214 client files
+compile with CPython 2.7.18; exact Chinese HD #1513 inspection passes. Independent
+package inspection and two diagnostic-entry Ghost Town matches with lineup 30
+and Default are pending at this runtime source commit. Native observations must
+separate exercised return-to-base behavior from any untriggered defense branch.
+
 ## Build 543 follow-up scope (2026-10-27)
 
 Manual Ghost Town report `69064df66e0b` proves a close-range SPG aim-point

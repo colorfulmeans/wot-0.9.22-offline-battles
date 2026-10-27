@@ -7769,6 +7769,27 @@ class BotRuntimeTests(unittest.TestCase):
                                     for args in motion))
                 self.assertLess(state['speed'], 8.0)
 
+    def test_artillery_reproof_does_not_brake_priority_travel(self):
+        for mode in ('spg_route_travel', 'base_defense'):
+            with self.subTest(mode=mode):
+                runtime=self._drive_runtime(lambda *a:dict(clear=True,collision=False,slope=0.))
+                state=runtime.states[11];state['profile']['class_tag']='SPG'
+                command=dict(self._stationary_command(),combat_mode=mode,spg_mode='sortie',
+                    move_position=(0.,0.,400.),face_position=(0.,0.,400.),
+                    throttle=1.,brake=False,movement_intent=True,fire_allowed=True)
+                runtime.adapter.decide=lambda *a:dict(command)
+                runtime._active_artillery_intent=lambda *a:None
+                runtime._active_artillery_reproof=lambda *a:dict(
+                    hold_solution=dict(aim_position=(100.,2.,0.)))
+                runtime._refresh_control_this_step=True;runtime._publish_control_this_step=True
+                original=self.module.vehicle_physics.longitudinal_step
+                with mock.patch.object(self.module.vehicle_physics,'longitudinal_step',wraps=original) as step:
+                    runtime._update_once(.1,1.1)
+                motion=[c.args for c in step.call_args_list if c.args[5]==.1]
+                self.assertTrue(motion)
+                self.assertTrue(all(a[2]==1. and not a[8] for a in motion))
+                self.assertFalse(state['hull_aiming'])
+
     def test_deferred_probe_keeps_the_proved_corridor(self):
         """A budget deferral is not evidence of a wall, so the cache stays."""
         probe = self._recast_budget_probe()

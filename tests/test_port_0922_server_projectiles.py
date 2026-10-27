@@ -3765,6 +3765,45 @@ class ServerProjectileLedgerTests(unittest.TestCase):
         self.assertFalse(state.projectile_tombstones)
         self.assertEqual(0, state.projectile_revision)
 
+    def test_finished_projectile_diagnostic_is_exactly_once_and_observational(self):
+        for enabled in ('0','1'):
+            state=_state()
+            self.assertTrue(_launch_authority(state,_launch(max_time_ms=10000)))
+            before=state.players[2].health
+            with mock.patch.dict(lan_server_module.os.environ,WOT_OFFLINE_DIAGNOSTICS=enabled), \
+                 mock.patch.object(lan_server_module,'_server_log') as log:
+                self.assertTrue(state._finish_battle(1,'test'))
+                state._finish_battle(1,'test')
+            records=[c.args[0] for c in log.call_args_list if 'outcome=battle_finished' in c.args[0]]
+            self.assertEqual(int(enabled),len(records))
+            if records:
+                self.assertIn('id=1:p:1:1',records[0]);self.assertIn('shooter=player:1',records[0])
+            self.assertEqual(before,state.players[2].health)
+            self.assertFalse(state.projectiles)
+            self.assertEqual('battle_finished',state.projectile_tombstones['1:p:1:1']['outcome'])
+
+    def test_finish_diagnostic_covers_bot_and_human_and_survives_output_failure(self):
+        for fail in (False,True):
+            state=_state()
+            self.assertTrue(_launch_authority(state,_launch(max_time_ms=10000)))
+            state.bot_states[16]=dict(id=16,team=2,vehicle='ussr:R11_MS-1',health=500,
+                max_health=500,display_health=500,alive=True,fire_seq=0)
+            state.bot_pending_projectile_launches.add((16,1))
+            self.assertTrue(_launch_authority(state,_launch(shooter_id=16,shooter_kind='bot')))
+            records=[]
+            def log(text):
+                if 'outcome=battle_finished' in text:
+                    records.append(text)
+                    if fail:raise OSError('diagnostic output unavailable')
+            with mock.patch.dict(lan_server_module.os.environ,WOT_OFFLINE_DIAGNOSTICS='1'), \
+                 mock.patch.object(lan_server_module,'_server_log',side_effect=log):
+                self.assertTrue(state._finish_battle(1,'test'))
+            self.assertEqual(2,len(records))
+            self.assertTrue(any('shooter=bot:16' in r for r in records))
+            self.assertTrue(any('shooter=player:1' in r for r in records))
+            self.assertFalse(state.projectiles)
+            self.assertEqual({'1:p:1:1','1:b:16:1'},set(state.projectile_tombstones))
+
     def test_connected_worker_does_not_disable_failed_player_shot_expiry(self):
         state = _state(players=3)
         self.assertTrue(_launch_authority(state, _launch(max_time_ms=100)))
