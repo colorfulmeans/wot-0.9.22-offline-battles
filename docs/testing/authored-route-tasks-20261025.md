@@ -1,5 +1,48 @@
 # Authored route tasks and editor connections
 
+## Consumed steering target and compact maintenance follow-up (2026-10-27)
+
+Build 555's Fjord 24-FPS reference failure is SPG bot 29/team 2, not an ordinary
+vehicle stuck at an authored waypoint. At 36.25-44.25 seconds it remains at
+(-310.956737, 58.442227), approximately E2. Its automatic-deployment destination
+is the enemy base, 717.142 metres away. The navigator supplies a fresh local tip
+3.12 metres away, but the retained alignment tip is only 1.457751 metres away,
+inside the driver's existing 1.5-metre arrival radius. The tips differ by
+1.880217 metres, so the two-metre leg-identity guard retains the consumed tip.
+Arrival repeatedly clears ordinary stuck time; the eight-second objective
+watchdog finally starts reverse recovery. This scene flattens all heights and
+loads no authored tactics, so it does not implicate the southern peninsula
+parking positions or any editor route-point number. The live package retains
+this same Python driver owner; exact native scene timing remains unproved.
+
+Release a retained alignment tip when that tip reaches the current arrival
+radius, before substituting it for the navigator's current target. Keep
+unconsumed alignment, explicit holds, reverse/avoidance, target-change guards,
+progress clocks, physical checks and combat behavior. Captured-input regression
+fails against the old branch and drives immediately with the correction;
+another test retains the required heading/brake for an unconsumed nearby tip.
+The existing Fjord/Airfield 15/24-FPS test keeps every original threshold and
+adds actor, class, position, local/macro target and alignment/arrival evidence
+to a future parking failure. Its non-SPG departure checks and wider parking
+monitor must not be described as the same population.
+
+Maintenance buttons retain their equal two-by-two grid but use ordinary button
+height, top alignment and no vertical expansion. Five localized explanatory
+lines below wrap with the available width. The final Chinese line is exactly:
+these offline data are shared by launcher versions; clearing affects other
+versions, while files manually copied to other locations are not deleted.
+No example destination is named. Destructive actions and confirmations are
+unchanged. Packaged Tk smoke compares normal button heights in both languages,
+resizes the window, and checks that the explanations remain below the controls.
+
+Local reference checks pass all 41 affected files / 546 tests. The unchanged
+Fjord/Airfield four-scene departure test passes with no far-goal arrived
+episodes captured. Real Windows Tk imports pass eight affected launcher suites,
+736 executions / 582 unique tests with nine symlink skips, including translated
+scope text and resize checks. These reference/UI checks do not constitute a
+new native battle acceptance. Exact-source CI and final package inspection are
+recorded after build completion. No routes or user's saved data are changed.
+
 ## Maintenance and replay preflight follow-up (2026-10-27)
 
 Scope: launcher-only maintenance and replay entry; no physics, combat, route,

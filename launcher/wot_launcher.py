@@ -58,7 +58,20 @@ _SHOP_HELP = (
 LAUNCHER_VERSION = "0.10.2"
 WINDOW_TITLE = "wot-0.9.22-offline-battles v%s" % LAUNCHER_VERSION
 
+_MAINTENANCE_HELP = (
+    "Repair mod installation: reinstall the mod supplied by this launcher; keep saves and custom profiles.",
+    "Reset all offline client settings: reset display, sound and controls for all offline accounts; keep saves and profiles.",
+    "Clear all offline saves: delete every offline save and create a fresh fully unlocked default; keep custom profiles and client settings.",
+    "Delete all data and restore factory defaults: clear offline saves, custom profiles, settings, caches, replays and diagnostic reports, reinstall the mod and rebuild defaults.",
+    "Offline data is shared by different launcher versions. Clearing it affects other versions; files manually copied to other locations are not deleted.",
+)
+
 _CHINESE = {
+    _MAINTENANCE_HELP[0]: "修复模组安装：重新安装此启动器携带的模组，保留存档和自定义方案。",
+    _MAINTENANCE_HELP[1]: "重置全部离线客户端设置：重置所有离线账号的画面、声音、按键等客户端设置，保留存档和方案。",
+    _MAINTENANCE_HELP[2]: "清空全部离线存档：删除所有离线存档，重新建立默认全解锁存档，保留自定义方案和客户端设置。",
+    _MAINTENANCE_HELP[3]: "删除全部数据并恢复出厂：清除全部离线存档、自定义方案、设置、缓存、录像和诊断报告，重新安装模组并恢复默认数据。",
+    _MAINTENANCE_HELP[4]: "这些离线数据由不同版本启动器共享，清空会影响其他版本；手动复制到其他位置的文件不会删除。",
     'Each click adds 16 free berths. Pending recruits reserve space; crew serving in vehicles do not.':'每次免费增加16个床位。待领取成员预留床位；车上服役成员不占兵营床位。',
     'Add 16 barracks berths': '添加16个兵营床位',
     'Added 16 barracks berths to this save.': '已为当前存档增加16个兵营床位。',
@@ -1152,22 +1165,29 @@ class LauncherWindow(object):
         self.repair_button = tk.Button(
             self.repair_panel, text="",
             command=self._repair_startup)
-        self.repair_button.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
+        self.repair_button.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
         self.reset_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_all_state)
-        self.reset_button.grid(row=1, column=0, sticky="nsew", padx=3, pady=3)
+        self.reset_button.grid(row=1, column=0, sticky="ew", padx=3, pady=3)
         self.offline_preferences_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_offline_client_settings)
         self.offline_preferences_button.grid(
-            row=0, column=1, sticky="nsew", padx=3, pady=3)
+            row=0, column=1, sticky="ew", padx=3, pady=3)
         self.factory_reset_button = tk.Button(
             self.repair_panel, text="", command=self._factory_reset)
-        self.factory_reset_button.grid(row=1, column=1, sticky="nsew", padx=3, pady=3)
+        self.factory_reset_button.grid(row=1, column=1, sticky="ew", padx=3, pady=3)
         for index in (0, 1):
             self.repair_panel.grid_columnconfigure(index, weight=1, uniform='maintenance_columns')
-            self.repair_panel.grid_rowconfigure(index, weight=1, uniform='maintenance_rows')
+            self.repair_panel.grid_rowconfigure(index, weight=0)
+        self.maintenance_help = tk.Label(self.repair_panel, text="", anchor="nw",
+            justify="left", wraplength=620)
+        self.maintenance_help.grid(row=2, column=0, columnspan=2,
+            sticky="new", padx=3, pady=(8, 0))
+        self.repair_panel.grid_rowconfigure(3, weight=1)
+        self.repair_panel.bind('<Configure>', lambda event:
+            self.maintenance_help.config(wraplength=max(1, event.width - 26)))
 
 
     def _t(self, text):
@@ -1266,6 +1286,7 @@ class LauncherWindow(object):
             "Reset all offline client settings"))
         self.reset_button.config(text=self._t("Clear all offline saves"))
         self.factory_reset_button.config(text=self._t("Delete all data and restore factory defaults"))
+        self.maintenance_help.config(text='\n'.join(self._t(line) for line in _MAINTENANCE_HELP))
         self.report_button.config(text=self._t("Create error report..."))
         self.log_panel.config(text=self._t("Activity log"))
         self._update_action_controls()

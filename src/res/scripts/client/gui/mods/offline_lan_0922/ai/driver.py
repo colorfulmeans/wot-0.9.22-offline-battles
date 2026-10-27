@@ -1292,10 +1292,14 @@ class LocalDriver(object):
 			origin=tuple(position), target=tuple(target), yaw=float(yaw))
 		alignment = state.get('alignment_target')
 		previous_alignment = alignment
+		# Nearby navigator tips can keep the same leg identity after the held
+		# point was reached. That consumed point must no longer own arrival.
 		release_reason = ('movement_hold' if not movement_intent else
 			'reverse_motion' if float(speed) < -0.05 else
 			'traverse_unavailable' if turn_speed_limit is None else
 			'current_point_reached' if _distance(position, target) <= arrival else
+			'alignment_point_reached' if alignment is not None and
+			_distance(position, alignment) <= arrival else
 			'local_leg_changed' if alignment is not None and
 			_distance(alignment, target) > 2.0 else None)
 		if release_reason is not None:

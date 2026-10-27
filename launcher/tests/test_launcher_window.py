@@ -307,7 +307,7 @@ class WindowTest(unittest.TestCase):
             self.assertEqual(column, button.grid_options['column'])
             self.assertEqual(3, button.grid_options['padx'])
             self.assertEqual(3, button.grid_options['pady'])
-            self.assertEqual('nsew', button.grid_options['sticky'])
+            self.assertEqual('ew', button.grid_options['sticky'])
         self.assertIs(
             self.window.offline_preferences_button.master,
             self.window.repair_panel)
@@ -2224,6 +2224,15 @@ class WindowTest(unittest.TestCase):
                 self.assertFalse(method())
                 confirm.assert_called_once()
                 start.assert_not_called()
+
+    def test_maintenance_help_tracks_language_and_describes_shared_cleanup_scope(self):
+        for language in ('en', 'zh'):
+            self.window.language = language
+            self.window._apply_language(refresh=False)
+            expected = '\n'.join(self.window._t(line) for line in wot_launcher._MAINTENANCE_HELP)
+            self.assertEqual(expected, self.window.maintenance_help.cget('text'))
+        self.assertTrue(expected.endswith('这些离线数据由不同版本启动器共享，清空会影响其他版本；手动复制到其他位置的文件不会删除。'))
+        self.assertNotIn('桌面', expected)
 
     def test_maintenance_confirmation_is_translated_and_defaults_to_no(self):
         self._game('0.9.22.0.1', '1513')

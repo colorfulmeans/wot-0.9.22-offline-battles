@@ -212,6 +212,7 @@ class SpawnDepartureTests(unittest.TestCase):
                 monitor = _EpisodeMonitor()
                 now = [0.0]
                 macro_goals = {}
+                parked_diagnostics = {}
 
                 original_navigation = runtime.adapter.navigation_target
 
@@ -232,6 +233,14 @@ class SpawnDepartureTests(unittest.TestCase):
                     far_macro_goal = math.hypot(
                         float(goal[0]) - float(position[0]),
                         float(goal[2]) - float(position[2])) > 15.0
+                    if far_macro_goal and order.get('recovery_mode') == 'arrived':
+                        parked_diagnostics[bot_id] = dict(
+                            at=now[0], team=runtime.states[bot_id]['team'],
+                            class_tag=runtime.states[bot_id]['profile']['class_tag'],
+                            position=position, local_target=args[6], macro_goal=goal,
+                            movement_intent=kwargs.get('movement_intent', True),
+                            arrival=dict(runtime.adapter.driver.states[bot_id].get('arrival_trace') or {}),
+                            alignment=dict(runtime.adapter.driver.states[bot_id].get('alignment_observation') or {}))
                     monitor.record(
                         'parked', bot_id,
                         far_macro_goal and
@@ -317,7 +326,7 @@ class SpawnDepartureTests(unittest.TestCase):
                     5.0)
                 self.assertLessEqual(
                     max(monitor.maximum['parked'].values() or [0.0]),
-                    0.5)
+                    0.5, dict(episodes=monitor.maximum['parked'], observations=parked_diagnostics))
 
 
 if __name__ == '__main__':

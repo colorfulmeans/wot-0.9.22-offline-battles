@@ -32,7 +32,9 @@ original vehicle profile. Playback does not award battle rewards.
 
 Maintenance (Repair tab)
 ------------------------
-Four equally spaced buttons use a two-by-two layout. Every action requires
+Four equally spaced, normal-height buttons use a two-by-two layout. Resizing
+the window does not stretch their height. Explanations below the buttons wrap
+with the available width and follow the selected interface language. Every action requires
 confirmation, with No selected by default. Close the game, worker, LAN room
 and other offline launcher windows first. Repair mod installation reinstalls the files bundled with this launcher;
 it does not download a newer version and keeps usable saved data and profiles.

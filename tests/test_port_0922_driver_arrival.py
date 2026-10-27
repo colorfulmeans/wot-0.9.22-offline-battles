@@ -13,6 +13,37 @@ from gui.mods.offline_lan_0922.ai.driver import LocalDriver, WAYPOINT_ARRIVAL_RA
 
 
 class DriverArrivalTests(unittest.TestCase):
+    def test_consumed_alignment_releases_next_connector_without_stall_timeout(self):
+        # Fjord 24-FPS bot 29: the fresh connector is 3.12 m away, but
+        # a retained point 1.458 m away must not become an eight-second stop.
+        position = (-310.956737475532, 0., 58.442226592885326)
+        old = (-309.71835189356057, 0., 57.673175577012294)
+        target = (-307.86757904569, 0., 58.00461923995834)
+        goal = (399.0958557128906, 0., -42.14317321777344)
+        driver = LocalDriver()
+        state = driver._state(29, 13, position)
+        state['alignment_target'] = old
+        command = driver.drive(29, 13, position, 1.4844806386576725, 0., 1./6,
+            target, (), lambda *args: True, turn_speed_limit=.75,
+            stop_at_target=False, progress_target=goal, recovery_goal=goal)
+        self.assertEqual('alignment_point_reached', state['alignment_observation']['reason'])
+        self.assertEqual(target, state['alignment_observation']['resolved'])
+        self.assertEqual('drive', command['recovery_mode'])
+        self.assertEqual(1., command['throttle'])
+        self.assertFalse(state['arrival_trace']['objective_stalled'])
+        self.assertEqual(0, state['recovery_count'])
+
+    def test_unreached_alignment_keeps_heading_for_nearby_connector(self):
+        driver = LocalDriver()
+        state = driver._state(17, 1, (0., 0., 0.))
+        state['alignment_target'] = (2., 0., 0.)
+        command = driver.drive(17, 1, (0., 0., 0.), 0., 0., .15,
+            (3.12, 0., 0.), (), lambda *args: True, turn_speed_limit=.75)
+        self.assertTrue(state['alignment_observation']['retained'])
+        self.assertEqual((2., 0., 0.), state['alignment_observation']['resolved'])
+        self.assertEqual(0., command['throttle'])
+        self.assertTrue(command['brake'])
+
     def test_navigation_wait_does_not_publish_old_drive_arrival(self):
         adapter=BotAdapter('airfield',11,
             navigation_target=lambda bot,position,*args:position)

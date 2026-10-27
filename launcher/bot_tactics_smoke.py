@@ -55,6 +55,8 @@ def _verify_maintenance_controls(root, tk):
     import wot_launcher
     window = tk.Toplevel(root)
     window.withdraw()
+    reference = tk.Button(window, text='Reference button')
+    reference.pack(side='bottom')
     panel = tk.Frame(window)
     panel.pack(fill='both', expand=True)
     owner = SimpleNamespace(_tk=tk, repair_panel=panel,
@@ -68,10 +70,13 @@ def _verify_maintenance_controls(root, tk):
     for language in ('en', 'zh'):
         for button, text in zip(buttons, labels):
             button.config(text=wot_launcher._CHINESE[text] if language == 'zh' else text)
+        owner.maintenance_help.config(text='\n'.join(
+            wot_launcher._CHINESE[line] if language == 'zh' else line
+            for line in wot_launcher._MAINTENANCE_HELP))
         window.update_idletasks()
         width = panel.winfo_reqwidth()
         height = panel.winfo_reqheight()
-        window.geometry('%dx%d' % (width, height))
+        window.geometry('%dx%d' % (width, height + reference.winfo_reqheight()))
         window.deiconify()
         window.update()
         for button, position in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
@@ -82,6 +87,13 @@ def _verify_maintenance_controls(root, tk):
         assert min(b.winfo_width() for b in buttons) > 1
         assert max(b.winfo_width() for b in buttons) - min(b.winfo_width() for b in buttons) <= 1
         assert max(b.winfo_height() for b in buttons) - min(b.winfo_height() for b in buttons) <= 1
+        assert all(abs(b.winfo_height() - reference.winfo_height()) <= 1 for b in buttons)
+        assert owner.maintenance_help.winfo_y() >= max(b.winfo_y()+b.winfo_height() for b in buttons)
+        heights = [b.winfo_height() for b in buttons]
+        window.geometry('%dx%d' % (width + 120, height + 240))
+        window.update()
+        assert heights == [b.winfo_height() for b in buttons]
+        assert owner.maintenance_help.winfo_y()+owner.maintenance_help.winfo_height() <= panel.winfo_height()
     window.destroy()
 
 
