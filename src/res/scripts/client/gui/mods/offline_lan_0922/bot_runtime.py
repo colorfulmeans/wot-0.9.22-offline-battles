@@ -2086,7 +2086,7 @@ class BotRuntime(object):
                  wreck_ground_probe=None, rotation_resolver=None, visibility_async_probe=None,
                  impact_contacts_resolver=None, navigation_surface_probe=None,
                  navigation_height_columns=None, local_sweep_probe=None,
-                 bot_descriptor_resolver=None):
+                 bot_descriptor_resolver=None, artillery_aim_samples_probe=None):
         self._navigation_height_columns = navigation_height_columns
         self._navigation_surface_probe = navigation_surface_probe
         self._navigation_surface_queue = []
@@ -2107,6 +2107,7 @@ class BotRuntime(object):
         # Production resolves the same descriptor-local part selected by the
         # bounded firing-lane queue. None retains the engine-free test seam.
         self.direct_aim_point_probe = direct_aim_point_probe
+        self.artillery_aim_samples_probe = artillery_aim_samples_probe
         self.direction_probe = self._adapt_direction_probe(
             direction_probe or (lambda *unused: True))
         self.adapter_factory = adapter_factory or BotAdapter
@@ -7546,7 +7547,8 @@ class BotRuntime(object):
             return
         from . import artillery_diagnostics
         artillery_diagnostics.observe(self, state, command, throttle, turn,
-                                      path_clear, motion_probe, now)
+                                      path_clear, motion_probe, now,
+                                      traffic_input, traffic_output)
         self._log_spg_position_state(state, command, now)
         self._log_recovery_pocket(state, command, motion_probe, now, [throttle, turn])
         # This compact outcome has its own per-hull cadence. Bulk histories
@@ -13205,9 +13207,23 @@ class BotRuntime(object):
             return None
         target_position = _point(
             target.get('position'), _position(target))
-        target_position = (
-            target_position[0], target_position[1] + 1.0,
-            target_position[2])
+        aim_token = (reproof.get('hold_solution') or {}).get('aim_token')
+        if aim_token is not None:
+            if not callable(self.artillery_aim_samples_probe):
+                return None
+            try:
+                selected = next((point for token, point in
+                    self.artillery_aim_samples_probe(state, target)
+                    if token == aim_token), None)
+                if selected is None:
+                    return None
+                target_position = _boundary_point(selected)
+            except (TypeError, ValueError, KeyError, IndexError, OverflowError):
+                return None
+        else:
+            target_position = (
+                target_position[0], target_position[1] + 1.0,
+                target_position[2])
         target_velocity = self._target_velocity(target)
         proof_latency = max(0.0, _number(reproof.get('proof_latency')))
         arc = str(reproof.get('arc') or '')
@@ -13258,6 +13274,7 @@ class BotRuntime(object):
             'aim_position': aim_position,
             'yaw': yaw,
             'pitch': pitch, 'flight_time': flight_time, 'arc': arc,
+            'aim_token': aim_token,
             'target_motion_reference': dict(target.get('_canonical_motion') or
                 dict(position=_point(target.get('position'), _position(target)),
                      velocity=self._target_velocity(target)),

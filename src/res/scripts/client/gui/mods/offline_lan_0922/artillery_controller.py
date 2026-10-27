@@ -88,7 +88,7 @@ class ArtilleryController(object):
     """Create low/high candidates and publish only fully checked solutions."""
 
     def __init__(self, queue=None, maximum_step=0.12,
-                 origin_resolver=None):
+                 origin_resolver=None, aim_samples_resolver=None):
         # A strategic job proves only the low/high arc family. Freeze it to the
         # source pose, target identity and shell while the bounded queue works;
         # moving-target pose buckets would restart long shared jobs forever.
@@ -110,6 +110,8 @@ class ArtilleryController(object):
         self.maximum_step = max(0.04, min(0.20, float(maximum_step)))
         self.origin_resolver = (
             origin_resolver if callable(origin_resolver) else None)
+        self.aim_samples_resolver = (
+            aim_samples_resolver if callable(aim_samples_resolver) else None)
         self._planning_keys = {}
         self._launch_keys = {}
         self._launch_receipts = {}
@@ -239,7 +241,39 @@ class ArtilleryController(object):
         else:
             self._planning_keys[slot] = key
 
-    def _candidates(self, source, target, descriptor, shell_index, diagnostic=None):
+    def _candidates(self, source, target, descriptor, shell_index,
+                    diagnostic=None, aim_token=None):
+        evidence = diagnostic if diagnostic is not None else []
+        position = _position(target)
+        default_point = (position[0], position[1] + 1.0, position[2])
+        if aim_token is None:
+            candidates = self._point_candidates(
+                source, target, descriptor, shell_index, default_point, evidence)
+            if candidates or not any(row.get('reason') == 'outside_pitch_limits'
+                                     for row in evidence):
+                return candidates
+        if self.aim_samples_resolver is None:
+            return ()
+        # Only mechanically rejected default points enter this bounded fallback.
+        # Samples come from the current native target descriptor, never from an
+        # invented height or a relaxed gun limit. The arc and final launch queues
+        # still own world obstruction, friendly safety and physical launch proof.
+        try:
+            samples = self.aim_samples_resolver(source, target) or ()
+            for token, point in samples[:9]:
+                if aim_token is not None and token != aim_token:
+                    continue
+                candidates = self._point_candidates(source, target, descriptor,
+                    shell_index, point, evidence, token)
+                if candidates or aim_token is not None:
+                    return candidates
+        except Exception as error:
+            evidence.append(dict(reason='model_aim_samples_unavailable',
+                                 exception=type(error).__name__))
+        return ()
+
+    def _point_candidates(self, source, target, descriptor, shell_index,
+                          target_position, diagnostic=None, aim_token=None):
         evidence = diagnostic if diagnostic is not None else []
         physical = _shot(descriptor, shell_index)
         if physical is None:
@@ -262,14 +296,16 @@ class ArtilleryController(object):
                         for value in start)):
                 evidence.append(dict(reason='invalid_muzzle',muzzle=start))
                 return ()
-        target_position = _position(target)
-        target_position = (
-            target_position[0], target_position[1] + 1.0,
-            target_position[2])
+        target_position = tuple(float(value) for value in target_position)
+        if len(target_position) != 3 or any(math.isnan(value) or math.isinf(value)
+                                          for value in target_position):
+            evidence.append(dict(reason='invalid_model_aim_point'))
+            return ()
         velocity = _target_velocity(target)
         candidates = []
         for name, prefer_high in (('low', False), ('high', True)):
             row=dict(arc=name,muzzle=start,target=target_position,velocity=velocity,
+                     aim_token=aim_token,
                      speed=speed,gravity=gravity,max_distance=maximum)
             evidence.append(row)
             solution = ballistics.ballistic_intercept(
@@ -324,6 +360,7 @@ class ArtilleryController(object):
                 'pitch': pitch,
                 'flight_time': flight_time,
                 'arc': name,
+                'aim_token': aim_token,
                 'speed': speed,
                 'gravity': gravity,
                 'max_distance': maximum,
@@ -393,8 +430,12 @@ class ArtilleryController(object):
         # checked, so return a freshly led solution of the same proved family.
         # The final launch queue still checks every chord of that exact path.
         proved_arc = proved.get('arc')
-        for candidate in self._candidates(
-                source, target, descriptor, shell_index):
+        if proved.get('aim_token') is None:
+            candidates = self._candidates(source, target, descriptor, shell_index)
+        else:
+            candidates = self._candidates(source, target, descriptor, shell_index,
+                                           None, proved['aim_token'])
+        for candidate in candidates:
             if candidate.get('arc') == proved_arc:
                 return candidate
         return None

@@ -2858,7 +2858,8 @@ class BattleRuntime(object):
         self._projectile_scan_count = 0
         self._projectile_candidate_count = 0
         self._artillery = ArtilleryController(
-            origin_resolver=self._bot_artillery_planning_origin)
+            origin_resolver=self._bot_artillery_planning_origin,
+            aim_samples_resolver=self._bot_artillery_aim_samples)
         self._generation += 1
         self._deadline = self._clock() + float(
             self._config.get('startupTimeoutSeconds', 30.0))
@@ -4143,6 +4144,7 @@ class BattleRuntime(object):
                 friendly_lane_probe=self._bot_friendly_firing_lane,
                 direct_launch_origin_probe=self._bot_direct_launch_origin,
                 direct_aim_point_probe=self._bot_aim_point,
+                artillery_aim_samples_probe=self._bot_artillery_aim_samples,
                 ballistic_solution_probe=self._bot_ballistic_solution,
                 artillery_launch_probe=self._bot_artillery_launch,
                 artillery_friendly_lane_probe=(
@@ -27914,6 +27916,16 @@ class BattleRuntime(object):
         """Use the same gun pivot for SPG planning and launch proof."""
         return self._bot_direct_launch_origin(
             source, descriptor, 0, 0, 0.0, 0.0, 0.0)
+
+    def _bot_artillery_aim_samples(self, source, target):
+        """Reuse native model parts only after the legacy SPG point is refused."""
+        context = self._bot_aim_context(source, target)
+        if context is None:
+            return ()
+        entry = context[2]
+        return tuple(((id(entry['record']), id(entry['descriptor']), sample),
+                      shot_geometry.vehicle_aim_point(sample, target))
+                     for sample in entry['samples'])
 
     def _bot_artillery_status(self, source, target, shell_index, now):
         return self._artillery.status(source, target, shell_index, now)

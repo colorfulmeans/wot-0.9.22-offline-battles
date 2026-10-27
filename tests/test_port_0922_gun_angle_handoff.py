@@ -110,6 +110,21 @@ class MechanicalHandoffTests(unittest.TestCase):
         self.assertEqual(('bot',11),self.state['_gun_angle_refusal'])
         self.assertEqual(5,self.state['fire_seq'])
 
+    def test_artillery_reproof_retains_model_part_instead_of_restoring_low_point(self):
+        descriptor=harness._combat_descriptor()
+        target=dict(self.target,position=(0.,0.,10.),velocity=(0.,0.,0.))
+        token=('record','descriptor','turret')
+        reproof=dict(arc='low',hold_solution=dict(aim_token=token))
+        self.runtime.artillery_aim_samples_probe=lambda s,t:((token,(0.,2.1,10.)),)
+        with mock.patch.object(self.runtime,'_exact_shot_origin',return_value=(0.,2.2,0.)), \
+             mock.patch.object(self.runtime,'_world_solution_reachable',return_value=True):
+            solved=self.runtime._artillery_reproof_solution(self.state,target,descriptor,0,reproof)
+            self.assertIsNotNone(solved)
+            self.assertEqual(2.1,solved['aim_position'][1])
+            self.assertEqual(token,solved['aim_token'])
+            self.runtime.artillery_aim_samples_probe=lambda s,t:((('replacement',),(0.,2.1,10.)),)
+            self.assertIsNone(self.runtime._artillery_reproof_solution(self.state,target,descriptor,0,reproof))
+
 
 class CandidateReachabilityTests(unittest.TestCase):
     def scene(self):
@@ -118,6 +133,21 @@ class CandidateReachabilityTests(unittest.TestCase):
         runtime.bigworld.wg_collideSegment=lambda *a:None
         battle._bot_aim_damage_score=lambda *a:100.
         return runtime,battle,source,target,descriptor
+
+    def test_artillery_samples_follow_current_native_model_and_pose_without_rays(self):
+        runtime,battle,source,target,descriptor=self.scene()
+        runtime.bigworld.wg_collideSegment=mock.Mock(side_effect=AssertionError('unexpected extra ray'))
+        samples=battle._bot_artillery_aim_samples(source,target)
+        self.assertTrue(samples)
+        self.assertLessEqual(len(samples),9)
+        old_position=target['position']
+        target['position']=(old_position[0]+5.,old_position[1],old_position[2])
+        moved=battle._bot_artillery_aim_samples(source,target)
+        self.assertEqual([x[0] for x in samples],[x[0] for x in moved])
+        for a,b in zip(samples,moved):self.assertAlmostEqual(a[1][0]+5.,b[1][0])
+        runtime.bigworld.wg_collideSegment.assert_not_called()
+        battle._bot_aim_context=lambda *args:None
+        self.assertEqual((),battle._bot_artillery_aim_samples(source,target))
 
     def test_unreachable_retained_point_yields_to_later_reachable_point_with_budget(self):
         runtime,battle,source,target,descriptor=self.scene()

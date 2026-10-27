@@ -27,7 +27,7 @@ class SoundScanner:
                 self.diagnostic = True
                 try:record = json.loads(line.split(marker, 1)[1])
                 except ValueError:continue
-                if record.get('stage') in ('installed', 'object_coverage'):
+                if record.get('stage') in ('installed', 'object_coverage', 'playback_owner_coverage'):
                     if len(self.coverage) < 32:self.coverage.append(record)
                 for event in record.get('event_ids', ()):
                     if len(self.events) < 4096:

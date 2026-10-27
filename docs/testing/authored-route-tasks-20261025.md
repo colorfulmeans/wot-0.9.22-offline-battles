@@ -1,5 +1,42 @@
 # Authored route tasks and editor connections
 
+## Build 543 follow-up scope (2026-10-27)
+
+Manual Ghost Town report `69064df66e0b` proves a close-range SPG aim-point
+failure: two stocked Object 261s reject both arc families at a fixed one-metre
+height, requiring 5.26/5.87 degrees depression against their actual three-degree
+limit. Only after this mechanical refusal, the controller now tries the existing
+nine descriptor-local hull/turret samples. Gun limits, native muzzle, ballistic
+solving, world obstruction, friendly safety and final launch proof remain intact.
+The selected model-part identity follows live target pose through planning and
+latency reproof; model replacement invalidates it. Reachable legacy aim points
+and ordinary combat retain their existing behavior. This fixes a demonstrated
+low-point blind spot, not every reason a nearby gun can legitimately refuse fire.
+
+The same report proves allied-frag accounting and native arena update for enemy
+BatChat 155 destroying enemy Object 261. Exact #1513 UI policy keeps other-team
+vehicles enemy-colored; no blue-name rule is changed.
+
+Sound diagnosis confirms `hangar_v2_music_lobby` exists in the original event
+bank. Prior hooks could observe creation but not read-only native playback.
+Diagnostic entry now wraps the actual mutable Python MusicEvent owner and the
+missing global-sync entry, retaining native sound identity and recording
+before/after event, mute and playing state. It explicitly reports engine-owned
+bank auto-load as unobserved. No speculative audio/resource fix is included.
+SPG control history additionally separates planner, pre/post-traffic and final
+turn, with blocker/rotation/probe receipts. No movement policy or native query
+budget is changed. Worker saturation and yaw oscillation remain investigations;
+this build claims no measured worker speedup.
+
+Final-source engine-free reference validation: 41 files / 1,457 tests pass using
+the explicit Linux seam. Focused five-file regression passes; both sound/error
+report suites pass. All 214 client sources compile with CPython 2.7.18 and exact
+Chinese HD #1513 inspection passes. Package inspection and native acceptance
+are pending at this source commit. Planned Windows acceptance is lineup 30 plus
+Default, one AFK Prokhorovka match and one AFK Ghost Town match, launched through
+the diagnostic entry. Preserve reports and audit sound coverage, worker timing,
+SPG control/firing and projectile terminal conservation before final handoff.
+
 ## Build 542 follow-up scope (2026-10-27)
 
 Live enemy-pose refresh used to overwrite `face_position` even on an explicit

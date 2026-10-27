@@ -99,5 +99,34 @@ class SoundDiagnosticsTests(unittest.TestCase):
         self.assertTrue(any(r.get('call',0)>sound.MAX_CALLS for r in self.records))
         self.assertEqual(64,len(sound._RECENT))
 
+    def test_python_music_owner_observes_readonly_native_play_without_proxy(self):
+        class Native:
+            name='hangar_v2_music_lobby'
+            isPlaying=False
+            def play(self):self.isPlaying=True
+            def stop(self):self.isPlaying=False
+        class MusicEvent:
+            def __init__(self,sound):
+                self._MusicEvent__event=sound
+                self._MusicEvent__eventID=1
+                self._MusicEvent__muted=False
+            def play(self):self._MusicEvent__event.play()
+            def stop(self):self._MusicEvent__event.stop()
+        # Music can become available only after the initial diagnostic install.
+        sound.install()
+        original=MusicEvent.play
+        with mock.patch.dict(sys.modules,MusicControllerWWISE=SimpleNamespace(
+                MusicController=SimpleNamespace(MusicEvent=MusicEvent))):
+            self.groups().playSound2D('initializes_music_hook')
+            native=Native();owner=MusicEvent(native)
+            self.assertIsNone(owner.play())
+            self.assertIs(native,owner._MusicEvent__event)
+            row=next(r for r in reversed(self.records) if r.get('method')=='MusicController.MusicEvent.play')
+            self.assertEqual('returned',row['stage'])
+            self.assertTrue(row['music']['playing'])
+            self.assertEqual(2967843034,row['event_ids'][0]['id'])
+            owner.stop();self.assertFalse(native.isPlaying)
+            sound.remove();self.assertIs(original,MusicEvent.play)
+
 
 if __name__=='__main__':unittest.main()

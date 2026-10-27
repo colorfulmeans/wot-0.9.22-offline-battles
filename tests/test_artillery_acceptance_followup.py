@@ -48,7 +48,8 @@ class FollowupTests(unittest.TestCase):
              mock.patch.object(d.diagnostics,'detail_record_ready',return_value=False), \
              mock.patch.object(d.diagnostics,'write_json_record',side_effect=lambda k,v:rows.append((k,v))):
             for n in range(17):
-                d.observe(SimpleNamespace(round_id=1),state,command,.4,(-1)**n*.1,True,None,n*.25)
+                d.observe(SimpleNamespace(round_id=1),state,command,.4,(-1)**n*.1,True,None,n*.25,
+                    dict(turn=.25),dict(turn=-.1,traffic_mode='vehicle_brake',forward_blocked_by=9))
         self.assertEqual(3,len(rows))
         self.assertEqual('SPG CONTROL',rows[-1][0])
         self.assertLessEqual(len(rows[-1][1]['controls']),8)
@@ -57,6 +58,8 @@ class FollowupTests(unittest.TestCase):
         self.assertEqual([0,0],rows[-1][1]['stock'])
         self.assertEqual(3,rows[-1][1]['task']['index'])
         self.assertEqual(16,rows[-1][1]['turn_flips'])
+        self.assertEqual([.2,.25,-.1,'vehicle_brake'],rows[-1][1]['controls'][-1][9:])
+        self.assertEqual(9,rows[-1][1]['traffic']['forward_blocked_by'])
         self.assertEqual((0,0,100),command['move_position'])
         self.assertNotIn('_spg_control_observation',self.module._copy_runtime_state(state))
         with mock.patch.dict(os.environ,WOT_OFFLINE_DIAGNOSTICS='1'), \

@@ -52,6 +52,49 @@ class ArtilleryControllerTests(unittest.TestCase):
             'yaw': math.pi * 0.5, 'speed': 8.0,
         }
 
+    def test_close_depression_refusal_tries_native_part_without_relaxing_limits(self):
+        calls=[]
+        source=self.source()
+        target=dict(self.target(),position=(0.,0.,10.),speed=0.)
+        token=('record','descriptor','turret')
+        def samples(s,t):
+            calls.append((s,t))
+            return ((('low',), (0.,1.,10.)), (token,(0.,2.1,10.)))
+        controller=self.module.ArtilleryController(
+            origin_resolver=lambda s,d:(0.,2.2,0.),aim_samples_resolver=samples)
+        descriptor=_descriptor(pitch=(-.7854,math.radians(3)))
+        ready,result=controller.request(source,target,descriptor,0,1.)
+        self.assertFalse(ready)
+        self.assertEqual(1,len(calls))
+        rows=controller.status(source,target,0,1.01)['planning']['candidate_evidence']['rows']
+        self.assertTrue(any(r['reason']=='outside_pitch_limits' and r.get('aim_token') is None for r in rows))
+        controller.advance(1.01,1000,lambda a,b:None)
+        solved=controller.solution(source,target,descriptor,0,1.02)
+        self.assertEqual(token,solved['aim_token'])
+        self.assertEqual(2.1,solved['aim_position'][1])
+        self.assertLessEqual(solved['pitch'],math.radians(3))
+        # Moving a target retains the proved part, not merely the arc's name.
+        moved=dict(target,position=(1.,0.,10.))
+        def changed(s,t):return ((('new',),(0.,2.2,10.)),)
+        controller.aim_samples_resolver=changed
+        self.assertIsNone(controller.solution(source,moved,descriptor,0,1.03))
+
+    def test_reachable_legacy_point_never_resolves_other_parts(self):
+        def unexpected(s,t):raise AssertionError('ordinary artillery changed')
+        controller=self.module.ArtilleryController(aim_samples_resolver=unexpected)
+        self.assertTrue(controller._candidates(self.source(),self.target(),_descriptor(),0))
+
+    def test_unreachable_or_obstructed_model_point_remains_unshootable(self):
+        source=self.source();target=dict(self.target(),position=(0.,0.,10.),speed=0.)
+        descriptor=_descriptor(pitch=(-.7854,math.radians(3)))
+        controller=self.module.ArtilleryController(origin_resolver=lambda s,d:(0.,2.2,0.),
+            aim_samples_resolver=lambda s,t:((('part',),(0.,1.,10.)),))
+        self.assertEqual((True,None),controller.request(source,target,descriptor,0,1.))
+        controller.aim_samples_resolver=lambda s,t:((('part',),(0.,2.1,10.)),)
+        controller.request(source,target,descriptor,0,1.3)
+        controller.advance(1.31,1000,lambda a,b:False)
+        self.assertIsNone(controller.solution(source,target,descriptor,0,1.32))
+
     def test_zero_depression_rejection_records_actual_local_angle_and_limits(self):
         controller=self.module.ArtilleryController()
         source=self.source();target=dict(self.target(),position=(0.,0.,5.),speed=0.)

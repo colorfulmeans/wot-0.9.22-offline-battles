@@ -19,6 +19,7 @@ _STREAMS = []
 _OBJECT_TYPES = set()
 _COVERAGE = []
 _EVENT_NAMES = set()
+_MUSIC_INSTALLED = False
 try:
     _NUMBERS = (bool, int, long, float)
     _STRINGS = (basestring,)
@@ -76,6 +77,36 @@ def _emit(record):
         pass
 
 
+def _music_context(owner):
+    """Read #1513's Python playback owner; never replace its native sound."""
+    result = {}
+    try:
+        sound = getattr(owner, '_MusicEvent__event', None)
+        result.update(event_id=getattr(owner, '_MusicEvent__eventID', None),
+                      muted=getattr(owner, '_MusicEvent__muted', None),
+                      sound=_scalar(sound))
+        if sound is not None:
+            result.update(name=_scalar(sound.name), playing=_scalar(sound.isPlaying))
+    except Exception as error:
+        result['unavailable'] = type(error).__name__
+    return result
+
+
+def _install_music_owner():
+    global _MUSIC_INSTALLED
+    if _MUSIC_INSTALLED:
+        return
+    module = sys.modules.get('MusicControllerWWISE')
+    owner = getattr(getattr(module, 'MusicController', None), 'MusicEvent', None)
+    if owner is None:
+        return
+    _MUSIC_INSTALLED = True
+    for name in ('replace', 'play', 'stop', 'mute', 'destroy'):
+        _wrap(owner, name, 'MusicController.MusicEvent.' + name, True)
+    _emit(dict(stage='playback_owner_coverage', owner='MusicController.MusicEvent',
+        native_identity_preserved=True, bank_coverage='Python requests only; engine auto-load is not observed'))
+
+
 def _wrap(owner, name, label, skip_self):
     original = getattr(owner, name, None)
     if not callable(original):
@@ -90,14 +121,22 @@ def _wrap(owner, name, label, skip_self):
         summary = None
         try:
             _BUSY = True
+            _install_music_owner()
             values = [_scalar(v) for v in args[int(skip_self):int(skip_self)+4]]
             named = dict((str(k)[:60], _scalar(v)) for k,v in list(kwargs.items())[:8])
-            key = (label, json.dumps(values), json.dumps(sorted(named.items())))
+            music = (_music_context(args[0]) if args and
+                     label.startswith('MusicController.MusicEvent.') else None)
+            key = (label, json.dumps(values), json.dumps(sorted(named.items())),
+                   music.get('name') if music else None)
             _SERIAL += 1
             summary = dict(call=_SERIAL, method=label, args=values, wall=time.time(),
                 parent=_PARENTS[-1] if _PARENTS else None,
                 receiver=id(args[0]) if skip_self and args else None,
                 event_ids=[dict(name=v,id=event_id(v)) for v in values if isinstance(v,_STRINGS)])
+            if music is not None:
+                summary['music'] = music
+                if isinstance(music.get('name'), _STRINGS):
+                    summary['event_ids'].append(dict(name=music['name'], id=event_id(music['name'])))
             _RECENT.append(summary)
             for event in summary['event_ids']:
                 if event['name'] not in _EVENT_NAMES and len(_EVENT_NAMES)<4096:
@@ -131,7 +170,10 @@ def _wrap(owner, name, label, skip_self):
             try:_instrument_type(type(result))
             except Exception:pass
         if record:
-            try:_emit(dict(record,stage='returned',wall=time.time(),result=_scalar(result)))
+            try:
+                returned = dict(record,stage='returned',wall=time.time(),result=_scalar(result))
+                if music is not None:returned['music'] = _music_context(args[0])
+                _emit(returned)
             except Exception:pass
         return result
     try:
@@ -156,6 +198,7 @@ def _instrument_type(owner):
 
 def install():
     if not detailed_enabled():return 0
+    _install_music_owner()
     module = sys.modules.get('SoundGroups')
     owner = getattr(module,'SoundGroups',None)
     for name in ('getSound2D','playSound2D','getSound3D','playSound3D','playSoundPos',
@@ -164,7 +207,7 @@ def install():
         if owner is not None:_wrap(owner,name,'SoundGroups.'+name,True)
     # Verified #1513 SoundGroups consumers call these module functions directly.
     wwise = sys.modules.get('WWISE')
-    for name in ('WW_eventGlobal','WW_getSound','WW_getSoundObject','WW_getSoundCallback',
+    for name in ('WW_eventGlobal','WW_eventGlobalSync','WW_getSound','WW_getSoundObject','WW_getSoundCallback',
                  'WW_getSoundPos','WG_loadSoundBank','WG_unLoadSoundBank'):
         if wwise is not None:_wrap(wwise,name,'WWISE.'+name,False)
     for name in ('stdout','stderr'):
@@ -178,12 +221,13 @@ def install():
 
 
 def remove():
-    global _SERIAL
+    global _SERIAL, _MUSIC_INSTALLED
     while _HOOKS:
         owner,name,original,traced=_HOOKS.pop()
         if getattr(owner,name,None) is traced:setattr(owner,name,original)
     _SEEN.clear();_SERIAL=0
     _RECENT.clear();_PARENTS[:]=[];_OBJECT_TYPES.clear();_COVERAGE[:]=[];_EVENT_NAMES.clear()
+    _MUSIC_INSTALLED = False
     while _STREAMS:
         name,original,wrapped=_STREAMS.pop()
         if getattr(sys,name) is wrapped:setattr(sys,name,original)
