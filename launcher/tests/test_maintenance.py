@@ -54,6 +54,7 @@ class MaintenanceTest(unittest.TestCase):
         self.assertTrue(all(path.exists() for path in kept))
         self.assertEqual({'save_slot': 'default', 'name': 'Tester'}, core._read_json(str(kept[0])))
         record = save_slots.read_slot('default', self.game)
+        self.assertEqual('default', record['name'])
         self.assertEqual('unlocked', record['mode'])
         self.assertFalse(record['has_state'])
         metadata = core._read_json(str(Path(record['path']) / 'save.json'))

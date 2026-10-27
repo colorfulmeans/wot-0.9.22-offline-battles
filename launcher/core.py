@@ -1739,7 +1739,7 @@ def _fresh_default_save(game_root):
     os.makedirs(directory, exist_ok=True)
     _write_json(os.path.join(directory, save_slots.METADATA_NAME), {
         'schema': save_slots.METADATA_SCHEMA, 'id': save_slots.DEFAULT_SLOT_ID,
-        'name': 'Default', 'mode': save_slots.MODE_UNLOCKED,
+        'name': save_slots.DEFAULT_SLOT_ID, 'mode': save_slots.MODE_UNLOCKED,
         'skip_legacy_import': True,
     })
 
