@@ -71,8 +71,44 @@ removes only verified offline dossier namespaces on the native None server,
 plus the exact CN offline-account data/shop caches.
 Retail accounts, another server, malformed filenames and unknown accounts
 remain untouched. Cache removal shares the same rollback transaction; tests
-cover both successful cleanup and failed-reinstall recovery. Final package
-identity, CI limits and repeated native acceptance follow below.
+cover both successful cleanup and failed-reinstall recovery.
+
+Final runtime source `46d15be058ab3facbb9a2ea60c69d0dabf276f25`, build 555 run
+`40487774447`, identity `colorfulmeans-40487774447-1`, artifact `12727685025`.
+All three packaging jobs passed. Independent download inspection compares 38
+frozen launcher modules, 222 server sources and 215 client bytecode modules;
+native source identity, all navigation bytes, outer/nested CRC and packaged
+English/Chinese equal-grid editor smoke pass. All 1,226 delivered files match.
+Download: `WoT-0.10.2-test-555-maintenance-replay.zip`.
+
+Build 555 repeated real UI acceptance: create `555清空复测` as a new account,
+then factory reset. Its directory and all 56 identified old shared offline
+caches disappear, public default tactics and fresh unlocked default metadata
+are rebuilt, the installed identity is 555 and old launcher settings are not
+written back. Retail dossier bytes and stock preferences bytes remain identical.
+Reopen, select the actual client and start: hidden worker becomes ready and the
+visible #1513 client enters the garage with initial unlocked-default assets.
+Fresh role preferences are created; only the default save remains, with no
+Python traceback or assertion in either startup log. Close game, worker and
+server through the launcher. This is startup acceptance, not a new match test.
+Fresh logs/caches after that intentional start are expected new data, not old
+data resurrecting. Leave the launcher in Chinese with the actual game selected.
+
+Exact-runtime CI `40487780993`: Windows editor, Windows server, geometry and
+navigation jobs pass; the general suite is 428/430 files and BOT suite 147/148.
+The same pre-existing opposed Great Wall allocation cleanup and Fjord 24-FPS
+departure assertions fail. General launcher tests pass 36/36 files. Dependent
+CI packaging jobs are skipped after those general failures; the separate full
+555 packaging workflow passes. Do not describe all CI as green. No physical,
+combat, route or worker law was changed to weaken these assertions.
+
+Evidence: workspace `work/maintenance-live-proof.json`,
+`work/maintenance-native-unit-tests.json`, `work/maintenance-555-full-payload.json`,
+`work/followup-555-package-verification.json`,
+`work/followup-555-packaged-editor-smoke.json`,
+`work/followup-555-delivery-proof.json` and exact-run CI/build logs.
+Intermediate 549-554 builds are not the final delivery. PR 113 remains open;
+no merge, tag or release is authorized. No raw user report or save is uploaded.
 
 ## Lobby music and worker preparation follow-up (2026-10-27)
 
