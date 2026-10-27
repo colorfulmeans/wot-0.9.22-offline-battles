@@ -913,6 +913,11 @@ class BotAdapter(object):
             flank_arrival=flank_arrival)
         if strategic.get('parking_phase') is not None:
             result['parking_phase'] = strategic['parking_phase']
+        if strategic.get('spg_mode') is not None:
+            # The final runtime gun/reproof gates need the same SPG task owner
+            # and explicit hold boundary as the strategic order.
+            result['spg_mode'] = strategic['spg_mode']
+            result['throttle_override'] = strategic.get('throttle_override')
         if strategic.get('empty_ammo'):
             result['empty_ammo'] = True
             result['movement_priority'] = 'empty_ammo_capture'

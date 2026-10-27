@@ -29,6 +29,28 @@ class FollowupTests(unittest.TestCase):
             result=self.module._overlay_live_target_pose(command,target)
             self.assertEqual(target['position'],result['face_position'])
 
+    def test_real_adapter_retains_defense_owner_and_distinguishes_hold(self):
+        from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
+        from gui.mods.offline_lan_0922 import spg_route_travel as travel
+        descriptor=dict(type=dict(name='SPG',tags=('SPG',)),
+            physics=dict(speedLimits=(18.,)),hull={},turret={},gun=dict(shots=()))
+        state=dict(id=1,slot=0,position=(0.,0.,0.),yaw=0.,speed=0.,dt=.05,now=1.,neighbours=())
+        target=dict(alive=True,visible=True,position=(90.,3.,-50.))
+        for hold in (False, True):
+            adapter=BotAdapter('01_karelia',7)
+            adapter.register(1,1,descriptor)
+            strategic=dict(spg_mode='sortie',combat_mode='base_defense',target_id=9,
+                move_position=(0.,0.,200.) if not hold else (0.,0.,0.),
+                face_position=(0.,0.,200.),aim_position=(90.,3.,-50.),
+                fire_allowed=True,fire_range=400.,shell_index=0,
+                throttle_override=0. if hold else None)
+            command=adapter.decide_with_order(state,strategic,lambda *a:True)
+            self.assertEqual(not hold,travel.owns_hull(command))
+            overlaid=self.module._overlay_live_target_pose(command,target)
+            self.assertEqual(target['position'] if hold else strategic['face_position'],
+                             overlaid['face_position'])
+            self.assertEqual(target['position'],overlaid['aim_position'])
+
     def test_stale_rear_laying_cannot_stop_an_artillery_travel_task(self):
         runtime=self.module.BotRuntime(1)
         command=dict(combat_mode='spg_route_travel',target_id=9,

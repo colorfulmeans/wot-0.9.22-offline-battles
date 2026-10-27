@@ -1,5 +1,40 @@
 # Authored route tasks and editor connections
 
+## Build 545 adapter acceptance correction (2026-10-27)
+
+Build 544 native acceptance exposed an omitted producer-consumer boundary:
+`BotAdapter.decide_with_order` did not retain `spg_mode` or the explicit
+`throttle_override` hold boundary. Consequently moving base-defense commands
+lost the new SPG hull-ownership guard at the final live-target/reproof layer,
+although their older no-combat-hull-aim guard still prevented chassis aiming in
+the first observed sample. Preserve both fields only on SPG-owned strategic
+orders. A real adapter-to-live-target regression now checks moving defense and
+stationary hold separately, rather than injecting an already converted command.
+Ordinary combat, navigation and firing validation remain unchanged.
+
+Final corrected-source focused validation passes five files / 744 tests,
+including real adapter handoff, AI adapter, complete BOT runtime, authored route
+tasks and SPG recovery. All 214 client modules compile with CPython 2.7.18.
+
+Build 544 run `40441041047` passes all three package jobs; independent checks
+verify 38 frozen modules, 221 server sources, 214 client bytecode modules, native
+identity, unchanged navgraphs, archive CRCs, editor smoke and 1,225 delivered
+files. Source CI `40441033665` retains the previous two general-test failures
+(Great Wall gate and Fjord 24-FPS departure), with the same Fjord BOT failure;
+Windows server/editor, navigation resolution and native geometry pass.
+
+First diagnostic-entry Ghost Town sample `1ed7dc62442e` finishes by Team 1
+elimination win: 56 launches / 56 settled BOT shots, no unmatched identity,
+multipart residue, model-refresh assertion/refusal or Python traceback. Worker
+callback windows are 30.67, 35.20 and 33.27 Hz. BOT 20 has 19 actual defense
+samples and progresses along the return route, but its false hull-owner marker
+exposes the adapter omission above; do not count this as full guard acceptance.
+No 10-13-second turn-reversal window with less than two metres displacement
+appears. Known music error remains once per role, with valid event/action and
+embedded-media structure; native auto-load remains unobserved. A second 544
+sample is running while the correction is prepared. The final corrected package
+requires fresh native acceptance, not reassignment of the first package's logs.
+
 ## Build 544 follow-up scope (2026-10-27)
 
 Ghost Town build 543 proves stale parking/target-facing ownership during SPG
