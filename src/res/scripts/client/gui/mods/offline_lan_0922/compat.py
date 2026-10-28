@@ -49,6 +49,86 @@ def _observe_model_lifecycle(compatibility, appearance, phase, state, caller=Non
         pass
 
 
+
+def _observe_battle_model_pose(compatibility, appearance, phase):
+    """Read existing providers only; do not restore angles or schedule work."""
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import (
+            detailed_enabled, battle_review_record)
+        if not detailed_enabled() or not compatibility._battle_active:
+            return
+        read = getattr(compatibility, '_original_compound_getattribute', getattr)
+        vehicle = read(appearance, '_CompoundAppearance__vehicle')
+        if vehicle is None or getattr(vehicle, 'appearance', None) is not appearance:
+            return
+        now = float(compatibility._runtime.bigworld.time())
+        histories = getattr(compatibility, '_battle_model_pose_samples', None)
+        if histories is None:
+            histories = {}
+            compatibility._battle_model_pose_samples = histories
+        key = (id(appearance), id(vehicle))
+        entry = histories.get(key)
+        if entry is None:
+            if len(histories) >= 64:
+                return
+            entry = histories[key] = dict(next_at=0.0, dead_samples=0, alive=None)
+        dead = getattr(vehicle, 'health', 1) <= 0
+        if phase == 'effects_tick':
+            if now < entry['next_at'] or (dead and entry['dead_samples'] >= 8):
+                return
+            entry['next_at'] = now + 0.1
+        math_module = compatibility._runtime.math
+        def matrix(provider):
+            if provider is None:
+                return None
+            try:
+                value = math_module.Matrix(provider)
+                return dict(identity=id(provider),
+                    yaw=float(value.yaw), pitch=float(value.pitch), roll=float(value.roll),
+                    position=[float(value.translation[i]) for i in range(3)])
+            except Exception as error:
+                return dict(unavailable=type(error).__name__)
+        model = getattr(vehicle, 'model', None)
+        muzzle = None
+        if model is not None:
+            try:
+                muzzle = matrix(model.node('HP_gunFire'))
+            except Exception as error:
+                muzzle = dict(unavailable=type(error).__name__)
+        filters = {}
+        for name in ('_CompoundAppearance__filter',):
+            try:
+                provider = read(appearance, name)
+                filters[name] = dict(identity=id(provider), type=type(provider).__name__)
+            except Exception as error:
+                filters[name] = dict(unavailable=type(error).__name__)
+        vehicle_filter = getattr(vehicle, 'filter', None)
+        filters['vehicle'] = dict(identity=id(vehicle_filter), type=type(vehicle_filter).__name__)
+        damage = read(appearance, '_CompoundAppearance__currentDamageState')
+        payload = dict(phase=phase, vehicle=getattr(vehicle, 'id', None),
+            appearance_identity=id(appearance), vehicle_identity=id(vehicle),
+            model_identity=id(model), health=getattr(vehicle, 'health', None),
+            damage_state=str(getattr(damage, 'modelState', None)),
+            detached=bool(getattr(vehicle, 'isTurretDetached', False)),
+            gun_angles=getattr(vehicle, 'gunAngles', None),
+            turret=matrix(getattr(appearance, 'turretMatrix', None)),
+            gun=matrix(getattr(appearance, 'gunMatrix', None)),
+            hull=matrix(getattr(model, 'matrix', None)), muzzle_world=muzzle,
+            bindings=filters, sampled_at=now)
+        if not dead and phase == 'effects_tick':
+            entry['alive'] = payload
+            return
+        if dead and entry['dead_samples'] == 0 and entry['alive'] is not None:
+            previous = entry['alive']
+            battle_review_record(compatibility, 'model_last_alive', key, now,
+                                 lambda: dict(previous), interval=0.0, limit=1)
+        if phase == 'effects_tick':
+            entry['dead_samples'] += 1
+        battle_review_record(compatibility, 'model_' + phase, key, now,
+            lambda: payload, interval=0.0, limit=32)
+    except Exception:
+        pass
+
 def _observe_model_refresh_callback(compatibility, appearance, model_state):
     """Retain scalar async ordering evidence only at the diagnostic entrance."""
     try:
@@ -74,6 +154,7 @@ def _observe_model_refresh_callback(compatibility, appearance, model_state):
 
 def _run_model_refresh_callback(compatibility, appearance, model_state, resources):
     row = _observe_model_refresh_callback(compatibility, appearance, model_state)
+    _observe_battle_model_pose(compatibility, appearance, 'refresh_before')
     try:
         result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
     except AssertionError:
@@ -87,6 +168,7 @@ def _run_model_refresh_callback(compatibility, appearance, model_state, resource
         if row is not None:
             _observe_model_lifecycle(compatibility, appearance, 'callback_returned',
                                      None, str(model_state))
+        _observe_battle_model_pose(compatibility, appearance, 'refresh_after')
         return result
 
 
@@ -2620,6 +2702,7 @@ class OfflineCompatibility(object):
             steady-state cost is two flag reads.
             """
             original = compatibility._original_compound_effects_lod
+            _observe_battle_model_pose(compatibility, appearance, 'effects_tick')
             if not compatibility._battle_active:
                 return original(appearance, distance_from_player)
             try:
@@ -3650,6 +3733,8 @@ class OfflineCompatibility(object):
         from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
         self._model_lifecycle_enabled = detailed_enabled()
         self._model_lifecycle_histories = {}
+        self._battle_model_pose_samples = {}
+        self._battle_review_records = None
         self._model_lifecycle_sequence = 0
         self._strategic_camera_failure_reported = False
         self._vehicle_property_overlays = {}

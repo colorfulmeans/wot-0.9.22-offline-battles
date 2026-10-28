@@ -11,27 +11,47 @@ Current release: **v1.0.0** — [release notes](docs/releases/v1.0.0.md).
 
 ### Battle fix review (not a release)
 
-This review starts from the exact `v1.0.0` tag (`97e8f3ec`), with no commits
-from the discarded PR #115. Scope: spotting assistance during received memory,
-radio-source-specific sharing, the full 14-second designated-target lease in
-both implementations, and rigid wreck hull/turret pose agreement (including
-rejected moves and vertical rollback). Side-push behavior, UI and career
-statistics are outside this review.
+This review retains the verified received-source spotting assistance, integer
+sharing, 14-second designated-target lease propagation and removed-target
+radio cleanup. The unaccepted wreck angle coupling change has been withdrawn;
+wreck motion uses the release's angle updates. Player corpse turret reset
+remains unresolved. No angle restoration or native filter synchronization has
+been added for that issue.
 
-The new regression file reproduces the failures on the untouched release.
-Local Python 3.11 checks cover the regression file, radio, mission and award
-settlement. CI additionally checks the native/reference radio source lists,
-Python 2.7 compilation, and the rebuilt shipping module and package. The full
-Tests workflow remains independent of the Battle review package workflow;
-a review artifact alone does not mean the full suite or native play passed.
+Use `START_DIAGNOSTIC_TEST.bat` beside the unpacked launcher. Its existing
+`--diagnostics` entrance enables bounded `BATTLE REVIEW` records in the
+visible client, hidden worker and bundled server logs. Ordinary startup does
+not construct these payloads. Records carry round, PID, process-local clock,
+stage and sample number; worker and server clock origins are independent.
+Worker records include active perk/directive duration, native observation
+duration/deadline, radio actor positions/ranges and published per-source
+leases. Server records include accepted leases, source expiry/alive/team
+eligibility, self-spot suppression and actual integer damage shares. Model
+records preserve the last sampled alive pose, refresh entry/return, and eight
+subsequent existing effects ticks: turret/gun providers, hull and world muzzle
+matrices, filter identities and turret detachment. Missing native readings
+are reported as unavailable. These probes read existing state and schedule
+no engine callbacks.
 
-Windows gameplay acceptance is **pending**. Test with the matching launcher,
-server and hidden worker: spot then retreat before an ally hits; repeat with
-two observers where only one has radio contact; check boosted spotting near
-seconds 12--14; rotate a wreck and compare turret/barrel collision with its
-visible pose. Report the launcher build identity with the exported report.
-Player-death turret model relinking is a separate unverified issue, not a
-claimed fix in this package. No three-match unattended acceptance is required.
+Validation covers regressions, related battle subsystems, diagnostic laziness,
+byte limits, round reset and stale appearance fencing. CI also checks native
+source parity, CPython 2.7 compilation, shipping native source stamps, archive
+contents and the actual downloaded launcher/server. The full Tests workflow
+remains separate; an artifact does not imply full CI or gameplay acceptance.
+
+For Windows acceptance, use the matching launcher, server and hidden worker:
+1. Turn the turret away from the hull, record its pose, then die. Stay in
+   battle for at least two seconds, observing whether the corpse snaps and
+   whether a turret detaches. Repeat while a wreck is pushed or rotated.
+2. Spot an enemy, lose direct sight, and have an ally damage it before memory
+   expires. Repeat with two observers and only one radio connection; compare
+   the actual credited sources and damage shares.
+3. Equip the actual designated-target duration directive. Verify its active
+   duration in the config log, then lose sight and check near seconds 12--14
+   and after expiry. A normal 12-second session cannot accept this case.
+4. Export the matching error report and include the launcher build identity.
+   Gameplay acceptance, especially actual model reset and the boosted
+   14-second case, remains pending until this evidence is examined.
 
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows

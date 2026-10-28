@@ -579,6 +579,13 @@ class NativeControl(object):
             float(profile['camouflage_net_delay'])
             if profile['has_camouflage_net'] else -1.0,
             runtime._source_radio_range(source, tick), float(relay), designated_duration)
+        if _native_input_diagnostics.detailed_enabled():
+            _native_input_diagnostics.battle_review_record(
+                runtime, 'worker_spotting_config', key, float(getattr(runtime, '_contact_now', 0.0) or 0.0),
+                lambda: dict(actor=key, designated_active=bool(designated),
+                    designated_duration=designated_duration, config=list(values),
+                    booster=snapshot.get('battle_booster') if key[0] == 0 else None),
+                interval=2.0, limit=32)
         return values, bool(last_effort), bool(designated)
 
     @observed('frontier.control_sample')
@@ -738,6 +745,13 @@ class NativeControl(object):
             source, target = tuple(source), tuple(target)
             source_team = int(self._sources[source].get('team', 0))
             key = (source_team,) + _wire_key(target)
+            if _native_input_diagnostics.detailed_enabled():
+                _native_input_diagnostics.battle_review_record(
+                    runtime, 'worker_native_observation', (source, target), sampled,
+                    lambda: dict(source=source, target=target, source_team=source_team,
+                        sampled=sampled, duration=duration,
+                        deadline=sampled + min(14.0, max(0.0, duration))),
+                    interval=1.0, limit=48)
             runtime._visible_target_poses[key] = pose
             runtime._spot_until[key] = max(runtime._spot_until.get(key, 0.0),
                                           sampled + min(14.0, max(0.0, duration)))

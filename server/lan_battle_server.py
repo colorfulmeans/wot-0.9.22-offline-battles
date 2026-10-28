@@ -50,6 +50,7 @@ from vehicle_overlay_store import (
     VehicleOverlayStore,
     VehicleOverlayStoreError,
 )
+from gui.mods.offline_lan_0922 import native_input_diagnostics as battle_review_diagnostics
 from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import snapshot_delta
@@ -5854,6 +5855,20 @@ class BattleState:
             self.radio_assist_sources = {
                 key: {source: now + duration for source, duration in sources.items()}
                 for key, sources in assist_sources.items()}
+            if battle_review_diagnostics.detailed_enabled():
+                battle_review_diagnostics.battle_review_record(
+                    self, 'server_radio_accepted', 'batch', now,
+                    lambda: dict(contacts=[dict((name, row.get(name)) for name in
+                        ('observing_team', 'target_kind', 'target_id', 'visible',
+                         'fresh', 'time_left', 'visible_by_player_ids',
+                         'visible_by_bot_ids', 'radio_recipients')) for row in contacts],
+                        leases=[dict(receiver=receiver, target=target,
+                            sources=[dict(actor=source, deadline=deadline,
+                                          remaining=deadline-now)
+                                     for source, deadline in sorted(sources.items())])
+                            for (receiver, target), sources in
+                                sorted(self.radio_assist_sources.items())]),
+                    interval=1.0, limit=240)
             team_lit = {
                 team: {target: now + time_left
                        for target, time_left in targets.items()}
@@ -14605,6 +14620,35 @@ class BattleState:
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))
+        if battle_review_diagnostics.detailed_enabled():
+            review_now = time.monotonic()
+            def review_assist():
+                sources = self.radio_assist_sources.get((attacker, target), {})
+                candidates = []
+                for reporter, deadline in sorted(sources.items()):
+                    player = self.players.get(reporter[1]) if reporter[0] == "player" else None
+                    alive = (bool(player and player.connected and player.alive)
+                             if reporter[0] == "player" else
+                             bool((self.bot_states.get(reporter[1]) or {}).get("alive")))
+                    same_team = self._vehicle_team(*reporter) == self._vehicle_team(*attacker)
+                    candidates.append(dict(actor=reporter, deadline=deadline,
+                        remaining=deadline-review_now, alive_connected=alive,
+                        same_team=same_team, selected=reporter in assisters,
+                        reason=("expired" if deadline <= review_now else
+                                "inactive" if not alive else "other_team" if not same_team else
+                                "eligible_source")))
+                return dict(attacker=attacker, target=target, damage=damage,
+                    direct_self_spot=self._spots_target(attacker, target),
+                    suppression=("self_direct" if self._spots_target(attacker, target) else
+                                 "self_memory" if attacker in sources and
+                                 sources[attacker] > review_now else
+                                 "friendly_target" if self._vehicle_team(*attacker) == target_team else
+                                 "none"),
+                    candidates=candidates, selected=assisters,
+                    credits=[dict(actor=holder, amount=amount)
+                             for category, holder, amount in credits if category == "radio"])
+            battle_review_diagnostics.battle_review_record(self, 'server_radio_credit',
+                'damage', review_now, review_assist, interval=0.0, limit=512)
         for category, assister, amount in credits:
             if amount <= 0:
                 continue

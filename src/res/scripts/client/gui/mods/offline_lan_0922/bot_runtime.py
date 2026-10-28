@@ -11727,18 +11727,8 @@ class BotRuntime(object):
                     step, getattr(self, '_contact_now', 0.0), 0.0)
             if not clear:
                 candidate, omega = old_yaw, 0.0
-        self._commit_wreck_yaw(state, candidate)
+        state['yaw'] = math.atan2(math.sin(candidate), math.cos(candidate))
         state['push_yaw'] = omega
-
-    @staticmethod
-    def _commit_wreck_yaw(state, yaw):
-        """Keep both collision consumers on the same rigid wreck pose."""
-        relative = state.get('turret_yaw')
-        if relative is None:
-            relative = _angle_delta(state.get('aim_yaw', state['yaw']), state['yaw'])
-        state['yaw'] = _wrapped(yaw)
-        state['turret_yaw'] = relative
-        state['aim_yaw'] = _wrapped(state['yaw'] + relative)
 
     def _try_wreck_swept_pose(self, state, movement, omega, step):
         """Admit translation and yaw together, with one vehicle constraint.
@@ -11779,7 +11769,7 @@ class BotRuntime(object):
                 translation=(move_x, move_z)):
             return False
         state['x'], state['z'] = end[0], end[2]
-        self._commit_wreck_yaw(state, end_yaw)
+        state['yaw'] = math.atan2(math.sin(end_yaw), math.cos(end_yaw))
         if fraction < 1.0:
             state['push_yaw'] = 0.0
         return True
@@ -11790,6 +11780,13 @@ class BotRuntime(object):
             return False
         before = _position(state)
         old_yaw = state['yaw']
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'worker_wreck_before', state['id'],
+                getattr(self, '_contact_now', 0.0), lambda: dict(
+                    actor=state['id'], pose=dict((name, state.get(name)) for name in
+                        ('x', 'y', 'z', 'yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch')),
+                    impulse=dict(result)), interval=0.25, limit=48)
         vx = state.get('push_x', 0.0) + result['delta_velocity'][0]
         vz = state.get('push_z', 0.0) + result['delta_velocity'][1]
         omega = state.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
@@ -11809,13 +11806,22 @@ class BotRuntime(object):
             self._advance_wreck_yaw(state, motion, step)
         # Run even when translation/rotation stopped: a falling wreck has no
         # live drive tick to finish its flight or landing on its behalf.
-        if self._update_vertical_motion(state, step, before, old_yaw):
+        vertical_rejected = self._update_vertical_motion(state, step, before, old_yaw)
+        if vertical_rejected:
             state['x'], state['y'], state['z'] = before
-            self._commit_wreck_yaw(state, old_yaw)
+            state['yaw'] = old_yaw
             state['push_yaw'] = 0.0
         for angle in ('pitch', 'terrain_pitch', 'roll'):
             value = state.get(angle, 0.0)
             state[angle] = math.atan2(math.sin(value), math.cos(value))
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'worker_wreck_after', state['id'],
+                getattr(self, '_contact_now', 0.0), lambda: dict(
+                    actor=state['id'], vertical_rejected=bool(vertical_rejected),
+                    pose=dict((name, state.get(name)) for name in
+                        ('x', 'y', 'z', 'yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch'))),
+                interval=0.25, limit=48)
         moved = _position(state) != before or state['yaw'] != old_yaw
         now = getattr(self, '_contact_now', None)
         if moved and now is not None and now >= state.get('_wreck_motion_log_time', 0.0):
@@ -14387,6 +14393,17 @@ class BotRuntime(object):
                     self.states[actor]['_lane_publication_evidence'] = dict(
                         at=now, target=key[1:], reason='no_observation_row',
                         visible=False, lane_clear=None)
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'worker_radio_publication', 'batch', now,
+                lambda: dict(contacts=[dict((name, row.get(name)) for name in
+                    ('observing_team', 'target_kind', 'target_id', 'visible', 'fresh',
+                     'time_left', 'visible_by_player_ids', 'visible_by_bot_ids',
+                     'radio_recipients')) for row in packed],
+                    actors=[dict(actor=actor, team=value[0], position=value[1],
+                                 radio_range=value[2])
+                            for actor, value in sorted(self._radio_network.actors.items())]),
+                interval=1.0, limit=240)
         return packed
 
     @classmethod

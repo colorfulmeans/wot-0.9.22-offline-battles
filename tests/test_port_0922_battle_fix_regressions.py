@@ -1,6 +1,4 @@
-"""v1.0.0 regressions: received spotting sources, 14s memory and wreck yaw."""
-import copy
-import math
+"""Received spotting sources, 14s memory and bounded review diagnostics."""
 import unittest
 from unittest import mock
 
@@ -35,6 +33,26 @@ class ReceivedSpottingAssistTests(unittest.TestCase):
     def damage(self, amount=200):
         self.state._record_damage(('player', 2), ('bot', 11), amount, {})
         return self.state._statistics_row('player', 1)['damage_assisted_radio']
+
+    def test_diagnostics_capture_accepted_deadlines_and_actual_shares(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=True), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            self.accept(self.message(direct=(), duration=7.0))
+            self.assertEqual(201, self.damage(201))
+            rows = [call.args[1] for call in write.call_args_list]
+            accepted = next(row for row in rows if row['stage'] == 'server_radio_accepted')
+            self.assertEqual(107.0, accepted['leases'][0]['sources'][0]['deadline'])
+            credit = next(row for row in rows if row['stage'] == 'server_radio_credit')
+            self.assertEqual([{'actor': ('player', 1), 'amount': 201}], credit['credits'])
+            self.assertFalse(credit['direct_self_spot'])
+            self.assertEqual(7.0, credit['candidates'][0]['remaining'])
+            self.now.return_value = 108.0
+            self.damage(201)
+            expired = write.call_args[0][1]
+            self.assertEqual('expired', expired['candidates'][0]['reason'])
+            self.assertEqual([], expired['credits'])
 
     def test_retreat_keeps_assist_until_received_source_expires(self):
         self.accept(self.message())
@@ -183,55 +201,105 @@ class TeamMemoryTests(unittest.TestCase):
         self.assertEqual(0.0, runtime._team_spot_time_left(key, 24.0))
 
 
-class WreckYawTests(unittest.TestCase):
-    def test_vertical_rejection_restores_both_world_angles(self):
-        worker = BotRuntime(1)
-        worker._physics_ground_probe = lambda *unused: 0.0
-        worker._physics_params_for = lambda unused: None
-        state = dict(id=11, x=0.0, y=0.0, z=0.0, yaw=0.0,
-                     aim_yaw=0.7, turret_yaw=0.7, push_yaw=1.0,
-                     collision_shape=(1.5, 3.5, -0.8, 2.0))
-        def admit(*unused):
-            worker._commit_wreck_yaw(state, 0.1)
-            return True
-        worker._try_wreck_swept_pose = admit
-        worker._update_vertical_motion = lambda *unused: True
-        self.assertFalse(worker._apply_wreck_contact_response(
-            state, dict(delta_velocity=(0.0, 0.0), correction=(0.0, 0.0)), 0.1))
-        self.assertEqual((0.0, 0.7, 0.7),
-                         (state['yaw'], state['turret_yaw'], state['aim_yaw']))
 
-    def test_both_rotation_owners_preserve_turret_local_pose(self):
-        for coupled in (False, True):
-            for blocked in (False, True):
-                worker = BotRuntime(1)
-                state = dict(id=11, x=0.0, y=0.0, z=0.0, alive=False,
-                             half_length=3.5, half_width=1.7,
-                             collision_shape=(1.5, 3.5, -0.8, 2.0), mass=25000.0)
-                state.update(yaw=3.13, turret_yaw=0.7,
-                             aim_yaw=math.atan2(math.sin(3.83), math.cos(3.83)),
-                             gun_pitch=-0.2, push_yaw=1.0)
-                before = copy.deepcopy(state)
-                worker._contact_motion_bodies = lambda unused: []
-                worker.motion_resolver = mock.Mock(return_value='clear')
-                worker._passive_motion_status = mock.Mock(return_value='clear')
-                worker._baked_pose_progress_clear = mock.Mock(return_value=True)
-                worker._turret_pose_is_clear = mock.Mock(return_value=not blocked)
-                worker._wreck_rotation_probe = mock.Mock(return_value=True)
-                if coupled:
-                    self.assertEqual(not blocked, worker._try_wreck_swept_pose(
-                        state, (0.1, 0.1), 1.0, 0.1))
-                else:
-                    worker._advance_wreck_yaw(state, {}, 0.1)
-                self.assertEqual(before['turret_yaw'], state['turret_yaw'])
-                self.assertEqual(before['gun_pitch'], state['gun_pitch'])
-                expected = math.atan2(math.sin(state['yaw'] + 0.7),
-                                      math.cos(state['yaw'] + 0.7))
-                self.assertAlmostEqual(expected, state['aim_yaw'])
-                if blocked:
-                    self.assertEqual(before['yaw'], state['yaw'])
-                else:
-                    self.assertNotEqual(before['yaw'], state['yaw'])
+class BattleReviewDiagnosticsTests(unittest.TestCase):
+    def test_disabled_diagnostics_do_not_build_or_retain_payload(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        owner = type('Owner', (), {'round_id': 1})()
+        with mock.patch.dict(diag.os.environ, {}, clear=True):
+            build = mock.Mock(side_effect=AssertionError('must stay lazy'))
+            diag.battle_review_record(owner, 'test', 'target', 1.0, build)
+        self.assertFalse(build.called)
+        self.assertFalse(hasattr(owner, '_battle_review_records'))
+
+    def test_bounds_reset_on_round_and_logging_failure_is_contained(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        owner = type('Owner', (), {'round_id': 1})()
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=True), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            build = mock.Mock(return_value={'value': 42})
+            for now in (1.0, 1.5, 2.0, 3.0):
+                diag.battle_review_record(owner, 'test', 'target', now, build,
+                                         interval=1.0, limit=2)
+            self.assertEqual(2, build.call_count)
+            owner.round_id = 2
+            diag.battle_review_record(owner, 'test', 'target', 4.0, build,
+                                     interval=1.0, limit=2)
+            self.assertEqual(3, build.call_count)
+            self.assertEqual(2, write.call_args[0][1]['round'])
+            for key in range(150):
+                diag.battle_review_record(owner, 'test', key, 5.0, lambda: {})
+            self.assertLessEqual(len(owner._battle_review_records[1]), 128)
+            write.side_effect = RuntimeError('broken stdout')
+            diag.battle_review_record(owner, 'failure', 1, 6.0, lambda: {})
+
+    def test_budget_rejection_does_not_inspect_payload(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        owner = type('Owner', (), {'round_id': 1})()
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=False):
+            build = mock.Mock(side_effect=AssertionError('budget closed'))
+            diag.battle_review_record(owner, 'test', 'target', 1.0, build)
+            self.assertFalse(build.called)
+
+
+    def test_model_probe_records_refresh_and_eight_dead_frames_without_writes(self):
+        import ast
+        import types
+        from pathlib import Path
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        compat_path = Path(control.__file__).with_name('compat.py')
+        tree = ast.parse(compat_path.read_text(encoding='utf-8'))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == '_observe_battle_model_pose')
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]),
+                     str(compat_path), 'exec'), namespace)
+        observe = namespace['_observe_battle_model_pose']
+        matrix = types.SimpleNamespace(yaw=0.98, pitch=0.006, roll=0.0,
+                                       translation=(1.0, 2.0, 3.0))
+        model = types.SimpleNamespace(matrix=matrix, node=lambda name: matrix)
+        appearance = types.SimpleNamespace(turretMatrix=matrix, gunMatrix=matrix)
+        vehicle = types.SimpleNamespace(id=2, appearance=appearance, health=219,
+            model=model, filter=None, isTurretDetached=False, gunAngles=0)
+        appearance._CompoundAppearance__vehicle = vehicle
+        appearance._CompoundAppearance__filter = None
+        appearance._CompoundAppearance__currentDamageState = types.SimpleNamespace(modelState='alive')
+        clock = [0.0]
+        owner = types.SimpleNamespace(_battle_active=True,
+            _battle_server_time_origin=100.0,
+            _runtime=types.SimpleNamespace(
+                bigworld=types.SimpleNamespace(time=lambda: clock[0]),
+                math=types.SimpleNamespace(Matrix=lambda value: value)))
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=True), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            observe(owner, appearance, 'effects_tick')
+            self.assertEqual(0, write.call_count)
+            vehicle.health = 0
+            clock[0] = 1.0
+            observe(owner, appearance, 'refresh_before')
+            matrix.yaw = 0.0  # Model replacement can disagree with prior controls.
+            observe(owner, appearance, 'refresh_after')
+            for frame in range(20):
+                clock[0] += 0.2
+                observe(owner, appearance, 'effects_tick')
+            rows = [call.args[1] for call in write.call_args_list]
+            self.assertEqual(1, sum(row['stage'] == 'model_last_alive' for row in rows))
+            self.assertEqual(8, sum(row['stage'] == 'model_effects_tick' for row in rows))
+            self.assertEqual(0.98, next(row for row in rows if
+                row['stage'] == 'model_last_alive')['turret']['yaw'])
+            self.assertEqual(0.0, next(row for row in rows if
+                row['stage'] == 'model_refresh_after')['turret']['yaw'])
+            self.assertEqual(0.0, matrix.yaw)
+            before = write.call_count
+            vehicle.appearance = object()
+            observe(owner, appearance, 'refresh_after')
+            self.assertEqual(before, write.call_count)
+            owner._battle_active = False
+            observe(owner, appearance, 'refresh_after')
+            self.assertEqual(before, write.call_count)
 
 
 if __name__ == '__main__':

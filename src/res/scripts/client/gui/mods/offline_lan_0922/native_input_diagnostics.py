@@ -32,7 +32,7 @@ DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT
     'BOT SUPPORT RECOVERY', 'BOT SUPPORT REJECTION', 'BOT VERTICAL SUPPORT',
     'LOCAL ATTITUDE CHART', 'LOCAL EDGE SUPPORT', 'LOCAL SUPPORT DECISION',
     'RAM CONTACT GEOMETRY', 'RAM TRACK CONTACT', 'RICOCHET SURFACE EVIDENCE',
-    'VEHICLE STACK', 'WRECK POSE'))
+    'VEHICLE STACK', 'WRECK POSE', 'BATTLE REVIEW'))
 DETAIL_WINDOW_BYTES = 2 * 1024 * 1024
 DETAIL_SESSION_BYTES = 32 * 1024 * 1024
 DETAIL_RECORD_BYTES = 256 * 1024
@@ -297,3 +297,39 @@ def log_summary(phase, round_id):
         write_json_record('NATIVE INPUT SUMMARY', payload)
     except Exception:
         pass
+
+
+def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32):
+    """Admit lazy, round-scoped read-only evidence through --diagnostics.
+
+    No engine callbacks, payload construction or retained engine references.
+    Clock values belong to the named process; never compare worker and server
+    monotonic origins. Existing process byte budgets also apply.
+    """
+    if not detailed_enabled():
+        return
+    try:
+        round_id = getattr(owner, 'round_id', None)
+        if round_id is None:
+            round_id = getattr(owner, '_battle_server_time_origin', None)
+        state = getattr(owner, '_battle_review_records', None)
+        if state is None or state[0] != round_id:
+            state = (round_id, {})
+            owner._battle_review_records = state
+        records = state[1]
+        token = (stage, key)
+        previous = records.get(token)
+        if previous is None and len(records) >= 128:
+            return
+        count, last = previous if previous is not None else (0, None)
+        if count >= limit or (last is not None and now-last < interval):
+            return
+        if not detail_record_ready():
+            return
+        records[token] = (count+1, now)
+        payload = build()
+        payload.update(schema=1, stage=stage, round=round_id,
+                       pid=os.getpid(), clock=now, sample=count+1)
+        write_json_record('BATTLE REVIEW', payload)
+    except Exception:
+        pass  # Diagnostics must not change a gameplay result.
