@@ -859,7 +859,8 @@ class Checker(object):
                 name=name, level=100., active=True, enabled=True) for name in
                 ('radioman_lasteffort', 'radioman_retransmitter')])]
         params['skills'].update(designated_target=True, last_effort=True)
-        params['battle_booster'] = dict(skill_overrides=dict(designated_target_duration=4.0))
+        params['battle_booster'] = dict(compact_descr=11003,
+            skill_overrides=dict(designated_target_duration=4.0))
         dynamic = params['crew']['dynamic_spotting']
         row = dynamic['states']['0:0']
         dynamic['crew'] = ['gunner', 'radioman']
