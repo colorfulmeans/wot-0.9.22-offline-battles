@@ -122,7 +122,7 @@ class SkillCreditTests(unittest.TestCase):
         from unittest.mock import patch
         state=self.state();before=copy.deepcopy(state.snapshot())
         context=dict(garage=state,selected_vehicle=state.snapshot(),garage_store=NS(mark_dirty=lambda:None,flush=lambda snapshot:False))
-        with patch.object(requests.data,'stats',return_value={'stats':{}}):
+        with patch.object(requests.data,'stats',return_value={'stats':{},'account':{'globalRating':0}}):
             result=requests._add_tankman_skill(context,[100001,policy.data.ACTIVE.index('repair')])
         self.assertEqual(commands.RES_FAILURE,result.result_id);self.assertEqual(before,state.snapshot())
         self.assertEqual(before,context['selected_vehicle'])
