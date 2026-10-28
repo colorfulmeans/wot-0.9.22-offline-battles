@@ -79,6 +79,7 @@ VEHICLE_BLACKLIST = _real_module('vehicle_blacklist')
 VEHICLE_CONFIGURATION = _real_module('vehicle_configuration')
 VEHICLE_RECORDS = _real_module('vehicle_records')
 EQUIPMENT_POLICY = _real_module('equipment_policy')
+NATIVE_INPUT_DIAGNOSTICS = _real_module('native_input_diagnostics')
 DEFAULT_LOADOUTS = _real_module('default_loadouts')
 DEFAULT_CREW = _real_module('default_crew')
 
@@ -643,6 +644,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 VEHICLE_CONFIGURATION),
             'gui.mods.offline_lan_0922.vehicle_records': VEHICLE_RECORDS,
             'gui.mods.offline_lan_0922.equipment_policy': EQUIPMENT_POLICY,
+            'gui.mods.offline_lan_0922.native_input_diagnostics': NATIVE_INPUT_DIAGNOSTICS,
             'gui.mods.offline_lan_0922.default_loadouts': DEFAULT_LOADOUTS,
             'gui.mods.offline_lan_0922.default_crew': DEFAULT_CREW,
             'gui.app_loader': app_loader_module,

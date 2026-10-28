@@ -99,8 +99,11 @@ class RoomWindow(object):
 
     def refresh(self):
         if self.view is not None and self.view._isDAAPIInited():
-            self.view.flashObject.as_update(model(self.room))
+            self.view.flashObject.as_update(self.model())
         return True
+
+    def model(self):
+        return model(self.room)
 
     def action(self, role, value):
         room = self.room

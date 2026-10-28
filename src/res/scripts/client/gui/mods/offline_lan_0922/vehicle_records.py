@@ -201,7 +201,14 @@ def initialize_elite_devices(vehicles, descriptor):
         raise ValueError('default garage cannot install three improved devices: %s' % descriptor.type.name)
     for name in equipment_policy.directive_candidates(installed):
         if name in cache.equipmentIDs():
-            return cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+            directive = cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('player_fitting_initialized', vehicle=descriptor.type.name,
+                devices=installed, directive=name, directive_compact=directive)
+            return directive
+    from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+    validation_event('player_fitting_initialized', vehicle=descriptor.type.name,
+        devices=installed, directive=None)
     return 0
 
 

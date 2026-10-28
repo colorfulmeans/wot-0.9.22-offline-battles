@@ -36,21 +36,12 @@ class EquipmentPolicyTests(unittest.TestCase):
         self.assertEqual(['coatedOpticsBattleBooster', 'rammerBattleBooster'],
             list(self.policy.directive_candidates(['camouflageNet', 'coatedOptics', 'deluxRammer'])))
 
-    def test_daily_window_reuses_room_button_styles_and_dimensions(self):
-        import test_port_0922_waiting_room_ui as room_fixture
+    def test_daily_window_uses_stock_flash_instead_of_fixed_native_quads(self):
         ui = fixture._load_port_module('offline_services_ui')
-        surface = room_fixture._Surface()
-        with mock.patch.object(room_fixture._Component, 'delChild',
-                lambda component, child: component.children.remove(child), create=True):
-            panel = ui.ServicePanel(surface=surface)
-            panel.install()
-            self.assertTrue(panel._controls['close'].texture.endswith('waiting_button_close.dds'))
-            self.assertTrue(panel._controls['reserves'].texture.endswith('waiting_button_normal.dds'))
-            self.assertAlmostEqual(100, panel._controls['close'].width*640/2)
-            self.assertAlmostEqual(180, panel._controls['reserves'].width*640/2)
-            self.assertAlmostEqual(22, panel._controls['close'].height*320/2)
-            self.assertEqual(panel._labels['close'].font, panel.panel_font)
-            self.assertIn('reward2', panel._labels)
+        panel = ui.ServicePanel()
+        self.assertEqual('DailyWindow', type(panel._flash).__name__)
+        self.assertIsNone(panel._surface)
+        self.assertIsNone(panel._panel)
 
     def test_baked_bot_tiers_have_exact_equipment_and_directive_boundaries(self):
         data = fixture._load_port_module('bot_fitting_data')

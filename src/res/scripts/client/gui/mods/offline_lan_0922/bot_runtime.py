@@ -11814,6 +11814,11 @@ class BotRuntime(object):
             state['x'], state['y'], state['z'] = before
             self._set_wreck_hull_yaw(state, old_yaw)
             state['push_yaw'] = 0.0
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_change
+            validation_change('wreck_pose_rollback', state.get('id'),
+                entity=state.get('id'), hull_yaw=state['yaw'],
+                turret_yaw=state.get('turret_yaw'), aim_yaw=state.get('aim_yaw'),
+                gun_pitch=state.get('gun_pitch'))
         for angle in ('pitch', 'terrain_pitch', 'roll'):
             value = state.get(angle, 0.0)
             state[angle] = math.atan2(math.sin(value), math.cos(value))
@@ -11821,6 +11826,11 @@ class BotRuntime(object):
         now = getattr(self, '_contact_now', None)
         if moved and now is not None and now >= state.get('_wreck_motion_log_time', 0.0):
             state['_wreck_motion_log_time'] = now + 2.0
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('wreck_pose_committed', entity=state.get('id'),
+                position=_position(state), hull_yaw=state['yaw'],
+                turret_yaw=state.get('turret_yaw'), aim_yaw=state.get('aim_yaw'),
+                gun_pitch=state.get('gun_pitch'))
             sys.stdout.write(
                 '[Offline LAN 0.9.22] WRECK motion bot=%d mass=%.3f '
                 'position=%s yaw=%.5f push=(%.4f,%.4f) omega=%.5f '

@@ -26,6 +26,9 @@ package {
         private var bodyFormat:TextFormat;
         private var embedded:Boolean;
         private var reportedLayout:Boolean = false;
+        private var daily:Boolean = false;
+        // #1513 settingsWindow.swf: 100px submit/cancel faces at x=491/596.
+        private static const FOOTER_GAP:Number = 5;
 
         public function TrainingWindow() { super(); }
 
@@ -83,8 +86,37 @@ package {
             button("team_random", "ButtonNormal", 226, 215, 208);
             button("team2", "ButtonNormal", 452, 215, 208);
             text("message", 0, 240, 660);
-            button("start", "ButtonRed", 378, 260, 180);
+            button("start", "ButtonRed", 381, 260, 180);
             button("close", "ButtonBlack", 566, 260, 94);
+        }
+
+        private function configureDaily():void {
+            clearControls();
+            daily = true;
+            _originalWidth = 560;
+            _originalHeight = 260;
+            graphics.clear();
+            graphics.beginFill(0, 0);
+            graphics.drawRect(0, 0, 560, 260);
+            graphics.endFill();
+            setSize(560, 260);
+            for (var index:int = 0; index < 3; ++index) {
+                text("row" + index, 0, 6 + index * 64, 560);
+                text("reward" + index, 0, 28 + index * 64, 560);
+            }
+            text("note", 0, 208, 560);
+            button("reserves", "ButtonNormal", 0, 238, 100);
+            button("close", "ButtonBlack", 0, 238, 64);
+        }
+
+        private function sizeDailyFooter():void {
+            var close:Object = widgets["close"];
+            var reserves:Object = widgets["reserves"];
+            close.validateNow(); reserves.validateNow();
+            close.width = Math.max(64, Math.ceil(close.textField.textWidth) + 24);
+            reserves.width = Math.max(64, Math.ceil(reserves.textField.textWidth) + 24);
+            close.x = 560 - close.width;
+            reserves.x = close.x - FOOTER_GAP - reserves.width;
         }
 
         private function text(key:String, xPos:Number, yPos:Number, w:Number):void {
@@ -155,6 +187,7 @@ package {
             // Build the fields before publishing data; otherwise the first
             // model is discarded and the wrapper measures only the prototype.
             validateNow();
+            if (data.daily === true && !daily) configureDaily();
             updating = true;
             window.title = data.title;
             window.useBottomBtns = true;
@@ -181,6 +214,7 @@ package {
                     widget.selected = state.selected;
                 }
             }
+            if (daily) sizeDailyFooter();
             // Window.updateSource caches content size. Re-measure after our
             // dynamic children exist, using the native padding/chrome contract.
             UIComponent(window).invalidate(Window.INVALID_SRC_VIEW);
@@ -192,8 +226,9 @@ package {
                 offlineAction("diagnostics", "content=" + width + "x" + height +
                     " actualScale=" + actualScaleX + "," + actualScaleY +
                     " frame=" + window.width + "x" + window.height +
-                    " roomChars=" + TextField(fields["room"]).length +
-                    " mapChars=" + String(widgets["map"].label).length);
+                    " daily=" + daily + " footerGap=" + FOOTER_GAP +
+                    " roomChars=" + (daily ? 0 : TextField(fields["room"]).length) +
+                    " mapChars=" + (daily ? 0 : String(widgets["map"].label).length));
                 for (var role:String in widgets) {
                     var control:Object = widgets[role];
                     var bounds:Rectangle = DisplayObject(control).getBounds(this);
@@ -231,9 +266,9 @@ package {
 
         private function placeRoom():void {
             if (window == null || stage == null || window.parent == null) return;
-            if (queue == null || queue.parent == null) queue = findQueue(App.stage as DisplayObjectContainer);
-            var top:Number = stage.stageHeight * 0.24;
-            var bottom:Number = stage.stageHeight * 0.80;
+            if (!daily && (queue == null || queue.parent == null)) queue = findQueue(App.stage as DisplayObjectContainer);
+            var top:Number = daily ? 0 : stage.stageHeight * 0.24;
+            var bottom:Number = daily ? stage.stageHeight : stage.stageHeight * 0.80;
             if (queue != null) {
                 var titleBounds:Rectangle = queue.modeTitle.getBounds(stage);
                 var footerBounds:Rectangle = DisplayObject(queue.exitButton).getBounds(stage);
@@ -251,7 +286,7 @@ package {
             window.y = Math.round(localPos.y);
         }
 
-        override protected function onDispose():void {
+        private function clearControls():void {
             for each (var icon:Object in icons) icon.dispose();
             icons = {};
             for (var key:String in widgets) {
@@ -261,8 +296,15 @@ package {
                 if (key == "tier" || key == "skill" || key == "size1" || key == "size2") widget.close();
                 widget.dispose();
             }
-            widgets = {}; fields = {}; queue = null; offlineAction = null;
+            widgets = {}; fields = {}; queue = null;
+            while (numChildren) removeChildAt(0);
+        }
+
+        override protected function onDispose():void {
+            clearControls();
+            offlineAction = null;
             super.onDispose();
         }
     }
 }
+

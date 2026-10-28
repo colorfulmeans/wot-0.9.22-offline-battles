@@ -330,6 +330,18 @@ jobs:
         run: >-
           python -m unittest discover -s tests
           -p "test_port_0922_gameplay_followup.py" -v
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Rebuild native mission and waiting windows before UI validation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python tools/stage_release_style_ui.py
+          curl --fail --location --retry 3 https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version26.3.0/ffdec_26.3.0.zip -o /tmp/ffdec.zip
+          unzip -q /tmp/ffdec.zip -d /tmp/ffdec
+          python tools/rebuild_review_room.py --ffdec /tmp/ffdec/ffdec.jar
       - name: Run client test suite
         if: ${{ !cancelled() }}
         env:

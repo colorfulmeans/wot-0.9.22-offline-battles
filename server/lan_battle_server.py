@@ -14634,6 +14634,13 @@ class BattleState:
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('server_assist_split', attacker=attacker, target=target,
+            damage=damage, shooter_sees_target=self._spots_target(attacker, target),
+            delivered_leases=list(getattr(self, 'spotting_assist_leases', {}).get(
+                (attacker, target), ())),
+            credits=[dict(category=category, observer=observer, amount=amount)
+                     for category, observer, amount in credits])
         for category, assister, amount in credits:
             if amount <= 0:
                 continue

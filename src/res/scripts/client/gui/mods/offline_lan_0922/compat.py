@@ -96,6 +96,18 @@ def _run_model_refresh_callback(compatibility, appearance, model_state, resource
         raise
     else:
         pose('after_model_refresh')
+        from gui.mods.offline_lan_0922 import native_input_diagnostics
+        if native_input_diagnostics.detailed_enabled():
+            vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
+            if vehicle is not None and (getattr(vehicle, 'health', 1) <= 0 or
+                                       not getattr(vehicle, 'isCrewActive', True)):
+                try:
+                    world = compatibility._runtime.bigworld
+                    native_input_diagnostics.observe_refresh_frames(
+                        world, vehicle, appearance, world.player())
+                except Exception as error:
+                    native_input_diagnostics.validation_event('turret_frame_schedule_failed',
+                        error=type(error).__name__, message=str(error)[:240])
         if row is not None:row['result'] = 'returned'
         if row is not None:
             _observe_model_lifecycle(compatibility, appearance, 'callback_returned',

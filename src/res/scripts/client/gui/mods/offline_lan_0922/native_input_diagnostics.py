@@ -40,6 +40,49 @@ _detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
                   'notice': False}
 _detail_round = None
 _turret_pose_counts = {}
+_validation_last = {}
+
+
+def validation_change(stage, key, fingerprint=None, **values):
+    if not detailed_enabled():
+        return
+    identity = (stage, key)
+    signature = json.dumps(values if fingerprint is None else fingerprint,
+                           sort_keys=True, separators=(',', ':'))
+    if _validation_last.get(identity) == signature:
+        return
+    if identity not in _validation_last and len(_validation_last) >= 4096:
+        if not _validation_last.get('capacity_reported'):
+            _validation_last['capacity_reported'] = True
+            validation_event('validation_capacity', limit=4096)
+        return
+    _validation_last[identity] = signature
+    validation_event(stage, **values)
+
+
+def validation_event(stage, **values):
+    """Diagnostic-entry evidence; a failed probe is an explicit result."""
+    if not detailed_enabled():
+        return
+    try:
+        values.update(schema=1, stage=stage, pid=os.getpid(),
+                      round=_detail_round, wall_time=time.time())
+        write_json_record('VALIDATION', values)
+    except Exception as error:
+        sys.stdout.write('[Offline LAN 0.9.22] VALIDATION ERROR stage=%s type=%s\n' %
+                         (stage, type(error).__name__))
+
+
+def _pose_matrix(provider):
+    if provider is None:
+        return dict(available=False, reason='missing_provider')
+    try:
+        import Math
+        matrix = Math.Matrix(provider)
+        return dict(available=True, yaw=float(matrix.yaw),
+                    pitch=float(matrix.pitch), roll=float(matrix.roll))
+    except Exception as error:
+        return dict(available=False, error=type(error).__name__, message=str(error)[:240])
 
 
 def turret_pose(stage, entity, avatar=None, appearance=None):
@@ -64,21 +107,29 @@ def turret_pose(stage, entity, avatar=None, appearance=None):
         row['appearance_identity'] = id(appearance)
         matrices = {}
         for name in ('turretMatrix', 'gunMatrix'):
-            matrix = getattr(appearance, name, None)
-            if matrix is not None:
-                matrices[name] = dict((axis, float(getattr(matrix, axis)))
-                    for axis in ('yaw', 'pitch', 'roll') if hasattr(matrix, axis))
+            matrices[name] = _pose_matrix(getattr(appearance, name, None))
         row['model_matrices'] = matrices
+        row['hull_world'] = _pose_matrix(getattr(entity, 'matrix', None))
+        row['detached_turret'] = bool(getattr(entity, 'isTurretDetached', False))
         # HP_gunFire is the same pinned node used by live muzzle queries.
         # Observe its world matrix to distinguish a stale rotator from a
         # rebuilt compound that actually points somewhere else.
         try:
-            import Math
             model = getattr(entity, 'model', None)
             if model is not None:
-                matrix = Math.Matrix(model.node('HP_gunFire'))
-                row['barrel_world'] = dict((axis, float(getattr(matrix, axis)))
-                    for axis in ('yaw', 'pitch', 'roll'))
+                # Damaged compounds need not retain HP_gunFire. Read the
+                # turret/gun nodes independently so one missing node cannot
+                # suppress the rest of the post-refresh evidence.
+                nodes = {}
+                for name in ('HP_turretJoint', 'HP_gunJoint', 'HP_gunFire'):
+                    try:
+                        nodes[name] = _pose_matrix(model.node(name))
+                    except Exception as error:
+                        nodes[name] = dict(available=False, error=type(error).__name__,
+                                           message=str(error)[:240])
+                row['world_nodes'] = nodes
+            else:
+                row['world_nodes'] = dict(available=False, reason='missing_model')
         except Exception as error:
             row['barrel_world_unavailable'] = type(error).__name__
         if avatar is not None and getattr(avatar, 'playerVehicleID', None) == row['entity']:
@@ -86,9 +137,29 @@ def turret_pose(stage, entity, avatar=None, appearance=None):
             row['local_rotator'] = dict(
                 turret_yaw=float(rotator.turretYaw), gun_pitch=float(rotator.gunPitch))
         write_json_record('TURRET DEATH POSE', row)
-    except Exception:
+    except Exception as error:
         # Diagnostics must never interrupt a health or model callback.
-        pass
+        validation_event('turret_probe_failed', probe_stage=stage,
+                         error=type(error).__name__, message=str(error)[:240])
+
+
+def observe_refresh_frames(bigworld, entity, appearance, avatar=None):
+    """Observe subsequent engine frames, fenced to this round/entity/model."""
+    if not detailed_enabled():
+        return
+    round_id = _detail_round
+    identity = getattr(entity, 'id', None)
+    model = getattr(entity, 'model', None)
+    def sample(index):
+        if (_detail_round != round_id or bigworld.entity(identity) is not entity or
+                getattr(entity, 'appearance', None) is not appearance or
+                getattr(entity, 'model', None) is not model):
+            validation_event('turret_probe_cancelled', entity=identity, frame=index)
+            return
+        turret_pose('after_model_frame_%d' % index, entity, avatar, appearance)
+        if index < 3:
+            bigworld.callback(0.0, lambda: sample(index+1))
+    bigworld.callback(0.0, lambda: sample(1))
 
 
 def detailed_enabled():
@@ -339,6 +410,7 @@ def log_summary(phase, round_id):
         global _detail_round
         if phase == 'round_start' and round_id != _detail_round:
             _turret_pose_counts.clear()
+            _validation_last.clear()
             _detail_round = round_id
             _detail_budget.clear()
             _detail_budget.update(start=None, window=0, session=0,

@@ -25,6 +25,24 @@ Only fully unlocked players and elite Bots receive equipment directives, chosen
 in installed-device order. Turret death/model diagnostics require the diagnostic
 launch entrance and do not change turret behavior.
 
+The daily-mission panel now uses the stock Scaleform Window chrome, title and
+close cross. Its normal/black bottom buttons are right aligned and sized to
+their text. The waiting-room start/leave widths stay unchanged; their gap uses
+the 5px submit/cancel authoring gap from the pinned settings window.
+`START_DIAGNOSTIC_TEST.bat` enables model-provider matrices, individual damaged
+model nodes and three fenced post-refresh frame observations, native-radio
+eligibility, server damage-assist shares, installed player/Bot fittings,
+account-rating diffs, receipt counters and retained-history coverage. Missing
+model nodes and failed probes are reported independently. These records prove
+which path ran; they do not by themselves prove visual correctness.
+
+PR #115 acceptance remains layered: resource audits and regression tests cover
+logic; the review workflow recompiles and inspects the actual movie and Python
+2.7 package. Previous launcher-only starts and the two user-played battles on
+build `40729026395-1` do not establish acceptance of this new build. Final-client
+window appearance, retained spotting/radio shares, wreck display after refresh,
+and three Mittengard VII–VIII matches still require new-build runtime evidence.
+
 1. Download the Windows x64 package from the latest published release,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,

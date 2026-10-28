@@ -319,28 +319,23 @@ class OfflineServicesTests(unittest.TestCase):
         buy.assert_called_once_with(50002, recruit_crew=True, bond_offer=True)
         self.assertEqual({'gold': 9000}, data['shopItemPrices'][50002])
 
-    def test_panel_close_and_escape_release_every_native_resource(self):
+    def test_panel_close_and_reserves_retire_the_stock_window(self):
         ui = garage_fixture._load_port_module('offline_services_ui')
-        closed = []
-        surface = room_fixture._TransactionalSurface()
-        # Native SimpleGUIComponent owns delChild as well as addChild.
-        with mock.patch.object(room_fixture._Component, 'delChild',
-                               lambda owner, child: owner.children.remove(child), create=True), \
-                mock.patch.object(ui, 'snapshot', return_value=self.state.snapshot()), \
-                mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_ESCAPE=1)}):
-            panel = ui.ServicePanel('reserves', lambda: closed.append(True), surface)
-            self.assertTrue(panel.open())
-            self.assertTrue(surface.cursor_owned)
-            panel._panel.script.handleKeyEvent(types.SimpleNamespace(
-                key=1, isKeyDown=lambda: True))
-            self.assertEqual([True], closed)
-            self.assertEqual([], surface.roots)
-            self.assertFalse(surface.cursor_owned)
-            self.assertFalse(surface.callbacks)
-            self.assertTrue(panel.open())
-            panel.activate('close')
-            self.assertEqual([True, True], closed)
-            self.assertFalse(surface.roots)
+        closed, reserves = [], []
+        panel = ui.ServicePanel(on_close=lambda: closed.append(True))
+        adapter = panel._flash
+        exports = {'gui.shared.event_dispatcher': types.SimpleNamespace(
+            showBoostersWindow=lambda: reserves.append(True))}
+        for role in ('close', 'reserves'):
+            with mock.patch.object(adapter, 'open', return_value=True), mock.patch.object(
+                    adapter, 'close') as close, mock.patch.dict(sys.modules, exports):
+                self.assertTrue(panel.open())
+                self.assertTrue(panel.activate(role))
+                close.assert_called_once()
+                self.assertFalse(panel._open)
+                self.assertFalse(panel.activate(role))
+        self.assertEqual([True, True], closed)
+        self.assertEqual([True], reserves)
 
     def test_lobby_install_accepts_settings_package_class_export(self):
         ui = garage_fixture._load_port_module('offline_services_ui')

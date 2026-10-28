@@ -739,6 +739,11 @@ def _validate_waiting_room_ui(repo_root):
             digest = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
         if proof.get(key) != digest:
             raise ValueError('Rebuild waiting-room movie after changing ' + source)
+    if proof.get('native_daily_window'):
+        with open(os.path.join(repo_root, 'tools', 'rebuild_review_room.py'), 'rb') as stream:
+            digest = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
+        if proof.get('rebuilder_sha256') != digest:
+            raise ValueError('Rebuild waiting-room movie after changing review rebuilder')
     with open(os.path.join(root, 'offlineMapPicker.swf'), 'rb') as stream:
         picker = stream.read()
     with open(os.path.join(root, 'offlineMapPicker.swf.json'), 'r') as stream:
@@ -825,3 +830,4 @@ def build():
 
 if __name__ == '__main__':
     build()
+

@@ -222,6 +222,12 @@ jobs:
           python -m unittest discover -s tests -p test_port_0922_career_dossiers.py
           python -m unittest discover -s tests -p test_port_0922_offline_services_ui.py
           python -m unittest discover -s tests -p test_port_0922_equipment_policy.py
+          python -m unittest discover -s tests -p test_pr115_diagnostic_acceptance.py
+          python -m unittest discover -s tests -p test_port_0922_spotting_radio.py
+          python -m unittest discover -s tests -p test_port_0922_radio_integration.py
+          python -m unittest discover -s tests -p test_port_0922_wreck_pose_readback.py
+          python -m unittest discover -s tests -p test_port_0922_offline_services.py
+          python -m unittest discover -s tests -p test_port_0922_postbattle.py
           python -m unittest discover -s tests -p test_port_0922_bootstrap_lifecycle.py
           PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_default_revision.py
           PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_launcher_core.py
@@ -245,6 +251,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python tools/stage_release_style_ui.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Rebuild and inspect native daily and waiting windows
+        run: |
+          curl --fail --location --retry 3 https://github.com/jindrapetrik/jpexs-decompiler/releases/download/version26.3.0/ffdec_26.3.0.zip -o /tmp/ffdec.zip
+          unzip -q /tmp/ffdec.zip -d /tmp/ffdec
+          python tools/rebuild_review_room.py --ffdec /tmp/ffdec/ffdec.jar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr115-native-window-evidence
+          path: |
+            src/res/gui/flash/offlineWaitingRoom.swf
+            src/res/gui/flash/offlineWaitingRoom.swf.json
       - name: Rebuild and verify the shipping x86 native module
         run: sh tools/build_math_batch_native.sh
       - name: Build Python 2.7 0.9.22 LAN client

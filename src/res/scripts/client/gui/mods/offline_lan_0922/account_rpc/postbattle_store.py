@@ -1528,6 +1528,11 @@ class PostBattleStore(object):
         # DossierCache asks for rows newer than its maxChangeTime.  The global
         # battle ordinal is stable across restarts and strictly increases.
         row['changeTime'] = progress['battles']
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('career_receipt_applied', receipt=receipt['receipt_id'],
+            vehicle=receipt['vehicle'], stats=dict(stats),
+            stun_capable=receipt.get('stun_capable'), totals=dict(row),
+            cache_change_time=row['changeTime'])
 
     def _award_badges(self, receipt, row):
         """Fold this battle into the vehicle's retail badge state.
@@ -1773,6 +1778,13 @@ class PostBattleStore(object):
                     row['droppedCapturePoints'] = sum(min(
                         100, receipt['stats']['dropped_capture_points'])
                         for receipt in receipts)
+                from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+                validation_event('career_history_coverage', vehicle=name,
+                    complete=complete, retained_receipts=len(receipts),
+                    battles=row.get('battles'), stun_coverage=row.get('stunStatsCoverage'),
+                    stun_num=row.get('stunNum'),
+                    stunning_battles=row.get('battlesOnStunningVehicles'),
+                    defence=row.get('droppedCapturePoints'))
             self._trim_history_bodies()
         except (IOError, OSError, TypeError, ValueError) as error:
             # Keep a corrupt optional cache from preventing an offline login.

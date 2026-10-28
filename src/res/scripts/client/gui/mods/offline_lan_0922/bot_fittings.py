@@ -227,4 +227,11 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None, overrides=Non
     from gui.mods.offline_lan_0922.bot_runtime import _descriptor_crew_roster
     value['crew_roster'] = _descriptor_crew_roster(descriptor)
     register(descriptor, value)
+    from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+    validation_event('bot_fitting_installed', vehicle=vehicle, tier=tier,
+        crew_level=level, modules=actual,
+        devices=[d.name for d in descriptor.optionalDevices if d is not None],
+        directive=selected['directive'],
+        native_directives=[d.name for d in directives], style=selected['style'],
+        restored=restored is not None, overrides=overrides)
     return descriptor

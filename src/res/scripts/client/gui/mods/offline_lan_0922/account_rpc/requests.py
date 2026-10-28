@@ -155,6 +155,10 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
             diff.setdefault('recycleBin', {})['vehicles'] = {
                 'buffer': recovery_diff}
         built = _clock()
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('account_diff_rating', current_rating=current_account['globalRating'],
+            published_rating=(diff.get('account') or {}).get('globalRating'),
+            account_fields=sorted((diff.get('account') or {}).keys()))
         completed = [False]
 
         def complete(unused_player=None):

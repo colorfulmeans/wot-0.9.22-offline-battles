@@ -10,10 +10,7 @@ import time
 
 from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
-from gui.mods.offline_lan_0922.waiting_room_ui import (
-    WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR,
-    OUTLINE_TEXTURE, NativeSurface, ROOM_TEXT_COLOUR, ROOM_HOVER_COLOUR,
-    PANEL_TEXTURE, ROOM_FONT)
+from gui.mods.offline_lan_0922.waiting_room_ui import WaitingRoomUI
 
 _patches = []
 _panels = []
@@ -809,91 +806,16 @@ def mission_label(row):
     return label % row[3] if '%d' in label else label
 
 
-class _ServiceControl(_ControlScript):
-    def handleKeyEvent(self, event):
-        import Keys
-        if event.key == Keys.KEY_ESCAPE and event.isKeyDown():
-            self._room.activate('close')
-            return True
-        return False
-
-
-class _DailySurface(NativeSurface):
-    def window(self):
-        return self._gui.Window(PANEL_TEXTURE)
-
-
 class ServicePanel(WaitingRoomUI):
-    # Waiting-room restyling does not repaint the independent daily panel.
-    panel_size = (640, 320)
-    panel_font = ROOM_FONT
-    control_text_colour = (242, 241, 225, 255)
-    control_hover_colour = ROOM_HOVER_COLOUR
-
-    def _control_texture(self, role):
-        return WaitingRoomUI._control_texture(self, role)
-
-    """Daily missions on an empty native page, with no stock tab below it."""
-    def __init__(self, page='daily', on_close=None, surface=None):
+    """Native Window title, close cross and stock bottom buttons."""
+    def __init__(self, page='daily', on_close=None):
+        from gui.mods.offline_lan_0922.daily_window import DailyWindow
         WaitingRoomUI.__init__(self, lambda unused: False, lambda: (),
-                               on_close=on_close, surface=surface or _DailySurface())
-        self._last_paint = 0
-
-    def install(self):
-        if self._panel is not None:
-            return True
-        WaitingRoomUI.install(self)
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._panel.delChild(component)
-        self._controls, self._labels = {}, {}
-        self._panel.script = _ServiceControl(self, None)
-        def position(x, y, z=0.0):
-            return (2.0*x/640.0-1.0, 1.0-2.0*y/320.0, z)
-        def label(role, text, x, y, width, anchor='LEFT', colour=ROOM_TEXT_COLOUR):
-            return self._make_label(role, text, position(x, y),
-                2.0*width/640.0, 32.0/320.0, anchor=anchor, colour=colour)
-        label('title', tr('DAILY MISSIONS'), 12, 12, 610,
-              colour=(219, 219, 204, 255))
-        for index in range(3):
-            label('row%d' % index, '', 22, 62 + index*64, 596)
-            label('reward%d' % index, '', 22, 84 + index*64, 596)
-        label('note', tr('Standard battles only. Rewards automatic. Resets at 00:00 UTC.'),
-              22, 260, 596)
-        for role, caption, x, width in (
-                ('reserves', tr('PERSONAL RESERVES'), 422, 180),
-                ('close', tr('CLOSE'), 568, 100)):
-            self._make_control(role, position(x, 297, CONTROL_Z),
-                               2.0*width/640.0, 44.0/320.0)
-            label(role, caption, x, 297, width-8,
-                  anchor='CENTER', colour=self.control_text_colour)
-            self._controls[role].script = _ServiceControl(self, role)
-        return True
+                               on_close=on_close)
+        self._flash = DailyWindow(self)
 
     def _sync_selection(self):
         return ()
-
-    def _move_pointer(self):
-        WaitingRoomUI._move_pointer(self)
-        stamp = int(time.time())
-        if self._open and self._last_paint != stamp:
-            self._last_paint = stamp
-            self.refresh()
-
-    def _refresh_contents(self):
-        self._apply_layout()
-        daily = policy.daily_state(snapshot())
-        for index, key in enumerate(daily['missions']):
-            row = policy.MISSION_BY_ID[key]
-            self._set_text('row%d' % index, tr('%s: %d/%d') % (
-                mission_label(row), daily[key], row[3]))
-            self._set_text('reward%d' % index, tr('Reward: %s reserve x1%s') % (
-                tr(policy.RESERVE_BY_ID[row[4]][1]),
-                tr(' (RECEIVED)') if key in daily['claimed'] else ''))
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._set(component, 'visible', True)
-        self._set(self._panel, 'visible', True)
-        self._paint()
-        return True
 
     def activate(self, role):
         if not self._open or role not in ('close', 'reserves'):

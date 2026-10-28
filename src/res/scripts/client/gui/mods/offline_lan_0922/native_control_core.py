@@ -377,6 +377,17 @@ class _NativeRadio(object):
                 sources.pop(observer, None)
             elif observer in group and deadline-now > 0.000001:
                 result.append((observer, deadline-now))
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        if diagnostic.detailed_enabled():
+            diagnostic.validation_change('native_radio_assist', (recipient, target),
+                fingerprint=([observer for observer, unused in sorted(result)],
+                    [(observer, observer in group, observer in self.actors)
+                     for observer in sorted(sources)]),
+                recipient=recipient, target=target,
+                sources=[dict(observer=observer, deadline=deadline,
+                    connected=observer in group, present=observer in self.actors)
+                    for observer, deadline in sorted(sources.items())],
+                accepted=[observer for observer, unused in sorted(result)])
         return sorted(result)
 
     def summaries(self, pairs, now):
