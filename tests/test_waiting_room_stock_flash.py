@@ -178,6 +178,7 @@ class StockRoomTests(unittest.TestCase):
                          'src/res/gui/flash/offlineMapPicker.swf',
                          'src/res/gui/flash/offlineMapPicker.swf.json',
                          'tools/actionscript/OfflineMapPicker.as',
+                         'tools/rebuild_review_room.py',
                          'tools/build_waiting_room_swf.py'):
                 target = root/name
                 target.parent.mkdir(parents=True, exist_ok=True)

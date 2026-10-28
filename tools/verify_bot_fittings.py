@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.bot_fitting_data import PLANS, CLASSES
 from gui.mods.offline_lan_0922 import ammo_policy, vehicle_configuration
-from gui.mods.offline_lan_0922 import bot_fittings
+from gui.mods.offline_lan_0922 import bot_fittings, equipment_policy
 
 
 def audit_rented_outfits(packed):
@@ -147,6 +147,24 @@ def audit(client):
                 mass = float(definition['hull']['weight']) + float(turret['weight']) + float(gun['weight'])
                 mass += sum(float(options[modules[kind]]['weight']) for kind,options in components.items())
                 mass += sum(float(device_data[n].get('script',{}).get('weight',0)) for n in fitting['devices'])
+                if '_' not in tier:
+                    expected = []
+                    count = dict(rookie=0, regular=1, veteran=3, elite=3)[tier]
+                    base_mass = mass - sum(float(device_data[n].get('script',{}).get('weight',0))
+                                           for n in fitting['devices'])
+                    for candidates in equipment_policy.candidates(CLASSES[vehicle], improved=tier=='elite'):
+                        if len(expected) == count:
+                            break
+                        for candidate in candidates:
+                            weight = float(device_data.get(candidate, {}).get('script', {}).get('weight',0))
+                            if (candidate in device_nodes and allowed(candidate) and
+                                    base_mass + weight <= float(components['chassis'][modules['chassis']]['maxLoad'])):
+                                expected.append(candidate)
+                                base_mass += weight
+                                break
+                    assert expected == fitting['devices'], (vehicle,tier,'priority order',expected,fitting['devices'])
+                    expected_directive = next(equipment_policy.directive_candidates(expected), None) if tier=='elite' else None
+                    assert expected_directive == fitting['directive'], (vehicle,tier,'directive order')
                 if mass > float(components['chassis'][modules['chassis']]['maxLoad']):
                     if '_' not in tier:raise AssertionError((vehicle,tier,mass))
                     invalid.append((vehicle,tier))
@@ -182,6 +200,7 @@ def audit(client):
                 assert all(n % clip == 0 for n in allocation), (vehicle,tier,'whole magazine')
                 assert all(allocation[s['index']] > 0 for s in ammo_policy.stages(profile)), (vehicle,tier,'missing shell')
                 rows.append(dict(vehicle=vehicle,tier=tier,modules=modules,weight=mass,
+                    devices=list(fitting['devices']), directive=fitting['directive'],
                     max_health=float(definition['hull'].get('maxHealth',0))+float(turret.get('maxHealth',0)),
                     reload_seconds=gun['reloadTime'],capacity=capacity,clip_size=clip,allocation=allocation))
     assert all(t.startswith('stock_') for v,t in invalid), 'An allowed fitting exceeds load'

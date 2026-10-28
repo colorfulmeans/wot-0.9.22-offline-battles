@@ -378,6 +378,13 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
         # the record carries the exact 'nation:vehicle' name the client uses.
         'vehicleTypeName': str(descriptor.type.name),
     }
+    if default_elite_equipment:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('player_record_ready', vehicle=descriptor.type.name,
+            mounted_devices=[int(device.compactDescr) for device in descriptor.optionalDevices
+                             if device is not None],
+            inventory_devices=record_inventory_items.get(item_type_indices['optionalDevice'], {}),
+            consumables_and_directive=list(consumables))
     return {
         'record': record,
         'shellCatalog': shell_catalog,
