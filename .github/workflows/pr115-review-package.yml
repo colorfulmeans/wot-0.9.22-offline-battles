@@ -232,6 +232,16 @@ jobs:
           PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_default_revision.py
           PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_launcher_core.py
           python -m unittest discover -s tests -p test_crew_skill_credits.py
+      - name: Exercise actual diagnostic producers with diagnostics enabled
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher
+          WOT_OFFLINE_DIAGNOSTICS: '1'
+        run: |
+          python -m unittest discover -s tests -p test_bot_fittings.py
+          python -m unittest discover -s tests -p test_port_0922_spotting_career_regressions.py
+          python -m unittest discover -s tests -p test_port_0922_postbattle.py
+          python -m unittest discover -s tests -p test_pr115_diagnostic_acceptance.py
       - uses: actions/download-artifact@v4
         with:
           name: wot-0.9.22-lan-server-windows

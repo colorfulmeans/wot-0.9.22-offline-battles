@@ -41,6 +41,7 @@ _detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
 _detail_round = None
 _turret_pose_counts = {}
 _validation_last = {}
+_validation_counts = {}
 
 
 def validation_change(stage, key, fingerprint=None, **values):
@@ -65,6 +66,7 @@ def validation_event(stage, **values):
     if not detailed_enabled():
         return
     try:
+        _validation_counts[stage] = _validation_counts.get(stage, 0) + 1
         values.update(schema=1, stage=stage, pid=os.getpid(),
                       round=_detail_round, wall_time=time.time())
         write_json_record('VALIDATION', values)
@@ -85,6 +87,13 @@ def _pose_matrix(provider):
         return dict(available=False, error=type(error).__name__, message=str(error)[:240])
 
 
+def _read_pose_matrix(owner, name):
+    try:
+        return _pose_matrix(getattr(owner, name, None))
+    except Exception as error:
+        return dict(available=False, error=type(error).__name__, message=str(error)[:240])
+
+
 def turret_pose(stage, entity, avatar=None, appearance=None):
     """Observe death/model boundaries without restoring or rotating anything."""
     if not detailed_enabled() or entity is None:
@@ -101,15 +110,15 @@ def turret_pose(stage, entity, avatar=None, appearance=None):
                    entity_identity=id(entity), health=getattr(entity, 'health', None),
                    crew_active=getattr(entity, 'isCrewActive', None),
                    gun_angles_packed=getattr(entity, 'gunAnglesPacked', None),
-                   round=_detail_round)
+                   round=_detail_round, wall_time=time.time())
         if appearance is None:
             appearance = getattr(entity, 'appearance', None)
         row['appearance_identity'] = id(appearance)
         matrices = {}
         for name in ('turretMatrix', 'gunMatrix'):
-            matrices[name] = _pose_matrix(getattr(appearance, name, None))
+            matrices[name] = _read_pose_matrix(appearance, name)
         row['model_matrices'] = matrices
-        row['hull_world'] = _pose_matrix(getattr(entity, 'matrix', None))
+        row['hull_world'] = _read_pose_matrix(entity, 'matrix')
         row['detached_turret'] = bool(getattr(entity, 'isTurretDetached', False))
         # HP_gunFire is the same pinned node used by live muzzle queries.
         # Observe its world matrix to distinguish a stale rotator from a
@@ -133,9 +142,13 @@ def turret_pose(stage, entity, avatar=None, appearance=None):
         except Exception as error:
             row['barrel_world_unavailable'] = type(error).__name__
         if avatar is not None and getattr(avatar, 'playerVehicleID', None) == row['entity']:
-            rotator = getattr(avatar, 'gunRotator', None)
-            row['local_rotator'] = dict(
-                turret_yaw=float(rotator.turretYaw), gun_pitch=float(rotator.gunPitch))
+            try:
+                rotator = getattr(avatar, 'gunRotator', None)
+                row['local_rotator'] = dict(
+                    turret_yaw=float(rotator.turretYaw), gun_pitch=float(rotator.gunPitch))
+            except Exception as error:
+                row['local_rotator'] = dict(available=False, error=type(error).__name__,
+                    message=str(error)[:240])
         write_json_record('TURRET DEATH POSE', row)
     except Exception as error:
         # Diagnostics must never interrupt a health or model callback.
@@ -411,11 +424,13 @@ def log_summary(phase, round_id):
         if phase == 'round_start' and round_id != _detail_round:
             _turret_pose_counts.clear()
             _validation_last.clear()
+            _validation_counts.clear()
             _detail_round = round_id
             _detail_budget.clear()
             _detail_budget.update(start=None, window=0, session=0,
                                   dropped=0, notice=False)
         payload = snapshot()
+        payload['validation_events'] = dict(_validation_counts)
         payload.update(schema=1, pid=os.getpid(), phase=phase, round=round_id)
         write_json_record('NATIVE INPUT SUMMARY', payload)
     except Exception:

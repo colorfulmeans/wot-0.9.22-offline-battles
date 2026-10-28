@@ -91,6 +91,14 @@ def native_factors(descriptor, critical=None):
         if factors is None:
             raise RuntimeError('native Bot fitting crew factors were rejected')
         cache[key] = factors
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        if diagnostic.detailed_enabled():
+            diagnostic.validation_event('bot_effective_factors', vehicle=value['wire'].get('vehicle'),
+                tier=value['wire'].get('tier'), crew_level=value['wire']['crew_level'],
+                devices=value['wire'].get('devices'), directive=value['wire'].get('directive'),
+                crew_active=list(flags), fire=fire,
+                factors=dict((name, factor) for name, factor in factors.items()
+                             if isinstance(factor, (int, float))))
     return cache[key]
 
 

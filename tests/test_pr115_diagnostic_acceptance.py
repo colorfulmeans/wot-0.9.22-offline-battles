@@ -62,6 +62,20 @@ class DiagnosticAcceptanceTests(unittest.TestCase):
             self.d.turret_pose('before_death', Broken())
         self.assertEqual('turret_probe_failed', write.call_args.args[1]['stage'])
 
+    def test_failed_provider_getter_and_missing_rotator_do_not_suppress_wreck_record(self):
+        class Appearance(object):
+            @property
+            def turretMatrix(self): raise ValueError('retired provider')
+        entity = types.SimpleNamespace(id=7, health=0, appearance=Appearance())
+        avatar = types.SimpleNamespace(playerVehicleID=7, gunRotator=None)
+        with mock.patch.object(self.d, 'detailed_enabled', return_value=True), \
+             mock.patch.object(self.d, 'write_json_record') as write:
+            self.d.turret_pose('after_model_refresh', entity, avatar)
+        label, row = write.call_args.args
+        self.assertEqual('TURRET DEATH POSE', label)
+        self.assertFalse(row['model_matrices']['turretMatrix']['available'])
+        self.assertFalse(row['local_rotator']['available'])
+
     def test_daily_refresh_cancels_timer_and_rejects_stale_open(self):
         daily = fixture._load_port_module('daily_window')
         queue, cancelled = [], []
