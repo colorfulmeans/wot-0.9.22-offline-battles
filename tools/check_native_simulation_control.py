@@ -682,7 +682,7 @@ class Checker(object):
                 self.visibility_queries += len(traces[1])
                 actual_team=dict(((row[0],'bot',row[1][1]),(row[2],self.facade._pose_dict(row[3])))
                     for row in owner.team_contacts())
-                expected_team=dict((key,(min(12.,deadline-now),reference._visible_target_poses[key]))
+                expected_team=dict((key,(min(14.,deadline-now),reference._visible_target_poses[key]))
                     for key,deadline in reference._spot_until.items() if deadline>now)
                 self.equal(actual_team,expected_team,'perception.team')
                 if index != 94 and index % 4 == 0:
@@ -979,7 +979,7 @@ class Checker(object):
                     runtime._finish_visibility_frame()
             self.equal(results[1], results[0], 'humans.frame.%d' % frame)
             if frame == 0:
-                assert scenes[0]._spot_until[(1, 'bot', 13)] == 12.
+                assert scenes[0]._spot_until[(1, 'bot', 13)] == 14.
             if 10 <= frame < 30:
                 assert scenes[0]._human_vengeance_until[1] == 3.
                 assert 1 in results[0]['aggregate'][(1, 'bot', 13)][3]

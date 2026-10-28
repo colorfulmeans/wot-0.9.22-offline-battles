@@ -7,6 +7,7 @@ from unittest import mock
 import test_port_0922_bot_runtime as fixtures
 from lan_battle_server import SIMULATION_WORKER_AUTHORITY_ID as WORKER
 from gui.mods.offline_lan_0922 import radio
+from gui.mods.offline_lan_0922 import native_control_core as control
 from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
 
 
@@ -99,6 +100,28 @@ class ReceivedSpottingAssistTests(unittest.TestCase):
         message['round_id'] -= 1
         self.assertFalse(self.state.update_bot_observation(WORKER, message))
 
+    def test_bot_observer_and_bot_shooter_use_the_same_received_source_contract(self):
+        for bot_id in (12, 13):
+            self.state.bot_manifest.append(dict(id=bot_id, team=1, slot=bot_id - 12,
+                                                name='Ally', vehicle='ussr:R11_MS-1'))
+            self.state.bot_states[bot_id] = dict(id=bot_id, team=1, alive=True,
+                                                 health=1000, max_health=1000)
+        for receiver in (('human', 2), ('bot', 13)):
+            message = self.message(sources=(1,), direct=(1,))
+            contact = message['contacts'][0]
+            contact['visible_by_bot_ids'] = [12]
+            contact['radio_recipients'][0].update(kind=receiver[0], id=receiver[1])
+            contact['radio_recipients'][0]['sources'].append(
+                dict(kind='bot', id=12, time_left=10.0))
+            self.accept(message)
+            attacker = ('player' if receiver[0] == 'human' else 'bot', receiver[1])
+            self.assertEqual([('player', 1), ('bot', 12)],
+                             self.state._radio_assisters(attacker, ('bot', 11), 2))
+            contact.update(fresh=False, visible_by_bot_ids=[], visible_by_player_ids=[])
+            self.accept(message)
+            self.assertEqual([('player', 1), ('bot', 12)],
+                             self.state._radio_assisters(attacker, ('bot', 11), 2))
+
 
 class SourceLeaseTests(unittest.TestCase):
     def test_each_source_is_reported_without_team_union_or_relay_hops(self):
@@ -116,6 +139,17 @@ class SourceLeaseTests(unittest.TestCase):
 
 
 class TeamMemoryTests(unittest.TestCase):
+    def test_native_observation_bridge_does_not_shorten_the_worker_lease(self):
+        runtime = BotRuntime(1)
+        owner = control.NativeControl.__new__(control.NativeControl)
+        owner.runtime, owner.backend = runtime, object()
+        owner._sources = {(0, 1): dict(team=1)}
+        owner._old_radio = radio.RadioNetwork()
+        owner.observations = lambda: (((0, 1), (1, 12), 10.0, 14.0,
+                                        control._pose(dict(x=100.0, y=0.0, z=0.0))),)
+        owner._sync_events()
+        self.assertEqual(24.0, runtime._spot_until[(1, 'bot', 12)])
+
     def test_14_second_lease_survives_packing_until_exact_expiry(self):
         runtime = BotRuntime(1)
         key = (1, 'bot', 12)

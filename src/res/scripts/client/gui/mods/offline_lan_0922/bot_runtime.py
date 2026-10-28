@@ -14285,7 +14285,7 @@ class BotRuntime(object):
                     radio_keys.append(actor_key)
             radio_values = self._radio_network.summaries(
                 tuple((actor, key[1:]) for actor in radio_keys), now,
-                include_sources=True)
+                include_sources=True) if radio_keys else ()
             radio_values = dict(zip(radio_keys, radio_values))
             published_shooters = []
             pending_shooters = []

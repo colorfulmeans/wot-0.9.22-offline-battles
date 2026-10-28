@@ -740,7 +740,7 @@ class NativeControl(object):
             key = (source_team,) + _wire_key(target)
             runtime._visible_target_poses[key] = pose
             runtime._spot_until[key] = max(runtime._spot_until.get(key, 0.0),
-                                          sampled + min(12.0, max(0.0, duration)))
+                                          sampled + min(14.0, max(0.0, duration)))
             # Keep only the Python dictionary's insertion history for handoff.
             # Its target payloads are exported once when detaching this owner.
             self._old_radio.observations.setdefault(_wire_key(source), {})
