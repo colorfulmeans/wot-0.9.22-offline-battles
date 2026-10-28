@@ -347,6 +347,36 @@ jobs:
               throw "Launcher download must run after one ZIP extraction"
           }
           Write-Host "Downloaded launcher is runnable after one ZIP extraction"
+          @'
+          import io
+          import struct
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          executable = (root / 'wot-0.9.22-offline-battles.exe').read_bytes()
+          pe = struct.unpack_from('<I', executable, 0x3c)[0]
+          assert struct.unpack_from('<H', executable, pe + 4)[0] == 0x8664
+          with zipfile.ZipFile(root / '_internal/client/0.9.22.zip') as client:
+              mods = [n for n in client.namelist() if n.endswith('.wotmod')]
+              assert len(mods) == 1, mods
+              shipped = client.read(mods[0])
+          references = list(Path('dist').glob('*.wotmod'))
+          assert len(references) == 1, references
+          assert shipped == references[0].read_bytes(), 'Launcher contains a stale mod'
+          with zipfile.ZipFile(io.BytesIO(shipped)) as mod:
+              names = set(mod.namelist())
+              prefix = 'res/scripts/client/gui/mods/offline_lan_0922/'
+              for name in ('daily_window.pyc', 'native_input_diagnostics.pyc',
+                           'native_control_core.pyc', 'bot_fittings.pyc'):
+                  assert prefix + name in names, name
+              assert 'res/gui/flash/offlineWaitingRoom.swf' in names
+          print('Actual downloaded x64 launcher contains the exact verified current mod; native mission and diagnostic modules are present')
+          '@ | python - $download
+          if ($LASTEXITCODE -ne 0) {
+              throw "Actual launcher payload inspection failed"
+          }
           foreach ($port in @("0.9.22")) {
               $process = Start-Process -FilePath $launcher `
                   -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
