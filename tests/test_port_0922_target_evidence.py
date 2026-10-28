@@ -216,7 +216,8 @@ class LanePublicationTests(unittest.TestCase):
         self.radio_left = 5.
         self.runtime._radio_network = type('Radio', (), {
             'actors': {('bot', 11): (1,)},
-            'contact': lambda *args: (self.radio_left, False, None)})()
+            'contact': lambda *args: (self.radio_left, False, None),
+            'assist_sources': lambda *args: []})()
         self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.1, True)
 
     def pack(self, now=1.2, direct=False):
