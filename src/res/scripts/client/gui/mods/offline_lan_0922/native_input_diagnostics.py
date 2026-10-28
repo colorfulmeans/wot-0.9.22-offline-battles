@@ -316,10 +316,15 @@ def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32):
         if state is None or state[0] != round_id:
             state = (round_id, {})
             owner._battle_review_records = state
-        records = state[1]
-        token = (stage, key)
+        stages = state[1]
+        if stage not in stages:
+            if len(stages) >= 16:
+                return
+            stages[stage] = {}
+        records = stages[stage]
+        token = key
         previous = records.get(token)
-        if previous is None and len(records) >= 128:
+        if previous is None and len(records) >= 64:
             return
         count, last = previous if previous is not None else (0, None)
         if count >= limit or (last is not None and now-last < interval):

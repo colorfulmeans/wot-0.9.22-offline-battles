@@ -230,9 +230,15 @@ class BattleReviewDiagnosticsTests(unittest.TestCase):
             self.assertEqual(2, write.call_args[0][1]['round'])
             for key in range(150):
                 diag.battle_review_record(owner, 'test', key, 5.0, lambda: {})
-            self.assertLessEqual(len(owner._battle_review_records[1]), 128)
+            self.assertLessEqual(len(owner._battle_review_records[1]['test']), 64)
+            before = write.call_count
+            diag.battle_review_record(owner, 'independent_stage', 'batch', 6.0, lambda: {})
+            self.assertEqual(before+1, write.call_count)
             write.side_effect = RuntimeError('broken stdout')
             diag.battle_review_record(owner, 'failure', 1, 6.0, lambda: {})
+            for stage in range(30):
+                diag.battle_review_record(owner, str(stage), 1, 7.0, lambda: {})
+            self.assertLessEqual(len(owner._battle_review_records[1]), 16)
 
     def test_budget_rejection_does_not_inspect_payload(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diag

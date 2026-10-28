@@ -105,12 +105,24 @@ def _observe_battle_model_pose(compatibility, appearance, phase):
         vehicle_filter = getattr(vehicle, 'filter', None)
         filters['vehicle'] = dict(identity=id(vehicle_filter), type=type(vehicle_filter).__name__)
         damage = read(appearance, '_CompoundAppearance__currentDamageState')
+        controls = {}
+        try:
+            avatar = compatibility._runtime.bigworld.player()
+            rotator = getattr(avatar, 'gunRotator', None)
+            for name in ('turretYaw', 'gunPitch', '_turretYaw', '_gunPitch'):
+                value = getattr(rotator, name, None)
+                controls[name] = value if type(value) in (int, float) else None
+        except Exception as error:
+            controls['unavailable'] = type(error).__name__
+        packed_angles = getattr(vehicle, 'gunAngles', None)
+        if type(packed_angles) not in (int, float):
+            packed_angles = None
         payload = dict(phase=phase, vehicle=getattr(vehicle, 'id', None),
             appearance_identity=id(appearance), vehicle_identity=id(vehicle),
             model_identity=id(model), health=getattr(vehicle, 'health', None),
             damage_state=str(getattr(damage, 'modelState', None)),
             detached=bool(getattr(vehicle, 'isTurretDetached', False)),
-            gun_angles=getattr(vehicle, 'gunAngles', None),
+            gun_angles=packed_angles, player_rotator=controls,
             turret=matrix(getattr(appearance, 'turretMatrix', None)),
             gun=matrix(getattr(appearance, 'gunMatrix', None)),
             hull=matrix(getattr(model, 'matrix', None)), muzzle_world=muzzle,

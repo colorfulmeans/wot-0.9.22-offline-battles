@@ -14640,8 +14640,9 @@ class BattleState:
                 return dict(attacker=attacker, target=target, damage=damage,
                     direct_self_spot=self._spots_target(attacker, target),
                     suppression=("self_direct" if self._spots_target(attacker, target) else
-                                 "self_memory" if attacker in sources and
-                                 sources[attacker] > review_now else
+                                 "self_memory" if any(row['actor'] == attacker and
+                                     row['remaining'] > 0.0 and row['alive_connected'] and
+                                     row['same_team'] for row in candidates) else
                                  "friendly_target" if self._vehicle_team(*attacker) == target_team else
                                  "none"),
                     candidates=candidates, selected=assisters,
