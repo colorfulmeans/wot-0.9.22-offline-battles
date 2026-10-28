@@ -329,8 +329,15 @@ class _NativeRadio(object):
         self.owner = owner
         self.rows = ()
         self.actors = {}
+        # Metadata mirrors admitted native events; native code still owns sight.
+        self._assist_targets = {}
+        self._assist_groups = {}
+        for observer, targets in owner._old_radio.observations.items():
+            for target, row in targets.items():
+                self._assist_targets.setdefault(target, {})[observer] = row[0]
 
     def refresh(self):
+        self._assist_groups.clear()
         self.rows = self.owner._call('sim_control_radio_actors')
         self.actors = dict((_wire_key(row[0]),
             (row[1], tuple(row[2]), row[3]) + ((row[4],) if row[0][0] == 0 else ()))
@@ -351,6 +358,26 @@ class _NativeRadio(object):
         remaining, fresh, pose = self.owner._call(
             'sim_control_radio', 0, recipient, target, float(now))
         return remaining, bool(fresh), _pose_dict(pose) if pose is not None else None
+
+    def record_assist_source(self, observer, target, sampled, duration):
+        targets = self._assist_targets.setdefault(_wire_key(target), {})
+        observer = _wire_key(observer)
+        targets[observer] = max(targets.get(observer, 0.0), sampled + duration)
+
+    def assist_sources(self, recipient, target, now):
+        group = self._assist_groups.get(recipient)
+        if group is None:
+            group = set(owner for owner in self.actors
+                        if owner != recipient and self.connected(recipient, owner))
+            self._assist_groups[recipient] = group
+        result = []
+        sources = self._assist_targets.get(target, {})
+        for observer, deadline in tuple(sources.items()):
+            if observer not in self.actors or deadline <= now:
+                sources.pop(observer, None)
+            elif observer in group and deadline-now > 0.000001:
+                result.append((observer, deadline-now))
+        return sorted(result)
 
     def summaries(self, pairs, now):
         """Read ordered recipient flags without crossing remembered poses."""
@@ -725,6 +752,7 @@ class NativeControl(object):
         rows = _observation_rows(self.backend, self.observations())
         for source, target, sampled, duration, pose in rows:
             source, target = tuple(source), tuple(target)
+            self.radio.record_assist_source(source, target, sampled, duration)
             source_team = int(self._sources[source].get('team', 0))
             key = (source_team,) + _wire_key(target)
             runtime._visible_target_poses[key] = pose

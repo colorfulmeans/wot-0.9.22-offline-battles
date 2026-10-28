@@ -296,7 +296,7 @@ class PostBattleContractTests(unittest.TestCase):
         version, rows = data.dossiers(
             2, 6, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001)
-        self.assertEqual(2, version)
+        self.assertEqual(3, version)
         self.assertEqual(50001, rows[0][0])
         self.assertEqual(7, rows[0][1])
         self.assertEqual({
@@ -310,10 +310,13 @@ class PostBattleContractTests(unittest.TestCase):
             'piercings': 4, 'damageBlockedByArmor': 100,
             'damageAssistedTrack': 80, 'damageAssistedRadio': 40,
             'damageAssistedStun': 0, 'originalXP': 0,
+            'stunNum': 0, 'battlesOnStunningVehicles': 0,
+            'piercingsReceived': 0, 'noDamageDirectHitsReceived': 0,
+            'explosionHitsReceived': 0, 'explosionHits': 0,
             'directHitsReceived': 0, 'potentialDamageReceived': 0},
             rows[0][2]['a15x15_2'])
-        self.assertEqual((2, []), data.dossiers(
-            2, 7, progress, dossier_factory=factory,
+        self.assertEqual((3, []), data.dossiers(
+            3, 7, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001))
 
     def test_a_receipt_carries_the_health_and_the_rounds_it_fired(self):

@@ -12,7 +12,7 @@ from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
 from gui.mods.offline_lan_0922.waiting_room_ui import (
     WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR,
-    OUTLINE_TEXTURE, NativeSurface)
+    OUTLINE_TEXTURE, NativeSurface, ROOM_TEXT_COLOUR, ROOM_HOVER_COLOUR)
 
 _patches = []
 _panels = []
@@ -825,12 +825,13 @@ class _DailySurface(NativeSurface):
 class ServicePanel(WaitingRoomUI):
     # Waiting-room restyling does not repaint the independent daily panel.
     panel_size = (680, 340)
-    panel_font = 'system/fonts/offline_lan_cjk.font'
-    control_text_colour = CONTROL_TEXT_COLOUR
-    control_hover_colour = (14, 82, 140, 255)
+    panel_font = 'offline_lan_cjk.font'
+    control_text_colour = ROOM_TEXT_COLOUR
+    control_hover_colour = ROOM_HOVER_COLOUR
 
     def _control_texture(self, role):
-        return 'system/maps/col_white.dds'
+        # #1513 ignores vertex tint on these GUI controls; use a baked button.
+        return 'gui/maps/offline_lan/waiting_button_normal.dds'
 
     """Daily missions on an empty native page, with no stock tab below it."""
     def __init__(self, page='daily', on_close=None, surface=None):
@@ -856,7 +857,7 @@ class ServicePanel(WaitingRoomUI):
                                ('close', tr('CLOSE'), 0.55)):
             self._make_control(role, (x, -0.85, CONTROL_Z), 0.75, 0.16)
             self._make_label(role, label, (x, -0.85, 0), 0.75, 0.14,
-                             anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
+                             anchor='CENTER', colour=self.control_text_colour)
             self._controls[role].script = _ServiceControl(self, role)
         return True
 

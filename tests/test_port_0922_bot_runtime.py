@@ -1458,6 +1458,9 @@ class ServerBotObservationRelayTests(unittest.TestCase):
     def test_worker_human_spot_is_idempotent_and_earns_assist(self):
         server, unused_authority_socket, unused_guest_socket = self._server()
         message = self._human_message(server.round_id)
+        message['contacts'][0]['radio_recipients'] = [
+            {'kind': 'human', 'id': 2, 'time_left': 10.0,
+             'spotters': [{'kind': 'human', 'id': 1, 'time_left': 10.0}]}]
 
         self.assertIsInstance(server.update_bot_observation(
             SIMULATION_WORKER_AUTHORITY_ID, message), dict)

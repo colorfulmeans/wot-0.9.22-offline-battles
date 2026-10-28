@@ -102,6 +102,14 @@ class RadioNetwork(object):
             self._groups[recipient] = group
         return group
 
+    def assist_sources(self, recipient, target, now):
+        """Return individual live observer leases delivered to this recipient."""
+        group = self._recipient_group(recipient)
+        return [(observer, row[0] - now) for observer, row in sorted(
+            self._targets.get(target, {}).items())
+            if observer != recipient and observer in group and
+               observer in self.actors and row[0] - now > 0.000001]
+
     def contact(self, recipient, target, now):
         group = self._recipient_group(recipient)
         receipts = self.receipts.setdefault(target, {})

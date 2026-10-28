@@ -395,6 +395,10 @@ def _receipt(value):
         'watched_battle_to_end': value.get(
             'watched_battle_to_end', not value.get('premature_leave', False)),
         'stats': stats,
+        'defence_stat_recorded': bool(value.get('defence_stat_recorded',
+                                              'dropped_capture_points' in raw_stats)),
+        'stun_stat_recorded': bool(value.get('stun_stat_recorded',
+                                          'stun_num' in raw_stats)),
         'rewards': rewards,
         'friendly_fire': friendly_fire.facts(value.get('friendly_fire')),
         'friendly_fire_costs': friendly_fire.costs(value.get('friendly_fire_costs')),
@@ -424,6 +428,8 @@ def _receipt(value):
         'public_results': public_results,
         'interactions': interactions,
     }
+    if isinstance(value.get('stun_capable'), bool):
+        result['stun_capable'] = value['stun_capable']
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
     if battle_max_health is not None:
@@ -431,6 +437,41 @@ def _receipt(value):
     if outfits is not None:
         result['vehicle_outfits'] = copy.deepcopy(outfits)
     return result
+
+
+def _stun_capable(receipt):
+    """Read the mounted gun, never infer stun capability from class or calibre."""
+    if isinstance(receipt.get("stun_capable"), bool):
+        return receipt["stun_capable"]
+    if receipt["stats"].get("stun_num", 0) > 0:
+        return True
+    mounted = receipt.get("vehicle_compact_descr")
+    if not mounted:
+        return None
+    try:
+        from items import vehicles
+        descriptor = vehicles.VehicleDescr(compactDescr=base64.b64decode(
+            mounted.encode("ascii")))
+        for shot in descriptor.gun.shots:
+            shell = shot.get("shell") if isinstance(shot, dict) else shot.shell
+            component = (shell.get("stun") if isinstance(shell, dict) else
+                         getattr(shell, "stun", None))
+            if component is not None:
+                return True
+        return False
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _fold_stun_statistics(row, receipt):
+    capable = _stun_capable(receipt)
+    if capable is None or (capable and not receipt.get("stun_stat_recorded", False)):
+        return
+    row["stunStatsCoverage"] = int(row.get("stunStatsCoverage", 0)) + 1
+    if capable:
+        row["battlesOnStunningVehicles"] = int(row.get(
+            "battlesOnStunningVehicles", 0)) + 1
+        row["stunNum"] = int(row.get("stunNum", 0)) + receipt["stats"]["stun_num"]
 
 
 def _sanitise_badges(row):
@@ -1210,6 +1251,9 @@ class PostBattleStore(object):
         receipt = _receipt(value)
         if receipt['account_key'] != self._account_key:
             raise ValueError('battle receipt belongs to another account')
+        capable = _stun_capable(receipt)
+        if capable is not None:
+            receipt['stun_capable'] = capable
         receipt_id = receipt['receipt_id']
         if any(row.get('receipt_id') == receipt_id for row in self._history):
             return False
@@ -1387,6 +1431,8 @@ class PostBattleStore(object):
             'xp': 0, 'battles': 0, 'wins': 0, 'losses': 0, 'draws': 0,
             'damage': 0, 'kills': 0, 'achievements': {},
         })
+        for field in ('stunStatsCoverage', 'stunNum', 'battlesOnStunningVehicles'):
+            row.setdefault(field, 0)
         # Existing complete win/loss totals already determine every draw.
         # Capture that value before adding this receipt's outcome.
         row.setdefault('draws', max(0, int(row.get('battles', 0)) -
@@ -1449,12 +1495,19 @@ class PostBattleStore(object):
                 ('damageAssistedRadio', 'assist_radio'),
                 ('damageAssistedStun', 'assist_stun'),
                 ('capturePoints', 'capture_points'),
-                ('droppedCapturePoints', 'dropped_capture_points'),
                 ('hitsReceived', 'hits_received'),
+                ('piercingsReceived', 'piercings_received'),
+                ('noDamageDirectHitsReceived', 'no_damage_direct_hits_received'),
+                ('explosionHitsReceived', 'explosion_hits_received'),
+                ('explosionHits', 'explosion_hits'),
                 ('potentialDamageReceived', 'potential_damage_received'),
                 ('critsReceived', 'crits_received')):
             row[target_name] = int(row.get(target_name, 0)) + int(
                 stats[source_name])
+        # Retail caps a single battle's contribution to lifetime defence at 100.
+        row['droppedCapturePoints'] = int(row.get('droppedCapturePoints', 0)) + min(
+            100, stats['dropped_capture_points'])
+        _fold_stun_statistics(row, receipt)
         survived = int(receipt['death_reason'] < 0 and
                        not receipt['premature_leave'] and
                        receipt['watched_battle_to_end'])
@@ -1698,6 +1751,28 @@ class PostBattleStore(object):
                         receipt['vehicle'])
                     if isinstance(row, dict):
                         self._update_record_extrema(row, receipt)
+            # Only a complete retained receipt set can repair lifetime totals.
+            # Identity-only archives prove deduplication, not missing statistics.
+            retained = {}
+            for receipt in list(pending.values()) + history:
+                if 'account_key' in receipt and receipt.get('battle_mode') != 'training':
+                    retained.setdefault(receipt['vehicle'], {})[receipt['receipt_id']] = receipt
+            for name, row in self._progress.get('vehicles', {}).items():
+                if not isinstance(row, dict):
+                    continue
+                receipts = list(retained.get(name, {}).values())
+                complete = len(receipts) == int(row.get('battles', 0))
+                if complete or 'stunStatsCoverage' not in row:
+                    row['stunStatsCoverage'] = 0
+                    row['stunNum'] = 0
+                    row['battlesOnStunningVehicles'] = 0
+                    for receipt in receipts:
+                        _fold_stun_statistics(row, receipt)
+                if complete and all(receipt.get('defence_stat_recorded', False)
+                                    for receipt in receipts):
+                    row['droppedCapturePoints'] = sum(min(
+                        100, receipt['stats']['dropped_capture_points'])
+                        for receipt in receipts)
             self._trim_history_bodies()
         except (IOError, OSError, TypeError, ValueError) as error:
             # Keep a corrupt optional cache from preventing an offline login.

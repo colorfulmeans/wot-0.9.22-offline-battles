@@ -11700,6 +11700,18 @@ class BotRuntime(object):
                                 'suspension_pitch_velocity',
                                 'suspension_roll_velocity')))
 
+    @staticmethod
+    def _set_wreck_hull_yaw(state, yaw):
+        """Rotate the rigid wreck without turning its turret independently."""
+        relative = state.get('turret_yaw')
+        if relative is None:
+            relative = _number(state.get('aim_yaw')) - _number(state.get('yaw'))
+        relative = math.atan2(math.sin(relative), math.cos(relative))
+        state['yaw'] = math.atan2(math.sin(yaw), math.cos(yaw))
+        state['turret_yaw'] = relative
+        world = state['yaw'] + relative
+        state['aim_yaw'] = math.atan2(math.sin(world), math.cos(world))
+
     def _advance_wreck_yaw(self, state, result, step):
         """Integrate the passive yaw impulse through vehicle/world sweeps."""
         omega = state.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
@@ -11726,7 +11738,7 @@ class BotRuntime(object):
                     step, getattr(self, '_contact_now', 0.0), 0.0)
             if not clear:
                 candidate, omega = old_yaw, 0.0
-        state['yaw'] = math.atan2(math.sin(candidate), math.cos(candidate))
+        self._set_wreck_hull_yaw(state, candidate)
         state['push_yaw'] = omega
 
     def _try_wreck_swept_pose(self, state, movement, omega, step):
@@ -11768,7 +11780,7 @@ class BotRuntime(object):
                 translation=(move_x, move_z)):
             return False
         state['x'], state['z'] = end[0], end[2]
-        state['yaw'] = math.atan2(math.sin(end_yaw), math.cos(end_yaw))
+        self._set_wreck_hull_yaw(state, end_yaw)
         if fraction < 1.0:
             state['push_yaw'] = 0.0
         return True
@@ -11800,7 +11812,8 @@ class BotRuntime(object):
         # live drive tick to finish its flight or landing on its behalf.
         if self._update_vertical_motion(state, step, before, old_yaw):
             state['x'], state['y'], state['z'] = before
-            state['yaw'], state['push_yaw'] = old_yaw, 0.0
+            self._set_wreck_hull_yaw(state, old_yaw)
+            state['push_yaw'] = 0.0
         for angle in ('pitch', 'terrain_pitch', 'roll'):
             value = state.get(angle, 0.0)
             state[angle] = math.atan2(math.sin(value), math.cos(value))
@@ -14340,8 +14353,14 @@ class BotRuntime(object):
                 'radio_recipients': [
                     {'kind': actor[0], 'id': actor[1],
                      'time_left': round(min(time_left,
-                                           radio_values[actor][0]), 6)}
-                    for actor in recipients if radio_values[actor][0] > 0.0],
+                                           radio_values[actor][0]), 6),
+                     'spotters': [
+                         {'kind': owner[0], 'id': owner[1],
+                          'time_left': round(min(time_left, radio_values[actor][0], remaining), 6)}
+                         for owner, remaining in self._radio_network.assist_sources(
+                             actor, key[1:], now)]}
+                    for actor in recipients
+                    if min(time_left, radio_values[actor][0]) > 0.000001],
                 # These identities are produced only by the hidden worker's
                 # native LOS probes. Visible clients cannot submit this
                 # authority message.

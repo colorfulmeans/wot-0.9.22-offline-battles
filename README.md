@@ -94,6 +94,13 @@ The 0.9.22 client gets a working offline garage:
   range, concealment, reload, aim time, dispersion, traverse, engine power,
   terrain resistance and repair speed.
 
+Career Personal Rating uses the published 0.8.11 random-battle formula, including
+spotting and tracking assistance and original battle XP. This is an explicit
+offline scoring choice, not a claim of exact 0.9.22 server parity. Stun averages
+are unavailable when retained history cannot prove their complete denominator;
+old missing statistics are not inferred from lifetime totals. Defence contributes
+at most 100 points per battle to career statistics, without changing raw results.
+
 Automatic teams share a tier/class template but draw vehicle models
 independently from the usable catalogue. The existing model blacklist and
 host exclusions still apply. A host's explicit lineup overrides stay explicit.

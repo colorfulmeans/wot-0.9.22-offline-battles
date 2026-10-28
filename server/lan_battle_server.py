@@ -2542,6 +2542,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.spotting_assist_leases = None
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -3810,6 +3811,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.spotting_assist_leases = None
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -5536,7 +5538,7 @@ class BattleState:
 
     @staticmethod
     def _validated_radio_rows(raw, actors, team, max_duration=None,
-                              exclude=None):
+                              exclude=None, allow_spotters=True):
         """Validate identity lists before committing any observation state.
 
         The worker owns native radio/crew ranges. This boundary checks the
@@ -5564,6 +5566,13 @@ class BattleState:
                 if duration <= 0.0:
                     raise ValueError("radio recipient lease must be positive")
                 clean["time_left"] = duration
+            if 'spotters' in row:
+                if not allow_spotters or max_duration is None:
+                    raise ValueError('invalid nested spotting sources')
+                clean['spotters'] = BattleState._validated_radio_rows(
+                    row['spotters'], actors, team,
+                    max_duration=clean['time_left'], exclude=key,
+                    allow_spotters=False)
             if actor[1]:
                 result.append(clean)
         return result
@@ -5850,6 +5859,22 @@ class BattleState:
                 for contact in contacts)
             accepted_affordances = self.bot_planner.report_affordances(
                 message.get("affordances"), known_bots, known_targets, now)
+            # A complete worker batch replaces per-recipient ownership atomically.
+            # Retained observer leases, rather than current direct spots, own assists.
+            assist_leases = {}
+            for contact in contacts:
+                target = ('player' if contact['target_kind'] == 'human' else 'bot',
+                          int(contact['target_id']))
+                for recipient in contact.get('radio_recipients', ()):
+                    if 'spotters' not in recipient:
+                        continue
+                    actor = ('player' if recipient['kind'] == 'human' else 'bot',
+                             int(recipient['id']))
+                    assist_leases[(actor, target)] = [
+                        (('player' if source['kind'] == 'human' else 'bot',
+                          int(source['id'])), now + source['time_left'])
+                        for source in recipient['spotters']]
+            self.spotting_assist_leases = assist_leases
             self._replace_bot_spotted(direct_bot_spots)
             self._replace_player_spotted(direct_player_spots)
             self.player_mission_view_ranges = mission_ranges or {}
@@ -14391,7 +14416,7 @@ class BattleState:
                     target in self.bot_spotted.get(actor[1], ()))
 
     def _radio_assisters(self, attacker, target, target_team):
-        """Return the live observers one spotting assist is divided between.
+        """Return live owners of the observer leases delivered to this shooter.
 
         Wargaming pays a spotting assist for damage done to a target the
         observer is spotting "by team members who are not spotting them
@@ -14402,6 +14427,22 @@ class BattleState:
         """
         if self._spots_target(attacker, target):
             return []
+        leases = getattr(self, 'spotting_assist_leases', None)
+        if leases is not None:
+            now = time.monotonic()
+            result = []
+            for observer, deadline in leases.get((attacker, target), ()):
+                if observer == attacker or deadline <= now:
+                    continue
+                if observer[0] == 'player':
+                    actor = self.players.get(observer[1])
+                    alive = bool(actor and actor.connected and actor.alive)
+                else:
+                    actor = self.bot_states.get(observer[1])
+                    alive = bool(actor and actor.get('alive'))
+                if alive and self._vehicle_team(*observer) == self._vehicle_team(*attacker):
+                    result.append(observer)
+            return sorted(set(result))
         result = []
         for reporter_id in sorted(self.player_spotted):
             reporter = self.players.get(reporter_id)
