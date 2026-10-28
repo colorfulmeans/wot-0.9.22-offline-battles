@@ -31,6 +31,8 @@ def tr(source):
 
 
 _ZH = {
+    '%s: %d/%d': u'%s: %d/%d',
+    'Reward: %s reserve x1%s': u'\u5956\u52b1: %s\u50a8\u5907\u00d71%s',
     'Back': u'返回',
     'Select map': u'选择地图',
     'Confirm': u'确定',

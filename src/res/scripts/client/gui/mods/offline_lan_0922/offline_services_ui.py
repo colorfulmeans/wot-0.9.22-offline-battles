@@ -12,7 +12,8 @@ from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
 from gui.mods.offline_lan_0922.waiting_room_ui import (
     WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR,
-    OUTLINE_TEXTURE, NativeSurface, ROOM_TEXT_COLOUR, ROOM_HOVER_COLOUR)
+    OUTLINE_TEXTURE, NativeSurface, ROOM_TEXT_COLOUR, ROOM_HOVER_COLOUR,
+    PANEL_TEXTURE, ROOM_FONT)
 
 _patches = []
 _panels = []
@@ -819,19 +820,18 @@ class _ServiceControl(_ControlScript):
 
 class _DailySurface(NativeSurface):
     def window(self):
-        return self._gui.Window(OUTLINE_TEXTURE)
+        return self._gui.Window(PANEL_TEXTURE)
 
 
 class ServicePanel(WaitingRoomUI):
     # Waiting-room restyling does not repaint the independent daily panel.
-    panel_size = (680, 340)
-    panel_font = 'offline_lan_cjk.font'
-    control_text_colour = ROOM_TEXT_COLOUR
+    panel_size = (640, 320)
+    panel_font = ROOM_FONT
+    control_text_colour = (242, 241, 225, 255)
     control_hover_colour = ROOM_HOVER_COLOUR
 
     def _control_texture(self, role):
-        # #1513 ignores vertex tint on these GUI controls; use a baked button.
-        return 'gui/maps/offline_lan/waiting_button_normal.dds'
+        return WaitingRoomUI._control_texture(self, role)
 
     """Daily missions on an empty native page, with no stock tab below it."""
     def __init__(self, page='daily', on_close=None, surface=None):
@@ -847,17 +847,25 @@ class ServicePanel(WaitingRoomUI):
             self._panel.delChild(component)
         self._controls, self._labels = {}, {}
         self._panel.script = _ServiceControl(self, None)
-        self._make_label('title', tr('DAILY MISSIONS'), (-0.89, 0.82, 0), 1.8, 0.12)
+        def position(x, y, z=0.0):
+            return (2.0*x/640.0-1.0, 1.0-2.0*y/320.0, z)
+        def label(role, text, x, y, width, anchor='LEFT', colour=ROOM_TEXT_COLOUR):
+            return self._make_label(role, text, position(x, y),
+                2.0*width/640.0, 32.0/320.0, anchor=anchor, colour=colour)
+        label('title', tr('DAILY MISSIONS'), 12, 12, 610,
+              colour=(219, 219, 204, 255))
         for index in range(3):
-            self._make_label('row%d' % index, '',
-                             (-0.89, 0.48 - index * 0.3, 0), 1.8, 0.2)
-        self._make_label('note', tr('Standard battles only. Rewards automatic. Resets at 00:00 UTC.'),
-                         (-0.89, -0.55, 0), 1.8, 0.13)
-        for role, label, x in (('reserves', tr('PERSONAL RESERVES'), -0.45),
-                               ('close', tr('CLOSE'), 0.55)):
-            self._make_control(role, (x, -0.85, CONTROL_Z), 0.75, 0.16)
-            self._make_label(role, label, (x, -0.85, 0), 0.75, 0.14,
-                             anchor='CENTER', colour=self.control_text_colour)
+            label('row%d' % index, '', 22, 62 + index*64, 596)
+            label('reward%d' % index, '', 22, 84 + index*64, 596)
+        label('note', tr('Standard battles only. Rewards automatic. Resets at 00:00 UTC.'),
+              22, 260, 596)
+        for role, caption, x, width in (
+                ('reserves', tr('PERSONAL RESERVES'), 422, 180),
+                ('close', tr('CLOSE'), 568, 100)):
+            self._make_control(role, position(x, 297, CONTROL_Z),
+                               2.0*width/640.0, 44.0/320.0)
+            label(role, caption, x, 297, width-8,
+                  anchor='CENTER', colour=self.control_text_colour)
             self._controls[role].script = _ServiceControl(self, role)
         return True
 
@@ -876,8 +884,9 @@ class ServicePanel(WaitingRoomUI):
         daily = policy.daily_state(snapshot())
         for index, key in enumerate(daily['missions']):
             row = policy.MISSION_BY_ID[key]
-            self._set_text('row%d' % index, tr('%s: %d/%d | Reward: %s reserve x1%s') % (
-                mission_label(row), daily[key], row[3],
+            self._set_text('row%d' % index, tr('%s: %d/%d') % (
+                mission_label(row), daily[key], row[3]))
+            self._set_text('reward%d' % index, tr('Reward: %s reserve x1%s') % (
                 tr(policy.RESERVE_BY_ID[row[4]][1]),
                 tr(' (RECEIVED)') if key in daily['claimed'] else ''))
         for component in list(self._controls.values()) + list(self._labels.values()):

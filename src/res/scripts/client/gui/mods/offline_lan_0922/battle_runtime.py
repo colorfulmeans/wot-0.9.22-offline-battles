@@ -30967,6 +30967,8 @@ class BattleRuntime(object):
         entity = self._server_entity(engine_id)
         if entity is None:
             return
+        if dead and not previous_dead:
+            native_input_diagnostics.turret_pose('before_death', entity, self._avatar)
         if dead and not previous_dead and not record.get('local'):
             # This is the last stable point before native death callbacks can
             # replace the compound.  Snapshot the existing team-knowledge
@@ -31079,6 +31081,8 @@ class BattleRuntime(object):
             crew_notifier = getattr(entity, 'set_isCrewActive', None)
             if callable(crew_notifier):
                 crew_notifier(previous_crew_active)
+        if dead and not previous_dead:
+            native_input_diagnostics.turret_pose('after_health_callbacks', entity, self._avatar)
         if (record.get('presentation') and
                 not suppress_combat_presentation):
             # Exact #1513's ``set_isCrewActive`` republishes remote health

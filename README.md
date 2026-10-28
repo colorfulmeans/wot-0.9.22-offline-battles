@@ -15,6 +15,16 @@ launcher and all eighteen guide files as separate downloads.
 
 ## Play
 
+The review build replaces an obsolete `default` save once with a fresh fully
+unlocked save, without keeping a backup. Later edits to that default and custom
+saves are preserved. New fully unlocked saves and default recovery use the new
+five-class equipment priorities. Player and Bot installers remain separate;
+regular Bots carry one normal device, veterans three normal devices, and elite
+Bots prefer improved devices with normal fallback in each equipment family.
+Only fully unlocked players and elite Bots receive equipment directives, chosen
+in installed-device order. Turret death/model diagnostics require the diagnostic
+launch entrance and do not change turret behavior.
+
 1. Download the Windows x64 package from the latest published release,
    unpack it, and start `wot-0.9.22-offline-battles.exe`.
 2. Select your World of Tanks folder. The launcher recognizes the client,

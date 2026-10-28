@@ -415,7 +415,7 @@ def local_state(runtime):
         result[name] = getattr(runtime, name, 0.0)
     entity = runtime._server_entity(runtime._server.vehicle_id) if runtime._server is not None else None
     result['health'] = int(getattr(entity, 'health', 0))
-    result['gun_angles'] = int(getattr(entity, 'gunAngles', 0))
+    result['gun_angles'] = int(getattr(entity, 'gunAnglesPacked', 0))
     rotator = getattr(runtime._avatar, 'gunRotator', None)
     if rotator is not None:
         result['turret_yaw'] = float(getattr(rotator, 'turretYaw', 0.0))

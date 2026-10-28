@@ -13,8 +13,15 @@ from types import SimpleNamespace
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from packed_xml import PackedElement, read_packed_xml
-from verify_default_loadouts import plain
+from packed_xml import PackedElement, PackedValue, read_packed_xml
+
+
+def plain(value):
+    if isinstance(value, PackedValue):
+        return plain(value.value)
+    if isinstance(value, PackedElement):
+        return {key.decode(): plain(child) for key, child in value.children}
+    return value.decode('utf8', errors='replace') if isinstance(value, bytes) else value
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'src/res/scripts/client'))

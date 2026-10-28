@@ -67,6 +67,7 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Replace the old default with fresh fully unlocked defaults? No backup is kept.': '\u5f7b\u5e95\u5220\u9664\u65e7default\u5e76\u6062\u590d\u4e3a\u65b0\u7248\u5168\u5f00default\uff1f\u4e0d\u4fdd\u7559\u5907\u4efd\u3002',
     _MAINTENANCE_HELP[0]: "修复模组安装：重新安装此启动器携带的模组，保留存档和自定义方案。",
     _MAINTENANCE_HELP[1]: "重置全部离线客户端设置：重置所有离线账号的画面、声音、按键等客户端设置，保留存档和方案。",
     _MAINTENANCE_HELP[2]: "清空全部离线存档：删除所有离线存档，重新建立默认全解锁存档，保留自定义方案和客户端设置。",
@@ -2109,8 +2110,10 @@ class LauncherWindow(object):
         record=self._selected_save_slot_record()
         if record is None:return False
         from tkinter import messagebox
-        if not messagebox.askyesno(self._t('Initialize save?'),
-                self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')),
+        prompt = (self._t('Replace the old default with fresh fully unlocked defaults? No backup is kept.')
+                  if record['id'] == save_slots.DEFAULT_SLOT_ID else
+                  self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')))
+        if not messagebox.askyesno(self._t('Initialize save?'), prompt,
                 icon='warning',default='no',parent=self.root):
             return False
         try:
@@ -2119,7 +2122,10 @@ class LauncherWindow(object):
             self._log(self._t('The save could not be initialized: %s') % error)
             return False
         self._refresh_save_slots()
-        self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
+        if record['id'] == save_slots.DEFAULT_SLOT_ID:
+            self._log('Rebuilt fresh fully unlocked default without a backup.')
+        else:
+            self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):

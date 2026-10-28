@@ -74,6 +74,18 @@ def _observe_model_refresh_callback(compatibility, appearance, model_state):
 
 def _run_model_refresh_callback(compatibility, appearance, model_state, resources):
     row = _observe_model_refresh_callback(compatibility, appearance, model_state)
+    def pose(stage):
+        try:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import turret_pose, detailed_enabled
+            if not detailed_enabled():
+                return
+            vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
+            if vehicle is not None and (getattr(vehicle, 'health', 1) <= 0 or
+                                       not getattr(vehicle, 'isCrewActive', True)):
+                turret_pose(stage, vehicle, compatibility._runtime.bigworld.player(), appearance)
+        except Exception:
+            pass
+    pose('before_model_refresh')
     try:
         result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
     except AssertionError:
@@ -83,6 +95,7 @@ def _run_model_refresh_callback(compatibility, appearance, model_state, resource
         _report_model_refresh_failure(compatibility, appearance, model_state, resources)
         raise
     else:
+        pose('after_model_refresh')
         if row is not None:row['result'] = 'returned'
         if row is not None:
             _observe_model_lifecycle(compatibility, appearance, 'callback_returned',

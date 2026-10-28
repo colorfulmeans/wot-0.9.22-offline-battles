@@ -182,23 +182,27 @@ def initialize_elite_devices(vehicles, descriptor):
     from gui.mods.offline_lan_0922.vehicle_configuration import _installation_accepted
     cache = vehicles.g_cache
     ids = cache.optionalDeviceIDs()
-    priority = ('deluxAimingStabilizer','deluxRammer','deluxEnhancedAimDrives',
-                'deluxImprovedVentilation','deluxCoatedOptics','deluxToolbox')
+    from gui.mods.offline_lan_0922 import equipment_policy
+    tag = equipment_policy.class_tag(descriptor.type.tags)
     installed = []
-    for name in priority:
-        if name not in ids:continue
-        device = cache.optionalDevices()[ids[name]]
-        slot = len(installed)
-        if not _installation_accepted(descriptor.mayInstallOptionalDevice(device.compactDescr,slot)):continue
-        descriptor.installOptionalDevice(device.compactDescr,slot)
-        installed.append(name)
+    for names in equipment_policy.candidates(tag, improved=True):
+        for name in names:
+            if name not in ids:
+                continue
+            device = cache.optionalDevices()[ids[name]]
+            slot = len(installed)
+            if not _installation_accepted(descriptor.mayInstallOptionalDevice(device.compactDescr,slot)):
+                continue
+            descriptor.installOptionalDevice(device.compactDescr,slot)
+            installed.append(name)
+            break
         if len(installed)==3:break
     if len(installed)!=3:
         raise ValueError('default garage cannot install three improved devices: %s' % descriptor.type.name)
-    boosters = dict(deluxAimingStabilizer='aimingStabilizerBattleBooster',
-                    deluxRammer='rammerBattleBooster',deluxEnhancedAimDrives='enhancedAimDrivesBattleBooster')
-    name = boosters[installed[0]]
-    return cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+    for name in equipment_policy.directive_candidates(installed):
+        if name in cache.equipmentIDs():
+            return cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+    return 0
 
 
 def build_record(vehicles, tankmen, item_type_indices, type_id,
