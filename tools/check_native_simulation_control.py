@@ -951,8 +951,8 @@ class Checker(object):
                     pairs += (pairs[-1],pairs[0],(('bot',99),('human',98)))
                     expected = tuple(runtime._radio_network.contact(a,b,now)[:2]
                                      for a,b in pairs)
-                    expected_sources = tuple(row + (runtime._radio_network.sources(a,b,now),)
-                                             for row,(a,b) in zip(expected,pairs)) if side == 0 else None
+                    expected_sources = tuple(row + (scenes[0]._radio_network.sources(a,b,now),)
+                                             for row,(a,b) in zip(expected,pairs))
                     def pose_unread(unused):
                         raise AssertionError('radio summary crossed an unread pose')
                     project_pose = self.facade._pose_dict
@@ -964,9 +964,7 @@ class Checker(object):
                     finally:
                         self.facade._pose_dict = project_pose
                     self.equal(actual,expected,'humans.radio_summary.%d'%frame)
-                    if side == 0:
-                        reference_sources = expected_sources
-                    self.equal(actual_sources,reference_sources,'humans.radio_sources.%d'%frame)
+                    self.equal(actual_sources,expected_sources,'humans.radio_sources.%d'%frame)
                     self.radio_summaries += len(pairs)
                 links = dict((actor, tuple(other for other in sorted(actors)
                     if runtime._radio_network.connected(actor, other))) for actor in actors)

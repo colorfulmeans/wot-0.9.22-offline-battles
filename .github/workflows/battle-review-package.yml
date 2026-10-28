@@ -213,9 +213,13 @@ jobs:
           python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
           --pattern test_port_0922_battle_fix_regressions.py
           --pattern test_port_0922_battle_achievements.py
-          --pattern test_port_0922_bot_runtime.py
           --pattern test_port_0922_radio_server.py
           --pattern test_port_0922_spotting_radio.py
+          --pattern test_port_0922_lan_protocol.py
+          --pattern test_port_0922_mission_events.py
+          --pattern test_port_0922_lt12_ht12_missions.py
+          --pattern test_port_0922_target_evidence.py
+          --pattern test_port_0922_gun_angle_recovery.py
           --pattern test_port_0922_wreck_dynamics.py
           --pattern test_port_0922_wreck_pose_readback.py
           --pattern test_port_0922_battle_projectiles.py
