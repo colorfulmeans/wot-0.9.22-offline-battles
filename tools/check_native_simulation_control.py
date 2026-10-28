@@ -953,8 +953,10 @@ class Checker(object):
                                      for a,b in pairs)
                     # Removed target actors have no native contact. The reference
                     # retains unread historical rows until their lease expires.
+                    known_targets = set(('bot', actor) for actor in runtime.states)
+                    known_targets.update(('human', player['id']) for player in players)
                     expected_sources = tuple(row + (
-                        scenes[0]._radio_network.sources(a,b,now) if b in actors else (),)
+                        scenes[0]._radio_network.sources(a,b,now) if b in known_targets else (),)
                         for row,(a,b) in zip(expected,pairs))
                     def pose_unread(unused):
                         raise AssertionError('radio summary crossed an unread pose')
