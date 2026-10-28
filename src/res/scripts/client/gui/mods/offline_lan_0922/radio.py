@@ -38,6 +38,13 @@ class RadioNetwork(object):
             for target, row in targets.items():
                 self._targets.setdefault(target, {})[observer] = row
 
+    def forget_target(self, target):
+        """Retire a removed entity's leases before its identity can reappear."""
+        for targets in self.observations.values():
+            targets.pop(target, None)
+        self._targets.pop(target, None)
+        self.receipts.pop(target, None)
+
     def connected(self, first, second):
         if first == second:
             return True

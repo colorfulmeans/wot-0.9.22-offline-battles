@@ -124,6 +124,20 @@ class ReceivedSpottingAssistTests(unittest.TestCase):
 
 
 class SourceLeaseTests(unittest.TestCase):
+    def test_removed_target_cannot_recover_old_sources_when_it_rejoins(self):
+        runtime = BotRuntime(1)
+        net = runtime._radio_network
+        source, target = ('human', 1), ('human', 2)
+        actors = {source: (1, (0, 0, 0), 200), target: (2, (100, 0, 0), 200)}
+        net.configure(actors, 1.0)
+        runtime._track_human_observer_lifecycle([dict(id=1), dict(id=2)], 1.0)
+        net.observe(source, target, 1.0, 10.0, {'x': 100})
+        self.assertEqual(((source, 10.0),), net.sources(source, target, 1.0))
+        runtime._track_human_observer_lifecycle([dict(id=1)], 2.0)
+        net.configure(actors, 3.0)
+        self.assertEqual((), net.sources(source, target, 3.0))
+
+
     def test_each_source_is_reported_without_team_union_or_relay_hops(self):
         net = radio.RadioNetwork()
         a, b, c = ('human', 1), ('bot', 2), ('bot', 3)

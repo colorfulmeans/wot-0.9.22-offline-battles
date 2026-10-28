@@ -6150,6 +6150,7 @@ class BotRuntime(object):
         for player_id in tuple(self._human_observer_alive):
             if player_id in present:
                 continue
+            self._radio_network.forget_target(('human', player_id))
             self._human_observer_alive.pop(player_id, None)
             self._human_last_alive_critical.pop(player_id, None)
             self._human_direct_targets.pop(player_id, None)
