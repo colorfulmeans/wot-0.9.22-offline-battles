@@ -1530,8 +1530,8 @@ def repair_0_9_22_startup(game_root, base_dir=None, is_running=None):
         actions.insert(0, "Quarantined invalid config.json as %s" %
                        os.path.basename(quarantined))
     actions.append(
-        "Startup repair kept the saved endpoint, account, garage, "
-        "post-battle results, and isolated client preferences.")
+        "Startup repair kept the saved endpoint, named saves and isolated "
+        "client preferences; obsolete defaults follow the one-time replacement policy.")
     return actions
 
 

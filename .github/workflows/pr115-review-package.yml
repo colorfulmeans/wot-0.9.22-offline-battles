@@ -8,6 +8,7 @@ on:
       - '.github/workflows/pr115-review-package.yml'
       - 'src/**'
       - 'server/**'
+      - 'launcher/**'
       - 'tests/test_crew_skill_credits.py'
 permissions:
   contents: read
@@ -214,13 +215,16 @@ jobs:
       - name: Run focused spotting, wreck and career regressions
         env:
           PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONPATH: tests:server:src/res/scripts/client:launcher
         run: |
           python -m unittest discover -s tests -p test_port_0922_spotting_career_regressions.py
           python -m unittest discover -s tests -p test_port_0922_wreck_dynamics.py
           python -m unittest discover -s tests -p test_port_0922_career_dossiers.py
           python -m unittest discover -s tests -p test_port_0922_offline_services_ui.py
           python -m unittest discover -s tests -p test_port_0922_equipment_policy.py
+          python -m unittest discover -s tests -p test_port_0922_bootstrap_lifecycle.py
           PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_default_revision.py
+          PYTHONPATH=launcher python -m unittest discover -s launcher/tests -p test_launcher_core.py
           python -m unittest discover -s tests -p test_crew_skill_credits.py
       - uses: actions/download-artifact@v4
         with:

@@ -78,6 +78,7 @@ ACCOUNT_DATA = _real_module(
 VEHICLE_BLACKLIST = _real_module('vehicle_blacklist')
 VEHICLE_CONFIGURATION = _real_module('vehicle_configuration')
 VEHICLE_RECORDS = _real_module('vehicle_records')
+EQUIPMENT_POLICY = _real_module('equipment_policy')
 DEFAULT_LOADOUTS = _real_module('default_loadouts')
 DEFAULT_CREW = _real_module('default_crew')
 
@@ -385,7 +386,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 name=name or 'nation-%d:vehicle-%d' % (
                     nation_id, vehicle_type_id),
                 crewRoles=(('commander',), ('driver',)),
-                tags=frozenset(tags),
+                tags=frozenset(tags) | frozenset(('lightTank',)),
                 chassis=[_part(base + 2, 2), _part(base + 12, 5)],
                 turrets=turrets,
                 engines=[_part(base + 5, 2), _part(base + 15, 5)],
@@ -641,6 +642,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.vehicle_configuration': (
                 VEHICLE_CONFIGURATION),
             'gui.mods.offline_lan_0922.vehicle_records': VEHICLE_RECORDS,
+            'gui.mods.offline_lan_0922.equipment_policy': EQUIPMENT_POLICY,
             'gui.mods.offline_lan_0922.default_loadouts': DEFAULT_LOADOUTS,
             'gui.mods.offline_lan_0922.default_crew': DEFAULT_CREW,
             'gui.app_loader': app_loader_module,
