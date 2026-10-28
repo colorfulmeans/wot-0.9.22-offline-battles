@@ -9,6 +9,30 @@ and battle logic, a small LAN server and a launcher.
 
 Current release: **v1.0.0** — [release notes](docs/releases/v1.0.0.md).
 
+### Battle fix review (not a release)
+
+This review starts from the exact `v1.0.0` tag (`97e8f3ec`), with no commits
+from the discarded PR #115. Scope: spotting assistance during received memory,
+radio-source-specific sharing, the full 14-second designated-target lease in
+both implementations, and rigid wreck hull/turret pose agreement (including
+rejected moves and vertical rollback). Side-push behavior, UI and career
+statistics are outside this review.
+
+The new regression file reproduces the failures on the untouched release.
+Local Python 3.11 checks cover the regression file, radio, mission and award
+settlement. CI additionally checks the native/reference radio source lists,
+Python 2.7 compilation, and the rebuilt shipping module and package. The full
+Tests workflow remains independent of the Battle review package workflow;
+a review artifact alone does not mean the full suite or native play passed.
+
+Windows gameplay acceptance is **pending**. Test with the matching launcher,
+server and hidden worker: spot then retreat before an ally hits; repeat with
+two observers where only one has radio contact; check boosted spotting near
+seconds 12--14; rotate a wreck and compare turret/barrel collision with its
+visible pose. Report the launcher build identity with the exported report.
+Player-death turret model relinking is a separate unverified issue, not a
+claimed fix in this package. No three-match unattended acceptance is required.
+
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows
 launcher and all eighteen guide files as separate downloads.

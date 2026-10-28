@@ -6106,7 +6106,7 @@ class BotRuntime(object):
         if duration is None:
             duration = spotting.SPOT_MEMORY_SECONDS
         duration = max(
-            0.0, min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS,
+            0.0, min(spotting.MAX_SPOT_MEMORY_SECONDS,
                      duration))
         deadline = now + duration
         self._spot_until[key] = max(
@@ -6118,7 +6118,7 @@ class BotRuntime(object):
         if remaining <= 0.0:
             self._spot_until.pop(key, None)
             return 0.0
-        return min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS, remaining)
+        return min(spotting.MAX_SPOT_MEMORY_SECONDS, remaining)
 
     @detailed_observed('bot.observer_lifecycle')
     def _track_human_observer_lifecycle(
@@ -11726,8 +11726,18 @@ class BotRuntime(object):
                     step, getattr(self, '_contact_now', 0.0), 0.0)
             if not clear:
                 candidate, omega = old_yaw, 0.0
-        state['yaw'] = math.atan2(math.sin(candidate), math.cos(candidate))
+        self._commit_wreck_yaw(state, candidate)
         state['push_yaw'] = omega
+
+    @staticmethod
+    def _commit_wreck_yaw(state, yaw):
+        """Keep both collision consumers on the same rigid wreck pose."""
+        relative = state.get('turret_yaw')
+        if relative is None:
+            relative = _angle_delta(state.get('aim_yaw', state['yaw']), state['yaw'])
+        state['yaw'] = _wrapped(yaw)
+        state['turret_yaw'] = relative
+        state['aim_yaw'] = _wrapped(state['yaw'] + relative)
 
     def _try_wreck_swept_pose(self, state, movement, omega, step):
         """Admit translation and yaw together, with one vehicle constraint.
@@ -11768,7 +11778,7 @@ class BotRuntime(object):
                 translation=(move_x, move_z)):
             return False
         state['x'], state['z'] = end[0], end[2]
-        state['yaw'] = math.atan2(math.sin(end_yaw), math.cos(end_yaw))
+        self._commit_wreck_yaw(state, end_yaw)
         if fraction < 1.0:
             state['push_yaw'] = 0.0
         return True
@@ -11800,7 +11810,8 @@ class BotRuntime(object):
         # live drive tick to finish its flight or landing on its behalf.
         if self._update_vertical_motion(state, step, before, old_yaw):
             state['x'], state['y'], state['z'] = before
-            state['yaw'], state['push_yaw'] = old_yaw, 0.0
+            self._commit_wreck_yaw(state, old_yaw)
+            state['push_yaw'] = 0.0
         for angle in ('pitch', 'terrain_pitch', 'roll'):
             value = state.get(angle, 0.0)
             state[angle] = math.atan2(math.sin(value), math.cos(value))
@@ -14272,13 +14283,9 @@ class BotRuntime(object):
                 if actor_key not in known_radio_keys:
                     known_radio_keys.add(actor_key)
                     radio_keys.append(actor_key)
-            summarize_radio = getattr(self._radio_network, 'summaries', None)
-            if radio_keys and callable(summarize_radio):
-                radio_values = summarize_radio(
-                    tuple((actor, key[1:]) for actor in radio_keys), now)
-            else:
-                radio_values = tuple(self._radio_network.contact(
-                    actor, key[1:], now)[:2] for actor in radio_keys)
+            radio_values = self._radio_network.summaries(
+                tuple((actor, key[1:]) for actor in radio_keys), now,
+                include_sources=True)
             radio_values = dict(zip(radio_keys, radio_values))
             published_shooters = []
             pending_shooters = []
@@ -14340,7 +14347,12 @@ class BotRuntime(object):
                 'radio_recipients': [
                     {'kind': actor[0], 'id': actor[1],
                      'time_left': round(min(time_left,
-                                           radio_values[actor][0]), 6)}
+                                           radio_values[actor][0]), 6),
+                     'sources': [
+                         {'kind': source[0], 'id': source[1],
+                          'time_left': round(min(time_left, remaining), 6)}
+                         for source, remaining in radio_values[actor][2]
+                         if round(min(time_left, remaining), 6) > 0.0]}
                     for actor in recipients if radio_values[actor][0] > 0.0],
                 # These identities are produced only by the hidden worker's
                 # native LOS probes. Visible clients cannot submit this

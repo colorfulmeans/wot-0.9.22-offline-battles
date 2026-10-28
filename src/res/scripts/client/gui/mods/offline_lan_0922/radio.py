@@ -127,3 +127,18 @@ class RadioNetwork(object):
         return (receipt[1] - now,
                 receipt[4] is not None and now - receipt[4] <= 0.5 + 1e-9,
                 receipt[3][2])
+
+    def sources(self, recipient, target, now):
+        """Return each received observer lease, including its memory period."""
+        if recipient not in self.actors:
+            return ()
+        group = self._recipient_group(recipient)
+        return tuple((observer, row[0] - now)
+                     for observer, row in sorted(self._targets.get(target, {}).items(),
+                         key=lambda item: (0 if item[0][0] == 'human' else 1, item[0][1]))
+                     if observer in group and row[0] > now)
+
+    def summaries(self, pairs, now, include_sources=False):
+        return tuple(self.contact(recipient, target, now)[:2] +
+                     ((self.sources(recipient, target, now),) if include_sources else ())
+                     for recipient, target in pairs)

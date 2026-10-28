@@ -352,7 +352,7 @@ class _NativeRadio(object):
             'sim_control_radio', 0, recipient, target, float(now))
         return remaining, bool(fresh), _pose_dict(pose) if pose is not None else None
 
-    def summaries(self, pairs, now):
+    def summaries(self, pairs, now, include_sources=False):
         """Read ordered recipient flags without crossing remembered poses."""
         native_keys, rows = {}, []
         for recipient, target in pairs:
@@ -360,8 +360,14 @@ class _NativeRadio(object):
                 if key not in native_keys:
                     native_keys[key] = (0 if key[0] == 'human' else 1, int(key[1]))
             rows.append((native_keys[recipient], native_keys[target]))
-        result = self.owner._call('sim_control_radio_summaries',
-                                  tuple(rows), float(now))
+        args = (tuple(rows), float(now))
+        if include_sources:
+            args += (1,)
+        result = self.owner._call('sim_control_radio_summaries', *args)
+        if include_sources:
+            return tuple((remaining, bool(fresh),
+                          tuple((_wire_key(source), lease) for source, lease in sources))
+                         for remaining, fresh, sources in result)
         return tuple((remaining, bool(fresh)) for remaining, fresh in result)
 
 
@@ -520,6 +526,7 @@ class NativeControl(object):
         still_aspect = profile['invisibility_still']
         relay = 0.0
         last_effort = designated = False
+        designated_duration = 0.0
         if key[0] == 0:
             snapshot = laws._player_effective_params(source, tick)
             spotting_profile = snapshot['spotting']
@@ -550,6 +557,10 @@ class NativeControl(object):
                 snapshot, source, 'radioman_lasteffort')
             designated = laws._player_spotting_perk(
                 snapshot, source, 'gunner_rancorous')
+            if designated:
+                overrides = (snapshot.get('battle_booster') or {}).get('skill_overrides') or {}
+                designated_duration = laws.spotting.SPOT_MEMORY_SECONDS + max(0.0, min(4.0,
+                    laws._number(overrides.get('designated_target_duration'), 2.0)))
         else:
             view_moving, view_still, delay = runtime._vision_ranges.get(
                 key[1], (source.get('view_range', 330.0),
@@ -567,7 +578,7 @@ class NativeControl(object):
             float(moving_aspect[1]), float(still_aspect[1]), float(shot_factor),
             float(profile['camouflage_net_delay'])
             if profile['has_camouflage_net'] else -1.0,
-            runtime._source_radio_range(source, tick), float(relay), 0.0)
+            runtime._source_radio_range(source, tick), float(relay), designated_duration)
         return values, bool(last_effort), bool(designated)
 
     @observed('frontier.control_sample')

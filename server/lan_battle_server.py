@@ -2542,6 +2542,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.radio_assist_sources = {}
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -3810,6 +3811,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.radio_assist_sources = {}
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -5536,7 +5538,7 @@ class BattleState:
 
     @staticmethod
     def _validated_radio_rows(raw, actors, team, max_duration=None,
-                              exclude=None):
+                              exclude=None, with_sources=False):
         """Validate identity lists before committing any observation state.
 
         The worker owns native radio/crew ranges. This boundary checks the
@@ -5564,6 +5566,9 @@ class BattleState:
                 if duration <= 0.0:
                     raise ValueError("radio recipient lease must be positive")
                 clean["time_left"] = duration
+                if with_sources and "sources" in row:
+                    clean["sources"] = BattleState._validated_radio_rows(
+                        row["sources"], actors, team, max_duration=duration)
             if actor[1]:
                 result.append(clean)
         return result
@@ -5650,6 +5655,7 @@ class BattleState:
             team_lit = {1: {}, 2: {}}
             stale_observation = False
             contacts = []
+            assist_sources = {}
             for raw in message.get("contacts"):
                 contact = dict(raw) if isinstance(raw, dict) else raw
                 if (not isinstance(contact, dict) or
@@ -5712,9 +5718,17 @@ class BattleState:
                     try:
                         contact["radio_recipients"] = self._validated_radio_rows(
                             contact["radio_recipients"], radio_actors,
-                            observing_team, max_duration=time_left)
+                            observing_team, max_duration=time_left, with_sources=True)
                     except (ValueError, TypeError):
                         return False
+                    result_target = ("player" if target_kind == "human" else "bot", target_id)
+                    for recipient in contact["radio_recipients"]:
+                        receiver = ("player" if recipient["kind"] == "human" else "bot",
+                                    recipient["id"])
+                        assist_sources[(receiver, result_target)] = {
+                            ("player" if source["kind"] == "human" else "bot", source["id"]):
+                            source["time_left"]
+                            for source in recipient.get("sources", ())}
                 bot_observer_ids = []
                 for raw_bot_id in contact.get("visible_by_bot_ids"):
                     try:
@@ -5837,6 +5851,9 @@ class BattleState:
                         (result_kind, target_id))
                 contacts.append(contact)
             now = time.monotonic()
+            self.radio_assist_sources = {
+                key: {source: now + duration for source, duration in sources.items()}
+                for key, sources in assist_sources.items()}
             team_lit = {
                 team: {target: now + time_left
                        for target, time_left in targets.items()}
@@ -14391,34 +14408,29 @@ class BattleState:
                     target in self.bot_spotted.get(actor[1], ()))
 
     def _radio_assisters(self, attacker, target, target_team):
-        """Return the live observers one spotting assist is divided between.
+        """Divide an assist only among the shooter's received, unexpired sources.
 
-        Wargaming pays a spotting assist for damage done to a target the
-        observer is spotting "by team members who are not spotting them
-        themselves", divided "by the number of team members spotting the
-        target".  An attacker that sees its own target therefore earns
-        nobody an assist instead of merely being skipped, which is the rule
-        the Patrol Duty ledger in ``_record_damage`` already applies.
+        Direct LOS can end before its lease expires. Team-wide direct sets
+        neither represent that memory nor prove a source reached this shooter.
+        Missing provenance fails closed rather than inventing a radio link.
         """
-        if self._spots_target(attacker, target):
+        if self._vehicle_team(*attacker) == target_team or self._spots_target(attacker, target):
             return []
-        result = []
-        for reporter_id in sorted(self.player_spotted):
-            reporter = self.players.get(reporter_id)
-            if (reporter is None or not reporter.connected or
-                    not reporter.alive or reporter.team == target_team or
-                    target not in self.player_spotted[reporter_id]):
+        now = time.monotonic()
+        sources = self.radio_assist_sources.get((attacker, target), {})
+        live_sources = []
+        for reporter, deadline in sorted(sources.items(), key=lambda item: (
+                0 if item[0][0] == "player" else 1, item[0][1])):
+            if deadline <= now or self._vehicle_team(*reporter) != self._vehicle_team(*attacker):
                 continue
-            result.append(("player", reporter_id))
-        for bot_id in sorted(self.bot_spotted):
-            bot = self.bot_states.get(bot_id)
-            reporter = ("bot", int(bot_id))
-            if (bot is None or not bot.get("alive") or
-                    int(bot.get("team", 0)) == target_team or
-                    target not in self.bot_spotted[bot_id]):
+            if reporter[0] == "player":
+                player = self.players.get(reporter[1])
+                if player is None or not player.connected or not player.alive:
+                    continue
+            elif not (self.bot_states.get(reporter[1]) or {}).get("alive"):
                 continue
-            result.append(reporter)
-        return result
+            live_sources.append(reporter)
+        return [] if attacker in live_sources else live_sources
 
     def _vehicle_statistics_payload(self):
         # Compensation eligibility is server settlement state, not a new

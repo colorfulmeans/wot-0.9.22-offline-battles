@@ -316,7 +316,7 @@ void Store::observe(const ActorKey &source, const ActorKey &target,
   entry.pose = pose;
   entry.direct = true;
   auto &team = team_spots_[{actors_.at(source).config.team, target}];
-  team.deadline = std::max(team.deadline, sampled + clamp(duration, 0., 12.));
+  team.deadline = std::max(team.deadline, sampled + clamp(duration, 0., 14.));
   team.sampled_at = sampled;
   team.pose = pose;
   events_.push_back({source, target, sampled, duration, pose});
@@ -361,6 +361,20 @@ Contact Store::radio_contact(const ActorKey &s, const ActorKey &t,
     result.pose = latest->pose;
     result.sampled_at = latest->sampled_at;
     result.visible = true;
+  }
+  return result;
+}
+std::vector<std::pair<ActorKey, double>> Store::recipient_sources(
+    const ActorKey &recipient, const ActorKey &target, double now) const {
+  std::vector<std::pair<ActorKey, double>> result;
+  if (!radio_ranges_.count(recipient))
+    return result;
+  for (const auto &owner : observations_) {
+    if (!connected(recipient, owner.first))
+      continue;
+    auto found = owner.second.find(target);
+    if (found != owner.second.end() && found->second.deadline > now)
+      result.push_back({owner.first, found->second.deadline - now});
   }
   return result;
 }
@@ -698,7 +712,7 @@ void Store::observe_humans(const SightProbe &probe) {
                            : s.sample.pose.values[3];
           if (dx * dx + dz * dz <= .000001 ||
               std::abs(angle(std::atan2(dx, dz), gun)) <= pi / 36. + 1e-9)
-            duration = 12.;
+            duration = s.config.designated_duration;
         }
         observe(source, target, sampled, duration, t.sample.pose);
       }
@@ -716,7 +730,7 @@ std::vector<TeamContact> Store::team_contacts() const {
   for (const auto &row : team_spots_)
     if (row.second.deadline > now_)
       result.push_back({row.first.first, row.first.second,
-                        std::min(12., row.second.deadline - now_),
+                        std::min(14., row.second.deadline - now_),
                         row.second.pose});
   return result;
 }

@@ -27,6 +27,7 @@ struct ActorConfig {
          camo_net_multiplier = 1.;
   double camo_shot = 1., camo_net_delay = -1.;
   double radio = 0., relay = 0.;
+  double designated_duration = 12.;
 };
 struct ActorSample {
   ActorKey key;
@@ -239,6 +240,8 @@ public:
                             double now) const {
     return radio_contact(a, b, now);
   }
+  std::vector<std::pair<ActorKey, double>> recipient_sources(
+      const ActorKey &, const ActorKey &, double) const;
   PerceptionSnapshot snapshot() const;
   void restore(const PerceptionSnapshot &);
   void note_source_stillness(const ActorKey &, double, double);

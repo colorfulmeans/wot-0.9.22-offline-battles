@@ -284,8 +284,9 @@ PyObject *WOT_CDECL sim_control_configure(PyObject *, PyObject *args) {
       c.camo_net_delay = n[14];
       c.radio = n[15];
       c.relay = n[16];
-      if (n[17] != 0.)
+      if (n[17] != 0. && (n[17] < 10. || n[17] > 14.))
         throw Unsupported();
+      c.designated_duration = n[17] == 0. ? 12. : n[17];
       result.push_back(c);
     }
     profile.run(&offline_simulation::control::Store::configure, &context->control, result);
@@ -950,12 +951,15 @@ PyObject *WOT_CDECL sim_control_radio(PyObject *, PyObject *args) {
 PyObject *WOT_CDECL sim_control_radio_summaries(PyObject *, PyObject *args) {
     NATIVE_PROFILE_ENTRY(sim_control_radio_summaries);
   try {
-    require_sequence(args, 3, true);
+    require_sequence(args, 3);
+    if (size(args) > 4)
+      throw Unsupported();
     auto v = items(args);
     auto context = simulation_context(identity(v[0]));
     auto pairs = v[1];
     require_sequence(pairs, 0);
     const double now = finite_number(v[2]);
+    const bool include_sources = size(args) == 4 && index_value(v[3]) != 0;
     profile.output();
     OwnedTuple result(size(pairs));
     for (Py_ssize_t i = 0; i < size(pairs); ++i) {
@@ -965,9 +969,22 @@ PyObject *WOT_CDECL sim_control_radio_summaries(PyObject *, PyObject *args) {
       auto keys = items(pair);
       const auto contact = profile.run(&offline_simulation::control::Store::recipient_contact, &context->control,
           sim_control_bridge::key(keys[0]), sim_control_bridge::key(keys[1]), now);
-      OwnedTuple row(2);
+      OwnedTuple row(include_sources ? 3 : 2);
       row.set(0, float_new(contact.remaining));
       row.set(1, int_new(contact.fresh));
+      if (include_sources) {
+        auto sources = profile.run(&offline_simulation::control::Store::recipient_sources,
+            &context->control, sim_control_bridge::key(keys[0]),
+            sim_control_bridge::key(keys[1]), now);
+        OwnedTuple source_rows(sources.size());
+        for (std::size_t j = 0; j < sources.size(); ++j) {
+          OwnedTuple source(2);
+          source.set(0, sim_control_bridge::key(sources[j].first));
+          source.set(1, float_new(sources[j].second));
+          source_rows.set(j, source.release());
+        }
+        row.set(2, source_rows.release());
+      }
       result.set(i, row.release());
     }
     return result.release();
