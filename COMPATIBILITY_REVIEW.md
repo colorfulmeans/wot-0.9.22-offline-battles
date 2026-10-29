@@ -10976,3 +10976,16 @@ package gate now includes those files and the new regression file on Linux.
 Matching-head CI, package inspection and subsequent #1513 rendered/gameplay
 receipts are recorded in PR116. Random matches alone do not accept the original
 12t rejection cause or every wreck firing configuration.
+
+The first current-package native session 5a8c228d6176 started through the
+diagnostic entrance and exercised both windows. Initial/rendered/hover footer
+measurements are now 4/19 bounds units (previously 1/19); button dimensions
+remain unchanged. Reserves navigation and daily reopen worked. Actual passive
+probes returned `crushed` as well as clear/hard. The new lane record contained
+an AttributeError because native remote entities do not expose getAimParams.
+It now reads the already-reviewed #1513 appearance turret/gun matrix providers
+directly and retains read failures as evidence. Battle review admission also
+recognizes BattleRuntime.client and its start-message round, so these samples
+are round-tagged and their per-round budgets reset. Native acceptance of this
+diagnostic correction requires the rebuilt package; the first session is not
+silently relabelled as running the correction.

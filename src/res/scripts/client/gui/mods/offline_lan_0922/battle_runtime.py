@@ -27734,7 +27734,10 @@ class BattleRuntime(object):
             state = record.get('state') or {}
             native_aim, error = None, None
             try:
-                native_aim = list(vehicle.getAimParams())
+                appearance = vehicle.appearance
+                turret = self._runtime.math.Matrix(appearance.turretMatrix)
+                gun = self._runtime.math.Matrix(appearance.gunMatrix)
+                native_aim = [float(turret.yaw), float(gun.pitch)]
             except Exception as failure:
                 error = type(failure).__name__
             return dict(actor=record.get('network_id'), blocked=bool(blocked),
@@ -27742,7 +27745,8 @@ class BattleRuntime(object):
                 state=dict((key, state.get(key)) for key in
                     ('yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch')),
                 projectile_pose=record.get('projectile_collision_pose'),
-                native_aim=native_aim, native_aim_error=error)
+                native_aim=native_aim, native_aim_error=error,
+                native_aim_source='appearance_matrix_providers')
         battle_review_record(
             self, 'wreck_firing_lane', record.get('engine_id'),
             self._last_frame_time, build, interval=2.0, limit=256)

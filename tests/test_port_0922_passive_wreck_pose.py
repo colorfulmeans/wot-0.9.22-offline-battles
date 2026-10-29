@@ -138,12 +138,16 @@ class WreckLaneEvidenceTests(unittest.TestCase):
         for diagnostics in (False,True):
             for blocked in (False,True):
                 runtime=battle.NativeBattleRuntime.__new__(battle.NativeBattleRuntime)
-                runtime.round_id=1;runtime._last_frame_time=3.
+                runtime.client=types.SimpleNamespace(round_id=1)
+                runtime._last_frame_time=3.
                 runtime._vector=lambda value:value
-                runtime._runtime=types.SimpleNamespace(math=None)
+                matrix=mock.Mock(side_effect=lambda value:value)
+                runtime._runtime=types.SimpleNamespace(math=types.SimpleNamespace(Matrix=matrix))
                 vehicle=types.SimpleNamespace(
                     collideSegmentExt=mock.Mock(return_value=[object()] if blocked else []),
-                    getAimParams=mock.Mock(return_value=(2.262,.018)))
+                    appearance=types.SimpleNamespace(
+                        turretMatrix=types.SimpleNamespace(yaw=2.262),
+                        gunMatrix=types.SimpleNamespace(pitch=.018)))
                 record=dict(engine_id=44,network_id=16,state=dict(alive=False),
                     projectile_collision_pose=dict(turret_yaw=2.262))
                 output=io.StringIO()
@@ -153,10 +157,11 @@ class WreckLaneEvidenceTests(unittest.TestCase):
                         [(record,vehicle,(0.,0.,0.))],[(-1.,0.,0.),(1.,0.,0.)])
                 self.assertEqual(blocked,result is not None)
                 self.assertEqual(1,vehicle.collideSegmentExt.call_count)
-                self.assertEqual(int(diagnostics),vehicle.getAimParams.call_count)
+                self.assertEqual(2*int(diagnostics),matrix.call_count)
                 if diagnostics:
                     row=json.loads(output.getvalue().split('BATTLE REVIEW ',1)[1])
                     self.assertEqual('wreck_firing_lane',row['stage'])
+                    self.assertEqual(1,row['round'])
                     self.assertEqual(blocked,row['blocked'])
                     self.assertEqual([2.262,.018],row['native_aim'])
                 else:
