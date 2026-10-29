@@ -212,6 +212,12 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
           --pattern test_port_0922_battle_fix_regressions.py
+          --pattern test_port_0922_career_review_regressions.py
+          --pattern test_port_0922_career_dossiers.py
+          --pattern test_port_0922_postbattle.py
+          --pattern test_port_0922_spg_missions.py
+          --pattern test_diagnostic_log_modes.py
+          --pattern test_native_input_diagnostics.py
           --pattern test_port_0922_effective_params.py
           --pattern test_port_0922_bonds_and_directives.py
           --pattern 'test_port_0922_*diagnostic*.py'

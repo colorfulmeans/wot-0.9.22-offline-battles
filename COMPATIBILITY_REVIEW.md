@@ -10625,3 +10625,87 @@ shot-line queue metrics explicitly. No world result is cached, no physics or
 weapon safety is reduced, and no native performance gain is claimed without
 the next #1513 runtime capture. The banana-bend local steering feasibility
 question remains open beyond the confirmed ownership defect.
+
+## 2026-10-29 career audit and independent diagnostic admission (PR 116)
+
+The current head was compared directly with closed PR 115
+(`fca7849d50ca1e50181a21614b3c2c4a6c01dbd1`). Only its reviewed career
+subset was reapplied and corrected; no wholesale merge, wreck angle change,
+mission interface change or speculative model synchronization was restored.
+The previous release-angle rollback remains in place.
+
+Exact Chinese HD #1513 `scripts.pkg` contracts were read after a passing
+`tools/inspect_client.py` inventory. `ProfileSummaryPage.getGlobalRating` and
+`AccountDossier.getGlobalRating` consume `items.stats.globalRating`;
+`StatsRequester` defaults that field to 0. The offline producer previously
+hard-coded 0. The user-selected published 0.8.11 Personal Rating is now
+computed from lifetime vehicle rows, including sold vehicles, without adding
+the duplicate account aggregate. The retained formula image is
+https://usercontent.one/wp/hokx.com/wp-content/uploads/2019/12/WTR-Personal-Rating.png.
+This selection is not evidence that the unpublished 9.22 server used identical
+coefficients or rounding. The implementation truncates the final nonnegative
+value to an integer. A fixed 1000-battle vector yields 5843; changing awarded
+XP leaves it unchanged. Entitlement account diffs preserve the computed value.
+
+Exact `dossiers2/custom/battle_results_processors.__updateBaseStatistics`
+increments `battlesOnStunningVehicles` from `results['canStun']`, copies
+`stunNum`, and adds `min(droppedCapturePoints, 100)` to the lifetime block.
+Exact `_Battle2StatsBlock` reads `stunNum` and divides average stun counts and
+stun assistance by `battlesOnStunningVehicles`. Therefore a stunning-capable
+zero-stun battle counts, and a non-stunning vehicle does not. The adapter
+uses the frozen mounted descriptor's `gun.shots[].shell.stun` component,
+never a vehicle-class or calibre guess. Single-battle defence stays raw.
+The reviewed receiving-hit/explosion counters now reach their native dossier
+fields as well. Dossier version 4 invalidates both the prior version 2 and
+the version 3 used by the abandoned PR 115 package.
+
+Missing original XP is not reconstructed from awarded XP. Missing rating
+inputs remain explicitly marked across reloads; an incomplete rating returns
+the native nonnegative unavailable value 0 and logs its missing inputs.
+Only a complete unique set of retained non-training receipt bodies can repair
+those missing inputs or recalculate lifetime defence. Identity-only history
+is insufficient. Stun coverage is tracked separately; partial coverage never
+divides lifetime assistance, and older receipt bodies lacking stun facts cannot
+erase better existing coverage. Migration and repeat-load tests cover these
+cases. No user's live save was rewritten or initialized during this audit.
+
+The 132743 report still establishes a model replacement followed by turret
+angles becoming zero, not the native cause. Exact `CompoundAppearance`
+refresh order supplies new read-only brackets around deactivation,
+`__setupModels`, `setVehicle`, `activate`, `setupGunMatrixTargets` and
+`onModelChanged`, in addition to the existing final-sync boundary and eight
+post-death frame samples. A transient call-stack vehicle reference allows the
+deactivate-after probe to work after the private binding is cleared. It is
+restored in `finally`; no engine callback or angle write is introduced.
+Tests preserve original callable results, exceptions and ordinary-entry
+behavior. Actual native reset localization remains pending the new report.
+
+Diagnostic entry alone enables these probes and career records. It now allows
+bulk 32 MiB/minute and 256 MiB/round, superseding the earlier 2/32 limits.
+Verification admission is independent: 32 MiB per stage/owner/round, 4 MiB
+per owner/round for priority events, and 4 MiB per process/round for low-frequency
+career validation. Limit records and round summaries disclose byte drops.
+Human observations use a separate stage from bot observations; radio publication
+can record at 0.5-second cadence up to 4096 samples per key. The limits remain
+finite, with stage/key bounds and round reset tested. Ordinary entry constructs
+none of the new payloads. No gameplay cadence or radio calculation is changed.
+
+The original official 9.18 SPG explanation describes 70/30 sharing for
+overlapping active stuns (https://worldoftanks.asia/en/news/general-news/update-918-spg-revision/).
+The present server retains one canonical owner. Its exact 9.22 overlap and
+expiry boundary is not yet accepted: this revision records proposed/retained
+owners, deadlines and actual damage credits without changing attribution.
+
+Local focused verification: nine isolated files, 153 tests, no failures or
+skips (`build/career-review-accepted/summary.json`). They cover chosen-rating
+inputs, entitlement diffs, capped/raw defence, zero-stun capability, incomplete
+history, migration idempotence, cache invalidation, model probe contracts,
+basic-entry laziness and independent diagnostic budgets. A related 20-file
+local run passed 17 files; gun-angle recovery, wreck dynamics and wreck-push
+diagnostics could not create the matching native simulation in this Windows
+Python 3.11 environment. Their errors are retained, not counted as passes;
+Linux CI builds the reference extension and reruns them. Related subsystem
+tests and matching-head CI/package receipts are tracked in PR 116; prior-head
+artifacts are not evidence for this revision. Native gameplay acceptance is
+still required for turret rendering, old-save UI refresh and actual battle
+statistics. README supplies the diagnostic-entry acceptance procedure.

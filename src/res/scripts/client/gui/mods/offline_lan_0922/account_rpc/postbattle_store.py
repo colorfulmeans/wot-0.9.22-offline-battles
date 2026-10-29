@@ -395,6 +395,12 @@ def _receipt(value):
         'watched_battle_to_end': value.get(
             'watched_battle_to_end', not value.get('premature_leave', False)),
         'stats': stats,
+        'defence_stat_recorded': bool(value.get('defence_stat_recorded',
+                                              'dropped_capture_points' in raw_stats)),
+        'rating_stat_recorded': bool(value.get('rating_stat_recorded',
+            all(key in raw_stats for key in ('damage', 'assist_radio', 'assist_track')))),
+        'stun_stat_recorded': bool(value.get('stun_stat_recorded',
+                                          'stun_num' in raw_stats)),
         'rewards': rewards,
         'friendly_fire': friendly_fire.facts(value.get('friendly_fire')),
         'friendly_fire_costs': friendly_fire.costs(value.get('friendly_fire_costs')),
@@ -424,6 +430,8 @@ def _receipt(value):
         'public_results': public_results,
         'interactions': interactions,
     }
+    if isinstance(value.get('stun_capable'), bool):
+        result['stun_capable'] = value['stun_capable']
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
     if battle_max_health is not None:
@@ -431,6 +439,41 @@ def _receipt(value):
     if outfits is not None:
         result['vehicle_outfits'] = copy.deepcopy(outfits)
     return result
+
+
+def _stun_capable(receipt):
+    """Read the mounted gun, never infer stun capability from class or calibre."""
+    if isinstance(receipt.get("stun_capable"), bool):
+        return receipt["stun_capable"]
+    if receipt["stats"].get("stun_num", 0) > 0:
+        return True
+    mounted = receipt.get("vehicle_compact_descr")
+    if not mounted:
+        return None
+    try:
+        from items import vehicles
+        descriptor = vehicles.VehicleDescr(compactDescr=base64.b64decode(
+            mounted.encode("ascii")))
+        for shot in descriptor.gun.shots:
+            shell = shot.get("shell") if isinstance(shot, dict) else shot.shell
+            component = (shell.get("stun") if isinstance(shell, dict) else
+                         getattr(shell, "stun", None))
+            if component is not None:
+                return True
+        return False
+    except (ImportError, AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _fold_stun_statistics(row, receipt):
+    capable = _stun_capable(receipt)
+    if capable is None or (capable and not receipt.get("stun_stat_recorded", False)):
+        return
+    row["stunStatsCoverage"] = int(row.get("stunStatsCoverage", 0)) + 1
+    if capable:
+        row["battlesOnStunningVehicles"] = int(row.get(
+            "battlesOnStunningVehicles", 0)) + 1
+        row["stunNum"] = int(row.get("stunNum", 0)) + receipt["stats"]["stun_num"]
 
 
 def _sanitise_badges(row):
@@ -1210,6 +1253,9 @@ class PostBattleStore(object):
         receipt = _receipt(value)
         if receipt['account_key'] != self._account_key:
             raise ValueError('battle receipt belongs to another account')
+        capable = _stun_capable(receipt)
+        if capable is not None:
+            receipt['stun_capable'] = capable
         receipt_id = receipt['receipt_id']
         if any(row.get('receipt_id') == receipt_id for row in self._history):
             return False
@@ -1387,6 +1433,8 @@ class PostBattleStore(object):
             'xp': 0, 'battles': 0, 'wins': 0, 'losses': 0, 'draws': 0,
             'damage': 0, 'kills': 0, 'achievements': {},
         })
+        for field in ('stunStatsCoverage', 'stunNum', 'battlesOnStunningVehicles'):
+            row.setdefault(field, 0)
         # Existing complete win/loss totals already determine every draw.
         # Capture that value before adding this receipt's outcome.
         row.setdefault('draws', max(0, int(row.get('battles', 0)) -
@@ -1449,12 +1497,19 @@ class PostBattleStore(object):
                 ('damageAssistedRadio', 'assist_radio'),
                 ('damageAssistedStun', 'assist_stun'),
                 ('capturePoints', 'capture_points'),
-                ('droppedCapturePoints', 'dropped_capture_points'),
                 ('hitsReceived', 'hits_received'),
+                ('piercingsReceived', 'piercings_received'),
+                ('noDamageDirectHitsReceived', 'no_damage_direct_hits_received'),
+                ('explosionHitsReceived', 'explosion_hits_received'),
+                ('explosionHits', 'explosion_hits'),
                 ('potentialDamageReceived', 'potential_damage_received'),
                 ('critsReceived', 'crits_received')):
             row[target_name] = int(row.get(target_name, 0)) + int(
                 stats[source_name])
+        # Retail caps a single battle's contribution to lifetime defence at 100.
+        row['droppedCapturePoints'] = int(row.get('droppedCapturePoints', 0)) + min(
+            100, stats['dropped_capture_points'])
+        _fold_stun_statistics(row, receipt)
         survived = int(receipt['death_reason'] < 0 and
                        not receipt['premature_leave'] and
                        receipt['watched_battle_to_end'])
@@ -1475,6 +1530,12 @@ class PostBattleStore(object):
         # DossierCache asks for rows newer than its maxChangeTime.  The global
         # battle ordinal is stable across restarts and strictly increases.
         row['changeTime'] = progress['battles']
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
+        if diagnostics.detailed_enabled():
+            diagnostics.validation_event('career_receipt_applied', receipt=receipt['receipt_id'],
+                vehicle=receipt['vehicle'], stats=dict(stats),
+                stun_capable=receipt.get('stun_capable'), totals=dict(row),
+                cache_change_time=row['changeTime'])
 
     def _award_badges(self, receipt, row):
         """Fold this battle into the vehicle's retail badge state.
@@ -1681,6 +1742,11 @@ class PostBattleStore(object):
                 self._progress.get('achievements'))
             for row in self._progress.get('vehicles', {}).values():
                 if isinstance(row, dict):
+                    from gui.mods.offline_lan_0922.personal_rating import INPUT_FIELDS
+                    missing = set(row.get('_rating_input_missing', ()))
+                    missing.update(key for key in INPUT_FIELDS if key not in row)
+                    if missing:
+                        row['_rating_input_missing'] = sorted(missing)
                     # Prior awarded totals cannot reconstruct base battle XP.
                     row.setdefault('originalXP', 0)
                     row.setdefault(
@@ -1698,6 +1764,53 @@ class PostBattleStore(object):
                         receipt['vehicle'])
                     if isinstance(row, dict):
                         self._update_record_extrema(row, receipt)
+            # Only a complete retained receipt set can repair lifetime totals.
+            # Identity-only archives prove deduplication, not missing statistics.
+            retained = {}
+            for receipt in list(pending.values()) + history:
+                if 'account_key' in receipt and receipt.get('battle_mode') != 'training':
+                    retained.setdefault(receipt['vehicle'], {})[receipt['receipt_id']] = receipt
+            for name, row in self._progress.get('vehicles', {}).items():
+                if not isinstance(row, dict):
+                    continue
+                receipts = list(retained.get(name, {}).values())
+                complete = len(receipts) == int(row.get('battles', 0))
+                if complete and all(r.get('rating_stat_recorded', False) for r in receipts):
+                    rebuilt = dict(
+                        battles=len(receipts),
+                        wins=sum(int(r['winner'] == r['team']) for r in receipts),
+                        survivedBattles=sum(int(r['death_reason'] < 0 and
+                            not r['premature_leave'] and r['watched_battle_to_end']) for r in receipts),
+                        damage=sum(r['stats']['damage'] for r in receipts),
+                        originalXP=sum(r['rewards']['xp'] for r in receipts),
+                        damageAssistedRadio=sum(r['stats']['assist_radio'] for r in receipts),
+                        damageAssistedTrack=sum(r['stats']['assist_track'] for r in receipts))
+                    for key in row.get('_rating_input_missing', ()):
+                        row[key] = rebuilt[key]
+                    row.pop('_rating_input_missing', None)
+                if complete or 'stunStatsCoverage' not in row:
+                    rebuilt_stun = dict(stunStatsCoverage=0, stunNum=0,
+                                        battlesOnStunningVehicles=0)
+                    for receipt in receipts:
+                        _fold_stun_statistics(rebuilt_stun, receipt)
+                    # Retained bodies may predate stun recording. Their mere
+                    # presence must not erase better, already recorded facts.
+                    if rebuilt_stun['stunStatsCoverage'] >= int(row.get('stunStatsCoverage', 0)):
+                        row.update(rebuilt_stun)
+                if complete and all(receipt.get('defence_stat_recorded', False)
+                                    for receipt in receipts):
+                    row['droppedCapturePoints'] = sum(min(
+                        100, receipt['stats']['dropped_capture_points'])
+                        for receipt in receipts)
+                from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
+                if diagnostics.detailed_enabled():
+                    diagnostics.validation_event('career_history_coverage', vehicle=name,
+                        complete=complete, retained_receipts=len(receipts),
+                        battles=row.get('battles'), stun_coverage=row.get('stunStatsCoverage'),
+                        stun_num=row.get('stunNum'),
+                        stunning_battles=row.get('battlesOnStunningVehicles'),
+                        defence=row.get('droppedCapturePoints'),
+                        rating_missing=row.get('_rating_input_missing', []))
             self._trim_history_bodies()
         except (IOError, OSError, TypeError, ValueError) as error:
             # Keep a corrupt optional cache from preventing an offline login.

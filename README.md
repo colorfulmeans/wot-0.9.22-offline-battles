@@ -35,17 +35,36 @@ Worker records include active perk/directive duration, native observation
 duration/deadline, radio actor positions/ranges and published per-source
 leases. Server records include accepted leases, source expiry/connection/team
 eligibility, post-death retention, self-spot suppression and integer shares.
-`BATTLE REVIEW EVENT` reserves a separate 256 KiB per-round budget for bounded
-death-window and credit evidence after bulk tracing fills. Worker config
+Bulk detail allows 32 MiB/minute and 256 MiB/round. Verification bypasses that
+bulk quota: each `BATTLE REVIEW` stage has 32 MiB/round, priority
+`BATTLE REVIEW EVENT` evidence has a separate 4 MiB/round, and low-frequency
+`VALIDATION` career evidence has another 4 MiB/round. Explicit limit records
+and round summaries expose byte drops. Human observations have their own stage
+so bot source/target keys cannot exhaust their admission slots. Worker config
 records expose the donated radio factor, direct range, relay bonus and crew
 state. Relay uses unboosted links and does not cascade. Signal Strength stays
 owned by the exact client's radio/distance factor and crew/module projection.
 Model records preserve the last sampled alive pose, refresh entry/return,
-deactivation and final-sync boundaries, and eight subsequent existing battle
+deactivation, setupModels, setVehicle, activate, gun-target setup,
+onModelChanged and final-sync boundaries, and eight subsequent existing battle
 frames even when corpse effects ticks stop: turret/gun providers, hull and world muzzle
 matrices, filter identities and turret detachment. Missing native readings
 are reported as unavailable. These probes read existing state and schedule
 no engine callbacks.
+
+Career review restores the explicitly selected published 0.8.11 Personal
+Rating, using lifetime vehicle rows (including sold vehicles), base battle XP,
+and integer truncation. This is the selected historical algorithm, not proof
+of an identical unpublished 9.22 server implementation. Account entitlement
+updates preserve the computed rating. Missing historical inputs publish 0
+and are identified in diagnostics; awarded XP never substitutes for base XP.
+Exact #1513 dossier contracts establish lifetime defence capped at 100 per
+battle, stun counts, and the stunning-capable battle denominator (including
+zero-stun battles). Single-battle defence remains uncapped. Cache version 4
+invalidates earlier dossier snapshots. Only complete retained receipt bodies
+repair missing history; identity-only archives do not. Partial stun coverage
+cannot produce a lifetime average. Multi-SPG overlapping ownership remains
+unchanged: transition and damage-credit logs collect the unresolved boundary.
 
 Validation covers regressions, related battle subsystems, diagnostic laziness,
 byte limits, round reset and stale appearance fencing. CI also checks native
@@ -75,6 +94,15 @@ target, and expires without erasing delivered memory. A newcomer outside
 radio contact at transmission end must not obtain that corpse's memory.
 Check radio/crew damage and repair, donor death, disconnect, and a new round
 for stale links or leases. Native gameplay acceptance remains pending.
+
+For this career review, also compare the garage rating before/after a battle,
+an entitlement update and restart. Switch between existing and new saves;
+inspect `career_history_coverage` for unavailable inputs instead of treating
+0 as a verified calculation. On a stunning-capable SPG, include a zero-stun
+battle and compare its denominator with a successful-stun battle; a vehicle
+without a stunning shell must not increment it. Check raw battle defence
+against the capped lifetime increment. For overlapping SPGs, record both
+hit orders, expiry and damage credits without assuming ownership is fixed.
 
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows

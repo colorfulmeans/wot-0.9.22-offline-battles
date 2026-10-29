@@ -296,7 +296,7 @@ class PostBattleContractTests(unittest.TestCase):
         version, rows = data.dossiers(
             2, 6, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001)
-        self.assertEqual(2, version)
+        self.assertEqual(4, version)
         self.assertEqual(50001, rows[0][0])
         self.assertEqual(7, rows[0][1])
         self.assertEqual({
@@ -310,10 +310,13 @@ class PostBattleContractTests(unittest.TestCase):
             'piercings': 4, 'damageBlockedByArmor': 100,
             'damageAssistedTrack': 80, 'damageAssistedRadio': 40,
             'damageAssistedStun': 0, 'originalXP': 0,
+            'stunNum': 0, 'battlesOnStunningVehicles': 0,
+            'piercingsReceived': 0, 'noDamageDirectHitsReceived': 0,
+            'explosionHitsReceived': 0, 'explosionHits': 0,
             'directHitsReceived': 0, 'potentialDamageReceived': 0},
             rows[0][2]['a15x15_2'])
-        self.assertEqual((2, []), data.dossiers(
-            2, 7, progress, dossier_factory=factory,
+        self.assertEqual((4, []), data.dossiers(
+            4, 7, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001))
 
     def test_a_receipt_carries_the_health_and_the_rounds_it_fired(self):
@@ -781,8 +784,8 @@ class PostBattleContractTests(unittest.TestCase):
     def test_native_compact_contract_uses_all_six_stock_packers(self):
         packers = _Packers()
         receipt = _receipt()
-        receipt['player_name'] = '玩家'
-        receipt['public_results'][0]['name'] = '玩家'
+        receipt['player_name'] = 'çŽ©å®¶'
+        receipt['public_results'][0]['name'] = 'çŽ©å®¶'
         original_vehicle = postbattle_store._vehicle_type_compact_descr
         original_arena = postbattle_store._arena_type_id
         try:
@@ -800,7 +803,7 @@ class PostBattleContractTests(unittest.TestCase):
             'AVATAR_FULL_RESULTS', 'VEH_FULL_RESULTS', 'PLAYER_INFO',
             'VEH_PUBLIC_RESULTS', 'AVATAR_PUBLIC_RESULTS', 'COMMON_RESULTS'],
             [name for name, unused in packers.calls])
-        self.assertEqual('玩家'.encode('utf-8'),
+        self.assertEqual('çŽ©å®¶'.encode('utf-8'),
                          packers.calls[2][1]['name'])
         avatar = pickle.loads(zlib.decompress(compact[1]))
         vehicles = pickle.loads(zlib.decompress(compact[2]))

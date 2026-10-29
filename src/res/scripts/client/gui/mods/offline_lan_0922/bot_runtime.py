@@ -14414,7 +14414,7 @@ class BotRuntime(object):
                     actors=[dict(actor=actor, team=value[0], position=value[1],
                                  radio_range=value[2])
                             for actor, value in sorted(self._radio_network.actors.items())]),
-                interval=1.0, limit=240)
+                interval=0.5, limit=4096)
         return packed
 
     @classmethod

@@ -7,6 +7,8 @@ wire shapes can be tested without importing BigWorld.
 
 import time
 
+from gui.mods.offline_lan_0922.personal_rating import personal_rating
+
 
 VEHICLE_ITEM_TYPE = 1
 TANKMAN_ITEM_TYPE = 8
@@ -805,7 +807,7 @@ def stats(selected_vehicle=None, postbattle_progress=None):
             'attrs': DAILY_MULTIPLIED_XP_ATTR | (
                 PREMIUM_ACCOUNT_ATTR if premium_active else 0),
             'premiumExpiryTime': premium_expiry if premium_active else 0,
-            'autoBanTime': 0, 'globalRating': 0,
+            'autoBanTime': 0, 'globalRating': personal_rating(progress),
         },
         'stats': {
             'credits': balances['credits'],
@@ -1236,9 +1238,15 @@ _DOSSIER_COUNTERS2 = (
     ('damageAssistedTrack', 'damageAssistedTrack'),
     ('damageAssistedRadio', 'damageAssistedRadio'),
     ('damageAssistedStun', 'damageAssistedStun'),
+    ('stunNum', 'stunNum'),
+    ('battlesOnStunningVehicles', 'battlesOnStunningVehicles'),
+    ('piercingsReceived', 'piercingsReceived'),
+    ('noDamageDirectHitsReceived', 'noDamageDirectHitsReceived'),
+    ('explosionHitsReceived', 'explosionHitsReceived'),
+    ('explosionHits', 'explosionHits'),
     ('hitsReceived', 'directHitsReceived'),
     ('potentialDamageReceived', 'potentialDamageReceived'))
-_VEHICLE_DOSSIER_VERSION = 2
+_VEHICLE_DOSSIER_VERSION = 4
 
 
 def _write_battle_statistics(dossier, stats):
@@ -1253,6 +1261,9 @@ def _write_battle_statistics(dossier, stats):
     block2 = dossier['a15x15_2']
     for name, native_name in _DOSSIER_COUNTERS2:
         block2[native_name] = max(0, int(stats.get(name, 0) or 0))
+    if int(stats.get('stunStatsCoverage', 0) or 0) != battles:
+        # A partial historical denominator must never divide lifetime assistance.
+        block2['battlesOnStunningVehicles'] = 0
     for name in ('maxXP', 'maxDamage', 'maxFrags'):
         dossier['max15x15'][name] = max(0, int(stats.get(name, 0) or 0))
     for name in ('creationTime', 'lastBattleTime'):
@@ -1296,6 +1307,8 @@ def account_dossier(postbattle_progress=None, dossier_factory=None,
             for name, value in (('battles', battles), ('wins', wins),
                                 ('losses', losses)):
                 totals[name] = totals.get(name, 0) + value
+            totals['stunStatsCoverage'] = totals.get('stunStatsCoverage', 0) + max(
+                0, int(stats.get('stunStatsCoverage', 0) or 0))
             for name, unused_native in _DOSSIER_COUNTERS + _DOSSIER_COUNTERS2:
                 totals[name] = totals.get(name, 0) + max(
                     0, int(stats.get(name, 0) or 0))

@@ -345,9 +345,10 @@ class BattleReviewDiagnosticsTests(unittest.TestCase):
                 mock.patch.object(diag, 'write_json_record') as write:
             diag.battle_review_record(owner, 'death', 1, 1.0, lambda: {'alive': False}, priority=True)
             self.assertEqual('BATTLE REVIEW EVENT', write.call_args[0][0])
-            owner._battle_review_records[2][0] = 256*1024
+            owner._battle_review_records[2][0] = diag.REVIEW_PRIORITY_BYTES
             diag.battle_review_record(owner, 'death', 2, 2.0, lambda: {}, priority=True)
-            self.assertEqual(1, write.call_count)
+            self.assertEqual(2, write.call_count)
+            self.assertEqual('BATTLE REVIEW LIMIT', write.call_args[0][0])
 
     def test_disabled_diagnostics_do_not_build_or_retain_payload(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
@@ -384,13 +385,13 @@ class BattleReviewDiagnosticsTests(unittest.TestCase):
             diag.battle_review_record(owner, 'failure', 1, 6.0, lambda: {})
             for stage in range(30):
                 diag.battle_review_record(owner, str(stage), 1, 7.0, lambda: {})
-            self.assertLessEqual(len(owner._battle_review_records[1]), 16)
+            self.assertLessEqual(len(owner._battle_review_records[1]), 32)
 
     def test_budget_rejection_does_not_inspect_payload(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
         owner = type('Owner', (), {'round_id': 1})()
         with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
-                mock.patch.object(diag, 'detail_record_ready', return_value=False):
+                mock.patch.object(diag, 'REVIEW_STAGE_BYTES', 0):
             build = mock.Mock(side_effect=AssertionError('budget closed'))
             diag.battle_review_record(owner, 'test', 'target', 1.0, build)
             self.assertFalse(build.called)

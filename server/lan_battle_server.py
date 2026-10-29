@@ -13794,6 +13794,16 @@ class BattleState:
         state = self._vehicle_stun_state(target)
         if state is None or not state["alive"]:
             return False
+        if battle_review_diagnostics.detailed_enabled():
+            battle_review_diagnostics.battle_review_record(self,
+                'server_stun_transition', (tuple(attacker), tuple(target)),
+                self._monotonic(), lambda: dict(
+                    target=target, proposed_attacker=attacker,
+                    previous_attacker=[state['attacker_kind'], state['attacker_id']],
+                    previous_end=state['end'], proposed_end=end_server_time_ms,
+                    server_time_ms=self._server_time_ms(),
+                    action='retain' if int(state['end']) >= end_server_time_ms else 'replace'),
+                interval=0.0, limit=256, priority=True)
         if int(state['end']) >= end_server_time_ms:
             # Repeated/smaller hits must not shorten the existing stun or
             # steal its outstanding assistance attribution.
@@ -14618,6 +14628,15 @@ class BattleState:
                 spotters[0], set()).add(target)
         credits = [(category, holder, damage) for category, holder in
                    self._impairment_assisters(attacker, target, target_critical)]
+        if battle_review_diagnostics.detailed_enabled() and state is not None and state['end']:
+            battle_review_diagnostics.battle_review_record(self, 'server_stun_credit',
+                (tuple(attacker), tuple(target)), self._monotonic(),
+                lambda: dict(attacker=attacker, target=target, damage=damage,
+                    stun_end=state['end'], server_time_ms=self._server_time_ms(),
+                    stun_owner=[state['attacker_kind'], state['attacker_id']],
+                    credits=[dict(category=category, actor=holder, damage=share)
+                             for category, holder, share in credits]),
+                interval=0.0, limit=256, priority=True)
         self._record_impairment_kill_assists(attacker, target, target_critical)
         # A track or a stun has one owner, but a spotting assist is shared by
         # every observer lighting the target, so each of them is paid its
