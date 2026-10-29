@@ -203,6 +203,23 @@ class FittingContracts(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'restored'):
                     fitting.build(native, 'ussr:R04_T-34', tier, restored=bad)
 
+    def test_diagnostic_fitting_record_observes_installed_native_devices(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        with patch.dict(sys.modules, self._items()), \
+             patch.object(diagnostic, 'detailed_enabled', return_value=True), \
+             patch.object(diagnostic, 'write_json_record') as write:
+            descriptor = fitting.build(self._native('ussr:R04_T-34', 'elite'),
+                                       'ussr:R04_T-34', 'elite')
+        row = write.call_args.args[1]
+        self.assertEqual('bot_fitting_installed', row['stage'])
+        self.assertEqual([d.name for d in descriptor.optionalDevices if d], row['devices'])
+        self.assertEqual([row['directive']], row['native_directives'])
+        with patch.dict(sys.modules, self._items()), \
+             patch.object(diagnostic, 'detailed_enabled', return_value=False), \
+             patch.object(diagnostic, 'write_json_record') as write:
+            fitting.build(self._native('ussr:R04_T-34', 'regular'), 'ussr:R04_T-34', 'regular')
+        write.assert_not_called()
+
     def test_native_device_refusal_does_not_install(self):
         with patch.dict(sys.modules, self._items()), self.assertRaisesRegex(ValueError, 'installation refused'):
             fitting.build(self._native('ussr:R04_T-34','regular',True), 'ussr:R04_T-34','regular')

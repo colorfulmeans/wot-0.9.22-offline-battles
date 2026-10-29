@@ -10852,3 +10852,44 @@ Normal entry does not build those diagnostic payloads. Exact Windows rendered
 recovery, detached turrets, spectating, repeated refresh and next-round safety
 remain acceptance requirements. Matching-head CI and package evidence belongs
 in PR 116; the known Great Wall gate failure remains separate.
+
+
+## Reimplemented PR115 fitting and daily-window requirements (2026-10-29)
+
+PR115 is historical evidence, not a merge source. Current sparse-lineup,
+spotting, career, corpse-target ownership and diagnostic budgets remain in
+place. The five-class equipment policy is shared data only; player and Bot
+installation owners remain independent. Player admission uses the native
+VehicleDescr.mayInstallOptionalDevice before installation. The exact-client
+resource audit checks 576 Bot vehicles and 9216 tier/module combinations,
+including family priority, per-family ordinary fallback, device filters, module
+load, magazine allocation and directive order. This is static evidence, not
+proof of every fitting in BigWorld. Detailed fitting records observe installed
+devices, native directives, numeric crew factors and player inventory through
+PR116's bounded validation channel.
+
+Default seed revision 2 does not trust the unaccepted PR115 revision-1 marker.
+The launcher validates contained default/legacy paths before removal, removes
+obsolete defaults without backups, and publishes its revision only after
+successful cleanup. Subsequent edits and named saves are retained. Fresh
+unlocked saves and default initialization reach the same creation-only player
+policy; career creation is unchanged. Local migration tests use throwaway
+directories and do not modify the user's actual saves.
+
+The daily adapter uses current-token RoomWindow dispatch. Only an initialized
+current view owns a refresh timer; cancellation, external disposal and an old
+cancelled callback delivered after reopen are covered. Existing native model
+diagnostics and corpse restoration are not replaced by PR115 callbacks.
+The room/daily movie is compiled from pinned #1513 training and lobby movies.
+Compile-only lobby definitions are removed, and the output is exported again
+to check its daily mode and dynamic-sizing code. SoundButtonEx supplies text
+padding; BlackButton owns face resizing. SettingsWindowUI declares horizontal
+padding 5; its submit/cancel positions 491/596 and 100-pixel faces establish a
+5-pixel footer gap. Window retains native background/content padding. Rendered
+footer spacing, daily interaction and repeated lobby/battle transitions still
+require exact-client acceptance. The packed local replay sample now reads
+Vehicle.gunAnglesPacked; float turret/gun fields remain independent.
+
+The unaccepted old rotated-wreck collision coupling is not restored. Three
+Mittengard VII-VIII acceptance matches and the separate report-export,
+filtered-random-lineup, profile-write and Great Wall findings remain open.

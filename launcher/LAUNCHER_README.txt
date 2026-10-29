@@ -126,7 +126,8 @@ Full-skill choices are durable member-owned credits; choose skills in the
 native client. Moving seats or restarting never renews credits. Recruits,
 credits and delivery notices commit together to the selected save.
 
-New unlocked saves mount three legal improved devices and the corresponding
+New unlocked saves mount three legal class-priority devices (improved first,
+ordinary fallback within the same family) and the corresponding
 battle directive, with directive auto-resupply checked. Users may change or
 remove them; saved choices are never reapplied as defaults. Career saves remain
 stock. The vehicle editor displays magazine/trigger reload intervals in seconds;
@@ -430,12 +431,16 @@ sources. It includes rules already added to the current draft, not unsubmitted
 form fields. All selected scopes are resolved; inherited difficulty retains
 room rating sampling. Opening this window does not save or apply the profile.
 
-Saves -> Initialize save resets only the selected save after confirmation and
-requires a closed game. Name, save type and earnings multiplier are kept;
-progress and pending rewards return to the current new-save defaults. An
-ordinary ZIP backup is kept inside its pre-initialize recovery folder and can
-be selected with Restore save. Default-save legacy migration is blocked after
-initialization so old progress cannot return automatically.
+The current default-seed revision replaces obsolete Default progress and old
+Default backups once, without keeping a backup or importing legacy progress.
+Completion is marked only after replacement succeeds. Later edits are kept on
+subsequent starts and repairs. Other named saves are preserved.
+
+Saves -> Initialize save requires a closed game and confirmation. Default is
+replaced with the current fully unlocked seed without a backup. For named
+saves, name, type and earnings multiplier are kept; progress and pending rewards
+return to new-save defaults. A ZIP backup is kept in its pre-initialize recovery
+folder and can be selected with Restore save.
 
 Member recruitment uses the same standard, loadable vehicle filter as player
 vehicles, including supported retired vehicles. Garage and Members share full

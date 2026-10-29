@@ -456,14 +456,43 @@ Standard and Commander voice settings apply immediately in battle, including
 after preview cancellation. The attached vehicle's native refresh selects
 the language and special crew voices; commander gender remains preserved.
 
+New unlocked player vehicles and Bot fittings use class-specific equipment
+families, in this order:
+
+| Class | Priority |
+| --- | --- |
+| Light | Ventilation, optics, stabilizer, rammer, aim drives |
+| Medium | Stabilizer, rammer, ventilation, optics, aim drives |
+| Heavy | Stabilizer, rammer, ventilation, aim drives, optics |
+| Tank destroyer / artillery | Ventilation, rammer, aim drives, camouflage net, optics |
+
+The player's creation-only installer and the Bot installer remain separate.
+The native client admits player devices; Bot plans are checked against the
+exact #1513 resource filters and load limits. Improved fittings try the improved
+device and then ordinary variants within each family before the next family.
+Rookie Bots mount none, regular Bots one ordinary device, veteran Bots three
+ordinary devices, and elite Bots three compatible improved/fallback devices.
+Only unlocked player defaults and elite equipment mount the directive for the
+first installed family with an available directive. Career creation is unchanged.
+Later saved equipment changes are preserved.
+
+Daily missions use the stock Scaleform Window title, close cross and button
+classes. Daily and waiting-room footer buttons use the client's own dynamic
+text sizing and are right aligned. The exact-client movie is rebuilt and
+inspected alongside its source; rendered spacing still needs Windows acceptance.
+
 ## Saves
 
 The launcher's Saves tab keeps any number of independent saves. Each one owns
 its own garage, crew, account settings and battle results under
 `%APPDATA%/Wargaming.net/WorldOfTanks/offline_lan_0922/saves/<save>/`, and the
 selected save is written into the client configuration when the game starts.
-State written by a build without saves moves into the default save on the next
-start.
+The first installation of the current default-seed revision replaces the old
+Default, including its old backups and legacy progress, without retaining a
+backup. An independent completion marker prevents future starts or repairs
+from replacing later edits. Named unlocked and career saves are preserved.
+Initializing Default explicitly uses this same new seed; initializing a named
+save retains its ordinary recovery backup.
 
 A new save is created as one of two accounts, and the choice is permanent. A
 fully unlocked save is the historical garage: every vehicle, module and

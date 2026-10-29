@@ -10,9 +10,7 @@ import time
 
 from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
-from gui.mods.offline_lan_0922.waiting_room_ui import (
-    WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR,
-    OUTLINE_TEXTURE, NativeSurface)
+from gui.mods.offline_lan_0922.waiting_room_ui import WaitingRoomUI
 
 _patches = []
 _panels = []
@@ -808,82 +806,16 @@ def mission_label(row):
     return label % row[3] if '%d' in label else label
 
 
-class _ServiceControl(_ControlScript):
-    def handleKeyEvent(self, event):
-        import Keys
-        if event.key == Keys.KEY_ESCAPE and event.isKeyDown():
-            self._room.activate('close')
-            return True
-        return False
-
-
-class _DailySurface(NativeSurface):
-    def window(self):
-        return self._gui.Window(OUTLINE_TEXTURE)
-
-
 class ServicePanel(WaitingRoomUI):
-    # Waiting-room restyling does not repaint the independent daily panel.
-    panel_size = (680, 340)
-    panel_font = 'system/fonts/offline_lan_cjk.font'
-    control_text_colour = CONTROL_TEXT_COLOUR
-    control_hover_colour = (14, 82, 140, 255)
-
-    def _control_texture(self, role):
-        return 'system/maps/col_white.dds'
-
-    """Daily missions on an empty native page, with no stock tab below it."""
-    def __init__(self, page='daily', on_close=None, surface=None):
+    """Native Window title, close cross and stock bottom buttons."""
+    def __init__(self, page='daily', on_close=None):
+        from gui.mods.offline_lan_0922.daily_window import DailyWindow
         WaitingRoomUI.__init__(self, lambda unused: False, lambda: (),
-                               on_close=on_close, surface=surface or _DailySurface())
-        self._last_paint = 0
-
-    def install(self):
-        if self._panel is not None:
-            return True
-        WaitingRoomUI.install(self)
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._panel.delChild(component)
-        self._controls, self._labels = {}, {}
-        self._panel.script = _ServiceControl(self, None)
-        self._make_label('title', tr('DAILY MISSIONS'), (-0.89, 0.82, 0), 1.8, 0.12)
-        for index in range(3):
-            self._make_label('row%d' % index, '',
-                             (-0.89, 0.48 - index * 0.3, 0), 1.8, 0.2)
-        self._make_label('note', tr('Standard battles only. Rewards automatic. Resets at 00:00 UTC.'),
-                         (-0.89, -0.55, 0), 1.8, 0.13)
-        for role, label, x in (('reserves', tr('PERSONAL RESERVES'), -0.45),
-                               ('close', tr('CLOSE'), 0.55)):
-            self._make_control(role, (x, -0.85, CONTROL_Z), 0.75, 0.16)
-            self._make_label(role, label, (x, -0.85, 0), 0.75, 0.14,
-                             anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-            self._controls[role].script = _ServiceControl(self, role)
-        return True
+                               on_close=on_close)
+        self._flash = DailyWindow(self)
 
     def _sync_selection(self):
         return ()
-
-    def _move_pointer(self):
-        WaitingRoomUI._move_pointer(self)
-        stamp = int(time.time())
-        if self._open and self._last_paint != stamp:
-            self._last_paint = stamp
-            self.refresh()
-
-    def _refresh_contents(self):
-        self._apply_layout()
-        daily = policy.daily_state(snapshot())
-        for index, key in enumerate(daily['missions']):
-            row = policy.MISSION_BY_ID[key]
-            self._set_text('row%d' % index, tr('%s: %d/%d | Reward: %s reserve x1%s') % (
-                mission_label(row), daily[key], row[3],
-                tr(policy.RESERVE_BY_ID[row[4]][1]),
-                tr(' (RECEIVED)') if key in daily['claimed'] else ''))
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._set(component, 'visible', True)
-        self._set(self._panel, 'visible', True)
-        self._paint()
-        return True
 
     def activate(self, role):
         if not self._open or role not in ('close', 'reserves'):

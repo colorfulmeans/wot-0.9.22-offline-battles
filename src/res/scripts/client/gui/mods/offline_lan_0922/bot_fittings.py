@@ -91,6 +91,14 @@ def native_factors(descriptor, critical=None):
         if factors is None:
             raise RuntimeError('native Bot fitting crew factors were rejected')
         cache[key] = factors
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        if diagnostic.detailed_enabled():
+            diagnostic.validation_event('bot_effective_factors', vehicle=value['wire'].get('vehicle'),
+                tier=value['wire'].get('tier'), crew_level=value['wire']['crew_level'],
+                devices=value['wire'].get('devices'), directive=value['wire'].get('directive'),
+                crew_active=list(flags), fire=fire,
+                factors=dict((name, factor) for name, factor in factors.items()
+                             if isinstance(factor, (int, float))))
     return cache[key]
 
 
@@ -227,4 +235,11 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None, overrides=Non
     from gui.mods.offline_lan_0922.bot_runtime import _descriptor_crew_roster
     value['crew_roster'] = _descriptor_crew_roster(descriptor)
     register(descriptor, value)
+    from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+    validation_event('bot_fitting_installed', vehicle=vehicle, tier=tier,
+        crew_level=level, modules=actual,
+        devices=[d.name for d in descriptor.optionalDevices if d is not None],
+        directive=selected['directive'],
+        native_directives=[d.name for d in directives], style=selected['style'],
+        restored=restored is not None, overrides=overrides)
     return descriptor

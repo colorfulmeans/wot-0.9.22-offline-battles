@@ -319,28 +319,32 @@ class OfflineServicesTests(unittest.TestCase):
         buy.assert_called_once_with(50002, recruit_crew=True, bond_offer=True)
         self.assertEqual({'gold': 9000}, data['shopItemPrices'][50002])
 
-    def test_panel_close_and_escape_release_every_native_resource(self):
+    def test_daily_panel_close_releases_the_current_flash_view_and_can_reopen(self):
         ui = garage_fixture._load_port_module('offline_services_ui')
-        closed = []
-        surface = room_fixture._TransactionalSurface()
-        # Native SimpleGUIComponent owns delChild as well as addChild.
-        with mock.patch.object(room_fixture._Component, 'delChild',
-                               lambda owner, child: owner.children.remove(child), create=True), \
-                mock.patch.object(ui, 'snapshot', return_value=self.state.snapshot()), \
-                mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_ESCAPE=1)}):
-            panel = ui.ServicePanel('reserves', lambda: closed.append(True), surface)
+        from gui.mods.offline_lan_0922 import waiting_room_flash as flash
+        closed, views = [], []
+        panel = ui.ServicePanel(on_close=lambda: closed.append(True))
+        def open_view():
+            panel._flash.token = len(views) + 1
+            flash._rooms[panel._flash.token] = panel._flash
+            view = types.SimpleNamespace(owner=panel._flash, destroy=mock.Mock(),
+                _isDAAPIInited=lambda: False)
+            views.append(view)
+            panel._flash.view = view
+            return True
+        with mock.patch.object(panel._flash, 'open', side_effect=open_view), \
+             mock.patch.object(ui, 'snapshot', return_value=self.state.snapshot()):
             self.assertTrue(panel.open())
-            self.assertTrue(surface.cursor_owned)
-            panel._panel.script.handleKeyEvent(types.SimpleNamespace(
-                key=1, isKeyDown=lambda: True))
+            panel._flash.action('close', '')
             self.assertEqual([True], closed)
-            self.assertEqual([], surface.roots)
-            self.assertFalse(surface.cursor_owned)
-            self.assertFalse(surface.callbacks)
+            views[0].destroy.assert_called_once_with()
+            self.assertIsNone(panel._flash.view)
             self.assertTrue(panel.open())
             panel.activate('close')
             self.assertEqual([True, True], closed)
-            self.assertFalse(surface.roots)
+            views[1].destroy.assert_called_once_with()
+            self.assertFalse(panel._open)
+            self.assertIsNone(panel._flash.token)
 
     def test_lobby_install_accepts_settings_package_class_export(self):
         ui = garage_fixture._load_port_module('offline_services_ui')

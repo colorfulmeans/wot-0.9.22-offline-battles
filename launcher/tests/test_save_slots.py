@@ -516,7 +516,7 @@ class InitializeSaveTests(unittest.TestCase):
         legacy=root.parent/'garage_state.json';legacy.write_text('legacy')
         save_slots.initialize_slot('default',root=self.root,is_running=lambda:False)
         self.assertEqual(str(root/'default/garage_state.json'),save_ledger.ledger_path('default',root=self.root))
-        self.assertEqual('legacy',legacy.read_text())
+        self.assertFalse(legacy.exists())
 
 
     def test_locked_partial_metadata_still_attempts_to_restore_old_files(self):

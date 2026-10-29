@@ -224,6 +224,8 @@ _CHINESE = {
     "Restore save...": "恢复存档…",
     "Initialize save...": "初始化存档…",
     "Initialize save?": "初始化存档？",
+    "Replace Default with current fully unlocked defaults? All Default progress and old Default backups will be deleted. No backup will be retained. Other saves are kept.": "将默认存档替换为当前的全解锁初始存档？默认存档的全部进度和旧备份都会删除，不保留备份。其他存档会保留。",
+    "Initialized Default with current fully unlocked defaults; no backup was retained.": "默认存档已替换为当前的全解锁初始存档，未保留备份。",
     "Close World of Tanks before initializing a save.": "初始化存档前请先关闭游戏。",
     "The save could not be initialized: %s": "初始化存档失败：%s",
     "Initialized save '%s'. Recovery folder: %s": "已初始化存档“%s”。恢复备份目录：%s",
@@ -2117,8 +2119,11 @@ class LauncherWindow(object):
         record=self._selected_save_slot_record()
         if record is None:return False
         from tkinter import messagebox
+        prompt = self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account'))
+        if record['id'] == save_slots.DEFAULT_SLOT_ID:
+            prompt = self._t('Replace Default with current fully unlocked defaults? All Default progress and old Default backups will be deleted. No backup will be retained. Other saves are kept.')
         if not messagebox.askyesno(self._t('Initialize save?'),
-                self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')),
+                prompt,
                 icon='warning',default='no',parent=self.root):
             return False
         try:
@@ -2127,7 +2132,10 @@ class LauncherWindow(object):
             self._log(self._t('The save could not be initialized: %s') % error)
             return False
         self._refresh_save_slots()
-        self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
+        if result['recovery'] is None:
+            self._log(self._t('Initialized Default with current fully unlocked defaults; no backup was retained.'))
+        else:
+            self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):

@@ -286,7 +286,8 @@ def build(client, java, ffdec, output):
         subprocess.run(command + ['-selectclass', 'OfflineWaitingRoomUI', '-export',
             'script', str(temp / 'verify'), str(output.resolve())], check=True)
         verified = (temp / 'verify/scripts/OfflineWaitingRoomUI.as').read_text(encoding='utf8')
-        for token in tuple(control_linkages) + ('modeTitle', 'exitButton', '_originalWidth', 'rowCount'):
+        for token in tuple(control_linkages) + ('modeTitle', 'exitButton', '_originalWidth', 'rowCount',
+                                               'configureDaily', 'sizeFooter', 'dynamicSizeByText'):
             if token not in verified: raise ValueError('Missing compiled room contract: ' + token)
     proof = dict(actionscript_sha256=hashlib.sha256((ROOT/'tools/actionscript/OfflineWaitingRoom.as').read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
                  builder_sha256=hashlib.sha256(Path(__file__).read_bytes().replace(b'\r\n', b'\n')).hexdigest(),
