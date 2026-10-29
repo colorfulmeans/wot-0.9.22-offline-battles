@@ -225,6 +225,7 @@ jobs:
           python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
           --pattern test_port_0922_battle_fix_regressions.py
           --pattern test_port_0922_sparse_lineup.py
+          --pattern test_port_0922_simulation_worker.py
           --pattern test_waiting_room_stock_flash.py
           --pattern test_port_0922_bot_lineup_integration.py
           --pattern test_port_0922_server_team_size.py

@@ -10770,3 +10770,10 @@ diagnostic-only model records now add callback function/owner type names, retain
 no callbacks and invoking no synchronization or angle write. Native turret
 acceptance remains unresolved. Matching-head CI and actual artifact results are
 recorded in PR 116; the prior package is superseded once this follow-up ships.
+
+The complete follow-up run found a strict welcome-key assertion that did not
+yet include lineup_locked. Its expected wire contract now includes the field
+and verifies False for an Automatic room. The package gate also runs the full
+simulation-worker socket file, retaining its existing liveness assertions.
+The separate Great Wall opposed-gate failure remains the previously reproduced
+release-baseline issue; no unrelated steering or collision change is inferred.
