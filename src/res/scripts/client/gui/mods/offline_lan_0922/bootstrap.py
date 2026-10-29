@@ -739,7 +739,7 @@ def _grant_initial_appearance(snapshot, cache, vehicle_types):
         stock = inventory.setdefault(kind, {})
         for identifier, item in collection.items():
             bindings = stock.setdefault(int(identifier), {})
-            if item.isVehicleBound:
+            if item.isVehicleBound():
                 restriction = item.filter
                 for record in snapshot.get('vehicles') or ():
                     cd = int(record['vehicleTypeCompactDescr'])

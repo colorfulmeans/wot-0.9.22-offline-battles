@@ -1297,7 +1297,7 @@ class GarageState(object):
                 vehicle = _int(record['vehicleTypeCompactDescr'])
                 bindings = dict(self._snapshot.get('customizationItems', {}).get(kind, {}).get(identifier, {}))
                 if change > 0:
-                    binding = vehicle if item.isVehicleBound else 0
+                    binding = vehicle if item.isVehicleBound() else 0
                     bindings[binding] = bindings.get(binding, 0) + change
                 else:
                     needed = -change

@@ -66,7 +66,7 @@ def _report_inventory(snapshot, cache):
             if 'premiumIGR' not in item.tags and 'IGR' not in item.tags:
                 continue
             rows.append(dict(type=kind, id=int(identifier), tags=sorted(item.tags),
-                bound=bool(item.isVehicleBound), token=item.requiredToken,
+                bound=bool(item.isVehicleBound()), token=item.requiredToken,
                 stock=inventory.get(kind, {}).get(int(identifier), {})))
     write_json_record('APPEARANCE INVENTORY', dict(
         seed=snapshot.get('appearanceStockSeed', 0),

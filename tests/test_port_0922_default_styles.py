@@ -24,8 +24,8 @@ class DefaultStyleStockTests(unittest.TestCase):
         self.assertEqual({'gold':10},self.snapshot['wallet'])
 
     def test_independent_seed_uses_native_bindings_once_and_does_not_change_styles(self):
-        shared=types.SimpleNamespace(isVehicleBound=False,filter=None)
-        bound=types.SimpleNamespace(isVehicleBound=True,filter=types.SimpleNamespace(
+        shared=types.SimpleNamespace(isVehicleBound=lambda:False,filter=None)
+        bound=types.SimpleNamespace(isVehicleBound=lambda:True,filter=types.SimpleNamespace(
             matchVehicleType=lambda v:v.name=='first'))
         cache=types.SimpleNamespace(paints={137:shared},camouflages={77:bound},decals={},modifications={})
         self.snapshot.update(appearanceStockSeed=1,customizationItems={4:{128:{101:1}}})
@@ -45,7 +45,7 @@ class DefaultStyleStockTests(unittest.TestCase):
 
     def test_inventory_diagnostic_uses_the_real_entry_and_emits_parseable_igr_evidence(self):
         diagnostics=harness.NATIVE_INPUT_DIAGNOSTICS
-        item=types.SimpleNamespace(tags=frozenset(['premiumIGR']),isVehicleBound=False,requiredToken='')
+        item=types.SimpleNamespace(tags=frozenset(['premiumIGR']),isVehicleBound=lambda:False,requiredToken='')
         cache=types.SimpleNamespace(paints={},camouflages={77:item},decals={},modifications={})
         rules=self.modules['gui.mods.offline_lan_0922.customization_rules']
         output=io.StringIO()

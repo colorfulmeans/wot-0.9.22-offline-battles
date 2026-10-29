@@ -11103,3 +11103,8 @@ migration. APPEARANCE TRANSFER exposes committed typed stock in diagnostic runs.
 Five focused regressions plus all 294 garage, 24 campaign-reward and seven
 creation/style regressions passed locally. Acceptance of the new transfer
 requires a rebuilt native package; the 9042143 observation is not its proof.
+The descriptor's BaseCustomizationItem.isVehicleBound is a method, not the
+GUI item's property. Exact bytecode inspection corrected creation grants,
+refund binding and diagnostic flags to call it. Test descriptors now model
+that callable contract; a false-returning method must never count as bound
+merely because its function object is truthy.

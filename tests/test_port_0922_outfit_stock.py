@@ -31,8 +31,8 @@ class OutfitStockTests(unittest.TestCase):
     def setUp(self):
         unused, unused, self.garage = fixture._request_modules()
         vehicles, tankmen = fixture._modules()
-        shared = types.SimpleNamespace(isVehicleBound=False)
-        bound = types.SimpleNamespace(isVehicleBound=True)
+        shared = types.SimpleNamespace(isVehicleBound=lambda:False)
+        bound = types.SimpleNamespace(isVehicleBound=lambda:True)
         self.cache = types.SimpleNamespace(paints={137:shared}, camouflages={15125:bound},
             decals={137:shared}, modifications={1:shared}, styles={})
         vehicles.g_cache = types.SimpleNamespace(customization20=lambda:self.cache)
