@@ -22756,6 +22756,8 @@ class BattleRuntime(object):
         # Evidence only: candidate probes cannot apply HP. BotRuntime consumes
         # the primary realised hard contact before trying alternate headings.
         bot_state.pop('_world_contact_trace', None)
+        if detailed_enabled():
+            bot_state.pop('_passive_world_diagnostic_trace', None)
         airborne = bool(bot_state.get('airborne', False))
         movement_dir = int(bot_state.get('movement_dir', 0))
         rotation_dir = int(bot_state.get('rotation_dir', 0))
@@ -22849,8 +22851,14 @@ class BattleRuntime(object):
                 sampled_at=now, source='native_world', commit_enabled=commit_enabled)
             return 'hard'
         if self._destructibles is None:
+            if detailed_enabled() and world_status != 'clear':
+                bot_state['_passive_world_diagnostic_trace'] = dict(contact_trace,
+                    source='native_world_without_catalog', status=world_status)
             return 'clear' if world_status == 'clear' else 'hard'
         if airborne:
+            if detailed_enabled() and world_status != 'clear':
+                bot_state['_passive_world_diagnostic_trace'] = dict(contact_trace,
+                    source='native_world_airborne', status=world_status)
             return 'clear' if world_status == 'clear' else 'hard'
         # A native kinetic result is only a forward candidate.  Always hand it
         # to the catalog's exact contact seam; its ``approach`` result keeps a
@@ -22920,6 +22928,13 @@ class BattleRuntime(object):
             return self._complete_bot_tree_contact(
                 tree, position, yaw, contact_end, yaw,
                 descriptor, speed, now, dt, commit_enabled, status)
+        if detailed_enabled():
+            bot_state['_passive_world_diagnostic_trace'] = dict(reason='catalog_' + status,
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=commit_enabled,
+                native_status=world_status, native_contact=contact_trace,
+                catalog={key: detail.get(key) for key in
+                         ('status', 'kinds', 'reason', 'token', 'requires_commit')})
         return status
 
     @staticmethod
@@ -27710,6 +27725,28 @@ class BattleRuntime(object):
             rows.append((record, vehicle, position))
         return tuple(rows)
 
+    def _wreck_lane_evidence(self, record, vehicle, points, blocked):
+        """Observe the existing lane/model and projectile poses; never requery."""
+        if not detailed_enabled():
+            return
+        from .native_input_diagnostics import battle_review_record
+        def build():
+            state = record.get('state') or {}
+            native_aim, error = None, None
+            try:
+                native_aim = list(vehicle.getAimParams())
+            except Exception as failure:
+                error = type(failure).__name__
+            return dict(actor=record.get('network_id'), blocked=bool(blocked),
+                ray_start=list(_xyz(points[0])), ray_end=list(_xyz(points[-1])),
+                state=dict((key, state.get(key)) for key in
+                    ('yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch')),
+                projectile_pose=record.get('projectile_collision_pose'),
+                native_aim=native_aim, native_aim_error=error)
+        battle_review_record(
+            self, 'wreck_firing_lane', record.get('engine_id'),
+            self._last_frame_time, build, interval=2.0, limit=256)
+
     def _bot_lane_row_contact(self, rows, points, splash_radius=0.0,
                               exclude=()):
         """Return the first supplied hull one bot shell path contacts.
@@ -27730,6 +27767,7 @@ class BattleRuntime(object):
                 splash_radius > 0.0 and
                 sum((position[index] - terminal[index]) ** 2
                     for index in range(3)) <= splash_radius ** 2)
+            tested = blocked
             if not blocked:
                 for first, second in zip(points, points[1:]):
                     if (not point_in_expanded_segment_bounds(
@@ -27740,6 +27778,7 @@ class BattleRuntime(object):
                         continue
                     start = self._vector(first)
                     end = self._vector(second)
+                    tested = True
                     if (record.get('local') and
                             self._local_matrix is not None):
                         collisions = collide_vehicle_at_matrix(
@@ -27762,6 +27801,8 @@ class BattleRuntime(object):
                     if collisions:
                         blocked = True
                         break
+            if tested and not (record.get('state') or {}).get('alive', True):
+                self._wreck_lane_evidence(record, vehicle, points, blocked)
             if blocked:
                 return record, vehicle, position
         return None

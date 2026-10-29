@@ -259,6 +259,9 @@ jobs:
           --pattern test_port_0922_target_evidence.py
           --pattern test_port_0922_gun_angle_recovery.py
           --pattern test_port_0922_wreck_dynamics.py
+          --pattern test_port_0922_passive_wreck_pose.py
+          --pattern test_port_0922_contact_motion.py
+          --pattern test_port_0922_wreck_push_diagnostics.py
           --pattern test_port_0922_wreck_pose_readback.py
           --pattern test_port_0922_battle_projectiles.py
       - name: Verify default seed revision and save isolation

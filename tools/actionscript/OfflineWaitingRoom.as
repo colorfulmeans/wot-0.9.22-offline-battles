@@ -254,6 +254,12 @@ package {
             updating = true;
             window.title = data.title;
             window.useBottomBtns = true;
+            // Match the stock settings' visible upper clearance separately
+            // from its lower frame inset. Default Window footer padding leaves
+            // our 22px controls only 1px below bgForm's measured bounds.
+            // The extra 3px moves the form edge, preserving the accepted lower
+            // inset, button sizes and content dimensions in both panels.
+            window.formBgPadding = new Padding(33, 11, 45, 10);
             for (var key:String in fields) fields[key].text = data.labels[key] == null ? "" : String(data.labels[key]);
             for (key in widgets) {
                 var widget:Object = widgets[key];

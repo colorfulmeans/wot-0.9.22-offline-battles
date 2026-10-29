@@ -1,10 +1,10 @@
 {
-  "actionscript_sha256": "b7160a82d25e82761d138eb6b65d4cacf48f140f44815a0dfde1f0208bf9dbc9",
+  "actionscript_sha256": "b2a64a239b77aa5b0beb3afbbcdfc673247ffa333f3fbd04f1fee481d6662e2d",
   "builder_sha256": "62e6a8b6af9fa1d22e5141f4c0727c2ce9ca0f22cacd70622e0d06c33690b340",
   "client": "Chinese HD 0.9.22.0.1 #1513",
   "source_sha256": "aeaf9efe4ef1180ed8c65cd7d1c2d9d2e7ddfa8297e5cf1e0819c34c7281a019",
   "lobby_sha256": "3a54f7081b35b77dfbcb0048bfe9e8c77f0071cf0586cfb68dabf5a00ff81e55",
-  "output_sha256": "b941de433ee7894ebfc4a0789bfe30a11cbacdecf7910668fb635c231f10e549",
+  "output_sha256": "2c2fd55ae36e1e93b1c5c556d39d6a68a5f243dccae610967e361bdafe96c1e0",
   "shared_movies_unchanged": true,
   "native_control_linkages": [
     "ButtonBlack",

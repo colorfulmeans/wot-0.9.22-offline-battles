@@ -10920,3 +10920,59 @@ The unaccepted old rotated-wreck collision coupling is not restored. Three
 Mittengard VII-VIII acceptance matches and the separate Great Wall finding
 remain open; its engine-free fixture still fails and no navigation law is
 changed on that evidence alone.
+
+## Reviewed passive-wreck and footer follow-up (2026-10-30)
+
+This supersedes the rotated-wreck exclusion above with fresh source evidence.
+Report 79f2cd83009d uses build 40530145249-1, not the current PR116 package.
+Tiger Bot 4 aimed 32 shots at T29 Bot 18 without damage; T29 aimed 16 back,
+with two damage credits of 320/386. The worker explicitly logged eight turret
+and four gun impacts on Emil 1951 wreck Bot 16. The report proves repeated
+wreck obstruction, not the pre-fire verdict of every unsuccessful shell.
+
+Current-source reproduction found that both passive yaw paths updated hull
+yaw while retaining inconsistent world/relative turret angles. Native aim
+presentation derives relative yaw from world-minus-hull; projectile authority
+retains the explicit relative angle. Applying the report's 0.38762-radian hull
+turn in an isolated reproduction separated these consumers by 22.209 degrees.
+That is a code reproduction, not a measured runtime matrix difference. Both
+rotation paths now preserve the passive relative angle and update world aim
+together. Vertical pose rejection restores world aim along with hull yaw.
+Wraparound, all existing sweep vetoes and unchanged gun pitch are covered.
+This does not reenable suppressed native gun synchronization or replace native
+turret-detachment ownership.
+
+Two passive translation gates rejected the valid resolver status `crushed`,
+despite other motion consumers admitting it. They now admit `clear` and
+`crushed`; `soft`, `hard` and uncommitted transactions still block. This defect
+is reproducible but is not established as the cause of report 69355839c587's
+Bat-Chat 12t: all 38 logged nonzero nudges were rejected by the world gate,
+but their resolver return values were absent. The old Emil report also has
+four such rejected nudges, after earlier accepted movement.
+
+Diagnostic entry now records raw/normalized passive resolver verdicts, actual
+hull/travel headings, step/distance inputs, catalog-soft/native refusal detail,
+the first rejecting contact gate, and requested versus final wreck poses and
+angles. A separately bounded firing-lane record compares existing native aim
+and cached projectile pose on actual tested wreck candidates, including clear
+verdicts. It issues no extra collision queries and does not alter firing policy.
+Each new stage admits at most 256 samples per actor/round at a two-second
+interval, using its own review-stage budget rather than the bulk history or
+shared priority allowance. Basic entry does not build or read native diagnostic
+payloads. Additional soft-contact traces are diagnostic-only and are not placed
+in the gameplay impact-damage receipt.
+
+The native room and daily window form edge is moved three pixels upward,
+preserving the accepted lower button inset and 191/127/100x22 button sizes.
+Upper clearance is matched independently to the stock settings reference;
+no equal-upper/lower-spacing rule is imposed. The mod-owned movie was rebuilt
+and exported for inspection with pinned FFDec 26.3.0/Java 17 and #1513 assets.
+
+Local isolated verification passed five files / 217 tests without skips,
+including six new rotation/rollback/status/lane-diagnostic checks. Three related
+full motion fixture files could not create the matching native simulation in
+the local embedded Windows Python; they are not passing evidence. The review
+package gate now includes those files and the new regression file on Linux.
+Matching-head CI, package inspection and subsequent #1513 rendered/gameplay
+receipts are recorded in PR116. Random matches alone do not accept the original
+12t rejection cause or every wreck firing configuration.
