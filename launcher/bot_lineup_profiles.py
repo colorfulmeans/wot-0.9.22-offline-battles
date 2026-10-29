@@ -184,7 +184,9 @@ def _assignments(value):
                         raise BotLineupProfileError('The Bot filter is invalid.')
                     entry[key] = raw[key]
             if not entry['enabled']:
-                vehicle, skill = None, None
+                # Difficulty/filter edits are inactive presets until a vehicle
+                # is selected. Explicit clearing removes them in the editor.
+                vehicle = None
         if vehicle is not None:
             entry["vehicle"] = vehicle
         if skill is not None:

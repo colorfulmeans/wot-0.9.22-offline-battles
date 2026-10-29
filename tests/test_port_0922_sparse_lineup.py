@@ -11,6 +11,45 @@ ROWS = [dict(team=1, slot=0, enabled=False), dict(team=1, slot=3, enabled=True),
 
 
 class SparseLineupTests(unittest.TestCase):
+    def test_disabled_difficulty_survives_server_environment_but_is_not_an_active_pin(self):
+        import json
+        import windows_server
+        import bot_lineup_profiles as profiles
+        from gui.mods.offline_lan_0922.bot_runtime import BotRuntime
+        store, name = profiles.create(profiles.empty_store(), 'Inactive presets')
+        rows = [dict(team=1, slot=0, enabled=False, skill='elite'),
+                dict(team=1, slot=14, enabled=True, skill='veteran'),
+                dict(team=2, slot=6, enabled=True)]
+        store = profiles.replace_assignments(store, name, rows)
+        saved = profiles.runtime_assignments(json.loads(json.dumps(store)), name)
+        wire = windows_server._bot_lineup_from_environment(
+            {windows_server.SERVER_BOT_LINEUP_ENV: json.dumps(saved)})
+        state = BattleState(bot_lineup=wire)
+        self.assertEqual('elite', state.bot_lineup[0]['skill'])
+        self.assertEqual({1: 1, 2: 1}, state.team_sizes)
+        self.assertEqual([(1, 14), (2, 6)],
+                         [(r['team'], r['slot']) for r in state._new_bot_roster()])
+        self.assertEqual({(1, 14): 'veteran'},
+                         BotRuntime._lineup_skill_pins({'bot_lineup': state.bot_lineup}))
+        from unittest import mock
+        import lan_battle_server as server_module
+        diagnostic = server_module.battle_review_diagnostics
+        with mock.patch.object(diagnostic, 'detailed_enabled', return_value=False), \
+                mock.patch.object(diagnostic, 'validation_event') as event:
+            state._new_bot_roster()
+            event.assert_not_called()
+        with mock.patch.object(diagnostic, 'detailed_enabled', return_value=True), \
+                mock.patch.object(diagnostic, 'validation_event') as event:
+            state._new_bot_roster()
+            self.assertEqual([
+                dict(team=1,slot=0,enabled=False,skill='elite'),
+                dict(team=1,slot=14,enabled=True,skill='veteran')],
+                event.call_args.kwargs['difficulty_presets'])
+        with self.assertRaises(ValueError):
+            BattleState(bot_lineup=[dict(team=1,slot=0,enabled=False,vehicle='usa:T1')])
+        with self.assertRaises(ValueError):
+            BattleState(bot_lineup=[dict(team=1,slot=0,enabled=False,skill='invalid')])
+
     def test_sparse_roster_keeps_original_ids_and_locked_defaults(self):
         state = BattleState(bot_lineup=ROWS, bot_skill_mode='brutal', bot_tier_mode='same')
         self.assertEqual({1: 2, 2: 1}, state.team_sizes)

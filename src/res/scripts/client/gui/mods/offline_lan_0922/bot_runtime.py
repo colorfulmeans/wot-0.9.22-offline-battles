@@ -3618,6 +3618,10 @@ class BotRuntime(object):
         for raw in message.get('bot_lineup') or ():
             if not isinstance(raw, dict):
                 continue
+            if raw.get('enabled') is False:
+                # Empty slots may retain a future difficulty preset, but do
+                # not contribute a runtime pin or affect another slot.
+                continue
             skill = raw.get('skill')
             if skill not in bot_gunnery.SKILL_TIERS:
                 continue

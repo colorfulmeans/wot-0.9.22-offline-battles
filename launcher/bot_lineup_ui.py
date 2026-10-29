@@ -28,6 +28,7 @@ ZH = {
     'No vehicles match this slot.': '没有符合此槽位筛选条件的车辆。',
     'Unavailable vehicle: %s': '车辆不可用：%s',
     'The lineup could not be saved.': '无法保存阵容。',
+    'Vehicles could not be loaded. Reopen the lineup editor before saving.': '未能加载车辆列表，请重新打开阵容编辑器后再保存。',
     'This lineup changed in another editor; reopen it before saving.': '此阵容已在另一个窗口中修改，请重新打开后再保存。',
     'Could not read vehicles: %s': '无法读取车辆列表：%s',
     'Team sizes: %d / %d': '队伍人数：%d／%d',
@@ -216,9 +217,9 @@ class BotLineupEditorWindow:
         old_root.destroy()
 
     def _save(self):
-        if not self._catalog_ready:
-            return False
         try:
+            if not self._catalog_ready:
+                raise ValueError(self._t('Vehicles could not be loaded. Reopen the lineup editor before saving.'))
             for state in self._draft:
                 pool = self._pool(state)
                 if state.get('enabled') and (not pool or (state.get('vehicle') and

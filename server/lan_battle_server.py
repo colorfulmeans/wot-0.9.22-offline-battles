@@ -2663,8 +2663,8 @@ class BattleState:
                 for field in ('nation', 'vehicle_class'):
                     if raw.get(field) is not None:
                         entry[field] = raw[field]
-                if not raw['enabled'] and (vehicle is not None or skill is not None):
-                    raise ValueError('Disabled lineup slot carries a vehicle or difficulty')
+                if not raw['enabled'] and vehicle is not None:
+                    raise ValueError('Disabled lineup slot carries a vehicle')
             if vehicle is not None:
                 entry["vehicle"] = vehicle
             if skill is not None:
@@ -2942,6 +2942,9 @@ class BattleState:
             battle_review_diagnostics.validation_event('lineup_roster',
                 active={str(t):self._team_slots(t) for t in (1,2)},
                 human_slots=sorted(occupied_slots),
+                difficulty_presets=[dict(team=r['team'], slot=r['slot'],
+                    enabled=r.get('enabled', True), skill=r['skill'])
+                    for r in self.bot_lineup if r.get('skill')],
                 bots=[dict(team=r['team'],slot=r['slot'],id=r['id']) for r in roster])
         return roster
 

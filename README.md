@@ -117,12 +117,16 @@ type, vehicle and difficulty columns. Nations follow the garage order; vehicles
 sort by descending tier, with distinct captions for duplicate stock names.
 Each team's All row applies one field to that team. Its vehicle menu begins with
 Clear all slots, Individual slot settings, then Random vehicle and actual vehicles.
-Difficulty-only edits never enable an empty slot. Random vehicles obey the saved
+Difficulty-only edits never enable an empty slot. An empty slot retains a later
+difficulty preset across Save and reopening; selecting a vehicle activates that
+preset. Choosing Empty or Clear explicitly removes that slot's prior settings.
+Random vehicles obey the saved
 nation/type filters; an empty candidate pool is refused rather than widened.
 
 Edits are drafts until Save succeeds. Failed saves retain the draft and previous
 complete settings; closing a changed draft offers Save and close, Discard, or
-Cancel. Success and failure show a result dialog. Slot numbers never compact:
+Cancel. Success and failure show a result dialog, including an unavailable vehicle
+catalogue; a failed save does not write or discard the draft. Slot numbers never compact:
 slots 1, 4 and 15 remain those slots and produce a team capacity of three.
 Humans replace enabled slots in order, using their own vehicles; excess humans
 are refused. Each team needs at least one enabled slot to start. Returning humans,
@@ -138,6 +142,8 @@ equally likely difficulty labels. Explicit tactics still override lineup difficu
 the effective preview identifies lineup sources without modifying tactics files.
 
 Acceptance: test both languages, per-team bulk actions, empty versus random slots,
+clear a team then set Elite, save/reopen and enable Random vehicles (the slots must
+remain Elite); also confirm explicit clearing removes the old difficulty. Test
 only a last slot enabled, duplicate vehicle names, failed save/close choices,
 human replacement and over-capacity refusal, zero-sized teams, and custom-to-
 Automatic restart. Export the diagnostic report to check the generated slot map.

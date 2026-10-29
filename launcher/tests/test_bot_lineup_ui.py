@@ -1,5 +1,6 @@
 """Draft/identity regressions plus real Tk acceptance on Windows CI."""
 import copy
+import json
 import os
 import types
 import unittest
@@ -51,6 +52,42 @@ class DraftTests(unittest.TestCase):
         self.assertFalse(any(r['enabled'] for r in e._draft))
         self.assertTrue(all(r.get('skill')=='elite' for r in e._draft[:15]))
         self.assertTrue(all('skill' not in r for r in e._draft[15:]))
+
+    def test_empty_slot_difficulty_survives_save_reopen_and_random_enable(self):
+        e = editor()
+        e._read = mock.Mock(return_value=ui.CLEAR)
+        e._changed(1, None, 'vehicle')
+        e._read.return_value = 'elite'
+        e._changed(1, None, 'skill')
+        self.assertTrue(e._save())
+        saved = profiles.normalize_store(json.loads(json.dumps(e._store)))
+        rows = profiles.runtime_assignments(saved, 'Review')
+        self.assertTrue(all(not r['enabled'] and r.get('skill') == 'elite' for r in rows[:15]))
+        self.assertEqual('elite', e._bulk_states[1]['skill'])
+        reopened = editor()
+        reopened._store = saved
+        reopened._draft = rows
+        reopened._original = copy.deepcopy(rows)
+        reopened._read = mock.Mock(return_value=ui.RANDOM)
+        reopened._changed(1, None, 'vehicle')
+        self.assertTrue(reopened._save())
+        self.assertTrue(all(r['enabled'] and r.get('skill') == 'elite' for r in reopened._draft[:15]))
+        self.assertTrue(all('skill' not in r for r in reopened._draft[15:]))
+        reopened._read.return_value = None
+        reopened._changed(1, 14, 'vehicle')
+        self.assertTrue(reopened._save())
+        self.assertEqual(dict(team=1, slot=14, enabled=False), reopened._draft[14])
+
+    def test_unloaded_catalogue_save_shows_failure_without_writing_or_losing_draft(self):
+        e = editor()
+        e._catalog_ready = False
+        e._draft[0]['skill'] = 'elite'
+        before = copy.deepcopy(e._store)
+        self.assertFalse(e._save())
+        e._messagebox.showerror.assert_called_once()
+        e._on_save.assert_not_called()
+        self.assertEqual(before, e._store)
+        self.assertEqual('elite', e._draft[0]['skill'])
 
     def test_clear_team_and_sparse_save_preserve_slot_ids(self):
         e=editor();e._read=mock.Mock(return_value=ui.CLEAR)
@@ -152,6 +189,32 @@ class RealTkTests(unittest.TestCase):
         self.choose(1,None,'vehicle',ui.RANDOM)
         self.assertTrue(all(r['enabled'] and r.get('nation')=='china' and r.get('vehicle_class')=='heavyTank' for r in self.e._draft[:15]))
         self.assertTrue(all('nation' not in r for r in self.e._draft[15:]))
+
+    def test_saved_empty_difficulty_matches_widgets_and_enabled_random_slots(self):
+        self.e.set_language('en')
+        self.choose(1, None, 'vehicle', ui.CLEAR)
+        self.choose(1, None, 'skill', 'elite')
+        self.assertTrue(self.e._save())
+        self.assertEqual('Elite', self.e._bulk[1]['skill'].get())
+        self.assertTrue(all(self.e._rows[(1, s)]['skill'].get() == 'Elite' for s in range(15)))
+        self.assertTrue(all(not r['enabled'] for r in self.e._draft[:15]))
+        saved = json.loads(json.dumps(self.saved[-1]))
+        self.e.root.destroy()
+        self.e = ui.open_bot_lineup_editor(self.parent, '/game', 'Review', saved,
+            self.saved.append, tk_module=self.tk, ttk_module=self.ttk,
+            messagebox_module=self.messages, language='en')
+        self.choose(1, None, 'vehicle', ui.RANDOM)
+        self.assertTrue(self.e._save())
+        self.assertTrue(all(r['enabled'] and r.get('skill') == 'elite' for r in self.e._draft[:15]))
+
+    def test_unloaded_catalogue_failure_is_localized_and_preserves_editor(self):
+        self.e._catalog_ready = False
+        self.assertFalse(self.e._save())
+        title, message = self.messages.showerror.call_args.args
+        self.assertEqual(ui.ZH['Save'], title)
+        self.assertIn(ui.ZH['Save failed: %s'].split('%s')[0], message)
+        self.assertTrue(self.e.root.winfo_exists())
+        self.assertEqual([], self.saved)
 
     def test_close_dialog_uses_three_content_sized_buttons_and_discard(self):
         self.choose(1,0,'skill','elite')

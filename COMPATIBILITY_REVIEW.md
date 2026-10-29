@@ -10777,3 +10777,31 @@ and verifies False for an Automatic room. The package gate also runs the full
 simulation-worker socket file, retaining its existing liveness assertions.
 The separate Great Wall opposed-gate failure remains the previously reproduced
 release-baseline issue; no unrelated steering or collision change is inferred.
+
+## Empty-slot difficulty persistence and save failure review
+
+Reconnection review reproduced a missing save/reopen transition: editing an empty
+slot's difficulty worked in the draft, but profile normalization deleted it.
+The All row retained its previous caption, so enabling random vehicles afterwards
+silently used mixed difficulty. Normalization now retains an inactive difficulty
+preset. The server accepts and validates that preset without adding capacity or
+generating a Bot; the worker excludes explicitly disabled entries from active
+skill pins. Explicit Empty/Clear actions still erase the slot's previous settings.
+Legacy entries without an enabled flag retain their original pin semantics.
+
+The editor also returned silently when its catalogue was unavailable. Save now
+uses the existing localized failure dialog in that case and preserves both the
+draft and the last persisted state. No write callback is invoked.
+
+Regressions cover clear -> difficulty -> Save -> JSON reload -> random enable,
+explicit clearing afterwards, isolation from the other team, environment parsing,
+server capacity/roster, inactive worker pins and invalid inactive difficulty.
+Diagnostic-entry-only lineup_roster evidence now includes enabled/inactive
+difficulty presets alongside the actual active and human-replaced slot map.
+Basic entry does not construct or publish that evidence.
+Actual Windows Tk tests also compare All/slot captions after saving, reopen the
+saved profile and enable random vehicles, and check the localized catalogue
+failure dialog. They run in the existing package gate; local embedded Python has
+no Tk and does not supply native-window acceptance. Matching-head CI and package
+results are recorded in PR 116. Turret delegate/lifecycle diagnostics remain
+read-only and diagnostic-entry-only; no new turret angle correction is inferred.
