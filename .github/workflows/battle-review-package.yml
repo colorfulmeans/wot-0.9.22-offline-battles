@@ -22,6 +22,8 @@ jobs:
           python tools/run_test_suite.py --directory launcher/tests --jobs 1
           --logs build/lineup-tk-results
           --pattern test_bot_lineup_ui.py
+          --pattern test_appearance_widgets.py
+          --pattern test_appearance_inventory.py
           --pattern test_bot_lineup_profiles.py
           --pattern test_bot_tactics_preview.py
       - uses: actions/upload-artifact@v4
@@ -224,6 +226,9 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
           --pattern test_port_0922_battle_fix_regressions.py
+          --pattern test_port_0922_contact_chain.py
+          --pattern test_port_0922_settings_policy.py
+          --pattern test_port_0922_default_styles.py
           --pattern test_port_0922_sparse_lineup.py
           --pattern test_port_0922_simulation_worker.py
           --pattern test_waiting_room_stock_flash.py

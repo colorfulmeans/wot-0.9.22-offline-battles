@@ -20,6 +20,26 @@ class DefaultStyleStockTests(unittest.TestCase):
         self.assertEqual({1:{101:100,102:100},128:{101:1}},self.snapshot['customizationItems'][4])
         self.assertEqual({'gold':10},self.snapshot['wallet'])
 
+    def test_independent_seed_uses_native_bindings_once_and_does_not_change_styles(self):
+        shared=types.SimpleNamespace(isVehicleBound=False,filter=None)
+        bound=types.SimpleNamespace(isVehicleBound=True,filter=types.SimpleNamespace(
+            matchVehicleType=lambda v:v.name=='first'))
+        cache=types.SimpleNamespace(paints={137:shared},camouflages={77:bound},decals={},modifications={})
+        self.snapshot.update(appearanceStockSeed=1,customizationItems={4:{128:{101:1}}})
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual({137:{0:1000}},self.snapshot['customizationItems'][1])
+        self.assertEqual({77:{101:1000}},self.snapshot['customizationItems'][2])
+        self.assertEqual({128:{101:1}},self.snapshot['customizationItems'][4])
+        self.snapshot['customizationItems'][1][137][0]=3
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual(3,self.snapshot['customizationItems'][1][137][0])
+
+    def test_existing_unlocked_save_without_seed_flag_is_not_replenished(self):
+        cache=types.SimpleNamespace(paints={},camouflages={},decals={},modifications={})
+        before=copy.deepcopy(self.snapshot)
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual(before,self.snapshot)
+
     def test_used_or_sold_inventory_is_not_reset_on_next_start(self):
         self.bootstrap._grant_default_styles(self.snapshot,self.styles,self.types)
         self.snapshot['customizationItems'][4][1][101]=15

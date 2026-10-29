@@ -11029,3 +11029,56 @@ establish failing boundaries, not a complete safe C++ initialization recipe.
 Any future experiment needs the exact #1513 connection/entity lifecycle and
 an isolated dump-backed run before gameplay acceptance. This follow-up changes
 no native synchronization call or server-connection initialization.
+
+### PR116 settings, independent appearance inventory and contact chains (2026-10-30)
+
+The stock #1513 SettingsParams forwards SettingsCore.packSettings(GAME.ALL()).
+GameplaySetting already represents an unavailable checkbox with None. The
+offline adapter publishes that sentinel for gameplay-mode toggles and server
+aim, and removes those keys from apply/default diffs. Standard mode keeps the
+native fixed-selection control. Unrelated settings and training Bot controls
+retain their owners. Actual disabled/selected Flash state remains a Windows
+acceptance item until observed in the installed review build.
+
+The active packed lists contain 1341 typed entries: 93 paints, 338 camouflage,
+305 emblems, 575 inscriptions, 3 modifications and 27 preset styles. IDs are
+scoped by type; raw style 137 in special_ru is not an active style. Thirty
+camouflage and fifteen decal entries carry premiumIGR. Fifteen Polish legacy
+camouflage definitions have no matching selectable #1513 vehicle and remain
+excluded by normal vehicle filtering. No resource-only style is activated.
+Native CustomizationType IDs are 1 paint, 2 camouflage, 3 decal, 4 style and
+5 modification. ItemTags.VEHICLE_BOUND is vehicleBound; the cache's
+isVehicleBound/filter contracts decide placement, not item names or guesses.
+
+Default seed revision 3 and newly created unlocked metadata explicitly opt
+into the independent 1000-unit grant. appearanceStockVersion is durable in
+garage ledgers and prevents replenishing subsequent use/sales. Existing named
+saves lack this creation marker. Preset-style quantity rules are unchanged.
+Typed launcher additions use the existing durable account-change notification
+queue. Diagnostic entry publishes APPEARANCE INVENTORY with IGR ownership and
+remaining token restrictions; client installation and persistence need native
+acceptance, not merely an edited JSON count.
+
+The contact candidate roster now retains resting wreck edges, but evaluates
+the active/moving condition during each sequential pass. This wakes a tail
+wreck within the same slice while leaving a completely resting pile untouched.
+Both Python and C++ follow this law. Worker application also recognizes the
+newly solved impulse instead of requiring an initially active peer. Four
+live/dead combinations and all six actor-ID orders transmit momentum in the
+first reference slice; a resting overlapping pile remains at rest. Native
+conformance cases cover the same chains. This does not change track friction,
+world-destruction strength or player-wreck ownership.
+
+Detailed contact_chain evidence retains frozen body velocities, mass, grip,
+ownership flags, solved impulses and final worker poses. Individual refused
+translations include vehicle blocker IDs/fractions. Player-wreck ownership,
+longer-chain stalls and the first IS-2 shove remain investigations rather than
+claims of a universal physics fix.
+
+Local validation before native packaging: all 39 launcher test files passed
+(1182 tests), including real bilingual Tk interaction and save isolation.
+Targeted reference bootstrap/contact and existing garage/settings/message
+regressions passed. The exact installed Chinese HD #1513 resources passed
+inspect_client.py. The original-resource exterior dialog was visually checked
+in both tabs on Windows using a disposable save; game-client checks and final
+package/CI identity are recorded after their actual completion below.

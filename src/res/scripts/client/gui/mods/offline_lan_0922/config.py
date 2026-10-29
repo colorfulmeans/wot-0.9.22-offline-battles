@@ -663,6 +663,8 @@ def save_slot_initial_customizations(slot=None, user_data_dir=None):
             return {}
         from gui.mods.offline_lan_0922.account_rpc.garage_store import _customization_inventory
         return {'customizationItems': _customization_inventory(value.get('initial_customizations')),
+                'appearanceStockSeed': max(0, int(value.get('appearanceStockSeed', 0))),
+                'appearanceStockVersion': max(0, int(value.get('appearanceStockVersion', 0))),
                 'styleStockVersion': max(0, int(value.get('styleStockVersion', 0)))}
     except (IOError, OSError, TypeError, ValueError):
         return {}

@@ -80,6 +80,7 @@ _ZH = {
     'Use preset styles from the garage Exterior screen.':u'请在车库外观界面安装或移除预设风格。',
     'Use in Exterior':u'在外观界面使用',
     'Style inventory: %s x%d': u'风格库存：%s，数量 %d',
+    'Appearance inventory: %s x%d': u'外观库存：%s，数量 %d',
     'Battle earnings multiplier: %d%% -> %d%%': u'战斗收益倍率：%d%% → %d%%',
     'Badge: %s': u'勋章：%s',
     'Crew members: %d': u'乘员：%d 名',

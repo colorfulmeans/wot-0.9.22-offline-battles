@@ -33,7 +33,7 @@ METADATA_NAME = "save.json"
 METADATA_SCHEMA = 1
 # PR115 review packages used revision 1 before their implementation was accepted.
 # A distinct seed revision must not trust that older completion marker.
-DEFAULT_REVISION = 2
+DEFAULT_REVISION = 3
 
 # How a slot was created.  ``unlocked`` is the historical offline garage: every
 # vehicle owned and every balance effectively unlimited.  ``new_account``
@@ -257,6 +257,7 @@ def replace_default(game_root=None, environment=None, root=None, force=False):
         'schema': METADATA_SCHEMA, 'id': DEFAULT_SLOT_ID,
         'name': DEFAULT_SLOT_ID, 'mode': MODE_UNLOCKED,
         'default_revision': DEFAULT_REVISION, 'skip_legacy_import': True,
+        'appearanceStockSeed': 1,
     })
     return True
 
@@ -341,6 +342,7 @@ def create_slot(name, mode, game_root=None, environment=None, root=None,
             "id": slot_id,
             "name": name,
             "mode": mode,
+            "appearanceStockSeed": 1 if mode == MODE_UNLOCKED else 0,
             EARNINGS_KEY: normalized_earnings_percent(earnings_percent),
             "created": int(time.time() if now is None else now),
         })

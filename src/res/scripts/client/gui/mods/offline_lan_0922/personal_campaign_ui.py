@@ -158,6 +158,18 @@ def _payout_parts(rows):
         elif kind == 'style':
             parts.append(tr('Style inventory: %s x%d') %
                          (_style_name(row['id']),int(row.get('count',0))))
+        elif kind == 'customization':
+            from items import vehicles
+            cache = vehicles.g_cache.customization20()
+            collection = {1: cache.paints, 2: cache.camouflages,
+                          3: cache.decals, 5: cache.modifications}.get(int(row['type']), {})
+            item = collection.get(int(row['id']))
+            name = getattr(item, 'userString', '') if item is not None else ''
+            if name:
+                from helpers import i18n
+                name = i18n.makeString(name)
+            parts.append(tr('Appearance inventory: %s x%d') %
+                (_label(name or '%s:%s' % (row['type'], row['id'])), int(row.get('count', 0))))
         elif kind == 'earnings_percent':
             parts.append(tr('Battle earnings multiplier: %d%% -> %d%%') %
                          (int(row['before']),int(row['count'])))

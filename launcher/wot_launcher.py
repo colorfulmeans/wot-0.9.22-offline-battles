@@ -67,6 +67,19 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Appearance inventory': '外观库存',
+    'Type': '类型',
+    'Select at least one appearance item.': '请至少选择一种外观物品。',
+    'Appearance inventory saved.': '外观库存已保存。',
+    'My style': '我的风格', 'Preset styles': '预设风格',
+    'Appearance item': '外观物品', 'Category': '类别', 'Search': '搜索车辆',
+    'Paint': '喷漆', 'Camouflage': '迷彩', 'Emblem': '徽章',
+    'Inscription': '签名', 'Wear': '战损', 'Internet cafe': '网吧专用',
+    'Garage vehicles only': '仅车库车辆',
+    'Quantity to add per selected item': '每种选中物品添加数量',
+    'Add selected items': '添加选中物品',
+    'Add the entered quantity to each selected item. Vehicle-bound items are added for each compatible target vehicle. Rental copies grant their original battle count. Save with the game closed; additions appear in game system messages.':
+        '按填写数量增加选中物品；绑定车辆的物品会分别添加至筛选范围内的适用车辆。租赁风格每份提供原版规定的使用场次。关闭游戏后保存，再次进入游戏时通过系统消息提示。',
     _MAINTENANCE_HELP[0]: "修复模组安装：重新安装此启动器携带的模组，保留存档和自定义方案。",
     _MAINTENANCE_HELP[1]: "重置全部离线客户端设置：重置所有离线账号的画面、声音、按键等客户端设置，保留存档和方案。",
     _MAINTENANCE_HELP[2]: "清空全部离线存档：删除所有离线存档，重新建立默认全解锁存档，保留自定义方案和客户端设置。",
@@ -103,7 +116,7 @@ _CHINESE = {
     'Adds one 100% crew member, with experience for the selected number of complete skills. Choose the skills in the client. No zero-skill perk is added. Close the game before adding; the next startup delivers the recruit and a system message. Insufficient barracks space leaves the request pending.':
         '每次添加一名 100% 成员，附带所选数量的完整技能经验，具体技能在客户端自行选择，不额外附赠零技能。技能数 0 表示只有 100% 基础熟练度。添加前请关闭游戏，下次启动时进入兵营并显示系统消息；兵营空间不足时保留待领取。',
     'Coatings': '涂装',
-    'Edit preset style inventory...': '编辑预设风格库存…',
+    'Edit appearance inventory...': '编辑外观库存…',
     'All compatible vehicles': '全部适用车辆',
     'Vehicle': '车辆',
     'Preset style': '预设风格',
@@ -1254,7 +1267,7 @@ class LauncherWindow(object):
         self.edit_badges_button.config(text=self._t("Edit account badges..."))
         self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
-        self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
+        self.edit_customizations_button.config(text=self._t('Edit appearance inventory...'))
         for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
                              (self.customizations_panel, 'Coatings'), (self.crew_panel, 'Crew members'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))

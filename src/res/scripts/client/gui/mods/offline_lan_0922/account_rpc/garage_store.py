@@ -260,6 +260,7 @@ def _ledger_payload(snapshot):
         'accountBadges': data.account_badges(snapshot.get('accountBadges')),
         'customizations': _customization_inventory(snapshot.get('customizationItems')),
         'styleStockVersion': max(0, _int_value(snapshot.get('styleStockVersion'))),
+        'appearanceStockVersion': max(0, _int_value(snapshot.get('appearanceStockVersion'))),
         'offlineServices': offline_services.saved_fields(snapshot),
     }
 
@@ -419,6 +420,7 @@ def _apply_ledger(staged, stored):
     if 'customizations' in ledger:
         staged['customizationItems'] = _customization_inventory(ledger['customizations'])
     staged['styleStockVersion'] = max(0, _int_value(ledger.get('styleStockVersion')))
+    staged['appearanceStockVersion'] = max(0, _int_value(ledger.get('appearanceStockVersion')))
     if 'accountBadges' in ledger:
         staged['accountBadges'] = data.account_badges(ledger['accountBadges'])
     return True

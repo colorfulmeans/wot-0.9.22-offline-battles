@@ -872,6 +872,19 @@ def _install_settings():
     from gui.Scaleform.daapi.view.common.settings.SettingsWindow import (
         SettingsWindow, SETTINGS, _PAGES_INDICES, _setLastTabIndex)
     from account_helpers.settings_core.options import VOIPSupportSetting
+    from gui.Scaleform.daapi.view.common.settings.SettingsParams import SettingsParams
+    from . import settings_policy
+    original_game = SettingsParams.getGameSettings
+    original_apply = SettingsParams.apply
+
+    def game_settings(params):
+        return settings_policy.pack(original_game(params))
+
+    def apply_settings(params, diff, *args, **kwargs):
+        return original_apply(params, settings_policy.editable(diff), *args, **kwargs)
+
+    _patch(SettingsParams, 'getGameSettings', game_settings)
+    _patch(SettingsParams, 'apply', apply_settings)
     original_tab = SettingsWindow.onTabSelected
 
     def tab_selected(view, tab):

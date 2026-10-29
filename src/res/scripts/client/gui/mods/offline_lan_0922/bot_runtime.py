@@ -11637,6 +11637,7 @@ class BotRuntime(object):
         requested_move = (move_x, move_z)
         world_blocked = False
         fraction = 1.0
+        vehicle_contacts = [] if detailed_enabled() else None
         # A zero displacement has no swept volume. Keep its velocity and
         # friction bookkeeping, without rebuilding every other vehicle body.
         if move_x != 0.0 or move_z != 0.0:
@@ -11644,7 +11645,7 @@ class BotRuntime(object):
                 getattr(self, '_contact_players', ()))
             body = self._contact_motion_body(state)
             fraction = tank_collision.translation_fraction(
-                body, (move_x, move_z), bodies)
+                body, (move_x, move_z), bodies, contacts=vehicle_contacts)
             move_x, move_z = tank_collision.slide_translation(
                 body, (move_x, move_z), bodies, first_fraction=fraction)
         else:
@@ -11734,6 +11735,7 @@ class BotRuntime(object):
             if detailed_enabled():
                 state['_contact_compact_receipt'] = dict(at=now,
                     requested=requested_move, accepted=(move_x, move_z),
+                    vehicle_contacts=vehicle_contacts,
                     vehicle_fraction=fraction, native_world=world_blocked)
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
@@ -12500,6 +12502,8 @@ class BotRuntime(object):
                 state.pop('_contact_drive_sweep', None)
                 continue
             if not state_alive and not (
+                    any(physical_results.get(own['id'], {}).get('delta_velocity', ())) or
+                    physical_results.get(own['id'], {}).get('delta_yaw', 0.0) or
                     self._wreck_is_active(state) or
                     state.get('push_x', 0.0) or state.get('push_z', 0.0) or
                     (contact_row[5] if contact_row is not None else
@@ -12594,6 +12598,19 @@ class BotRuntime(object):
         for bot_id in sorted(contacted_bot_ids):
             self._record_traffic_wait_contact(bot_id, step)
         self._ram_contacts = frozenset(current_ram_contacts)
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            # Original inputs and final accepted poses distinguish missing
+            # momentum from grip, actor ownership, and per-body sweep refusal.
+            battle_review_record(self, 'contact_chain', 0, now, lambda: dict(
+                step=step, inputs=tanks,
+                solved=physical_results,
+                native_rows=[list(row[:6]) for row in contact_rows.values()] if contact_rows is not None else None,
+                accepted=[dict(id=s['id'], alive=s.get('alive', True),
+                    x=s['x'], y=s['y'], z=s['z'], speed=s['speed'],
+                    push_x=s.get('push_x', 0.0), push_z=s.get('push_z', 0.0),
+                    motion=s.get('_contact_compact_receipt')) for s in self._ordered_states()]),
+                interval=2.0, limit=256)
         return reports
 
     @staticmethod

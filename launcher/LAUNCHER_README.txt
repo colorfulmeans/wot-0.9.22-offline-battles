@@ -75,7 +75,10 @@ and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.
 Exit both the game and launcher before switching entrances. The fixtures do
 not change saved room presets; the contact fixes also apply in normal battles.
 
-Customize save -> Coatings edits preset-style inventory, including hidden styles.
+Customize save -> Appearance inventory has My style and Preset styles pages,
+with nation/type/vehicle filters, garage-only targets and vehicle-name search.
+My style includes paints, camouflage, emblems, inscriptions and wear; active
+internet-cafe items retain their native restrictions and are labeled explicitly.
 Customize save -> Members adds 100% recruits by nation, role, gender, complete
 skill count and trained vehicle. Skills remain unassigned for the client to
 choose; zero gives no secondary-skill XP. Close the game before adding. The next
@@ -85,10 +88,15 @@ delivery after an interrupted inbox cleanup. The Members tab follows Coatings.
 Bot tactics also has an independent outfit checkbox below consumables: inherit,
 enable or disable the existing seasonal rented styles, keeping locked-outfit
 exceptions. It does not select a style or add a battle-count expiry.
-Select one vehicle or all compatible vehicles, add copies or fill missing styles,
-then Save with the game closed. One rental copy grants its original battle count.
+Select one vehicle or all filtered compatible vehicles and add a positive quantity,
+then Save with the game closed. Saved additions appear in native system messages.
+One rental copy grants its original battle count. There is no subtract button.
 Fully unlocked saves receive one copy per compatible vehicle on their first style
 stock initialization, including existing saves; later use/sales are not replenished.
+Default seed revision 3 replaces Default once without backup. This fresh Default
+and newly created unlocked saves receive 1000 units of each independent exterior
+item, retaining native vehicle bindings. Preset-style quantities are unchanged.
+Existing named saves and new-account saves receive no new exterior-stock grant.
 
 English release notes:
 https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.0.0

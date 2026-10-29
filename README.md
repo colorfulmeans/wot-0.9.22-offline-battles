@@ -494,6 +494,21 @@ from replacing later edits. Named unlocked and career saves are preserved.
 Initializing Default explicitly uses this same new seed; initializing a named
 save retains its ordinary recovery backup.
 
+Customize save -> Appearance inventory mirrors the native My style and Preset
+styles pages. Nation/type/vehicle filters follow the garage nation order;
+the optional garage-only filter and vehicle-name search narrow the targets.
+Enter a positive quantity and add selected items, then save with the client
+closed. The next garage startup publishes durable system-message additions.
+Native vehicle-bound items retain their bindings and rental styles retain
+their original battle-count units. Only active #1513 item lists are offered.
+
+Default seed revision 3 and newly created unlocked saves start with 1000 native
+inventory units of each independent paint/camouflage/decal/modification item.
+Preset-style quantities keep their existing initialization law. The separate
+creation marker never replenishes existing named saves, career saves, used
+stock, or sold stock. IGR descriptors are labeled as internet-cafe items;
+ownership does not waive their native vehicle or token restrictions.
+
 A new save is created as one of two accounts, and the choice is permanent. A
 fully unlocked save is the historical garage: every vehicle, module and
 consumable is already owned. A new account starts the way a real World of Tanks

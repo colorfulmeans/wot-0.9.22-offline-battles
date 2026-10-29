@@ -14,6 +14,38 @@ def rental_battles(style):
     return max(0, int(getattr(style, 'rentCount', 0) or 0))
 
 
+def report_inventory(snapshot, cache):
+    """Expose IGR ownership and remaining token restrictions in diagnostic runs."""
+    try:
+        _report_inventory(snapshot, cache)
+    except Exception as error:
+        # Observation must not prevent a valid garage from opening.
+        import sys
+        sys.stdout.write('[Offline LAN 0.9.22] APPEARANCE DIAGNOSTIC unavailable: %s\n' % error)
+
+
+def _report_inventory(snapshot, cache):
+    from gui.mods.offline_lan_0922.worker_diagnostics import detailed_enabled
+    if not detailed_enabled():
+        return
+    from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+    inventory = snapshot.get('customizationItems', {})
+    rows = []
+    for kind, items in ((1, cache.paints), (2, cache.camouflages),
+                        (3, cache.decals), (5, cache.modifications)):
+        for identifier, item in items.items():
+            if 'premiumIGR' not in item.tags and 'IGR' not in item.tags:
+                continue
+            rows.append(dict(type=kind, id=int(identifier), tags=sorted(item.tags),
+                bound=bool(item.isVehicleBound), token=item.requiredToken,
+                stock=inventory.get(kind, {}).get(int(identifier), {})))
+    write_json_record('APPEARANCE INVENTORY', dict(
+        seed=snapshot.get('appearanceStockSeed', 0),
+        version=snapshot.get('appearanceStockVersion', 0),
+        counts=dict((str(kind), len(items)) for kind, items in inventory.items()),
+        igr=rows))
+
+
 def report_style(stage, record, snapshot, styles, parser, identity, receipt=None):
     """Read-only evidence for one vehicle; logging must never affect a save."""
     try:

@@ -729,6 +729,28 @@ def _grant_default_styles(snapshot, styles, vehicle_types):
     snapshot['styleStockVersion'] = 1
 
 
+def _grant_initial_appearance(snapshot, cache, vehicle_types):
+    """Seed newly created sandbox slots once, preserving existing player saves."""
+    if not snapshot.get('appearanceStockSeed') or snapshot.get('appearanceStockVersion', 0) >= 1:
+        return
+    inventory = snapshot.setdefault('customizationItems', {})
+    for kind, collection in ((1, cache.paints), (2, cache.camouflages),
+                             (3, cache.decals), (5, cache.modifications)):
+        stock = inventory.setdefault(kind, {})
+        for identifier, item in collection.items():
+            bindings = stock.setdefault(int(identifier), {})
+            if item.isVehicleBound:
+                restriction = item.filter
+                for record in snapshot.get('vehicles') or ():
+                    cd = int(record['vehicleTypeCompactDescr'])
+                    vehicle = vehicle_types.get(cd)
+                    if vehicle is not None and (restriction is None or restriction.matchVehicleType(vehicle)):
+                        bindings[cd] = max(int(bindings.get(cd, 0)), 1000)
+            else:
+                bindings[0] = max(int(bindings.get(0, 0)), 1000)
+    snapshot['appearanceStockVersion'] = 1
+
+
 def _selected_vehicle(config, restore_saved=True):
     try:
         import nations
@@ -983,6 +1005,9 @@ def _selected_vehicle(config, restore_saved=True):
             _settle_launcher_campaign(result, vehicles, tankmen)
         if not career:
             _grant_default_styles(result, customization_cache.styles, style_vehicle_types)
+            _grant_initial_appearance(result, customization_cache, style_vehicle_types)
+        from gui.mods.offline_lan_0922.customization_rules import report_inventory
+        report_inventory(result, customization_cache)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot
