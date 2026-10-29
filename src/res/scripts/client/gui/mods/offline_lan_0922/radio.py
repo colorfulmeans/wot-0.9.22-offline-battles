@@ -11,8 +11,22 @@ class RadioNetwork(object):
         self._targets = {}
         self._observer_ranks = {}
         self._groups = {}
+        self.retired_receivers = {}
 
-    def configure(self, actors, now):
+    def configure(self, actors, now, retiring=()):
+        # Death ends transmission, not information already delivered. Freeze
+        # the last direct recipients; a newcomer cannot learn from a corpse.
+        retiring = set(retiring)
+        for observer in tuple(self.observations):
+            if observer in retiring and observer in self.actors:
+                previous = self.retired_receivers.get(observer, frozenset())
+                self.retired_receivers[observer] = previous | frozenset(
+                    recipient for recipient in self.actors
+                    if recipient != observer and self.connected(recipient, observer))
+        for observer in tuple(self.retired_receivers):
+            if observer not in retiring:
+                self.retired_receivers.pop(observer, None)
+                self.observations.pop(observer, None)
         self.actors = dict(actors)
         # The legacy Relaying skill boosts allies' radio range by 0.1% per
         # level. Use only unboosted direct links for eligibility: no cascade.
@@ -25,12 +39,14 @@ class RadioNetwork(object):
         self.receipts = {}
         self._groups = {}
         for observer, targets in list(self.observations.items()):
-            if observer not in self.actors:
+            if observer not in self.actors and observer not in self.retired_receivers:
                 del self.observations[observer]
                 continue
             for target, row in list(targets.items()):
                 if row[0] <= now:
                     del targets[target]
+            if not targets:
+                self.retired_receivers.pop(observer, None)
         self._observer_ranks = dict((observer, index) for index, observer in
                                     enumerate(self.observations))
         self._targets = {}
@@ -105,7 +121,9 @@ class RadioNetwork(object):
             # Equal direct-radio neighborhoods may share the same aggregate.
             # This is deliberately not a connected-component/relay closure.
             group = frozenset([recipient] + [observer for observer in self.actors
-                if observer != recipient and self.connected(recipient, observer)])
+                if observer != recipient and self.connected(recipient, observer)] +
+                [observer for observer, recipients in self.retired_receivers.items()
+                 if recipient in self.actors and recipient in recipients])
             self._groups[recipient] = group
         return group
 

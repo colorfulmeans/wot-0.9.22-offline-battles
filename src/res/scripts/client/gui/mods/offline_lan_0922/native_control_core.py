@@ -479,6 +479,47 @@ class NativeControl(object):
             requests = flush_visibility(self)
             if requests:
                 self.runtime._probe_totals[0] += requests
+            self._trace_observer_deaths()
+
+    def _trace_observer_deaths(self):
+        if not _native_input_diagnostics.detailed_enabled():
+            return
+        try:
+            traces = getattr(self, '_review_observer_deaths', {})
+            self._review_observer_deaths = traces
+            due = []
+            for key, source in self._sources.items():
+                if source.get('alive', True):
+                    traces.pop(key, None)
+                    continue
+                trace = traces.setdefault(key, [self._now, self._now, 0])
+                if self._now >= trace[1] and trace[2] < 3:
+                    due.append(key)
+            if not due:
+                return
+            snapshot = self._call('sim_control_snapshot', None)
+            actors = dict((tuple(row[0]), row) for row in snapshot[0])
+            radio = set(tuple(row[0]) for row in snapshot[6])
+            for key in due:
+                trace = traces[key]
+                trace[2] += 1
+                duration = self._config[key][18]
+                trace[1] = trace[0] + (0.25 if trace[2] == 1 else duration+0.1)
+                row = actors[key]
+                _native_input_diagnostics.battle_review_record(
+                    self.runtime, 'worker_observer_death', key, self._now,
+                    lambda: dict(actor=key, death_first_seen=trace[0],
+                        last_effort_eligible=bool(row[1] & 32),
+                        last_effort_until=row[2][2], active_window=self._now < row[2][2],
+                        radio_active=key in radio, direct_targets=list(row[4]),
+                        configured_range=self._config[key][15],
+                        configured_relay=self._config[key][16],
+                        configured_last_effort_duration=duration,
+                        retained_receivers=list(row[5]),
+                        critical=self._sources[key].get('critical')), interval=0.0,
+                        limit=3, priority=True)
+        except Exception:
+            pass
 
     @observed('frontier.control_config')
     def _actor_config(self, source, tick):
@@ -526,6 +567,7 @@ class NativeControl(object):
         still_aspect = profile['invisibility_still']
         relay = 0.0
         last_effort = designated = False
+        last_effort_duration = 2.0
         designated_duration = 0.0
         if key[0] == 0:
             snapshot = laws._player_effective_params(source, tick)
@@ -555,6 +597,7 @@ class NativeControl(object):
                 'radioman_retransmitter', source.get('critical') or {}) * 0.001
             last_effort = laws._player_spotting_perk(
                 snapshot, source, 'radioman_lasteffort')
+            last_effort_duration = laws.BotRuntime._last_effort_duration(snapshot)
             designated = laws._player_spotting_perk(
                 snapshot, source, 'gunner_rancorous')
             if designated:
@@ -578,12 +621,18 @@ class NativeControl(object):
             float(moving_aspect[1]), float(still_aspect[1]), float(shot_factor),
             float(profile['camouflage_net_delay'])
             if profile['has_camouflage_net'] else -1.0,
-            runtime._source_radio_range(source, tick), float(relay), designated_duration)
+            runtime._source_radio_range(source, tick), float(relay), designated_duration,
+            last_effort_duration)
         if _native_input_diagnostics.detailed_enabled():
             _native_input_diagnostics.battle_review_record(
                 runtime, 'worker_spotting_config', key, float(getattr(runtime, '_contact_now', 0.0) or 0.0),
                 lambda: dict(actor=key, designated_active=bool(designated),
+                    last_effort_active=bool(last_effort),
+                    last_effort_duration=last_effort_duration,
                     designated_duration=designated_duration, config=list(values),
+                    radio_range=values[15], relay_bonus=values[16],
+                    crew_ko=(source.get('critical') or {}).get('crew_ko', []),
+                    radio_factor=snapshot['loadout']['radio_factor'] if key[0] == 0 else None,
                     booster=snapshot.get('battle_booster') if key[0] == 0 else None),
                 interval=2.0, limit=32)
         return values, bool(last_effort), bool(designated)
@@ -854,7 +903,12 @@ class NativeControl(object):
         raw_actors = dict((_wire_key(row[0]),
             (row[1], tuple(row[2]), self._config[tuple(row[0])][15]) +
             ((row[4],) if row[0][0] == 0 else ())) for row in radio_rows)
-        self._old_radio.configure(raw_actors, now)
+        self._old_radio.retired_receivers = dict(
+            (_wire_key(row[0]), frozenset(_wire_key(key) for key in row[5]))
+            for row in actor_rows if row[1] & 128)
+        self._old_radio.actors = {}
+        self._old_radio.configure(raw_actors, now,
+                                 retiring=self._old_radio.retired_receivers)
         runtime._visibility_cache = dict(((_wire_key(row[0]) + _wire_key(row[1])),
             (row[2], bool(row[3]), None if row[4] < 0 else row[4])) for row in visibility)
         runtime._visibility_waiting = [_wire_key(row[0]) + _wire_key(row[1]) for row in waiting]
@@ -862,7 +916,8 @@ class NativeControl(object):
         runtime._visibility_frame = None
         runtime._spot_until = dict(((row[0],) + _wire_key(row[1]), row[2]) for row in teams)
         runtime._visible_target_poses = dict(((row[0],) + _wire_key(row[1]), _pose_dict(row[4])) for row in teams)
-        for key, flags, times, fire, direct in actor_rows:
+        for actor_row in actor_rows:
+            key, flags, times, fire, direct = actor_row[:5]
             identity = _wire_key(key)
             if flags & 2:
                 runtime._visibility_still[identity] = times[0]

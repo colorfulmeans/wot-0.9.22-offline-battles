@@ -849,7 +849,7 @@ class Checker(object):
         self.backend.sim_close(owner.handle)
         self.lifecycle_checks += 1
 
-    def human_cases(self):
+    def human_cases(self, effort_duration=2.0):
         from gui.mods.offline_lan_0922 import bot_runtime as laws
         params = _effective_params_snapshot()
         params['crew']['members'] = [
@@ -858,9 +858,14 @@ class Checker(object):
             dict(instance='radioman', roles=['radioman'], skills=[dict(
                 name=name, level=100., active=True, enabled=True) for name in
                 ('radioman_lasteffort', 'radioman_retransmitter')])]
-        params['skills'].update(designated_target=True, last_effort=True)
+        params['skills'].update(designated_target=True, last_effort=bool(effort_duration))
+        if not effort_duration:
+            params['crew']['members'][1]['skills'] = [skill for skill in
+                params['crew']['members'][1]['skills'] if skill['name'] != 'radioman_lasteffort']
         params['battle_booster'] = dict(compact_descr=11003,
             skill_overrides=dict(designated_target_duration=4.0))
+        if effort_duration > 2.0:
+            params['battle_booster']['skill_overrides']['last_effort_duration'] = effort_duration
         dynamic = params['crew']['dynamic_spotting']
         row = dynamic['states']['0:0']
         dynamic['crew'] = ['gunner', 'radioman']
@@ -902,19 +907,21 @@ class Checker(object):
                 profile={'class_tag':'mediumTank'}, armor=80.)) for actor in range(11,15))
             scenes.append(runtime)
         owner = self.facade.NativeControl(scenes[1], self.backend, self.backend.sim_open(1, 40))
-        for frame in range(65):
+        death_end = 75 if effort_duration > 2.0 else 35
+        effort_end = int((1.0+effort_duration)*10)
+        for frame in range(death_end+30):
             now = frame * .1
             results = []
             for side, runtime in enumerate(scenes):
                 traces[side][:] = []
                 players = [dict(id=actor, team=1 if actor < 3 else 2,
-                    alive=not (actor == 1 and 10 <= frame < 35),
+                    alive=not (actor == 1 and 10 <= frame < death_end),
                     vehicle='test:projected', x=0. if actor == 1 else actor*70.,
                     y=0., z=(900. if actor == 3 and 15 <= frame < 33 else 0.),
                     yaw=0., aim_yaw=0. if frame < 5 else .10,
                     speed=2. if 42 <= frame < 46 else 0., fire_seq=int(frame >= 14),
                     health=600, max_health=600,
-                    critical={'crew_ko': ['radioman'] if actor == 1 and 10 <= frame < 35 else
+                    critical={'crew_ko': ['radioman'] if actor == 1 and 10 <= frame < death_end else
                         (['gunner'] if actor == 2 and 40 <= frame < 44 else [])},
                     effective_params=copy.deepcopy(params)) for actor in (1,2,3)
                     if not (actor == 2 and 20 <= frame < 30)]
@@ -979,12 +986,12 @@ class Checker(object):
             self.equal(results[1], results[0], 'humans.frame.%d' % frame)
             if frame == 0:
                 assert scenes[0]._spot_until[(1, 'bot', 13)] == 14.
-            if 10 <= frame < 30:
-                assert scenes[0]._human_vengeance_until[1] == 3.
+            if 10 <= frame < effort_end:
+                assert scenes[0]._human_vengeance_until[1] == 1.0+effort_duration
                 assert 1 in results[0]['aggregate'][(1, 'bot', 13)][3]
-            if 10 <= frame < 35:
+            if 10 <= frame < death_end:
                 assert not any(row[0] == (0,1) for row in traces[0])
-            if frame == 30:
+            if frame == effort_end:
                 assert 1 not in results[0]['aggregate'][(1, 'bot', 13)][3]
             # Restore inside the active Last Effort lease, then restore alive state.
             if frame in (19,39):
@@ -1098,6 +1105,8 @@ def main():
     checker.projection_cases()
     checker.projection_cache_cases()
     checker.human_cases()
+    checker.human_cases(5.0)
+    checker.human_cases(0.0)
     print(json.dumps(dict(ok=True, comparisons=checker.comparisons,
         driver_ticks=checker.driver_ticks, traffic_ticks=checker.traffic_ticks,
         contacts=checker.contacts, visibility_queries=checker.visibility_queries,

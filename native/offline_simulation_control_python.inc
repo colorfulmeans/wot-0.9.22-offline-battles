@@ -265,8 +265,12 @@ PyObject *WOT_CDECL sim_control_configure(PyObject *, PyObject *args) {
       offline_simulation::control::ActorConfig c;
       c.key = sim_control_bridge::key(items(row)[0]);
       c.python_hash = identity(items(row)[1]);
-      double n[18];
-      world_array(items(row)[2], n, 18);
+      double n[19] = {};
+      auto config = items(row)[2];
+      require_sequence(config, 0);
+      if (size(config) != 18 && size(config) != 19)
+        throw Unsupported();
+      world_array(config, n, size(config));
       c.team = int(n[0]);
       c.slot = int(n[1]);
       c.half_length = n[2];
@@ -287,6 +291,9 @@ PyObject *WOT_CDECL sim_control_configure(PyObject *, PyObject *args) {
       if (n[17] != 0. && (n[17] < 10. || n[17] > 14.))
         throw Unsupported();
       c.designated_duration = n[17] == 0. ? 12. : n[17];
+      if (n[18] != 0. && (n[18] < 2. || n[18] > 5.))
+        throw Unsupported();
+      c.last_effort_duration = n[18] == 0. ? 2. : n[18];
       result.push_back(c);
     }
     profile.run(&offline_simulation::control::Store::configure, &context->control, result);
@@ -737,7 +744,7 @@ PyObject *snapshot(const PerceptionSnapshot &s) {
   size_t i = 0;
   for (const auto &entry : s.actors) {
     const auto &a = entry.second;
-    OwnedTuple row(5), direct(a.direct_targets.size());
+    OwnedTuple row(6), direct(a.direct_targets.size()), retired(a.retired_receivers.size());
     size_t j = 0;
     for (const auto &t : a.direct_targets)
       direct.set(j++, key(t));
@@ -746,7 +753,8 @@ PyObject *snapshot(const PerceptionSnapshot &s) {
                      (unsigned(a.lifecycle_initialized) << 3) |
                      (unsigned(a.last_alive) << 4) |
                      (unsigned(a.last_alive_effort) << 5) |
-                     (unsigned(a.source_still) << 6);
+                     (unsigned(a.source_still) << 6) |
+                     (unsigned(a.radio_retired) << 7);
     double times[] = {a.still_since, a.fire_until, a.vengeance_until,
                       a.source_still_since};
     row.set(0, key(entry.first));
@@ -754,6 +762,10 @@ PyObject *snapshot(const PerceptionSnapshot &s) {
     row.set(2, world_numbers(times, 4));
     row.set(3, integer_result(a.fire_sequence));
     row.set(4, direct.release());
+    j = 0;
+    for (const auto &recipient : a.retired_receivers)
+      retired.set(j++, key(recipient));
+    row.set(5, retired.release());
     actors.set(i++, row.release());
   }
   i = 0;
@@ -829,7 +841,7 @@ PerceptionSnapshot snapshot(PyObject *value) {
   s.now = finite_number(rows[7]);
   for (Py_ssize_t i = 0; i < size(rows[0]); ++i) {
     auto row = items(rows[0])[i];
-    require_sequence(row, 5, true);
+    require_sequence(row, 6, true);
     auto v = items(row);
     auto k = key(v[0]);
     ActorMemory a;
@@ -841,6 +853,7 @@ PerceptionSnapshot snapshot(PyObject *value) {
     a.last_alive = f & 16;
     a.last_alive_effort = f & 32;
     a.source_still = f & 64;
+    a.radio_retired = f & 128;
     double n[4];
     world_array(v[2], n, 4);
     a.still_since = n[0];
@@ -850,6 +863,8 @@ PerceptionSnapshot snapshot(PyObject *value) {
     a.fire_sequence = identity(v[3]);
     for (const auto &t : keys(v[4]))
       a.direct_targets.insert(t);
+    for (const auto &recipient : keys(v[5]))
+      a.retired_receivers.insert(recipient);
     s.actors[k] = a;
   }
   for (Py_ssize_t i = 0; i < size(rows[1]); ++i) {

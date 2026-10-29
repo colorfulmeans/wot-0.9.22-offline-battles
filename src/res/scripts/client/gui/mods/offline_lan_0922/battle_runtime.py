@@ -1,5 +1,6 @@
 from __future__ import print_function
 from gui.mods.offline_lan_0922 import bot_tactics
+from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
 
 """Playable #1513 battle runtime built on stock Avatar and Vehicle entities."""
 
@@ -19505,6 +19506,9 @@ class BattleRuntime(object):
     def _frame(self):
         if self.state != 'running':
             return
+        if detailed_enabled():
+            from .compat import sample_pending_battle_models
+            sample_pending_battle_models(getattr(self._runtime, 'compatibility', None))
         if self._worker_mode:
             self._worker_frame_callbacks += 1
         diagnostics = self._frame_diagnostics

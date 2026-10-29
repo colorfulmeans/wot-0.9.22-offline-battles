@@ -73,7 +73,7 @@ def _observe_battle_model_pose(compatibility, appearance, phase):
                 return
             entry = histories[key] = dict(next_at=0.0, dead_samples=0, alive=None)
         dead = getattr(vehicle, 'health', 1) <= 0
-        if phase == 'effects_tick':
+        if phase in ('effects_tick', 'frame_tick'):
             if now < entry['next_at'] or (dead and entry['dead_samples'] >= 8):
                 return
             entry['next_at'] = now + 0.1
@@ -134,10 +134,42 @@ def _observe_battle_model_pose(compatibility, appearance, phase):
             previous = entry['alive']
             battle_review_record(compatibility, 'model_last_alive', key, now,
                                  lambda: dict(previous), interval=0.0, limit=1)
-        if phase == 'effects_tick':
+        if phase == 'refresh_after' and dead:
+            pending = getattr(compatibility, '_battle_model_pose_pending', None)
+            if pending is None:
+                pending = compatibility._battle_model_pose_pending = {}
+            if len(pending) < 64:
+                pending[key] = (getattr(vehicle, 'id', None),
+                    id(getattr(compatibility, '_model_lifecycle_histories', None)))
+        if phase in ('effects_tick', 'frame_tick'):
             entry['dead_samples'] += 1
         battle_review_record(compatibility, 'model_' + phase, key, now,
             lambda: payload, interval=0.0, limit=32)
+    except Exception:
+        pass
+
+def sample_pending_battle_models(compatibility):
+    """Use the existing battle frame after corpse effects LOD stops ticking."""
+    from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+    if not detailed_enabled() or compatibility is None:
+        return
+    try:
+        pending = getattr(compatibility, '_battle_model_pose_pending', {})
+        for key, (vehicle_id, battle) in list(pending.items()):
+            if (not compatibility._battle_active or battle != id(getattr(
+                    compatibility, '_model_lifecycle_histories', None))):
+                pending.pop(key, None)
+                continue
+            vehicle = compatibility._runtime.bigworld.entity(vehicle_id)
+            appearance = getattr(vehicle, 'appearance', None)
+            if (vehicle is None or (id(appearance), id(vehicle)) != key or
+                    getattr(vehicle, 'health', 1) > 0):
+                pending.pop(key, None)
+                continue
+            _observe_battle_model_pose(compatibility, appearance, 'frame_tick')
+            entry = compatibility._battle_model_pose_samples.get(key, {})
+            if entry.get('dead_samples', 0) >= 8:
+                pending.pop(key, None)
     except Exception:
         pass
 
@@ -2622,15 +2654,20 @@ class OfflineCompatibility(object):
                 except (AttributeError, ValueError):
                     caller_code = None
                 if caller_code is compatibility._compound_models_refresh_code:
+                    _observe_battle_model_pose(compatibility, appearance, 'refresh_sync_boundary')
                     return _OfflineVehicleFilterSyncProxy(value)
             return value
 
         def compound_deactivate(appearance, stopEffects=True):
             original = compatibility._original_compound_deactivate
             def call_original():
+                if compatibility._compound_refreshing_models is appearance:
+                    _observe_battle_model_pose(compatibility, appearance, 'deactivate_before')
                 try:
                     return original(appearance, stopEffects)
                 finally:
+                    if compatibility._compound_refreshing_models is appearance:
+                        _observe_battle_model_pose(compatibility, appearance, 'deactivate_after')
                     # A nested model refresh needs the old generation token
                     # so its retained Splodge cannot be mistaken for a child
                     # of the replacement compound.  Final teardown does not.
@@ -3746,6 +3783,7 @@ class OfflineCompatibility(object):
         self._model_lifecycle_enabled = detailed_enabled()
         self._model_lifecycle_histories = {}
         self._battle_model_pose_samples = {}
+        self._battle_model_pose_pending = {}
         self._battle_review_records = None
         self._model_lifecycle_sequence = 0
         self._strategic_camera_failure_reported = False

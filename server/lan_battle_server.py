@@ -5539,12 +5539,13 @@ class BattleState:
 
     @staticmethod
     def _validated_radio_rows(raw, actors, team, max_duration=None,
-                              exclude=None, with_sources=False):
+                              exclude=None, with_sources=False, allow_dead=False):
         """Validate identity lists before committing any observation state.
 
         The worker owns native radio/crew ranges. This boundary checks the
         bounded recipients it proved, without inventing a server-side range.
-        Dead known actors are an ordinary in-flight race and are retired.
+        Dead recipients are retired; a known dead source can retain an
+        already delivered, unexpired lease without becoming a receiver.
         """
         if not isinstance(raw, (list, tuple)) or len(raw) > len(actors):
             raise ValueError("invalid radio recipient list")
@@ -5569,8 +5570,9 @@ class BattleState:
                 clean["time_left"] = duration
                 if with_sources and "sources" in row:
                     clean["sources"] = BattleState._validated_radio_rows(
-                        row["sources"], actors, team, max_duration=duration)
-            if actor[1]:
+                        row["sources"], actors, team, max_duration=duration,
+                        allow_dead=True)
+            if actor[1] or allow_dead:
                 result.append(clean)
         return result
 
@@ -14433,19 +14435,23 @@ class BattleState:
             return []
         now = time.monotonic()
         sources = self.radio_assist_sources.get((attacker, target), {})
-        live_sources = []
+        eligible_sources = []
         for reporter, deadline in sorted(sources.items(), key=lambda item: (
                 0 if item[0][0] == "player" else 1, item[0][1])):
             if deadline <= now or self._vehicle_team(*reporter) != self._vehicle_team(*attacker):
                 continue
             if reporter[0] == "player":
                 player = self.players.get(reporter[1])
-                if player is None or not player.connected or not player.alive:
+                if player is None or not player.connected:
                     continue
-            elif not (self.bot_states.get(reporter[1]) or {}).get("alive"):
+            elif reporter[1] not in self.bot_states:
                 continue
-            live_sources.append(reporter)
-        return [] if attacker in live_sources else live_sources
+            # Death cannot erase a lease already delivered to this shooter.
+            # A dead shooter's own old observation does not suppress helpers.
+            if reporter == attacker and not (self._vehicle_stun_state(reporter) or {}).get('alive'):
+                continue
+            eligible_sources.append(reporter)
+        return [] if attacker in eligible_sources else eligible_sources
 
     def _vehicle_statistics_payload(self):
         # Compensation eligibility is server settlement state, not a new
@@ -14631,11 +14637,15 @@ class BattleState:
                              if reporter[0] == "player" else
                              bool((self.bot_states.get(reporter[1]) or {}).get("alive")))
                     same_team = self._vehicle_team(*reporter) == self._vehicle_team(*attacker)
+                    connected = (bool(player and player.connected) if reporter[0] == "player"
+                                 else reporter[1] in self.bot_states)
                     candidates.append(dict(actor=reporter, deadline=deadline,
                         remaining=deadline-review_now, alive_connected=alive,
+                        connected=connected,
                         same_team=same_team, selected=reporter in assisters,
                         reason=("expired" if deadline <= review_now else
-                                "inactive" if not alive else "other_team" if not same_team else
+                                "inactive" if not connected else "other_team" if not same_team else
+                                "retained_after_death" if not alive else
                                 "eligible_source")))
                 return dict(attacker=attacker, target=target, damage=damage,
                     direct_self_spot=self._spots_target(attacker, target),
@@ -14649,7 +14659,7 @@ class BattleState:
                     credits=[dict(actor=holder, amount=amount)
                              for category, holder, amount in credits if category == "radio"])
             battle_review_diagnostics.battle_review_record(self, 'server_radio_credit',
-                'damage', review_now, review_assist, interval=0.0, limit=512)
+                'damage', review_now, review_assist, interval=0.0, limit=512, priority=True)
         for category, assister, amount in credits:
             if amount <= 0:
                 continue

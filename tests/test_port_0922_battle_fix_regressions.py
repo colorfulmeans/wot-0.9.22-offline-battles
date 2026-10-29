@@ -110,13 +110,30 @@ class ReceivedSpottingAssistTests(unittest.TestCase):
             self.assertFalse(self.state.update_bot_observation(WORKER, message), change)
         self.assertEqual(200, self.damage())
 
-    def test_wrong_round_and_dead_sources_do_not_receive_credit(self):
+    def test_dead_source_keeps_delivered_credit_until_expiry_but_not_disconnect(self):
         self.accept(self.message())
         self.state.players[1].alive = False
-        self.assertEqual(0, self.damage())
+        self.assertEqual(200, self.damage())
+        self.accept(self.message(direct=(), duration=7.0))
+        self.assertEqual(400, self.damage())
+        self.state.players[1].connected = False
+        self.assertEqual(400, self.damage())
+        self.state.players[1].connected = True
+        self.now.return_value = 110.0
+        self.assertEqual(400, self.damage())
         message = self.message()
         message['round_id'] -= 1
         self.assertFalse(self.state.update_bot_observation(WORKER, message))
+
+    def test_dead_shooter_own_memory_does_not_hide_external_assist(self):
+        self.accept(self.message(sources=(1, 2), direct=()))
+        self.state.players[2].alive = False
+        self.assertEqual(200, self.damage())
+
+    def test_dead_recipient_is_not_admitted_as_a_live_radio_receiver(self):
+        self.state.players[2].alive = False
+        self.accept(self.message(direct=()))
+        self.assertEqual(0, self.damage())
 
     def test_bot_observer_and_bot_shooter_use_the_same_received_source_contract(self):
         for bot_id in (12, 13):
@@ -142,6 +159,93 @@ class ReceivedSpottingAssistTests(unittest.TestCase):
 
 
 class SourceLeaseTests(unittest.TestCase):
+    def test_death_radio_damage_cannot_erase_information_already_delivered(self):
+        net = radio.RadioNetwork()
+        source, receiver, target = ('human', 1), ('bot', 2), ('bot', 9)
+        net.configure({source: (1, (0, 0, 0), 100),
+                       receiver: (1, (150, 0, 0), 100)}, 0.0)
+        net.observe(source, target, 0.0, 10.0, {'x': 90})
+        # Last Effort remains in the active roster but terminal crew/radio
+        # damage shrinks the current link before its short window expires.
+        net.configure({source: (1, (0, 0, 0), 0),
+                       receiver: (1, (150, 0, 0), 100)}, 1.0, retiring=(source,))
+        self.assertFalse(net.connected(source, receiver))
+        self.assertEqual(((source, 9.0),), net.sources(receiver, target, 1.0))
+
+    def test_death_preserves_only_previous_receivers_and_original_expiry(self):
+        net = radio.RadioNetwork()
+        source, friend, newcomer, target = ('human', 1), ('bot', 2), ('bot', 3), ('bot', 9)
+        actors = {source: (1, (0, 0, 0), 100), friend: (1, (50, 0, 0), 100),
+                  newcomer: (1, (1000, 0, 0), 100)}
+        net.configure(actors, 1.0)
+        net.observe(source, target, 1.0, 14.0, {'x': 100})
+        net.hidden(source, target)
+        dead = {friend: actors[friend], newcomer: (1, (0, 0, 0), 100)}
+        net.configure(dead, 2.0, retiring=(source,))
+        self.assertEqual(((source, 13.0),), net.sources(friend, target, 2.0))
+        self.assertTrue(net.contact(friend, target, 2.0)[0] > 0)
+        self.assertEqual((), net.sources(newcomer, target, 2.0))
+        self.assertFalse(net.connected(friend, source))
+        net.configure(dead, 14.0, retiring=(source,))
+        self.assertEqual(((source, 1.0),), net.sources(friend, target, 14.0))
+        net.configure(dead, 15.0, retiring=(source,))
+        self.assertEqual((), net.sources(friend, target, 15.0))
+
+    def test_disconnect_retires_dead_source_and_bot_memory_uses_same_contract(self):
+        net = radio.RadioNetwork()
+        source, receiver, target = ('bot', 1), ('human', 2), ('bot', 9)
+        actors = {source: (1, (0, 0, 0), 100), receiver: (1, (50, 0, 0), 100)}
+        net.configure(actors, 0.0)
+        net.observe(source, target, 0.0, 10.0, {'x': 90})
+        net.configure({receiver: actors[receiver]}, 1.0, retiring=(source,))
+        self.assertEqual(((source, 9.0),), net.sources(receiver, target, 1.0))
+        net.configure({receiver: actors[receiver]}, 2.0)
+        self.assertEqual((), net.sources(receiver, target, 2.0))
+
+    def test_relay_is_not_cascaded_and_refresh_removes_an_unavailable_donor(self):
+        net = radio.RadioNetwork()
+        a, b, c = ('human', 1), ('human', 2), ('human', 3)
+        actors = {a: (1, (0, 0, 0), 100, .1), b: (1, (190, 0, 0), 100, .1),
+                  c: (1, (395, 0, 0), 100, .1)}
+        net.configure(actors, 0.0)
+        self.assertAlmostEqual(110.0, net.actors[a][2])
+        self.assertAlmostEqual(110.0, net.actors[b][2])
+        self.assertAlmostEqual(100.0, net.actors[c][2])
+        actors[b] = actors[b][:3] + (0.0,)
+        net.configure(actors, 1.0)
+        self.assertAlmostEqual(100.0, net.actors[a][2])
+
+    def test_last_effort_uses_predeath_crew_and_does_not_reopen_or_acquire_targets(self):
+        import copy
+        params = fixtures._effective_params_snapshot()
+        params['crew']['members'] = [dict(instance='commander', roles=['commander', 'radioman'],
+            skills=[dict(name='radioman_lasteffort', active=True, enabled=True, level=100.0)])]
+        params['skills']['last_effort'] = True
+        params['crew']['dynamic_spotting']['crew'] = ['commander']
+        for duration in (2.0, 5.0):
+            snapshot = copy.deepcopy(params)
+            snapshot['battle_booster'] = dict(compact_descr=11003,
+                skill_overrides=dict(last_effort_duration=duration))
+            worker = BotRuntime(1, descriptor_resolver=lambda unused: fixtures._combat_descriptor(),
+                visibility_probe=lambda *unused: self.fail('corpse acquired a new LOS'))
+            worker.states = {identity: dict(id=identity, team=2, alive=True, x=0., y=0.,
+                z=100., health=100, max_health=100) for identity in (11, 12)}
+            alive = dict(id=1, team=1, alive=True, x=0., y=0., z=0.,
+                         critical={'crew_ko': []}, effective_params=snapshot)
+            worker._track_human_observer_lifecycle([alive], 1.0)
+            worker._human_direct_targets[1] = set((('bot', 11),))
+            dead = dict(alive, alive=False, critical={'crew_ko': ['commander']})
+            worker._track_human_observer_lifecycle([dead], 2.0)
+            self.assertEqual(2.0+duration, worker._human_vengeance_until[1])
+            aggregate = {}
+            worker._append_human_observations([dead], 2.1, aggregate, {})
+            self.assertEqual({1}, aggregate[(1, 'bot', 11)][3])
+            self.assertEqual(set(), aggregate[(1, 'bot', 12)][3])
+            worker._track_human_observer_lifecycle([dead], 2.0+duration)
+            self.assertNotIn(1, worker._human_vengeance_until)
+            worker._track_human_observer_lifecycle([dead], 8.0)
+            self.assertNotIn(1, worker._human_vengeance_until)
+
     def test_removed_target_cannot_recover_old_sources_when_it_rejoins(self):
         runtime = BotRuntime(1)
         net = runtime._radio_network
@@ -203,6 +307,18 @@ class TeamMemoryTests(unittest.TestCase):
 
 
 class BattleReviewDiagnosticsTests(unittest.TestCase):
+    def test_priority_events_survive_bulk_exhaustion_and_keep_their_own_byte_limit(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        owner = type('Owner', (), {'round_id': 1})()
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=False), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            diag.battle_review_record(owner, 'death', 1, 1.0, lambda: {'alive': False}, priority=True)
+            self.assertEqual('BATTLE REVIEW EVENT', write.call_args[0][0])
+            owner._battle_review_records[2][0] = 256*1024
+            diag.battle_review_record(owner, 'death', 2, 2.0, lambda: {}, priority=True)
+            self.assertEqual(1, write.call_count)
+
     def test_disabled_diagnostics_do_not_build_or_retain_payload(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
         owner = type('Owner', (), {'round_id': 1})()
@@ -306,6 +422,46 @@ class BattleReviewDiagnosticsTests(unittest.TestCase):
             owner._battle_active = False
             observe(owner, appearance, 'refresh_after')
             self.assertEqual(before, write.call_count)
+
+
+    def test_existing_frame_samples_corpses_when_effects_lod_stops(self):
+        import ast
+        import types
+        from pathlib import Path
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        path = Path(control.__file__).with_name('compat.py')
+        functions = [node for node in ast.parse(path.read_text(encoding='utf8')).body
+                     if isinstance(node, ast.FunctionDef) and node.name in
+                     ('_observe_battle_model_pose', 'sample_pending_battle_models')]
+        namespace = {}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), 'exec'), namespace)
+        matrix = types.SimpleNamespace(yaw=0.4, pitch=0.1, roll=0., translation=(0., 0., 0.))
+        model = types.SimpleNamespace(matrix=matrix, node=lambda unused: matrix)
+        appearance = types.SimpleNamespace(turretMatrix=matrix, gunMatrix=matrix)
+        vehicle = types.SimpleNamespace(id=2, appearance=appearance, health=0, model=model, filter=None)
+        appearance._CompoundAppearance__vehicle = vehicle
+        appearance._CompoundAppearance__filter = None
+        appearance._CompoundAppearance__currentDamageState = types.SimpleNamespace(modelState='destroyed')
+        clock = [1.0]
+        owner = types.SimpleNamespace(_battle_active=True, _model_lifecycle_histories={},
+            _runtime=types.SimpleNamespace(math=types.SimpleNamespace(Matrix=lambda value: value),
+                bigworld=types.SimpleNamespace(time=lambda: clock[0], entity=lambda identity: vehicle)))
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=True), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            namespace['_observe_battle_model_pose'](owner, appearance, 'refresh_after')
+            for unused in range(20):
+                clock[0] += .2
+                namespace['sample_pending_battle_models'](owner)
+            self.assertEqual(8, sum(call.args[1]['stage'] == 'model_frame_tick'
+                                    for call in write.call_args_list))
+            self.assertEqual({}, owner._battle_model_pose_pending)
+            namespace['_observe_battle_model_pose'](owner, appearance, 'refresh_after')
+            owner._model_lifecycle_histories = {}  # A different battle generation.
+            before = write.call_count
+            namespace['sample_pending_battle_models'](owner)
+            self.assertEqual(before, write.call_count)
+            self.assertEqual({}, owner._battle_model_pose_pending)
 
 
 if __name__ == '__main__':

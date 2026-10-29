@@ -5436,6 +5436,8 @@ class BotRuntime(object):
     @detailed_observed('bot.radio_configuration')
     def _configure_radio(self, players, now, tick_cache=None):
         actors = {}
+        retiring = set(self._radio_identity(source) for source in self.states.values()
+                       if not source.get('alive', True))
         for source in self.states.values():
             if source.get('alive', True):
                 actors[self._radio_identity(source)] = (
@@ -5444,8 +5446,11 @@ class BotRuntime(object):
         for raw in players or ():
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
+            if not raw.get('alive', True):
+                retiring.add(('human', int(raw['id'])))
             if not raw.get('alive', True) and now >= self._human_vengeance_until.get(
                     int(raw['id']), 0.0):
+                retiring.add(('human', int(raw['id'])))
                 continue
             source = dict(raw, kind='human')
             try:
@@ -5458,7 +5463,7 @@ class BotRuntime(object):
             actors[self._radio_identity(source)] = (
                 int(source.get('team', 0)), _position(source),
                 self._source_radio_range(source, tick_cache), relay_bonus)
-        self._radio_network.configure(actors, now)
+        self._radio_network.configure(actors, now, retiring=retiring)
 
     def _renew_observer_spot(self, source, target, now, duration=None,
                              target_key=None, target_pose=None):
@@ -6140,7 +6145,7 @@ class BotRuntime(object):
                 if _player_spotting_perk(
                         snapshot, prior, 'radioman_lasteffort'):
                     self._human_vengeance_until[player_id] = (
-                        now + spotting.LAST_EFFORT_SECONDS)
+                        now + self._last_effort_duration(snapshot))
             elif alive:
                 critical = raw.get('critical')
                 self._human_last_alive_critical[player_id] = dict(
@@ -6162,6 +6167,12 @@ class BotRuntime(object):
                 self._human_vengeance_until.pop(player_id, None)
                 self._human_direct_targets.pop(player_id, None)
         return True
+
+    @staticmethod
+    def _last_effort_duration(snapshot):
+        overrides = (snapshot.get('battle_booster') or {}).get('skill_overrides') or {}
+        return max(spotting.LAST_EFFORT_SECONDS, min(5.0, _number(
+            overrides.get('last_effort_duration'), spotting.LAST_EFFORT_SECONDS)))
 
     @staticmethod
     def _designated_spot_duration(source, target, snapshot):

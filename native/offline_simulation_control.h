@@ -28,6 +28,7 @@ struct ActorConfig {
   double camo_shot = 1., camo_net_delay = -1.;
   double radio = 0., relay = 0.;
   double designated_duration = 12.;
+  double last_effort_duration = 2.;
 };
 struct ActorSample {
   ActorKey key;
@@ -88,10 +89,12 @@ struct ActorMemory {
        fire_initialized = false;
   bool lifecycle_initialized = false, last_alive = false,
        last_alive_effort = false;
+  bool radio_retired = false;
   double still_since = 0., source_still_since = 0., fire_until = 0.,
          vengeance_until = 0.;
   std::int64_t fire_sequence = -1;
   std::set<ActorKey> direct_targets;
+  std::set<ActorKey> retired_receivers;
 };
 struct VisibilitySample {
   double sampled_at = 0.;
@@ -226,6 +229,7 @@ class Store {
   bool visible(const ActorKey &, const ActorKey &, const SightProbe &,
                double &);
   bool connected(const ActorKey &, const ActorKey &) const;
+  bool received_from(const ActorKey &, const ActorKey &) const;
   void observe(const ActorKey &, const ActorKey &, double, double,
                const PoseSample &);
   void hidden(const ActorKey &, const ActorKey &);

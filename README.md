@@ -13,7 +13,15 @@ Current release: **v1.0.0** — [release notes](docs/releases/v1.0.0.md).
 
 This review retains the verified received-source spotting assistance, integer
 sharing, 14-second designated-target lease propagation and removed-target
-radio cleanup. The unaccepted wreck angle coupling change has been withdrawn;
+radio cleanup. Death now retains an observer's unexpired leases for the
+recipients reached before transmission ended, without granting newcomers
+access to a corpse's memory. Server validation and credit preserve those
+sources until expiry; disconnected sources remain ineligible. Last Effort
+opens once from the pre-death conscious crew state and updates only the
+previous direct target set: two seconds normally, or the projected directive
+duration (bounded to five seconds). It performs no new LOS queries after
+death. Native checkpoints retain the frozen recipients.
+The unaccepted wreck angle coupling change has been withdrawn;
 wreck motion uses the release's angle updates. Player corpse turret reset
 remains unresolved. No angle restoration or native filter synchronization has
 been added for that issue.
@@ -25,10 +33,16 @@ not construct these payloads. Records carry round, PID, process-local clock,
 stage and sample number; worker and server clock origins are independent.
 Worker records include active perk/directive duration, native observation
 duration/deadline, radio actor positions/ranges and published per-source
-leases. Server records include accepted leases, source expiry/alive/team
-eligibility, self-spot suppression and actual integer damage shares. Model
-records preserve the last sampled alive pose, refresh entry/return, and eight
-subsequent existing effects ticks: turret/gun providers, hull and world muzzle
+leases. Server records include accepted leases, source expiry/connection/team
+eligibility, post-death retention, self-spot suppression and integer shares.
+`BATTLE REVIEW EVENT` reserves a separate 256 KiB per-round budget for bounded
+death-window and credit evidence after bulk tracing fills. Worker config
+records expose the donated radio factor, direct range, relay bonus and crew
+state. Relay uses unboosted links and does not cascade. Signal Strength stays
+owned by the exact client's radio/distance factor and crew/module projection.
+Model records preserve the last sampled alive pose, refresh entry/return,
+deactivation and final-sync boundaries, and eight subsequent existing battle
+frames even when corpse effects ticks stop: turret/gun providers, hull and world muzzle
 matrices, filter identities and turret detachment. Missing native readings
 are reported as unavailable. These probes read existing state and schedule
 no engine callbacks.
@@ -52,6 +66,15 @@ For Windows acceptance, use the matching launcher, server and hidden worker:
 4. Export the matching error report and include the launcher build identity.
    Gameplay acceptance, especially actual model reset and the boosted
    14-second case, remains pending until this evidence is examined.
+
+Also test dying immediately after spotting: an already informed ally must
+retain the original remaining lease and award assistance on a later hit.
+Repeat without Last Effort and with its carrier incapacitated before death.
+With Last Effort, confirm its short window opens once, never adds an unknown
+target, and expires without erasing delivered memory. A newcomer outside
+radio contact at transmission end must not obtain that corpse's memory.
+Check radio/crew damage and repair, donor death, disconnect, and a new round
+for stale links or leases. Native gameplay acceptance remains pending.
 
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows

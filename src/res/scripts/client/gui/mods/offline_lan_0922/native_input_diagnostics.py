@@ -299,7 +299,8 @@ def log_summary(phase, round_id):
         pass
 
 
-def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32):
+def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32,
+                         priority=False):
     """Admit lazy, round-scoped read-only evidence through --diagnostics.
 
     No engine callbacks, payload construction or retained engine references.
@@ -314,7 +315,7 @@ def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32):
             round_id = getattr(owner, '_battle_server_time_origin', None)
         state = getattr(owner, '_battle_review_records', None)
         if state is None or state[0] != round_id:
-            state = (round_id, {})
+            state = (round_id, {}, [0])
             owner._battle_review_records = state
         stages = state[1]
         if stage not in stages:
@@ -329,12 +330,17 @@ def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32):
         count, last = previous if previous is not None else (0, None)
         if count >= limit or (last is not None and now-last < interval):
             return
-        if not detail_record_ready():
+        if not priority and not detail_record_ready():
             return
         records[token] = (count+1, now)
         payload = build()
         payload.update(schema=1, stage=stage, round=round_id,
                        pid=os.getpid(), clock=now, sample=count+1)
-        write_json_record('BATTLE REVIEW', payload)
+        if priority:
+            size = len(json.dumps(payload, separators=(',', ':'))) * 2 + 256
+            if size > 16384 or state[2][0]+size > 256*1024:
+                return
+            state[2][0] += size
+        write_json_record('BATTLE REVIEW EVENT' if priority else 'BATTLE REVIEW', payload)
     except Exception:
         pass  # Diagnostics must not change a gameplay result.
