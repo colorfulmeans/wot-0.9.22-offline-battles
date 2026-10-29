@@ -246,6 +246,21 @@ class SourceLeaseTests(unittest.TestCase):
             worker._track_human_observer_lifecycle([dead], 8.0)
             self.assertNotIn(1, worker._human_vengeance_until)
 
+    def test_last_effort_does_not_arm_for_prior_knockout_or_first_seen_dead(self):
+        params = fixtures._effective_params_snapshot()
+        params['crew']['members'] = [dict(instance='commander', roles=['commander', 'radioman'], skills=[
+            dict(name='radioman_lasteffort', active=True, enabled=True, level=100.0)])]
+        params['skills']['last_effort'] = True
+        params['crew']['dynamic_spotting']['crew'] = ['commander']
+        alive = dict(id=1, alive=True, critical={'crew_ko': ['commander']}, effective_params=params)
+        dead = dict(alive, alive=False)
+        for first_dead in (False, True):
+            runtime = BotRuntime(1)
+            if not first_dead:
+                runtime._track_human_observer_lifecycle([alive], 1.0)
+            runtime._track_human_observer_lifecycle([dead], 2.0)
+            self.assertNotIn(1, runtime._human_vengeance_until)
+
     def test_removed_target_cannot_recover_old_sources_when_it_rejoins(self):
         runtime = BotRuntime(1)
         net = runtime._radio_network
