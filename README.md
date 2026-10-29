@@ -40,8 +40,10 @@ bulk quota: each `BATTLE REVIEW` stage has 32 MiB/round, priority
 `BATTLE REVIEW EVENT` evidence has a separate 4 MiB/round, and low-frequency
 `VALIDATION` career evidence has another 4 MiB/round. Explicit limit records
 and round summaries expose byte drops. Human observations have their own stage
-so bot source/target keys cannot exhaust their admission slots. Worker config
-records expose the donated radio factor, direct range, relay bonus and crew
+so bot source/target keys cannot exhaust their admission slots.
+The launcher-owned diagnostic server log retains up to 256 MiB per run
+(192 MiB after rolling), instead of the ordinary entry's 1 MiB ceiling.
+Worker config records expose the donated radio factor, direct range, relay bonus and crew
 state. Relay uses unboosted links and does not cascade. Signal Strength stays
 owned by the exact client's radio/distance factor and crew/module projection.
 Model records preserve the last sampled alive pose, refresh entry/return,

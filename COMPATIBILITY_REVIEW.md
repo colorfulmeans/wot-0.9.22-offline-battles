@@ -10689,6 +10689,14 @@ Human observations use a separate stage from bot observations; radio publication
 can record at 0.5-second cadence up to 4096 samples per key. The limits remain
 finite, with stage/key bounds and round reset tested. Ordinary entry constructs
 none of the new payloads. No gameplay cadence or radio calculation is changed.
+The launcher server log was another admission boundary: its ordinary 1 MiB
+rolling file could erase early verification records. Diagnostic entry now
+retains up to 256 MiB per server run, rolling to 192 MiB; ordinary entry keeps
+its original 1 MiB bound. A production-stream regression writes past the basic
+ceiling and verifies early evidence survives only in diagnostic mode. Report
+export already copies the complete current session byte range without a
+16 MiB truncation; the 16 MiB maintenance threshold trims idle logs before a
+new session checkpoint, not the current report.
 
 The original official 9.18 SPG explanation describes 70/30 sharing for
 overlapping active stuns (https://worldoftanks.asia/en/news/general-news/update-918-spg-revision/).

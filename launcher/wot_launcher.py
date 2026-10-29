@@ -564,6 +564,8 @@ def _append_launcher_log(message, path=None, timestamp=None):
 
 SERVER_LOG_MAX_BYTES = 1024 * 1024
 SERVER_LOG_RETAIN_BYTES = 768 * 1024
+DIAGNOSTIC_SERVER_LOG_MAX_BYTES = 256 * 1024 * 1024
+DIAGNOSTIC_SERVER_LOG_RETAIN_BYTES = 192 * 1024 * 1024
 
 
 class _BoundedLogStream(object):
@@ -3919,7 +3921,12 @@ def _open_server_log(path=None):
         directory = os.path.dirname(path)
         if directory and not os.path.isdir(directory):
             os.makedirs(directory)
-        stream = _BoundedLogStream(path)
+        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+            stream = _BoundedLogStream(path,
+                max_bytes=DIAGNOSTIC_SERVER_LOG_MAX_BYTES,
+                retain_bytes=DIAGNOSTIC_SERVER_LOG_RETAIN_BYTES)
+        else:
+            stream = _BoundedLogStream(path)
     except Exception as error:
         try:
             sys.stderr.write(

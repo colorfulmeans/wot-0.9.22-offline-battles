@@ -1,9 +1,12 @@
 """Verification survives busy histories without changing model lifecycle calls."""
 import ast
 import io
+import os
 from pathlib import Path
 import sys
 import types
+import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -13,6 +16,34 @@ from gui.mods.offline_lan_0922 import native_input_diagnostics as logs
 
 
 class ReviewEvidenceTests(unittest.TestCase):
+    def test_diagnostic_server_persistence_keeps_early_evidence_over_basic_ceiling(self):
+        tree = ast.parse((ROOT / 'launcher/wot_launcher.py').read_text(encoding='utf8'))
+        selected = {'_open_server_log', '_BoundedLogStream', '_TeeTextStream'}
+        constants = {'SERVER_LOG_MAX_BYTES', 'SERVER_LOG_RETAIN_BYTES',
+            'DIAGNOSTIC_SERVER_LOG_MAX_BYTES', 'DIAGNOSTIC_SERVER_LOG_RETAIN_BYTES'}
+        nodes = [node for node in tree.body if
+            isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in selected or
+            isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in constants
+                                                for t in node.targets)]
+        ns = dict(os=os, sys=types.SimpleNamespace(stdout=None, stderr=None), threading=threading)
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), '<server log>', 'exec'), ns)
+        with tempfile.TemporaryDirectory() as directory:
+            for mode in ('0', '1'):
+                ns['sys'].stdout = ns['sys'].stderr = None
+                target = os.path.join(directory, mode + '.log')
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': mode}):
+                    self.assertEqual(target, ns['_open_server_log'](target))
+                tee = ns['sys'].stdout
+                tee.write('EARLY VERIFICATION\n')
+                for unused in range(300):
+                    tee.write('later evidence ' + 'x' * 4096 + '\n')
+                tee.flush()
+                tee._log_stream.close()
+                payload = Path(target).read_bytes()
+                self.assertEqual(mode == '1', b'EARLY VERIFICATION' in payload)
+                if mode == '0':
+                    self.assertLessEqual(len(payload), ns['SERVER_LOG_MAX_BYTES'])
+
     def test_bulk_exhaustion_does_not_drop_continuous_verification(self):
         owner = types.SimpleNamespace(round_id=1)
         output = io.StringIO()
