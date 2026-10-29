@@ -14,6 +14,35 @@ def rental_battles(style):
     return max(0, int(getattr(style, 'rentCount', 0) or 0))
 
 
+def outfit_item_counts(outfit):
+    """Count native independent units, expanding each applied-area bit."""
+    result = {}
+    if getattr(outfit, 'styleId', 0):
+        return result
+    for kind, name in ((1, 'paints'), (2, 'camouflages'), (3, 'decals')):
+        for component in getattr(outfit, name, ()):
+            # CustomizationOutfit.applyAreaBitmaskToDict expands these bits.
+            key = (kind, int(component.id))
+            result[key] = result.get(key, 0) + bin(int(component.appliedTo)).count('1')
+    for component in getattr(outfit, 'modifications', ()):
+        # Native modifications is an array of IDs, unlike the area components.
+        key = (5, int(component))
+        result[key] = result.get(key, 0) + 1
+    return result
+
+
+def report_outfit_transfer(updates):
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled, write_json_record
+        if detailed_enabled() and updates:
+            write_json_record('APPEARANCE TRANSFER', dict(stage='committed', items=[
+                dict(type=kind, id=identifier, stock=bindings)
+                for (kind, identifier), bindings in sorted(updates.items())]))
+    except Exception as error:
+        import sys
+        sys.stdout.write('[Offline LAN 0.9.22] APPEARANCE DIAGNOSTIC transfer unavailable: %s\n' % error)
+
+
 def report_inventory(snapshot, cache):
     """Expose IGR ownership and remaining token restrictions in diagnostic runs."""
     try:

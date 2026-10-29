@@ -229,6 +229,7 @@ jobs:
           --pattern test_port_0922_contact_chain.py
           --pattern test_port_0922_settings_policy.py
           --pattern test_port_0922_default_styles.py
+          --pattern test_port_0922_outfit_stock.py
           --pattern test_port_0922_sparse_lineup.py
           --pattern test_port_0922_simulation_worker.py
           --pattern test_waiting_room_stock_flash.py

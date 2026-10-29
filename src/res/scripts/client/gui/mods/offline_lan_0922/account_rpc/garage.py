@@ -28,7 +28,8 @@ customization writers share one live record: two independent writers would each
 rebuild the descriptor from a stale copy and silently drop the other's change.
 """
 
-from gui.mods.offline_lan_0922.customization_rules import is_rental, rental_battles
+from gui.mods.offline_lan_0922.customization_rules import (
+    is_rental, rental_battles, outfit_item_counts)
 
 import contextlib
 import copy
@@ -1272,6 +1273,55 @@ class GarageState(object):
 
     # ---- customization 2.0 ---------------------------------------------
 
+    def _outfit_stock_plan(self, record, replacement):
+        # Stock #1513 getItemInventoryCount is free inventory + original -
+        # modified units. Persist that transfer when accepting CMD 119.
+        totals = []
+        try:
+            for outfits in (record.get('outfits', {}), replacement):
+                counts = {}
+                for descriptor, enabled in outfits.values():
+                    if enabled:
+                        parsed = self._customizations_module().parseOutfitDescr(descriptor)
+                        for key, count in outfit_item_counts(parsed).items():
+                            counts[key] = counts.get(key, 0) + count
+                totals.append(counts)
+            before, after = totals
+            updates = {}
+            for kind, identifier in set(before) | set(after):
+                change = before.get((kind, identifier), 0) - after.get((kind, identifier), 0)
+                if not change:
+                    continue
+                cache = self._vehicles_module().g_cache.customization20()
+                item = getattr(cache, {1:'paints', 2:'camouflages', 3:'decals', 5:'modifications'}[kind])[identifier]
+                vehicle = _int(record['vehicleTypeCompactDescr'])
+                bindings = dict(self._snapshot.get('customizationItems', {}).get(kind, {}).get(identifier, {}))
+                if change > 0:
+                    binding = vehicle if item.isVehicleBound else 0
+                    bindings[binding] = bindings.get(binding, 0) + change
+                else:
+                    needed = -change
+                    for binding in (vehicle, 0):
+                        taken = min(needed, bindings.get(binding, 0))
+                        if taken:
+                            bindings[binding] -= taken
+                            needed -= taken
+                    if needed:
+                        raise GarageError('not enough customization units to install')
+                updates[kind, identifier] = bindings
+            return updates
+        except GarageError:
+            raise
+        except Exception as error:
+            raise GarageError('customization inventory transfer is unavailable: %s' % error)
+
+    def _commit_outfit_stock(self, updates):
+        stock = self._snapshot.setdefault('customizationItems', {})
+        for (kind, identifier), bindings in updates.items():
+            stock.setdefault(kind, {})[identifier] = bindings
+        from gui.mods.offline_lan_0922.customization_rules import report_outfit_transfer
+        report_outfit_transfer(updates)
+
     def apply_outfit(self, vehicle_inventory_id, season, outfit_descr):
         """Validate and atomically store one #1513 outfit compact descriptor.
 
@@ -1300,6 +1350,8 @@ class GarageState(object):
         if season != CUSTOMIZATION_ALL_SEASONS:
             outfits.pop(CUSTOMIZATION_ALL_SEASONS, None)
         outfits[season] = (canonical, True)
+        stock_updates = self._outfit_stock_plan(record, outfits)
+        self._commit_outfit_stock(stock_updates)
         record.clear()
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))
@@ -1342,6 +1394,7 @@ class GarageState(object):
         # arena-specific outfits supplied by the style definition.
         staged['outfits'] = {
             CUSTOMIZATION_ALL_SEASONS: (canonical, True)}
+        stock_updates = self._outfit_stock_plan(record, staged['outfits'])
         # CMD 116 also rents/applies a style without a separate CMD 118.
         style = styles[style_id]
         compact_descr = _int(style.compactDescr)
@@ -1350,6 +1403,7 @@ class GarageState(object):
         owned = self._snapshot.get('customizationItems', {}).get(kind, {}).get(item_id, {})
         if not (owned.get(vehicle_type, 0) or owned.get(0, 0)):
             self.buy_customizations(vehicle_inventory_id, [compact_descr, 1])
+        self._commit_outfit_stock(stock_updates)
         record.clear()
         record.update(staged)
         self._touched.add(_int(vehicle_inventory_id))

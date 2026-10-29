@@ -11087,3 +11087,19 @@ regressions passed. The exact installed Chinese HD #1513 resources passed
 inspect_client.py. The original-resource exterior dialog was visually checked
 in both tabs on Windows using a disposable save; game-client checks and final
 package/CI identity are recorded after their actual completion below.
+
+Native build 9042143 / colorfulmeans-40945824237-1 exposed a pre-existing
+independent-outfit settlement omission: three seasonal FN3 hull applications
+previewed 1007 -> 1004, but CMD 119 saved the three outfits while leaving free
+stock at 1007. Exact #1513 customization/shared.getItemInventoryCount computes
+free stock + original - modified copies; applied copies are separate from free
+inventory. CMD 119 now stages typed per-area differences, checks the entire
+inventory transfer before mutation, consumes owned vehicle/public buckets,
+and returns removed copies to their native binding. Selecting a preset returns
+the displaced independent components without changing preset quantity rules.
+Modification arrays contain integer IDs; paint/camouflage/decal masks expand
+one copy per applied bit. Unchanged existing outfits do not trigger a stock
+migration. APPEARANCE TRANSFER exposes committed typed stock in diagnostic runs.
+Five focused regressions plus all 294 garage, 24 campaign-reward and seven
+creation/style regressions passed locally. Acceptance of the new transfer
+requires a rebuilt native package; the 9042143 observation is not its proof.
