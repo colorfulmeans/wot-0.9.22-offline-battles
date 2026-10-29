@@ -1,5 +1,6 @@
 """Daily-window model publication and delayed callback ownership."""
 import sys
+import os
 import types
 import unittest
 from unittest import mock
@@ -80,7 +81,6 @@ class DailyWindowTests(unittest.TestCase):
     def test_latest_daily_progress_is_built_for_each_model(self):
         self.patches[-1].stop()
         ui = fixture._load_port_module('offline_services_ui')
-        daily = dict(missions=['win', 'kill', 'damage'], claimed=[])
         # Use actual policy mission IDs and counters, rather than a fixed label snapshot.
         with mock.patch.object(ui, 'snapshot', return_value={}), \
              mock.patch.object(ui.policy, 'daily_state') as state:
@@ -93,6 +93,15 @@ class DailyWindowTests(unittest.TestCase):
         self.assertTrue(first['daily'])
         self.assertNotEqual(first['labels']['row0'], second['labels']['row0'])
         self.assertEqual({'reserves', 'close'}, set(first['controls']))
+
+    def test_chinese_daily_labels_translate_the_new_separate_reward_row(self):
+        self.patches[-1].stop()
+        ui = fixture._load_port_module('offline_services_ui')
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_UI_LANGUAGE': 'zh'}), \
+             mock.patch.object(ui, 'snapshot', return_value={}):
+            model = self.panel.model()
+        self.assertIn('\u5956\u52b1', model['labels']['reward0'])
+        self.assertNotIn('Reward:', model['labels']['reward0'])
 
 
 if __name__ == '__main__':
