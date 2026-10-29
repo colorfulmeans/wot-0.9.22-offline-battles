@@ -127,7 +127,7 @@ class CustomizationsDialog(object):
         def order(item):
             nations=[n for action,rule in item['rules'] if action=='include' for n in rule.get('nations',())]
             return (min([nation_choices.ORDER.index(n) for n in nations] or [len(nation_choices.ORDER)]),
-                    item['category'],item['id'])
+                    {'Paint':0,'Camouflage':1,'Emblem':2,'Inscription':3,'Wear':4}.get(item['category'],5),item['id'])
         for style in sorted(self.items,key=order):
             if (style['kind']==store.STYLE_TYPE)!=preset:continue
             if not preset and self.categories.get(self.category.get()) not in (None,style['category']):continue
@@ -136,10 +136,15 @@ class CustomizationsDialog(object):
             bindings = self.inventory.get(str(style['kind']), {}).get(str(style['id']), {})
             count = bindings.get('0', 0) + sum(bindings.get(str(v['compact_descr']), 0) for v in applicable)
             category = ('Internet cafe' if style['igr'] else style['category']) if not preset else 'Hidden' if style['hidden'] else 'Rental' if style['rent_count'] else 'Permanent'
+            caption = tr(category)
+            if not preset:
+                caption = tr(style['category'])
+                if style['igr']: caption += ' / ' + tr('Internet cafe')
+                if style.get('season','ALL').lower() != 'all': caption += ' / ' + tr(style['season'].lower())
             unit = tr('battles') if style['rent_count'] else tr('copies')
             self.table.insert('', 'end', iid='%d:%d'%(style['kind'],style['id']), values=(
                 store.display_name(style,self.styles,tr) if preset else style['label'],store.applicability(style,self.vehicles,tr),
-                tr(category), '%d %s' % (count, unit), len(applicable)))
+                caption, '%d %s' % (count, unit), len(applicable)))
         self.table.selection_set(*(key for key in selected if self.table.exists(key)))
         self.show_scope()
 

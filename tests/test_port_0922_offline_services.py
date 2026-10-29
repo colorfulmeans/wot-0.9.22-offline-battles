@@ -368,6 +368,14 @@ class OfflineServicesTests(unittest.TestCase):
             _PremiumWindow__makePacketVO=lambda self, period, *args:
                 {'id': period, 'image': 'image-%d' % period}))
         settings = type('SettingsWindow', (object,), dict(onTabSelected=native_tab))
+        policy = garage_fixture._load_port_module('settings_policy')
+        def native_game_settings(params):
+            return dict(dict((key,True) for key in policy.LOCKED), minimapAlpha=.65)
+        def native_apply(params, diff, restartApproved=False):
+            params.applied = (diff, restartApproved)
+            return 'applied'
+        params_type = type('SettingsParams', (object,), dict(
+            getGameSettings=native_game_settings, apply=native_apply))
         voip = type('VOIPSupportSetting', (object,), dict(_VOIPSupportSetting__isSupported=noop))
         exports = {
             'gui.Scaleform.daapi.view.lobby.store.StoreActions': {'StoreActions': store},
@@ -378,6 +386,7 @@ class OfflineServicesTests(unittest.TestCase):
             # its module. Treating that package attribute as a module prevents
             # the visible client from reaching Account creation.
             'gui.Scaleform.daapi.view.common.settings': {'SettingsWindow': settings},
+            'gui.Scaleform.daapi.view.common.settings.SettingsParams': {'SettingsParams':params_type},
             'gui.Scaleform.daapi.view.common.settings.SettingsWindow': {
                 'SettingsWindow': settings, '_setLastTabIndex': selected_tabs.append,
                 '_PAGES_INDICES': {'sound': 2},
@@ -398,6 +407,12 @@ class OfflineServicesTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, modules), mock.patch.object(ui, 'tr', side_effect=lambda text: text):
             try:
                 ui._install_settings()
+                params=params_type()
+                packed=params.getGameSettings()
+                self.assertEqual(.65,packed['minimapAlpha'])
+                self.assertTrue(all(packed[key] is None for key in policy.LOCKED))
+                self.assertEqual('applied',params.apply({'useServerAim':True,'gameplay_assault':True,'minimapAlpha':.5},True))
+                self.assertEqual(({'minimapAlpha':.5},True),params.applied)
                 for days in (360, 180, 30, 7, 3, 1):
                     self.assertEqual('image-%s' % days,
                         premium()._PremiumWindow__makePacketVO(
@@ -412,6 +427,8 @@ class OfflineServicesTests(unittest.TestCase):
             finally:
                 ui.uninstall()
         self.assertIs(native_tab, settings.onTabSelected)
+        self.assertIs(native_game_settings,params_type.getGameSettings)
+        self.assertIs(native_apply,params_type.apply)
 
 
 if __name__ == '__main__':

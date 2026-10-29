@@ -69,6 +69,7 @@ _MAINTENANCE_HELP = (
 _CHINESE = {
     'Appearance inventory': '外观库存',
     'Type': '类型',
+    'winter': '雪地', 'summer': '草地', 'desert': '沙地',
     'Select at least one appearance item.': '请至少选择一种外观物品。',
     'Appearance inventory saved.': '外观库存已保存。',
     'My style': '我的风格', 'Preset styles': '预设风格',

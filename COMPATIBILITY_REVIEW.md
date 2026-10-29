@@ -11049,6 +11049,11 @@ excluded by normal vehicle filtering. No resource-only style is activated.
 Native CustomizationType IDs are 1 paint, 2 camouflage, 3 decal, 4 style and
 5 modification. ItemTags.VEHICLE_BOUND is vehicleBound; the cache's
 isVehicleBound/filter contracts decide placement, not item names or guesses.
+BaseCustomizationItemXmlReader applies item-local tags/filters over its group
+prototype (105 bound legacy camouflage and 29 local decal filters). FilterNode
+uses customizationNationID, not the tech-tree nation: T-55A uses USSR exterior
+rules and Panther/M10 uses USA rules. Tag requirements are a proper subset.
+The launcher follows these exact contracts and retains seasonal captions.
 
 Default seed revision 3 and newly created unlocked metadata explicitly opt
 into the independent 1000-unit grant. appearanceStockVersion is durable in

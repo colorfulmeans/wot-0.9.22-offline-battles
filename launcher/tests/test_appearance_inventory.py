@@ -61,6 +61,13 @@ class AppearanceTests(unittest.TestCase):
         self.assertEqual(15,sum(i['igr'] and i['kind']==3 for i in items))
         self.assertNotIn((4,137),[(i['kind'],i['id']) for i in items])
         self.assertEqual(len(items),len(set((i['kind'],i['id']) for i in items)))
+        by_id={(i['kind'],i['id']):i for i in items}
+        self.assertTrue(by_id[2,15335]['vehicle_bound'])
+        self.assertEqual(105,sum(bool(i.get('vehicle_bound')) for i in items))
+        self.assertEqual([('include',{'nations':['china','france','uk','usa','ussr']})],by_id[3,15872]['rules'])
+        ddr=next(v for v in vehicles if v['name']=='germany:G105_T-55_NVA_DDR')
+        self.assertEqual('ussr',ddr['customization_nation'])
+        self.assertTrue(store.compatible(by_id[2,15050],ddr))
         unavailable=[i for i in items if not any(store.compatible(i,v) for v in vehicles)]
         # #1513 has only the Pudel in Poland; these legacy definitions exclude it.
         self.assertEqual(15,len(unavailable))

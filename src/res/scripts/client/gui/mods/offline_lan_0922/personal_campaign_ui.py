@@ -135,6 +135,21 @@ separate earned-order receipt and must not be counted a second time here.
     return parts
 
 
+def _appearance_name(kind, identifier):
+    try:
+        from items import vehicles
+        from helpers import i18n
+        cache = vehicles.g_cache.customization20()
+        collection = {1: cache.paints, 2: cache.camouflages,
+                      3: cache.decals, 5: cache.modifications}.get(int(kind), {})
+        item = collection.get(int(identifier))
+        if item is not None and item.userString:
+            return _label(i18n.makeString(item.userString))
+    except Exception:
+        pass
+    return tr('Appearance item %d:%d') % (int(kind), int(identifier))
+
+
 def _payout_parts(rows):
     """Format actual operation payouts without guessing from operation IDs."""
     nodes, parts, premium_seconds = [], [], 0
@@ -158,18 +173,9 @@ def _payout_parts(rows):
         elif kind == 'style':
             parts.append(tr('Style inventory: %s x%d') %
                          (_style_name(row['id']),int(row.get('count',0))))
-        elif kind == 'customization':
-            from items import vehicles
-            cache = vehicles.g_cache.customization20()
-            collection = {1: cache.paints, 2: cache.camouflages,
-                          3: cache.decals, 5: cache.modifications}.get(int(row['type']), {})
-            item = collection.get(int(row['id']))
-            name = getattr(item, 'userString', '') if item is not None else ''
-            if name:
-                from helpers import i18n
-                name = i18n.makeString(name)
+        elif kind == 'appearance':
             parts.append(tr('Appearance inventory: %s x%d') %
-                (_label(name or '%s:%s' % (row['type'], row['id'])), int(row.get('count', 0))))
+                (_appearance_name(row['type'], row['id']), int(row.get('count', 0))))
         elif kind == 'earnings_percent':
             parts.append(tr('Battle earnings multiplier: %d%% -> %d%%') %
                          (int(row['before']),int(row['count'])))

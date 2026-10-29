@@ -253,6 +253,20 @@ class PersonalCampaignMessageTests(unittest.TestCase):
         self.assertEqual(['Account assets received: Style inventory: Hidden style x2.',
             'Account settings updated: Battle earnings multiplier: 100% -> 250%.'],result)
 
+    def test_typed_appearance_additions_keep_names_and_escape_native_message_markup(self):
+        items=types.ModuleType('items')
+        cache=types.SimpleNamespace(paints={137:types.SimpleNamespace(userString='Paint <gold>')},
+            camouflages={137:types.SimpleNamespace(userString='Different camouflage')},decals={},modifications={})
+        items.vehicles=types.SimpleNamespace(g_cache=types.SimpleNamespace(customization20=lambda:cache))
+        helpers=types.ModuleType('helpers');helpers.i18n=types.SimpleNamespace(makeString=lambda value:value)
+        with mock.patch.dict(sys.modules,{'items':items,'helpers':helpers}):
+            result=self.ui.messages({'account_changes':[{'phase':'granted','rewards':[
+                {'kind':'appearance','type':1,'id':137,'count':7},
+                {'kind':'appearance','type':2,'id':137,'count':3}]}]})
+        self.assertEqual(1,len(result))
+        self.assertIn('Paint &lt;gold&gt; x7',result[0])
+        self.assertIn('Different camouflage x3',result[0])
+
     def test_launcher_vehicle_delivery_commits_notice_once_and_keeps_failed_delivery_pending(self):
         import ast
         from pathlib import Path

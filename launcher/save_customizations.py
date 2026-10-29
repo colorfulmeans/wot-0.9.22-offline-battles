@@ -32,6 +32,16 @@ def _text(value):
     return str(value.value).lower()
 
 
+def _vehicle_rules(fields):
+    section = fields.get('vehicleFilter')
+    if section is None or section.value_type != 0:
+        return []
+    return [(action.decode('ascii'), {
+                key.decode('ascii'): _text(value).split()
+                for key, value in (rule.value.children if rule.value_type == 0 else ())})
+            for action, rule in section.value.children]
+
+
 def catalogue(game_root):
     """Read the active merged list, including hidden styles, not unused files."""
     status, package = vehicle_overlays._require_target(game_root)
@@ -87,6 +97,11 @@ def catalogue(game_root):
                 vehicle['tags'] = tuple(set(vehicle['tags']) | {'premium'})
             vehicle['compact_descr'] = 1 | (NATIONS.index(nation) << 4) | (identifier << 8)
             vehicle['name'] = nation + ':' + vehicle['vehicle']
+            definition = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
+                'scripts/item_defs/vehicles/%s/%s.xml' % (nation, vehicle['vehicle'])))
+            customization_nation = _fields(definition).get('customizationNation')
+            vehicle['customization_nation'] = (_text(customization_nation)
+                if customization_nation is not None else nation)
     if not styles or len({s['id'] for s in styles}) != len(styles):
         raise save_ledger.SaveLedgerError('The style catalogue is invalid.')
     return styles, vehicles
@@ -95,10 +110,13 @@ def catalogue(game_root):
 def compatible(style, vehicle):
     def matches(rule):
         for key, allowed in rule.items():
-            if key == 'nations': actual = {vehicle['nation']}
+            if key == 'nations': actual = {vehicle.get('customization_nation', vehicle['nation'])}
             elif key == 'levels': actual = {str(vehicle['level'])}
             elif key == 'vehicles': actual = {vehicle['name']}
-            elif key == 'tags': actual = set(vehicle['tags'])
+            elif key == 'tags':
+                # #1513 FilterNode uses a proper subset, not any shared tag.
+                if allowed and not set(allowed) < set(vehicle['tags']): return False
+                continue
             else: raise save_ledger.SaveLedgerError('Unknown style vehicle filter: ' + key)
             if not actual.intersection(allowed): return False
         return True
@@ -119,37 +137,45 @@ def appearance_catalogue(game_root):
                 translations[domain] = gettext.GNUTranslations(stream)
     items = []
     with zipfile.ZipFile(package) as archive:
+        price_root = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
+            'scripts/item_defs/customization/priceGroups/list.xml'))
+        price_flags = {}
+        for tag, raw in price_root.children:
+            if tag != b'priceGroup': continue
+            fields = _fields(raw.value)
+            price_flags[_text(fields['name'])] = ('notInShop' in fields and
+                _text(fields['notInShop']).lower() in ('true', '1'))
         for kind, folder, item_tag, label in CUSTOM_TYPES:
             section = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
                 'scripts/item_defs/customization/%s/list.xml' % folder))
             for tag, raw in section.children:
                 if tag != b'itemGroup': continue
                 group = _fields(raw.value)
-                rules = []
-                if 'vehicleFilter' in group and group['vehicleFilter'].value_type == 0:
-                    for action, rule in group['vehicleFilter'].value.children:
-                        rules.append((action.decode('ascii'), {
-                            key.decode('ascii'): _text(value).split()
-                            for key, value in (rule.value.children if rule.value_type == 0 else ())}))
                 for tag, raw_item in raw.value.children:
                     if tag != item_tag.encode('ascii'): continue
                     fields = _fields(raw_item.value)
+                    # BaseCustomizationItemXmlReader assigns item fields over
+                    # its group prototype. A local filter REPLACES that filter.
+                    effective = dict(group)
+                    effective.update(fields)
                     key = _text(fields.get('userString') or group['userString'])
                     if ':' in key:
                         domain, text = key.lstrip('#').split(':', 1)
                         name = translations.get(domain, gettext.NullTranslations()).gettext(text)
                     else:
                         name = key or '%s %s' % (label, _text(fields['id']))
-                    price_group = _text(group['priceGroup'])
-                    tags = _text(group['tags']).split() if 'tags' in group else []
+                    price_group = _text(effective['priceGroup'])
+                    tags = _text(effective['tags']).split() if 'tags' in effective else []
                     category = label
                     if kind == 3:
-                        category = ('Inscription' if _text(group.get('type')).upper() == 'INSCRIPTION'
+                        category = ('Inscription' if _text(effective['type']).upper() == 'INSCRIPTION'
                                     else 'Emblem')
                     items.append(dict(id=int(_text(fields['id'])), kind=kind,
-                        label=name, category=category, rules=rules,
-                        igr='premiumIGR' in tags, hidden='notInShop' in price_group,
+                        label=name, category=category, rules=_vehicle_rules(effective),
+                        igr='premiumIGR' in tags, hidden=price_flags[price_group],
                         vehicle_bound='vehicleBound' in tags,
+                        season=_text(effective['season']) if 'season' in effective else 'ALL',
+                        required_token=_text(effective['requiredToken']) if 'requiredToken' in effective else '',
                         rent_count=0, price_group=price_group))
     for item in styles:
         item.update(kind=STYLE_TYPE, category='Preset style', igr=False)
@@ -311,7 +337,7 @@ def write_inventory(slot_id, game_root, inventory, environment=None, root=None, 
                 delta = sign * (sum(after.get(identifier, {}).values()) -
                                 sum(before.get(identifier, {}).values()))
                 if delta > 0:
-                    reward = {'kind':'style' if int(kind)==STYLE_TYPE else 'customization',
+                    reward = {'kind':'style' if int(kind)==STYLE_TYPE else 'appearance',
                               'id':int(identifier),'count':delta}
                     if int(kind) != STYLE_TYPE: reward['type'] = int(kind)
                     rewards.append(reward)
