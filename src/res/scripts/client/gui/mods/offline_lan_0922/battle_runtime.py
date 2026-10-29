@@ -22900,6 +22900,13 @@ class BattleRuntime(object):
             return 'commit_required'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
+        if detailed_enabled() and motion_yaw is not None:
+            bot_state['_passive_world_diagnostic_trace'] = dict(
+                source='realised_passive_catalog', status=status,
+                speed=speed, kinetic_speed=kinetic_speed,
+                allow_crush_drive=allow_crush_drive,
+                accepted_now=accepted_now, used_kinetic_speed=used_kinetic_speed,
+                token=detail.get('token'), requires_commit=detail.get('requires_commit'))
         if used_kinetic_speed and not (
                 accepted_now and status == 'crushed' and
                 detail.get('token')):
@@ -27046,15 +27053,19 @@ class BattleRuntime(object):
             # identical setHullAimingAnglesDelta input every render callback
             # does not advance them; current hull pitch and Siege state below
             # fence every input that can change that value.
+            # World barrel yaw includes hull pitch/roll. The matrix setter
+            # consumes hull-relative traverse, just like projectile geometry.
+            presentation_aim = (yaw + turret_yaw
+                if 'turret_yaw' in state else aim_yaw)
             aim_signature = (
-                lifecycle, yaw, aim_yaw, gun_pitch,
+                lifecycle, yaw, presentation_aim, gun_pitch,
                 rotation[1], int(state.get('siege_state', 0) or 0))
             if record.get('_authority_aim_signature') == aim_signature:
                 self._authority_aim_skips += 1
             else:
                 try:
                     self._binding.update_vehicle_aim(
-                        engine_id, yaw, aim_yaw, gun_pitch)
+                        engine_id, yaw, presentation_aim, gun_pitch)
                 except Exception as error:
                     record.pop('_authority_aim_signature', None)
                     self._warn_optional_failure(
@@ -27091,6 +27102,8 @@ class BattleRuntime(object):
                 self._run_optional_feature(
                     'bot track animation', self._update_bot_tracks,
                     (record, state, now))
+            if not motion_alive:
+                self._observe_wreck_aim(record, now)
             applied = True
         return applied
 
@@ -27750,6 +27763,29 @@ class BattleRuntime(object):
         battle_review_record(
             self, 'wreck_firing_lane', record.get('engine_id'),
             self._last_frame_time, build, interval=2.0, limit=256)
+
+    def _observe_wreck_aim(self, record, now):
+        """Sample actual providers even when no shot crosses this corpse."""
+        if not detailed_enabled():
+            return
+        from .native_input_diagnostics import battle_review_record
+        def build():
+            pose = record.get('projectile_collision_pose') or {}
+            row = dict(actor=record.get('network_id'), projectile_pose=pose,
+                native_aim=None, native_aim_error=None)
+            try:
+                vehicle = self._remote_factory.get(record['engine_id'])
+                appearance = vehicle.appearance
+                yaw = float(self._runtime.math.Matrix(appearance.turretMatrix).yaw)
+                pitch = float(self._runtime.math.Matrix(appearance.gunMatrix).pitch)
+                row['native_aim'] = [yaw, pitch]
+                row['yaw_error'] = _angle_delta(pose['turret_yaw'], yaw)
+                row['pitch_error'] = pitch - pose['gun_pitch']
+            except Exception as error:
+                row['native_aim_error'] = type(error).__name__
+            return row
+        battle_review_record(self, 'wreck_aim_published', record.get('engine_id'),
+            now, build, interval=2.0, limit=256)
 
     def _bot_lane_row_contact(self, rows, points, splash_radius=0.0,
                               exclude=()):
@@ -29184,6 +29220,8 @@ class BattleRuntime(object):
             pitch = pose.get('pitch', 0.0)
             roll = pose.get('roll', 0.0)
             aim_yaw = pose.get('aim_yaw', yaw)
+            presentation_aim = (yaw + pose['turret_yaw']
+                if 'turret_yaw' in pose else aim_yaw)
             gun_pitch = pose.get('gun_pitch', 0.0)
             collision_pose = self._projectile_plain_pose(
                 (x, y, z), pose)
@@ -29192,7 +29230,7 @@ class BattleRuntime(object):
             record['projectile_collision_pose'] = collision_pose
             alive = bool(state.get('alive', True)) and int(
                 state.get('health', 1) or 0) > 0
-            signature = (x, y, z, yaw, pitch, roll, aim_yaw, gun_pitch)
+            signature = (x, y, z, yaw, pitch, roll, presentation_aim, gun_pitch)
             lifecycle = (self._generation, record['engine_id'], id(record))
             pose_changed = (
                 signature != record.get('_remote_pose_signature') or
@@ -29238,7 +29276,7 @@ class BattleRuntime(object):
             # for a worker's hydraulic geometry, and an applied Siege edge
             # can replace the installed gun's static component angles.
             aim_signature = (
-                lifecycle, yaw, pitch, aim_yaw, gun_pitch,
+                lifecycle, yaw, pitch, presentation_aim, gun_pitch,
                 record.get('presented_siege_state'))
             aim_changed = aim_signature != record.get('_remote_aim_signature')
             if aim_changed:
@@ -29246,8 +29284,10 @@ class BattleRuntime(object):
                 # signature no longer describes that partially written aim.
                 record.pop('_remote_aim_signature', None)
                 self._binding.update_vehicle_aim(
-                    record['engine_id'], yaw, aim_yaw, gun_pitch)
+                    record['engine_id'], yaw, presentation_aim, gun_pitch)
                 record['_remote_aim_signature'] = aim_signature
+            if not alive:
+                self._observe_wreck_aim(record, now)
             if record.get('kind') in ('bot', 'player'):
                 # Keep the zero-turn sample fresh through playback holds.
                 turn = self._remember_remote_track_turn(record, yaw, now)

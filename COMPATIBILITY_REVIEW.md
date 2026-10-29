@@ -3092,7 +3092,9 @@ boundary. The first access violation was in `WGVehicleFilter.syncGunAngles`
 inside `Vehicle.__startWGPhysics`; the second run passed that address and
 failed in `WGVehicleFilter.syncStabilisedYPR` inside
 `PlayerAvatar.__onSetOwnVehicleAuxPhysicsData`. Both native methods reach the
-same absent retail server-connection/filter chain. A complete exact-`#1513`
+retail server-connection/filter boundary. The outer WGVehicleFilter exists;
+the exact missing C++ initialization dependency is not proved by Python
+object presence or by the faulting method name alone. A complete exact-`#1513`
 bytecode scan inventories every Python reference to those two methods and finds
 four call sites: `Vehicle.__startWGPhysics`, `Vehicle.set_gunAnglesPacked`,
 `CompoundAppearance.__onModelsRefresh`, and the Avatar auxiliary-physics
@@ -10989,3 +10991,41 @@ recognizes BattleRuntime.client and its start-message round, so these samples
 are round-tagged and their per-round budgets reset. Native acceptance of this
 diagnostic correction requires the rebuilt package; the first session is not
 silently relabelled as running the correction.
+
+
+### Passive wreck destruction and tilted Bot aim follow-up
+
+Report 9910694a59d3 proves passive motion can reject an uncommitted catalog
+proposal. Two realised contact paths now enable destruction at the existing
+world/catalog seam, after vehicle, arena and detached-turret guards. Candidate
+probes remain read-only. Passive calls temporarily clear drive intent and use
+actual transferred speed and the contacted hull descriptor; they never borrow
+the dead vehicle's directional drive cap. Existing strength/energy laws and
+post-destruction world recasts still apply. Slow-speed failures remain a
+separate gameplay investigation, not grounds to destroy every fragile prop.
+A real catalog regression distinguishes a 0.16 m/s rejection from a 20 m/s
+physical crush and checks that the drive-cap function is never called.
+
+The same report's AMX 13 75 body pitch/roll exposed a separate coordinate-space
+error: the renderer subtracted hull yaw from world barrel yaw while projectile
+geometry used the actual hull-relative traverse. World yaw already contains
+pitch/roll projection, so those expressions differ on tilted bodies. Authority
+presentation now uses the same retained relative traverse as collision. The
+positional Bot codec, server admission/contained-combat motion, takeover and
+remote interpolation retain that angle explicitly so visible peers use the
+same geometry. Player pose messages retain their existing convention. This
+covers live Bots and corpses; it does not change gun rotation or shot policy.
+
+Diagnostic entry records realised passive commit mode/results alongside the
+existing per-identity crush energy evidence. A separately bounded
+wreck_aim_published stage reads actual appearance matrix providers and compares
+them to projectile angles even without a shot through that corpse. Read errors
+remain explicit. Windows acceptance must distinguish a successful prop commit,
+a physical-energy rejection, a hard world blocker and pose-read failure.
+
+Native synchronization remains a separate investigation. Do not reenable the
+two faulting methods merely because a Python filter object exists. The dumps
+establish failing boundaries, not a complete safe C++ initialization recipe.
+Any future experiment needs the exact #1513 connection/entity lifecycle and
+an isolated dump-backed run before gameplay acceptance. This follow-up changes
+no native synchronization call or server-connection initialization.

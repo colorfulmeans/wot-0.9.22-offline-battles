@@ -6875,6 +6875,8 @@ class BattleState:
             "roll": round(bot_state_codec._wrapped_angle(
                 _finite_float(raw.get("roll"))), 5),
             "aim_yaw": round(_finite_float(raw.get("aim_yaw"), yaw), 5),
+            "turret_yaw": round(bot_state_codec._wrapped_angle(_finite_float(
+                raw.get("turret_yaw"), _finite_float(raw.get("aim_yaw"), yaw) - yaw)), 5),
             "gun_pitch": round(_clamp(_finite_float(raw.get("gun_pitch")), -1.2, 1.2), 5),
             "speed": round(_clamp(
                 _finite_float(raw.get("speed")), -80.0, 80.0), 4),
@@ -7280,7 +7282,7 @@ class BattleState:
         if previous is not None:
             health = min(health, int(previous.get("health", max_health)))
         for name in ("x", "y", "z", "yaw", "pitch", "roll", "aim_yaw",
-                     "gun_pitch", "speed", "movement_dir", "rotation_dir",
+                     "turret_yaw", "gun_pitch", "speed", "movement_dir", "rotation_dir",
                      "world_pose"):
             result[name] = raw[name]
         for name in ("shot_yaw", "shot_pitch"):

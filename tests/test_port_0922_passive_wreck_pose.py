@@ -91,7 +91,7 @@ class PassiveWreckPoseTests(unittest.TestCase):
             self.assertAlmostEqual(before[key],state[key],key)
 
     def test_passive_status_contract_admits_crushed_but_not_pending_commit(self):
-        for status in ('clear','crushed','soft','hard','commit_required'):
+        for status in ('clear','crushed','soft','hard'):
             for coupled in (False, True):
                 worker = self.worker(status); state = self.state()
                 with mock.patch.object(self.module.tank_collision,
@@ -111,6 +111,32 @@ class PassiveWreckPoseTests(unittest.TestCase):
                 self.assertEqual(status in ('clear','crushed'),moved,(status,coupled))
                 self.assertEqual(1,state['movement_dir'])
                 self.assertAlmostEqual(1.24765,worker.motion_resolver.call_args.args[2])
+                self.assertTrue(worker.motion_resolver.call_args.args[7])
+
+    def test_nonworld_rejection_cannot_commit_destructibles(self):
+        for coupled in (False, True):
+            for gate in ('baked', 'turret', 'rotation') if coupled else ('baked', 'turret'):
+                worker = self.worker(); state = self.state()
+                worker._baked_pose_progress_clear.return_value = gate != 'baked'
+                worker._turret_pose_is_clear.return_value = gate != 'turret'
+                worker._wreck_rotation_probe.return_value = gate != 'rotation'
+                with mock.patch.object(self.module.tank_collision,
+                        'rotation_fraction', return_value=1.), mock.patch.object(
+                        self.module.tank_collision, 'translation_fraction', return_value=1.), \
+                        mock.patch('sys.stdout'):
+                    if coupled:
+                        worker._try_wreck_swept_pose(state, (.1,.2), .3, 1.)
+                    else:
+                        worker._apply_tank_contact_response(state, dict(
+                            delta_velocity=(1.,.5), correction=(0.,0.)), .1,
+                            apply_friction=False)
+                worker.motion_resolver.assert_not_called()
+
+    def test_preview_pending_crush_remains_nonmutating_and_blocked(self):
+        worker = self.worker('commit_required'); state = self.state()
+        self.assertEqual('hard', worker._passive_motion_status(
+            state, (0.,0.,0.), .5, 20., None, .1, 1., False))
+        self.assertFalse(worker.motion_resolver.call_args.args[7])
 
     def test_diagnostic_status_is_lazy_bounded_and_preserves_result(self):
         worker = self.worker('soft'); state = self.state()

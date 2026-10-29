@@ -4434,7 +4434,8 @@ class BotRuntime(object):
         state['z'] = _number(raw.get('z'), state.get('z'))
         state['yaw'] = yaw
         state['aim_yaw'] = aim_yaw
-        state['turret_yaw'] = _angle_delta(aim_yaw, yaw)
+        state['turret_yaw'] = _number(raw.get('turret_yaw'),
+            _angle_delta(aim_yaw, yaw))
         state['gun_pitch'] = gun_pitch
         state['desired_gun_pitch'] = gun_pitch
         state['pitch'] = _number(raw.get('pitch'), state.get('pitch'))
@@ -8856,13 +8857,14 @@ class BotRuntime(object):
         if status not in ('clear', 'crushed', 'soft', 'hard'):
             raise RuntimeError(
                 'bot passive motion resolver returned an invalid status')
-        if detailed_enabled() and not commit_enabled:
+        if detailed_enabled():
             from .native_input_diagnostics import battle_review_record
             battle_review_record(self, 'passive_world_motion', state['id'], now,
                 lambda: dict(actor=state['id'], alive=state.get('alive', True),
                     position=list(position), hull_yaw=hull_yaw,
                     motion_yaw=motion_yaw, speed=speed, dt=step,
                     raw_status=raw_status, status=status,
+                    commit_enabled=bool(commit_enabled),
                     admitted=status in ('clear', 'crushed'),
                     world_trace=state.get('_world_contact_trace') or
                         state.get('_passive_world_diagnostic_trace')),
@@ -11676,12 +11678,19 @@ class BotRuntime(object):
             position = _position(state)
             candidate = (position[0] + move_x, position[1],
                          position[2] + move_z)
-            if callable(self.motion_resolver):
+            # Reject geometry before a realised world sweep can destroy props.
+            rejection = ('baked_pose' if not self._baked_pose_progress_clear(
+                    state, position, yaw, candidate, yaw) else
+                'detached_turret' if not self._turret_pose_is_clear(
+                    state, position, yaw, candidate, yaw) else None)
+            if rejection is not None:
+                path_blocked = False
+            elif callable(self.motion_resolver):
                 sweep_step = max(float(step), 1.0 / 120.0)
                 world_blocked = self._passive_motion_status(
                     state, position, contact_yaw, move_distance/sweep_step,
                     self._descriptors.get(int(state['id'])), sweep_step,
-                    getattr(self, '_contact_now', 0.0), commit_enabled=False) not in ('clear', 'crushed')
+                    getattr(self, '_contact_now', 0.0), commit_enabled=True) not in ('clear', 'crushed')
                 path_blocked = False
             else:
                 # Passive momentum has no navigation goal. A cliff, steep
@@ -11692,11 +11701,7 @@ class BotRuntime(object):
                 path_blocked = (bool(passive_probe.get('collision'))
                                 if isinstance(passive_probe, dict)
                                 else not bool(passive_probe))
-            rejection = ('world_status' if world_blocked else
-                'baked_pose' if not self._baked_pose_progress_clear(
-                    state, position, yaw, candidate, yaw) else
-                'detached_turret' if not self._turret_pose_is_clear(
-                    state, position, yaw, candidate, yaw) else
+            rejection = rejection or ('world_status' if world_blocked else
                 'direction_probe' if path_blocked else None)
             if detailed_enabled():
                 from .native_input_diagnostics import battle_review_record
@@ -11849,17 +11854,17 @@ class BotRuntime(object):
             return False
         descriptor = self._descriptors.get(int(state['id']))
         now = getattr(self, '_contact_now', 0.0)
-        if callable(self.motion_resolver):
-            if self._passive_motion_status(state, start, math.atan2(move_x, move_z),
-                    math.hypot(move_x, move_z)/step, descriptor, step, now,
-                    commit_enabled=False) not in ('clear', 'crushed'):
-                return False
-        else:
-            # Keep narrow adapters on their established translation gate.
-            return False
         if not self._wreck_rotation_probe(
                 state['id'], start, yaw, end_yaw, descriptor, step, now, 0.0,
                 translation=(move_x, move_z)):
+            return False
+        if callable(self.motion_resolver):
+            if self._passive_motion_status(state, start, math.atan2(move_x, move_z),
+                    math.hypot(move_x, move_z)/step, descriptor, step, now,
+                    commit_enabled=True) not in ('clear', 'crushed'):
+                return False
+        else:
+            # Keep narrow adapters on their established translation gate.
             return False
         state['x'], state['z'] = end[0], end[2]
         self._set_wreck_yaw(state, end_yaw)

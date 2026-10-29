@@ -898,9 +898,9 @@ class _OfflineVehicleFilterSyncProxy(object):
         return getattr(self._vehicle_filter, name)
 
     def syncGunAngles(self, yaw, pitch):
-        # A client-only Vehicle has no retail interpolation filter behind its
-        # initial gun-angle sample.  Exact #1513 asserts a null native filter
-        # here, so the sample cannot be submitted through this native path.
+        # The outer WGVehicleFilter exists. Full #1513 dumps show this native
+        # call fails for client-created Vehicles; the exact missing C++ state
+        # is not established by Python object presence. Keep this seam closed.
         if self._wreck_restore is not None:
             from gui.mods.offline_lan_0922.wreck_model_pose import restore
             owner, appearance, context = self._wreck_restore
