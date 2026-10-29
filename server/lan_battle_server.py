@@ -55,7 +55,7 @@ from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import snapshot_delta
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
-from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, lineup_slots
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
@@ -2460,6 +2460,13 @@ class BattleState:
         self.bot_tactics_path = bot_tactics_path
         self.bot_tactics = bot_tactics.empty()
         self.bot_lineup = self._normalize_bot_lineup(bot_lineup)
+        self.lineup_locked = lineup_slots.explicit(self.bot_lineup)
+        if self.lineup_locked:
+            self.team_sizes = {team: len(self._team_slots(team)) for team in (1, 2)}
+            self.bot_tier_mode = 'random'
+            self.bot_skill_mode = 'mixed'
+            self.team_classes = bot_tactics.team_class_choices()
+            team1_size, team2_size = self.team_sizes[1], self.team_sizes[2]
         self.bot_excluded_vehicles = self._normalize_bot_excluded_vehicles(
             bot_excluded_vehicles)
         # Keep the old scalar on the wire for older protocol-v5 consumers.
@@ -2632,7 +2639,7 @@ class BattleState:
             slot = _exact_int(raw.get("slot"), 0, 14)
             vehicle = raw.get("vehicle")
             skill = raw.get("skill")
-            if vehicle is None and skill is None:
+            if vehicle is None and skill is None and "enabled" not in raw:
                 raise ValueError("empty Bot lineup entry")
             if vehicle is not None:
                 if (not isinstance(vehicle, str) or len(vehicle) > 96 or
@@ -2650,6 +2657,14 @@ class BattleState:
             # A slot may pin its vehicle, its gunnery tier, or both.  What
             # it leaves out stays with the room's own presets.
             entry = {"team": team, "slot": slot}
+            lineup_slots.validate_filters(raw)
+            if 'enabled' in raw:
+                entry['enabled'] = raw['enabled']
+                for field in ('nation', 'vehicle_class'):
+                    if raw.get(field) is not None:
+                        entry[field] = raw[field]
+                if not raw['enabled'] and (vehicle is not None or skill is not None):
+                    raise ValueError('Disabled lineup slot carries a vehicle or difficulty')
             if vehicle is not None:
                 entry["vehicle"] = vehicle
             if skill is not None:
@@ -2713,6 +2728,17 @@ class BattleState:
 
     def _active_map_pool(self):
         return MAP_POOL
+
+    def _lineup_pins_vehicle(self, team, slot, vehicle, class_tag):
+        return any(row.get('team') == team and row.get('slot') == slot and
+                   (row.get('vehicle') == vehicle or
+                    (row.get('enabled') and not row.get('vehicle') and
+                     (row.get('nation') or row.get('vehicle_class')) and
+                     lineup_slots.matches(row, dict(name=vehicle, class_tag=class_tag))))
+                   for row in self.bot_lineup)
+
+    def _team_slots(self, team):
+        return lineup_slots.active_slots(self.bot_lineup, team, self.team_sizes[team])
 
     def _team_sizes_wire(self):
         return {str(team): self.team_sizes[team] for team in (1, 2)}
@@ -2902,7 +2928,7 @@ class BattleState:
         available_callsigns = list(BOT_CALLSIGNS_0922)
         random.shuffle(available_callsigns)
         for team in (1, 2):
-            for slot in range(self.team_sizes[team]):
+            for slot in self._team_slots(team):
                 if (team, slot) in occupied_slots:
                     continue
                 name = available_callsigns.pop()
@@ -2912,6 +2938,11 @@ class BattleState:
                 # across different waiting-room sizes without slot collisions.
                 bot_id = slot + 1 if team == 1 else slot + 16
                 roster.append({"id": bot_id, "team": team, "slot": slot, "name": name})
+        if self.lineup_locked and battle_review_diagnostics.detailed_enabled():
+            battle_review_diagnostics.validation_event('lineup_roster',
+                active={str(t):self._team_slots(t) for t in (1,2)},
+                human_slots=sorted(occupied_slots),
+                bots=[dict(team=r['team'],slot=r['slot'],id=r['id']) for r in roster])
         return roster
 
     def _elect_bot_authority(self):
@@ -3028,11 +3059,11 @@ class BattleState:
                 automatic.append(participant)
                 continue
             available = [
-                slot for slot in range(self.team_sizes[requested])
+                slot for slot in self._team_slots(requested)
                 if slot not in occupied[requested]]
             if not available:
                 return None
-            slot = (participant.slot if participant.team == requested and
+            slot = (participant.slot if not self.lineup_locked and participant.team == requested and
                     participant.slot in available else available[0])
             occupied[requested].add(slot)
             plan.append((participant, requested, slot))
@@ -3048,7 +3079,7 @@ class BattleState:
                 if len(occupied[team]) == smallest]
             team = random.choice(candidates)
             slot = next(
-                value for value in range(self.team_sizes[team])
+                value for value in self._team_slots(team)
                 if value not in occupied[team])
             occupied[team].add(slot)
             plan.append((participant, team, slot))
@@ -3154,7 +3185,11 @@ class BattleState:
                 if participant.connected]
             if len(self.players) >= self.max_players:
                 return None, "full"
-            if len(connected_players) >= sum(self.team_sizes.values()):
+            if self.lineup_locked and not connected_players and not sum(self.team_sizes.values()):
+                # Let the host inspect an empty custom room; it still cannot
+                # start or accept a participant into either zero-sized team.
+                requested_team = 0
+            if len(connected_players) >= max(1, sum(self.team_sizes.values())):
                 return None, "team_full"
             if self.client_build is None:
                 map_pool = MAP_POOL
@@ -3177,7 +3212,7 @@ class BattleState:
             if requested_team in (1, 2):
                 team = requested_team
                 slot = next(
-                    value for value in range(self.team_sizes[team])
+                    value for value in self._team_slots(team)
                     if value not in occupied[team])
                 x, z, yaw = self._spawn_for(slot, team)
             else:
@@ -3252,7 +3287,7 @@ class BattleState:
                 for candidate in (1, 2)
             }
             available = [
-                slot for slot in range(self.team_sizes[team])
+                slot for slot in self._team_slots(team)
                 if slot not in occupied[team]]
             if not available:
                 return False, "team_full"
@@ -3276,7 +3311,7 @@ class BattleState:
             occupied={(side,slot) for p,side,slot in plan}
             humans=[p for p,side,slot in plan if side==team]
         pinned=[r for r in self.bot_lineup if r.get('team')==team and 'vehicle' in r
-                and (team,r.get('slot')) not in occupied and 0<=r.get('slot',-1)<self.team_sizes[team]]
+                and (team,r.get('slot')) not in occupied and r.get('slot') in self._team_slots(team)]
         tags=[CLASSES.get(r['vehicle']) for r in pinned]
         return max(0,self.team_sizes[team]-len(humans)-len(pinned)),tags,sum(CLASSES.get(p.vehicle)=='SPG' for p in humans)
 
@@ -3293,6 +3328,8 @@ class BattleState:
         return removed
 
     def set_team_class(self, player_id, team, tag, allowed):
+        if self.lineup_locked:
+            return False
         with self.lock:
             player=self.players.get(player_id)
             if player is None or not player.connected or self.phase!='waiting' or player_id!=self.host_player_id:return False
@@ -3316,6 +3353,8 @@ class BattleState:
 
     def set_team_size(self, player_id, requested_team, requested_size):
         """Let the waiting-room host change one next-round team capacity."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3374,6 +3413,8 @@ class BattleState:
 
     def set_bot_skill_mode(self, player_id, requested_mode):
         """Let only the room host choose the next round's Bot skill preset."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3392,6 +3433,8 @@ class BattleState:
 
     def set_bot_tier_mode(self, player_id, requested_mode):
         """Let only the room host choose the next round's Bot tier preset."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3880,6 +3923,11 @@ class BattleState:
 
     def lobby_message(self):
         with self.lock:
+            if self.lineup_locked and self.phase == 'waiting':
+                participants = [p for p in self.players.values() if p.connected and self._requested_team_for_player(p) in (1, 2)]
+                plan = self._waiting_assignment_plan(participants)
+                if plan is not None:
+                    self._apply_waiting_assignment_plan(plan)
             message = {
                 "type": "roster",
                 "protocol": PROTOCOL_VERSION,
@@ -3893,6 +3941,7 @@ class BattleState:
                 "bot_authority_id": self.bot_authority_id,
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -3933,6 +3982,8 @@ class BattleState:
                 return None, "host_only"
             if battle_mode not in ("regular", "training") or not isinstance(training_bots, bool):
                 return None, "invalid_battle_mode"
+            if self.lineup_locked and any(not self._team_slots(team) for team in (1, 2)):
+                return None, 'empty_lineup_team'
             battle_duration_seconds = self._requested_battle_duration(
                 requested_round_seconds)
             if battle_duration_seconds is None:
@@ -4022,6 +4073,13 @@ class BattleState:
                 host_tier=next((r['level'] for r in catalog if r.get('name')==host.vehicle),1)
                 pool=[r for r in catalog if r.get('name') in allowed_names and
                       bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
+                occupied = {(side, slot) for participant, side, slot in assignment_plan}
+                for row in self.bot_lineup:
+                    if (row.get('enabled') and not row.get('vehicle') and
+                            (row['team'], row['slot']) not in occupied and
+                            (row.get('nation') or row.get('vehicle_class')) and
+                            not any(lineup_slots.matches(row, candidate) for candidate in pool)):
+                        return None, 'invalid_bot_lineup'
                 # The worker reserves every connected human's tier/class, even
                 # in a mixed-tier room outside the host's ordinary tier band.
                 pool_names=set(r['name'] for r in pool)
@@ -4132,6 +4190,7 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -4942,6 +5001,7 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -5230,7 +5290,7 @@ class BattleState:
                     return False
                 from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
                 tag=CLASSES.get(entry['vehicle'],entry['profile'].get('class_tag','mediumTank'))
-                pinned=any(row.get('team')==raw_team and row.get('slot')==raw_slot and row.get('vehicle')==entry['vehicle'] for row in self.bot_lineup)
+                pinned=self._lineup_pins_vehicle(raw_team,raw_slot,entry['vehicle'],tag)
                 from gui.mods.offline_lan_0922 import team_class_policy as class_policy
                 if not pinned and not class_policy.allows(self.team_classes[str(raw_team)],tag):
                     self.last_bot_manifest_reject_code='bot_class_excluded'
@@ -5243,7 +5303,7 @@ class BattleState:
             from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
             for team in (1,2):
                 artillery=[row for row in manifest if row['team']==team and CLASSES.get(row['vehicle'],row['profile'].get('class_tag'))=='SPG']
-                pinned=sum(any(p.get('team')==team and p.get('slot')==row['slot'] and p.get('vehicle')==row['vehicle'] for p in self.bot_lineup) for row in artillery)
+                pinned=sum(self._lineup_pins_vehicle(team,row['slot'],row['vehicle'],'SPG') for row in artillery)
                 humans=sum(p.connected and p.team==team and CLASSES.get(p.vehicle)=='SPG' for p in self.players.values())
                 from gui.mods.offline_lan_0922 import team_class_policy as class_policy
                 row=self.team_classes[str(team)]
@@ -13801,7 +13861,6 @@ class BattleState:
                     target=target, proposed_attacker=attacker,
                     previous_attacker=[state['attacker_kind'], state['attacker_id']],
                     previous_end=state['end'], proposed_end=end_server_time_ms,
-                    server_time_ms=self._server_time_ms(),
                     action='retain' if int(state['end']) >= end_server_time_ms else 'replace'),
                 interval=0.0, limit=256, priority=True)
         if int(state['end']) >= end_server_time_ms:
@@ -16438,6 +16497,7 @@ class BattleState:
                     "bots": list(self.bot_roster),
                     "team_size": self.team_size,
                     "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                     "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                     "bot_tier_mode": self.bot_tier_mode,
@@ -16508,6 +16568,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
             "server_time_ms": state._server_time_ms(),
             "team_size": state.team_size,
             "team_sizes": state._team_sizes_wire(),
+            "lineup_locked": state.lineup_locked,
             "team_classes": copy.deepcopy(state.team_classes),
             "team_class_notice": copy.deepcopy(state.team_class_notice),
             "bot_tier_mode": state.bot_tier_mode,
@@ -16945,6 +17006,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         "bot_authority_id": server.state.bot_authority_id,
                         "team_size": server.state.team_size,
                         "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                         "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                         "bot_tier_mode": server.state.bot_tier_mode,
@@ -17206,6 +17268,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "code": team_error,
                                     "team": message.get("team"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                                     "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
@@ -17233,6 +17296,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "team": message.get("team"),
                                     "size": message.get("size"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                                     "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })

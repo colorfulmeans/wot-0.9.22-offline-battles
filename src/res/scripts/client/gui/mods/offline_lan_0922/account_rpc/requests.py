@@ -89,7 +89,7 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
     # elite vehicles must belong only to its own notification delta.
     current_data = data.stats(state.snapshot(), progress)
     current_stats = current_data['stats']
-    current_account = current_data['account']
+    current_account = current_data.get('account') or {}
     current_recovery = offline_services.vehicle_recovery_buffer(state.snapshot())
     recovery_diff = dict((cd, current_recovery.get(cd)) for cd in
                          set(previous_recovery) | set(current_recovery)
@@ -144,7 +144,7 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
                 diff.update(additional)
                 if isinstance(diff.get('account'), dict):
                     # Entitlement/mission diffs must not reset a career rating.
-                    diff['account']['globalRating'] = current_account['globalRating']
+                    diff['account']['globalRating'] = current_account.get('globalRating', 0)
         if moved_recycled:
             # PlayerAccount._update hands every diff to the recycle bin, so
             # who was dismissed and who was hired back travel with the same
@@ -157,11 +157,14 @@ def _fitting(context, mutate, extension=None, extra_diff=None,
         built = _clock()
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostics
         if diagnostics.detailed_enabled():
-            from gui.mods.offline_lan_0922.personal_rating import input_coverage
-            diagnostics.validation_event('account_diff_rating', current_rating=current_account['globalRating'],
-                published_rating=(diff.get('account') or {}).get('globalRating'),
-                account_fields=sorted((diff.get('account') or {}).keys()),
-                rating_input_missing=input_coverage(progress))
+            try:
+                from gui.mods.offline_lan_0922.personal_rating import input_coverage
+                diagnostics.validation_event('account_diff_rating', current_rating=current_account.get('globalRating', 0),
+                    published_rating=(diff.get('account') or {}).get('globalRating'),
+                    account_fields=sorted((diff.get('account') or {}).keys()),
+                    rating_input_missing=input_coverage(progress))
+            except Exception:
+                diagnostics.validation_event('account_diff_rating_unavailable')
         completed = [False]
 
         def complete(unused_player=None):

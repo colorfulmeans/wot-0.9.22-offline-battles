@@ -1307,6 +1307,12 @@ class LauncherWindow(object):
                 editor.set_language(self.language)
                 editors.append(editor)
         self._bot_tactics_editors = editors
+        lineups = []
+        for editor in getattr(self, '_bot_lineup_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                lineups.append(editor)
+        self._bot_lineup_editors = lineups
         vehicle_editors = []
         for editor in getattr(self, '_vehicle_editors', ()):
             if editor.root.winfo_exists():
@@ -2592,7 +2598,7 @@ class LauncherWindow(object):
     def _save_settings(self):
         if getattr(self, '_factory_reset_requested', False):
             return
-        core.save_settings({
+        return core.save_settings({
             "game_root": self.game_root.get().strip(),
             "folders": list(self._folders),
             "mode": (core.MODE_SINGLE
@@ -2746,9 +2752,13 @@ class LauncherWindow(object):
             icon="warning")
 
     def _save_bot_lineup_store(self, store):
+        previous = self._bot_lineup_store
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(store)
+        if not self._save_settings():
+            self._bot_lineup_store = previous
+            raise IOError('The lineup could not be saved.')
         self._refresh_bot_lineup_profiles()
-        self._save_settings()
+        return True
 
     def _new_bot_lineup_profile(self):
         if self._busy or self._maintenance_busy:
@@ -2787,7 +2797,7 @@ class LauncherWindow(object):
             status = self._refresh_client()
             editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
                                                language=self.language, log=self._log,
-                                                lineup=lambda:bot_lineup_profiles.assignments_for(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
+                                                lineup=lambda:bot_lineup_profiles.runtime_assignments(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
             editors = [value for value in getattr(self, '_bot_tactics_editors', ())
                        if value.root.winfo_exists()]
             editors.append(editor)
@@ -2810,10 +2820,21 @@ class LauncherWindow(object):
             self._log("Create or select a Bot lineup profile before editing.")
             return False
         self._remember_folder()
-        bot_lineup_ui.open_bot_lineup_editor(
+        baseline = bot_lineup_profiles.assignments_for(self._bot_lineup_store, profile_name)
+        def save_lineup(candidate):
+            current = bot_lineup_profiles.assignments_for(self._bot_lineup_store, profile_name)
+            if current != baseline:
+                raise ValueError('This lineup changed in another editor; reopen it before saving.')
+            values = bot_lineup_profiles.assignments_for(candidate, profile_name)
+            merged = bot_lineup_profiles.replace_assignments(self._bot_lineup_store, profile_name, values)
+            result = self._save_bot_lineup_store(merged)
+            baseline[:] = values
+            return result
+        editor = bot_lineup_ui.open_bot_lineup_editor(
             self.root, status["path"], profile_name,
-            self._bot_lineup_store, self._save_bot_lineup_store,
-            log=self._log)
+            self._bot_lineup_store, save_lineup,
+            log=self._log, language=self.language)
+        self._bot_lineup_editors = [e for e in getattr(self, '_bot_lineup_editors', ()) if e.root.winfo_exists()] + [editor]
         return True
 
     def _delete_bot_lineup_profile(self):
@@ -2960,7 +2981,7 @@ class LauncherWindow(object):
                 "Select Online and a supported game folder first.")
             return False
         try:
-            bot_lineup = bot_lineup_profiles.assignments_for(
+            bot_lineup = bot_lineup_profiles.runtime_assignments(
                 self._bot_lineup_store,
                 self.bot_lineup_profile.get().strip())
         except bot_lineup_profiles.BotLineupProfileError as error:
@@ -3059,7 +3080,7 @@ class LauncherWindow(object):
             session = core.plan_session(
                 status, session_mode, self.join_address.get(),
                 vehicle_profile=profile_name)
-            session["bot_lineup"] = bot_lineup_profiles.assignments_for(
+            session["bot_lineup"] = bot_lineup_profiles.runtime_assignments(
                 self._bot_lineup_store,
                 self.bot_lineup_profile.get().strip())
             if replay_path:

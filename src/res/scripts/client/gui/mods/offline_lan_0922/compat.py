@@ -118,7 +118,20 @@ def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
         packed_angles = getattr(vehicle, 'gunAngles', None)
         if type(packed_angles) not in (int, float):
             packed_angles = None
+        # Exact #1513 Event.Event stores Python callbacks in __delegates.
+        # Record names only: never retain callbacks or invoke a native sync.
+        delegates = []
+        try:
+            event = read(appearance, 'onModelChanged')
+            for delegate in tuple(getattr(event, '_Event__delegates', ())):
+                owner = getattr(delegate, 'im_self', getattr(delegate, '__self__', None))
+                function = getattr(delegate, 'im_func', getattr(delegate, '__func__', delegate))
+                delegates.append(dict(owner=type(owner).__name__,
+                                      function=getattr(function, '__name__', type(function).__name__)))
+        except Exception as error:
+            delegates = [dict(unavailable=type(error).__name__)]
         payload = dict(phase=phase, vehicle=getattr(vehicle, 'id', None),
+            model_changed_delegates=delegates,
             appearance_vehicle_bound=bound_vehicle is vehicle,
             appearance_identity=id(appearance), vehicle_identity=id(vehicle),
             model_identity=id(model), health=getattr(vehicle, 'health', None),

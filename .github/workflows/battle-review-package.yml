@@ -17,6 +17,18 @@ jobs:
         with:
           python-version: "3.11.9"
           architecture: "x64"
+      - name: Verify actual bilingual lineup widgets, drafts and previews
+        run: >-
+          python tools/run_test_suite.py --directory launcher/tests --jobs 1
+          --logs build/lineup-tk-results
+          --pattern test_bot_lineup_ui.py
+          --pattern test_bot_lineup_profiles.py
+          --pattern test_bot_tactics_preview.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: lineup-tk-results
+          path: build/lineup-tk-results/
       - name: Install pinned Windows server packager
         run: >-
           python -m pip install
@@ -212,6 +224,14 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
           --pattern test_port_0922_battle_fix_regressions.py
+          --pattern test_port_0922_sparse_lineup.py
+          --pattern test_port_0922_bot_lineup_integration.py
+          --pattern test_port_0922_server_team_size.py
+          --pattern test_port_0922_account_rpc.py
+          --pattern test_port_0922_offline_services.py
+          --pattern test_port_0922_garage.py
+          --pattern test_port_0922_server_projectiles.py
+          --pattern test_crew_skill_credits.py
           --pattern test_port_0922_career_review_regressions.py
           --pattern test_port_0922_career_dossiers.py
           --pattern test_port_0922_postbattle.py

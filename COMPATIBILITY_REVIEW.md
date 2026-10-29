@@ -10717,3 +10717,56 @@ tests and matching-head CI/package receipts are tracked in PR 116; prior-head
 artifacts are not evidence for this revision. Native gameplay acceptance is
 still required for turret rendering, old-save UI refresh and actual battle
 statistics. README supplies the diagnostic-entry acceptance procedure.
+
+## Sparse lineup editor and diagnostic regression follow-up
+
+The full prior-head suite exposed diagnostic regressions omitted by its focused
+package gate: optional progress was passed to input_coverage(None), interrupting
+account publication, and stun transition evidence sampled server time again
+inside an already frozen projectile batch. The null input is now supported and
+diagnostic payload failures cannot escape the account publication boundary.
+Stun evidence records the supplied deadlines without rereading the resolution
+clock. The account dossier test uses the current cache-version constant; the
+crew rollback fake is accepted without manufacturing a runtime account failure.
+Focused reruns include account RPC, garage, recovery, orders, sales, crew credits
+and the existing frozen-clock projectile test with diagnostic entry enabled.
+
+An explicit enabled flag now separates an empty slot from a random vehicle.
+The launcher materializes every custom roster slot; older profiles keep their
+former random fill and fixed skill pins. Windows server environment parsing
+preserves empty/random rows, so their absence cannot accidentally select Automatic.
+The shared Python 2-compatible slot contract supplies sparse slot identities.
+Server capacities count enabled slots; player admission, team switching, start
+planning and Bot roster generation use their actual numbers. Bot IDs remain
+slot+1 or slot+16. Humans replace enabled slots in order, and a zero-capacity
+team refuses start. An entirely empty custom room can still admit its pending
+host to inspect the room. The server owns locked random/mixed defaults and
+rejects room size, class, tier and difficulty changes. Wire messages publish
+the lock with capacities; zero capacities are accepted only with that explicit
+lock. Waiting preferences do not replay old overrides into a custom room and
+reset the next Automatic capacities to 15.
+
+The editor uses a draft and an atomic whole-settings replacement. A failed
+write retains the previous persisted state and the editable draft. A stale
+second editor cannot overwrite a newer save, and saving one lineup merges into
+the current store without overwriting another profile. Country/type filters,
+random vehicle and disabled slot are distinct. Per-team bulk difficulty changes
+cannot enable empty slots. Duplicate stock captions carry their canonical vehicle
+identifier; UI language changes preserve the draft identities. Slot numbers are
+never reordered and independent tactics files are not rewritten. Preview grouping
+includes lineup skill pins, but ordered explicit tactic rules retain precedence.
+The Windows package workflow now gates the real Tk Chinese/English widgets,
+bulk filtering, save failures, content-sized close-dialog buttons and previews,
+in addition to sparse server/client and account regressions.
+
+The exact 150330 report uses build colorfulmeans-40830724235-1. At 15:02:17
+the local player's model turret/gun changes from -16.160/+2.708 degrees to zero
+during deactivation and remains zero after activation and eight later frames.
+The gun rotator retains its nonzero angles. Other logged Bot model refreshes
+temporarily zero their providers but restore their poses during activation.
+This narrows the missing restoration path without identifying a safe native fix.
+Exact scripts/common/Event.pyc stores Event callbacks in _Event__delegates;
+diagnostic-only model records now add callback function/owner type names, retaining
+no callbacks and invoking no synchronization or angle write. Native turret
+acceptance remains unresolved. Matching-head CI and actual artifact results are
+recorded in PR 116; the prior package is superseded once this follow-up ships.

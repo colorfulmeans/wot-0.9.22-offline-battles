@@ -293,4 +293,5 @@ _ZH = {
     'The selected LAN team is full. Choose the other team or Random in the waiting room.': u'所选队伍已满，请在等待房间选择另一队或随机。',
     'The launcher team selection is invalid.': u'启动器中的队伍选择无效。',
     'LAN battle connection lost (%s). Returning to the garage.': u'战斗连接已断开（%s），正在返回车库。',
+    'Custom lineup has an empty team. Configure at least one slot per team.': u'\u81ea\u5b9a\u4e49\u9635\u5bb9\u4e2d\u6709\u7a7a\u961f\u4f0d\uff0c\u8bf7\u4e3a\u6bcf\u961f\u914d\u7f6e\u81f3\u5c11\u4e00\u4e2a\u6709\u6548\u69fd\u4f4d\u3002',
 }

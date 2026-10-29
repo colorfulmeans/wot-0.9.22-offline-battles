@@ -12,6 +12,7 @@ INPUT_FIELDS = ("battles", "wins", "survivedBattles", "damage", "originalXP",
 
 def input_coverage(progress):
     """Missing historical facts are not recorded zeroes."""
+    progress = progress or {}
     missing = {}
     for name, row in (progress.get("vehicles") or {}).items():
         if not row.get('battles', 0):

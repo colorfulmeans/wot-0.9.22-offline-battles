@@ -289,20 +289,19 @@ class BotLineupIntegrationTests(unittest.TestCase):
             bot_lineup_ui.BotLineupEditorWindow)
         editor._profile_name = profile_name
         editor._store = store
-        editor._choices_by_nation = {"germany": [choice]}
-        editor._rows = {(2, 0): {
-            "nation": _Variable("germany"),
-            "vehicle": _Variable("Leichttraktor"),
-            "skill": _Variable("Veteran"),
-            "vehicle_box": _Combo(0),
-        }}
+        from unittest import mock
+        editor._choices = [choice]
+        editor._draft = [dict(team=2,slot=0,enabled=True,vehicle=choice['type_name'],skill='veteran')]
+        editor._original = []
+        editor._catalog_ready = True
         editor._on_save = saved.append
-        editor.status = _Variable()
-
-        editor._vehicle_changed((2, 0))
-
+        editor._messagebox = mock.Mock()
+        editor._render = mock.Mock()
+        editor.root = mock.Mock()
+        editor.language = 'en'
+        self.assertTrue(editor._save())
         self.assertEqual(1, len(saved))
-        return bot_lineup_profiles.assignments_for(saved[0], profile_name)
+        return [r for r in bot_lineup_profiles.assignments_for(saved[0], profile_name) if r.get('enabled')]
 
     def test_ui_profile_env_and_hidden_worker_keep_the_exact_type_name(self):
         assignments = self._ui_saved_assignment()

@@ -110,6 +110,38 @@ Nine independent player guides are available in [English](docs/releases/v1.0.0-g
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows
 launcher and all eighteen guide files as separate downloads.
 
+### Custom lineup review
+
+The lineup editor follows the launcher's Chinese/English language, with nation,
+type, vehicle and difficulty columns. Nations follow the garage order; vehicles
+sort by descending tier, with distinct captions for duplicate stock names.
+Each team's All row applies one field to that team. Its vehicle menu begins with
+Clear all slots, Individual slot settings, then Random vehicle and actual vehicles.
+Difficulty-only edits never enable an empty slot. Random vehicles obey the saved
+nation/type filters; an empty candidate pool is refused rather than widened.
+
+Edits are drafts until Save succeeds. Failed saves retain the draft and previous
+complete settings; closing a changed draft offers Save and close, Discard, or
+Cancel. Success and failure show a result dialog. Slot numbers never compact:
+slots 1, 4 and 15 remain those slots and produce a team capacity of three.
+Humans replace enabled slots in order, using their own vehicles; excess humans
+are refused. Each team needs at least one enabled slot to start. Returning humans,
+team changes and the next round recalculate the replacement map.
+
+Custom rooms show random tier, mixed difficulty, computed team capacities and
+unrestricted classes; those controls are disabled and the server rejects changes.
+After a custom room, Automatic starts from 15 slots per team with editable controls.
+Restart the room after selecting or saving a different launcher lineup. Legacy
+profiles retain their unpinned random vehicles and explicitly saved difficulty.
+Random (mixed distribution) draws one stable rating per round/team/slot, not four
+equally likely difficulty labels. Explicit tactics still override lineup difficulty;
+the effective preview identifies lineup sources without modifying tactics files.
+
+Acceptance: test both languages, per-team bulk actions, empty versus random slots,
+only a last slot enabled, duplicate vehicle names, failed save/close choices,
+human replacement and over-capacity refusal, zero-sized teams, and custom-to-
+Automatic restart. Export the diagnostic report to check the generated slot map.
+
 ## Play
 
 1. Download the Windows x64 package from the latest published release,

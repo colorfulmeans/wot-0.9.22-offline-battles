@@ -5729,7 +5729,17 @@ class BattleRuntime(object):
                     pinned_vehicles[key] = raw['vehicle']
             artillery_names = set(candidate['name'] for candidate in all_candidates
                                   if bot_planner.vehicle_match_class(candidate) == 'SPG')
-            assignments = {}
+            from gui.mods.offline_lan_0922 import lineup_slots
+            for row in self._start_message.get('bot_lineup') or ():
+                key = (row.get('team'), row.get('slot'))
+                if (row.get('enabled') and not row.get('vehicle') and key in bot_slots and
+                        (row.get('nation') or row.get('vehicle_class'))):
+                    pool = [candidate for candidate in automatic_candidates
+                            if lineup_slots.matches(row, candidate)]
+                    if not pool:
+                        raise ValueError('No vehicles match lineup slot %s' % (key,))
+                    pinned_vehicles[key] = lineup_random.choice(pool)['name']
+            assignments = dict(pinned_vehicles)
             for team in (1, 2):
                 team_bots = bots_by_team[team]
                 picked = bot_planner.remaining_match_template(

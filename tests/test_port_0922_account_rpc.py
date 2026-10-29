@@ -1596,7 +1596,7 @@ class AccountRpcTests(unittest.TestCase):
         for change in value[1]:
             self.assertEqual(
                 CONTRACT['dossiers']['changeTupleArity'], len(change))
-        self.assertEqual((2, []), value)
+        self.assertEqual((account_data._VEHICLE_DOSSIER_VERSION, []), value)
 
     def test_old_chat_mailbox_does_not_echo_command_as_chat_action(self):
         events = []

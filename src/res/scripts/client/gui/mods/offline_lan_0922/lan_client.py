@@ -412,7 +412,7 @@ def _team_choice(value, default=0):
     return parsed if parsed in (0, 1, 2) else default
 
 
-def _team_sizes(value, legacy=None, default=None):
+def _team_sizes(value, legacy=None, default=None, allow_empty=False):
     """Validate the asymmetric shape, with the old scalar as fallback."""
     if value is None:
         parsed = _exact_int(legacy)
@@ -424,7 +424,7 @@ def _team_sizes(value, legacy=None, default=None):
     result = {}
     for team in (1, 2):
         parsed = _exact_int(value.get(str(team), value.get(team)))
-        if parsed is None or not 1 <= parsed <= 15:
+        if parsed is None or not (0 if allow_empty else 1) <= parsed <= 15:
             return None
         result[team] = parsed
     return result
@@ -1698,6 +1698,7 @@ class LANClient(object):
         self.player_id = None
         self.team = None
         self.team_sizes = {1: 15, 2: 15}
+        self.lineup_locked = False
         self.team_classes = bot_tactics.team_class_choices()
         self.bot_tier_mode = 'random'
         self.bot_skill_mode = bot_gunnery.DEFAULT_SKILL_MODE
@@ -4774,7 +4775,7 @@ class LANClient(object):
                 message.get('effective_params'))
             team_sizes = _team_sizes(
                 message.get('team_sizes'), message.get('team_size'),
-                self.team_sizes)
+                self.team_sizes, allow_empty=bool(message.get("lineup_locked", self.lineup_locked)))
             bot_tier_mode = _safe_text(
                 message.get('bot_tier_mode'), self.bot_tier_mode, 32)
             bot_skill_mode = _safe_text(
@@ -4811,6 +4812,7 @@ class LANClient(object):
             self.vehicle = _safe_text(message.get('vehicle'), self.vehicle)
             self.team = team
             self.team_sizes = team_sizes
+            self.lineup_locked = bool(message.get("lineup_locked", self.lineup_locked))
             if 'team_classes' in message:
                 try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
                 except bot_tactics.TacticsError:
@@ -4875,7 +4877,7 @@ class LANClient(object):
                 message.get('authority_epoch'), 0, MAX_PROJECTILE_ID)
             team_sizes = _team_sizes(
                 message.get('team_sizes'), message.get('team_size'),
-                self.team_sizes)
+                self.team_sizes, allow_empty=bool(message.get("lineup_locked", self.lineup_locked)))
             bot_tier_mode = _safe_text(
                 message.get('bot_tier_mode'), self.bot_tier_mode, 32)
             bot_skill_mode = _safe_text(
@@ -4956,6 +4958,7 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            self.lineup_locked = bool(message.get("lineup_locked", self.lineup_locked))
             if 'team_classes' in message:
                 try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
                 except bot_tactics.TacticsError:
@@ -5040,7 +5043,7 @@ class LANClient(object):
                 message.get('authority_epoch'), 0, MAX_PROJECTILE_ID)
             team_sizes = _team_sizes(
                 message.get('team_sizes'), message.get('team_size'),
-                self.team_sizes)
+                self.team_sizes, allow_empty=bool(message.get("lineup_locked", self.lineup_locked)))
             start_server_time = None
             if 'server_time_ms' in message:
                 start_server_time = _projectile_int_range(
@@ -5085,6 +5088,7 @@ class LANClient(object):
             players = self._commit_player_static_inputs(prepared_players)
             self.roster = players
             self.team_sizes = team_sizes
+            self.lineup_locked = bool(message.get("lineup_locked", self.lineup_locked))
             if 'team_classes' in message:
                 try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
                 except bot_tactics.TacticsError:
@@ -5147,7 +5151,7 @@ class LANClient(object):
             team = _team_choice(message.get('team'), None)
             code = _safe_text(message.get('code'), '', 32)
             team_sizes = _team_sizes(
-                message.get('team_sizes'), None, self.team_sizes)
+                message.get('team_sizes'), None, self.team_sizes, allow_empty=bool(message.get("lineup_locked", self.lineup_locked)))
             if (round_id is None or round_id != self.round_id or
                     team not in (0, 1, 2) or
                     code not in ('team_full', 'invalid_team', 'not_waiting') or
@@ -5156,6 +5160,7 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            self.lineup_locked = bool(message.get("lineup_locked", self.lineup_locked))
             if 'team_classes' in message:
                 try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
                 except bot_tactics.TacticsError:
@@ -5166,7 +5171,7 @@ class LANClient(object):
             size = _exact_int(message.get('size'))
             code = _safe_text(message.get('code'), '', 32)
             team_sizes = _team_sizes(
-                message.get('team_sizes'), None, self.team_sizes)
+                message.get('team_sizes'), None, self.team_sizes, allow_empty=bool(message.get("lineup_locked", self.lineup_locked)))
             if (round_id is None or round_id != self.round_id or
                     team not in (1, 2) or size is None or
                     not 1 <= size <= 15 or
@@ -5178,6 +5183,7 @@ class LANClient(object):
                 self.stop()
                 return
             self.team_sizes = team_sizes
+            self.lineup_locked = bool(message.get("lineup_locked", self.lineup_locked))
             if 'team_classes' in message:
                 try:self.team_classes = bot_tactics.team_class_choices(message['team_classes'], team_sizes)
                 except bot_tactics.TacticsError:
