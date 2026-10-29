@@ -312,6 +312,8 @@ def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32,
     try:
         round_id = getattr(owner, 'round_id', None)
         if round_id is None:
+            round_id = getattr(getattr(owner, '_battle_network_client', None), 'round_id', None)
+        if round_id is None:
             round_id = getattr(owner, '_battle_server_time_origin', None)
         state = getattr(owner, '_battle_review_records', None)
         if state is None or state[0] != round_id:

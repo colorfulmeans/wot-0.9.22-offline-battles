@@ -322,6 +322,21 @@ class TeamMemoryTests(unittest.TestCase):
 
 
 class BattleReviewDiagnosticsTests(unittest.TestCase):
+    def test_model_round_uses_network_identity_instead_of_clock_origin(self):
+        import types
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
+        client = types.SimpleNamespace(round_id=7)
+        owner = types.SimpleNamespace(_battle_network_client=client, _battle_server_time_origin=-1.0)
+        with mock.patch.dict(diag.os.environ, {diag.DETAIL_ENV: '1'}), \
+                mock.patch.object(diag, 'detail_record_ready', return_value=True), \
+                mock.patch.object(diag, 'write_json_record') as write:
+            diag.battle_review_record(owner, 'model', 1, 1.0, lambda: {}, limit=1)
+            self.assertEqual(7, write.call_args[0][1]['round'])
+            client.round_id = 8
+            diag.battle_review_record(owner, 'model', 1, 2.0, lambda: {}, limit=1)
+            self.assertEqual(8, write.call_args[0][1]['round'])
+            self.assertEqual(2, write.call_count)
+
     def test_priority_events_survive_bulk_exhaustion_and_keep_their_own_byte_limit(self):
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diag
         owner = type('Owner', (), {'round_id': 1})()
