@@ -410,7 +410,8 @@ class OfflineServicesTests(unittest.TestCase):
                 params=params_type()
                 packed=params.getGameSettings()
                 self.assertEqual(.65,packed['minimapAlpha'])
-                self.assertTrue(all(packed[key] is None for key in policy.LOCKED))
+                self.assertIs(True,packed['gameplay_ctf'])
+                self.assertTrue(all(packed[key] is None for key in policy.LOCKED if key!='gameplay_ctf'))
                 self.assertEqual('applied',params.apply({'useServerAim':True,'gameplay_assault':True,'minimapAlpha':.5},True))
                 self.assertEqual(({'minimapAlpha':.5},True),params.applied)
                 for days in (360, 180, 30, 7, 3, 1):

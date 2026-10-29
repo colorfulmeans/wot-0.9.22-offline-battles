@@ -11,7 +11,9 @@ def pack(values):
     result = dict(values)
     for name in LOCKED:
         if name in result:
-            result[name] = None
+            # The stock standard-mode control is intrinsically fixed, but
+            # still needs True as its displayed check value. None clears it.
+            result[name] = True if name == 'gameplay_ctf' else None
     return result
 
 

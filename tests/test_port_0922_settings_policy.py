@@ -11,7 +11,9 @@ class PolicyTests(unittest.TestCase):
             original['minimapAlpha'] = .65
             packed = settings_policy.pack(original)
             self.assertEqual(.65, packed['minimapAlpha'])
-            for key in settings_policy.LOCKED: self.assertIsNone(packed[key])
+            for key in settings_policy.LOCKED:
+                if key=='gameplay_ctf':self.assertIs(True,packed[key])
+                else:self.assertIsNone(packed[key])
             self.assertEqual(old, original['useServerAim'])
             self.assertEqual({'minimapAlpha': .65}, settings_policy.editable(original))
 
