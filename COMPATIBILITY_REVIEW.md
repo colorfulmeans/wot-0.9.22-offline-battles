@@ -10896,6 +10896,27 @@ footer spacing, daily interaction and repeated lobby/battle transitions still
 require exact-client acceptance. The packed local replay sample now reads
 Vehicle.gunAnglesPacked; float turret/gun fields remain independent.
 
+Native follow-up on the rebuilt movie observed stable initial/rendered/hover
+sizes: Start 191x22, Reserves 127x22, Close/Leave 100x22. Reserves opens the stock
+window. Glyph-clearance records remain unchanged on rollover. These observations
+accept the exercised Chinese captions, not every localization or resolution.
+
+Report containment now compares real parent directory identities after rejecting
+links/reparse points; Windows MSIX can return different spellings for the same
+directory. New-session preparation first invalidates the previous export
+boundary. Actual diagnostic startup created a fresh three-role session, and a
+throwaway filesystem export excluded old-session markers. Filtered random slot
+constraints now participate in server and client tier-window feasibility;
+impossible combinations remain in the waiting room. New/Delete lineup settings
+write failures restore both the profile store and selection.
+
+Diagnostic Bot factors include descriptor misc attributes and final reload
+seconds. A compact stationary-control receipt has independent priority budget,
+at most eight records per hull, with no extra geometry/path query. It records
+route, actual throttle/turn/traffic, probe verdict and planner/job age even when
+bulk motion histories have filled their budget. Normal entry does not build it.
+
 The unaccepted old rotated-wreck collision coupling is not restored. Three
-Mittengard VII-VIII acceptance matches and the separate report-export,
-filtered-random-lineup, profile-write and Great Wall findings remain open.
+Mittengard VII-VIII acceptance matches and the separate Great Wall finding
+remain open; its engine-free fixture still fails and no navigation law is
+changed on that evidence alone.

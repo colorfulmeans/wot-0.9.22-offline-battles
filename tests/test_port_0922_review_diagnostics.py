@@ -80,6 +80,37 @@ class ReviewEvidenceTests(unittest.TestCase):
             logs.validation_event('career', value=object())
         write.assert_not_called()
 
+    def test_stationary_priority_receipt_is_bounded_and_does_not_query_or_change_controls(self):
+        path = ROOT / 'src/res/scripts/client/gui/mods/offline_lan_0922/bot_runtime.py'
+        nodes = [node for node in ast.walk(ast.parse(path.read_text(encoding='utf8')))
+                 if isinstance(node, ast.FunctionDef) and node.name == '_review_stalled_control']
+        enabled = [False]
+        namespace = dict(__package__='gui.mods.offline_lan_0922',
+                         detailed_enabled=lambda: enabled[0])
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), namespace)
+        observe = namespace['_review_stalled_control']
+        owner = types.SimpleNamespace(round_id=7, _server_orders={17:dict(route_id='wall_pass',route_index=3)},
+            _decision_cache={}, navigator=types.SimpleNamespace(searches={}))
+        state = dict(id=17, x=404., y=0., z=-154.1, yaw=3.14, speed=0.)
+        command = dict(combat_mode='route', movement_intent=True, move_position=[408,0,-186])
+        original = dict(state)
+        with mock.patch.object(logs, 'validation_event') as event:
+            observe(owner, state, command, 1., 0., True, {}, 0.)
+            self.assertEqual(original, state)
+            enabled[0] = True
+            for tick in range(201):
+                observe(owner, state, command, 1., 0., True, {}, float(tick))
+            self.assertEqual(8, event.call_count)
+            self.assertEqual('bot_stationary_control', event.call_args.args[0])
+            self.assertEqual('wall_pass', event.call_args.kwargs['route_id'])
+            self.assertEqual('existing_state_only', event.call_args.kwargs['query_policy'])
+            self.assertEqual(original, {k:v for k,v in state.items() if not k.startswith('_review_')})
+            state['x'] += 2
+            observe(owner, state, command, 1., 0., True, {}, 202.)
+            self.assertEqual(202., state['_review_stall_anchor'][2])
+        self.assertEqual(dict(combat_mode='route', movement_intent=True,
+                              move_position=[408,0,-186]), command)
+
     def namespace(self, owner):
         path = ROOT / 'src/res/scripts/client/gui/mods/offline_lan_0922/compat.py'
         tree = ast.parse(path.read_text(encoding='utf8'))

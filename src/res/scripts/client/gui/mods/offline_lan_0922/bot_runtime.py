@@ -7535,6 +7535,43 @@ class BotRuntime(object):
             radius=initial.get('radius'), occupied=state.get('_spg_parking_occupied'),
             position_event=state.get('_spg_position_event'), query_policy='existing_state_only'))
 
+    def _review_stalled_control(self, state, command, throttle, turn,
+                                path_clear, motion_probe, now, traffic_output=None):
+        """Keep a small stationary decision receipt outside bulk trace limits."""
+        if not detailed_enabled():
+            return
+        anchor = state.get('_review_stall_anchor')
+        x, z = state['x'], state['z']
+        if anchor is None or (x-anchor[0])**2 + (z-anchor[1])**2 >= 1.0:
+            state['_review_stall_anchor'] = (x, z, now)
+            return
+        if (now-anchor[2] < 5.0 or
+                now-state.get('_review_stall_last', -100.0) < 10.0 or
+                state.get('_review_stall_count', 0) >= 8):
+            return
+        state['_review_stall_last'] = now
+        state['_review_stall_count'] = state.get('_review_stall_count', 0) + 1
+        order = self._server_orders.get(state['id']) or {}
+        cached = self._decision_cache.get(state['id'])
+        search_times = getattr(self.navigator, 'search_times', {})
+        probe = motion_probe if isinstance(motion_probe, dict) else {}
+        from .native_input_diagnostics import validation_event
+        validation_event('bot_stationary_control', battle_round=self.round_id,
+            bot=state['id'], at=now, position=[x, state.get('y'), z],
+            yaw=state.get('yaw'), speed=state.get('speed'),
+            held_seconds=now-anchor[2], mode=command.get('combat_mode'),
+            movement_intent=command.get('movement_intent'),
+            target=command.get('move_position'), recovery=command.get('recovery_mode'),
+            route_id=order.get('route_id'), route_index=order.get('route_index'),
+            throttle=throttle, turn=turn,
+            traffic=(traffic_output or command).get('traffic_mode'),
+            path_clear=path_clear,
+            probe=dict((key, probe.get(key)) for key in ('clear', 'collision', 'reason')),
+            planner_age=now-cached[2] if cached is not None else None,
+            pending_jobs=len(getattr(self.navigator, 'searches', {})),
+            oldest_job_age=max(0., now-min(search_times.values())) if search_times else 0.,
+            query_policy='existing_state_only')
+
     @detailed_observed('bot.motion_diagnostics')
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
@@ -7563,6 +7600,8 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        self._review_stalled_control(
+            state, command, throttle, turn, path_clear, motion_probe, now, traffic_output)
         from . import artillery_diagnostics
         artillery_diagnostics.observe(self, state, command, throttle, turn,
                                       path_clear, motion_probe, now,
