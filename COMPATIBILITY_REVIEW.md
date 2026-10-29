@@ -11036,9 +11036,11 @@ The stock #1513 SettingsParams forwards SettingsCore.packSettings(GAME.ALL()).
 GameplaySetting already represents an unavailable checkbox with None. The
 offline adapter publishes that sentinel for gameplay-mode toggles and server
 aim, and removes those keys from apply/default diffs. Standard mode keeps the
-native fixed-selection control. Unrelated settings and training Bot controls
-retain their owners. Actual disabled/selected Flash state remains a Windows
-acceptance item until observed in the installed review build.
+native fixed-selection control, explicitly packed as True. Unrelated settings
+and training Bot controls retain their owners. Build 9042143 was installed
+through the launcher and observed in the actual Chinese HD #1513 client:
+standard checked/disabled, other mode choices and server aim off/disabled.
+Clicking standard, Assault and server aim did not change their state.
 
 The active packed lists contain 1341 typed entries: 93 paints, 338 camouflage,
 305 emblems, 575 inscriptions, 3 modifications and 27 preset styles. IDs are
@@ -11081,7 +11083,10 @@ longer-chain stalls and the first IS-2 shove remain investigations rather than
 claims of a universal physics fix.
 
 Local validation before native packaging: all 39 launcher test files passed
-(1182 tests), including real bilingual Tk interaction and save isolation.
+(1183 tests, one existing symlink-environment skip), including real bilingual
+Tk interaction and save isolation. The two launcher core/window files were
+rerun after stopping the real game so its running-process gate did not affect
+the fixtures; all 343 tests in those files passed.
 Targeted reference bootstrap/contact and existing garage/settings/message
 regressions passed. The exact installed Chinese HD #1513 resources passed
 inspect_client.py. The original-resource exterior dialog was visually checked
@@ -11108,3 +11113,70 @@ GUI item's property. Exact bytecode inspection corrected creation grants,
 refund binding and diagnostic flags to call it. Test descriptors now model
 that callable contract; a false-returning method must never count as bound
 merely because its function object is truthy.
+
+Final production candidate be7c534ad8b3626b956e016270fe6b62ee662117 was packaged
+by successful Package run 40950329097, all three jobs. The downloaded launcher
+artifact 12930224087 identifies colorfulmeans-40950329097-1. Outer/nested ZIP
+integrity, x64 launcher and x86 native module machines, and all 221 Python 2.7
+bytecode members were checked. Installed through that launcher's own updater.
+Tests run 40950328867 passed native geometry/C API chain conformance, Windows
+Tk editors, Bot behavior, navigation and Windows server jobs. The full client
+suite passed 442/443 files; the single existing GreatWallGateTests
+test_new_allocation_with_server_recovery_clears_opposed_gate failure remains
+[] != [(17, -154.1)]. All 39 launcher files passed. This is not an all-green CI.
+
+Native session ff470c8ac277 used a newly created unlocked PR116 Exterior QA
+save that had never opened the launcher inventory editor. First client boot
+created version 1 with 93 paint/338 camouflage/880 decal/3 modification entries
+and the unchanged 27 preset entries. All 45 active IGR entries were diagnosed
+as shared, with 1000 free units and no required token. In the native E-100
+exterior panel FN3 started at 1000; installing the hull for three seasons
+showed 999/998/997 and emitted three committed APPEARANCE TRANSFER receipts.
+The durable ledger and reopened native panel both retained 997. All pre-test
+default save file digests remained unchanged, proving this separate slot did
+not reset default again. The normal menu exit completed without a crash.
+Launcher-generated report wot-error-report-20261030-045425-ff470c8ac277.zip
+contains all four primary logs, worker starter, both native exception trails
+and sound/resource analysis. Parsed appearance receipts have no fragment
+issues or script errors; exception trails contain session headers only.
+
+Restart session 3552a0b25ca9 reached HANGAR READY and retained appearance
+version 1 and FN3 free stock 997. No creation grant was reapplied. The native
+bound camouflage 15335 retains separate compatible-vehicle 1000-unit buckets;
+IGR camouflage 15124/15125 retain shared 1000-unit buckets. Empty bound-item
+entries have no stock to preserve and are omitted by normal reload
+normalization (338 initial camouflage keys, 329 nonempty keys after reload).
+The production report collector, called with its pinned Python 3.11 runtime,
+generated live-session report 045740-3552a0b25ca9 with all four primary logs,
+no missing roles, no parsed appearance issue/script error, no native exception
+entry and no sound/resource failure. This is a garage-only live snapshot, not
+a second completed battle or normal-exit receipt.
+
+Computer Use failed during restart observation with `foreground window did
+not report a process id`, including one fresh-window/activation retry. No
+further input was issued. Native removal/refund, explicit IGR application and
+assistant-driven chain pushing remain unaccepted UI/gameplay cases; removal
+and preset refund are covered only by focused stock regressions. The tested
+QA slot and current diagnostic client remain open for user follow-up. It is
+separate from default and other saves. Existing-save/no-refill rules are also
+covered by isolated persistence fixtures; no old player progress is migrated.
+
+The preceding 9042143 native session 8221657557c9 completed an actual 15v15
+Mittengard battle with E-100 and tier 8-10 Bots, ending by team elimination
+and returning to the garage. Launcher-generated report
+wot-error-report-20261030-043144-8221657557c9.zip has all four logs and no dump.
+Its 234 contact_chain samples include 17 wreck impulse rows and six accepted
+wreck translations (maximum sampled displacement 0.170582 m). All 3364
+wreck_aim_published samples parsed, with no matrix read failure or attached
+angle mismatch above 1e-5. Neither client log has script errors; both sound
+analyses have error_count 0 and no resource membership failure. The final
+candidate changes only appearance stock settlement/binding since that build;
+these battle receipts do not prove manual player-driven multi-wreck chains,
+every IGR item installation or every unresolved first-push cause.
+
+An earlier b218235 session ended with worker exit 1 during an Alt-F4/testing
+window. Its automatically collected all-log report 041020-b4c854392ca9 contains
+a termination dump without an exception stream, and neither native trail
+records an exception. This is not a proved native fault or a repaired cause.
+Both later normal-menu shutdowns completed; retain the earlier termination as
+an unresolved isolated observation. Raw reports remain local, not uploaded.
