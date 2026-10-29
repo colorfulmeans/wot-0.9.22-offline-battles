@@ -25,7 +25,7 @@ def report_inventory(snapshot, cache):
 
 
 def _report_inventory(snapshot, cache):
-    from gui.mods.offline_lan_0922.worker_diagnostics import detailed_enabled
+    from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
     if not detailed_enabled():
         return
     from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record

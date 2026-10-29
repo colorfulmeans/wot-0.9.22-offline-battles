@@ -276,6 +276,16 @@ def seed_initial_appearance(inventory, metadata, game_root):
         for key in keys:bindings[key] = max(bindings.get(key, 0), 1000)
 
 
+def _seed_styles(inventory, styles, vehicles):
+    stock = inventory.setdefault(str(STYLE_TYPE), {})
+    for style in styles:
+        bindings = stock.setdefault(str(style['id']), {})
+        for vehicle in vehicles:
+            if compatible(style, vehicle):
+                cd = str(vehicle['compact_descr'])
+                bindings[cd] = max(bindings.get(cd, 0), style['rent_count'] or 1)
+
+
 def read_inventory(slot_id, game_root, styles, vehicles, environment=None, root=None):
     unused_path, state, container, key, has_garage = _target(slot_id, game_root, environment, root)
     inventory = container.get(key, {})
@@ -290,13 +300,7 @@ def read_inventory(slot_id, game_root, styles, vehicles, environment=None, root=
     if not has_garage:
         seed_initial_appearance(result, metadata, game_root)
     if metadata.get('mode', save_slots.MODE_UNLOCKED) == save_slots.MODE_UNLOCKED and container.get('styleStockVersion', 0) < STOCK_VERSION:
-        stock = result.setdefault(str(STYLE_TYPE), {})
-        for style in styles:
-            bindings = stock.setdefault(str(style['id']), {})
-            for vehicle in vehicles:
-                if compatible(style, vehicle):
-                    cd = str(vehicle['compact_descr'])
-                    bindings[cd] = max(bindings.get(cd, 0), style['rent_count'] or 1)
+        _seed_styles(result, styles, vehicles)
     return result
 
 
@@ -327,6 +331,10 @@ def write_inventory(slot_id, game_root, inventory, environment=None, root=None, 
     previous = _inventory(container.get(key, {}))
     if not has_garage:
         seed_initial_appearance(previous, container, game_root)
+        if container.get('appearanceStockSeed') and container.get('styleStockVersion', 0) < STOCK_VERSION:
+            # The untouched creation grant is the baseline, not a manual add.
+            styles, vehicles = catalogue(game_root)
+            _seed_styles(previous, styles, vehicles)
     updated = _inventory(inventory)
     changes = []
     for kind in sorted(set(previous) | set(updated), key=int):

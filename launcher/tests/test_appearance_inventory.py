@@ -74,5 +74,21 @@ class AppearanceTests(unittest.TestCase):
         self.assertTrue(all(i['kind']==2 and ('include',{'nations':['poland']}) in i['rules']
                             for i in unavailable))
 
+    def test_first_manual_add_does_not_announce_automatic_style_seed(self):
+        vehicles=[dict(name='ussr:T',nation='ussr',tags=['heavyTank'],level=10,compact_descr=101)]
+        styles=[dict(id=1,rent_count=100,rules=[])]
+        paint=dict(kind=1,id=137,rules=[],vehicle_bound=False)
+        with tempfile.TemporaryDirectory() as root, \
+             mock.patch.object(store,'catalogue',return_value=(styles,vehicles)), \
+             mock.patch.object(store,'appearance_catalogue',return_value=([paint],vehicles)):
+            slot=save_slots.create_slot('Sandbox',save_slots.MODE_UNLOCKED,root=root)
+            inventory=store.read_inventory(slot['id'],'unused',styles,vehicles,root=root)
+            store.add_item(inventory,paint,vehicles,7)
+            store.write_inventory(slot['id'],'unused',inventory,root=root,is_running=lambda:False)
+            data=json.loads(Path(save_slots.metadata_path(slot['id'],root=root)).read_text())
+            changes=data['initial_account_notifications'][0]['settlement']['account_changes']
+            self.assertEqual([{'phase':'granted','rewards':[{'kind':'appearance','type':1,'id':137,'count':7}]}],changes)
+            self.assertEqual({'101':100},data['initial_customizations']['4']['1'])
+
 
 if __name__ == '__main__':unittest.main()
