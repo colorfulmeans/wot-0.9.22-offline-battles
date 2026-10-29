@@ -27776,11 +27776,17 @@ class BattleRuntime(object):
             try:
                 vehicle = self._remote_factory.get(record['engine_id'])
                 appearance = vehicle.appearance
+                from .entities.remote_vehicle import _component_aim_angles
+                expected = _component_aim_angles(
+                    getattr(vehicle, 'typeDescriptor', None),
+                    pose['turret_yaw'], pose['gun_pitch'])
+                row['expected_component_aim'] = list(expected)
+                row['turret_detached'] = bool(getattr(vehicle, 'isTurretDetached', False))
                 yaw = float(self._runtime.math.Matrix(appearance.turretMatrix).yaw)
                 pitch = float(self._runtime.math.Matrix(appearance.gunMatrix).pitch)
                 row['native_aim'] = [yaw, pitch]
-                row['yaw_error'] = _angle_delta(pose['turret_yaw'], yaw)
-                row['pitch_error'] = pitch - pose['gun_pitch']
+                row['yaw_error'] = _angle_delta(expected[0], yaw)
+                row['pitch_error'] = pitch - expected[1]
             except Exception as error:
                 row['native_aim_error'] = type(error).__name__
             return row
