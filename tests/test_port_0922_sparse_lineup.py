@@ -11,6 +11,27 @@ ROWS = [dict(team=1, slot=0, enabled=False), dict(team=1, slot=3, enabled=True),
 
 
 class SparseLineupTests(unittest.TestCase):
+    def test_filtered_tier_six_slot_succeeds_for_every_random_round_and_both_clients(self):
+        from test_port_0922_bot_lineup_integration import BotLineupIntegrationTests
+        fixture = BotLineupIntegrationTests()
+        for round_id in range(1, 21):
+            results = []
+            for worker in (False, True):
+                battle, descriptor = fixture._profile_exclusion_runtime(worker, 'random', [], [
+                    dict(team=2, slot=14, enabled=True, nation='poland',
+                         vehicle_class='mediumTank')])
+                entries = {0: descriptor.type,
+                           1: types.SimpleNamespace(name='poland:TierSix', level=6,
+                                                    tags=('mediumTank',))}
+                battle._runtime.vehicles.g_list.getList = lambda unused: entries
+                battle._start_message.update(round_id=round_id,
+                    bots=[dict(id=30, team=2, slot=14)])
+                self.assertTrue(battle._prepare_bot_vehicle_assignments(descriptor),
+                                (round_id, worker))
+                self.assertEqual({(2, 14): 'poland:TierSix'}, battle._bot_vehicle_assignments)
+                results.append(battle._bot_vehicle_assignments)
+            self.assertEqual(results[0], results[1])
+
     def test_disabled_difficulty_survives_server_environment_but_is_not_an_active_pin(self):
         import json
         import windows_server

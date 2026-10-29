@@ -10882,10 +10882,16 @@ cancelled callback delivered after reopen are covered. Existing native model
 diagnostics and corpse restoration are not replaced by PR115 callbacks.
 The room/daily movie is compiled from pinned #1513 training and lobby movies.
 Compile-only lobby definitions are removed, and the output is exported again
-to check its daily mode and dynamic-sizing code. SoundButtonEx supplies text
-padding; BlackButton owns face resizing. SettingsWindowUI declares horizontal
-padding 5; its submit/cancel positions 491/596 and 100-pixel faces establish a
-5-pixel footer gap. Window retains native background/content padding. Rendered
+to check its daily mode and sizing code. Native testing found that the 1px
+initial SoundButtonEx face plus dynamicSizeByText left a collapsed transform
+until rollover. Footer controls now start at the stock settings face width and
+use the regular width path after measuring the native text. The 100px settings
+face minus the localized #settings:ok_button glyph width establishes total side
+clearance; paddingHorizontal=5 alone is not the rendered glyph clearance.
+BlackButton retains its own face-resizing override. Settings submit/cancel
+positions 491/596 establish a 5px gap. Initial, rendered, rollover and rollout
+diagnostics include actual bounds, glyph margins and upper/lower footer gaps.
+Window retains native background/content padding. Rendered
 footer spacing, daily interaction and repeated lobby/battle transitions still
 require exact-client acceptance. The packed local replay sample now reads
 Vehicle.gunAnglesPacked; float turret/gun fields remain independent.

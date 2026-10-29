@@ -5692,9 +5692,18 @@ class BattleRuntime(object):
                 row=room_choices[str(side)]
                 needed.update(class_policy.required(row,pinned_tags))
                 if len(slots)>len(pinned_names) and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
+            from gui.mods.offline_lan_0922 import lineup_slots
+            active_slots = set((side, int(raw.get('slot', 0)))
+                               for side in (1, 2) for raw in bots_by_team[side])
+            filtered_slots = [row for row in self._start_message.get('bot_lineup') or ()
+                              if row.get('enabled') and not row.get('vehicle') and
+                              (row.get('team'), row.get('slot')) in active_slots and
+                              (row.get('nation') or row.get('vehicle_class'))]
+            slot_tiers = [[v['level'] for v in candidates if v['name'] not in excluded_names
+                           and lineup_slots.matches(row, v)] for row in filtered_slots]
             resolved=class_policy.matching_tiers([(v['level'],bot_planner.vehicle_match_class(v)) for v in candidates
                                                   if v['name'] not in excluded_names],needed,
-                [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups)
+                [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups,slot_tiers)
             if resolved is None:raise ValueError('No legal battle-tier window can supply the selected Bot classes')
             match_tiers=resolved
             team_size = max(

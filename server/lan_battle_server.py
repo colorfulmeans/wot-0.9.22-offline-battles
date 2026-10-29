@@ -4077,12 +4077,18 @@ class BattleState:
                 pool=[r for r in catalog if r.get('name') in allowed_names and
                       bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
                 occupied = {(side, slot) for participant, side, slot in assignment_plan}
+                slot_tiers = []
                 for row in self.bot_lineup:
                     if (row.get('enabled') and not row.get('vehicle') and
                             (row['team'], row['slot']) not in occupied and
                             (row.get('nation') or row.get('vehicle_class')) and
                             not any(lineup_slots.matches(row, candidate) for candidate in pool)):
                         return None, 'invalid_bot_lineup'
+                    if (row.get('enabled') and not row.get('vehicle') and
+                            (row['team'], row['slot']) not in occupied and
+                            (row.get('nation') or row.get('vehicle_class'))):
+                        slot_tiers.append([candidate.get('level', 1) for candidate in pool
+                                           if lineup_slots.matches(row, candidate)])
                 # The worker reserves every connected human's tier/class, even
                 # in a mixed-tier room outside the host's ordinary tier band.
                 pool_names=set(r['name'] for r in pool)
@@ -4102,8 +4108,10 @@ class BattleState:
                     available_tiers=[r.get('level',1) for r in pool],required_tiers=human_tiers)
                 proposed=tuple(sorted(set(proposed)|set(human_tiers)))
                 tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r)) for r in pool],
-                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups)
+                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups,slot_tiers)
                 if tiers is None:
+                    if slot_tiers:
+                        return None, 'invalid_bot_lineup'
                     available=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool)
                     for team in (1,2):
                         row=self.team_classes[str(team)]

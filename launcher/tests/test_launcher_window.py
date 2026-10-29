@@ -231,6 +231,28 @@ class _StoppableProcess(_Process):
 
 
 class WindowTest(unittest.TestCase):
+    def test_failed_lineup_create_and_delete_preserve_store_selection_and_disk(self):
+        self._game()
+        profiles = wot_launcher.bot_lineup_profiles
+        store, name = profiles.create(profiles.empty_store(), 'Existing')
+        self.window._bot_lineup_store = store
+        self.window.bot_lineup_profile.set(name)
+        self.window._refresh_bot_lineup_profiles()
+        self.assertTrue(self.window._save_settings())
+        before = core.load_settings()
+        with mock.patch.object(self.window, '_save_settings', return_value=False), \
+                mock.patch.object(self.window, '_ask_bot_lineup_profile_name', return_value='New'), \
+                mock.patch.object(self.window, '_open_bot_lineup_editor') as editor, \
+                mock.patch.object(self.window, '_confirm_delete_bot_lineup_profile', return_value=True):
+            self.assertFalse(self.window._new_bot_lineup_profile())
+            editor.assert_not_called()
+            self.assertEqual(store, self.window._bot_lineup_store)
+            self.assertEqual(name, self.window.bot_lineup_profile.get())
+            self.assertFalse(self.window._delete_bot_lineup_profile())
+            self.assertEqual(store, self.window._bot_lineup_store)
+            self.assertEqual(name, self.window.bot_lineup_profile.get())
+        self.assertEqual(before, core.load_settings())
+
     def setUp(self):
         self.settings_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.settings_dir, True)

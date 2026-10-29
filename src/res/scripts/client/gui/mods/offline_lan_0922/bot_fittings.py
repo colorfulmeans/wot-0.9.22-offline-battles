@@ -93,10 +93,22 @@ def native_factors(descriptor, critical=None):
         cache[key] = factors
         from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
         if diagnostic.detailed_enabled():
+            modifiers = loadout.modifiers(
+                descriptor, crew_skills=value.get('crew_skills', ()), factors=factors)
+            misc = getattr(descriptor, 'miscAttrs', None) or {}
+            gun = getattr(descriptor, 'gun', None)
+            base_reload = getattr(gun, 'reloadTime', None)
             diagnostic.validation_event('bot_effective_factors', vehicle=value['wire'].get('vehicle'),
                 tier=value['wire'].get('tier'), crew_level=value['wire']['crew_level'],
                 devices=value['wire'].get('devices'), directive=value['wire'].get('directive'),
                 crew_active=list(flags), fire=fire,
+                descriptor_misc=dict((name, misc[name]) for name in (
+                    'gunReloadTimeFactor', 'gunAimingTimeFactor') if name in misc),
+                final_modifiers=dict((name, factor) for name, factor in modifiers.items()
+                                     if isinstance(factor, (int, float))),
+                base_reload_seconds=base_reload,
+                effective_reload_seconds=(float(base_reload) * modifiers['reload_factor']
+                                          if base_reload is not None else None),
                 factors=dict((name, factor) for name, factor in factors.items()
                              if isinstance(factor, (int, float))))
     return cache[key]

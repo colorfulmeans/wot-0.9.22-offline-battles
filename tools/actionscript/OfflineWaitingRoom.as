@@ -2,6 +2,7 @@ package {
     import flash.display.DisplayObject;
     import flash.display.DisplayObjectContainer;
     import flash.events.Event;
+    import flash.events.MouseEvent;
     import flash.geom.Point;
     import flash.geom.Rectangle;
     import flash.text.TextField;
@@ -27,6 +28,8 @@ package {
         private var embedded:Boolean;
         private var reportedLayout:Boolean = false;
         private var daily:Boolean = false;
+        private var footerSamples:int = 0;
+        private var layoutFrames:int = 0;
         // #1513 settingsWindow.swf: 100px submit/cancel faces at x=491/596.
         private static const FOOTER_GAP:Number = 5;
 
@@ -86,8 +89,8 @@ package {
             button("team_random", "ButtonNormal", 226, 215, 208);
             button("team2", "ButtonNormal", 452, 215, 208);
             text("message", 0, 240, 660);
-            button("start", "ButtonRed", 0, 276, 1);
-            button("close", "ButtonBlack", 0, 276, 1);
+            button("start", "ButtonRed", 0, 276, 100);
+            button("close", "ButtonBlack", 0, 276, 100);
         }
 
         private function configureDaily():void {
@@ -105,18 +108,68 @@ package {
                 text("reward" + index, 0, 28 + index * 64, 560);
             }
             text("note", 0, 208, 560);
-            button("reserves", "ButtonNormal", 0, 244, 1);
-            button("close", "ButtonBlack", 0, 244, 1);
+            button("reserves", "ButtonNormal", 0, 244, 100);
+            button("close", "ButtonBlack", 0, 244, 100);
         }
 
         private function sizeFooter():void {
             var close:Object = widgets["close"];
             var primary:Object = widgets[daily ? "reserves" : "start"];
-            // #1513 SoundButtonEx/BlackButton own text padding and resizing.
-            // No fixed room widths or independently guessed text margins.
-            close.validateNow(); primary.validateNow();
+            sizeFooterButton(close);
+            sizeFooterButton(primary);
             close.x = (daily ? 560 : 660) - close.width;
             primary.x = close.x - FOOTER_GAP - primary.width;
+        }
+
+        private function sizeFooterButton(item:Object):void {
+            // Stock settings has a 100px face around its localized OK label.
+            // Measure that label in this control's own native font, preserving
+            // its total side clearance for longer translated captions.
+            var sample:TextField = new TextField();
+            sample.defaultTextFormat = item.textField.defaultTextFormat;
+            sample.embedFonts = item.textField.embedFonts;
+            sample.text = App.utils.locale.makeString("#settings:ok_button");
+            var clearance:Number = 100 - sample.textWidth;
+            item.width = Math.ceil(item.textField.textWidth + clearance);
+            item.validateNow();
+        }
+
+        private function footerState(event:MouseEvent):void {
+            reportFooter(event.type);
+        }
+
+        private function footerFrame(event:Event):void {
+            if (++layoutFrames < 2) return;
+            removeEventListener(Event.ENTER_FRAME, footerFrame);
+            reportFooter("rendered");
+        }
+
+        private function reportFooter(phase:String):void {
+            if (offlineAction == null || footerSamples++ >= 12) return;
+            var frame:Rectangle = window.getBackground().getBounds(this);
+            var form:Rectangle = Object(window).bgForm.getBounds(this);
+            for each (var role:String in [daily ? "reserves" : "start", "close"]) {
+                var item:Object = widgets[role];
+                var bounds:Rectangle = DisplayObject(item).getBounds(this);
+                var text:TextField = item.textField;
+                var glyphs:Rectangle = null;
+                for (var index:int = 0; index < text.length; ++index) {
+                    var glyph:Rectangle = text.getCharBoundaries(index);
+                    if (glyph != null) glyphs = glyphs == null ? glyph : glyphs.union(glyph);
+                }
+                var left:Number = NaN; var right:Number = NaN;
+                if (glyphs != null) {
+                    var p:Point = globalToLocal(text.localToGlobal(new Point(glyphs.left, glyphs.top)));
+                    var q:Point = globalToLocal(text.localToGlobal(new Point(glyphs.right, glyphs.bottom)));
+                    left = p.x - bounds.left; right = bounds.right - q.x;
+                }
+                offlineAction("diagnostics", "phase=" + phase + " control=" + role +
+                    " logical=" + item.width + "x" + item.height +
+                    " rendered=" + bounds.width + "x" + bounds.height +
+                    " glyphMargins=" + left + "," + right +
+                    " footerMargins=" + (bounds.top - form.bottom) + "," + (frame.bottom - bounds.bottom) +
+                    " actualScale=" + item.actualScaleX + "," + item.actualScaleY);
+            }
         }
 
         private function text(key:String, xPos:Number, yPos:Number, w:Number):void {
@@ -149,9 +202,14 @@ package {
         private function button(key:String, linkage:String, xPos:Number, yPos:Number, w:Number):void {
             var item:Object = component(key, linkage, xPos, yPos, w);
             if (key == "start" || key == "reserves" || key == "close") {
-                item.dynamicSizeByText = true;
+                // #1513 SoundButtonEx dynamic sizing calls setActualSize on
+                // its animated display bounds; a 1px initial face can retain
+                // that transform until rollover. Use the stable width path.
+                item.dynamicSizeByText = false;
                 item.changeSizeOnlyUpwards = false;
                 item.paddingHorizontal = 5;
+                item.addEventListener(MouseEvent.ROLL_OVER, footerState);
+                item.addEventListener(MouseEvent.ROLL_OUT, footerState);
             }
             item.addEventListener(ButtonEvent.CLICK, clicked);
         }
@@ -228,6 +286,8 @@ package {
             updating = false;
             placeRoom();
             if (!reportedLayout && offlineAction != null) {
+                reportFooter("initial");
+                addEventListener(Event.ENTER_FRAME, footerFrame);
                 reportedLayout = true;
                 offlineAction("diagnostics", "content=" + width + "x" + height +
                     " actualScale=" + actualScaleX + "," + actualScaleY +
@@ -293,12 +353,15 @@ package {
         }
 
         private function clearControls():void {
+            removeEventListener(Event.ENTER_FRAME, footerFrame);
             for each (var icon:Object in icons) icon.dispose();
             icons = {};
             for (var key:String in widgets) {
                 var widget:Object = widgets[key];
                 widget.removeEventListener(ButtonEvent.CLICK, clicked);
                 widget.removeEventListener(ListEvent.INDEX_CHANGE, selected);
+                widget.removeEventListener(MouseEvent.ROLL_OVER, footerState);
+                widget.removeEventListener(MouseEvent.ROLL_OUT, footerState);
                 if (key == "tier" || key == "skill" || key == "size1" || key == "size2") widget.close();
                 widget.dispose();
             }

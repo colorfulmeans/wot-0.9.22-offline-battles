@@ -18,6 +18,33 @@ class ErrorReportTest(unittest.TestCase):
     SESSION_1 = "20260823T120000Z-111111111111"
     SESSION_2 = "20260823T130000Z-222222222222"
 
+    def test_redirected_parent_identity_allows_msix_but_not_a_different_folder(self):
+        base = error_reports.session_dumps_directory()
+        os.makedirs(base, exist_ok=True)
+        directory = os.path.join(base, self.SESSION_1)
+        os.mkdir(directory)
+        realpath = os.path.realpath
+        redirected = os.path.join(os.path.dirname(self.game), 'redirected')
+        with mock.patch.object(error_reports.os.path, 'realpath',
+                side_effect=lambda p: os.path.join(redirected, self.SESSION_1)
+                if p == directory else realpath(p)), \
+                mock.patch.object(error_reports.os.path, 'samefile', return_value=True) as same:
+            self.assertTrue(error_reports._safe_dump_directory(directory))
+            same.assert_called_with(base, redirected)
+        with mock.patch.object(error_reports.os.path, 'samefile', return_value=False):
+            with self.assertRaisesRegex(core.LauncherError, 'unsafe'):
+                error_reports._safe_dump_directory(directory)
+
+    def test_failed_new_session_cannot_export_the_previous_boundary(self):
+        error_reports.begin_session(self.game, session_id=self.SESSION_1)
+        self._write(self._game_log(error_reports.ROLE_VISIBLE_CLIENT), b'old game')
+        with mock.patch.object(error_reports, '_prepare_session_dump_directory',
+                               side_effect=core.LauncherError('test preparation failure')):
+            with self.assertRaises(core.LauncherError):
+                error_reports.begin_session(self.game, session_id=self.SESSION_2)
+        with self.assertRaisesRegex(core.LauncherError, 'boundary is unreadable'):
+            error_reports.create_report()
+
     def test_sound_analysis_is_generated_from_current_session_slices(self):
         import json
         visible=self._game_log(error_reports.ROLE_VISIBLE_CLIENT)

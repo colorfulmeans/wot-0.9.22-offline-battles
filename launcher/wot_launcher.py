@@ -2779,16 +2779,20 @@ class LauncherWindow(object):
         raw_name = self._ask_bot_lineup_profile_name()
         if raw_name is None:
             return False
+        previous_store = self._bot_lineup_store
+        previous_name = self.bot_lineup_profile.get()
         try:
-            self._bot_lineup_store, profile_name = bot_lineup_profiles.create(
+            candidate, profile_name = bot_lineup_profiles.create(
                 self._bot_lineup_store, raw_name)
-        except bot_lineup_profiles.BotLineupProfileError as error:
+            self.bot_lineup_profile.set(profile_name)
+            self._save_bot_lineup_store(candidate)
+        except (bot_lineup_profiles.BotLineupProfileError, OSError) as error:
+            self._bot_lineup_store = previous_store
+            self.bot_lineup_profile.set(previous_name)
+            self._refresh_bot_lineup_profiles()
             self._log(
                 "Could not create the Bot lineup profile: %s" % error)
             return False
-        self._refresh_bot_lineup_profiles()
-        self.bot_lineup_profile.set(profile_name)
-        self._save_settings()
         return self._open_bot_lineup_editor()
 
     def _open_bot_tactics_editor(self):
@@ -2855,17 +2859,20 @@ class LauncherWindow(object):
             return False
         if not self._confirm_delete_bot_lineup_profile(profile_name):
             return False
+        previous_store = self._bot_lineup_store
         try:
-            self._bot_lineup_store = bot_lineup_profiles.delete(
+            candidate = bot_lineup_profiles.delete(
                 self._bot_lineup_store, profile_name)
-        except bot_lineup_profiles.BotLineupProfileError as error:
+            self.bot_lineup_profile.set(
+                bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
+            self._save_bot_lineup_store(candidate)
+        except (bot_lineup_profiles.BotLineupProfileError, OSError) as error:
+            self._bot_lineup_store = previous_store
+            self.bot_lineup_profile.set(profile_name)
+            self._refresh_bot_lineup_profiles()
             self._log(
                 "Could not delete the Bot lineup profile: %s" % error)
             return False
-        self.bot_lineup_profile.set(
-            bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
-        self._refresh_bot_lineup_profiles()
-        self._save_settings()
         return True
 
     def _confirm_delete_profile(self, profile_name):

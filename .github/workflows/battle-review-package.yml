@@ -228,6 +228,7 @@ jobs:
           --pattern test_port_0922_simulation_worker.py
           --pattern test_waiting_room_stock_flash.py
           --pattern test_port_0922_bot_lineup_integration.py
+          --pattern test_team_class_selection.py
           --pattern test_port_0922_server_team_size.py
           --pattern test_port_0922_account_rpc.py
           --pattern test_port_0922_offline_services.py
@@ -269,6 +270,8 @@ jobs:
           --pattern test_default_revision.py
           --pattern test_save_slots.py
           --pattern test_launcher_core.py
+          --pattern test_error_reports.py
+          --pattern test_launcher_window.py
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
