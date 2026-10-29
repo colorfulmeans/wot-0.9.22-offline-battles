@@ -77,7 +77,7 @@ def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
         if phase in ('effects_tick', 'frame_tick'):
             if now < entry['next_at'] or (dead and entry['dead_samples'] >= 8):
                 return
-            entry['next_at'] = now + 0.1
+            entry['next_at'] = now + (0.3 if dead else 0.1)
         math_module = compatibility._runtime.math
         def matrix(provider):
             if provider is None:
@@ -85,6 +85,7 @@ def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
             try:
                 value = math_module.Matrix(provider)
                 return dict(identity=id(provider),
+                    target_identity=id(getattr(provider, 'target', None)),
                     yaw=float(value.yaw), pitch=float(value.pitch), roll=float(value.roll),
                     position=[float(value.translation[i]) for i in range(3)])
             except Exception as error:
@@ -113,6 +114,9 @@ def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
             for name in ('turretYaw', 'gunPitch', '_turretYaw', '_gunPitch'):
                 value = getattr(rotator, name, None)
                 controls[name] = value if type(value) in (int, float) else None
+            for name in ('turret', 'gun'):
+                animator = getattr(rotator, '_VehicleGunRotator__' + name + 'MatrixAnimator', None)
+                controls[name + '_animator'] = matrix(getattr(animator, 'matrix', None))
         except Exception as error:
             controls['unavailable'] = type(error).__name__
         packed_angles = getattr(vehicle, 'gunAngles', None)
@@ -152,6 +156,8 @@ def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
             battle_review_record(compatibility, 'model_last_alive', key, now,
                                  lambda: dict(previous), interval=0.0, limit=1)
         if phase == 'refresh_after' and dead:
+            entry['dead_samples'] = 0
+            entry['next_at'] = now
             pending = getattr(compatibility, '_battle_model_pose_pending', None)
             if pending is None:
                 pending = compatibility._battle_model_pose_pending = {}
@@ -877,14 +883,16 @@ class _OfflineVehicleFilterSyncProxy(object):
     """Delegate WGVehicleFilter except for unsafe retail-only syncs."""
 
     __slots__ = (
-        '_vehicle_filter', '_pose_matrix', '_velocity', '_acceleration')
+        '_vehicle_filter', '_pose_matrix', '_velocity', '_acceleration',
+        '_wreck_restore')
 
     def __init__(self, vehicle_filter, pose_matrix=None, velocity=None,
-                 acceleration=None):
+                 acceleration=None, wreck_restore=None):
         self._vehicle_filter = vehicle_filter
         self._pose_matrix = pose_matrix
         self._velocity = velocity
         self._acceleration = acceleration
+        self._wreck_restore = wreck_restore
 
     def __getattr__(self, name):
         return getattr(self._vehicle_filter, name)
@@ -893,6 +901,10 @@ class _OfflineVehicleFilterSyncProxy(object):
         # A client-only Vehicle has no retail interpolation filter behind its
         # initial gun-angle sample.  Exact #1513 asserts a null native filter
         # here, so the sample cannot be submitted through this native path.
+        if self._wreck_restore is not None:
+            from gui.mods.offline_lan_0922.wreck_model_pose import restore
+            owner, appearance, context = self._wreck_restore
+            restore(owner, appearance, context, yaw, pitch)
         return None
 
     def syncStabilisedYPR(self, yaw, pitch, roll):
@@ -2701,7 +2713,11 @@ class OfflineCompatibility(object):
                     caller_code = None
                 if caller_code is compatibility._compound_models_refresh_code:
                     _observe_battle_model_pose(compatibility, appearance, 'refresh_sync_boundary')
-                    return _OfflineVehicleFilterSyncProxy(value)
+                    context = (getattr(compatibility, '_wreck_pose_battle', None),
+                        getattr(compatibility, '_compound_refresh_token', None),
+                        id(getattr(compatibility, '_compound_refreshing_vehicle', None)))
+                    return _OfflineVehicleFilterSyncProxy(value,
+                        wreck_restore=(compatibility, appearance, context))
             return value
 
         def compound_deactivate(appearance, stopEffects=True):
@@ -2720,6 +2736,10 @@ class OfflineCompatibility(object):
                     # of the replacement compound.  Final teardown does not.
                     if (compatibility._compound_refreshing_models is not
                             appearance):
+                        from gui.mods.offline_lan_0922.wreck_model_pose import clear
+                        aim = getattr(compatibility, '_local_wreck_aim', None)
+                        if aim is not None and aim.identity[3] == id(appearance):
+                            clear(compatibility, 'deactivate', appearance)
                         clear_ground_decal_visibility_state(appearance)
             if not compatibility._battle_active:
                 return call_original()
@@ -2819,20 +2839,27 @@ class OfflineCompatibility(object):
                 return original(appearance, model_state, resource_list)
             outer_appearance = compatibility._compound_refreshing_models
             outer_vehicle = getattr(compatibility, '_compound_refreshing_vehicle', None)
+            outer_token = getattr(compatibility, '_compound_refresh_token', None)
+            compatibility._compound_refresh_token = object()
             compatibility._compound_refreshing_models = appearance
-            from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
-            if detailed_enabled():
-                try:
-                    compatibility._compound_refreshing_vehicle = (
-                        compatibility._original_compound_getattribute(
-                            appearance, '_CompoundAppearance__vehicle'))
-                except Exception:
-                    compatibility._compound_refreshing_vehicle = None
+            try:
+                compatibility._compound_refreshing_vehicle = (
+                    compatibility._original_compound_getattribute(
+                        appearance, '_CompoundAppearance__vehicle'))
+            except (AttributeError, ReferenceError):
+                compatibility._compound_refreshing_vehicle = None
             try:
                 return _run_model_refresh_callback(compatibility, appearance, model_state, resource_list)
+            except Exception:
+                from gui.mods.offline_lan_0922.wreck_model_pose import clear
+                aim = getattr(compatibility, '_local_wreck_aim', None)
+                if aim is not None and aim.identity[3] == id(appearance):
+                    clear(compatibility, 'refresh_failed', appearance)
+                raise
             finally:
                 compatibility._compound_refreshing_models = outer_appearance
                 compatibility._compound_refreshing_vehicle = outer_vehicle
+                compatibility._compound_refresh_token = outer_token
 
         def account_getattribute(account, name):
             if name in ('base', 'cell', 'server'):
@@ -3835,6 +3862,9 @@ class OfflineCompatibility(object):
         if arena_type_id is not None:
             self._battle_arena_type_id = int(arena_type_id)
         self.install()
+        from gui.mods.offline_lan_0922.wreck_model_pose import clear
+        clear(self, 'configure_battle')
+        self._wreck_pose_battle = object()
         self._battle_active = True
         from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
         self._model_lifecycle_enabled = detailed_enabled()
@@ -4366,6 +4396,9 @@ class OfflineCompatibility(object):
             if self._runtime is not None:
                 self._runtime.offline_map_creator.SetActive(False)
         finally:
+            from gui.mods.offline_lan_0922.wreck_model_pose import clear
+            clear(self, 'deactivate_map')
+            self._wreck_pose_battle = None
             self._battle_active = False
             self._native_battle = False
             self._battle_gui_type = None

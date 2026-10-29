@@ -22,9 +22,12 @@ previous direct target set: two seconds normally, or the projected directive
 duration (bounded to five seconds). It performs no new LOS queries after
 death. Native checkpoints retain the frozen recipients.
 The unaccepted wreck angle coupling change has been withdrawn;
-wreck motion uses the release's angle updates. Player corpse turret reset
-remains unresolved. No angle restoration or native filter synchronization has
-been added for that issue.
+wreck motion uses the release's angle updates. A new local corpse turret
+candidate replaces the suppressed final model-refresh restore with independent
+matrix targets, using the angles saved by stock code before deactivation.
+It is limited to the current local dead vehicle with an attached turret;
+the unsafe native filter synchronization remains suppressed. Failed display
+readback rolls back the candidate. Native Windows acceptance remains pending.
 
 Use `START_DIAGNOSTIC_TEST.bat` beside the unpacked launcher. Its existing
 `--diagnostics` entrance enables bounded `BATTLE REVIEW` records in the
@@ -49,10 +52,15 @@ owned by the exact client's radio/distance factor and crew/module projection.
 Model records preserve the last sampled alive pose, refresh entry/return,
 deactivation, setupModels, setVehicle, activate, gun-target setup,
 onModelChanged and final-sync boundaries, and eight subsequent existing battle
-frames even when corpse effects ticks stop: turret/gun providers, hull and world muzzle
+frames at least 0.3 seconds apart even when corpse effects ticks stop:
+turret/gun providers, hull and world muzzle
 matrices, filter identities and turret detachment. Missing native readings
 are reported as unavailable. These probes read existing state and schedule
 no engine callbacks.
+`wreck_pose_before/bound/refused/clear` records compare the stock snapshot,
+owned targets and native display readback, including repeated-refresh and
+cleanup outcomes. Provider target identities and local rotator animator matrices
+are also sampled. The candidate never drives the rotator or records replay angles.
 
 Career review restores the explicitly selected published 0.8.11 Personal
 Rating, using lifetime vehicle rows (including sold vehicles), base battle XP,
@@ -78,6 +86,10 @@ For Windows acceptance, use the matching launcher, server and hidden worker:
 1. Turn the turret away from the hull, record its pose, then die. Stay in
    battle for at least two seconds, observing whether the corpse snaps and
    whether a turret detaches. Repeat while a wreck is pushed or rotated.
+   Also repeat a model refresh, spectate another vehicle, return to the garage
+   and start another battle. Verify living aim, remote vehicles and detached
+   turrets retain their normal owners. Export the report even if the candidate
+   is refused; successful Python calls alone do not prove rendered recovery.
 2. Spot an enemy, lose direct sight, and have an ally damage it before memory
    expires. Repeat with two observers and only one radio connection; compare
    the actual credited sources and damage shares.

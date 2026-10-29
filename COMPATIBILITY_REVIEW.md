@@ -10805,3 +10805,50 @@ failure dialog. They run in the existing package gate; local embedded Python has
 no Tk and does not supply native-window acceptance. Matching-head CI and package
 results are recorded in PR 116. Turret delegate/lifecycle diagnostics remain
 read-only and diagnostic-entry-only; no new turret angle correction is inferred.
+
+## Local corpse model-refresh candidate (2026-10-29)
+
+The later coherent report 20261029-194244 uses colorfulmeans-40855572272-1.
+Local vehicle 2130706436 enters refresh at -47.715/-3.113 degrees; deactivation
+zeros both providers, and refresh plus eight later frames through 19:36:56.643
+leave them zero. Its onModelChanged event executes with no delegates. Twenty
+other observed vehicles recover their angles; native-remote on_model_changed
+rebinds its independent aim targets inside that event. This is a demonstrated
+missing local restore path, not proof that the native sync is safe to reenable.
+
+tools/inspect_client.py passed again against Chinese HD #1513. Read-only
+bytecode review of scripts/client/vehicle_systems/CompoundAppearance.pyc
+confirms WGAdaptiveMatrixProvider display matrices, deactivate clearing their
+targets and resetting the filter, and __onModelsRefresh saving yaw/pitch before
+deactivation and restoring them with syncGunAngles after reactivation.
+setupGunMatrixTargets(target) assigns target.turretMatrix/gunMatrix directly;
+None selects the filter. VehicleGunRotator.pyc confirms its private animators
+expose matrix properties and update/replay side effects; the candidate does
+not invoke them.
+
+Only the proxy returned to the original refresh code object's private-filter
+lookup receives the candidate restore context. Nested activation/deactivation
+still sees and stores the real filter. The candidate consumes stock's saved
+angles without unpacking network samples or changing hull/wreck motion.
+Current battle token, synchronous refresh token, registered local entity and
+appearance identities, dead health, attached turret and absence of the remote
+adapter are required. There are no scheduled callbacks or event subscriptions.
+
+The compatibility owner retains only the two Math matrices, saved angles and
+scalar identities plus a battle token. Repeated corpse refreshes reuse that
+snapshot even if deactivation clears the providers again. A partial bind or
+native readback mismatch rolls back only targets still owned by the candidate;
+it never invokes the suppressed native sync. Final deactivation, failed stock
+refresh, revival/detachment refresh, next battle and map exit release ownership
+without clearing a newer writer. No entity, appearance or rotator is retained.
+
+test_port_0922_wreck_model_pose.py covers the installed wrapper, nested filter
+identity, basic-entry restoration, repeated reset, stale context refusal,
+partial failure/readback rollback, owner replacement and lifecycle cleanup.
+Detailed diagnostics record target identities, animator matrices, stock and
+read-back angles, refusal and cleanup. Eight existing frame samples are spaced
+at least 0.3 seconds apart and reset after each completed corpse refresh.
+Normal entry does not build those diagnostic payloads. Exact Windows rendered
+recovery, detached turrets, spectating, repeated refresh and next-round safety
+remain acceptance requirements. Matching-head CI and package evidence belongs
+in PR 116; the known Great Wall gate failure remains separate.
