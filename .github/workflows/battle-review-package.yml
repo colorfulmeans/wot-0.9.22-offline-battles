@@ -262,6 +262,8 @@ jobs:
           --pattern test_port_0922_passive_wreck_pose.py
           --pattern test_port_0922_wreck_contact_commit.py
           --pattern test_port_0922_bot_state_codec.py
+          --pattern test_port_0922_094_repair.py
+          --pattern test_port_0922_lan_client_queue.py
           --pattern test_port_0922_snapshot_sync.py
           --pattern test_port_0922_battle_runtime.py
           --pattern test_port_0922_server_bot_ai.py

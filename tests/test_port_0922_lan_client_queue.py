@@ -1121,7 +1121,7 @@ class LanClientQueueTests(unittest.TestCase):
         # keeps the state it already admitted for them.
         expected = {
             'id', 'x', 'y', 'z', 'yaw', 'pitch', 'roll',
-            'aim_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'push_yaw', 'contact_push_acks',
+            'aim_yaw', 'turret_yaw', 'gun_pitch', 'speed', 'push_x', 'push_z', 'push_yaw', 'contact_push_acks',
             'movement_dir', 'rotation_dir', 'fire_seq', 'shell_index',
             'next_shell_index', 'ammo_remaining', 'ammo_reload_pending', 'ammo_magazine_started',
             'reload_time', 'reload_duration', 'clip', 'clip_size',
@@ -1134,6 +1134,7 @@ class LanClientQueueTests(unittest.TestCase):
         self.assertEqual(29, len(queued_bots))
         for state in queued_bots:
             self.assertEqual(expected, set(state))
+            self.assertAlmostEqual(.1, state['turret_yaw'])
         self.assertEqual([state['local_combat_manoeuvre'] for state in states],
                          [state['local_combat_manoeuvre'] for state in queued_bots])
         # The positional row carries the same contract in a fraction of the
