@@ -202,7 +202,8 @@ def model(room):
         sizes = teams.get('sizes') or {}
         current = int(sizes.get(team, sizes.get(str(team), 15)))
         if room._pending_team_sizes.get(team) == current: room._pending_team_sizes.pop(team, None)
-        menu('size%d' % team, [(str(i), str(i)) for i in range(1, 16)], room._pending_team_sizes.get(team, current),
+        first = 0 if current == 0 and not teams.get('size_supported') else 1
+        menu('size%d' % team, [(str(i), str(i)) for i in range(first, 16)], room._pending_team_sizes.get(team, current),
              host and teams.get('size_supported'))
     from gui.mods.offline_lan_0922 import bot_tactics
     choices=bot_tactics.team_class_choices(teams.get('classes') or None)

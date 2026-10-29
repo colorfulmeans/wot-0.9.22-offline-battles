@@ -51,6 +51,21 @@ class StockRoomTests(unittest.TestCase):
             self.assertFalse(controls[key]['enabled'], key)
         self.assertTrue(controls['team1']['enabled'])
 
+    def test_custom_empty_team_displays_zero_and_all_owned_controls_are_disabled(self):
+        room = self.room()
+        teams = room._team_status()
+        teams.update(sizes={1: 0, 2: 3}, size_supported=False, class_supported=False)
+        room._bot_tier_status().update(mode='random', supported=False)
+        room._bot_skill_status().update(mode='mixed', supported=False)
+        controls = flash.model(room)['controls']
+        for team, expected in ((1, '0'), (2, '3')):
+            control = controls['size%d' % team]
+            self.assertEqual(expected, control['options'][control['index']]['value'])
+            self.assertFalse(control['enabled'])
+        for key in ('tier', 'skill', 'class_1_random', 'class_2_random'):
+            self.assertFalse(controls[key]['enabled'])
+        self.assertTrue(controls['class_1_random']['selected'])
+
     def test_native_initial_selection_events_do_not_resubmit_settings(self):
         room = self.room()
         adapter = flash.RoomWindow(room)
