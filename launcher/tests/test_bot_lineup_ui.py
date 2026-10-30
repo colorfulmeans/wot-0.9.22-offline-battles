@@ -190,6 +190,26 @@ class RealTkTests(unittest.TestCase):
         self.assertTrue(all(r['enabled'] and r.get('nation')=='china' and r.get('vehicle_class')=='heavyTank' for r in self.e._draft[:15]))
         self.assertTrue(all('nation' not in r for r in self.e._draft[15:]))
 
+    def test_tier_browsing_never_rewrites_slots_and_explicit_pick_survives_reopen(self):
+        self.choose(1, 0, 'vehicle', 'china:Ch22_113P')
+        before=copy.deepcopy(self.e._draft)
+        self.choose(1, None, 'tier', 1)
+        self.assertEqual(before,self.e._draft)
+        self.assertEqual(before != self.e._original,self.e._dirty)
+        options=self.e._rows[(1,0)]['vehicle_options']
+        self.assertNotIn('china:Ch22_113P',[v for v,label in options])
+        self.assertEqual(ui.INDIVIDUAL,self.e._read(self.e._rows[(1,0)],'vehicle'))
+        self.choose(1, 1, 'tier', 10)
+        self.choose(1, 1, 'vehicle', 'china:Ch22_113')
+        self.assertEqual(before[0],self.e._draft[0])
+        self.assertTrue(self.e._save())
+        saved=profiles.runtime_assignments(self.saved[-1],'Review')
+        self.assertEqual('china:Ch22_113P',saved[0]['vehicle'])
+        self.assertEqual('china:Ch22_113',saved[1]['vehicle'])
+        self.assertTrue(all('tier' not in row for row in saved))
+        self.e.set_language('en');self.parent.update()
+        self.assertEqual('1',self.e._rows[(1,0)]['tier'].get())
+
     def test_saved_empty_difficulty_matches_widgets_and_enabled_random_slots(self):
         self.e.set_language('en')
         self.choose(1, None, 'vehicle', ui.CLEAR)

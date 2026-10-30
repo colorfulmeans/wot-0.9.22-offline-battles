@@ -28,6 +28,7 @@ class CustomizationsDialog(object):
         filters.grid(row=0, column=0, columnspan=2, sticky='we')
         self.nation = tk.StringVar(value=tr('All'))
         self.vehicle_class = tk.StringVar(value=tr('All'))
+        self.tier = tk.StringVar(value=tr('All'))
         self.category = tk.StringVar(value=tr('All'))
         self.search = tk.StringVar()
         self.garage_only = tk.BooleanVar(value=True)
@@ -35,25 +36,29 @@ class CustomizationsDialog(object):
         self.nations.update((nation_choices.caption(n,tr),n) for n in nation_choices.ordered(v['nation'] for v in self.vehicles))
         self.classes = {tr('All'): None}
         self.classes.update((tr(label),name) for name,label in vehicle_editor_ui.VEHICLE_CLASS_LABELS)
+        self.tiers = {tr('All'): None}
+        self.tiers.update((str(level),level) for level in sorted(set(
+            v['level'] for v in self.vehicles if isinstance(v.get('level'),int))))
         self.categories = {tr('All'):None}
         self.categories.update((tr(name),name) for name in ('Paint','Camouflage','Emblem','Inscription','Wear'))
         for col, label, variable, values in ((0,'Nation',self.nation,self.nations),
-                (1,'Type',self.vehicle_class,self.classes), (3,'Category',self.category,self.categories)):
+                (1,'Type',self.vehicle_class,self.classes), (2,'Tier',self.tier,self.tiers),
+                (4,'Category',self.category,self.categories)):
             tk.Label(filters,text=tr(label)).grid(row=0,column=col,sticky='w')
             box=ttk.Combobox(filters,textvariable=variable,values=tuple(values),state='readonly',width=15)
             box.grid(row=1,column=col,sticky='we',padx=(0,6))
-            box.bind('<<ComboboxSelected>>',self.filter_vehicles if col<2 else self.refresh)
-        tk.Label(filters,text=tr('Vehicle')).grid(row=0,column=2,sticky='w')
+            box.bind('<<ComboboxSelected>>',self.filter_vehicles if col<3 else self.refresh)
+        tk.Label(filters,text=tr('Vehicle')).grid(row=0,column=3,sticky='w')
         self.vehicle_box=ttk.Combobox(filters,textvariable=self.vehicle,state='readonly',width=36)
-        self.vehicle_box.grid(row=1,column=2,sticky='we',padx=(0,6))
+        self.vehicle_box.grid(row=1,column=3,sticky='we',padx=(0,6))
         self.vehicle_box.bind('<<ComboboxSelected>>',self.refresh)
-        tk.Label(filters,text=tr('Search')).grid(row=0,column=4,sticky='w')
+        tk.Label(filters,text=tr('Search')).grid(row=0,column=5,sticky='w')
         entry=ttk.Entry(filters,textvariable=self.search,width=18)
-        entry.grid(row=1,column=4,sticky='we')
+        entry.grid(row=1,column=5,sticky='we')
         entry.bind('<KeyRelease>',self.filter_vehicles)
         tk.Checkbutton(filters,text=tr('Garage vehicles only'),variable=self.garage_only,
                        command=self.filter_vehicles).grid(row=2,column=0,columnspan=3,sticky='w')
-        filters.grid_columnconfigure(2,weight=1)
+        filters.grid_columnconfigure(3,weight=1)
         self.notebook=ttk.Notebook(frame)
         self.notebook.grid(row=1,column=0,columnspan=2,sticky='nsew',pady=8)
         self.tables=[]
@@ -103,9 +108,11 @@ class CustomizationsDialog(object):
     def filter_vehicles(self, unused=None):
         tr=self.owner._t
         nation=self.nations.get(self.nation.get());kind=self.classes.get(self.vehicle_class.get())
+        level=self.tiers.get(self.tier.get())
         text=self.search.get().strip().casefold()
         self.filtered_vehicles=[v for v in self.vehicles if (not nation or v['nation']==nation)
             and (not kind or v.get('vehicleClass')==kind)
+            and (level is None or v.get('level')==level)
             and (not self.garage_only.get() or self.garage_ids is None or str(v['compact_descr']) in self.garage_ids)
             and (not text or text in (v['label']+' '+v['name']).casefold())]
         self.vehicle_by_label={tr('All compatible vehicles'):None}

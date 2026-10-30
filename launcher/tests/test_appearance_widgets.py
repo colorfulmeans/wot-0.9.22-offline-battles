@@ -17,7 +17,7 @@ class WidgetTests(unittest.TestCase):
                 root=tk.Tk();root.withdraw()
                 try:
                     tr=lambda value:wot_launcher._CHINESE.get(value,value) if chinese else value
-                    vehicles=[dict(nation=n,name=n+':Tank',vehicle='Tank',label=n,level=10,
+                    vehicles=[dict(nation=n,name=n+':Tank',vehicle='Tank',label=n,level=8 if n=='germany' else 10,
                         vehicleClass='heavyTank',compact_descr=i,tags=['heavyTank'])
                         for n,i in (('germany',101),('china',102),('ussr',103))]
                     items=[dict(kind=1,id=137,label='Paint',category='Paint',rules=[],igr=False,
@@ -34,6 +34,11 @@ class WidgetTests(unittest.TestCase):
                     self.assertEqual({'china:Tank','germany:Tank'},set(v['name'] for v in dialog.targets()))
                     dialog.nation.set(ui.nation_choices.caption('germany',tr));dialog.filter_vehicles()
                     self.assertEqual(['germany:Tank'],[v['name'] for v in dialog.targets()])
+                    dialog.tier.set('10');dialog.filter_vehicles()
+                    self.assertEqual([],dialog.targets())
+                    self.assertEqual((),dialog.table.get_children())
+                    self.assertEqual({},dialog.inventory)
+                    dialog.tier.set('8');dialog.filter_vehicles()
                     self.assertEqual(('1:137',),dialog.table.get_children())
                     dialog.table.selection_set('1:137');dialog.quantity.set('7');dialog.add()
                     self.assertEqual({'0':7},dialog.inventory['1']['137'])

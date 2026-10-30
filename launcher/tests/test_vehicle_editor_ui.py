@@ -393,7 +393,7 @@ class VehicleEditorWindowTest(unittest.TestCase):
         self.assertIn("positive", self.window.constraint.get())
         self.assertIn("vehicle_profiles.json",
                       self.window.overlay_path.get())
-        self.assertEqual(("usa", "ussr"),
+        self.assertEqual(("USSR", "USA"),
                          self.window.nation_box.cget("values"))
         self.assertEqual(("MS-1", "Test"),
                          self.window.vehicle_box.cget("values"))
@@ -732,10 +732,9 @@ class VehicleEditorWindowTest(unittest.TestCase):
             if text.startswith("正在编辑方案"))
         self.assertIn("请依次选择系别、车辆、类别和属性。", explanation)
         self.assertIn("或您开房时固定该方案时生效", explanation)
-        self.assertIn("类型", _texts(window.root))
+        self.assertIn("坦克类型", _texts(window.root))
+        self.assertEqual(('苏联', '美国'), window.nation_box.cget('values'))
         self.assertIn("级别", _texts(window.root))
-        self.assertIn("按原始数据中的车型或级别筛选车辆列表。",
-                      _texts(window.root))
         self.assertFalse(hasattr(window, "inspect_button"))
         self.assertEqual(("车辆", "火炮"),
                          window.category_box.cget("values"))

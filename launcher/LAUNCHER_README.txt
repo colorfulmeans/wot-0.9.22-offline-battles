@@ -98,6 +98,12 @@ and newly created unlocked saves receive 1000 units of each independent exterior
 item, retaining native vehicle bindings. Preset-style quantities are unchanged.
 Existing named saves and new-account saves receive no new exterior-stock grant.
 
+Garage additions, Members and Appearance inventory include Tier after Type.
+Exact lineup Tier narrows vehicle candidates only; selecting a vehicle changes
+the slot. Clear Tier to use Random vehicle. Browsing tiers never rewrites saved
+assignments. The vehicle modifier has aligned nation/type/tier and
+vehicle/modification-category/field rows, using localized garage-order nations.
+
 English release notes:
 https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.0.0
 

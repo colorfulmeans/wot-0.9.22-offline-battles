@@ -67,6 +67,7 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Tier': '级别',
     'Appearance inventory': '外观库存',
     'Type': '类型',
     'winter': '雪地', 'summer': '草地', 'desert': '沙地',
@@ -1040,6 +1041,7 @@ class LauncherWindow(object):
         self._gold_offer_by_label = {}
         self.gold_nation = tk.StringVar(value="")
         self.gold_class = tk.StringVar(value="")
+        self.gold_tier = tk.StringVar(value="")
         self.gold_nation_label = tk.Label(self.shop_panel, text="")
         self.gold_nation_label.grid(row=0, column=0, sticky="w")
         self.gold_nation_box = self._ttk.Combobox(
@@ -1050,19 +1052,24 @@ class LauncherWindow(object):
         self.gold_class_box = self._ttk.Combobox(
             self.shop_panel, textvariable=self.gold_class, state="readonly")
         self.gold_class_box.grid(row=1, column=1, sticky="we", padx=(6, 0))
-        for box in (self.gold_nation_box, self.gold_class_box):
+        self.gold_tier_label = tk.Label(self.shop_panel, text="")
+        self.gold_tier_label.grid(row=2, column=0, sticky="w", pady=(4, 4))
+        self.gold_tier_box = self._ttk.Combobox(
+            self.shop_panel, textvariable=self.gold_tier, state="readonly")
+        self.gold_tier_box.grid(row=2, column=1, sticky="we", padx=(6, 0))
+        for box in (self.gold_nation_box, self.gold_class_box, self.gold_tier_box):
             box.bind("<<ComboboxSelected>>", self._filter_gold_shop)
         self.gold_vehicle_label = tk.Label(self.shop_panel, text="")
-        self.gold_vehicle_label.grid(row=2, column=0, sticky="w")
+        self.gold_vehicle_label.grid(row=3, column=0, sticky="w")
         self.gold_vehicle = tk.StringVar(value="")
         self.gold_vehicle_box = self._ttk.Combobox(
             self.shop_panel, textvariable=self.gold_vehicle, values=(),
             state="readonly", width=48)
-        self.gold_vehicle_box.grid(row=2, column=1, sticky="we", padx=(6, 0))
+        self.gold_vehicle_box.grid(row=3, column=1, sticky="we", padx=(6, 0))
         self.gold_vehicle_box.bind("<<ComboboxSelected>>", self._update_vehicle_add_button)
         shop_actions = tk.Frame(self.shop_panel)
         shop_actions.grid(
-            row=3, column=0, columnspan=2, sticky="we", pady=(6, 0))
+            row=4, column=0, columnspan=2, sticky="we", pady=(6, 0))
         self.buy_gold_vehicle_button = tk.Button(
             shop_actions, text="", command=self._buy_gold_vehicle)
         self.buy_gold_vehicle_button.pack(side="left", fill="x", expand=True)
@@ -1070,7 +1077,7 @@ class LauncherWindow(object):
             self.shop_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.shop_help_label.grid(
-            row=4, column=0, columnspan=2, sticky="we", pady=(8, 0))
+            row=5, column=0, columnspan=2, sticky="we", pady=(8, 0))
         self.shop_panel.grid_columnconfigure(1, weight=1)
 
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(
@@ -1812,10 +1819,8 @@ class LauncherWindow(object):
             state = self._t("queued")
         else:
             state = ""
-        if state:
-            return self._t("%s - tier %d (%s)") % (
-                offer["label"], offer["level"], state)
-        return self._t("%s - tier %d") % (offer["label"], offer["level"])
+        label = '%s (%s)' % (offer['label'], offer['name'])
+        return '%s (%s)' % (label, state) if state else label
 
     def _gold_catalogue(self, game_root):
         """Return the client's gold vehicles, read once per game folder.
@@ -1834,6 +1839,7 @@ class LauncherWindow(object):
     def _refresh_gold_shop(self, status=None):
         old_nation=getattr(self,'_gold_nation_by_label',{}).get(self.gold_nation.get())
         old_class=getattr(self,'_gold_class_by_label',{}).get(self.gold_class.get())
+        old_tier=getattr(self,'_gold_tier_by_label',{}).get(self.gold_tier.get())
         game_root = (status or {}).get("path") or self.game_root.get().strip()
         try:
             offers = gold_shop.list_offers(
@@ -1847,6 +1853,7 @@ class LauncherWindow(object):
         self._gold_offers = offers
         self.gold_nation_label.config(text=self._t("Nation"))
         self.gold_class_label.config(text=self._t("Vehicle type"))
+        self.gold_tier_label.config(text=self._t("Tier"))
         self._gold_nation_by_label = {self._t("All"): None}
         self._gold_nation_by_label.update(
             (nation_choices.caption(nation,self._t), nation)
@@ -1855,9 +1862,13 @@ class LauncherWindow(object):
         self._gold_class_by_label.update(
             (self._t(label), name)
             for name, label in vehicle_editor_ui.VEHICLE_CLASS_LABELS)
+        self._gold_tier_by_label = {self._t('All'): None}
+        self._gold_tier_by_label.update((str(level),level) for level in sorted(set(
+            row['level'] for row in offers if isinstance(row.get('level'),int))))
         for box, variable, choices, selected in (
                 (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label,old_nation),
-                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class)):
+                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class),
+                (self.gold_tier_box, self.gold_tier, self._gold_tier_by_label,old_tier)):
             box.config(values=tuple(choices))
             variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
@@ -1867,12 +1878,15 @@ class LauncherWindow(object):
         selected = self._gold_offer_by_label.get(self.gold_vehicle.get())
         nation = self._gold_nation_by_label.get(self.gold_nation.get())
         vehicle_class = self._gold_class_by_label.get(self.gold_class.get())
+        level = self._gold_tier_by_label.get(self.gold_tier.get())
         self._gold_offer_by_label = {}
         values = []
         for offer in self._gold_offers:
             if nation is not None and offer["nation"] != nation:
                 continue
             if vehicle_class is not None and offer.get("vehicleClass") != vehicle_class:
+                continue
+            if level is not None and offer.get('level') != level:
                 continue
             label = self._gold_offer_label(offer)
             self._gold_offer_by_label[label] = offer["name"]

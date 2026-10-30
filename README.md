@@ -509,6 +509,14 @@ creation marker never replenishes existing named saves, career saves, used
 stock, or sold stock. IGR descriptors are labeled as internet-cafe items;
 ownership does not waive their native vehicle or token restrictions.
 
+Garage additions, Members and Appearance inventory also offer a tier filter
+after vehicle type. Garage labels use the same name/internal-ID form as
+Members. Exact lineup tier controls narrow the candidate lists only; choosing
+a vehicle explicitly changes the slot. They do not rewrite existing or random
+assignments. Clear the tier filter to choose the ordinary random-vehicle mode.
+The vehicle modifier uses two aligned rows of three selectors: nation/type/tier
+above vehicle/modification category/field, with localized garage-order nations.
+
 A new save is created as one of two accounts, and the choice is permanent. A
 fully unlocked save is the historical garage: every vehicle, module and
 consumable is already owned. A new account starts the way a real World of Tanks

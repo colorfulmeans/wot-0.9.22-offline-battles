@@ -15,6 +15,10 @@ CLASSES = ((None, 'All'), ('lightTank', 'Light tank'), ('mediumTank', 'Medium ta
 ZH = {
     'Exact Bot lineup: %s': '自定义 Bot 阵容：%s', 'Team 1 Bot': '队伍 1 Bot',
     'Team 2 Bot': '队伍 2 Bot', 'Nation': '国家', 'Type': '类型', 'Vehicle': '车辆',
+    'Tier': '级别', 'Each': '各槽位',
+    'Choose a filtered vehicle': '请选择筛选后的车辆',
+    'Tier filters only narrow the vehicle lists; choose a vehicle to change a slot.':
+    '级别仅筛选车辆列表；选择车辆后才修改槽位。',
     'Difficulty': '难度', 'All': '全部', 'Light tank': '轻坦', 'Medium tank': '中坦',
     'Heavy tank': '重坦', 'Tank destroyer': '坦歼', 'SPG': '自行火炮',
     'Random vehicle': '随机车辆', 'Empty / do not participate': '空槽／不参战',
@@ -56,6 +60,7 @@ class BotLineupEditorWindow:
         self.language, self._log = language, log or (lambda unused: None)
         self._rows, self._bulk, self._choices = {}, {}, []
         self._bulk_states = {1: {}, 2: {}}
+        self._tier_filters = {}
         self._parent = parent
         self._draft = profiles.runtime_assignments(store, profile_name)
         self._original = copy.deepcopy(self._draft)
@@ -75,26 +80,28 @@ class BotLineupEditorWindow:
         frame = self._ttk.Frame(self.root, padding=12)
         frame.pack(fill='both', expand=True)
         note = 'Slots keep their numbers. Humans replace enabled slots from first to last. Random difficulty is drawn once per Bot per round from the mixed distribution. Explicit tactics may override difficulty. Changes apply after saving and restarting the room.'
-        self._ttk.Label(frame, text=self._t(note), wraplength=1180).grid(row=0, column=0, columnspan=10, sticky='w', pady=(0, 8))
+        self._ttk.Label(frame, text=self._t(note)+'\n'+self._t(
+            'Tier filters only narrow the vehicle lists; choose a vehicle to change a slot.'),
+            wraplength=1180).grid(row=0, column=0, columnspan=12, sticky='w', pady=(0, 8))
         for team in (1, 2):
-            offset = (team - 1) * 5
-            for column, text in enumerate(('Team %d Bot' % team, 'Nation', 'Type', 'Vehicle', 'Difficulty')):
+            offset = (team - 1) * 6
+            for column, text in enumerate(('Team %d Bot' % team, 'Nation', 'Type', 'Tier', 'Vehicle', 'Difficulty')):
                 self._ttk.Label(frame, text=self._t(text)).grid(row=1, column=offset+column, sticky='w', padx=3)
             self._make_row(frame, 2, team, None, offset)
             for slot in range(15):
                 self._make_row(frame, slot+3, team, slot, offset)
-            frame.columnconfigure(offset+3, weight=1)
+            frame.columnconfigure(offset+4, weight=1)
         self.status = tk.StringVar(value='')
-        self._ttk.Label(frame, textvariable=self.status).grid(row=18, column=0, columnspan=10, sticky='w', pady=8)
-        self._ttk.Button(frame, text=self._t('Save'), command=self._save).grid(row=19, column=0, columnspan=5, sticky='we', padx=(0, 4))
-        self._ttk.Button(frame, text=self._t('Close'), command=self._close).grid(row=19, column=5, columnspan=5, sticky='we', padx=(4, 0))
+        self._ttk.Label(frame, textvariable=self.status).grid(row=18, column=0, columnspan=12, sticky='w', pady=8)
+        self._ttk.Button(frame, text=self._t('Save'), command=self._save).grid(row=19, column=0, columnspan=6, sticky='w', padx=(0, 4))
+        self._ttk.Button(frame, text=self._t('Close'), command=self._close).grid(row=19, column=6, columnspan=6, sticky='e', padx=(4, 0))
 
     def _make_row(self, frame, gridrow, team, slot, offset):
         self._ttk.Label(frame, text=self._t('All') if slot is None else str(slot+1)).grid(row=gridrow, column=offset, padx=3)
         row = {}
-        for column, field in enumerate(('nation', 'vehicle_class', 'vehicle', 'skill'), 1):
+        for column, field in enumerate(('nation', 'vehicle_class', 'tier', 'vehicle', 'skill'), 1):
             row[field] = self._tk.StringVar(value='')
-            width = {'nation': 20, 'vehicle_class': 20, 'vehicle': 28, 'skill': 27}[field]
+            width = {'nation': 16, 'vehicle_class': 15, 'tier': 6, 'vehicle': 25, 'skill': 24}[field]
             box = self._ttk.Combobox(frame, textvariable=row[field], state='readonly', width=width)
             box.grid(row=gridrow, column=offset+column, sticky='we', padx=3, pady=1)
             row[field+'_box'] = box
@@ -128,28 +135,39 @@ class BotLineupEditorWindow:
         label = row[field].get()
         return next((value for value, caption in row[field+'_options'] if caption == label), None)
 
-    def _pool(self, state):
+    def _pool(self, state, tier=None):
         return [c for c in self._choices if
                 (not state.get('nation') or c['nation'] == state['nation']) and
-                (not state.get('vehicle_class') or c.get('vehicleClass') == state['vehicle_class'])]
+                (not state.get('vehicle_class') or c.get('vehicleClass') == state['vehicle_class']) and
+                (tier is None or c.get('level') == tier)]
 
     def _render_row(self, row, state, bulk=False):
         prefix = [(INDIVIDUAL, 'Individual slot settings')] if bulk else []
         nations = [(None, 'All')] + [(n, nation_choices.EN_NAMES[n]) for n in nation_choices.ordered(c['nation'] for c in self._choices)]
         self._populate(row, 'nation', self._options(prefix+nations), state.get('nation', INDIVIDUAL if bulk else None))
         self._populate(row, 'vehicle_class', self._options(prefix+list(CLASSES)), state.get('vehicle_class', INDIVIDUAL if bulk else None))
+        key = (state.get('team'), state.get('slot'))
+        tier = self._tier_filters.get(key)
+        tier_options = ([(INDIVIDUAL, self._t('Each'))] if bulk else []) + [(None, self._t('All'))]
+        tier_options += [(level,str(level)) for level in sorted(set(c['level'] for c in self._choices))]
+        self._populate(row, 'tier', tier_options, tier)
         vehicles = ([(CLEAR, self._t('Clear all slots in this team')), (INDIVIDUAL, self._t('Individual slot settings'))] if bulk else [(None, self._t('Empty / do not participate'))])
-        vehicles += [(RANDOM, self._t('Random vehicle'))] + [(c['type_name'], c['caption']) for c in self._pool(state)]
-        if state.get('vehicle') and not any(v == state['vehicle'] for v, label in vehicles):
+        vehicles += ([(RANDOM, self._t('Random vehicle'))] if tier is None else [])
+        vehicles += [(c['type_name'], c['caption']) for c in self._pool(state, tier)]
+        selected = state.get('vehicle', RANDOM) if state.get('enabled') else (INDIVIDUAL if bulk else None)
+        if tier is not None and selected not in (None, CLEAR, INDIVIDUAL) and not any(v == selected for v, label in vehicles):
+            vehicles.insert(0, (INDIVIDUAL, self._t('Choose a filtered vehicle')))
+            selected = INDIVIDUAL
+        elif state.get('vehicle') and not any(v == state['vehicle'] for v, label in vehicles):
             vehicles.append((state['vehicle'], self._t('Unavailable vehicle: %s') % state['vehicle']))
-        self._populate(row, 'vehicle', vehicles, state.get('vehicle', RANDOM) if state.get('enabled') else (INDIVIDUAL if bulk else None))
+        self._populate(row, 'vehicle', vehicles, selected)
         self._populate(row, 'skill', self._options(prefix+list(SKILL_CHOICES)), state.get('skill', INDIVIDUAL if bulk else None))
 
     def _render(self):
         for state in self._draft:
             self._render_row(self._rows[(state['team'], state['slot'])], state)
         for team in (1, 2):
-            self._render_row(self._bulk[team], self._bulk_states[team], True)
+            self._render_row(self._bulk[team], dict(self._bulk_states[team], team=team, slot=None), True)
         self._update_status()
 
     def _update_status(self):
@@ -185,6 +203,14 @@ class BotLineupEditorWindow:
         row = self._bulk[team] if slot is None else self._rows[(team, slot)]
         value = self._read(row, field)
         if value == INDIVIDUAL:
+            return
+        if field == 'tier':
+            # A browsing filter must not rewrite exact/random assignments.
+            for state in self._draft:
+                if state['team'] == team and (slot is None or state['slot'] == slot):
+                    self._tier_filters[(team, state['slot'])] = value
+            self._tier_filters[(team, slot)] = value
+            self._render()
             return
         targets = [s for s in self._draft if s['team'] == team and (slot is None or s['slot'] == slot)]
         for state in targets:

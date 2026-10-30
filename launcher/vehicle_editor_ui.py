@@ -5,11 +5,12 @@ import math
 import re
 
 try:
-    from . import i18n, vehicle_armor_viewer, vehicle_overlays
+    from . import i18n, vehicle_armor_viewer, vehicle_overlays, nation_choices
 except ImportError:
     import i18n
     import vehicle_armor_viewer
     import vehicle_overlays
+    import nation_choices
 
 
 DEFAULT_MEMBER = "scripts/item_defs/vehicles/ussr/R11_MS-1.xml"
@@ -42,10 +43,14 @@ _CHINESE = {
         "res_mods 之外，会在单人游戏使用该方案、或您开房时固定该方案时生效。"
         "共用的火炮、发动机等部件会列出所有受影响的车辆。ID、资源路径、"
         "数据结构和未知属性不可修改。",
-    "Nation": "系别",
+    "Nation": "国家",
+    "china": "中国", "ussr": "苏联", "usa": "美国", "germany": "德国",
+    "czech": "捷克", "france": "法国", "uk": "英国", "japan": "日本",
+    "poland": "波兰", "sweden": "瑞典",
+    "Modification category": "修改类别",
     "Only nations found in the original vehicle definitions.":
         "只显示原始车辆数据中存在的系别。",
-    "Type": "类型",
+    "Type": "坦克类型",
     "Tier": "级别",
     "All": "全部",
     "Narrow the vehicle list to one original vehicle class or tier.":
@@ -293,26 +298,25 @@ class VehicleEditorWindow(object):
         self.bot_exclusion_button.grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
-        row = 2
-        row, self.nation_box = self._selector_row(
-            frame, row, "Nation", self.nation,
-            "Only nations found in the original vehicle definitions.")
-        row, (self.vehicle_class_box, self.tier_box) = self._filter_row(
-            frame, row,
-            "Narrow the vehicle list to one original vehicle class or "
-                "tier.",
-            (("Type", self.vehicle_class, 18),
-             ("Tier", self.tier, 8)))
-        row, self.vehicle_box = self._selector_row(
-            frame, row, "Vehicle", self.vehicle,
-            "Type to search the vehicles left by these filters, then "
-                "choose one or press Enter.", editable=True)
-        row, self.category_box = self._selector_row(
-            frame, row, "Category", self.category,
-            "Only categories with an existing safe field are shown.")
-        row, self.field_box = self._selector_row(
-            frame, row, "Field", self.field,
-            "The exact package member and field path stay internal.")
+        selectors = tk.Frame(frame)
+        selectors.grid(row=2, column=0, columnspan=3, sticky='we', pady=(0, 8))
+        boxes = []
+        entries = (("Nation", self.nation), ("Type", self.vehicle_class),
+                   ("Tier", self.tier), ("Vehicle", self.vehicle),
+                   ("Modification category", self.category), ("Field", self.field))
+        for index, (label, variable) in enumerate(entries):
+            column, line = index % 3, (index // 3) * 2
+            self._widget(tk.Label, selectors, text=label, anchor='w').grid(
+                row=line, column=column, sticky='w', padx=(0, 8))
+            box = self._ttk.Combobox(selectors, textvariable=variable,
+                values=(), width=(28, 22, 32)[column],
+                state='normal' if index == 3 else 'readonly')
+            box.grid(row=line+1, column=column, sticky='we', padx=(0, 8), pady=(0, 8))
+            boxes.append(box)
+            selectors.grid_columnconfigure(column, weight=(3, 2, 3)[column])
+        (self.nation_box, self.vehicle_class_box, self.tier_box,
+         self.vehicle_box, self.category_box, self.field_box) = boxes
+        row = 3
         self.nation_box.bind("<<ComboboxSelected>>", self.refresh_vehicles)
         self.vehicle_class_box.bind(
             "<<ComboboxSelected>>", self.refresh_vehicles)
@@ -409,6 +413,7 @@ class VehicleEditorWindow(object):
         if language == self._language:
             return
         tag, level = self._selected_vehicle_class(), self._selected_tier()
+        nation = self._selected_nation()
         record = self._field_by_label.get(self.field.get().strip())
         category = next((r['categoryLabel'] for r in self._fields
                          if self._category_label(r['categoryLabel']) == self.category.get()), None)
@@ -417,6 +422,7 @@ class VehicleEditorWindow(object):
         for widget, text, args in self._language_widgets:
             widget.config(text=self._t(text) % args if args else self._t(text))
         self._refresh_filter_options()
+        self._refresh_nation_options(nation)
         self.vehicle_class.set(next(k for k, v in self._class_by_label.items() if v == tag))
         self.tier.set(next(k for k, v in self._tier_by_label.items() if v == level))
         categories = list(dict.fromkeys(self._category_label(r['categoryLabel']) for r in self._fields))
@@ -629,11 +635,7 @@ class VehicleEditorWindow(object):
             key=lambda choice: (
                 choice["nation"], self._choice_label(choice).casefold(),
                 choice["vehicle"]))
-        nations = sorted(set(choice["nation"] for choice in choices))
-        self.nation_box.config(values=tuple(nations))
-        if self.nation.get().strip() not in nations:
-            self.nation.set(
-                DEFAULT_NATION if DEFAULT_NATION in nations else nations[0])
+        self._refresh_nation_options(self._selected_nation())
         self._refresh_filter_options()
         return self.refresh_vehicles()
 
@@ -666,6 +668,18 @@ class VehicleEditorWindow(object):
         if self.tier.get().strip() not in self._tier_by_label:
             self.tier.set(all_label)
 
+    def _selected_nation(self):
+        value = self.nation.get().strip()
+        return getattr(self, '_nation_by_label', {}).get(value, value)
+
+    def _refresh_nation_options(self, selected):
+        nations = nation_choices.ordered(choice['nation'] for choice in self._vehicle_choices)
+        self._nation_by_label = {nation_choices.caption(n, self._t): n for n in nations}
+        self.nation_box.config(values=tuple(self._nation_by_label))
+        if selected not in nations:
+            selected = DEFAULT_NATION if DEFAULT_NATION in nations else nations[0]
+        self.nation.set(next(label for label, nation in self._nation_by_label.items() if nation == selected))
+
     def _selected_vehicle_class(self):
         return self._class_by_label.get(self.vehicle_class.get().strip())
 
@@ -684,10 +698,16 @@ class VehicleEditorWindow(object):
         return self.refresh_catalog()
 
     def refresh_vehicles(self, unused_event=None):
-        nation = self.nation.get().strip()
+        nation = self._selected_nation()
         choices = self._visible_vehicle_choices(nation)
         self._show_vehicle_choices(choices)
         if not choices:
+            self.vehicle.set('')
+            self._selected_vehicle_choice = None
+            self._fields = []
+            self._field_by_label = {}
+            self.category.set(''); self.field.set('')
+            self.category_box.config(values=()); self.field_box.config(values=())
             return self._show_error(
                 self._no_vehicle_message(), clear_contract=True)
         selected = self.vehicle.get().strip()
@@ -722,7 +742,7 @@ class VehicleEditorWindow(object):
 
     def _visible_vehicle_choices(self, nation=None):
         """Return the catalog narrowed by nation, class and tier."""
-        nation = self.nation.get().strip() if nation is None else nation
+        nation = self._selected_nation() if nation is None else nation
         vehicle_class = self._selected_vehicle_class()
         level = self._selected_tier()
         return [
@@ -783,7 +803,7 @@ class VehicleEditorWindow(object):
             self._choice_label(self._selected_vehicle_choice)
             if (self._selected_vehicle_choice is not None and
                 self._selected_vehicle_choice.get("nation") ==
-                self.nation.get().strip()) else None)
+                self._selected_nation()) else None)
         if selected_label == self.vehicle.get().strip():
             return True
         self.apply_button.config(state="disabled")

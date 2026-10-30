@@ -11180,3 +11180,29 @@ a termination dump without an exception stream, and neither native trail
 records an exception. This is not a proved native fault or a repaired cause.
 Both later normal-menu shutdowns completed; retain the earlier termination as
 an unresolved isolated observation. Raw reports remain local, not uploaded.
+
+### Launcher tier filters and aligned modifier selectors (2026-10-30)
+
+Garage additions, Members and independent/preset appearance inventory expose
+catalog-derived tier choices after type. They intersect the existing nation,
+class, garage ownership and search filters. Empty results clear the visible
+vehicle selection and cannot add a hidden previous target. Garage labels now
+use the Members name/internal-ID form, retaining owned/queued status separately.
+The modifier has two rows of three selectors, sharing column widths between
+rows: nation/type/tier and vehicle/modification category/field. Nations use the
+existing garage order and localized captions while retaining canonical IDs.
+Language changes preserve canonical nation, tier and uncommitted field input.
+
+Lineup adds a compact tier column to each team, including bulk selection.
+These are browsing filters, never persisted assignment rules: filtering cannot
+disable slots, erase exact vehicles, change difficulty or constrain a random
+runtime draw. A hidden prior selection shows an explicit choose-filtered-vehicle
+placeholder. Selecting a concrete candidate changes the assignment; Random
+vehicle is available again with All tiers. Existing nation/class/difficulty
+and sparse slot persistence retain their previous behavior and schema.
+
+Local final-source validation passed all 39 launcher test files. Regressions
+exercise intersecting/empty tiers, canonical identities across language changes,
+add-only exterior quantities, and lineup bulk tier browsing without assignment
+mutation followed by explicit selection and save/reopen. Actual Windows window
+inspection and exact pushed-head CI are recorded after their completion below.
