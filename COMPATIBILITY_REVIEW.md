@@ -1,5 +1,74 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Final package acceptance and subsequent gameplay audit (October 30)
+
+Shipping production source is c3c1d279d6bbf3936b824cb1da94109d53cfa38d.
+`PR116-fixes-c3c1d27.zip` is build colorfulmeans-41064767596-1;
+Full Tests 41064767736 and Battle review package 41064767596 both passed.
+Archive integrity and installed package inspection passed; all 224 packaged
+client modules match this source. Final targeted checks passed 441 tests;
+the three editor files passed 49 tests including real Tk containment. The
+full launcher check encountered two live-game guards while the client was
+running; after closing it, both affected files passed (344 tests). This does
+not relabel the earlier broad local run's missing dependencies as successes.
+
+The final packaged editor visibly retains both selector rows, equal nation and
+category widths, distinct resource-qualified 113 entries, and the simplified
+transparent hull outline with internal modules. Selecting a module showed its
+localized radio caption. No vehicle attribute modifications were saved.
+The final native mission page visibly showed 715/8000 assistance, separate
+ordinary objectives, stable completed-card placement, and the tier IX rental
+credit substitute appropriate to this all-permanent QA inventory. Seven cards
+were observed live; eight/nine-card calendar dates have parser/test evidence,
+not live-client acceptance. Launcher-added gold and a crew member reached the
+account, typed native envelopes were admitted, and the durable outbox emptied.
+The invoice history itself was not captured visibly and remains a presentation
+acceptance boundary.
+
+Diagnostic session 20261030T135651Z-4867fedb9429 completed Lakeville and
+Mittengard battles. The report generated at local 22:30:02 includes all four
+log roles and both native exception trails. No Python ERROR/CRITICAL/traceback
+or fragmented-evidence parsing failures were found. Both native exception
+trails contain headers only. Across 2,562 wreck aim samples there were zero
+read failures and zero attached turret/gun discrepancies. Both sound roles
+reported zero diagnostic errors; this is not an audible playback guarantee.
+The Lakeville result advanced current tasks and paid two newly completed goals
+without paying previously claimed goals again. Battle bond rules were unchanged.
+An earlier, superseded 8d486d4 session ended with worker exit 1 and a termination
+dump, without an exception stream identifying a cause. That incident remains
+unresolved; the final two-battle session did not repeat it.
+
+Read-only gameplay audit after acceptance:
+
+- Premature reserve-route allocation is confirmed. The shared allocator counts
+  three vehicles of all classes per physical route before preferring reserves.
+  In Mittengard, WZ131 and AMX 13 75 received reserve orders from spawn, with no
+  route-switch reason. Current owner-reviewed main routes were connected;
+  this was allocation policy, not proof of invalid authored paths. The user
+  approved a NEXT-package limit of five total and three of one class, trying
+  eligible primary roads first. Physical-road counts must remain shared across
+  class variants and independent across teams; SPG parking remains separate.
+  Existing tests explicitly codify the old three-total policy and must change
+  together with that implementation. No such gameplay change is in this ZIP.
+- Lakeville enemy Skoda T50 (bot 5) was pushed uphill, increasing its authoritative
+  height and hull tilt. A later dead-vehicle sample reports native solid contact
+  and rejects inward movement. An earlier stationary segment was an arrived
+  magazine-reload retreat. These facts do not establish or disprove the user's
+  observed terrain penetration; direct body/terrain overlap evidence is missing.
+- Lakeville Rhm. Pzw. (bot 27) left its lake-road elevation, descended from about
+  0.49 to -13.31 metres and then died. Drowning is consistent with this sequence,
+  but a direct death-reason/water-sensor record is absent. Terminal reason,
+  water level and drowning timer are diagnostic follow-ups, not a proven fix.
+- The destructible source retains a soft-vegetation health <=5 comment, while
+  its actual tree health admission is 0 < health <=1000. A blanket low-health
+  prohibition has not been restored. Descriptor health, remaining structure
+  health, object category, destruction and passability must be distinguished;
+  rejecting destruction in a contact-admission path can affect navigation.
+
+Holiday tasks, first-win calendar multipliers and ammunition behavior were not
+changed during this audit. The existing main-shell return policy counts fired
+probe shells independently of their subsequent hit/penetration result.
+
 ## October 30: ordinary missions, native notices and current test inputs
 
 ### Follow-up: audited notification losses and native progress presentation
