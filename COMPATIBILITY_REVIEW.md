@@ -70,6 +70,15 @@ No generic module boxes, fitting/rescaling or invented missing geometry is
 drawn. Missing data prompts on selection. This provenance is stated in the
 viewer; component-frame agreement is not proof of identical PC internal meshes.
 
+The user's follow-up adds a transparent shell in interior mode. It is a
+simplified projected convex envelope per selected stock component, with
+sub-pixel curvature removed. It draws no filled armor or triangulation lines,
+shares the interior camera, and does not intercept module selection. This
+is approximate spatial context, not a replacement collision/armor model.
+The armor view itself remains unchanged. Four viewer/editor test files passed
+locally, including a regression for an unfilled four-corner envelope, unchanged
+module triangles/picking, and camera rotation.
+
 ### Test baseline review and evidence boundary
 
 `tools/audit_test_baselines.py` inventories all test files, literal battle-start

@@ -1202,7 +1202,7 @@ class ArmorViewerPanel(object):
         self._on_select(key)
         return True
 
-    def _projected_triangles(self, width, height):
+    def _projected_triangles(self, width, height, scene=None):
         if self._scene is None:
             return []
         minimum, maximum = self._scene["bounds"]
@@ -1226,8 +1226,9 @@ class ArmorViewerPanel(object):
                     height * 0.52 - rotated_y * scale, depth)
 
         result = []
-        scene = (self._internal_scene if getattr(self, '_view_mode', 'armor') == 'internal'
-                 else self._scene)
+        if scene is None:
+            scene = (self._internal_scene if getattr(self, '_view_mode', 'armor') == 'internal'
+                     else self._scene)
         for part in (scene or {}).get('parts', ()):
             for surface in part["surfaces"]:
                 for triangle in surface["triangles"]:
@@ -1243,6 +1244,52 @@ class ArmorViewerPanel(object):
                         projected, surface, area))
         result.sort(key=lambda item: item[0])
         return result
+
+    def _projected_shell_outlines(self, width, height):
+        """Transparent, simplified per-component envelopes, never mesh edges.
+
+        Project the selected stock components with the same camera as the
+        interior. A convex screen envelope provides spatial context without
+        implying an accurate armor surface or obscuring the modules.
+        """
+        groups = {}
+        for unused_depth, points, surface, unused_area in self._projected_triangles(
+                width, height, scene=self._scene):
+            key = (surface.get('role'), surface.get('component'))
+            groups.setdefault(key, set()).update(
+                (round(point[0], 1), round(point[1], 1)) for point in points)
+        outlines = []
+        for points in groups.values():
+            points = sorted(points)
+            if len(points) < 3:
+                continue
+
+            def cross(a, b, c):
+                return ((b[0] - a[0]) * (c[1] - a[1]) -
+                        (b[1] - a[1]) * (c[0] - a[0]))
+
+            halves = []
+            for ordered in (points, reversed(points)):
+                half = []
+                for point in ordered:
+                    while len(half) >= 2 and cross(half[-2], half[-1], point) <= 0:
+                        half.pop()
+                    half.append(point)
+                halves.append(half[:-1])
+            hull = halves[0] + halves[1]
+            # Remove sub-pixel curvature; preserve broad corners at every zoom.
+            changed = True
+            while changed and len(hull) > 3:
+                changed = False
+                for index, point in enumerate(hull):
+                    before, after = hull[index - 1], hull[(index + 1) % len(hull)]
+                    length = math.hypot(after[0] - before[0], after[1] - before[1])
+                    if length and abs(cross(before, after, point)) / length < 2.0:
+                        hull.pop(index)
+                        changed = True
+                        break
+            outlines.append(tuple(hull))
+        return outlines
 
     def _redraw(self, unused_event=None):
         width = max(10, int(self.canvas.winfo_width()))
@@ -1269,6 +1316,11 @@ class ArmorViewerPanel(object):
                 outline="#ffffff" if focused else "#242a34",
                 width=2 if focused else 1)
             self._item_surface[item] = surface
+        if getattr(self, '_view_mode', 'armor') == 'internal':
+            for outline in self._projected_shell_outlines(width, height):
+                self.canvas.create_polygon(
+                    [coordinate for point in outline for coordinate in point],
+                    fill='', outline='#a8b1bd', width=1, tags=('shell_outline',))
 
 
 class NullArmorViewerPanel(object):
