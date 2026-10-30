@@ -78,7 +78,11 @@ class OrdinaryMissionsTests(unittest.TestCase):
         class Formatter:
             def _getDescription(self, condition): return 'stock description'
         groups = types.SimpleNamespace(missionsSortFunc=lambda a, b: -99,
-            _MarathonQuestsBlockInfo=type('Marathon',(),{'_findEvents':lambda *args: []}))
+            _MarathonQuestsBlockInfo=type('Marathon',(),{'_findEvents':lambda *args: [],
+                '_getVO': lambda *args: 'stock marathon'}),
+            _UngroupedQuestsBlockInfo=types.SimpleNamespace(_getGuiLinkages=lambda: {
+                'headerLinkage':'stock category header','bodyLinkage':'stock marathon cards'}),
+            _getMissionsCountLabel=lambda a,b: '%d/%d' % (a,b))
         bonus = types.ModuleType('gui.server_events.cond_formatters.bonus')
         bonus.BattlesCountFormatter = Formatter
         formatters = types.ModuleType('gui.server_events.cond_formatters')
@@ -101,6 +105,20 @@ class OrdinaryMissionsTests(unittest.TestCase):
         self.assertEqual(1, groups.missionsSortFunc(
             event('offline_daily_v3_1_win1', 100), event('offline_daily_v3_1_vehicle_hard_day', 90)))
         self.assertEqual(-99, groups.missionsSortFunc(event('personal_1', 100), event('other', 90)))
+        block=groups._MarathonQuestsBlockInfo()
+        block._group=types.SimpleNamespace(getID=lambda:'marathon:offline_prizes:simple')
+        block._events=[types.SimpleNamespace(isCompleted=lambda:False) for _ in range(3)]
+        block.getEventsBlockID=lambda:'simple'
+        block._getBodyData=lambda:['day','week','month']
+        block.getTitleBlock=lambda:{'title':'Simple'}
+        rendered=block._getVO()
+        self.assertEqual('stock category header',rendered['headerLinkage'])
+        self.assertEqual(['day','week','month'],rendered['bodyData'])
+        self.assertEqual('0/3',rendered['headerData']['descBlock']['descr'])
+        self.assertFalse(rendered['headerData']['descBlock']['hasCalendarIcon'])
+        self.assertNotIn('conditionBlock',rendered['headerData'])
+        block._group.getID=lambda:'marathon:retail'
+        self.assertEqual('stock marathon',block._getVO())
 
     def test_yesterdays_receipt_cannot_finish_tasks_after_midnight_before_another_battle(self):
         with mock.patch.object(self.policy, 'assignments', return_value=['crit7']):

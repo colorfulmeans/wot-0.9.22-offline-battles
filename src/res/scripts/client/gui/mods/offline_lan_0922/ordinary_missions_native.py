@@ -189,13 +189,26 @@ def install_presentation(patch):
     patch(group_packers, 'missionsSortFunc', compare)
     # The stock marathon finder normally removes one headline token quest.
     # Our twelve independently paid objectives have no headline token: retain
-    # all three cards and let the existing no-headline header path render them.
+    # all three cards. The marathon header still renders empty token/award
+    # columns without a headline, so use #1513's category header/card linkage.
     original_find = group_packers._MarathonQuestsBlockInfo._findEvents
     def strategic_events(block, events):
         if as_text(block._group.getID()).startswith('marathon:offline_prizes:'):
             return block._group.getGroupContent(events)
         return original_find(block, events)
     patch(group_packers._MarathonQuestsBlockInfo, '_findEvents', strategic_events)
+    original_vo = group_packers._MarathonQuestsBlockInfo._getVO
+    def strategic_vo(block):
+        if not as_text(block._group.getID()).startswith('marathon:offline_prizes:'):
+            return original_vo(block)
+        result = group_packers._UngroupedQuestsBlockInfo._getGuiLinkages()
+        result.update(blockId=block.getEventsBlockID(), bodyData=block._getBodyData(),
+            headerData={'titleBlock': block.getTitleBlock(), 'descBlock': {
+                'descr': group_packers._getMissionsCountLabel(
+                    sum(event.isCompleted() for event in block._events), len(block._events)),
+                'period': '', 'hasCalendarIcon': False, 'isMultiline': False}})
+        return result
+    patch(group_packers._MarathonQuestsBlockInfo, '_getVO', strategic_vo)
 
 
 def sync(snapshot, now=None):
