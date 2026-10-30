@@ -545,12 +545,14 @@ class PostBattleContractTests(unittest.TestCase):
                     'isWinner', 'team', 'winnerIfDraw', 'guiType',
                     'arenaUniqueID', 'offlineDailyMissions',
                     'offlinePersonalMissions',
+                    'dailyXPFactor', 'xpPenalty', 'creditsPenalty',
+                    'creditsContributionIn', 'creditsContributionOut',
                 }, set(service_data))
                 self.assertEqual(receipt['arena_unique_id'],
                                  service_data['arenaUniqueID'])
                 # The per-vehicle entry now carries the mastery class the
                 # hangar message names; this battle earned none.
-                self.assertEqual({50001: {'markOfMastery': 0}},
+                self.assertEqual({50001: {'markOfMastery': 0, 'popUpRecords': []}},
                                  service_data['playerVehicles'])
             finally:
                 postbattle_store._vehicle_type_compact_descr = original_vehicle
@@ -1299,26 +1301,29 @@ class PostBattleContractTests(unittest.TestCase):
                 self.assertTrue(lan_client_module._valid_battle_receipt(receipt))
                 self.assertEqual(receipt, lan_server_module.
                                  _persisted_result_receipt(dict(receipt)))
-                snapshot = {'dailyMissions': {
-                    'day': 1, 'battles': 2, 'damage': 2999,
-                    'wins': 0, 'claimed': []}}
+                from gui.mods.offline_lan_0922 import ordinary_missions
+                from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+                snapshot = {'dailyMissions': {'schema': ordinary_missions.SCHEMA,
+                    'day': 1, 'missions': ['participate3'], 'claimed': [],
+                    'progress': {'participate3': {'battles': 1}}, 'rewards': {}}}
+                owner = GarageState(snapshot)
+                snapshot = owner.snapshot()
                 applied = []
                 store = postbattle_store.PostBattleStore(path=None)
                 store._account_key = player.account_key
                 def settle(row):
                     applied.append(row['receipt_id'])
-                    return {'daily_reserves': offline_services.advance_daily(
-                        snapshot, {'premature_leave': row['premature_leave'],
-                                   'damage': row['stats']['damage'],
-                                   'won': row['winner'] == row['team']}, 86402)}
+                    with mock.patch.object(ordinary_missions, 'assignments',
+                                           return_value=['participate3']), \
+                            mock.patch.object(ordinary_missions.time, 'time', return_value=86402):
+                        return {'ordinary_missions': ordinary_missions.advance(owner, row, 86402)}
                 store.set_progress_applier(settle)
                 self.assertTrue(store.accept(receipt))
                 self.assertFalse(store.accept(receipt))
                 self.assertEqual([receipt['receipt_id']], applied)
-                self.assertEqual(2 if abandoned else 3,
-                                 snapshot['dailyMissions']['battles'])
-                self.assertEqual([] if abandoned else ['battles', 'damage', 'wins'],
-                                 snapshot['dailyMissions']['claimed'])
+                self.assertEqual(1 if abandoned else 2,
+                    snapshot['dailyMissions']['progress']['participate3']['battles'])
+                self.assertEqual([], snapshot['dailyMissions']['claimed'])
                 self.assertEqual(watched, store.should_show_immediately(
                     receipt['arena_unique_id']))
                 stats = store.progress()['vehicles'][player.vehicle]

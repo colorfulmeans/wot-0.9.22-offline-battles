@@ -87,10 +87,13 @@ def _style_name(identifier):
 
 def queue_notification(snapshot, settlement):
     """Commit the notice with its assets; native delivery happens in lobby."""
-    if not messages(settlement):
+    if not (settlement.get('ordinary_missions') or settlement.get('rental_expired') or messages(settlement)):
         return False
     import copy
     import uuid
+    import time
+    settlement = copy.deepcopy(settlement)
+    settlement.setdefault('notification_at', int(time.time()))
     snapshot.setdefault('personalMissionNotifications', []).append({
         'id': uuid.uuid4().hex, 'settlement': copy.deepcopy(settlement)})
     return True
@@ -310,11 +313,7 @@ def messages(settlement):
     return lines
 
 
-def notify(settlement):
+def notify(settlement, identifier=None):
     """Deliver one native message; propagate failure for receipt-level retry."""
-    lines = messages(settlement)
-    if not lines:
-        return False
-    from gui import SystemMessages
-    SystemMessages.pushMessage(u'\n'.join(lines), type=SystemMessages.SM_TYPE.Information)
-    return True
+    from gui.mods.offline_lan_0922.native_notifications import publish_settlement
+    return publish_settlement(settlement, identifier)

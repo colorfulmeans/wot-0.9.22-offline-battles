@@ -80,7 +80,8 @@
       "eqsLayout",
       "shells",
       "shellsLayout",
-      "lock"
+      "lock",
+      "rent"
     ],
     "selectedVehicleTupleArities": {"repair": 2, "lock": 2},
     "selectedVehicleSequenceLengths": {"eqs": 3, "eqsLayout": 3},

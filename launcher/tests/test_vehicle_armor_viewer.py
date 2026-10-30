@@ -197,6 +197,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_projection_depth_sorts_and_keeps_finite_screen_points(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._scene = {
             "bounds": ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
             "parts": ({"surfaces": ({
@@ -225,6 +226,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_focus_field_reports_when_the_collision_model_has_no_surface(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._language = viewer.i18n.LANGUAGE_ENGLISH
         panel._scene_error = ""
         panel._focus_key = None
@@ -245,6 +247,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_non_armor_focus_does_not_hide_a_scene_load_error(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._language = viewer.i18n.LANGUAGE_ENGLISH
         panel._scene = None
         panel._scene_error = "Armor model unavailable: stock resource missing"

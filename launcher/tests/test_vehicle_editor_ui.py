@@ -21,6 +21,9 @@ class _Widget(object):
     def grid_columnconfigure(self, *unused, **unused_options):
         pass
 
+    def grid_rowconfigure(self, *unused, **unused_options):
+        pass
+
     def bind(self, event, callback):
         self.options.setdefault("bindings", {})[event] = callback
 

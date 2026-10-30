@@ -183,10 +183,16 @@ class AccountRpcTests(unittest.TestCase):
                             context)
         system = types.SimpleNamespace(pushMessage=mock.Mock(),
             SM_TYPE=types.SimpleNamespace(Information='info'))
-        patch = mock.patch.object(sys.modules['gui'], 'SystemMessages', system,
-                                  create=True)
+        import importlib
+        native = importlib.import_module('gui.mods.offline_lan_0922.native_notifications')
+        patch = mock.patch.object(native, 'publish', system.pushMessage)
         patch.start()
         self.addCleanup(patch.stop)
+        constants = sys.modules.setdefault('constants', types.ModuleType('constants'))
+        invoice_patch = mock.patch.object(constants, 'INVOICE_ASSET',
+            types.SimpleNamespace(DATA=6), create=True)
+        invoice_patch.start()
+        self.addCleanup(invoice_patch.stop)
         return server, state, store, system, saved, context
 
     def test_campaign_outbox_pushes_once_and_acknowledges_shared_garage(self):
@@ -195,7 +201,8 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
         system.pushMessage.assert_called_once()
-        self.assertIn('1234', system.pushMessage.call_args[0][0])
+        self.assertEqual('potapovQuestBonus', system.pushMessage.call_args.args[0])
+        self.assertEqual(1234, system.pushMessage.call_args.args[1]['credits'])
         self.assertEqual({'notice-1'}, delivered)
         self.assertEqual([], state.snapshot()['personalMissionNotifications'])
         self.assertEqual([], saved[0]['personalMissionNotifications'])
@@ -221,13 +228,15 @@ class AccountRpcTests(unittest.TestCase):
         server, state, store, system, saved, unused_context = self._campaign_outbox()
         state.snapshot()['personalMissionNotifications'][0]['settlement'] = {
             'account_changes': [{'phase': 'granted', 'rewards': [
-                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4}]}]}
+                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4,
+                    'passports': ['YQ=='] * 4}]}]}
         delivered = set()
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
         system.pushMessage.assert_called_once()
-        self.assertIn('4321', system.pushMessage.call_args[0][0])
-        self.assertEqual('info', system.pushMessage.call_args[1]['type'])
+        self.assertEqual('invoiceReceived', system.pushMessage.call_args.args[0])
+        self.assertEqual(4321, system.pushMessage.call_args.args[1]['data']['credits'])
+        self.assertEqual(4, len(system.pushMessage.call_args.args[1]['data']['tankmen']))
         self.assertEqual([], saved[0]['personalMissionNotifications'])
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
 

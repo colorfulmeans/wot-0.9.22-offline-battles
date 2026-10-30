@@ -75,7 +75,7 @@ _CHINESE = {
     "Save field to profile": "保存到方案",
     "Clear all edits in this profile...": "清除该方案的全部修改…",
     "Exclude edited vehicles from automatic Bots (exact lineup overrides)":
-        "随机/自动 Bot 不使用受此方案修改影响的车辆（精确阵容除外）",
+        "自动选车时排除本方案修改过的车辆（精确阵容除外）",
     "Bot exclusion option saved.": "已保存 Bot 车辆排除选项。",
     "Choose a vehicle field.": "请选择一项车辆属性。",
     "Choose one listed vehicle field.": "请选择列表中的一项车辆属性。",
@@ -298,25 +298,28 @@ class VehicleEditorWindow(object):
         self.bot_exclusion_button.grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
-        selectors = tk.Frame(frame)
-        selectors.grid(row=2, column=0, columnspan=3, sticky='we', pady=(0, 8))
         boxes = []
         entries = (("Nation", self.nation), ("Type", self.vehicle_class),
                    ("Tier", self.tier), ("Vehicle", self.vehicle),
                    ("Modification category", self.category), ("Field", self.field))
         for index, (label, variable) in enumerate(entries):
-            column, line = index % 3, (index // 3) * 2
+            if index in (0, 4):
+                selectors = tk.Frame(frame)
+                selectors.grid(row=2 if index == 0 else 3, column=0,
+                    columnspan=3, sticky='we', pady=(0, 4))
+            column = index if index < 4 else index - 4
             self._widget(tk.Label, selectors, text=label, anchor='w').grid(
-                row=line, column=column, sticky='w', padx=(0, 8))
+                row=0, column=column, sticky='w', padx=(0, 6))
             box = self._ttk.Combobox(selectors, textvariable=variable,
-                values=(), width=(28, 22, 32)[column],
+                values=(), width=(10, 14, 5, 26, 16, 44)[index],
                 state='normal' if index == 3 else 'readonly')
-            box.grid(row=line+1, column=column, sticky='we', padx=(0, 8), pady=(0, 8))
+            box.grid(row=1, column=column, sticky='we', padx=(0, 6), pady=(0, 4))
             boxes.append(box)
-            selectors.grid_columnconfigure(column, weight=(3, 2, 3)[column])
+            selectors.grid_columnconfigure(column,
+                weight=(1, 1, 0, 3, 0, 1)[index])
         (self.nation_box, self.vehicle_class_box, self.tier_box,
          self.vehicle_box, self.category_box, self.field_box) = boxes
-        row = 3
+        row = 4
         self.nation_box.bind("<<ComboboxSelected>>", self.refresh_vehicles)
         self.vehicle_class_box.bind(
             "<<ComboboxSelected>>", self.refresh_vehicles)
@@ -367,6 +370,11 @@ class VehicleEditorWindow(object):
                  wraplength=720).grid(
                      row=row, column=0, columnspan=3, sticky="we",
                      pady=(10, 0))
+        # Keep the details compact while the viewer consumes the window height.
+        # Without a spacer, its spanning minimum height is distributed across
+        # every detail row and creates large gaps between labels and values.
+        row += 1
+        frame.grid_rowconfigure(row, weight=1)
 
         viewer_factory = self._armor_viewer_factory
         if viewer_factory is None:

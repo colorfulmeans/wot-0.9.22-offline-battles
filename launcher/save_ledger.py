@@ -17,6 +17,7 @@ import io
 import json
 import os
 import uuid
+import time
 
 try:
     from . import save_slots
@@ -49,7 +50,8 @@ def queue_account_changes(container, changes, has_garage=True):
     key = 'notifications' if has_garage else 'initial_account_notifications'
     owner.setdefault(key, []).append({
         'id': uuid.uuid4().hex,
-        'settlement': {'account_changes': changes}})
+        'settlement': {'account_changes': changes,
+                       'notification_at': int(time.time())}})
 
 
 def _wallet_changes(before, after):

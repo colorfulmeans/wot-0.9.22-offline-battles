@@ -43,6 +43,15 @@ _MESH_CACHE = OrderedDict()
 _RESOURCE_PACKAGE_CACHE = {}
 
 _ZH = {
+    "Armor": "装甲",
+    "Internal modules": "内部模块",
+    "Internal module data": "内部模块数据",
+    "Modules and crew": "模块与乘员",
+    "Engine": "发动机", "Ammo": "弹药", "Fuel": "油箱",
+    "Radio": "电台", "Crew": "乘员",
+    "Decoded interior surfaces; missing or incompatible modules are not drawn.":
+        "Console 来源内部表面；已核对当前 PC 部件坐标框架，缺失或不匹配部分不显示。",
+    "Some interior data is unavailable:\n%s": "部分内部模块数据不可用：\n%s",
     "3D armor viewer": "3D 装甲检视",
     "Drag to orbit · wheel to zoom · click armor to select its field":
         "拖动旋转 · 滚轮缩放 · 点击装甲跳转到对应属性",
@@ -566,7 +575,14 @@ def _mesh_for_model(game_root, model_member):
             "material": identifiers[group_index],
             "triangles": tuple(triangles),
         })
-    result = {"model": model_member, "surfaces": tuple(surfaces)}
+    box = _unique_child(visual_root, 'boundingBox')
+    bounds = None
+    if box is not None and box.value_type == packed_xml.TYPE_ELEMENT:
+        low = _vector(_unique_child(box.value, 'min'), default=None)
+        high = _vector(_unique_child(box.value, 'max'), default=None)
+        if low is not None and high is not None:
+            bounds = (low, high)
+    result = {"model": model_member, "surfaces": tuple(surfaces), 'bounds': bounds}
     _MESH_CACHE[cache_key] = result
     while len(_MESH_CACHE) > _MESH_CACHE_LIMIT:
         _MESH_CACHE.popitem(last=False)
@@ -621,6 +637,8 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
         "role": role,
         "component": name,
         "model": model,
+        "offset": offset,
+        "localBounds": mesh.get('bounds'),
         "surfaces": tuple(surfaces),
     }
 
@@ -873,6 +891,8 @@ class ArmorViewerPanel(object):
         self._record_by_key = {}
         self._focus_key = None
         self._scene = None
+        self._view_mode = 'armor'
+        self._internal_scene = None
         self._scene_error = ""
         self._scene_error_source = ""
         self._language_widgets = []
@@ -887,29 +907,36 @@ class ArmorViewerPanel(object):
         self.frame = self._widget(tk_module.LabelFrame,
             parent, text="3D armor viewer", padx=8, pady=8)
         self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_rowconfigure(2, weight=1)
+        self.frame.grid_rowconfigure(3, weight=1)
+        modes = tk_module.Frame(self.frame)
+        modes.grid(row=0, column=0, sticky='w')
+        self._widget(tk_module.Button, modes, text='Armor',
+                     command=lambda: self.set_view_mode('armor')).pack(side='left')
+        self._widget(tk_module.Button, modes, text='Internal modules',
+                     command=lambda: self.set_view_mode('internal')).pack(side='left')
         self._widget(tk_module.Label,
             self.frame,
             text="Drag to orbit · wheel to zoom · click armor to select its field",
-            anchor="w").grid(row=0, column=0, sticky="we")
+            anchor="w").grid(row=1, column=0, sticky="we")
         self.selection = tk_module.StringVar(
             value=self._t("No armor field selected"))
         self._widget(tk_module.Label,
             self.frame, textvariable=self.selection, anchor="w",
             justify="left", wraplength=520).grid(
-                row=1, column=0, sticky="we", pady=(4, 6))
+                row=2, column=0, sticky="we", pady=(4, 6))
         self.canvas = tk_module.Canvas(
             self.frame, width=540, height=500, background="#171b22",
             highlightthickness=1, highlightbackground="#414958")
-        self.canvas.grid(row=2, column=0, sticky="nsew")
+        self.canvas.grid(row=3, column=0, sticky="nsew")
         controls = tk_module.Frame(self.frame)
-        controls.grid(row=3, column=0, sticky="we", pady=(6, 0))
+        controls.grid(row=4, column=0, sticky="we", pady=(6, 0))
         self._widget(tk_module.Button,
             controls, text="Reset view", command=self.reset_view).pack(
                 side="right")
-        self._widget(tk_module.Label,
+        self.legend_label = self._widget(tk_module.Label,
             controls, text="Nominal thickness (mm)",
-            anchor="w").pack(side="left")
+            anchor="w")
+        self.legend_label.pack(side="left")
         self.legend = tk_module.Canvas(
             controls, width=285, height=28, background="#171b22",
             highlightthickness=0)
@@ -936,6 +963,9 @@ class ArmorViewerPanel(object):
         self._language = i18n.resolve_language(language)
         for widget, text in self._language_widgets:
             widget.config(text=self._t(text))
+        if self._view_mode == 'internal':
+            self.set_view_mode('internal')
+            return
         if self._scene_error_source:
             self._scene_error = self._t('Armor model unavailable: %s') % self._scene_error_source
         record = self._record_by_key.get(self._focus_key)
@@ -952,6 +982,7 @@ class ArmorViewerPanel(object):
         return self.frame.grid(*args, **kwargs)
 
     def load_vehicle(self, vehicle_member, records, focus_record=None):
+        self._internal_scene = None
         self._vehicle_member = vehicle_member
         self._records = [dict(record) for record in records]
         self._record_by_key = dict(
@@ -978,12 +1009,41 @@ class ArmorViewerPanel(object):
             return False
         self._scene_error = ""
         self._scene_error_source = ""
+        if getattr(self, '_view_mode', 'armor') == 'internal':
+            self.set_view_mode('internal')
+            return True
         self._redraw()
         if focus_record is None:
             self.selection.set(self._t(
                 "Click an armor surface or choose an armor field."))
             return True
         return self.focus_field(focus_record, reload_scene=False)
+
+    def set_view_mode(self, mode):
+        self._view_mode = mode
+        if mode == 'internal' and self._scene is not None:
+            try:
+                from . import vehicle_internal_viewer
+            except ImportError:
+                import vehicle_internal_viewer
+            if self._internal_scene is None:
+                try:
+                    self._internal_scene = vehicle_internal_viewer.load_scene(self._scene)
+                except (ValueError, OSError, KeyError, struct.error) as error:
+                    self._internal_scene = dict(self._scene, parts=(), warnings=(str(error),))
+                if self._internal_scene.get('warnings'):
+                    from tkinter import messagebox
+                    messagebox.showwarning(self._t('Internal module data'),
+                        self._t('Some interior data is unavailable:\n%s') % '\n'.join(
+                            self._internal_scene['warnings']), parent=self.frame)
+            self.selection.set(self._t(
+                'Decoded interior surfaces; missing or incompatible modules are not drawn.'))
+        elif mode == 'armor':
+            self.selection.set(self._t('Click an armor surface or choose an armor field.'))
+        self.legend_label.config(text=self._t(
+            'Modules and crew' if mode == 'internal' else 'Nominal thickness (mm)'))
+        self._draw_legend()
+        self._redraw()
 
     def focus_field(self, record, reload_scene=True):
         identity = _focus_identity(record)
@@ -994,6 +1054,9 @@ class ArmorViewerPanel(object):
             self._focus_key = new_key
             return self._load_scene(record)
         self._focus_key = new_key
+        if self._view_mode == 'internal':
+            self.set_view_mode('internal')
+            return
         if new_key is None:
             self.selection.set(
                 self._scene_error if self._scene is None and self._scene_error
@@ -1061,6 +1124,15 @@ class ArmorViewerPanel(object):
 
     def _draw_legend(self):
         self.legend.delete("all")
+        if getattr(self, '_view_mode', 'armor') == 'internal':
+            for index, (label, color) in enumerate((('Engine', '#df8c42'),
+                    ('Ammo', '#d65b63'), ('Fuel', '#e9c64b'),
+                    ('Radio', '#69b6d7'), ('Crew', '#72c485'))):
+                left = index * 55
+                self.legend.create_rectangle(left, 1, left + 50, 13, fill=color, outline='')
+                self.legend.create_text(left + 25, 21, text=self._t(label),
+                                        fill='#d8dde7', font=('TkDefaultFont', 7))
+            return
         values = (0, 20, 50, 100, 150, 250, 400)
         width = 38
         for index, value in enumerate(values):
@@ -1114,6 +1186,9 @@ class ArmorViewerPanel(object):
                         if item in self._item_surface), None)
         if surface is None:
             return False
+        if surface.get('moduleLabel'):
+            self.selection.set(surface['moduleLabel'])
+            return True
         key = surface.get("fieldKey")
         if key is None or key not in self._record_by_key:
             self.selection.set(self._t(
@@ -1147,7 +1222,9 @@ class ArmorViewerPanel(object):
                     height * 0.52 - rotated_y * scale, depth)
 
         result = []
-        for part in self._scene["parts"]:
+        scene = (self._internal_scene if getattr(self, '_view_mode', 'armor') == 'internal'
+                 else self._scene)
+        for part in (scene or {}).get('parts', ()):
             for surface in part["surfaces"]:
                 for triangle in surface["triangles"]:
                     projected = tuple(project(point) for point in triangle)
@@ -1177,7 +1254,7 @@ class ArmorViewerPanel(object):
                 width, height):
             key = surface.get("fieldKey")
             focused = key is not None and key == self._focus_key
-            base = thickness_color(surface.get("thickness"))
+            base = surface.get('color') or thickness_color(surface.get("thickness"))
             fill = _shade(base, 0.22 if area < 0 else -0.08)
             if focused:
                 fill = _shade(base, 0.34)

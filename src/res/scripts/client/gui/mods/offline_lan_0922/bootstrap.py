@@ -535,7 +535,10 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         rewards = [{'kind': 'vehicle', 'vehicle': name,
                     'vehicle_type': compact_descr}]
         if record.get('tankmen'):
-            rewards.append({'kind': 'crew', 'count': len(record['tankmen'])})
+            import base64
+            rewards.append({'kind': 'crew', 'count': len(record['tankmen']),
+                'passports': [base64.b64encode(raw).decode('ascii')
+                    for unused, raw in sorted(record['tankmen'].items())]})
         queue_notification(staged, {'account_changes': [
             {'phase': 'granted', 'rewards': rewards}]})
         working = staged

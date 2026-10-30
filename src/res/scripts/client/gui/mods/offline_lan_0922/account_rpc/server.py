@@ -267,6 +267,10 @@ class FakeServer(object):
         from gui.mods.offline_lan_0922 import offline_services
         diff.update(offline_services.service_diff(
             self._context.get('selected_vehicle') or {}))
+        if 'quests' in diff:
+            # Day changes replace ordinary definitions and counters; never
+            # retain yesterday's cache rows or touch potapovQuests.
+            diff[('quests', '_r')] = diff.pop('quests')
         touched = self._context.get('postbattle_touched_vehicles')
         touched = set(touched or ())
         # A battle spends rounds and consumables, and the vehicle's own
@@ -329,8 +333,19 @@ class FakeServer(object):
         for row in rows:
             identifier = row['id']
             if identifier not in delivered:
-                if notify(row.get('settlement')):
-                    published += 1
+                try:
+                    if notify(row.get('settlement'), identifier=identifier):
+                        published += 1
+                except ValueError as error:
+                    # Historical count-only receipts cannot reconstruct crew
+                    # identities. Retain their evidence without blocking the
+                    # later, complete invoices in this account's outbox.
+                    errors = self._context.setdefault('native_notice_errors', set())
+                    if identifier not in errors:
+                        print('[Offline LAN 0.9.22] NATIVE NOTICE pending id=%s error=%s' %
+                              (identifier, error))
+                        errors.add(identifier)
+                    continue
                 # An obsolete empty message can be acknowledged too. The
                 # enqueue path only writes messages with visible content.
                 delivered.add(identifier)

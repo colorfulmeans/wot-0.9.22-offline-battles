@@ -417,6 +417,7 @@ def _receipt(value):
         'income': copy.deepcopy(value.get('income')),
         'daily_reserves': list(value.get('daily_reserves') or ()),
         'daily_missions': list(value.get('daily_missions') or ()),
+        'ordinary_missions': copy.deepcopy(value.get('ordinary_missions') or []),
         'personal_missions': copy.deepcopy(value.get('personal_missions') or {}),
         # By the shell's index in the gun's own shot order: only the client
         # can turn that into a shell, and only the client owns its price.
@@ -978,9 +979,8 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
         'watchedBattleToTheEnd': receipt['watched_battle_to_end'],
         'isTeamKiller': False,
     }
-    quests_progress = dict(('offline_daily_' + key,
-            (0, {'bonusCount': 0}, {'bonusCount': 1}))
-            for key in receipt.get('daily_missions', ()))
+    quests_progress = dict((row['id'], (None, row['before'], row['after']))
+                          for row in receipt.get('ordinary_missions', ()))
     quests_progress.update(personal_campaign_results.quests_progress(
         receipt.get('personal_missions')))
     avatar = {
@@ -1274,6 +1274,7 @@ class PostBattleStore(object):
         receipt['income'] = copy.deepcopy(policy.get('income'))
         receipt['daily_reserves'] = list(policy.get('daily_reserves') or ())
         receipt['daily_missions'] = list(policy.get('daily_missions') or ())
+        receipt['ordinary_missions'] = copy.deepcopy(policy.get('ordinary_missions') or [])
         receipt['personal_missions'] = copy.deepcopy(
             policy.get('personal_missions') or {})
         awarded = policy.get('awarded')
@@ -1338,6 +1339,11 @@ class PostBattleStore(object):
         winner = receipt['winner']
         result_key = (0 if winner == 0 else
                       (1 if winner == receipt['team'] else -1))
+        personal = next((row for row in receipt['public_results']
+                         if row['actor_kind'] == 'player' and
+                         row['actor_id'] == receipt['player_id']), {})
+        counts = self._progress.get('achievements') or {}
+        misconduct = receipt.get('friendly_fire_costs') or {}
         return {
             'arenaTypeID': _arena_type_id(receipt['map']),
             'arenaCreateTime': int(
@@ -1347,11 +1353,22 @@ class PostBattleStore(object):
             # (``__makeAchievementsAndBadgesStrings``) and names the badge in
             # the hangar message.
             'playerVehicles': {vehicle_type_cd: {
+                'popUpRecords': [(db_id, max(1, _int(counts.get(
+                    'maxAimerSeries' if name == 'aimer' else name, 1), 1)))
+                    for name, db_id in _achievement_records(
+                        personal.get('achievements', ()))],
                 'markOfMastery': max(0, min(
                     _int(awards.get('markOfMastery')),
                     battle_mastery.MAX_MARK_OF_MASTERY))}},
             'xp': rewards['xp'],
+            'dailyXPFactor': 2 if (receipt.get('income') or {}).get('first_win') else 1,
+            'xpPenalty': economy.premium_xp_bonus(
+                receipt['friendly_fire']['xp_penalty'],
+                150 if (receipt.get('income') or {}).get('premium') else 100),
             'credits': rewards['credits'],
+            'creditsPenalty': misconduct.get('credits_penalty', 0),
+            'creditsContributionOut': misconduct.get('credits_out', 0),
+            'creditsContributionIn': misconduct.get('credits_in', 0),
             'crystal': rewards['crystal'], 'creditsToDraw': 0,
             'isWinner': result_key, 'team': receipt['team'],
             'winnerIfDraw': 0, 'guiType': 1,

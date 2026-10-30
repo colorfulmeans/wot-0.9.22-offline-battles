@@ -146,25 +146,26 @@ class PersonalCampaignMessageTests(unittest.TestCase):
             self.assertIn(expected, result)
         self.assertNotIn('999', result)
 
-    def test_notify_makes_one_native_push_for_entire_receipt_and_no_modal(self):
-        messages = types.SimpleNamespace(SM_TYPE=types.SimpleNamespace(Information=6),
-                                        pushMessage=mock.Mock())
-        gui = sys.modules['gui']
+    def test_notify_uses_native_personal_mission_messages_without_a_custom_modal(self):
+        import importlib
+        native_notifications = importlib.import_module(
+            'gui.mods.offline_lan_0922.native_notifications')
         settlement = {'missions': [mission(), mission(id=1)]}
         before = copy.deepcopy(settlement)
-        with mock.patch.object(gui, 'SystemMessages', messages, create=True):
+        with mock.patch.object(native_notifications, 'publish') as send:
             self.assertTrue(self.ui.notify(settlement))
             self.assertFalse(self.ui.notify({'missions': []}))
-        messages.pushMessage.assert_called_once()
-        args, kwargs = messages.pushMessage.call_args
-        self.assertEqual({'type': 6}, kwargs)
-        self.assertEqual(2, len(args[0].splitlines()))
+        self.assertEqual(2, send.call_count)
+        self.assertEqual(['potapovQuestBonus'] * 2,
+                         [call.args[0] for call in send.call_args_list])
         self.assertEqual(before, settlement)
 
     def test_native_push_failure_propagates_so_receipt_delivery_can_retry(self):
-        messages = types.SimpleNamespace(SM_TYPE=types.SimpleNamespace(Information=6),
-            pushMessage=mock.Mock(side_effect=RuntimeError('Lobby messages not ready')))
-        with mock.patch.object(sys.modules['gui'], 'SystemMessages', messages, create=True):
+        import importlib
+        native_notifications = importlib.import_module(
+            'gui.mods.offline_lan_0922.native_notifications')
+        with mock.patch.object(native_notifications, 'publish',
+                side_effect=RuntimeError('Lobby messages not ready')):
             with self.assertRaisesRegex(RuntimeError, 'not ready'):
                 self.ui.notify({'missions': [mission()]})
 

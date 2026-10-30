@@ -71,11 +71,11 @@ def _garage_records(slot_id, game_root=None, environment=None, root=None):
 
 
 def owned_vehicles(slot_id, game_root=None, environment=None, root=None):
-    """Return the vehicle names this save's garage already holds."""
+    """Return permanent vehicles; a rented hull can be made permanent."""
     names = []
     for record in _garage_records(slot_id, game_root, environment, root):
         name = record.get("name")
-        if isinstance(name, str) and name:
+        if isinstance(name, str) and name and not record.get('rent'):
             names.append(name)
     return sorted(set(names))
 
@@ -128,6 +128,20 @@ def add_vehicle(slot_id, name, game_root, environment=None, root=None,
         raise GoldShopError(
             "%s is already queued and waiting for the game to start."
             % offer["label"])
+    rented = next((record for record in _garage_records(
+        slot_id, game_root, environment, root)
+        if record.get('name') == str(name) and record.get('rent')), None)
+    if rented is not None:
+        path = save_ledger.ledger_path(slot_id, game_root, environment, root)
+        state = save_ledger._read_state(path)
+        record = next(row for row in state['vehicles'].values()
+                      if row.get('name') == str(name))
+        record.pop('rent', None)
+        save_ledger.queue_account_changes(state.setdefault('ledger', {}),
+            [{'phase': 'granted', 'rewards': [{'kind': 'vehicle',
+                'vehicle': str(name)}]}])
+        save_ledger._write_state(path, state)
+        return dict(offer)
     if len(pending) >= MAX_PENDING_VEHICLES:
         raise GoldShopError(
             "Start the game once to receive the vehicles already queued.")

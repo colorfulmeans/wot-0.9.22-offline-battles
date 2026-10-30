@@ -514,7 +514,7 @@ def inventory(selected_vehicle=None, validate=True, only_vehicles=None,
     vehicle_values = {
         'repair': {}, 'lastCrew': {}, 'crew': {}, 'settings': {},
         'compDescr': {}, 'eqs': {}, 'eqsLayout': {}, 'shells': {},
-        'shellsLayout': {}, 'lock': {},
+        'shellsLayout': {}, 'lock': {}, 'rent': {},
     }
     all_tankmen = {}
     tankman_vehicles = {}
@@ -523,6 +523,10 @@ def inventory(selected_vehicle=None, validate=True, only_vehicles=None,
         vehicle_id = int(record.get('id', 1))
         if only_vehicles is not None and vehicle_id not in only_vehicles:
             continue
+        if record.get('rent') is not None:
+            vehicle_values['rent'][vehicle_id] = tuple(record['rent'])
+        elif delta:
+            vehicle_values['rent'][vehicle_id] = None
         crew = list(record.get('crew', ()))
         tankmen = dict(record.get('tankmen', {}))
         vehicle_values['crew'][vehicle_id] = crew

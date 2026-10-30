@@ -690,6 +690,8 @@ class GarageStore(object):
             if key is None:
                 continue
             stored = {}
+            if record.get('rent') is not None:
+                stored['rent'] = copy.deepcopy(record['rent'])
             compact_descr = _encode_bytes(record.get('compDescr'))
             if compact_descr is not None:
                 stored['compDescr'] = compact_descr
@@ -1027,15 +1029,14 @@ class GarageStore(object):
         result['refused'] = list(refused)
         result['service_costs'] = _settle_automatically(
             state, int(result['vehicle_id']), auto_settings, GarageError)
-        if (daily_facts is not None and not training and
-                not daily_facts.get('premature_leave', False)):
-            before_claimed = set(offline_services.daily_state(
-                state.snapshot(), daily_facts.get('finished_at'))['claimed'])
-            result['daily_reserves'] = offline_services.advance_daily(
-                state.snapshot(), daily_facts, daily_facts.get('finished_at'))
-            result['daily_missions'] = [key for key in
-                state.snapshot()['dailyMissions']['claimed']
-                if result['daily_reserves'] and key not in before_claimed]
+        if campaign_receipt is not None and not training:
+            from gui.mods.offline_lan_0922 import ordinary_missions
+            finish = (daily_facts or {}).get('finished_at')
+            if finish is None and all(key in campaign_receipt for key in ('arena_unique_id', 'duration')):
+                finish = ((int(campaign_receipt['arena_unique_id']) & 0xffffffff)
+                          + int(campaign_receipt['duration']))
+            result['ordinary_missions'] = ordinary_missions.advance(
+                state, campaign_receipt, finish)
         if (campaign_receipt is not None and not training and
                 not campaign_receipt.get('premature_leave', False)):
             from gui.mods.offline_lan_0922 import personal_campaign_battle
@@ -1088,6 +1089,7 @@ class GarageStore(object):
         marker['income'] = copy.deepcopy(result['income'])
         marker['daily_reserves'] = list(result.get('daily_reserves') or ())
         marker['daily_missions'] = list(result.get('daily_missions') or ())
+        marker['ordinary_missions'] = copy.deepcopy(result.get('ordinary_missions') or [])
         if 'friendly_fire_costs' in result:
             marker['friendly_fire_costs'] = dict(result['friendly_fire_costs'])
         next_receipts = (list(self._battle_receipts) + [marker])[
@@ -1326,6 +1328,7 @@ class GarageStore(object):
                 row['income'] = copy.deepcopy(raw['income'])
             row['daily_reserves'] = list(raw.get('daily_reserves') or ())
             row['daily_missions'] = list(raw.get('daily_missions') or ())
+            row['ordinary_missions'] = copy.deepcopy(raw.get('ordinary_missions') or [])
             row['touched_vehicle_types'] = _int_list(raw.get('touched_vehicle_types')) or []
             if isinstance(raw.get('personal_missions'), dict):
                 row['personal_missions'] = copy.deepcopy(raw['personal_missions'])
@@ -1379,6 +1382,14 @@ class GarageStore(object):
                 changed = True
             except (TypeError, ValueError):
                 pass
+        if 'rent' in saved:
+            rent = saved['rent']
+            if (isinstance(rent, (list, tuple)) and len(rent) == 4 and
+                    isinstance(rent[0], dict) and
+                    all(isinstance(value, integer_types) and value >= 0
+                        for value in rent[1:])):
+                record['rent'] = copy.deepcopy(rent)
+                changed = True
         crew = saved.get('crew')
         tankmen = record.get('tankmen')
         order = list(record.get('crew') or ())

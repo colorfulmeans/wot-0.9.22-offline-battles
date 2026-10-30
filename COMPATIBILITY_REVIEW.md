@@ -1,5 +1,110 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## October 30: ordinary missions, native notices and current test inputs
+
+This revision replaces the former AI-authored three-reserve daily mission
+system. It does not recover a historical server mission list: the 55 candidates
+in `ordinary_missions.py` are the discussed offline adaptation, with 28 ordinary
+conditions and 27 tier II-X rental conditions. Existing ordinary progress is
+ignored unless it has the new schema and current assignment day. Personal
+campaign conditions, progress, selection and reward amounts remain unchanged.
+Battle bond eligibility, medal table, formula and amounts remain unchanged.
+
+The daily selection is two basic, two advanced, one special and one challenge
+task, plus a one-day rental task; three/seven-day rental tasks appear on the
+corresponding three/seven-day calendar cadence. Every task's progress expires
+at the UTC day boundary (08:00 Beijing), including those periodic assignments.
+A receipt from yesterday cannot finish yesterday's task after that boundary,
+even if no new battle has yet persisted today's assignments. Seven critical
+events are cumulative, using the frozen server `critical_hits` event count,
+not the bit mask or a single-battle assumption. Base XP, team placement,
+starting maximum HP and survival use receipt facts. Missing evidence is logged;
+it is never replaced by a guessed successful condition.
+
+The exact compiled #1513 `quest_xml_source.Source` reads the generated XML.
+Its definitions feed `eventsData[EVENT_CLIENT_DATA.QUEST]`; progress uses
+`quests[id]['progress'][None]`. Native cumulative counters are flat fields
+such as `damageDealt`, not a nested `cumulative` dictionary. The native mission
+page, its filters and result component retain their own lifecycle. The mod
+page replacement, fabricated booster-task list and completion dialog have
+been removed. Composite conditions that have no matching stock counter retain
+their full condition and current progress in the native description; they do
+not borrow an unrelated XP/damage counter. `showCongrats` is false. Ordinary
+payments and their notification receipts commit with the battle marker.
+
+Notifications now carry actual immutable deltas through native service-channel
+types: `invoiceReceived`, `tokenQuests`, `potapovQuestBonus`, `vehicleRented`
+and `rentalsExpired`. Native formatters own names, icons, receipt groups and
+currency/crew/customization layout. Crew invoices carry actual compact crew
+passports instead of a count-only sentence. First-win battle notifications now
+include `dailyXPFactor`; medals use the owning player's real dossier records;
+friendly-fire penalty/contribution fields use the existing settlement. These
+are presentation inputs, not changes to reward calculation. Stock reserve and
+vehicle purchases use their native localized success keys and price formatter.
+Operational errors and offline-only settings use the native general/error
+message path because no stock asset receipt exists for those facts. A legacy
+count-only crew notice stays pending with a diagnostic instead of fabricating
+an identity or blocking later complete receipts. Admission logs are not proof
+of completed asynchronous native formatting; that requires client observation.
+
+Rental selection first considers missing/expired vehicles, then extends an
+active rental when every nonpermanent candidate is already rented. Credits
+replace the reward only when the entire eligible pool is permanently owned.
+Durations are 1/3/7/14/30/90/180/360 days. The corresponding integer compensation
+percentages are 1/3/5/10/25/50/75/100 percent of the selected vehicle's baked
+gold price converted at 400 credits per gold. This is explicit offline policy,
+not a claim about a historical rental offer. Only 1/3/7-day prizes occur in the
+daily pool. Candidates use standard-battle/resource exclusions and a meaningful
+baked gold price; zero-price and high-tier five-gold service placeholders are
+not used to invent a compensation value. The actual selected vehicle, expiry
+or compensation is persisted with payment. #1513 inventory `rent` is a
+four-element sequence `(additionalData, absoluteExpiry, battles, wins)`.
+Converting a rented vehicle to permanent ownership in the launcher clears that
+field on the same hull and preserves crew, fitting, customization and XP.
+
+The vehicle editor now places Nation/Type/Tier/Vehicle on the first row and
+Modification category/Field on the second, with compact details and a final
+stretch spacer. Internal inspection uses existing decoded Console surfaces
+only when their selected PC component and original visual bounding box match.
+No generic module boxes, fitting/rescaling or invented missing geometry is
+drawn. Missing data prompts on selection. This provenance is stated in the
+viewer; component-frame agreement is not proof of identical PC internal meshes.
+
+### Test baseline review and evidence boundary
+
+`tools/audit_test_baselines.py` inventories all test files, literal battle-start
+inputs, current-profile references and historical scene replay hooks. The
+October 30 inventory examined 484 files and flagged 45 for input-boundary
+review. A missing literal `bot_tactics` is not by itself a defect: many are
+isolated solver/ownership tests or receive their start message through helpers.
+
+| Boundary | Current treatment |
+| --- | --- |
+| First-run/restored route baseline | `default_tactics_owner_20261025.json` and the current `bot_tactics.default_profile()` remain authoritative; the complete owner document and all map/parking exits are checked by the adopted-default launcher tests. No route data is changed here. |
+| Great Wall current allocation | The configured scenario now passes the current profile into both runtime and server planner; mid-route actors rejoin through the production planner. The old empty-profile/frozen-lane replay remains a separately identified physical regression. Its targets and deadlines do not define correct authored routes. |
+| Himmelsdorf and Fjords departure scenarios | Current-allocation paths now receive the current profile in both planner and runtime. Historic Himmelsdorf build-506 lane replay remains isolated. Flattened heights and controlled probes do not certify native city navigation. |
+| Airfield/Highway/support/report replays | Captured poses, erased cells, analytic alleys and controlled probes deliberately reproduce a particular ownership/geometry law. They do not validate the shipping default route selection. |
+| Other flagged runtime/traffic/rotation/contact/aim/wreck tests | Their local commands, descriptors, targets or collision oracles isolate the named law. They are not full default-profile acceptance. Supplying a route policy to every isolated law would change the question being tested. |
+| SPG planning/graph tests | Baked geometry and explicit source plans are separate from native ray/arc acceptance and from the complete human route baseline. |
+| Retired ordinary-task tests | Three-reserve selection, custom-window lifecycle and congratulation-dialog assertions were removed with that implementation. The new cumulative/day/reset/payment/rental/native-shape tests replace that baseline. The review-package workflow selects the new suites. |
+
+Local evidence before packaging: all 40 launcher test files passed (1,191
+discovered tests; 16 skipped for unavailable link privileges or optional exact
+catalogue input). The two exact-catalogue suites were additionally rerun with
+the pinned client configured and passed. Seventeen focused client-policy
+suites cover account, garage, postbattle, services, ordinary tasks, crew and
+personal campaigns. CPython 2.7.18 compiles all 224 current client sources.
+`tools/verify_native_ordinary_missions.py` runs the real compiled #1513 parser
+against all 55 candidates and verifies native common counters and disabled
+congratulations; engine I/O is stubbed and this is not a live GUI test.
+Six current-profile gate/departure scenarios passed in 214.373 seconds at the
+explicit engine-free boundary (`sys.platform='linux'` in the isolated test
+process); no production platform guard is bypassed or altered. These results
+must not be reported as native Windows navigation acceptance.
+
+Package identity, PR checks, live launcher/client observations and generated
+error-report review remain to be recorded after the new artifact is built.
+
 ## October 24: shared owner routes and generic narrow passages
 
 Adopt the reviewed complete profile 1 as the built-in Default for all users,

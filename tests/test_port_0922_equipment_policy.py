@@ -36,12 +36,6 @@ class EquipmentPolicyTests(unittest.TestCase):
         self.assertEqual(['coatedOpticsBattleBooster', 'rammerBattleBooster'],
             list(self.policy.directive_candidates(['camouflageNet', 'coatedOptics', 'deluxRammer'])))
 
-    def test_daily_window_uses_stock_flash_instead_of_fixed_native_quads(self):
-        ui = fixture._load_port_module('offline_services_ui')
-        panel = ui.ServicePanel()
-        self.assertEqual('DailyWindow', type(panel._flash).__name__)
-        self.assertIsNone(panel._surface)
-        self.assertIsNone(panel._panel)
 
     def test_baked_bot_tiers_have_exact_equipment_and_directive_boundaries(self):
         data = fixture._load_port_module('bot_fitting_data')

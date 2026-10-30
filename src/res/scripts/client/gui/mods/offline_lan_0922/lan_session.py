@@ -884,18 +884,14 @@ class LANSession(object):
                     arena_unique_id, error)
                 return False
             self._battle_messages_sent.add(arena_unique_id)
-            if result_data.get('offlineDailyMissions'):
-                try:
-                    from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
-                    notify_missions(result_data['offlineDailyMissions'])
-                except Exception as error:
-                    self._report_postbattle_notification_error(arena_unique_id, error)
         # A mission-message failure may retry without replaying the battle
-        # result or daily reward notice already admitted to the native channel.
+        # result already admitted to the native channel. Ordinary rewards use
+        # the durable account notification outbox instead of a modal window.
         if result_data.get('offlinePersonalMissions'):
             try:
                 from gui.mods.offline_lan_0922.personal_campaign_ui import notify
-                notify(result_data['offlinePersonalMissions'])
+                notify(result_data['offlinePersonalMissions'],
+                       identifier='battle:%s' % arena_unique_id)
             except Exception as error:
                 self._report_postbattle_notification_error(arena_unique_id, error)
                 return False

@@ -2,7 +2,7 @@
 
 The permanent bond shop postdates 0.9.22. The first 2019 assortment is
 intersected with this client's definitions. Retired prices, reserve prices
-and daily missions below are explicit offline extensions, not retail data.
+are explicit offline extensions, not retail data.
 """
 
 import copy
@@ -75,28 +75,6 @@ RESERVES = _LEGACY_RESERVES + tuple(
     for percent, hours, api_id in _HISTORICAL_RESERVES[base.kind]
     if (percent, hours) != (base.percent, 1))
 RESERVE_BY_ID = dict((row[0], row) for row in RESERVES)
-DAILY_MISSIONS = (
-    ('battles', 'Complete 3 battles', 3, 'xp'),
-    ('damage', 'Complete battles and deal 3000 damage', 3000, 'credits'),
-    ('wins', 'Complete and win 1 battle', 1, 'crew_xp'),
-)
-# Each template has a fixed reward. Only the daily selection is random;
-# opening the page, restarting or receiving a late receipt cannot reroll it.
-MISSION_POOL = (
-    ('battles_3', 'Complete %d battles', 'battles', 3, 'xp'),
-    ('battles_4', 'Complete %d battles', 'battles', 4, 'free_xp'),
-    ('battles_5', 'Complete %d battles', 'battles', 5, 'crew_xp'),
-    ('damage_2000', 'Complete battles and deal %d damage', 'damage', 2000, 'xp'),
-    ('damage_3000', 'Complete battles and deal %d damage', 'damage', 3000, 'credits'),
-    ('damage_5000', 'Complete battles and deal %d damage', 'damage', 5000, 'crew_xp'),
-    ('wins_1', 'Complete and win %d battles', 'wins', 1, 'free_xp'),
-    ('wins_2', 'Complete and win %d battles', 'wins', 2, 'credits'),
-    ('wins_3', 'Complete and win %d battles', 'wins', 3, 'crew_xp'),
-)
-MISSION_BY_ID = dict((row[0], row) for row in MISSION_POOL)
-for _key, _label, _target, _reward in DAILY_MISSIONS:
-    MISSION_BY_ID[_key] = (_key, _label, _key, _target, _reward)
-
 # Mod-owned IDs, using the retail GoodieData and GoodieVariable wire shapes.
 RESERVE_IDS = dict((row.key, 92001 + index)
                   for index, row in enumerate(_LEGACY_RESERVES))
@@ -179,8 +157,11 @@ def reserve_inventory(snapshot, now=None):
 
 
 def service_diff(snapshot, unused_outcome=None):
-    return {'goodies': reserve_inventory(snapshot),
-            'badges': tuple(selected_badges(snapshot))}
+    from gui.mods.offline_lan_0922 import ordinary_missions_native
+    result = {'goodies': reserve_inventory(snapshot),
+              'badges': tuple(selected_badges(snapshot))}
+    result.update(ordinary_missions_native.sync(snapshot))
+    return result
 
 
 def selected_badges(snapshot):
@@ -230,29 +211,6 @@ def reserve_state(snapshot):
                 if 0 <= start < end:
                     history[key].append([start, end])
     return {'counts': counts, 'active': active, 'history': history}
-
-
-def daily_state(snapshot, now=None):
-    day = now_seconds(now) // 86400
-    raw = snapshot.get('dailyMissions') or {}
-    same_day = int(raw.get('day', -1)) == day
-    ids = raw.get('missions') if same_day else None
-    if same_day and ids is None:
-        # Finish the old fixed set today without granting its rewards twice.
-        ids = [row[0] for row in DAILY_MISSIONS]
-    if not (isinstance(ids, (list, tuple)) and len(ids) == 3 and
-            len(set(ids)) == 3 and all(key in MISSION_BY_ID for key in ids)):
-        def rank(row):
-            return hashlib.sha256(('%d:%s' % (day, row[0])).encode('ascii')).digest()
-        ids = [min((row for row in MISSION_POOL if row[2] == metric),
-                   key=rank)[0] for metric in ('battles', 'damage', 'wins')]
-    claimed = (raw.get('claimed') or []) if same_day else []
-    result = {'day': day, 'missions': list(ids),
-              'claimed': [key for key in ids if key in claimed]}
-    for key in ids:
-        target = MISSION_BY_ID[key][3]
-        result[key] = min(target, max(0, int(raw.get(key, 0)))) if same_day else 0
-    return result
 
 
 def publish_offers(snapshot, vehicles):
@@ -344,6 +302,9 @@ def transact(state, action, key, now=None):
                 active[key] = [stamp, stamp + RESERVE_BY_ID[key].duration]
                 reserves['active'] = active
             snapshot['personalReserves'] = reserves
+        elif action == 'expire_rentals':
+            from gui.mods.offline_lan_0922 import vehicle_rentals
+            vehicle_rentals.expire(snapshot, stamp)
         elif action == 'expire_reserves':
             reserves = reserve_state(snapshot)
             for kind, interval in list(reserves['active'].items()):
@@ -384,30 +345,6 @@ def reserve_bonuses(snapshot, awarded, battle_start):
             bonuses[row.kind] = max(bonuses[row.kind],
                                    max(0, int(base)) * row.percent // 100)
     return bonuses
-
-
-def advance_daily(snapshot, facts, now=None):
-    """Called inside the durable battle receipt transaction, once per battle."""
-    if facts.get('premature_leave', False):
-        return []
-    stamp = now_seconds(now)
-    if int((snapshot.get('dailyMissions') or {}).get('day', -1)) > stamp // 86400:
-        return []
-    daily = daily_state(snapshot, stamp)
-    reserves = reserve_state(snapshot)
-    values = {'battles': 1, 'damage': max(0, int(facts.get('damage', 0))),
-              'wins': int(bool(facts.get('won')))}
-    granted = []
-    for key in daily['missions']:
-        unused_id, unused_label, metric, target, reward = MISSION_BY_ID[key]
-        daily[key] = min(target, daily[key] + values[metric])
-        if daily[key] >= target and key not in daily['claimed']:
-            daily['claimed'].append(key)
-            reserves['counts'][reward] += 1
-            granted.append(reward)
-    snapshot['dailyMissions'] = daily
-    snapshot['personalReserves'] = reserves
-    return granted
 
 
 def saved_fields(snapshot):
