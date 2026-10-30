@@ -157,6 +157,9 @@ class CustomizationsDialog(object):
 
     def show_scope(self,unused=None):
         selected=self.table.selection()
+        if not self.targets():
+            self.scope_detail.config(text=self.owner._t('No vehicles match these filters.'))
+            return
         text=(self.owner._t('Applicable range: %s') % self.table.item(selected[0],'values')[1]
               if selected else self.owner._t('Select a style to see its full applicable range.'))
         self.scope_detail.config(text=text)

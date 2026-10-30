@@ -75,6 +75,11 @@ class CrewPanel(object):
                  if r['nation']==nation and (tag=='all' or r['vehicleClass']==tag)
                  and (level is None or r.get('level')==level)}
         self._choices('vehicle',choices,vehicle);self.by_label=choices
+        if not choices:
+            self.feedback.config(text=self.owner._t('No vehicles match these filters.'))
+        elif getattr(self,'_empty_filter',False):
+            self.feedback.config(text='')
+        self._empty_filter=not bool(choices)
         self.select_vehicle(seat=seat,skills=skills)
 
     def select_vehicle(self,unused=None,seat=None,skills=None):

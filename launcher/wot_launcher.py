@@ -68,6 +68,7 @@ _MAINTENANCE_HELP = (
 
 _CHINESE = {
     'Tier': '级别',
+    'No vehicles match these filters.': '没有符合筛选条件的车辆。',
     'Appearance inventory': '外观库存',
     'Type': '类型',
     'winter': '雪地', 'summer': '草地', 'desert': '沙地',
@@ -1871,7 +1872,7 @@ class LauncherWindow(object):
                 (self.gold_tier_box, self.gold_tier, self._gold_tier_by_label,old_tier)):
             box.config(values=tuple(choices))
             variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
-        self.shop_help_label.config(text=self._t(_SHOP_HELP))
+        self.shop_help_label.config(text=self._t(_SHOP_HELP) if values else self._t('No vehicles match these filters.'))
         return self._filter_gold_shop()
 
     def _filter_gold_shop(self, unused_event=None):
