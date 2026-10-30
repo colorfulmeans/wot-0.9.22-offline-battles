@@ -932,11 +932,13 @@ class GarageStore(object):
             int(snapshot.get('premiumExpiryTime', 0) or 0) > int(battle_start))
         premium_factor = economy.premium_vehicle_xp_factor_100(
             vehicles_module, vehicle_type_compact_descr)
+        from gui.mods.offline_lan_0922.game_calendar import first_win_factor
         awarded, crew_xp, income = economy.battle_income(
             awarded, bonuses, premium_active, first_win, premium_factor,
             int((friendly_fire_facts or {}).get('xp_penalty', 0)),
             original=economy.scale_rewards(
-                rewards, credits_percent=vehicle_credits_percent))
+                rewards, credits_percent=vehicle_credits_percent),
+            daily_factor=first_win_factor((daily_facts or {}).get('finished_at', battle_start)))
         battle_xp = crew_xp if rewards else (
             max(0, int(battle_xp or 0)) * experience_percent // 100)
         # What the battle earned does not depend on the vehicle it was

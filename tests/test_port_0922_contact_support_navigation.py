@@ -14,6 +14,23 @@ from gui.mods.offline_lan_0922 import world_collision, destructibles_sensor
 
 
 class ContactSupportTests(unittest.TestCase):
+    def test_raw_supported_handoff_retires_without_false_airborne_descent(self):
+        runtime, state = self.scene(lambda x,z: 11.86)
+        state.update(y=12.2764, speed=0., vertical_speed=0., airborne=False,
+                     _basic_support_datum=.4164,
+                     _basic_support_handoff={'created_at': 1.})
+        runtime._contact_now=2.
+        rows=[dict(name=name, ground=11.86, gap=.4164) for name in
+              ('centre','front_left','front_right','rear_left','rear_right')]
+        with mock.patch.object(runtime,'_basic_support_status',return_value=rows), \
+             mock.patch.object(runtime,'_terrain_support',return_value=(11.86,11.86)), \
+             mock.patch.object(runtime,'_reorient_basic_ground_pose',return_value=False):
+            runtime._integrate_basic_vertical_motion(state,.166,(0.,12.2764,0.))
+        self.assertAlmostEqual(11.86,state['y'])
+        self.assertFalse(state['airborne'])
+        self.assertEqual(0.,state['vertical_speed'])
+        self.assertNotIn('_basic_support_datum',state)
+
     def test_patch_height_preserves_actual_inboard_application_point(self):
         params = vp.derive_suspension_params(PhysicsFixture._descriptor())
         spring = dict(params['springs'][0], x=-0.04, z=0.0)

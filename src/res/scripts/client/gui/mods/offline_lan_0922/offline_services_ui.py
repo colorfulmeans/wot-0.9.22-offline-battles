@@ -41,6 +41,12 @@ def _schedule_daily_rollover(delay=None):
         def expired(success, error):
             try:
                 if success:
+                    # #1513 Shop.synchronize(serverCacheRev) requests its own
+                    # async table when the supplied revision differs. Refresh
+                    # dailyXPFactor along with mission/first-win reset fields.
+                    shop = getattr(account, 'shop', None)
+                    if shop is not None:
+                        shop.synchronize(-1)
                     server.publish_postbattle_progress()
                     server.publish_campaign_notifications()
             finally:

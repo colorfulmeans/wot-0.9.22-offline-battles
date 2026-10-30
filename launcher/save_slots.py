@@ -352,6 +352,22 @@ def create_slot(name, mode, game_root=None, environment=None, root=None,
     return read_slot(slot_id, root=root)
 
 
+def ensure_mission_seed(slot_id, game_root=None, environment=None, root=None):
+    """Persist a random identity before any first-login reward preview."""
+    import uuid
+    directory = slot_dir(slot_id, game_root, environment, root)
+    if not os.path.isdir(directory):
+        return None
+    path = os.path.join(directory, METADATA_NAME)
+    metadata = _read_metadata(path) or {}
+    seed = metadata.get('missionSeed')
+    if not isinstance(seed, str) or len(seed) != 32:
+        seed = uuid.uuid4().hex
+        metadata['missionSeed'] = seed
+        _write_metadata(path, metadata)
+    return seed
+
+
 def rename_slot(slot_id, name, game_root=None, environment=None, root=None):
     """Change a slot's display name, keeping its directory and state."""
     name = _normalized_name(name)

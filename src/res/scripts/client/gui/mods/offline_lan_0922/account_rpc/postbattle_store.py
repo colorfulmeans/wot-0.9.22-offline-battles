@@ -1021,7 +1021,7 @@ def pack_battle_result(receipt, packers=None, replay_types=None,
             'premiumXPFactor10': 15, 'premiumCreditsFactor10': 15,
             'appliedPremiumXPFactor10': account_factor,
             'appliedPremiumCreditsFactor10': account_factor,
-            'dailyXPFactor10': 20 if income.get('first_win') else 10,
+            'dailyXPFactor10': int(income.get('daily_factor', 2)) * 10 if income.get('first_win') else 10,
             'premiumVehicleXPFactor100': 100 + int(income.get('vehicle_xp_factor', 0)),
         })
         boosters = income.get('boosters', income.get('reserves')) or {}
@@ -1361,7 +1361,8 @@ class PostBattleStore(object):
                     _int(awards.get('markOfMastery')),
                     battle_mastery.MAX_MARK_OF_MASTERY))}},
             'xp': rewards['xp'],
-            'dailyXPFactor': 2 if (receipt.get('income') or {}).get('first_win') else 1,
+            'dailyXPFactor': int((receipt.get('income') or {}).get('daily_factor', 2))
+                if (receipt.get('income') or {}).get('first_win') else 1,
             'xpPenalty': economy.premium_xp_bonus(
                 receipt['friendly_fire']['xp_penalty'],
                 150 if (receipt.get('income') or {}).get('premium') else 100),

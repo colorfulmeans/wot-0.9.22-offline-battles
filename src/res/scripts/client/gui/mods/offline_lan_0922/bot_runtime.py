@@ -3247,6 +3247,13 @@ class BotRuntime(object):
         state['_basic_support_handoff'] = receipt
         if supported:
             state.pop('_basic_support_datum', None)
+            # The same footprint just proved the raw basic support pose.
+            # Retire the offset by settling onto that pose, not by deleting
+            # the offset while leaving the hull suspended above it. The latter
+            # enters gravity and the airborne ceiling hides the next uphill
+            # surface after contact pushes (Lakeville T-50 incident).
+            state['y'] = float(ground)
+            receipt['root_after'] = float(ground)
             return 0.
         return datum
 
@@ -4897,6 +4904,11 @@ class BotRuntime(object):
             state['_drown_time'] = 0.0
             state['_drowning'] = False
             return False
+        if not state.get('_drowning'):
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT WATER DANGER', dict(actor=state['id'], round=self.round_id,
+                position=_position(state), depth=depth, sensor_level=level,
+                elapsed=elapsed, death_after=BOT_DROWNING_SECONDS))
         state['_drowning'] = True
         state['_drown_time'] = state.get('_drown_time', 0.0) + elapsed
         if state['_drown_time'] <= BOT_DROWNING_SECONDS:
@@ -4912,6 +4924,11 @@ class BotRuntime(object):
         state['alive'] = False
         state['display_health'] = display_health
         state['death_reason'] = BOT_DROWNING_DEATH_REASON
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT ENVIRONMENT DEATH', dict(actor=state['id'], round=self.round_id,
+            cause='drowning', death_reason=BOT_DROWNING_DEATH_REASON,
+            position=_position(state), depth=depth, sensor_level=level,
+            submerged_seconds=state['_drown_time'], health_before=display_health))
         state['_drowned'] = True
         state['_drown_time'] = BOT_DROWNING_SECONDS
         state['_drowning'] = False

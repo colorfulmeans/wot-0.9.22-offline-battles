@@ -224,8 +224,8 @@ class PostBattleContractTests(unittest.TestCase):
         # Exercise half-integer rounding, reserve stacking, premium vehicles
         # and penalties with save multipliers; the replay must match banking
         # while keeping extra earnings out of the original gross XP row.
-        for premium, first_win, penalty, percent in itertools.product(
-                (False, True), (False, True), (0, 1, 2), (50, 100, 150, 200)):
+        for premium, first_win, penalty, percent, daily in itertools.product(
+                (False, True), (False, True), (0, 1, 2), (50, 100, 150, 200), (2, 5)):
             with self.subTest(premium=premium, first_win=first_win,
                               penalty=penalty, percent=percent):
                 receipt = _receipt()
@@ -234,14 +234,14 @@ class PostBattleContractTests(unittest.TestCase):
                     original, credits_percent=percent, experience_percent=percent)
                 reserves = {'credits': 500, 'xp': 50, 'free_xp': 10, 'crew_xp': 202}
                 awarded, crew, income = postbattle_store.economy.battle_income(
-                    base, reserves, premium, first_win, 10, penalty, original)
+                    base, reserves, premium, first_win, 10, penalty, original, daily_factor=daily)
                 receipt.update({'awarded': awarded, 'income': income,
                     'friendly_fire': {'victims': [], 'received_damage': 0,
                                       'xp_penalty': penalty}})
                 vehicle = _packed_vehicle(receipt)
                 self.assertEqual(min(101, base['xp']) + penalty, vehicle['originalXP'])
                 self.assertEqual(premium, vehicle['isPremium'])
-                self.assertEqual(20 if first_win else 10, vehicle['dailyXPFactor10'])
+                self.assertEqual(daily*10 if first_win else 10, vehicle['dailyXPFactor10'])
                 for key, native in (('credits', 'credits'), ('xp', 'xp'), ('free_xp', 'freeXP')):
                     self.assertEqual(awarded[key], vehicle[native])
                 self.assertIn('appliedPremiumXPFactor10', vehicle['xpReplay'].decode())
@@ -1305,6 +1305,7 @@ class PostBattleContractTests(unittest.TestCase):
                 from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
                 snapshot = {'dailyMissions': {'schema': ordinary_missions.SCHEMA,
                     'day': 1, 'missions': ['participate3'], 'claimed': [],
+                    'periods': {'participate3': 86400},
                     'progress': {'participate3': {'battles': 1}}, 'rewards': {}}}
                 owner = GarageState(snapshot)
                 snapshot = owner.snapshot()

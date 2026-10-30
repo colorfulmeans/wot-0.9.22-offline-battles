@@ -618,6 +618,17 @@ def save_slot_mode(slot=None, user_data_dir=None):
     return mode if mode in SAVE_MODES else SAVE_MODE_UNLOCKED
 
 
+def save_slot_mission_seed(slot=None, user_data_dir=None):
+    """Read the launcher's per-save identity without writing player assets."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            seed = json.load(stream).get('missionSeed')
+        return seed if isinstance(seed, string_types) and len(seed) == 32 else None
+    except (IOError, OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def save_slot_initial_wallet(slot=None, user_data_dir=None):
     """Read launcher-selected starting balances; a saved ledger takes priority."""
     path = os.path.join(

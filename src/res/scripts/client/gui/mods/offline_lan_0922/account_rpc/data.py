@@ -8,6 +8,7 @@ wire shapes can be tested without importing BigWorld.
 import time
 
 from gui.mods.offline_lan_0922.personal_rating import personal_rating
+from gui.mods.offline_lan_0922.game_calendar import first_win_factor
 
 
 VEHICLE_ITEM_TYPE = 1
@@ -1122,7 +1123,7 @@ def shop(revision=0, selected_vehicle=None):
         # exact #1513 shop field so the requester does not use its retail
         # crystal-price fallback.
         'paidDeluxeRemovalCost': {'crystal': 200},
-        'dailyXPFactor': 2,
+        'dailyXPFactor': first_win_factor(),
         # The crew shop.  These three are #1513's own ShopCommonStats
         # fallbacks rather than offline policy, and the garage charges the
         # same numbers the player is shown here.

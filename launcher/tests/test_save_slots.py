@@ -7,6 +7,16 @@ import save_slots
 
 
 class SaveSlotsTests(unittest.TestCase):
+    def test_reward_seed_persists_before_garage_creation_without_asset_writes(self):
+        first=save_slots.create_slot('First',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        second=save_slots.create_slot('Second',save_slots.MODE_NEW_ACCOUNT,root=self.root)
+        a=save_slots.ensure_mission_seed(first['id'],root=self.root)
+        b=save_slots.ensure_mission_seed(second['id'],root=self.root)
+        self.assertNotEqual(a,b)
+        self.assertEqual(a,save_slots.ensure_mission_seed(first['id'],root=self.root))
+        self.assertEqual(['save.json'],os.listdir(first['path']))
+        self.assertEqual(save_slots.MODE_NEW_ACCOUNT,save_slots.read_slot(first['id'],root=self.root)['mode'])
+
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)

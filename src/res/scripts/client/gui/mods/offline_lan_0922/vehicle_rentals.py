@@ -5,6 +5,24 @@ COMPENSATION_PERCENT = {1: 1, 3: 3, 7: 5, 14: 10, 30: 25,
                         90: 50, 180: 75, 360: 100}
 DAY = 86400
 
+# Offline prize valuations approved for #1513 service/placeholder vehicles.
+# These do not alter the native shop or claim to be historical retail prices.
+PRIZE_GOLD = {
+    'germany:G122_VK6501H': 1500,
+    'germany:G137_PzVI_Tiger_217': 3500,
+    'ussr:R99_T44_122': 7200,
+    'germany:G16_PzVIB_Tiger_II_F': 7700,
+    'france:F84_Somua_SM': 12000,
+    'germany:G44_JagdTigerH': 10900,
+    'germany:G85_Aufklarungspanzer_V': 6500,
+    'uk:GB93_Caernarvon_AX': 12000,
+    'ussr:R122_T44_100B': 7500,
+    'ussr:R127_T44_100_P': 7500,
+    'ussr:R135_T_103': 9000,
+    'ussr:R98_T44_85M': 6500,
+    'uk:GB84_Chieftain_Mk6': 22500,
+}
+
 
 def expire(snapshot, now):
     from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
@@ -23,7 +41,8 @@ def expire(snapshot, now):
 
 
 def compensation(gold_price, days):
-    return int(gold_price) * 400 * COMPENSATION_PERCENT[int(days)] // 100
+    percent = 100 if int(days) == 0 else COMPENSATION_PERCENT[int(days)]
+    return int(gold_price) * 400 * percent // 100
 
 
 def choose(pool, records, days, now, seed):
@@ -46,6 +65,8 @@ def choose(pool, records, days, now, seed):
     if not missing and not rented:
         return dict(kind='compensation', vehicle=selected['name'],
                     vehicle_type=selected['cd'], credits=compensation(selected['gold'], days))
+    if not days:
+        return dict(kind='vehicle', vehicle=selected['name'], vehicle_type=selected['cd'])
     previous = int(owned['rent'][1]) if owned and owned.get('rent') else 0
     return dict(kind='rental', vehicle=selected['name'], vehicle_type=selected['cd'],
                 days=int(days), expiry=max(now, previous) + int(days) * DAY,
@@ -57,19 +78,20 @@ def catalogue(vehicles, tier):
     from gui.mods.offline_lan_0922.vehicle_configuration import is_standard_battle_vehicle
     import nations
     result = []
+    tiers = (tier,) if isinstance(tier, int) else tuple(tier)
     for nation in nations.AVAILABLE_NAMES:
         nation_id = nations.INDICES[nation]
         for unused_id, vehicle in vehicles.g_list.getList(nation_id).items():
-            if (int(vehicle.level) != tier or vehicle.name in vehicle_blacklist.UNUSABLE_VEHICLES
+            if (int(vehicle.level) not in tiers or vehicle.name in vehicle_blacklist.UNUSABLE_VEHICLES
                     or not is_standard_battle_vehicle(vehicle)):
                 continue
             price = price_catalogue.VEHICLE_PRICES.get(vehicle.name)
             if not price:
                 continue
-            gold = int(price[1])
+            gold = PRIZE_GOLD.get(vehicle.name, int(price[1]))
             # Known 5-gold high-tier service placeholders cannot establish a
             # prize's credit value. Keep them outside the audited reward pool.
-            if gold <= 0 or (tier >= 8 and gold <= 5):
+            if gold <= 0 or (int(vehicle.level) >= 8 and gold <= 5):
                 continue
             cd = vehicles.makeIntCompactDescrByID('vehicle', nation_id, unused_id)
             result.append(dict(name=vehicle.name, cd=int(cd), gold=gold))
@@ -78,7 +100,10 @@ def catalogue(vehicles, tier):
 
 def grant(state, tier, days, now, seed):
     vehicles = state._vehicles_module()
-    award = choose(catalogue(vehicles, tier), state._records(), days, now, seed)
+    pool = catalogue(vehicles, tier)
+    award = choose(pool, state._records(), days, now, seed)
+    print('[Offline LAN 0.9.22] VEHICLE PRIZE kind=%s vehicle=%s days=%d pool=%d credits=%d extended=%s' % (
+        award['kind'], award['vehicle'], days, len(pool), award.get('credits', 0), award.get('extended', False)))
     if award['kind'] == 'compensation':
         wallet = state._wallet()
         value = int(wallet.get('credits', 0)) + award['credits']
@@ -103,6 +128,9 @@ def grant(state, tier, days, now, seed):
                                   for raw in record.get('tankmen', {}).values()]
     # #1513 Vehicle.__init__ calls RentalInfoProvider(*invData['rent'],
     # isRented=True): additionalData, absolute expiry, battles, wins.
-    record['rent'] = [{}, award['expiry'], 0, 0]
+    if award['kind'] == 'vehicle':
+        record.pop('rent', None)
+    else:
+        record['rent'] = [{}, award['expiry'], 0, 0]
     state._touched.add(int(record['id']))
     return award

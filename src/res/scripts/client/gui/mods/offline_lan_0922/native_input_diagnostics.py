@@ -24,7 +24,8 @@ _reports_by_method, _record_sequence = {}, 0
 # Detailed geometry histories are opt-in and bounded independently of errors
 # and lifecycle messages. Never use this budget for gameplay or wire events.
 DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
-DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
+DETAIL_LABELS = frozenset(('BOT INITIAL ROUTE CAPACITY', 'BOT WATER DANGER', 'BOT ENVIRONMENT DEATH',
+    'SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
     'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
     'BOT ROUTE CONNECTION', 'STACK CONTACT DECISION', 'BOT SEARCH JOB',
     'PROJECTILE INTERFACE', 'BOT NAV CHOICE', 'BOT EDGE DYNAMICS',

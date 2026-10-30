@@ -358,6 +358,7 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
         lane_usage[(state['team'], lane)] = lane_usage.get((state['team'], lane), 0) + 1
 
     lane_usage = {}
+    class_usage = {}
     original_candidates = candidates
     def candidates(state):
         rows = original_candidates(state)
@@ -365,14 +366,36 @@ def assign_initial_routes(profile, name, graph, states, catalog, seed):
             route = row[3][0]
             family = route.get('_route_family') or route.get('_editor_source') or route['id']
             used = lane_usage.get((state['team'], family), 0)
+            tag = (state.get('profile') or {}).get('class_tag')
+            same_class = class_usage.get((state['team'], family, tag), 0)
             reserve = route.get('_route_tier', 'main') == 'reserve'
-            stage = (1 if reserve else 0) if used < 3 else 2
+            stage = (1 if reserve else 0) if used < 5 and same_class < 3 else 2
             return (-stage, -used, row[0])
         if not rows:return []
         best = max(rank(row) for row in rows)
         return [row for row in rows if rank(row) == best]
 
+    original_reserve = reserve
+    def reserve(state, selected):
+        original_reserve(state, selected)
+        if selected is not None:
+            route = selected[3][0]
+            family = route.get('_route_family') or route.get('_editor_source') or route['id']
+            tag = (state.get('profile') or {}).get('class_tag')
+            key = (state['team'], family, tag)
+            class_usage[key] = class_usage.get(key, 0) + 1
     initial_allocation.allocate(states, candidates, reserve, seed, name + ':routes')
+    from .native_input_diagnostics import write_json_record
+    write_json_record('BOT INITIAL ROUTE CAPACITY', dict(map=name, total_limit=5,
+        class_limit=3, lanes=[dict(team=t, family=f, count=n)
+            for (t,f),n in sorted(lane_usage.items())],
+        classes=[dict(team=t, family=f, vehicle_class=c, count=n)
+            for (t,f,c),n in sorted(class_usage.items())],
+        actors=[dict(id=s['id'], team=s['team'],
+            vehicle_class=(s.get('profile') or {}).get('class_tag'),
+            route=(plans.get(s['id']) or {}).get('id'),
+            tier=(plans.get(s['id']) or {}).get('_route_tier','main'),
+            outcome=outcomes.get(s['id'])) for s in states]))
     return plans, outcomes, usage
 
 

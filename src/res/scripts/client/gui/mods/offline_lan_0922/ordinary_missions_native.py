@@ -66,8 +66,12 @@ def xml_definition(daily):
         for language, label in row.get('description', row['name']).items():
             counts = ', '.join('%d/%d' % (counters.get(metric, 0), target)
                                for metric, target in sorted(row['goals'].items()))
-            suffix = (u'进度：%s。跨日重置。' if language == 'zh_cn'
-                      else 'Progress: %s. Resets at the next game day.') % counts
+            period = row.get('period', 'day')
+            reset = {'day': (u'每日08:00重置', 'daily at 08:00 Beijing'),
+                     'week': (u'每周一08:00重置', 'Monday at 08:00 Beijing'),
+                     'month': (u'每月1日08:00重置', 'the first day of the month at 08:00 Beijing')}[period]
+            suffix = (u'进度：%s。%s。' % (counts, reset[0]) if language == 'zh_cn'
+                      else 'Progress: %s. Resets %s.' % (counts, reset[1]))
             descriptions[language] = label + u'\n' + suffix
         native_condition, unused = condition(row, descriptions)
         output.append(u'<battleQuest><enabled>true</enabled><id>%s</id>' %
@@ -82,6 +86,13 @@ def xml_definition(daily):
         output.append('<conditions>%s<common><bonusLimit>1</bonusLimit>%s</common></conditions>' %
                       (post, native_condition))
         output.append('</battleQuest>')
+    for index, (difficulty, unused_xp, unused_tiers, chinese) in enumerate(policy.STRATEGIC):
+        members = [policy.quest_id(daily['day'], key) for key in daily['missions']
+                   if policy.BY_ID[key].get('difficulty') == difficulty]
+        output.append('<group><enabled>true</enabled><id>marathon:offline_prizes:%s</id>' % difficulty)
+        output.append(_localized('name', dict(en=difficulty.title(), zh_cn=chinese)))
+        output.append('<priority>%d</priority>' % (4-index))
+        output.append('<groupContent>%s</groupContent></group>' % ' '.join(members))
     output.append('</quests></root>')
     return u''.join(output)
 
@@ -89,7 +100,7 @@ def xml_definition(daily):
 def preview(row, vehicles, snapshot=None, daily=None, now=None):
     assets = {}
     for kind, amount in row['rewards'].items():
-        if kind == 'rental':
+        if kind == 'vehicle_prize':
             from gui.mods.offline_lan_0922 import vehicle_rentals
             if snapshot is None or daily is None:
                 raise ValueError('Rental preview requires the current account inventory')
@@ -99,8 +110,8 @@ def preview(row, vehicles, snapshot=None, daily=None, now=None):
             else:
                 award = vehicle_rentals.choose(vehicle_rentals.catalogue(vehicles, amount[0]),
                     snapshot.get('vehicles', ()), amount[1],
-                    int(time.time() if now is None else now), '%d:%s:%s' %
-                    (daily['day'], row['id'], snapshot.get('accountDBID', 'default')))
+                    int(time.time() if now is None else now),
+                    policy.reward_seed(snapshot, daily['day'], row['id']))
             if award['kind'] == 'compensation':
                 assets['credits'] = award['credits']
             else:
@@ -108,7 +119,7 @@ def preview(row, vehicles, snapshot=None, daily=None, now=None):
                 # is days. Selection is pure and identical to grant(), and is
                 # recalculated when inventory changes before completion.
                 assets['vehicles'] = {int(award['vehicle_type']):
-                    {'rent': {'time': int(award['days'])}}}
+                    {'rent': {'time': int(award['days'])}} if award['kind'] == 'rental' else {}}
             continue
         if kind in ('credits', 'gold', 'crystal', 'freeXP'):
             assets[kind] = amount
@@ -168,7 +179,7 @@ def install_presentation(patch):
         return original_description(formatter, condition)
 
     def compare(first, second):
-        if all(as_text(event.getID()).startswith('offline_daily_v2_')
+        if all(as_text(event.getID()).startswith(('offline_daily_v3_', 'marathon:offline_prizes:'))
                for event in (first, second)):
             a, b = first.getPriority(), second.getPriority()
             return (a > b) - (a < b)
@@ -176,6 +187,15 @@ def install_presentation(patch):
 
     patch(BattlesCountFormatter, '_getDescription', description)
     patch(group_packers, 'missionsSortFunc', compare)
+    # The stock marathon finder normally removes one headline token quest.
+    # Our twelve independently paid objectives have no headline token: retain
+    # all three cards and let the existing no-headline header path render them.
+    original_find = group_packers._MarathonQuestsBlockInfo._findEvents
+    def strategic_events(block, events):
+        if as_text(block._group.getID()).startswith('marathon:offline_prizes:'):
+            return block._group.getGroupContent(events)
+        return original_find(block, events)
+    patch(group_packers._MarathonQuestsBlockInfo, '_findEvents', strategic_events)
 
 
 def sync(snapshot, now=None):
@@ -200,18 +220,22 @@ def sync(snapshot, now=None):
                         for key in daily['missions'])
         digest = hashlib.sha256(text.encode('utf-8') + pickle.dumps(previews, 2)).hexdigest()
         if digest not in _cache:
-            nodes = parse_xml(text, stamp, daily['day'] * policy.DAY,
-                              (daily['day'] + 1) * policy.DAY)
+            intervals = [policy.assignment_bounds(daily['day'], key) for key in daily['missions']]
+            nodes = parse_xml(text, stamp, min(r[0] for r in intervals), max(r[1] for r in intervals))
             definitions = {}
             for group in nodes.values():
                 for node in group:
                     data = dict(node.info['questClientData'])
-                    data['isDaily'] = True
-                    key = next(key for key in daily['missions']
-                               if policy.quest_id(daily['day'], key) == data['id'])
-                    data['bonus'] = previews[key]
+                    key = next((key for key in daily['missions']
+                                if policy.quest_id(daily['day'], key) == data['id']), None)
+                    if key is not None:
+                        row = policy.BY_ID[key]
+                        start, finish = policy.assignment_bounds(daily['day'], key)
+                        data.update(startTime=start, finishTime=finish, progressExpiryTime=finish,
+                                    announceTime=start, isDaily=row.get('period', 'day') == 'day')
+                        data['bonus'] = previews[key]
                     definitions[data['id']] = data
-            if len(definitions) != len(daily['missions']):
+            if len(definitions) != len(daily['missions']) + 4:
                 raise ValueError('Native quest parser returned %d/%d missions' %
                                  (len(definitions), len(daily['missions'])))
             _cache.clear()
@@ -219,7 +243,7 @@ def sync(snapshot, now=None):
             print('[Offline LAN 0.9.22] NATIVE MISSIONS parsed count=%d day=%d schema=%d' %
                   (len(definitions), daily['day'], policy.SCHEMA))
             for key in daily['missions']:
-                if 'rental' in policy.BY_ID[key]['rewards']:
+                if 'vehicle_prize' in policy.BY_ID[key]['rewards']:
                     print('[Offline LAN 0.9.22] NATIVE MISSION rental_preview quest=%s bonus=%s' %
                           (key, previews[key]))
         progress = {}

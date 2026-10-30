@@ -314,6 +314,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
             100 if earnings_percent is None else earnings_percent)
         config_module.save_slot_initial_berths = lambda: initial_berths
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
+        config_module.save_slot_mission_seed = lambda: 'a' * 32
         config_module.save_slot_initial_personal_progress = lambda: {}
         config_module.save_slot_initial_customizations = lambda: {}
         config_module.ACTIVE_SAVE_SLOT = object()

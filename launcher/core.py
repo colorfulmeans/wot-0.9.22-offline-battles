@@ -514,6 +514,7 @@ def write_0_9_22_settings(game_root, mode, host, port, name=None,
                 # account settings from this field, so the selected save takes
                 # effect for the run this launch starts.
                 config["save_slot"] = save_slot
+            save_slots.ensure_mission_seed(config.get('save_slot', 'default'), game_root)
             _write_json(config_path, config)
             written.append(config_path)
     return written

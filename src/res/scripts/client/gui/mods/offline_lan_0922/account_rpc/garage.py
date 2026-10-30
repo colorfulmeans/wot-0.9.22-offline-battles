@@ -137,6 +137,9 @@ class GarageState(object):
         if not isinstance(snapshot, dict):
             raise GarageError('garage snapshot must be a mapping')
         self._snapshot = copy.deepcopy(snapshot)
+        if not self._snapshot.get('missionSeed'):
+            import uuid
+            self._snapshot['missionSeed'] = uuid.uuid4().hex
         self._vehicles = vehicles_module
         self._tankmen = tankmen_module
         self._customizations = customizations_module

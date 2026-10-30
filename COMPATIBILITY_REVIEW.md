@@ -1,5 +1,68 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Strategic prizes and current-policy verification (October 31)
+
+This follow-up supersedes the preceding daily-rental cadence, thresholds and
+reward-price assumptions; the older acceptance below describes its own package.
+Six small ordinary tasks remain on the native regular page. Twelve quality
+objectives use four native marathon groups, ordered simple/normal/hard/elite,
+with day/week/month cards in each group. Per-battle winning base-XP gates are
+1000/1500/2000/2500; period targets are 5/25/100 qualifying wins. A qualifying
+battle advances every applicable difficulty and period. Rewards are respectively
+3-day rentals, 30-day rentals and permanent vehicles, using tier pools II-IV,
+V-VII, VIII-IX and X. Native group parsing is verified against #1513 bytecode;
+the scoped marathon finder retains all three independent cards without inventing
+a headline token reward. Packaged Scaleform rendering remains to be checked.
+
+Reset time is 08:00 Beijing (UTC midnight), Monday for weeks and day 1 for months.
+Week/month state survives daily resets. Schema-2 task progress is not migrated;
+existing assets, durable receipts and personal campaigns are preserved. Weekday
+first wins pay x2 and game-day weekends x5. Banking, result replay, service
+notification and carousel shop factor share that factor; the existing daily
+rollover requests a native Shop resync. Bonds and premium rules are unchanged.
+
+First-login draws now use a per-save UUID persisted by the launcher in save.json
+before client launch; the garage ledger retains it on later saves. Preview and
+payment use the same period/key/identity. This fixes the missing-accountDBID
+fallback which previously made all new accounts share a day's draw. Missing or
+expired rentals precede active rental extensions. Permanent prizes upgrade the
+same rental hull, clearing rent; all-permanent pools pay the selected vehicle's
+approved full gold valuation x400 in credits. Rental substitutes retain the
+existing integer percentage table. No asset is granted by the UI preview.
+
+The thirteen approved placeholder overrides live only in vehicle_rentals.PRIZE_GOLD,
+including King Tiger (H)=7700 and T-103=9000. Native shop prices are unchanged.
+Chinese #1513 Type59Gold=155520, 121B=32000 and WT(P)=30000 are retained. Modern
+2020/2.0 discounts and modern selling prices are not historical #1513 baselines.
+
+Route assignment now tests five total actors and three of a class per physical
+road before reserving another road. Class variants share that physical road's
+load, teams remain independent and artillery retains its own allocation.
+Overflow still uses authored roads when every eligible lane is saturated.
+The current allocator contract tests replace the old three-total expectation;
+historical movement recordings remain incident fixtures, not default-route truth.
+The owner-reviewed current tactics remain the live configuration baseline.
+
+Lakeville T-50's captured-input Python replay reproduced a supported-datum retirement
+followed by false airborne descent. Settling the already-proven five-point raw
+pose at retirement changes the recorded two steps from y=11.9386 then 11.2627
+and -4.0712 m/s to y=11.8628 then 12.3980, grounded in both steps. This is a
+recorded engine-I/O replay, not proof of native map collision acceptance. The
+existing bridge/roof/slope tests remain authoritative; no global slope threshold
+is relaxed. Diagnostic mode adds route-capacity, water-danger and drowning-death
+receipts, parsed by read_native_evidence. The IS-4/Conqueror avoidance policy and
+low-health destructible policy are deliberately unchanged.
+
+Local verification so far: nine isolated subsystem files passed 551 tests;
+bootstrap and diagnostic gating passed 95 tests; four launcher/editor files
+passed 86 tests including actual Tk geometry. Expanded economy/default-style
+checks passed. Initial-allocation and contact-motion runtime cases additionally
+encounter missing local native simulation; these are not counted as passing.
+The exact compiled Source parsed 40 candidates plus four groups and all 225 client
+modules compiled under Python 2.7. Current-commit CI, final package inspection,
+native strategic-page ordering, typed-notification history and battle/report
+acceptance are still pending, and will be updated after the actual package runs.
+
 ## Final package acceptance and subsequent gameplay audit (October 30)
 
 Shipping production source is c3c1d279d6bbf3936b824cb1da94109d53cfa38d.

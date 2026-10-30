@@ -183,7 +183,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
-          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/economy --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/economy --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py --pattern test_ordinary_missions.py --pattern test_strategic_calendar.py --pattern test_native_notifications.py --pattern test_port_0922_offline_services.py
           python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/bot-test-results/customization --pattern test_save_customizations.py
       - name: Check bonds settlement and worker collision preparation
         if: ${{ !cancelled() }}

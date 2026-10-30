@@ -476,10 +476,14 @@ Only unlocked player defaults and elite equipment mount the directive for the
 first installed family with an available directive. Career creation is unchanged.
 Later saved equipment changes are preserved.
 
-Daily missions use the stock Scaleform Window title, close cross and button
-classes. Daily and waiting-room footer buttons use the client's own dynamic
-text sizing and are right aligned. The exact-client movie is rebuilt and
-inspected alongside its source; rendered spacing still needs Windows acceptance.
+Ordinary tasks and strategic vehicle prizes use the native mission pages,
+progress counters and service notifications. Strategic groups run from simple
+through elite, with daily, weekly and monthly objectives in each group. Each
+qualifying battle must be a victory with at least 1000/1500/2000/2500 base XP.
+Complete 5/25/100 qualifying battles for a 3-day rental, 30-day rental or permanent
+vehicle. Periods reset at 08:00 Beijing, on Monday for weeks and day 1 for months.
+First-win experience is x2 on game-day weekdays and x5 on weekends. Personal
+campaigns and battle bond rewards are separate and unchanged.
 
 ## Saves
 

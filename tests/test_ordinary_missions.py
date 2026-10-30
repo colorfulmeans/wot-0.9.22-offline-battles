@@ -31,18 +31,15 @@ class OrdinaryMissionsTests(unittest.TestCase):
         row.update(changes)
         return row
 
-    def test_55_candidates_and_approved_cadence_daily_reset(self):
-        self.assertEqual(55, len(self.policy.CATALOGUE))
-        for day in range(21):
-            daily = self.policy.state({}, day * 86400 + 1)
-            self.assertEqual(7 + int(day % 3 == 0) + int(day % 7 == 0), len(daily['missions']))
-            rows = [self.policy.BY_ID[key] for key in daily['missions']]
-            self.assertEqual([2, 2, 1, 1], [sum(r['pool'] == pool for r in rows)
-                for pool in ('basic', 'advanced', 'special', 'challenge')])
-            daily['claimed'] = list(daily['missions'])
-            saved = {'dailyMissions': daily}
-            self.assertEqual(daily, self.policy.state(saved, day * 86400 + 5))
-            self.assertEqual([], self.policy.state(saved, (day + 1) * 86400 + 1)['claimed'])
+    def test_six_small_tasks_and_twelve_quality_tasks_in_difficulty_order(self):
+        self.assertEqual(40,len(self.policy.CATALOGUE))
+        daily=self.policy.state(self.owner.snapshot(),86401)
+        self.assertEqual(18,len(daily['missions']))
+        rows=[self.policy.BY_ID[k] for k in daily['missions']]
+        self.assertEqual([2,2,1,1],[sum(r['pool']==p for r in rows) for p in ('basic','advanced','special','challenge')])
+        self.assertEqual([(d,p) for d in ('simple','normal','hard','elite') for p in ('day','week','month')],
+                         [(r['difficulty'],r['period']) for r in rows[6:]])
+        self.assertEqual([1000,1500,2000,2500],[rows[i]['quality_xp'] for i in (6,9,12,15)])
 
     def test_old_progress_reset_does_not_change_campaign_or_reserves(self):
         snapshot = dict(dailyMissions={'day': 1, 'claimed': ['battles'], 'battles': 99},
@@ -53,16 +50,16 @@ class OrdinaryMissionsTests(unittest.TestCase):
         self.assertTrue(all(not any(values.values()) for values in daily['progress'].values()))
         self.assertEqual(before, snapshot)
 
-    def test_monthly_cadence_and_difficulty_order_across_year_and_leap_boundaries(self):
-        for year, month in ((2026, 1), (2026, 2), (2026, 12), (2027, 1), (2028, 2), (2028, 3)):
-            for month_day in range(1, calendar.monthrange(year, month)[1] + 1):
-                date = datetime.datetime(year, month, month_day)
-                day = calendar.timegm(date.timetuple()) // 86400
-                ids = self.policy.assignments(day)
-                self.assertEqual(ids, sorted(ids, key=lambda key: self.policy.DISPLAY_ORDER[key]))
-                rentals = [self.policy.BY_ID[key]['rental_days'] for key in ids[6:]]
-                self.assertEqual([duration for duration in (1, 3, 7)
-                                  if (month_day - 1) % duration == 0], rentals)
+    def test_week_month_and_day_boundaries_preserve_only_matching_periods(self):
+        for y,m,d in ((2026,10,31),(2026,11,1),(2026,12,31),(2028,2,28),(2028,2,29)):
+            now=calendar.timegm((y,m,d,12,0,0))
+            a=self.policy.state(self.owner.snapshot(),now)
+            for k in a['missions']: a['progress'][k]={metric:1 for metric in self.policy.BY_ID[k]['goals']}
+            snapshot=dict(self.owner.snapshot(),dailyMissions=a)
+            b=self.policy.state(snapshot,now+86400)
+            for k in b['missions'][6:]:
+                retained=a['periods'][k]==b['periods'][k]
+                self.assertEqual(int(retained),b['progress'][k][k],(y,m,d,k))
 
     def test_same_day_sort_update_preserves_paid_tasks_and_partial_progress(self):
         daily = self.policy.state({}, 86401)
@@ -80,7 +77,8 @@ class OrdinaryMissionsTests(unittest.TestCase):
     def test_native_presentation_honors_marked_description_and_keeps_completed_order(self):
         class Formatter:
             def _getDescription(self, condition): return 'stock description'
-        groups = types.SimpleNamespace(missionsSortFunc=lambda a, b: -99)
+        groups = types.SimpleNamespace(missionsSortFunc=lambda a, b: -99,
+            _MarathonQuestsBlockInfo=type('Marathon',(),{'_findEvents':lambda *args: []}))
         bonus = types.ModuleType('gui.server_events.cond_formatters.bonus')
         bonus.BattlesCountFormatter = Formatter
         formatters = types.ModuleType('gui.server_events.cond_formatters')
@@ -101,7 +99,7 @@ class OrdinaryMissionsTests(unittest.TestCase):
             getID=lambda: key, getPriority=lambda: priority,
             isCompleted=lambda: True)
         self.assertEqual(1, groups.missionsSortFunc(
-            event('offline_daily_v2_1_win1', 100), event('offline_daily_v2_1_rental_9_1', 90)))
+            event('offline_daily_v3_1_win1', 100), event('offline_daily_v3_1_vehicle_hard_day', 90)))
         self.assertEqual(-99, groups.missionsSortFunc(event('personal_1', 100), event('other', 90)))
 
     def test_yesterdays_receipt_cannot_finish_tasks_after_midnight_before_another_battle(self):
@@ -111,7 +109,8 @@ class OrdinaryMissionsTests(unittest.TestCase):
             before = copy.deepcopy(self.owner.snapshot())
             with mock.patch.object(self.policy.time, 'time', return_value=172801):
                 self.assertEqual([], self.policy.advance(self.owner, self.receipt(), 86402))
-            self.assertEqual(before, self.owner.snapshot())
+            self.assertEqual(before['wallet'], self.owner.snapshot()['wallet'])
+            self.assertEqual(0,self.owner.snapshot()['dailyMissions']['progress']['crit7']['crits'])
 
     def test_cumulative_seven_critical_events_paid_once_with_durable_notice(self):
         with mock.patch.object(self.policy, 'assignments', return_value=['crit7']), \
@@ -151,16 +150,14 @@ class OrdinaryMissionsTests(unittest.TestCase):
 
     def test_missing_hp_cannot_pass_own_hp_conditions(self):
         values = self.policy.battle_values(self.receipt(max_health=0))
-        for key in ('hp_survive', 'damage2hp', 'block2hp', 'rental_3_1', 'rental_5_1'):
+        for key in ('hp_survive', 'damage2hp', 'block2hp'):
             self.assertIsNone(values[key])
 
-    def test_base_xp_and_survival_qualify_battles_not_rewarded_xp(self):
-        row = self.receipt(rewards={'xp': 749})
-        values = self.policy.battle_values(row)
-        self.assertFalse(values['rental_6_1'])
-        self.assertTrue(values['rental_5_1'])
-        self.assertTrue(values['block2hp'])
-        self.assertEqual(2, values['crits'])
+    def test_quality_requires_one_battle_base_xp_and_victory(self):
+        for xp,qualified in ((999,0),(1000,1),(1499,1),(1500,2),(2000,3),(2500,4)):
+            for won in (True,False):
+                values=self.policy.battle_values(self.receipt(rewards={'xp':xp},winner=1 if won else 2))
+                self.assertEqual(qualified*3 if won else 0,sum(values[k] for k in values if k.startswith('vehicle_')))
 
     def test_native_flat_cumulative_counter_and_ungrouped_progress(self):
         daily = dict(day=1, missions=['damage3000'], claimed=[],
@@ -218,20 +215,20 @@ class OrdinaryMissionsTests(unittest.TestCase):
     def test_rental_preview_uses_payment_selection_without_mutating_inventory(self):
         rentals = fixture._load_port_module('vehicle_rentals')
         snapshot = {'accountDBID': 7, 'vehicles': []}
-        daily = dict(day=1, missions=['rental_9_1'], claimed=[], rewards={})
+        daily = dict(day=1, missions=['vehicle_hard_day'], claimed=[], rewards={})
         pool = [dict(cd=17, name='tank', gold=1000)]
         before = copy.deepcopy(snapshot)
         with mock.patch.object(rentals, 'catalogue', return_value=pool):
-            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+            assets = self.native.preview(self.policy.BY_ID['vehicle_hard_day'], None,
                                          snapshot, daily, 86401)
-            self.assertEqual({17: {'rent': {'time': 1}}}, assets['vehicles'])
+            self.assertEqual({17: {'rent': {'time': 3}}}, assets['vehicles'])
             self.assertEqual(before, snapshot)
             snapshot['vehicles'] = [dict(vehicleTypeCompactDescr=17)]
-            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+            assets = self.native.preview(self.policy.BY_ID['vehicle_hard_day'], None,
                                          snapshot, daily, 86401)
-            self.assertEqual({'credits': 4000}, assets)
-            daily['rewards']['rental_9_1'] = [dict(kind='rental', vehicle_type=17, days=1)]
-            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+            self.assertEqual({'credits': 12000}, assets)
+            daily['rewards']['vehicle_hard_day'] = [dict(kind='rental', vehicle_type=17, days=1)]
+            assets = self.native.preview(self.policy.BY_ID['vehicle_hard_day'], None,
                                          snapshot, daily, 86401)
             self.assertIn('vehicles', assets)
 
@@ -263,6 +260,36 @@ class RentalPolicyTests(unittest.TestCase):
         self.assertEqual(2, reward['vehicle_type'])
         self.assertFalse(reward['extended'])
         self.assertEqual(186400, reward['expiry'])
+
+    def test_permanent_prize_upgrades_rentals_and_full_owned_pool_pays_full_value(self):
+        records=[dict(vehicleTypeCompactDescr=1),
+                 dict(vehicleTypeCompactDescr=2,rent=[{},200000,0,0])]
+        reward=self.policy.choose(self.pool,records,0,100000,'seed')
+        self.assertEqual('vehicle',reward['kind'])
+        self.assertEqual(2,reward['vehicle_type'])
+        records[1].pop('rent')
+        reward=self.policy.choose(self.pool,records,0,100000,'seed')
+        self.assertEqual('compensation',reward['kind'])
+        price=self.pool[reward['vehicle_type']-1]['gold']
+        self.assertEqual(price*400,reward['credits'])
+
+    def test_approved_placeholder_values_do_not_follow_modern_repricing(self):
+        self.assertEqual(13,len(self.policy.PRIZE_GOLD))
+        self.assertEqual(7700,self.policy.PRIZE_GOLD['germany:G16_PzVIB_Tiger_II_F'])
+        self.assertEqual(9000,self.policy.PRIZE_GOLD['ussr:R135_T_103'])
+        self.assertNotIn('china:Ch01_Type59_Gold',self.policy.PRIZE_GOLD)
+
+    def test_save_seed_is_independent_and_survives_ledger_and_restart(self):
+        garage=fixture._load('garage')
+        services=fixture._load_port_module('offline_services')
+        first=garage.GarageState({})
+        second=garage.GarageState({})
+        self.assertNotEqual(first.snapshot()['missionSeed'],second.snapshot()['missionSeed'])
+        ledger=services.saved_fields(first.snapshot())
+        restored=garage.GarageState(ledger)
+        self.assertEqual(first.snapshot()['missionSeed'],restored.snapshot()['missionSeed'])
+        selected={self.policy.choose(self.pool,[],3,100000,str(i))['vehicle_type'] for i in range(50)}
+        self.assertEqual({1,2},selected)
 
     def test_fixed_duration_compensation_is_integer_and_rejects_other_durations(self):
         self.assertEqual([1, 3, 7, 14, 30, 90, 180, 360], sorted(self.policy.COMPENSATION_PERCENT))

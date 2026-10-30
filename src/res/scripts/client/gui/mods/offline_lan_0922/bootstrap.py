@@ -1001,6 +1001,7 @@ def _selected_vehicle(config, restore_saved=True):
         # Overlay the saved garage last, so it wins over the stock fitting but
         # never over the current client's catalogue.
         if restore_saved:
+            result['missionSeed'] = port_config.save_slot_mission_seed()
             _restore_garage(result)
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
@@ -1011,6 +1012,12 @@ def _selected_vehicle(config, restore_saved=True):
             _grant_initial_appearance(result, customization_cache, style_vehicle_types)
         from gui.mods.offline_lan_0922.customization_rules import report_inventory
         report_inventory(result, customization_cache)
+        if restore_saved and not result.get('missionSeed'):
+            # Non-launcher entrances retain one seed in this session. Normal
+            # launches persist it in save metadata before starting the client.
+            import uuid
+            result['missionSeed'] = uuid.uuid4().hex
+            sys.stdout.write('[Offline LAN 0.9.22] MISSION seed awaits normal garage persistence\n')
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot

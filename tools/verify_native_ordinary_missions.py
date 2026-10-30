@@ -119,7 +119,10 @@ def main():
         nodes = adapter.parse_xml(adapter.xml_definition(daily), 1000000000, 0, 2000000000)
         definitions = dict((node.info['id'], node.info['questClientData'])
                            for group in nodes.values() for node in group)
-        assert len(definitions) == len(policy.BY_ID) == 55
+        assert len(definitions) == len(policy.BY_ID) + 4 == 44
+        for difficulty, unused_xp, unused_tiers, unused_label in policy.STRATEGIC:
+            group = definitions['marathon:offline_prizes:' + difficulty]
+            assert len(group['groupContent']) == 3
         for key in daily['missions']:
             row = definitions[policy.quest_id(1, key)]
             assert row['name']['en'] == policy.BY_ID[key]['name']['en']
@@ -139,7 +142,7 @@ def main():
         combined = dict(combined)
         assert dict(dict(combined['battles'])['count'])['value'] == 8
         assert dict(combined['cumulative'])['value'] == ('damageDealt', 20000)
-        print('PASS: exact #1513 Source parsed 55 ordinary quests; native common counters and no congratulations flag verified.')
+        print('PASS: exact #1513 Source parsed 40 candidate quests and four strategic groups; counters and no congratulations flag verified.')
         print('Boundary: engine-I/O fixtures; live MissionsPage/render/payment acceptance remains separate.')
     finally:
         os.unlink(path)

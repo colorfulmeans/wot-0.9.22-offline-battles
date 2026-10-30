@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """Approved offline ordinary missions, independent of personal campaigns.
 
-Every progress counter expires with its assignment day. Three/seven-day rental
-missions describe appearance cadence and prize duration, not progress carryover.
+Daily, weekly and monthly quality counters have independent calendar boundaries.
+Old policy counters are reset without altering assets or personal campaigns.
 The catalogue is offline product policy, not a recovered historical server list.
 """
 import copy
 import hashlib
 import time
 
-SCHEMA = 2
+SCHEMA = 3
 DAY = 86400
 
 
@@ -69,38 +69,27 @@ CATALOGUE = [
         {'wins': 8, 'damage': 20000}, {'gold': 300, 'crystal': 50}),
 ]
 
-RENTAL_WEIGHTS = {1: (15, 15, 15, 15, 14, 10, 8, 5, 3),
-                 3: (15, 15, 16, 16, 15, 10, 7, 4, 2),
-                 7: (18, 18, 17, 16, 14, 9, 5, 2, 1)}
-RENTAL_COUNTS = {1: (2, 3, 3, 3, 3, 4, 5, 6, 6),
-                3: (3, 4, 4, 4, 4, 6, 8, 8, 8),
-                7: (4, 5, 5, 5, 6, 8, 12, 10, 10)}
-RENTAL_EN = ('Top 10 by base XP', 'Deal your HP in damage', 'Top 5 by base XP',
-             'Deal your HP in damage and win', '750 base XP and a victory',
-             '850 base XP and a victory', '1000 base XP and a victory')
-RENTAL_ZH = (u'基础经验进入本队前10名', u'造成不低于自身生命值的伤害', u'基础经验进入本队前5名',
-             u'造成不低于自身生命值的伤害并获胜', u'获得750基础经验并获胜',
-             u'获得850基础经验并获胜', u'获得1000基础经验并获胜')
-for _days in (1, 3, 7):
-    for _tier in range(2, 11):
-        _count = RENTAL_COUNTS[_days][_tier - 2]
-        _xp = None if _tier < 9 else (1000 if _days == 1 and _tier == 9 else
-                    1100 if _days == 3 and _tier == 9 else 1200)
-        _en = RENTAL_EN[_tier - 2] if _tier < 9 else '%d base XP and a victory' % _xp
-        _zh = RENTAL_ZH[_tier - 2] if _tier < 9 else u'获得%d基础经验并获胜' % _xp
-        if _tier == 10 and _days == 7:
-            _en += ', top 3 by team base XP'
-            _zh += u'，且基础经验进入本队前3名'
-        _key = 'rental_%d_%d' % (_tier, _days)
-        _row = _mission(_key, 'rental_%d' % _days,
-            '%s in %d battles: Tier %d rental, %d days' % (_en, _count, _tier, _days),
-            u'累计%d场%s：%d级战车租用%d天' % (_count, _zh, _tier, _days),
-            {_key: _count}, {'rental': (_tier, _days)})
-        _row['description'] = dict(_row['name'])
-        _row['name'] = dict(en='%d-day rental: Tier %d premium/special vehicle' % (_days, _tier),
-                           zh_cn=u'%d天租用：%d级金币／特种车' % (_days, _tier))
-        _row.update(rental_tier=_tier, rental_days=_days, rental_xp=_xp,
-                    weight=RENTAL_WEIGHTS[_days][_tier - 2])
+# Difficulty rows, each containing daily, weekly and monthly prizes.
+STRATEGIC = (('simple', 1000, (2, 3, 4), u'简单'),
+             ('normal', 1500, (5, 6, 7), u'普通'),
+             ('hard', 2000, (8, 9), u'困难'),
+             ('elite', 2500, (10,), u'精英'))
+PERIODS = (('day', 5, 3, u'日'), ('week', 25, 30, u'周'),
+           ('month', 100, 0, u'月'))
+for _difficulty, _xp, _tiers, _zh in STRATEGIC:
+    for _period, _count, _days, _period_zh in PERIODS:
+        _key = 'vehicle_%s_%s' % (_difficulty, _period)
+        _prize_en = '%d-day rental' % _days if _days else 'permanent vehicle'
+        _prize_zh = u'租用%d天' % _days if _days else u'永久车辆'
+        _row = _mission(_key, 'strategic',
+            '%s / %s: Tier %s %s' % (_difficulty.title(), _period, '-'.join(
+                str(t) for t in (_tiers[0], _tiers[-1])) if len(_tiers)>1 else str(_tiers[0]), _prize_en),
+            u'%s%s：%s级%s' % (_zh, _period_zh,
+                u'%d—%d' % (_tiers[0], _tiers[-1]) if len(_tiers)>1 else str(_tiers[0]), _prize_zh),
+            {_key: _count}, {'vehicle_prize': (_tiers, _days)})
+        _row.update(period=_period, difficulty=_difficulty, quality_xp=_xp,
+            description=dict(en='Win %d battles with at least %d base XP in each battle' % (_count, _xp),
+                zh_cn=u'完成%d场胜利，每场至少获得%d基础经验' % (_count, _xp)))
         CATALOGUE.append(_row)
 BY_ID = dict((row['id'], row) for row in CATALOGUE)
 DISPLAY_ORDER = dict((row['id'], index) for index, row in enumerate(CATALOGUE))
@@ -116,43 +105,42 @@ def assignments(day, seed='default'):
         rows = [row for row in CATALOGUE if row['pool'] == pool]
         result.extend(row['id'] for row in sorted(rows,
             key=lambda row: _number('%s:%d:%s' % (seed, day, row['id'])))[:count])
-    month_day = time.gmtime(day * DAY).tm_mday
-    for days in (1, 3, 7):
-        if (month_day - 1) % days:
-            continue
-        draw = _number('%s:%d:rental:%d' % (seed, day, days)) % 100
-        for row in (row for row in CATALOGUE if row['pool'] == 'rental_%d' % days):
-            draw -= row['weight']
-            if draw < 0:
-                result.append(row['id'])
-                break
+    result.extend(row['id'] for row in CATALOGUE if row['pool'] == 'strategic')
     return sorted(result, key=lambda key: DISPLAY_ORDER[key])
+
+
+def assignment_bounds(day, key):
+    from gui.mods.offline_lan_0922.game_calendar import bounds
+    return bounds(day * DAY, BY_ID[key].get('period', 'day'))
+
+
+def reward_seed(snapshot, day, key):
+    return '%s:%d:%s' % (snapshot.get('missionSeed', snapshot.get('accountDBID', 'default')),
+                        assignment_bounds(day, key)[0], key)
 
 
 def state(snapshot, now=None):
     day = int(time.time() if now is None else now) // DAY
     raw = snapshot.get('dailyMissions') or {}
-    same = raw.get('schema') == SCHEMA and raw.get('day') == day
-    ids = assignments(day, str(snapshot.get('accountDBID', 'default')))
+    same = raw.get('schema') == SCHEMA
+    ids = assignments(day, str(snapshot.get('missionSeed', snapshot.get('accountDBID', 'default'))))
     result = dict(schema=SCHEMA, day=day, missions=ids, claimed=[],
-                progress=dict((key, dict((metric, 0) for metric in BY_ID[key]['goals']))
-                              for key in ids), rewards={})
-    if same:
-        # Presentation-order/cadence updates must not pay an already completed
-        # unchanged objective again or erase its current-day progress.
-        for key in ids:
-            if key in raw.get('missions', ()):
-                result['progress'][key] = copy.deepcopy(raw.get('progress', {}).get(
-                    key, result['progress'][key]))
-                if key in raw.get('claimed', ()):
-                    result['claimed'].append(key)
-                if key in raw.get('rewards', {}):
-                    result['rewards'][key] = copy.deepcopy(raw['rewards'][key])
+                  progress={}, rewards={}, periods={})
+    for key in ids:
+        start, finish = assignment_bounds(day, key)
+        result['periods'][key] = start
+        result['progress'][key] = dict((metric, 0) for metric in BY_ID[key]['goals'])
+        if same and raw.get('periods', {}).get(key) == start:
+            result['progress'][key] = copy.deepcopy(raw.get('progress', {}).get(key, result['progress'][key]))
+            if key in raw.get('claimed', ()):
+                result['claimed'].append(key)
+            if key in raw.get('rewards', {}):
+                result['rewards'][key] = copy.deepcopy(raw['rewards'][key])
     return result
 
 
 def quest_id(day, key):
-    return 'offline_daily_v2_%d_%s' % (day, key)
+    return 'offline_daily_v3_%d_%s' % (assignment_bounds(day, key)[0] // DAY, key)
 
 
 def battle_values(receipt, vehicle_tags=()):
@@ -184,29 +172,15 @@ def battle_values(receipt, vehicle_tags=()):
         td3500=int('AT-SPG' in vehicle_tags and damage >= 3500 and won),
         spot3assist=int(stats.get('spotted', 0) >= 3 and assist >= 1000))
     for row in CATALOGUE:
-        if 'rental_tier' not in row:
-            continue
-        tier = row['rental_tier']
-        if tier == 2:
-            eligible = rank <= 10
-        elif tier == 3:
-            eligible = hp_damage
-        elif tier == 4:
-            eligible = rank <= 5
-        elif tier == 5:
-            eligible = None if hp_damage is None else hp_damage and won
-        else:
-            eligible = won and xp >= ({6: 750, 7: 850, 8: 1000}.get(tier) or row['rental_xp'])
-            if tier == 10 and row['rental_days'] == 7:
-                eligible = eligible and rank <= 3
-        result[row['id']] = None if eligible is None else int(eligible)
+        if row['pool'] == 'strategic':
+            result[row['id']] = int(won and xp >= row['quality_xp'])
     return result
 
 
 def _pay(state_owner, row, now, seed):
     rewards = []
     for kind, amount in sorted(row['rewards'].items()):
-        if kind == 'rental':
+        if kind == 'vehicle_prize':
             from gui.mods.offline_lan_0922 import vehicle_rentals
             rewards.append(vehicle_rentals.grant(state_owner, amount[0], amount[1], now, seed))
         elif kind in ('credits', 'gold', 'crystal', 'freeXP'):
@@ -239,14 +213,10 @@ def advance(state_owner, receipt, now):
         return []
     now = int(now)
     processing_time = int(time.time())
-    if now // DAY < processing_time // DAY:
-        print('[Offline LAN 0.9.22] MISSION EVIDENCE expired receipt=%s battle_day=%d current_day=%d' %
-              (receipt.get('receipt_id'), now // DAY, processing_time // DAY))
-        return []
     snapshot = state_owner.snapshot()
     if int((snapshot.get('dailyMissions') or {}).get('day', -1)) > now // DAY:
         return []
-    daily = state(snapshot, now)
+    daily = state(snapshot, max(now, processing_time))
     snapshot['dailyMissions'] = daily
     from gui.mods.offline_lan_0922.ordinary_missions_native import native_progress
     before = dict((key, native_progress(daily, key)) for key in daily['missions'])
@@ -263,7 +233,8 @@ def advance(state_owner, receipt, now):
         values.update(medium4=None, td3500=None)
     completed, unavailable = [], set()
     for key in daily['missions']:
-        if key in daily['claimed']:
+        start, finish = assignment_bounds(daily['day'], key)
+        if key in daily['claimed'] or not start <= now < finish:
             continue
         row = BY_ID[key]
         progress = daily['progress'][key]
@@ -277,8 +248,7 @@ def advance(state_owner, receipt, now):
             continue
         try:
             with state_owner._transaction():
-                rewards = _pay(state_owner, row, max(now, processing_time), '%d:%s:%s' %
-                    (daily['day'], key, snapshot.get('accountDBID', 'default')))
+                rewards = _pay(state_owner, row, max(now, processing_time), reward_seed(snapshot, daily['day'], key))
                 daily['claimed'].append(key)
                 daily['rewards'][key] = rewards
         except Exception as error:

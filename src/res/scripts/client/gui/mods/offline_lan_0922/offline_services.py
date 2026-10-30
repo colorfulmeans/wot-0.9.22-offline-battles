@@ -348,9 +348,12 @@ def reserve_bonuses(snapshot, awarded, battle_start):
 
 
 def saved_fields(snapshot):
-    return {'personalReserves': reserve_state(snapshot),
+    fields = {'personalReserves': reserve_state(snapshot),
             'vehicleRecovery': vehicle_recovery_state(snapshot),
             'dailyMissions': copy.deepcopy(snapshot.get('dailyMissions') or {}),
             'firstWinDays': dict(snapshot.get('firstWinDays') or {}),
             'selectedBadges': selected_badges(snapshot),
             'badgeSelectionVerified': bool(snapshot.get('badgeSelectionVerified', False))}
+    if snapshot.get('missionSeed'):
+        fields['missionSeed'] = snapshot['missionSeed']
+    return fields
