@@ -21,29 +21,39 @@ def _escape(text):
     return as_text(text).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
-def condition(row):
+def _localized(tag, values):
+    return '<%s>%s</%s>' % (tag, ''.join(
+        '<%s>%s</%s>' % (language, _escape(text), language)
+        for language, text in sorted(values.items())), tag)
+
+
+def condition(row, descriptions=None):
     """Use stock counters only where their meaning matches this mission.
 
     Composite and event-count conditions retain their complete description
     and actual counters. They must not masquerade as XP or ordinary battles.
     """
-    if len(row['goals']) != 1:
-        return '', {}
     metric, target = next(iter(row['goals'].items()))
-    if metric in SCALAR_FIELDS:
+    if len(row['goals']) == 1 and metric in SCALAR_FIELDS:
         name = SCALAR_FIELDS[metric]
         return '<cumulative><%s>%d</%s></cumulative>' % (name, target, name), {'cumulative': metric}
-    if metric in ('battles', 'wins') or metric.startswith('rental_') or metric in (
-            'damage_top3', 'xp_top10'):
-        return '<battles><count>%d</count></battles>' % target, {'battlesCount': metric}
-    return '', {}
+    if len(row['goals']) == 1 and (metric in ('battles', 'wins') or
+            metric.startswith('rental_') or metric in ('damage_top3', 'xp_top10')):
+        mapping = {'battlesCount': metric}
+    else:
+        # The counter is completion of this whole objective, never an
+        # unrelated XP/damage count or an ordinary battle participation count.
+        target, mapping = 1, {'completed': True}
+    title = dict(en='Objective', zh_cn=u'任务条件')
+    metadata = _localized('title', title) + _localized(
+        'description', descriptions or row['name'])
+    return '<battles><count>%d</count>%s</battles>' % (target, metadata), mapping
 
 
 def xml_definition(daily):
     output = [u'<?xml version="1.0" encoding="utf-8"?><root><quests>']
     for priority, key in enumerate(daily['missions']):
         row = policy.BY_ID[key]
-        native_condition, unused = condition(row)
         descriptions = {}
         counters = daily.get('progress', {}).get(key, {})
         for language, label in row['name'].items():
@@ -52,6 +62,7 @@ def xml_definition(daily):
             suffix = (u'进度：%s。跨日重置。' if language == 'zh_cn'
                       else 'Progress: %s. Resets at the next game day.') % counts
             descriptions[language] = label + u'\n' + suffix
+        native_condition, unused = condition(row, descriptions)
         output.append(u'<battleQuest><enabled>true</enabled><id>%s</id>' %
                       policy.quest_id(daily['day'], key))
         for tag, values in (('name', row['name']), ('description', descriptions)):
@@ -93,6 +104,9 @@ def native_progress(daily, key):
         values[SCALAR_FIELDS[metric]] = counters.get(metric, 0)
     if 'battlesCount' in mapping:
         values['battlesCount'] = counters.get(mapping['battlesCount'], 0)
+    if mapping.get('completed'):
+        values['battlesCount'] = int(all(counters.get(metric, 0) >= target
+            for metric, target in policy.BY_ID[key]['goals'].items()))
     return values
 
 

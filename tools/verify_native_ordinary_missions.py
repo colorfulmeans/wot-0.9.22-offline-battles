@@ -129,6 +129,12 @@ def main():
             assert dict(dict(common)['bonusLimit'])['value'] == 1
         sample = dict(definitions[policy.quest_id(1, 'damage3000')]['conditions'])['common']
         assert dict(dict(sample)['cumulative'])['value'] == ('damageDealt', 3000)
+        composite = dict(definitions[policy.quest_id(1, 'crit7')]['conditions'])['common']
+        counter = dict(dict(composite)['battles'])
+        assert counter['title']['en'] == 'Objective'
+        assert 'Cause 7 module or crew injuries' in counter['description']['en']
+        assert '0/7' in counter['description']['en']
+        assert dict(counter['count'])['value'] == 1
         print('PASS: exact #1513 Source parsed 55 ordinary quests; native common counters and no congratulations flag verified.')
         print('Boundary: engine-I/O fixtures; live MissionsPage/render/payment acceptance remains separate.')
     finally:

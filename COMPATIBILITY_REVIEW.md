@@ -149,6 +149,36 @@ group passed, including current configured passage/departure scenarios.
 This does not relabel the first full CI run as all green; updated-head checks
 and native task retest are still required.
 
+
+Native follow-up on `cb10604` reached both garages and parsed seven actual
+current-day missions. The external-path error is absent. On `61a180b`, build
+`colorfulmeans-41047471308-1`, the user opened the real MissionsPage: 7/7 cards
+and native credit/gold/free-XP/bond/equipment rewards were visible. This exposed
+a remaining presentation bug: conditions without a stock scalar formatter
+fell back to the native generic "play a battle" text. The correction supplies
+the supported localized title/description on the native `battles` condition.
+Its counter is either actual qualifying battles or completion of the whole
+objective (0/1), never unrelated participation. Full metric progress appears
+in the localized description. Stock parser verification now asserts that this
+metadata survives parsing. This changes presentation only; policy/payment is
+unchanged. Live card retest is still required after rebuilding.
+
+The packaged MS-1 internal view rendered the decoded modules. The user-requested
+simplified transparent shell in `61a180b` was visually checked, rotated, and a
+radio module selected through it. The T-50-2 missing-data case prompted and
+then cleared the interior instead of retaining MS-1 geometry. No attributes
+were saved during these checks. The isolated QA account/profile is separate
+from player saves. Game control failed before input with `foreground window
+did not report a process id`, including after the user changed to windowed
+mode; binding/activation retry did not recover. User-assisted page observation
+is recorded as such, not autonomous battle/notification acceptance.
+
+Full Tests `41045281948` passed all six jobs on `f843ab3`. Its production code
+matches `cb10604`; its delta updated stale test fixtures and this record.
+The later shell revision has passed its four local viewer/editor suites
+(48 tests total) and the review-package build. Current-head full CI and final
+native card/reward/error-report acceptance remain pending.
+
 ## October 24: shared owner routes and generic narrow passages
 
 Adopt the reviewed complete profile 1 as the built-in Default for all users,

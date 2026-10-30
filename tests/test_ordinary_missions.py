@@ -132,6 +132,19 @@ class OrdinaryMissionsTests(unittest.TestCase):
         parse.assert_called_once_with(b'<root/>')
         read.assert_called_once_with(section, 100, 0, 200)
 
+    def test_composite_card_uses_native_custom_description_and_actual_completion(self):
+        daily = dict(day=1, missions=['crit7'], claimed=[],
+                     progress={'crit7': {'crits': 6}})
+        xml = self.native.xml_definition(daily)
+        self.assertIn('<battles><count>1</count><title>', xml)
+        self.assertIn('6/7', xml)
+        self.assertIn('Cause 7 module or crew injuries', xml)
+        self.assertEqual({'bonusCount': 0, 'battlesCount': 0},
+                         self.native.native_progress(daily, 'crit7'))
+        daily['progress']['crit7']['crits'] = 7
+        self.assertEqual({'bonusCount': 0, 'battlesCount': 1},
+                         self.native.native_progress(daily, 'crit7'))
+
 
 class RentalPolicyTests(unittest.TestCase):
     def setUp(self):
