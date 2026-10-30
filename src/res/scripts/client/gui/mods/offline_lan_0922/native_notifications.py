@@ -139,8 +139,16 @@ def reward_assets(rows, sign=1):
                          if kind == 'customization' else
                          {1: 'paint', 2: 'camouflage', 3: 'decal',
                           5: 'modification'}[int(row['type'])])
+            permanent = True
+            if kind == 'style':
+                from items import vehicles
+                from gui.mods.offline_lan_0922.customization_rules import is_rental
+                style = vehicles.g_cache.customization20().styles.get(int(row['id']))
+                if style is None:
+                    raise ValueError('Native style notification descriptor is unavailable')
+                permanent = not is_rental(style)
             assets.setdefault('customizations', []).append({
-                'custType': cust_type, 'value': count, 'isPermanent': True})
+                'custType': cust_type, 'value': count, 'isPermanent': permanent})
         elif kind == 'token':
             assets.setdefault('tokens', {})[row['id']] = {'count': count}
         elif kind == 'badge':

@@ -58,6 +58,13 @@ equal-width regression now supplements fake-widget callback tests. This package
 is superseded for final delivery. Its client code can provide client evidence
 only if final package bytecode equality is independently established.
 
+A final notification-contract audit also found that launcher-added rental styles
+were labelled permanent. Typed style receipts now use the exact native style
+descriptor's isRent flag, matching warehouse purchases, while retaining the
+actual item-unit count. Missing descriptors retain the receipt with a diagnostic
+instead of guessing a permanent label. This changes notification presentation
+only, not inventory units, rental vehicle selection or reward amounts.
+
 This revision replaces the former AI-authored three-reserve daily mission
 system. It does not recover a historical server mission list: the 55 candidates
 in `ordinary_missions.py` are the discussed offline adaptation, with 28 ordinary

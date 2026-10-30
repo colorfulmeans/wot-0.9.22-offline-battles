@@ -17,6 +17,14 @@ class NativeNotificationTests(unittest.TestCase):
         self.constants = mock.patch.dict(sys.modules, {'constants': constants})
         self.constants.start()
         self.addCleanup(self.constants.stop)
+        self.styles = {128: types.SimpleNamespace(isRent=False, rentCount=1),
+                       1: types.SimpleNamespace(isRent=True, rentCount=100)}
+        self.vehicles = types.SimpleNamespace(g_cache=types.SimpleNamespace(
+            customization20=lambda: types.SimpleNamespace(styles=self.styles)))
+        self.items_patch = mock.patch.dict(sys.modules, {'items': types.SimpleNamespace(
+            vehicles=self.vehicles)})
+        self.items_patch.start()
+        self.addCleanup(self.items_patch.stop)
 
     def test_invoice_uses_signed_actual_deltas_and_passports(self):
         rewards = [{'kind': 'credits', 'count': 123},
@@ -39,6 +47,13 @@ class NativeNotificationTests(unittest.TestCase):
     def test_missing_crew_identity_is_not_acknowledged_as_a_count_only_notice(self):
         with self.assertRaisesRegex(ValueError, 'passports'):
             self.module.reward_assets([{'kind': 'crew', 'count': 1}])
+
+    def test_rental_style_notice_uses_native_rental_classification_and_actual_units(self):
+        assets = self.module.reward_assets([{'kind': 'style', 'id': 1, 'count': 200}])
+        self.assertEqual([dict(custType='style', value=200, isPermanent=False)],
+                         assets['customizations'])
+        with self.assertRaisesRegex(ValueError, 'descriptor'):
+            self.module.reward_assets([{'kind': 'style', 'id': 999, 'count': 1}])
 
     def test_transport_retries_failed_messages_without_repeating_accepted_ones(self):
         send = mock.Mock(side_effect=[None, RuntimeError('not ready'), None])
