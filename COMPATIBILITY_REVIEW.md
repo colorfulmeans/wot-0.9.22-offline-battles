@@ -12,7 +12,11 @@ battle advances every applicable difficulty and period. Rewards are respectively
 3-day rentals, 30-day rentals and permanent vehicles, using tier pools II-IV,
 V-VII, VIII-IX and X. Native group parsing is verified against #1513 bytecode;
 the scoped marathon finder retains all three independent cards without inventing
-a headline token reward. Packaged Scaleform rendering remains to be checked.
+a headline token reward. Native acceptance found that the stock marathon header
+still displayed empty token/award columns and a misleading combined date range.
+The final scoped adapter uses #1513's category-header/card linkages, showing the
+native completed count without a combined calendar range; each card retains its
+own reset description. Retail marathon groups continue through the stock method.
 
 Reset time is 08:00 Beijing (UTC midnight), Monday for weeks and day 1 for months.
 Week/month state survives daily resets. Schema-2 task progress is not migrated;
@@ -53,15 +57,49 @@ is relaxed. Diagnostic mode adds route-capacity, water-danger and drowning-death
 receipts, parsed by read_native_evidence. The IS-4/Conqueror avoidance policy and
 low-health destructible policy are deliberately unchanged.
 
-Local verification so far: nine isolated subsystem files passed 551 tests;
-bootstrap and diagnostic gating passed 95 tests; four launcher/editor files
-passed 86 tests including actual Tk geometry. Expanded economy/default-style
-checks passed. Initial-allocation and contact-motion runtime cases additionally
-encounter missing local native simulation; these are not counted as passing.
-The exact compiled Source parsed 40 candidates plus four groups and all 225 client
-modules compiled under Python 2.7. Current-commit CI, final package inspection,
-native strategic-page ordering, typed-notification history and battle/report
-acceptance are still pending, and will be updated after the actual package runs.
+Production source: `2a9ff19365858078fcb875e072277c7293b46881`.
+Full Tests [41121151840](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41121151840)
+and Battle review package [41121151843](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41121151843)
+both completed successfully. Final package `PR116-fixes-2a9ff19.zip` has build
+`colorfulmeans-41121151843-1`, SHA256
+`f57ccbba336e1fc2054995ab95a4ffb4e521501f6e8a3b9cabcd14c0e6669196`.
+Archive integrity, x64 launcher, both x86 extensions and all 225 packaged client
+modules were independently checked; the packaged bytecode matches this source.
+
+Local checks: twelve isolated subsystem files passed 663 tests; subsequent
+support/roof/large-drop checks passed 52. The final header change passed four
+mission/account/bootstrap/calendar files (211 tests) and Python 2.7 compilation.
+Four launcher/editor files passed 86 tests including real Tk geometry, and
+launcher/core plus save-slot checks passed 228 (one unavailable-symlink skip).
+Expanded economy/default-style checks passed. Some expanded local initial-
+allocation/contact-motion cases lacked the matching native simulation; their
+local failures are not relabeled as passes. Current full CI passed separately.
+The exact compiled Source parsed 40 candidate quests plus four groups.
+
+Native acceptance used the exact installed Chinese #1513 client, original
+vehicle values, automatic lineups and current owner-reviewed tactics, under an
+isolated QA APPDATA/LOCALAPPDATA. No player save outside that QA root was edited.
+
+| Acceptance | Observed result and boundary |
+| --- | --- |
+| Packaged mission pages | Six small ordinary tasks; twelve strategic tasks in simple/normal/hard/elite groups, day/week/month left to right. The final package rendered all four corrected native category headers without token columns or combined dates. |
+| Ownership-aware rewards | Full-unlocked account displayed credit compensation. A fresh account displayed clock-marked 3/30-day rental icons and unmarked permanent-vehicle icons, including the tier-X group. Preview alone granted nothing. |
+| Launcher notices | Through final-package UI, the isolated new account received 100 gold and one 100% male IS commander. Both appeared as stock localized Received messages with native icons, date and reward/crew details. |
+| Battle and task result | On source 7b8250f (same final gameplay code), an IS in a Mittengard VII/VIII 15:15 battle remained at spawn while Bots fought and captured. Base XP 150, first-win XP 300. The win task paid 40,000 credits once in the stock result task panel and service history; the IS carousel x2 marker disappeared. Quality tasks correctly stayed unadvanced. This is a passive native round/settlement test, not proof of driving or earned strategic-prize completion. |
+| Initial routes | Worker record for 100_thepit reported total_limit=5 and class_limit=3. Both teams assigned five to each rim road, all six light tanks used main routes; the reserve medium road was selected after shared rim capacity. |
+| Calendar | Local tests cover weekday x2/weekend x5 and period rollover/leap boundaries. Native acceptance occurred before Saturday's 08:00 Beijing game-day reset, so the live result correctly used Friday x2. A native weekend x5 victory was not observed in this session. |
+| Physics incident | Captured-input T-50 regression plus roof/large-drop negative guards passed. This native Mittengard run did not recreate Lakeville T-50's exact incident; native reproduction remains a stated limitation. |
+
+Report `wot-error-report-20261031-041932-524ee4b579cc.zip` was generated through
+the launcher after the Mittengard round: launcher/server/visible/worker logs
+contained 2926/2898/5932/34775 lines, no Python traceback/exception or mission
+parser failure, and no incomplete diagnostic fragments. Final-package fresh-
+account UI report `wot-error-report-20261031-044240-ac3b7475ba03.zip` included all
+expected roles, likewise without script errors or incomplete fragments. Reports
+are retained in the isolated QA reports folder, not committed as user telemetry.
+Optional ProcDump downloading was disabled for this QA run; diagnostic mode and
+manual report generation were enabled. No crash occurred, and no crash-dump
+coverage is claimed. Normal visible-client exit stopped the worker and server.
 
 ## Final package acceptance and subsequent gameplay audit (October 30)
 
