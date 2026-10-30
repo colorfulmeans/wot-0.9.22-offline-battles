@@ -1872,7 +1872,6 @@ class LauncherWindow(object):
                 (self.gold_tier_box, self.gold_tier, self._gold_tier_by_label,old_tier)):
             box.config(values=tuple(choices))
             variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
-        self.shop_help_label.config(text=self._t(_SHOP_HELP) if values else self._t('No vehicles match these filters.'))
         return self._filter_gold_shop()
 
     def _filter_gold_shop(self, unused_event=None):
@@ -1897,7 +1896,7 @@ class LauncherWindow(object):
         self.gold_vehicle_box.config(values=tuple(values))
         if self.gold_vehicle.get() not in self._gold_offer_by_label:
             self.gold_vehicle.set(values[0] if values else "")
-        self.shop_help_label.config(text=self._t(_SHOP_HELP))
+        self.shop_help_label.config(text=self._t(_SHOP_HELP) if values else self._t('No vehicles match these filters.'))
         self._update_vehicle_add_button()
         return tuple(values)
 
