@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """Feed #1513's own quest parser, cache, progress and mission page."""
 import hashlib
-import io
-import json
-import os
 import time
 import zlib
 try:
@@ -99,6 +96,19 @@ def native_progress(daily, key):
     return values
 
 
+def parse_xml(text, stamp, start, finish):
+    # #1513's native prefetcher/wgnc use this exact in-memory XML entrance.
+    # ResMgr's virtual resource paths cannot read an arbitrary APPDATA file.
+    import ResMgr
+    from quest_xml_source import Source
+    section = ResMgr.DataSection().createSectionFromString(text.encode('utf-8'))
+    if section is None:
+        raise ValueError('Native DataSection could not parse ordinary mission XML')
+    # The pinned Source exposes its DataSection reader privately. Keep its
+    # condition/header/bonus readers, without replacing global ResMgr I/O.
+    return Source()._Source__readXML(section['quests'], stamp, start, finish)
+
+
 def sync(snapshot, now=None):
     """Return account-native fields. Engine-free tests exercise xml_definition.
 
@@ -117,20 +127,10 @@ def sync(snapshot, now=None):
     digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
     try:
         from constants import EVENT_CLIENT_DATA
-        from quest_xml_source import Source
         from items import vehicles
         if digest not in _cache:
-            from gui.mods.offline_lan_0922 import config
-            path = config.save_slot_state_path('ordinary_missions.xml')
-            directory = os.path.dirname(path)
-            if not os.path.isdir(directory):
-                os.makedirs(directory)
-            temporary = path + '.tmp'
-            with io.open(temporary, 'w', encoding='utf-8') as stream:
-                stream.write(text)
-            config._replace(temporary, path)
-            nodes = Source().readFromExternalFile(path,
-                daily['day'] * policy.DAY, (daily['day'] + 1) * policy.DAY, stamp)
+            nodes = parse_xml(text, stamp, daily['day'] * policy.DAY,
+                              (daily['day'] + 1) * policy.DAY)
             definitions = {}
             for group in nodes.values():
                 for node in group:

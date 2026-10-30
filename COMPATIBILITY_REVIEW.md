@@ -105,6 +105,19 @@ must not be reported as native Windows navigation acceptance.
 Package identity, PR checks, live launcher/client observations and generated
 error-report review remain to be recorded after the new artifact is built.
 
+The first packaged native startup (`cb12679`, build
+`colorfulmeans-41041345571-1`, isolated session `d5b208c9d8f6`) reached the garage
+but logged `NATIVE MISSIONS unavailable`: ResMgr could not open the generated
+APPDATA XML as a virtual resource. The file existed; the external-file I/O
+fixture had not proved that native resource-path boundary. The correction
+uses the exact stock prefetcher/WGNC `ResMgr.DataSection().createSectionFromString`
+entrance and passes its `quests` child to the pinned Source's own section
+reader. No global ResMgr patch, alternate condition parser or mod UI fallback
+is installed. The parser audit now exercises this same entrance, with only
+engine DataSection construction stubbed. Native retest remains required.
+Viewer scene reloads also invalidate cached interiors when an armor field
+selects another turret/gun on the same vehicle.
+
 ## October 24: shared owner routes and generic narrow passages
 
 Adopt the reviewed complete profile 1 as the built-in Default for all users,

@@ -14,6 +14,7 @@ import os
 import re
 import struct
 import zipfile
+import zlib
 
 try:
     import packed_xml
@@ -49,7 +50,7 @@ _ZH = {
     "Modules and crew": "模块与乘员",
     "Engine": "发动机", "Ammo": "弹药", "Fuel": "油箱",
     "Radio": "电台", "Crew": "乘员",
-    "Decoded interior surfaces; missing or incompatible modules are not drawn.":
+    "Console-sourced surfaces; selected PC frame verified. Missing modules are not drawn.":
         "Console 来源内部表面；已核对当前 PC 部件坐标框架，缺失或不匹配部分不显示。",
     "Some interior data is unavailable:\n%s": "部分内部模块数据不可用：\n%s",
     "3D armor viewer": "3D 装甲检视",
@@ -995,6 +996,9 @@ class ArmorViewerPanel(object):
     def _load_scene(self, focus_record=None):
         if not self._vehicle_member:
             return False
+        # A field can select a different stock turret/gun on the same tank.
+        # Revalidate interiors against that component rather than its old mesh.
+        self._internal_scene = None
         try:
             self._scene = self._scene_loader(
                 self._game_root, self._vehicle_member, self._records,
@@ -1029,7 +1033,7 @@ class ArmorViewerPanel(object):
             if self._internal_scene is None:
                 try:
                     self._internal_scene = vehicle_internal_viewer.load_scene(self._scene)
-                except (ValueError, OSError, KeyError, struct.error) as error:
+                except (ValueError, OSError, KeyError, IndexError, struct.error, zlib.error) as error:
                     self._internal_scene = dict(self._scene, parts=(), warnings=(str(error),))
                 if self._internal_scene.get('warnings'):
                     from tkinter import messagebox
@@ -1037,7 +1041,7 @@ class ArmorViewerPanel(object):
                         self._t('Some interior data is unavailable:\n%s') % '\n'.join(
                             self._internal_scene['warnings']), parent=self.frame)
             self.selection.set(self._t(
-                'Decoded interior surfaces; missing or incompatible modules are not drawn.'))
+                'Console-sourced surfaces; selected PC frame verified. Missing modules are not drawn.'))
         elif mode == 'armor':
             self.selection.set(self._t('Click an armor surface or choose an armor field.'))
         self.legend_label.config(text=self._t(

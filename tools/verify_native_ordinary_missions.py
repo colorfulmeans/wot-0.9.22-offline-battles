@@ -84,6 +84,10 @@ def main():
     sys.modules['ResMgr'].isFile = lambda path: False
     sys.modules['ResMgr'].purge = lambda path: None
     sys.modules['ResMgr'].openSection = lambda path: Section(ET.parse(path).getroot())
+    class DataSection(object):
+        def createSectionFromString(self, text):
+            return Section(ET.fromstring(text))
+    sys.modules['ResMgr'].DataSection = DataSection
     sys.modules['BigWorld'].component = 'client'
     sys.modules['helpers'].__path__ = [package + '/scripts/client/helpers']
     sys.modules['helpers'].i18n = sys.modules['helpers.i18n']
@@ -112,7 +116,7 @@ def main():
     try:
         with io.open(path, 'w', encoding='utf-8') as stream:
             stream.write(adapter.xml_definition(daily))
-        nodes = Source().readFromExternalFile(path, 0, 2000000000, 1000000000)
+        nodes = adapter.parse_xml(adapter.xml_definition(daily), 1000000000, 0, 2000000000)
         definitions = dict((node.info['id'], node.info['questClientData'])
                            for group in nodes.values() for node in group)
         assert len(definitions) == len(policy.BY_ID) == 55

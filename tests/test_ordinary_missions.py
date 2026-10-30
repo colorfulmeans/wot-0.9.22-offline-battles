@@ -1,6 +1,8 @@
 """Current ordinary policy, not the retired three-reserve mission fixture."""
 import copy
 import importlib
+import sys
+import types
 import unittest
 from unittest import mock
 import test_port_0922_garage as fixture
@@ -116,6 +118,19 @@ class OrdinaryMissionsTests(unittest.TestCase):
         self.assertIn('<damageDealt>3000</damageDealt>', xml)
         self.assertIn('<showCongrats>false</showCongrats>', xml)
         self.assertNotIn('<popup', xml)
+
+    def test_native_parser_receives_memory_section_quest_root_and_utf8(self):
+        section = object()
+        parse = mock.Mock(return_value={'quests': section})
+        read = mock.Mock(return_value={'native': []})
+        with mock.patch.dict(sys.modules, {
+                'ResMgr': types.SimpleNamespace(DataSection=lambda: types.SimpleNamespace(
+                    createSectionFromString=parse)),
+                'quest_xml_source': types.SimpleNamespace(Source=lambda: types.SimpleNamespace(
+                    _Source__readXML=read))}):
+            self.assertEqual({'native': []}, self.native.parse_xml('<root/>', 100, 0, 200))
+        parse.assert_called_once_with(b'<root/>')
+        read.assert_called_once_with(section, 100, 0, 200)
 
 
 class RentalPolicyTests(unittest.TestCase):

@@ -262,6 +262,18 @@ class VehicleArmorGeometryTest(unittest.TestCase):
         }, reload_scene=False))
         self.assertEqual(panel._scene_error, panel.selection.get())
 
+    def test_component_switch_invalidates_internal_geometry_before_display(self):
+        panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._vehicle_member = 'scripts/item_defs/vehicles/usa/T29.xml'
+        panel._game_root, panel._records = 'client', []
+        panel._internal_scene = {'old_turret': True}
+        panel._view_mode = 'internal'
+        panel._scene_loader = lambda *args, **kwargs: {'new_turret': True}
+        observed = []
+        panel.set_view_mode = lambda mode: observed.append((mode, panel._internal_scene, panel._scene))
+        self.assertTrue(panel._load_scene({'fieldPath': 'turrets0/second/armor/armor_1'}))
+        self.assertEqual([('internal', None, {'new_turret': True})], observed)
+
 
 if __name__ == "__main__":
     unittest.main()
