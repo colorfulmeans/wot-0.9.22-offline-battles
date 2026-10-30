@@ -1378,8 +1378,10 @@ class LANSessionTests(unittest.TestCase):
                 123, result))
 
         self.assertEqual(1, len(received))
-        services_ui.notify_missions.assert_called_once_with(['damage', 'wins'])
-        self.assertEqual([mock.call(campaign), mock.call(campaign)],
+        # Legacy ordinary receipt keys cannot reopen the retired mod dialog.
+        services_ui.notify_missions.assert_not_called()
+        self.assertEqual([mock.call(campaign, identifier='battle:123'),
+                          mock.call(campaign, identifier='battle:123')],
                          campaign_ui.notify.call_args_list)
         action = received[0]
         self.assertEqual(123, action['data']['messageID'])

@@ -118,6 +118,28 @@ engine DataSection construction stubbed. Native retest remains required.
 Viewer scene reloads also invalidate cached interiors when an armor field
 selects another turret/gun on the same vehicle.
 
+The same first build's launcher-generated report
+`wot-error-report-20261030-185658-d5b208c9d8f6.zip` contains all four primary logs
+and both exception trails. Each trail has only its session header. The visible
+and worker logs each contain the reproduced task-path diagnostic; no Python
+ERROR/CRITICAL/traceback is present. This is failure evidence and garage-startup
+acceptance, not task/reward or battle acceptance. The supported starter stop
+protocol closed the visible client; the launcher then stopped worker/server.
+Two game-window input attempts failed with `foreground window did not report
+a process id`; further game inputs stopped. Launcher report controls worked.
+
+Full Tests `41041345567` on `cb12679` passed 440/444 client files, 40/40 launcher
+files, native geometry, navigation and Windows editor/server jobs. Its four
+failures were stale test contracts: mastery notices omitted `popUpRecords`, a
+bootstrap fixture did not load the new ordinary modules, a depot purchase
+fixture lacked native invoice dependencies, and a LAN retry test expected the
+removed daily dialog and old campaign call signature. These fixtures now
+exercise the new native paths; all four files pass locally (267 tests), with
+the exact client/Python 2.7 filter check enabled. The 151-file Bot behavior
+group passed, including current configured passage/departure scenarios.
+This does not relabel the first full CI run as all green; updated-head checks
+and native task retest are still required.
+
 ## October 24: shared owner routes and generic narrow passages
 
 Adopt the reviewed complete profile 1 as the built-in Default for all users,

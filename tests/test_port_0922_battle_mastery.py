@@ -473,7 +473,7 @@ class MasteryResultTests(unittest.TestCase):
             # The hangar battle-results message names the badge from the same
             # outcome.
             message = store.service_message_data(receipt['arena_unique_id'])
-            self.assertEqual({TYPE_59: {'markOfMastery': 4}},
+            self.assertEqual({TYPE_59: {'markOfMastery': 4, 'popUpRecords': []}},
                              message['playerVehicles'])
 
             # A second battle at the same mark count is not a new award, and

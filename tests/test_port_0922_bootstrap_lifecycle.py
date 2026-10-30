@@ -68,7 +68,8 @@ def _economy_modules(package_stubs):
                 _real_module('crew_recruits'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (
                 _real_module('offline_services'))
-            for name in ('ui_i18n', 'personal_campaign_ui'):
+            for name in ('ui_i18n', 'personal_campaign_ui', 'ordinary_missions',
+                         'ordinary_missions_native'):
                 _ECONOMY_MODULES['gui.mods.offline_lan_0922.' + name] = _real_module(name)
     return dict(_ECONOMY_MODULES)
 
