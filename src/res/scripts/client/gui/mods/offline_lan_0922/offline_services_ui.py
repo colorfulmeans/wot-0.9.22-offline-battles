@@ -867,6 +867,11 @@ def _install_crew_skill_counter():
     _patch(Tankman,'newSkillCount',property(count))
 
 
+def _install_ordinary_mission_presentation():
+    from gui.mods.offline_lan_0922 import ordinary_missions_native
+    ordinary_missions_native.install_presentation(_patch)
+
+
 def install():
     if _patches:
         return
@@ -879,6 +884,7 @@ def install():
         _install_reserves()
         _install_account()
         _install_settings()
+        _install_ordinary_mission_presentation()
         _install_exchange_dialog_limits()
         _install_crew_skill_counter()
         from gui.mods.offline_lan_0922 import crew_voice

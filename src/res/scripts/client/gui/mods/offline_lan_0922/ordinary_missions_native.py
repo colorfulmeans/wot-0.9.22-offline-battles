@@ -45,8 +45,8 @@ def condition(row, descriptions=None):
         # unrelated XP/damage count or an ordinary battle participation count.
         target, mapping = 1, {'completed': True}
     title = dict(en='Objective', zh_cn=u'任务条件')
-    metadata = _localized('title', title) + _localized(
-        'description', descriptions or row['name'])
+    metadata = _localized('meta', {'offlineOrdinary': 'v2'}) + _localized('title', title) + _localized(
+        'description', descriptions or row.get('description', row['name']))
     return '<battles><count>%d</count>%s</battles>' % (target, metadata), mapping
 
 
@@ -56,7 +56,7 @@ def xml_definition(daily):
         row = policy.BY_ID[key]
         descriptions = {}
         counters = daily.get('progress', {}).get(key, {})
-        for language, label in row['name'].items():
+        for language, label in row.get('description', row['name']).items():
             counts = ', '.join('%d/%d' % (counters.get(metric, 0), target)
                                for metric, target in sorted(row['goals'].items()))
             suffix = (u'进度：%s。跨日重置。' if language == 'zh_cn'
@@ -121,6 +121,37 @@ def parse_xml(text, stamp, start, finish):
     # The pinned Source exposes its DataSection reader privately. Keep its
     # condition/header/bonus readers, without replacing global ResMgr I/O.
     return Source()._Source__readXML(section['quests'], stamp, start, finish)
+
+
+def install_presentation(patch):
+    """Keep stock renderers while adapting only this offline quest family.
+
+    #1513 BattlesCountFormatter calls _getDescription directly, bypassing its
+    inherited native custom-description reader. Honor that reader only for our
+    marked conditions. The original method owns every other condition.
+    """
+    from gui.server_events.cond_formatters.bonus import BattlesCountFormatter
+    from gui.server_events.cond_formatters import packDescriptionField
+    from gui.Scaleform.daapi.view.lobby.missions.regular import group_packers
+    original_description = BattlesCountFormatter._getDescription
+    original_sort = group_packers.missionsSortFunc
+
+    def description(formatter, condition):
+        if getattr(condition, '_data', {}).get('meta', {}).get('offlineOrdinary') == 'v2':
+            custom = condition.getCustomDescription()
+            if custom is not None:
+                return packDescriptionField(custom)
+        return original_description(formatter, condition)
+
+    def compare(first, second):
+        if all(as_text(event.getID()).startswith('offline_daily_v2_')
+               for event in (first, second)):
+            a, b = first.getPriority(), second.getPriority()
+            return (a > b) - (a < b)
+        return original_sort(first, second)
+
+    patch(BattlesCountFormatter, '_getDescription', description)
+    patch(group_packers, 'missionsSortFunc', compare)
 
 
 def sync(snapshot, now=None):

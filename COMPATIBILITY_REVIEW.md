@@ -12,7 +12,10 @@ Battle bond eligibility, medal table, formula and amounts remain unchanged.
 
 The daily selection is two basic, two advanced, one special and one challenge
 task, plus a one-day rental task; three/seven-day rental tasks appear on the
-corresponding three/seven-day calendar cadence. Every task's progress expires
+corresponding three/seven-day calendar cadence, anchored to day 1 of each
+calendar month (days 1/4/7/... and 1/8/15/22/29 respectively). The UTC day
+boundary already corresponds to 08:00 Beijing; the month anchor uses that
+same game-day date and never an installation timestamp. Every task's progress expires
 at the UTC day boundary (08:00 Beijing), including those periodic assignments.
 A receipt from yesterday cannot finish yesterday's task after that boundary,
 even if no new battle has yet persisted today's assignments. Seven critical
@@ -178,6 +181,44 @@ matches `cb10604`; its delta updated stale test fixtures and this record.
 The later shell revision has passed its four local viewer/editor suites
 (48 tests total) and the review-package build. Current-head full CI and final
 native card/reward/error-report acceptance remain pending.
+
+
+User-assisted native battle on `23b746e`, session `efec15f44734`: S-51 won on
+47_canada_a. Persisted ordinary state records win1/top5/damage2hp claimed once,
+2671 cumulative damage, 715 assisted damage and rental_9_1 qualifying count 1/6.
+Wallet deltas include 80000 mission credits, 500 mission free XP, 100 gold and
+25 mission bonds, separate from battle earnings. Three stock tokenQuests
+messages visibly list the corresponding actual rewards; the battle message
+shows first-win x2 and a Details button. The selected S-51 x2 corner disappeared.
+An initial contrary visual reading was corrected; no first-win-refresh bug is
+claimed. No mod mission-completion modal appeared. Rental delivery/expiry,
+launcher grant families and personal campaign receipts still need separate
+live acceptance; this battle does not certify all notification families.
+
+The card metadata passed the parser but #1513 BattlesCountFormatter bypasses
+its inherited getCustomDescription when formatting its counter. Live cards
+still said "battle count". A narrowly scoped presentation adapter now makes
+that stock formatter honor its existing custom-description reader only for
+conditions marked offlineOrdinary=v2. All other conditions use its original
+method. Stock renderers, cards and icons remain in place. Ordinary-only native
+sorting compares authored priority before completion so completed tasks do not
+move behind rental tasks. Six normal picks remain first, difficulty ascending;
+active rental picks follow in 1/3/7-day order. Rental titles explicitly state
+duration, tier and premium/special vehicle; complete conditions stay in the
+description. No cooldown filler or additional daily rental task is created.
+Same-day ordering/cadence updates preserve shared objective progress and paid
+markers instead of granting them again. Tests cover monthly, year and leap-year
+boundaries, preserved paid markers, scoped ordering and untouched stock fallback.
+Three affected policy/UI/bootstrap files pass locally (including their teardown
+contracts); all 55 definitions still pass the pinned compiled parser. Native
+retest and rebuilt final artifact remain required for these latest changes.
+
+First-win audit (read-only): current offline Shop data is fixed at 2, income
+uses 200%, result packing uses dailyXPFactor10=20 and system summary uses
+ dailyXPFactor=2. #1513 carousel dynamically requests bonus_x{factor}.png;
+actual stock library images include x2/x3/x5 and no x4. Native message text
+formats the supplied integer multiplier. No first-win multiplier/economy change
+was authorized or made here; x3/x4/x5 end-to-end rendering has not been tested.
 
 ## October 24: shared owner routes and generic narrow passages
 

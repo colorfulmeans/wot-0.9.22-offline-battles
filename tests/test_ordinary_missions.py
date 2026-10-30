@@ -1,5 +1,7 @@
 """Current ordinary policy, not the retired three-reserve mission fixture."""
 import copy
+import calendar
+import datetime
 import importlib
 import sys
 import types
@@ -50,6 +52,57 @@ class OrdinaryMissionsTests(unittest.TestCase):
         self.assertEqual([], daily['claimed'])
         self.assertTrue(all(not any(values.values()) for values in daily['progress'].values()))
         self.assertEqual(before, snapshot)
+
+    def test_monthly_cadence_and_difficulty_order_across_year_and_leap_boundaries(self):
+        for year, month in ((2026, 1), (2026, 2), (2026, 12), (2027, 1), (2028, 2), (2028, 3)):
+            for month_day in range(1, calendar.monthrange(year, month)[1] + 1):
+                date = datetime.datetime(year, month, month_day)
+                day = calendar.timegm(date.timetuple()) // 86400
+                ids = self.policy.assignments(day)
+                self.assertEqual(ids, sorted(ids, key=lambda key: self.policy.DISPLAY_ORDER[key]))
+                rentals = [self.policy.BY_ID[key]['rental_days'] for key in ids[6:]]
+                self.assertEqual([duration for duration in (1, 3, 7)
+                                  if (month_day - 1) % duration == 0], rentals)
+
+    def test_same_day_sort_update_preserves_paid_tasks_and_partial_progress(self):
+        daily = self.policy.state({}, 86401)
+        key = daily['missions'][0]
+        daily['claimed'] = [key]
+        daily['rewards'][key] = [{'kind': 'credits', 'count': 40000}]
+        daily['progress'][key] = dict((metric, goal) for metric, goal in
+                                     self.policy.BY_ID[key]['goals'].items())
+        daily['missions'].reverse()
+        updated = self.policy.state({'dailyMissions': daily}, 86402)
+        self.assertIn(key, updated['claimed'])
+        self.assertEqual(daily['rewards'], updated['rewards'])
+        self.assertEqual(daily['progress'], updated['progress'])
+
+    def test_native_presentation_honors_marked_description_and_keeps_completed_order(self):
+        class Formatter:
+            def _getDescription(self, condition): return 'stock description'
+        groups = types.SimpleNamespace(missionsSortFunc=lambda a, b: -99)
+        bonus = types.ModuleType('gui.server_events.cond_formatters.bonus')
+        bonus.BattlesCountFormatter = Formatter
+        formatters = types.ModuleType('gui.server_events.cond_formatters')
+        formatters.packDescriptionField = lambda text: ('native field', text)
+        regular = types.ModuleType('gui.Scaleform.daapi.view.lobby.missions.regular')
+        regular.group_packers = groups
+        with mock.patch.dict(sys.modules, {
+                bonus.__name__: bonus, formatters.__name__: formatters,
+                regular.__name__: regular}):
+            self.native.install_presentation(setattr)
+        condition = types.SimpleNamespace(_data={'meta': {'offlineOrdinary': 'v2'}},
+            getCustomDescription=lambda: 'Cause seven critical events; 6/7')
+        self.assertEqual(('native field', 'Cause seven critical events; 6/7'),
+                         Formatter()._getDescription(condition))
+        condition._data = {}
+        self.assertEqual('stock description', Formatter()._getDescription(condition))
+        event = lambda key, priority: types.SimpleNamespace(
+            getID=lambda: key, getPriority=lambda: priority,
+            isCompleted=lambda: True)
+        self.assertEqual(1, groups.missionsSortFunc(
+            event('offline_daily_v2_1_win1', 100), event('offline_daily_v2_1_rental_9_1', 90)))
+        self.assertEqual(-99, groups.missionsSortFunc(event('personal_1', 100), event('other', 90)))
 
     def test_yesterdays_receipt_cannot_finish_tasks_after_midnight_before_another_battle(self):
         with mock.patch.object(self.policy, 'assignments', return_value=['crit7']):
@@ -136,7 +189,7 @@ class OrdinaryMissionsTests(unittest.TestCase):
         daily = dict(day=1, missions=['crit7'], claimed=[],
                      progress={'crit7': {'crits': 6}})
         xml = self.native.xml_definition(daily)
-        self.assertIn('<battles><count>1</count><title>', xml)
+        self.assertIn('<battles><count>1</count>', xml)
         self.assertIn('6/7', xml)
         self.assertIn('Cause 7 module or crew injuries', xml)
         self.assertEqual({'bonusCount': 0, 'battlesCount': 0},

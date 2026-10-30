@@ -96,10 +96,14 @@ for _days in (1, 3, 7):
             '%s in %d battles: Tier %d rental, %d days' % (_en, _count, _tier, _days),
             u'累计%d场%s：%d级战车租用%d天' % (_count, _zh, _tier, _days),
             {_key: _count}, {'rental': (_tier, _days)})
+        _row['description'] = dict(_row['name'])
+        _row['name'] = dict(en='%d-day rental: Tier %d premium/special vehicle' % (_days, _tier),
+                           zh_cn=u'%d天租用：%d级金币／特种车' % (_days, _tier))
         _row.update(rental_tier=_tier, rental_days=_days, rental_xp=_xp,
                     weight=RENTAL_WEIGHTS[_days][_tier - 2])
         CATALOGUE.append(_row)
 BY_ID = dict((row['id'], row) for row in CATALOGUE)
+DISPLAY_ORDER = dict((row['id'], index) for index, row in enumerate(CATALOGUE))
 
 
 def _number(seed):
@@ -112,8 +116,9 @@ def assignments(day, seed='default'):
         rows = [row for row in CATALOGUE if row['pool'] == pool]
         result.extend(row['id'] for row in sorted(rows,
             key=lambda row: _number('%s:%d:%s' % (seed, day, row['id'])))[:count])
+    month_day = time.gmtime(day * DAY).tm_mday
     for days in (1, 3, 7):
-        if day % days:
+        if (month_day - 1) % days:
             continue
         draw = _number('%s:%d:rental:%d' % (seed, day, days)) % 100
         for row in (row for row in CATALOGUE if row['pool'] == 'rental_%d' % days):
@@ -121,7 +126,7 @@ def assignments(day, seed='default'):
             if draw < 0:
                 result.append(row['id'])
                 break
-    return result
+    return sorted(result, key=lambda key: DISPLAY_ORDER[key])
 
 
 def state(snapshot, now=None):
@@ -129,11 +134,21 @@ def state(snapshot, now=None):
     raw = snapshot.get('dailyMissions') or {}
     same = raw.get('schema') == SCHEMA and raw.get('day') == day
     ids = assignments(day, str(snapshot.get('accountDBID', 'default')))
-    if same and raw.get('missions') == ids:
-        return copy.deepcopy(raw)
-    return dict(schema=SCHEMA, day=day, missions=ids, claimed=[],
+    result = dict(schema=SCHEMA, day=day, missions=ids, claimed=[],
                 progress=dict((key, dict((metric, 0) for metric in BY_ID[key]['goals']))
                               for key in ids), rewards={})
+    if same:
+        # Presentation-order/cadence updates must not pay an already completed
+        # unchanged objective again or erase its current-day progress.
+        for key in ids:
+            if key in raw.get('missions', ()):
+                result['progress'][key] = copy.deepcopy(raw.get('progress', {}).get(
+                    key, result['progress'][key]))
+                if key in raw.get('claimed', ()):
+                    result['claimed'].append(key)
+                if key in raw.get('rewards', {}):
+                    result['rewards'][key] = copy.deepcopy(raw['rewards'][key])
+    return result
 
 
 def quest_id(day, key):

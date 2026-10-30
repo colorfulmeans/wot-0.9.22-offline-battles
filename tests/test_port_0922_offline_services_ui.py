@@ -64,7 +64,7 @@ class NativeServiceUITests(unittest.TestCase):
                 return 200 - other
 
         original = FittingItem.__dict__['__cmp__']
-        other_installs = ('_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
+        other_installs = ('_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
             '_install_vehicle_filters_and_recovery', '_install_reserves',
             '_install_account',
             '_install_settings', '_install_exchange_dialog_limits',
@@ -898,7 +898,7 @@ class ExchangeDialogLimitTests(unittest.TestCase):
 
     def test_regular_services_install_and_rollback_own_the_native_base_hook(self):
         original = self.meta_type.makeVO
-        others = ('_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
+        others = ('_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
             '_install_shop', '_install_vehicle_filters_and_recovery',
             '_install_reserves', '_install_account',
             '_install_settings', '_schedule_daily_rollover')
