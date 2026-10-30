@@ -134,7 +134,11 @@ def main():
         assert counter['title']['en'] == 'Objective'
         assert 'Cause 7 module or crew injuries' in counter['description']['en']
         assert '0/7' in counter['description']['en']
-        assert dict(counter['count'])['value'] == 1
+        assert dict(counter['count'])['value'] == 7
+        combined = dict(definitions[policy.quest_id(1, 'win8damage')]['conditions'])['common']
+        combined = dict(combined)
+        assert dict(dict(combined['battles'])['count'])['value'] == 8
+        assert dict(combined['cumulative'])['value'] == ('damageDealt', 20000)
         print('PASS: exact #1513 Source parsed 55 ordinary quests; native common counters and no congratulations flag verified.')
         print('Boundary: engine-I/O fixtures; live MissionsPage/render/payment acceptance remains separate.')
     finally:

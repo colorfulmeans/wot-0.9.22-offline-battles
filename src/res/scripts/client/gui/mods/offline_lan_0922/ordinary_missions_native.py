@@ -13,6 +13,7 @@ from gui.mods.offline_lan_0922.ui_i18n import as_text
 
 _cache = {}
 _errors = set()
+_presented = set()
 SCALAR_FIELDS = {'damage': 'damageDealt', 'xp': 'xp', 'kills': 'kills',
                  'blocked': 'damageBlockedByArmor'}
 
@@ -33,21 +34,27 @@ def condition(row, descriptions=None):
     Composite and event-count conditions retain their complete description
     and actual counters. They must not masquerade as XP or ordinary battles.
     """
-    metric, target = next(iter(row['goals'].items()))
+    goals = row['goals']
+    metric, target = next(iter(goals.items()))
     if len(row['goals']) == 1 and metric in SCALAR_FIELDS:
         name = SCALAR_FIELDS[metric]
         return '<cumulative><%s>%d</%s></cumulative>' % (name, target, name), {'cumulative': metric}
-    if len(row['goals']) == 1 and (metric in ('battles', 'wins') or
-            metric.startswith('rental_') or metric in ('damage_top3', 'xp_top10')):
+    if len(goals) == 1:
+        # The stock counter widget supports a custom objective description.
+        # Feed the actual event/assistance count, not a fabricated 0/1 battle.
         mapping = {'battlesCount': metric}
     else:
-        # The counter is completion of this whole objective, never an
-        # unrelated XP/damage count or an ordinary battle participation count.
-        target, mapping = 1, {'completed': True}
+        # The approved combined objective has independent wins and damage.
+        # Keep both native counters; damage in a loss still contributes.
+        metric, target = 'wins', goals['wins']
+        mapping = {'battlesCount': metric, 'cumulative': 'damage'}
     title = dict(en='Objective', zh_cn=u'任务条件')
     metadata = _localized('meta', {'offlineOrdinary': 'v2'}) + _localized('title', title) + _localized(
         'description', descriptions or row.get('description', row['name']))
-    return '<battles><count>%d</count>%s</battles>' % (target, metadata), mapping
+    text = '<battles><count>%d</count>%s</battles>' % (target, metadata)
+    if len(goals) > 1:
+        text += '<cumulative><damageDealt>%d</damageDealt></cumulative>' % goals['damage']
+    return text, mapping
 
 
 def xml_definition(daily):
@@ -79,12 +86,29 @@ def xml_definition(daily):
     return u''.join(output)
 
 
-def preview(row, vehicles):
+def preview(row, vehicles, snapshot=None, daily=None, now=None):
     assets = {}
     for kind, amount in row['rewards'].items():
         if kind == 'rental':
-            # No vehicle is selected until payment. The native description
-            # states tier and duration; never preview an invented vehicle.
+            from gui.mods.offline_lan_0922 import vehicle_rentals
+            if snapshot is None or daily is None:
+                raise ValueError('Rental preview requires the current account inventory')
+            paid = daily.get('rewards', {}).get(row['id'])
+            if paid:
+                award = paid[0]
+            else:
+                award = vehicle_rentals.choose(vehicle_rentals.catalogue(vehicles, amount[0]),
+                    snapshot.get('vehicles', ()), amount[1],
+                    int(time.time() if now is None else now), '%d:%s:%s' %
+                    (daily['day'], row['id'], snapshot.get('accountDBID', 'default')))
+            if award['kind'] == 'compensation':
+                assets['credits'] = award['credits']
+            else:
+                # VehiclesBonus consumes a CD -> info dictionary; rent.time
+                # is days. Selection is pure and identical to grant(), and is
+                # recalculated when inventory changes before completion.
+                assets['vehicles'] = {int(award['vehicle_type']):
+                    {'rent': {'time': int(award['days'])}}}
             continue
         if kind in ('credits', 'gold', 'crystal', 'freeXP'):
             assets[kind] = amount
@@ -104,9 +128,6 @@ def native_progress(daily, key):
         values[SCALAR_FIELDS[metric]] = counters.get(metric, 0)
     if 'battlesCount' in mapping:
         values['battlesCount'] = counters.get(mapping['battlesCount'], 0)
-    if mapping.get('completed'):
-        values['battlesCount'] = int(all(counters.get(metric, 0) >= target
-            for metric, target in policy.BY_ID[key]['goals'].items()))
     return values
 
 
@@ -140,6 +161,9 @@ def install_presentation(patch):
         if getattr(condition, '_data', {}).get('meta', {}).get('offlineOrdinary') == 'v2':
             custom = condition.getCustomDescription()
             if custom is not None:
+                if custom not in _presented and len(_presented) < 64:
+                    _presented.add(custom)
+                    print('[Offline LAN 0.9.22] NATIVE MISSION objective_description rendered')
                 return packDescriptionField(custom)
         return original_description(formatter, condition)
 
@@ -169,10 +193,12 @@ def sync(snapshot, now=None):
     daily = policy.state(snapshot, now)
     stamp = int(time.time() if now is None else now)
     text = xml_definition(daily)
-    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()
     try:
         from constants import EVENT_CLIENT_DATA
         from items import vehicles
+        previews = dict((key, preview(policy.BY_ID[key], vehicles, snapshot, daily, stamp))
+                        for key in daily['missions'])
+        digest = hashlib.sha256(text.encode('utf-8') + pickle.dumps(previews, 2)).hexdigest()
         if digest not in _cache:
             nodes = parse_xml(text, stamp, daily['day'] * policy.DAY,
                               (daily['day'] + 1) * policy.DAY)
@@ -183,7 +209,7 @@ def sync(snapshot, now=None):
                     data['isDaily'] = True
                     key = next(key for key in daily['missions']
                                if policy.quest_id(daily['day'], key) == data['id'])
-                    data['bonus'] = preview(policy.BY_ID[key], vehicles)
+                    data['bonus'] = previews[key]
                     definitions[data['id']] = data
             if len(definitions) != len(daily['missions']):
                 raise ValueError('Native quest parser returned %d/%d missions' %
@@ -192,6 +218,10 @@ def sync(snapshot, now=None):
             _cache[digest] = zlib.compress(pickle.dumps(definitions, 2))
             print('[Offline LAN 0.9.22] NATIVE MISSIONS parsed count=%d day=%d schema=%d' %
                   (len(definitions), daily['day'], policy.SCHEMA))
+            for key in daily['missions']:
+                if 'rental' in policy.BY_ID[key]['rewards']:
+                    print('[Offline LAN 0.9.22] NATIVE MISSION rental_preview quest=%s bonus=%s' %
+                          (key, previews[key]))
         progress = {}
         for key in daily['missions']:
             row = policy.BY_ID[key]
@@ -199,7 +229,7 @@ def sync(snapshot, now=None):
             progress[policy.quest_id(daily['day'], key)] = {'progress': {None: values}}
         return {'eventsData': {EVENT_CLIENT_DATA.QUEST: _cache[digest]}, 'quests': progress}
     except Exception as error:
-        identity = (digest, str(error))
+        identity = (text, str(error))
         if identity not in _errors:
             print('[Offline LAN 0.9.22] NATIVE MISSIONS unavailable day=%d error=%s' % (daily['day'], error))
             _errors.add(identity)

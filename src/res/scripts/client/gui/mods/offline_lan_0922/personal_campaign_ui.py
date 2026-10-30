@@ -316,4 +316,7 @@ def messages(settlement):
 def notify(settlement, identifier=None):
     """Deliver one native message; propagate failure for receipt-level retry."""
     from gui.mods.offline_lan_0922.native_notifications import publish_settlement
-    return publish_settlement(settlement, identifier)
+    published = publish_settlement(settlement, identifier)
+    if not published and messages(settlement):
+        raise ValueError('Visible settlement has no native notification envelope')
+    return published

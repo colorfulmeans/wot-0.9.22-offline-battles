@@ -68,3 +68,26 @@ class NativeNotificationTests(unittest.TestCase):
             {'kind': 'token', 'id': 'free_award_list', 'count': 2}])
         self.assertEqual({'value': 1}, assets['dossier']['account'][('badges', 7)])
         self.assertEqual({'count': 2}, assets['tokens']['free_award_list'])
+
+    def test_failed_reset_has_a_stock_notice_without_assets(self):
+        settlement = {'reset_error':
+            'PERSONAL_MISSION_RESET_WALLET_UNAVAILABLE: credits required=100 available=0'}
+        rows = self.module.settlement_messages(settlement)
+        self.assertEqual(1, len(rows))
+        self.assertEqual('adminMessage', rows[0][0])
+        self.assertIn('100', rows[0][1])
+        self.assertNotIn('PERSONAL_MISSION_RESET', rows[0][1])
+
+    def test_visible_notice_cannot_be_acknowledged_when_conversion_returns_empty(self):
+        ui = fixture._load_port_module('personal_campaign_ui')
+        with mock.patch.object(self.module, 'publish_settlement', return_value=False):
+            with self.assertRaisesRegex(ValueError, 'no native notification'):
+                ui.notify({'reset_error': 'source unavailable'}, identifier='saved-row')
+
+    def test_historical_count_only_crew_keeps_known_fact_and_other_invoice_assets(self):
+        settlement = {'account_changes': [{'rewards': [
+            {'kind': 'crew', 'count': 2}, {'kind': 'credits', 'count': 50}]}]}
+        rows = self.module.settlement_messages(settlement)
+        self.assertEqual(['adminMessage', 'invoiceReceived'], [row[0] for row in rows])
+        self.assertIn('2', rows[0][1])
+        self.assertEqual({'credits': 50}, rows[1][1]['data'])

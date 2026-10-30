@@ -1191,7 +1191,13 @@ class ArmorViewerPanel(object):
         if surface is None:
             return False
         if surface.get('moduleLabel'):
-            self.selection.set(surface['moduleLabel'])
+            label = surface['moduleLabel']
+            if self._language == i18n.LANGUAGE_CHINESE:
+                names = {'engine': '发动机', 'ammoBay': '弹药架',
+                         'fuelTank': '油箱', 'radio': '电台',
+                         'turretRotator': '炮塔旋转机构', 'crew': '乘员'}
+                label = ' / '.join(names.get(part, part) for part in label.split(' / '))
+            self.selection.set(label)
             return True
         key = surface.get("fieldKey")
         if key is None or key not in self._record_by_key:

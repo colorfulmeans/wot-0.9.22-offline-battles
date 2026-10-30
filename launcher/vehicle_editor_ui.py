@@ -39,7 +39,7 @@ _CHINESE = {
     "this profile runs in single player or is pinned by a LAN room you host. "
     "Shared guns, engines and other components show every vehicle they "
     "affect. IDs, resource paths, topology and unknown fields remain locked.":
-        "正在编辑方案“%s”。请依次选择系别、车辆、类别和属性。修改保存在 "
+        "正在编辑方案“%s”。请先选择国家、坦克类型、级别和车辆，再选择修改类别和属性。修改保存在 "
         "res_mods 之外，会在单人游戏使用该方案、或您开房时固定该方案时生效。"
         "共用的火炮、发动机等部件会列出所有受影响的车辆。ID、资源路径、"
         "数据结构和未知属性不可修改。",
@@ -56,6 +56,8 @@ _CHINESE = {
     "Narrow the vehicle list to one original vehicle class or tier.":
         "按原始数据中的车型或级别筛选车辆列表。",
     "Vehicle": "车辆",
+    "Several vehicles share this name. Select the full vehicle label.":
+        "有多辆同名车辆，请从列表选择带完整括号标识的车辆。",
     "Type to search the vehicles left by these filters, then choose one or "
     "press Enter.": "输入名称搜索筛选后的车辆，然后选中或按回车。",
     "Category": "类别",
@@ -144,7 +146,7 @@ _CATEGORY_CHINESE = {
 
 _VEHICLE_CLASS_CHINESE = {
     "Light tank": "轻型坦克", "Medium tank": "中型坦克",
-    "Heavy tank": "重型坦克", "Tank destroyer": "反坦克炮",
+    "Heavy tank": "重型坦克", "Tank destroyer": "自行反坦克炮",
     "SPG": "自行火炮",
 }
 
@@ -304,19 +306,23 @@ class VehicleEditorWindow(object):
                    ("Modification category", self.category), ("Field", self.field))
         for index, (label, variable) in enumerate(entries):
             if index in (0, 4):
-                selectors = tk.Frame(frame)
-                selectors.grid(row=2 if index == 0 else 3, column=0,
-                    columnspan=3, sticky='we', pady=(0, 4))
-            column = index if index < 4 else index - 4
+                if index == 0:
+                    selectors = tk.Frame(frame)
+                    selectors.grid(row=2, column=0, rowspan=2,
+                        columnspan=3, sticky='we', pady=(0, 4))
+            column = index if index < 4 else (0 if index == 4 else 1)
+            selector_row = 0 if index < 4 else 2
             self._widget(tk.Label, selectors, text=label, anchor='w').grid(
-                row=0, column=column, sticky='w', padx=(0, 6))
+                row=selector_row, column=column, sticky='w', padx=(0, 6))
             box = self._ttk.Combobox(selectors, textvariable=variable,
-                values=(), width=(10, 14, 5, 26, 16, 44)[index],
+                values=(), width=(10, 14, 5, 26, 10, 44)[index],
                 state='normal' if index == 3 else 'readonly')
-            box.grid(row=1, column=column, sticky='we', padx=(0, 6), pady=(0, 4))
+            box.grid(row=selector_row + 1, column=column,
+                columnspan=3 if index == 5 else 1,
+                sticky='we', padx=(0, 6), pady=(0, 4))
             boxes.append(box)
-            selectors.grid_columnconfigure(column,
-                weight=(1, 1, 0, 3, 0, 1)[index])
+            if index < 4:
+                selectors.grid_columnconfigure(column, weight=(1, 1, 0, 3)[index])
         (self.nation_box, self.vehicle_class_box, self.tier_box,
          self.vehicle_box, self.category_box, self.field_box) = boxes
         row = 4
@@ -385,7 +391,7 @@ class VehicleEditorWindow(object):
             frame, tk, self.select_field_from_viewer, self._language,
             self._game_root)
         self.armor_viewer.grid(
-            row=1, column=3, rowspan=max(1, row), sticky="nsew",
+            row=0, column=3, rowspan=row + 1, sticky="nsew",
             padx=(14, 0))
 
         frame.grid_columnconfigure(1, weight=1)
@@ -495,7 +501,7 @@ class VehicleEditorWindow(object):
                 component = field_parts[1]
             return "共享%s %s；影响 %s 的 %d 辆车：%s" % (
                 self._category_label(record.get("categoryLabel", "")),
-                component or "-", record.get("nation", self.nation.get()),
+                component or "-", nation_choices.caption(record.get("nation", self._selected_nation()), self._t),
                 len(affected), ", ".join(affected))
         vehicle = record.get(
             "displayVehicle", record.get("vehicle", self.vehicle.get()))
@@ -739,14 +745,15 @@ class VehicleEditorWindow(object):
 
     @classmethod
     def _choice_label(cls, choice):
-        """Show the stock/localized name without repeating its resource ID."""
+        """Keep localized names and a unique nation/resource discriminator."""
         label = str(choice.get("label") or choice["vehicle"])
         display_id = cls._vehicle_display_id(choice.get("vehicle", ""))
         for opening, closing in ((" (", ")"), ("（", "）")):
             suffix = opening + display_id + closing
             if display_id and label.endswith(suffix):
-                return label[:-len(suffix)].rstrip()
-        return label
+                label = label[:-len(suffix)].rstrip()
+                break
+        return '%s (%s:%s)' % (label, choice['nation'], choice['vehicle'])
 
     def _visible_vehicle_choices(self, nation=None):
         """Return the catalog narrowed by nation, class and tier."""
@@ -789,9 +796,7 @@ class VehicleEditorWindow(object):
                 self._vehicle_display_id(
                     choice.get("vehicle", "")).casefold())]
         if exact:
-            if self._selected_vehicle_choice in exact:
-                return self._selected_vehicle_choice
-            return exact[0]
+            return exact[0] if len(exact) == 1 else None
         if allow_partial:
             return next((choice for choice in choices
                          if self._vehicle_search_matches(choice, value)), None)
@@ -827,6 +832,10 @@ class VehicleEditorWindow(object):
             self.vehicle.get(), allow_partial=True)
         if choice is None:
             self._show_vehicle_choices(self._visible_vehicle_choices())
+            if sum(self._vehicle_search_matches(row, self.vehicle.get())
+                   for row in self._visible_vehicle_choices()) > 1:
+                return self._show_error(self._t(
+                    "Several vehicles share this name. Select the full vehicle label."))
             return self._show_error(
                 self._t("No vehicles match this search."))
         self.vehicle.set(self._choice_label(choice))

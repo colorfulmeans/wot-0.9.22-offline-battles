@@ -2,6 +2,54 @@
 
 ## October 30: ordinary missions, native notices and current test inputs
 
+### Follow-up: audited notification losses and native progress presentation
+
+The follow-up keeps the approved mission catalogue, reward amounts, battle bond
+economy and personal campaign rules. Holiday assignments and first-win calendar
+multipliers are not part of this change.
+
+Confirmed regression: a failed personal-campaign reset produced readable content
+but no native envelope. The queue could acknowledge and remove it. Reset errors
+now use the stock general service notice with the existing localized reason.
+The delivery boundary refuses to acknowledge other visible settlements with no
+native envelope. Historical count-only crew receipts use a stock general notice
+for their known count; current receipts still require actual passports for the
+stock member invoice. No crew is created or granted by this conversion.
+
+Ordinary event/assistance counts now feed the stock numeric counter with its
+marked custom objective description, rather than a synthetic completion 0/1.
+The combined wins/damage goal retains independent native counters, so damage in
+a defeat appears in battle results without counting a victory. Rental previews
+use the exact pure selector and seed used by payment, current account ownership,
+fixed days and the native VehiclesBonus CD/info contract. Before completion they
+refresh with ownership changes; after completion they display the durable actual
+award. An entirely permanent pool previews the exact credit compensation.
+Inventory-sensitive previews participate in cache invalidation. No preview grants
+or reserves a vehicle. Diagnostic output distinguishes parser success, rental
+preview facts and actual custom-objective formatter invocation.
+
+The editor viewer starts alongside the introduction, category shares the nation's
+column, AT-SPG is translated as the requested Chinese full class name, and every
+vehicle shows its nation/resource discriminator. Enter on an ambiguous bare name
+does not silently retain or select a different vehicle. Shared-component nation
+captions and known internal-module labels are localized.
+
+Local validation: the targeted eight-file task/notification/garage/postbattle
+gate passed (439 tests before the final acknowledgement regression was added);
+all 40 launcher files passed (1,194 tests, 16 skips for optional client resources
+and Windows symlink privileges). All 224 client scripts compile with CPython
+2.7.18. The exact compiled #1513 Source parsed all 55 definitions, including both
+independent counters of the combined objective. The client inspection passed.
+The broad local 444-file run passed 378 files but failed 66, including native
+motion fixtures reporting missing native simulation / DLL dependencies. It is
+not an all-pass run; the configured CI builds native dependencies separately.
+The baseline inventory still identifies 484 files and 45 input-boundary review
+entries; its existing documented classifications remain authoritative, not a
+claim that every fixture is a shipping default or native gameplay acceptance.
+Engine-free results and exact #1513 parser checks are separate from packaged
+Windows/client acceptance below. The previous installed package is not evidence
+for these follow-up changes.
+
 This revision replaces the former AI-authored three-reserve daily mission
 system. It does not recover a historical server mission list: the 55 candidates
 in `ordinary_missions.py` are the discussed offline adaptation, with 28 ordinary

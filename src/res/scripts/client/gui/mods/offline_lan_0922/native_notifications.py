@@ -185,10 +185,26 @@ def quest_payload(assets):
 def settlement_messages(settlement, timestamp=None):
     """Native message families for immutable campaign and launcher deltas."""
     result = []
+    if settlement.get('reset_error'):
+        from gui.mods.offline_lan_0922.personal_campaign_ui import _reset_error
+        result.append(('adminMessage', _reset_error(settlement['reset_error'])))
+
+    def assets_for(rows, sign=1):
+        # Old saves recorded a count but not the members' native passports.
+        # Preserve that known fact through the stock general notice instead
+        # of inventing member identities or holding the queue indefinitely.
+        current = []
+        for row in rows:
+            if row.get('kind') == 'crew' and not row.get('passports') and sign > 0:
+                from gui.mods.offline_lan_0922.ui_i18n import tr
+                result.append(('adminMessage', tr('Crew members: %d') % int(row['count'])))
+            else:
+                current.append(row)
+        return reward_assets(current, sign)
     for row in settlement.get('rental_expired', ()):
         result.append(('rentalsExpired', {'vehTypeCD': int(row['vehicle_type'])}))
     for row in settlement.get('ordinary_missions', ()):
-        assets = reward_assets(row['rewards'])
+        assets = assets_for(row['rewards'])
         payload = quest_payload(assets)
         payload['completedQuestIDs'] = set((row['id'],))
         result.append(('tokenQuests', payload))
@@ -202,7 +218,7 @@ def settlement_messages(settlement, timestamp=None):
         paid = bool(row.get('paid_stages'))
         if not (revoked or changed or paid or row.get('orders_refunded')):
             continue
-        assets = reward_assets(row.get('rewards', ()) if paid or revoked else (),
+        assets = assets_for(row.get('rewards', ()) if paid or revoked else (),
                                -1 if revoked else 1)
         orders = (int(row.get('orders_earned', 0)) +
                   int(row.get('orders_refunded', 0)) -
@@ -229,7 +245,7 @@ def settlement_messages(settlement, timestamp=None):
                 from gui.mods.offline_lan_0922.ui_i18n import tr
                 result.append(('adminMessage', tr('Battle earnings multiplier: %d%% -> %d%%') %
                     (int(reward['before']), int(reward['count']))))
-        assets = reward_assets([reward for reward in rewards
+        assets = assets_for([reward for reward in rewards
                                 if reward.get('kind') != 'earnings_percent'],
             -1 if row.get('phase') == 'revoked' else 1)
         if assets:

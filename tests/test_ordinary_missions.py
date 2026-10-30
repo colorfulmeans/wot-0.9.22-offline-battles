@@ -189,14 +189,51 @@ class OrdinaryMissionsTests(unittest.TestCase):
         daily = dict(day=1, missions=['crit7'], claimed=[],
                      progress={'crit7': {'crits': 6}})
         xml = self.native.xml_definition(daily)
-        self.assertIn('<battles><count>1</count>', xml)
+        self.assertIn('<battles><count>7</count>', xml)
         self.assertIn('6/7', xml)
         self.assertIn('Cause 7 module or crew injuries', xml)
-        self.assertEqual({'bonusCount': 0, 'battlesCount': 0},
+        self.assertEqual({'bonusCount': 0, 'battlesCount': 6},
                          self.native.native_progress(daily, 'crit7'))
         daily['progress']['crit7']['crits'] = 7
-        self.assertEqual({'bonusCount': 0, 'battlesCount': 1},
+        self.assertEqual({'bonusCount': 0, 'battlesCount': 7},
                          self.native.native_progress(daily, 'crit7'))
+
+    def test_partial_assistance_and_combined_goals_reach_native_battle_results(self):
+        for key, metric, value in [('assist8000', 'assist', 715),
+                                   ('win8damage', 'damage', 2671)]:
+            with mock.patch.object(self.policy, 'assignments', return_value=[key]):
+                self.owner.snapshot().pop('dailyMissions', None)
+                receipt = self.receipt(winner=2, stats=dict(self.receipt()['stats'],
+                    damage=2671, assist_radio=715))
+                changed = self.policy.advance(self.owner, receipt, 86401)
+                self.assertEqual(1, len(changed))
+                self.assertEqual(0, changed[0]['after']['bonusCount'])
+                field = 'battlesCount' if key == 'assist8000' else 'damageDealt'
+                self.assertEqual(value, changed[0]['after'][field])
+                if key == 'win8damage':
+                    self.assertEqual(0, changed[0]['after']['battlesCount'])
+                    xml = self.native.xml_definition(self.owner.snapshot()['dailyMissions'])
+                    self.assertIn('<damageDealt>20000</damageDealt>', xml)
+
+    def test_rental_preview_uses_payment_selection_without_mutating_inventory(self):
+        rentals = fixture._load_port_module('vehicle_rentals')
+        snapshot = {'accountDBID': 7, 'vehicles': []}
+        daily = dict(day=1, missions=['rental_9_1'], claimed=[], rewards={})
+        pool = [dict(cd=17, name='tank', gold=1000)]
+        before = copy.deepcopy(snapshot)
+        with mock.patch.object(rentals, 'catalogue', return_value=pool):
+            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+                                         snapshot, daily, 86401)
+            self.assertEqual({17: {'rent': {'time': 1}}}, assets['vehicles'])
+            self.assertEqual(before, snapshot)
+            snapshot['vehicles'] = [dict(vehicleTypeCompactDescr=17)]
+            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+                                         snapshot, daily, 86401)
+            self.assertEqual({'credits': 4000}, assets)
+            daily['rewards']['rental_9_1'] = [dict(kind='rental', vehicle_type=17, days=1)]
+            assets = self.native.preview(self.policy.BY_ID['rental_9_1'], None,
+                                         snapshot, daily, 86401)
+            self.assertIn('vehicles', assets)
 
 
 class RentalPolicyTests(unittest.TestCase):
