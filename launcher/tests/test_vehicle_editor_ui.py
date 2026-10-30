@@ -266,6 +266,24 @@ def _texts(widget):
 
 
 class VehicleEditorWindowTest(unittest.TestCase):
+    def test_actual_tk_selector_rows_are_not_clipped_and_category_matches_nation(self):
+        import tkinter as tk
+        from tkinter import ttk, messagebox
+        try:
+            parent = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest('requires a Tk display: %s' % error)
+        self.addCleanup(parent.destroy)
+        parent.withdraw()
+        window = vehicle_editor_ui.VehicleEditorWindow(
+            parent, 'C:/WoT', 'Layout QA', tk, ttk, messagebox,
+            service=_Service())
+        window.root.update_idletasks()
+        for box in (window.nation_box, window.category_box, window.field_box):
+            self.assertLessEqual(box.winfo_y() + box.winfo_height(), box.master.winfo_height())
+        self.assertEqual(window.nation_box.winfo_width(), window.category_box.winfo_width())
+        self.assertEqual(0, window.armor_viewer.frame.grid_info()['row'])
+
     def setUp(self):
         self.parent = _Root()
         self.service = _Service()

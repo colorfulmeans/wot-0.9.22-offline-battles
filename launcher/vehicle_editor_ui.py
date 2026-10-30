@@ -305,11 +305,10 @@ class VehicleEditorWindow(object):
                    ("Tier", self.tier), ("Vehicle", self.vehicle),
                    ("Modification category", self.category), ("Field", self.field))
         for index, (label, variable) in enumerate(entries):
-            if index in (0, 4):
-                if index == 0:
-                    selectors = tk.Frame(frame)
-                    selectors.grid(row=2, column=0, rowspan=2,
-                        columnspan=3, sticky='we', pady=(0, 4))
+            if index == 0:
+                selectors = tk.Frame(frame)
+                selectors.grid(row=2, column=0,
+                    columnspan=3, sticky='we', pady=(0, 4))
             column = index if index < 4 else (0 if index == 4 else 1)
             selector_row = 0 if index < 4 else 2
             self._widget(tk.Label, selectors, text=label, anchor='w').grid(
@@ -325,7 +324,7 @@ class VehicleEditorWindow(object):
                 selectors.grid_columnconfigure(column, weight=(1, 1, 0, 3)[index])
         (self.nation_box, self.vehicle_class_box, self.tier_box,
          self.vehicle_box, self.category_box, self.field_box) = boxes
-        row = 4
+        row = 3
         self.nation_box.bind("<<ComboboxSelected>>", self.refresh_vehicles)
         self.vehicle_class_box.bind(
             "<<ComboboxSelected>>", self.refresh_vehicles)

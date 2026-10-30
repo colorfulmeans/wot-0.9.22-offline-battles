@@ -50,6 +50,14 @@ Engine-free results and exact #1513 parser checks are separate from packaged
 Windows/client acceptance below. The previous installed package is not evidence
 for these follow-up changes.
 
+Packaged 8d486d4 exposed a real Tk geometry regression before acceptance: the
+shared selector container spanned two otherwise unoccupied parent rows, and its
+44-pixel allocated height clipped the second selector row at y=67. Removing the
+unneeded rowspan gives it 92 pixels; both rows fit. An actual-Tk containment and
+equal-width regression now supplements fake-widget callback tests. This package
+is superseded for final delivery. Its client code can provide client evidence
+only if final package bytecode equality is independently established.
+
 This revision replaces the former AI-authored three-reserve daily mission
 system. It does not recover a historical server mission list: the 55 candidates
 in `ordinary_missions.py` are the discussed offline adaptation, with 28 ordinary
