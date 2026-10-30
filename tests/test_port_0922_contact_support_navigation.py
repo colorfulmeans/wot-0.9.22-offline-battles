@@ -14,6 +14,17 @@ from gui.mods.offline_lan_0922 import world_collision, destructibles_sensor
 
 
 class ContactSupportTests(unittest.TestCase):
+    def test_handoff_settlement_cannot_raise_hull_or_snap_a_large_drop(self):
+        for ground in (4.,-4.):
+            runtime,state=self.scene(lambda x,z:ground)
+            state.update(y=0.,_basic_support_datum=-ground,
+                         _basic_support_handoff={'created_at':1.})
+            runtime._contact_now=2.
+            rows=[dict(name=str(i),ground=ground,gap=-ground) for i in range(5)]
+            with mock.patch.object(runtime,'_basic_support_status',return_value=rows):
+                self.assertEqual(0.,runtime._revalidate_basic_support_datum(state,ground,.166))
+            self.assertEqual(0.,state['y'])
+
     def test_raw_supported_handoff_retires_without_false_airborne_descent(self):
         runtime, state = self.scene(lambda x,z: 11.86)
         state.update(y=12.2764, speed=0., vertical_speed=0., airborne=False,

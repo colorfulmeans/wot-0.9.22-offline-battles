@@ -3252,8 +3252,12 @@ class BotRuntime(object):
             # the offset while leaving the hull suspended above it. The latter
             # enters gravity and the airborne ceiling hides the next uphill
             # surface after contact pushes (Lakeville T-50 incident).
-            state['y'] = float(ground)
-            receipt['root_after'] = float(ground)
+            # Only consume a normal downward follow gap. Keep the existing
+            # rise-obstacle veto and real large-drop gravity path intact.
+            drop = float(state['y'])-float(ground)
+            if 0. <= drop <= vehicle_physics.GROUND_FOLLOW_MIN:
+                state['y'] = float(ground)
+            receipt['root_after'] = float(state['y'])
             return 0.
         return datum
 
