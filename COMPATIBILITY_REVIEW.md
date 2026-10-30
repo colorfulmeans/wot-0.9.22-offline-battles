@@ -11206,3 +11206,50 @@ exercise intersecting/empty tiers, canonical identities across language changes,
 add-only exterior quantities, and lineup bulk tier browsing without assignment
 mutation followed by explicit selection and save/reopen. Actual Windows window
 inspection and exact pushed-head CI are recorded after their completion below.
+
+Production head e38fab25560d5396274cf2b627cbc6bf2bee491c passed all three
+jobs of package run 41000067010. Downloaded launcher artifact 12953371128 is
+55,708,360 bytes and identifies colorfulmeans-41000067010-1. Verified the
+download digest against the Actions artifact gate, extraction containment,
+outer/nested/mod CRCs, x64 launcher, both x86 sidecar modules and 221 Python
+2.7 bytecode members. No client/server/native production source changed in
+this launcher follow-up. Final full Tests run 41000066820 passed all 39
+launcher files and native geometry, Windows editor, Bot behavior, navigation
+and Windows server jobs. Client files remain 442/443, solely the previously
+recorded Great Wall opposed-gate assertion; no all-green CI claim.
+
+The local full run found 1187 tests across 39 passing files, with 16 skips:
+14 Windows symlink privilege skips and two exact-client catalogue tests.
+Both catalogue files were subsequently rerun with WOT_0922_CLIENT set to the
+installed #1513 path, without those resource skips. After the final empty-pool
+message change, all three affected editor files passed again. This includes
+real Windows Tk interactions, not only widget fakes.
+
+Computer Use inspected the actual Windows launcher/editor implementation
+against the installed #1513 resources in an isolated Roaming/Local acceptance
+directory, leaving the user's real saves/profiles/settings untouched. Garage
+tier 8 selected 59 (china:Ch01_Type59), added that exact identity to the isolated
+inbox and retained the queued status. Members tier 1 selected MS-1; USSR +
+heavy + tier 1 cleared vehicle/seat and disabled recruitment. Exterior tier 8
+plus search 121B produced no rows; clearing tier restored one compatible
+vehicle. The original search behavior is unchanged.
+
+The modifier's 1327x740 Chinese window displayed both three-column rows with
+equal upper/lower widths per column. Its dropdown showed China/USSR/USA/
+Germany/Czech/France/UK/Japan/Poland/Sweden in Chinese. Selecting China loaded
+110's fields and actual armor model. The 1476x545 lineup window displayed both
+teams and the new tier columns. Bulk tier 1 kept 15/15 participants; choosing
+NC-31 for team 1 slot 0 and saving/reopening retained that exact vehicle and
+the other 29 random slots. The persisted schema contains no tier browsing
+keys. These checks used the production source UI; the final packaged launcher
+was then opened against the same isolated acceptance data.
+
+The actual colorfulmeans-41000067010-1 executable was checked separately:
+Members' empty tier/class intersection displayed the Chinese no-match message
+with recruitment disabled. Its English modifier window (1309x740) displayed
+the complete aligned selector rows, canonical USSR caption, field values and
+armor model; content-sized save/reset buttons remained readable. Bilingual
+selection preservation and tier-only browsing are also exercised by the
+regressions. The source and packaged acceptance launchers were closed after
+testing. No game was started for this UI-only change, and no new combat/error
+report is claimed. The package and prior gameplay reports remain separate.
