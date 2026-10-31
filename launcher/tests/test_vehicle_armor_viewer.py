@@ -286,19 +286,38 @@ class VehicleArmorGeometryTest(unittest.TestCase):
             def create_polygon(self, coords, **options):
                 self.calls.append((coords, options))
                 return len(self.calls)
+            def create_line(self, *args, **options):
+                self.calls.append((args, options))
+                return len(self.calls)
 
         panel.canvas = Canvas()
+        contexts = []
+        panel._draw_context_shell = lambda w, h: contexts.extend(
+            panel._projected_shell_outlines(w, h))
         panel._redraw()
-        self.assertEqual(2, len(panel.canvas.calls))
-        self.assertEqual(8, len(panel.canvas.calls[-1][0]))
-        self.assertEqual('', panel.canvas.calls[-1][1]['fill'])
+        self.assertEqual(1, len(panel.canvas.calls))
+        self.assertEqual(4, len(contexts[0]))
+        self.assertEqual('', panel.canvas.calls[0][1]['outline'])
         self.assertEqual({1: module}, panel._item_surface)
         self.assertEqual(1, len(panel._projected_triangles(400, 300)))
         self.assertEqual(1, len(panel._projected_shell_outlines(400, 300)))
         panel._yaw = 0.4
-        self.assertNotEqual(panel.canvas.calls[-1][0],
+        self.assertNotEqual([v for p in contexts[0] for v in p],
             [value for point in panel._projected_shell_outlines(400, 300)[0]
              for value in point])
+
+    def test_flat_plate_drops_internal_diagonal_but_keeps_selected_boundary(self):
+        surface = dict(role='hull', component='hull')
+        a, b, c, d = (0., 0., 0.), (2., 0., 0.), (2., 2., 0.), (0., 2., 0.)
+        triangles = [(0, (a, b, c), surface, 4),
+                     (0, (a, c, d), surface, 4)]
+        self.assertEqual(4, len(viewer._surface_edges(triangles)))
+        self.assertEqual(4, len(viewer._surface_edges(triangles, boundary_only=True)))
+
+    def test_nominal_bins_keep_exact_boundary_and_unknown_values(self):
+        for low, high in ((0, 20), (20, 50), (50, 100), (100, 150), (150, 250), (250, 400)):
+            self.assertEqual(viewer.thickness_color(low), viewer.thickness_color(high - .001))
+            self.assertNotEqual(viewer.thickness_color(low), viewer.thickness_color(high))
 
     def test_component_switch_invalidates_internal_geometry_before_display(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)

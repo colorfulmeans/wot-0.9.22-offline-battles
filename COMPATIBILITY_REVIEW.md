@@ -12093,3 +12093,32 @@ the installed payload identity is colorfulmeans-41209322093-1. Test profiles,
 history and reports were removed without backup as authorized. Only the client
 location and Chinese UI preference are restored for convenient handoff; no
 test vehicle/profile/lineup selection is retained.
+
+### Armor/interior presentation baseline (2026-10-31)
+
+The launcher viewer now draws filled source surfaces with mild camera-space
+lighting and no tessellation wireframe. Selection keeps its boundary highlight
+and original field callback; internal selection names the actual crew slot or
+module and dims unrelated surfaces. Interior context uses one low-alpha Pillow
+layer of simplified per-component screen envelopes behind the exact decoded
+surfaces. That layer never enters the picking map or changes geometry.
+
+Legends use normal Tk text, shared edges and responsive equal-width cells;
+Reset view occupies its own full-width row. Absolute nominal-armor bins
+0/20/50/100/150/250/400 mm now drive both the legend and surface base colors;
+lighting is presentation only. The interior legend shares the renderer's seven
+category colors, including gun control and observation devices, with explicit
+missing/partial-data labels. Help switches with mode and wraps to actual viewer
+width. Missing-data dialog names are localized. No donated layout, inferred
+region, battle damage, module placement or native physics change is included.
+
+Tests cover real Tk layouts at 380/620 pixels in both languages, mode switching,
+missing-data dialog admission, selected-crew translation, context-layer ordering,
+click-through context, original armor field selection, bin boundaries and the
+removal of shared triangle diagonals from selection borders. The package
+workflow includes all three viewer test files; the main Windows editor job
+continues to discover the full launcher suite. Local isolated coverage passed
+44 files / 1212 tests with 14 resource/platform skips; affected files are rerun
+after final presentation adjustments. Packaged Windows visual acceptance must
+still verify both modes, module/armor selection, orbit/zoom/reset, small-window
+legend reflow, missing interiors and no stale selection after vehicle changes.

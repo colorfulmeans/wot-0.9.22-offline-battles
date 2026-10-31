@@ -23,8 +23,16 @@ def catalogue():
     return ast.literal_eval(value)
 
 
-COLORS = {'engine': '#df8c42', 'ammoBay': '#d65b63', 'fuelTank': '#e9c64b',
-          'radio': '#69b6d7', 'turretRotator': '#a889d3', 'crew': '#72c485'}
+MODULE_STYLES = (
+    ('engine', 'Engine', '#df8c42'),
+    ('ammoBay', 'Ammo rack', '#d65b63'),
+    ('fuelTank', 'Fuel', '#e9c64b'),
+    ('radio', 'Radio', '#69b6d7'),
+    ('turretRotator', 'Gun control', '#a889d3'),
+    ('surveyingDevice', 'Observation devices', '#7485bd'),
+    ('crew', 'Crew', '#72c485'),
+)
+COLORS = {entity: color for entity, unused_label, color in MODULE_STYLES}
 
 
 def load_scene(armor_scene, layouts=None):
@@ -62,7 +70,8 @@ def load_scene(armor_scene, layouts=None):
             indices = struct.unpack_from('<3I', blob, 12 + vertices_count * 24 + index * 12)
             triangles.append(tuple(vertices[point] for point in indices))
         parts.append({'role': parent, 'surfaces': ({'triangles': tuple(triangles),
-            'moduleLabel': '%s / %s' % (entity, zone), 'fieldKey': None,
+            'moduleLabel': '%s / %s' % (identity, zone),
+            'moduleEntity': entity, 'fieldKey': None,
             'color': COLORS.get(entity, '#a889d3')},)})
         represented.add(identity)
     missing.extend('%s: selected component has no matching interior' % identity
