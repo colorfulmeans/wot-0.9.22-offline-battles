@@ -12129,3 +12129,8 @@ installs the same pinned Pillow already shipped by the launcher before those
 tests, without skipping the alpha-shell checks. A fourth widget regression
 also verifies vehicle reload clears module selection and refreshes the
 unmapped-thickness legend (current local coverage: 1213 tests).
+
+Native source-window inspection exposed initial long-status clipping despite
+the outer cells fitting: Tk had not yet resolved newly created label requests.
+Legend columns now use measured font widths plus swatch/control insets, and the
+real-widget regression checks the full caption request as well as cell bounds.

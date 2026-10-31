@@ -43,6 +43,9 @@ class ViewerWidgetTests(unittest.TestCase):
                     for index, cell in enumerate(p._legend_cells):
                         self.assertGreaterEqual(cell.winfo_x(), 0)
                         self.assertLessEqual(cell.winfo_x()+cell.winfo_width(), p.legend.winfo_width())
+                        for child in cell.winfo_children():
+                            if isinstance(child, tk.Label):
+                                self.assertGreaterEqual(child.winfo_width(), child.winfo_reqwidth())
                         if index >= columns:
                             self.assertGreater(cell.winfo_y(), p._legend_cells[index % columns].winfo_y())
                     self.assertEqual(p.canvas.winfo_x(), p.reset_button.winfo_x())

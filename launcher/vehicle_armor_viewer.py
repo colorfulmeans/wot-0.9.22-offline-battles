@@ -1185,9 +1185,11 @@ class ArmorViewerPanel(object):
         self._redraw()
 
     def _draw_legend(self):
+        from tkinter import font as tkfont
         for child in self.legend.winfo_children():
             child.destroy()
         self._legend_cells = []
+        self._legend_minwidth = 1
         if getattr(self, '_view_mode', 'armor') == 'internal':
             try:
                 from .vehicle_internal_viewer import MODULE_STYLES
@@ -1223,8 +1225,10 @@ class ArmorViewerPanel(object):
                                      highlightthickness=0)
             swatch.create_rectangle(0, 0, 16, 12, fill=color, outline='')
             swatch.pack(side='left', padx=(0, 6))
-            self._tk.Label(cell, text=label, anchor='w', padx=0, pady=0).pack(
-                side='left')
+            caption = self._tk.Label(cell, text=label, anchor='w', padx=0, pady=0)
+            caption.pack(side='left')
+            font = tkfont.Font(root=self.legend, font=caption.cget('font'))
+            self._legend_minwidth = max(self._legend_minwidth, font.measure(label) + 34)
             self._legend_cells.append(cell)
         self._legend_columns = None
         self._layout_legend()
@@ -1234,7 +1238,7 @@ class ArmorViewerPanel(object):
         if not cells:
             return
         available = max(1, self.legend.winfo_width())
-        requested = max(cell.winfo_reqwidth() for cell in cells) + 6
+        requested = self._legend_minwidth
         columns = min(len(cells), max(1, available // max(1, requested)))
         if columns == self._legend_columns:
             return
