@@ -26,6 +26,7 @@ jobs:
           --pattern test_appearance_inventory.py
           --pattern test_save_services.py
           --pattern test_service_widgets.py
+            --pattern test_launcher_layout.py
           --pattern test_crew_store.py
           --pattern test_vehicle_editor_localization.py
           --pattern test_bot_lineup_profiles.py

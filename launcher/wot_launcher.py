@@ -7,6 +7,11 @@ authority, and can run a persistent LAN server explicitly.
 
 from __future__ import annotations
 
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
 import os
 import subprocess
 import sys
@@ -74,6 +79,7 @@ _CHINESE = {
     'Personal reserves': '个人储备', 'Bonus': '加成', 'Duration (hours)': '时长（小时）',
     'Inventory': '库存', 'Quantity': '数量', 'Set selected quantities': '设置选中储备数量',
     'Personal reserves saved.': '个人储备已保存。', 'Add garage slots': '添加车位',
+    'Garage slots': '车位',
     'Garage slots: %d': '车位总数：%d', 'Select a personal reserve.': '请先选择个人储备。',
     'Quantity must be positive.': '数量必须大于零。',
     'Quantity must be a non-negative whole number.': '数量必须为非负整数。',
@@ -804,8 +810,8 @@ class LauncherWindow(object):
         self.language_box.bind(
             "<<ComboboxSelected>>", self._language_selected)
 
-        self.game_panel = tk.LabelFrame(frame, text="", padx=8, pady=8)
-        self.game_panel.grid(row=1, column=0, sticky="we", pady=(0, 8))
+        self.game_section, self.game_panel, self.game_title = ui_layout.section(tk, frame)
+        self.game_section.grid(row=1, column=0, sticky="we", pady=(0, 8))
         self.game_folder_label = tk.Label(self.game_panel, text="")
         self.game_folder_label.grid(row=0, column=0, sticky="w")
         self._folders = core.known_folders(settings)
@@ -952,11 +958,11 @@ class LauncherWindow(object):
         self.save_dialog.protocol("WM_DELETE_WINDOW", self._close_save_dialog)
         self.save_tabs = self._ttk.Notebook(self.save_dialog)
         self.save_tabs.pack(fill='both', expand=True, padx=12, pady=12)
-        self.account_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.account_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.reserves_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.reserves_editor = reserves_ui.ReservesPanel(self, self.reserves_panel)
-        self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
-        self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.shop_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        self.personal_missions_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.crew_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         for panel in (self.account_panel, self.reserves_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
@@ -973,7 +979,7 @@ class LauncherWindow(object):
         self.save_dialog_feedback.pack(fill="x", padx=12, pady=6)
         self.close_save_dialog_button = tk.Button(
             self.save_dialog, text="", command=self._close_save_dialog)
-        self.close_save_dialog_button.pack(anchor="e", padx=12, pady=(0, 12))
+        self.close_save_dialog_button.pack(fill="x", padx=12, pady=(0, 12))
         self.vehicle_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.bot_lineup_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.bot_tactics_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
@@ -1044,9 +1050,9 @@ class LauncherWindow(object):
             sticky="we", pady=(6, 0))
         self.save_account_button = tk.Button(
             account_actions, text="", command=self._apply_account)
-        self.save_account_button.pack(side="left", fill="x", expand=True)
+        self.save_account_button.pack(fill="x")
         self.edit_badges_button = tk.Button(account_actions, command=self._open_account_badges)
-        self.edit_badges_button.pack(side="left", fill="x", expand=True)
+        self.edit_badges_button.pack(fill="x", pady=(6, 0))
         self.account_help_label = tk.Label(
             self.account_panel, text="", anchor="w", justify="left",
             wraplength=620)
@@ -1094,18 +1100,19 @@ class LauncherWindow(object):
         self.buy_gold_vehicle_button = tk.Button(
             shop_actions, text="", command=self._buy_gold_vehicle)
         self.buy_gold_vehicle_button.pack(side="left", fill="x", expand=True)
-        slots_row = tk.Frame(self.shop_panel)
-        slots_row.grid(row=5, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        self.slots_label = tk.Label(self.shop_panel)
+        self.slots_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
         self.slots_quantity = tk.StringVar(value="1")
-        self._ttk.Spinbox(slots_row, from_=1, to=save_ledger.MAX_BALANCE,
-                         textvariable=self.slots_quantity, width=12).pack(side="left")
-        self.add_slots_button = tk.Button(slots_row, command=self._add_garage_slots)
-        self.add_slots_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.slots_box = self._ttk.Spinbox(self.shop_panel, from_=1,
+            to=save_ledger.MAX_BALANCE, textvariable=self.slots_quantity)
+        self.slots_box.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        self.add_slots_button = tk.Button(self.shop_panel, command=self._add_garage_slots)
+        self.add_slots_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.shop_help_label = tk.Label(
             self.shop_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.shop_help_label.grid(
-            row=6, column=0, columnspan=2, sticky="we", pady=(8, 0))
+            row=7, column=0, columnspan=2, sticky="we", pady=(8, 0))
         self.shop_panel.grid_columnconfigure(1, weight=1)
 
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(
@@ -1177,8 +1184,8 @@ class LauncherWindow(object):
 
         self._build_maintenance_controls()
 
-        self.log_panel = tk.LabelFrame(frame, text="", padx=6, pady=6)
-        self.log_panel.grid(row=4, column=0, sticky="nsew")
+        self.log_section, self.log_panel, self.log_title = ui_layout.section(tk, frame)
+        self.log_section.grid(row=4, column=0, sticky="nsew")
         self.log_view = tk.Text(
             self.log_panel, height=10, width=72, state="disabled",
                                 wrap="none")
@@ -1218,26 +1225,26 @@ class LauncherWindow(object):
         self.repair_button = tk.Button(
             self.repair_panel, text="",
             command=self._repair_startup)
-        self.repair_button.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        self.repair_button.grid(row=0, column=0, sticky="ew", padx=(0,3), pady=(0,6))
         self.reset_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_all_state)
-        self.reset_button.grid(row=1, column=0, sticky="ew", padx=3, pady=3)
+        self.reset_button.grid(row=1, column=0, sticky="ew", padx=(0,3), pady=(0,6))
         self.offline_preferences_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_offline_client_settings)
         self.offline_preferences_button.grid(
-            row=0, column=1, sticky="ew", padx=3, pady=3)
+            row=0, column=1, sticky="ew", padx=(3,0), pady=(0,6))
         self.factory_reset_button = tk.Button(
             self.repair_panel, text="", command=self._factory_reset)
-        self.factory_reset_button.grid(row=1, column=1, sticky="ew", padx=3, pady=3)
+        self.factory_reset_button.grid(row=1, column=1, sticky="ew", padx=(3,0), pady=(0,6))
         for index in (0, 1):
             self.repair_panel.grid_columnconfigure(index, weight=1, uniform='maintenance_columns')
             self.repair_panel.grid_rowconfigure(index, weight=0)
         self.maintenance_help = tk.Label(self.repair_panel, text="", anchor="nw",
             justify="left", wraplength=620)
         self.maintenance_help.grid(row=2, column=0, columnspan=2,
-            sticky="new", padx=3, pady=(8, 0))
+            sticky="new", pady=(8, 0))
         self.repair_panel.grid_rowconfigure(3, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
@@ -1250,7 +1257,7 @@ class LauncherWindow(object):
 
     def _apply_language(self, refresh=True):
         self.language_label.config(text=self._t("Language"))
-        self.game_panel.config(text=self._t("Game client"))
+        self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
         self.browse_button.config(text=self._t("Browse..."))
         self.crash_report_check.config(
@@ -1292,18 +1299,17 @@ class LauncherWindow(object):
             "battle results. The selected save is the one the game starts "
             "with. Back up a save to a ZIP file, or open its folder and copy "
             "the files out yourself."))
-        self.account_panel.config(text=self._t("Account"))
         for name, label in self.balance_labels.items():
             label.config(text=self._t(_BALANCE_LABELS[name]))
         self.save_account_button.config(text=self._t("Save changes"))
         self.premium_label.config(text=self._t("Premium account days"))
         self.add_slots_button.config(text=self._t("Add garage slots"))
+        self.slots_label.config(text=self._t("Garage slots"))
         self.earnings_label.config(text=self._t("Earnings multiplier"))
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
         self.edit_badges_button.config(text=self._t("Edit account badges..."))
-        self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.edit_customizations_button.config(text=self._t('Edit appearance inventory...'))
         for panel, label in ((self.account_panel, 'Account'), (self.reserves_panel, 'Personal reserves'), (self.shop_panel, 'Garage vehicles'),
@@ -1311,7 +1317,6 @@ class LauncherWindow(object):
             self.save_tabs.tab(panel, text=self._t(label))
         self.reserves_editor.translate()
         self.crew_editor.translate()
-        self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
@@ -1344,10 +1349,11 @@ class LauncherWindow(object):
         self.factory_reset_button.config(text=self._t("Delete all data and restore factory defaults"))
         self.maintenance_help.config(text='\n'.join(self._t(line) for line in _MAINTENANCE_HELP))
         self.report_button.config(text=self._t("Create error report..."))
-        self.log_panel.config(text=self._t("Activity log"))
+        self.log_title.config(text=self._t("Activity log"))
         self._update_action_controls()
         if refresh:
             self._refresh_client()
+        ui_layout.polish(self.root)
 
     def _language_selected(self, unused_event=None):
         self.language_preference = i18n.language_for_choice(
@@ -1832,7 +1838,7 @@ class LauncherWindow(object):
             balances = save_ledger.write_balances(
                 self._save_slot_id, wanted, game_root or None, premium_days=premium)
         except save_ledger.SaveLedgerError as error:
-            self._log("The balances could not be saved: %s" % error)
+            self._log(self._t("The balances could not be saved: %s") % self._t(str(error)))
             self._refresh_balances()
             return False
         try:
@@ -2175,7 +2181,9 @@ class LauncherWindow(object):
         save_actions = tk.Frame(self.save_panel)
         save_actions.grid(row=1,column=0,columnspan=2,sticky="we",pady=(6,0))
         for column in range(4):
-            save_actions.grid_columnconfigure(column,weight=1,uniform="save_actions")
+            save_actions.grid_columnconfigure(column*2,weight=1,uniform="save_actions")
+            if column < 3:
+                save_actions.grid_columnconfigure(column*2+1,minsize=6)
         for index,(attribute,command) in enumerate((
                 ('customize_save_button',self._open_save_dialog),
                 ('new_save_slot_button',self._new_save_slot),
@@ -2186,7 +2194,7 @@ class LauncherWindow(object):
                 ('restore_save_button',self._restore_save_slot),
                 ('initialize_save_button',self._initialize_save_slot))):
             button=tk.Button(save_actions,text="",command=command)
-            button.grid(row=index//4,column=index%4,sticky="we",padx=3,pady=3)
+            button.grid(row=index//4,column=(index%4)*2,sticky="we", pady=(0,6))
             setattr(self,attribute,button)
 
     def _initialize_save_slot(self):

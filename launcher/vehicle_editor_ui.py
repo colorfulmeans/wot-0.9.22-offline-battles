@@ -1,6 +1,11 @@
 """Tk window for named 0.9.22 vehicle-data profiles."""
 
 from __future__ import annotations
+
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
 import math
 import re
 
@@ -250,6 +255,7 @@ class VehicleEditorWindow(object):
         self._shown_result = None
         self._status_spec = ("Choose a vehicle field.", (), False)
         self._build(parent)
+        ui_layout.polish(self.root)
         self._load_profile_options()
         self.refresh_catalog()
 
@@ -295,7 +301,7 @@ class VehicleEditorWindow(object):
             frame, text="Clear all edits in this profile...",
             command=self.restore_defaults)
         self.restore_button.grid(row=1, column=0, columnspan=3,
-                                 sticky="w", pady=(0, 8))
+                                 sticky="ew", pady=(0, 8))
         self.exclude_edited_vehicles_from_bots = tk.BooleanVar(value=False)
         self.bot_exclusion_button = self._widget(tk.Checkbutton,
             frame, text="Exclude edited vehicles from automatic Bots "

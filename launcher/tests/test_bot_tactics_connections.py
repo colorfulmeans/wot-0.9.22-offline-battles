@@ -180,7 +180,7 @@ class ConnectionTests(unittest.TestCase):
             e.set_language(language)
             self.assertEqual([pair[0 if language=='zh' else 1] for pair in expected],
                              [str(w.cget('text')) for w in widgets])
-            self.assertEqual([(i//6,i%6) for i in range(12)],
+            self.assertEqual([(i//6,(i%6)*2) for i in range(12)],
                              [(int(w.grid_info()['row']),int(w.grid_info()['column'])) for w in widgets])
             self.assertEqual(e.tr('恢复本路线','Reset route'),e.route_restore_menu.entrycget(0,'label'))
             self.assertEqual(e.tr('恢复默认路线','Restore default routes'),e.route_restore_menu.entrycget(1,'label'))

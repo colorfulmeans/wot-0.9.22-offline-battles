@@ -11998,3 +11998,45 @@ without parse issues. Existing warnings concern unavailable Vivox, RSS, disabled
 new notification crash. Sound resource membership reports no failure, but this
 does not substitute for an audible playback acceptance test. No additional
 confirmed defect was established from this report.
+
+
+### PR116 launcher layout acceptance baseline (2026-10-31)
+
+Launcher presentation now shares classic Tk action buttons, a six-pixel
+control gap, equal action groups and left-anchored explanatory/feedback text.
+Bordered sections use a complete outer frame and an ordinary title inside it;
+custom-save notebook pages do not repeat their tab captions in inner frames.
+No account, reward, campaign, battle or navigation rules change in this pass.
+
+The geometry baseline is the agreed current UI, not the former content-sized
+button rows: save actions form four equal columns; vehicle/lineup profile
+operations form three; paired actions and armor/interior modes form halves.
+The reserve quantity/button gap is centered on the Save button midpoint.
+Garage slot quantities use the same label/input columns as vehicle filters,
+followed by a full-width Add slots row. Account Save and Edit badges occupy
+separate full-width rows. Team lineup Save/Close share a bottom action row;
+Bot tactics keeps its draft/apply distinction in equal bottom actions.
+
+`test_launcher_layout.py` measures actual Tk widgets at two window widths,
+checks contained titles and uniform save-page containers, and verifies the
+translated million-day rejection followed by successful one-day/zero-day
+premium saves. Existing lineup, route, language, maintenance and packaged
+smoke tests now target the agreed button classes and contained section titles.
+The package workflow explicitly includes the new geometry regression; the
+Windows editor job continues to run every launcher test in isolation.
+
+Packaged visual acceptance must separately click every play/tools tab and all
+six custom-save pages, then open appearance (both tabs), badges, personal
+missions, vehicle armor/interior, exact lineup, and both Bot tactics tabs and
+its effective-values/map-check windows. Check Chinese labels, equal action
+widths, shared edges, read-only Default guards, resized-window clipping and
+normal close behavior. Test fixtures use isolated stores; UI checks must not
+invoke destructive repair/reset operations merely to inspect their buttons.
+
+The local isolated suite exercised 43 files / 1205 tests with 14 platform or
+resource skips. Superseded geometry fixtures were corrected and rerun, including
+the packaged smoke's spacer-column indices. Canvas radius comparison allows
+sub-micropixel float roundoff (4 versus 3.9999999999999716) without changing
+waypoint positions, waiting radii or navigation rules. Final focused reruns also
+cover minimum readable equal-button captions, Default read-only guards, route
+editing, real launcher geometry and the shipped smoke verifier.

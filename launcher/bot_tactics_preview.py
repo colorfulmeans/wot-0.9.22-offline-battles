@@ -1,6 +1,7 @@
 """Read-only, scope-complete preview of committed draft behavior rules."""
 import copy
 import json
+import ui_layout
 import tkinter as tk
 from tkinter import ttk
 import bot_tactics_labels as labels
@@ -141,9 +142,10 @@ class PreviewWindow:
         notes_scroll=ttk.Scrollbar(notes_frame,orient='vertical',command=self.ammo_note.yview)
         self.ammo_note.configure(yscrollcommand=notes_scroll.set)
         notes_scroll.pack(side='right',fill='y');self.ammo_note.pack(fill='x',expand=True)
-        self.close_button=ttk.Button(self.root,command=self.root.destroy)
-        self.close_button.pack(anchor='e',padx=10,pady=8)
+        self.close_button=tk.Button(self.root,command=self.root.destroy)
+        self.close_button.pack(fill='x',padx=10,pady=8)
         self.set_language(language)
+        ui_layout.polish(self.root)
 
     def set_language(self,language):
         self.language=language;zh=language=='zh'

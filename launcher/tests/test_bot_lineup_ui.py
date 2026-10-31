@@ -236,13 +236,16 @@ class RealTkTests(unittest.TestCase):
         self.assertTrue(self.e.root.winfo_exists())
         self.assertEqual([], self.saved)
 
-    def test_close_dialog_uses_three_content_sized_buttons_and_discard(self):
+    def test_close_dialog_uses_three_equal_buttons_and_discard(self):
         self.choose(1,0,'skill','elite')
         self.e._close();self.parent.update()
         dialog=next(c for c in self.e.root.winfo_children() if isinstance(c,self.tk.Toplevel))
-        buttons=[c for frame in dialog.winfo_children() for c in frame.winfo_children() if isinstance(c,self.ttk.Button)]
+        buttons=[c for frame in dialog.winfo_children() for c in frame.winfo_children() if isinstance(c,self.tk.Button)]
         self.assertEqual(['保存并关闭','放弃修改','取消'],[b['text'] for b in buttons])
-        self.assertTrue(all(str(b['width'])=='0' for b in buttons))
+        self.assertEqual(1, len({str(b['width']) for b in buttons}))
+        self.assertLessEqual(max(b.winfo_width() for b in buttons)-min(b.winfo_width() for b in buttons), 1)
+        for b in buttons:
+            self.assertLess(int(b.tk.call('font', 'measure', b.cget('font'), b.cget('text'))), b.winfo_width())
         buttons[1].invoke();self.parent.update()
         self.assertEqual([],self.saved)
         self.assertFalse(self.e.root.winfo_exists())

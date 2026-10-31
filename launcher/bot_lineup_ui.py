@@ -1,5 +1,10 @@
 """Draft editor for sparse, explicitly enabled Bot lineup slots."""
 from __future__ import annotations
+
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
 import copy
 from collections import Counter
 try:
@@ -93,8 +98,13 @@ class BotLineupEditorWindow:
             frame.columnconfigure(offset+4, weight=1)
         self.status = tk.StringVar(value='')
         self._ttk.Label(frame, textvariable=self.status).grid(row=18, column=0, columnspan=12, sticky='w', pady=8)
-        self._ttk.Button(frame, text=self._t('Save'), command=self._save).grid(row=19, column=0, columnspan=6, sticky='w', padx=(0, 4))
-        self._ttk.Button(frame, text=self._t('Close'), command=self._close).grid(row=19, column=6, columnspan=6, sticky='e', padx=(4, 0))
+        actions = tk.Frame(frame)
+        actions.grid(row=19, column=0, columnspan=12, sticky='ew')
+        for column, (text, command) in enumerate((('Save', self._save), ('Close', self._close))):
+            actions.columnconfigure(column, weight=1, uniform='actions')
+            tk.Button(actions, text=self._t(text), command=command).grid(
+                row=0, column=column, sticky='ew', padx=(0, 3) if column == 0 else (3, 0))
+        ui_layout.polish(self.root)
 
     def _make_row(self, frame, gridrow, team, slot, offset):
         self._ttk.Label(frame, text=self._t('All') if slot is None else str(slot+1)).grid(row=gridrow, column=offset, padx=3)
@@ -279,8 +289,9 @@ class BotLineupEditorWindow:
             if action == 'discard' or (action == 'save' and self._save()):
                 self.root.destroy()
         for text, action in (('Save and close', 'save'), ('Discard changes', 'discard'), ('Cancel', 'cancel')):
-            self._ttk.Button(buttons, text=self._t(text), width=0,
+            self._tk.Button(buttons, text=self._t(text), width=0,
                              command=lambda a=action: choose(a)).pack(side='left', padx=4, ipadx=8, ipady=3)
+        ui_layout.polish(dialog)
         dialog.grab_set()
 
 

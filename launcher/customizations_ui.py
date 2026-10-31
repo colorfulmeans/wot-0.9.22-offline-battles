@@ -1,5 +1,10 @@
 """Inventory editor for owned preset styles, including retail-hidden styles."""
 try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
+try:
     from . import save_customizations as store, nation_choices, vehicle_editor_ui
 except ImportError:
     import save_customizations as store, nation_choices, vehicle_editor_ui
@@ -99,6 +104,7 @@ class CustomizationsDialog(object):
         frame.grid_columnconfigure(1, weight=1)
         frame.grid_rowconfigure(1, weight=1)
         self.filter_vehicles()
+        ui_layout.polish(self.window)
         self.window.grab_set()
 
     def change_tab(self, unused=None):

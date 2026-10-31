@@ -295,9 +295,9 @@ class WindowTest(unittest.TestCase):
         return game_root
 
     def test_custom_save_restores_original_vehicle_labels_and_exposes_progress_editors(self):
-        self.assertEqual("Garage vehicles", self.window.shop_panel.cget("text"))
+        self.assertEqual("Garage vehicles", self.window.save_tabs.tab(self.window.shop_panel).get("text"))
         self.assertEqual("Gold and reward vehicle", self.window.gold_vehicle_label.cget("text"))
-        self.assertEqual("Personal missions", self.window.personal_missions_panel.cget("text"))
+        self.assertEqual("Personal missions", self.window.save_tabs.tab(self.window.personal_missions_panel).get("text"))
         self.assertFalse(hasattr(self.window, "orders_entry"))
         self.assertFalse(hasattr(self.window, "orders_label"))
         self.assertEqual("Lowe (germany:G51_Lowe)", self.window._gold_offer_label({
@@ -331,8 +331,8 @@ class WindowTest(unittest.TestCase):
         for button, (row, column) in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
             self.assertEqual(row, button.grid_options['row'])
             self.assertEqual(column, button.grid_options['column'])
-            self.assertEqual(3, button.grid_options['padx'])
-            self.assertEqual(3, button.grid_options['pady'])
+            self.assertEqual((0, 3) if column == 0 else (3, 0), button.grid_options['padx'])
+            self.assertEqual((0, 6), button.grid_options['pady'])
             self.assertEqual('ew', button.grid_options['sticky'])
         self.assertIs(
             self.window.offline_preferences_button.master,
@@ -540,7 +540,7 @@ class WindowTest(unittest.TestCase):
             reopened = wot_launcher.LauncherWindow(
                 _FakeTk, _FakeTtk, self.dialog)
 
-        self.assertEqual("游戏客户端", reopened.game_panel.cget("text"))
+        self.assertEqual("游戏客户端", reopened.game_title.cget("text"))
         self.assertEqual(
             "开始单人战斗", reopened.single_start_button.cget("text"))
         self.assertEqual(
@@ -554,7 +554,7 @@ class WindowTest(unittest.TestCase):
         reopened.language_choice.set("English")
         reopened._language_selected()
 
-        self.assertEqual("Game client", reopened.game_panel.cget("text"))
+        self.assertEqual("Game client", reopened.game_title.cget("text"))
         self.assertEqual(
             "Start single-player battle",
             reopened.single_start_button.cget("text"))

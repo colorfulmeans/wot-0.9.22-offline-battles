@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """Tk Bot behavior / route / artillery editor, backed by the runtime contract."""
 from __future__ import annotations
+
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
 import copy
 import math
 from pathlib import Path
@@ -121,6 +126,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.root.geometry('1200x820'); self.root.minsize(1000, 700)
         self.root.protocol('WM_DELETE_WINDOW', self.close)
         self._build()
+        ui_layout.polish(self.root)
         self.map_name = '33_fjord'; self.team = 1
         self._load_map(); self._refresh_rules(); self._refresh_profiles(); self._refresh_lock()
         self.root.bind('<Control-z>', lambda e: self.undo())
@@ -151,7 +157,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         def refresh(widget):
             if isinstance(widget, (LocalizedCombobox,SlotsDropdown)):
                 widget.set_language(language)
-            if isinstance(widget, (ttk.Label, ttk.Button, ttk.Menubutton, ttk.Checkbutton, ttk.LabelFrame)):
+            if isinstance(widget, (ttk.Label, tk.Label, tk.Button, tk.Menubutton, ttk.Menubutton, ttk.Checkbutton, ttk.LabelFrame)):
                 text = str(widget.cget('text'))
                 widget.configure(text=self._translated_text(text))
             if isinstance(widget, ttk.Notebook):
@@ -195,13 +201,14 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.profile_box = ttk.Combobox(head, textvariable=self.profile_name, width=28, state='readonly')
         self.profile_box.pack(side='left', padx=6)
         self.profile_box.bind('<<ComboboxSelected>>', self.open_profile)
+        profile_actions = tk.Frame(head); profile_actions.pack(side='left', fill='x', expand=True)
         for key, zh, en, command in (
             ('new', '新建', 'New', self.new_profile),
             ('rename', '重命名', 'Rename', self.rename_profile),
             ('delete', '删除', 'Delete', self.delete_profile),
             ('import', '导入', 'Import', self.import_profile),
             ('export', '导出', 'Export', self.export_profile)):
-            button=ttk.Button(head, text=self.tr(zh,en), command=command)
+            button=tk.Button(profile_actions, text=self.tr(zh,en), command=command)
             button.pack(side='left', padx=2)
             setattr(self, key+'_button', button)
         self.book = ttk.Notebook(self.root)
@@ -210,13 +217,14 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.book.add(behavior, text=self.tr('行为参数', 'Behavior'))
         self.book.add(maps, text=self.tr('进攻路线 / 火炮炮位', 'Routes / SPG positions'))
         self._build_behavior(behavior); self._build_maps(maps)
-        foot = ttk.Frame(self.root, padding=10); foot.pack(fill='x')
+        foot = ttk.Frame(self.root, padding=10); foot.pack(side='bottom', fill='x')
         self.status = tk.StringVar(value=self.tr('已载入当前配置。修改先作为草稿，不影响进行中的战斗。',
                                                'Loaded active profile. Editing does not change an ongoing battle.'))
-        ttk.Label(foot, textvariable=self.status, wraplength=670).pack(side='left', fill='x', expand=True)
-        self.save_button=ttk.Button(foot, text=self.tr('保存草稿', 'Save draft'), command=lambda:self.save(False));self.save_button.pack(side='left', padx=5)
-        self.apply_button=ttk.Button(foot, text=self.tr('保存并应用（下一局）', 'Apply next battle'), command=lambda:self.save(True));self.apply_button.pack(side='left')
-        ttk.Button(foot, text=self.tr('关闭', 'Close'), command=self.close).pack(side='left', padx=5)
+        ttk.Label(foot, textvariable=self.status, wraplength=670).pack(fill='x')
+        actions = tk.Frame(foot); actions.pack(fill='x', pady=(6, 0))
+        self.save_button=tk.Button(actions, text=self.tr('保存草稿', 'Save draft'), command=lambda:self.save(False));self.save_button.pack(side='left', padx=5)
+        self.apply_button=tk.Button(actions, text=self.tr('保存并应用（下一局）', 'Apply next battle'), command=lambda:self.save(True));self.apply_button.pack(side='left')
+        tk.Button(actions, text=self.tr('关闭', 'Close'), command=self.close).pack(side='left', padx=5)
         self.book.pack(fill='both', expand=True, padx=10)
 
     def _build_behavior(self, parent):
@@ -276,9 +284,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
                 ('撤销','Undo',lambda:self.undo('behavior')),
                 ('重做','Redo',lambda:self.redo('behavior')),
                 ('显示所选范围生效参数','Effective values',self.preview_rule)]):
-            button=ttk.Button(actions,text=self.tr(zh,en),command=command)
+            button=tk.Button(actions,text=self.tr(zh,en),command=command)
             button.grid(row=index//2,column=index%2,columnspan=2 if index==4 else 1,
-                        sticky='ew',padx=2,pady=3)
+                        sticky='ew',padx=(0,0) if index == 4 else (0,3) if index%2 == 0 else (3,0),pady=(0,6))
             if index in (2,3):self.history_buttons.append(('behavior',index==3,button))
         self.behavior_help=tk.StringVar()
         help_frame=ttk.Frame(form);help_frame.grid(row=row+4,column=0,columnspan=2,sticky='sew',pady=8)
@@ -415,19 +423,20 @@ class BotTacticsEditor(ConnectionEditorMixin):
                               ('转换为备用路线','Make reserve',lambda:self.set_tier('reserve')),
                               ('检查本图','Check map',self.check_map),('适应窗口','Fit view',self.fit_view),
                               ('导入地图','Load image',self.load_background)]):
-            button=ttk.Button(tools,text=self.tr(zh,en),command=command);button.grid(row=tool_index//6,column=tool_index%6,sticky='ew',padx=1,pady=2);tools.columnconfigure(tool_index%6,weight=1,uniform='tools')
+            button=tk.Button(tools,text=self.tr(zh,en),command=command);button.grid(row=tool_index//6,column=(tool_index%6)*2,sticky='ew',pady=(0,6));tools.columnconfigure((tool_index%6)*2,weight=1,uniform='tools')
+            if tool_index%6 < 5:tools.columnconfigure((tool_index%6)*2+1,minsize=6)
             if en=='Delete':self.route_delete_button=button
             if en=='Duplicate':self.route_duplicate_button=button
             if en in ('Make main','Make reserve'):
                 if not hasattr(self,'tier_buttons'):self.tier_buttons={}
                 self.tier_buttons['main' if en=='Make main' else 'reserve']=button
             if en in ('Undo','Redo'):self.history_buttons.append(('maps',en=='Redo',button))
-        self.route_restore_button=ttk.Menubutton(tools,text=self.tr('恢复','Restore'))
+        self.route_restore_button=tk.Menubutton(tools,text=self.tr('恢复','Restore'))
         self.route_restore_menu=tk.Menu(self.route_restore_button,tearoff=False)
         self.route_restore_menu.add_command(label=self.tr('恢复本路线','Reset route'),command=self.reset_builtin)
         self.route_restore_menu.add_command(label=self.tr('恢复默认路线','Restore default routes'),command=self.restore_default_routes)
         self.route_restore_button.configure(menu=self.route_restore_menu)
-        self.route_restore_button.grid(row=1,column=5,sticky='ew',padx=1,pady=2)
+        self.route_restore_button.grid(row=1,column=10,sticky='ew',pady=(0,6))
         body=ttk.Panedwindow(parent,orient='horizontal');body.pack(fill='both',expand=True)
         left=ttk.Frame(body,width=185);centre=ttk.Frame(body);right=ttk.Frame(body,width=280)
         body.add(left,weight=0);body.add(centre,weight=1);body.add(right,weight=0)
@@ -483,19 +492,19 @@ class BotTacticsEditor(ConnectionEditorMixin):
         for i,c in enumerate(contract.CLASSES[:-1]):
             var=tk.BooleanVar(value=True);self.class_vars[c]=var
             ttk.Checkbutton(types,text=self.tr(*labels.ENUM_NAMES['class_tag'][c]),variable=var).grid(row=i,column=0,sticky='w')
-        ttk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=19,column=0,sticky='ew',pady=5)
+        tk.Button(right,text=self.tr('应用属性到草稿','Update draft properties'),command=self.update_properties).grid(row=19,column=0,sticky='ew',pady=5)
         self.points=ttk.Combobox(right,state='readonly',width=28);self.points.grid(row=20,column=0,sticky='ew')
         self.points.bind('<<ComboboxSelected>>',lambda e:self.choose_point())
         actions=ttk.Frame(right);actions.grid(row=21,column=0,sticky='ew');self.point_actions=actions
-        ttk.Button(actions,text=self.tr('删点','Delete point'),command=self.delete_point).pack(side='left')
-        self.insert_button=ttk.Button(actions,text=self.tr('插入点','Insert point'),command=self.insert_point)
+        tk.Button(actions,text=self.tr('删点','Delete point'),command=self.delete_point).pack(side='left')
+        self.insert_button=tk.Button(actions,text=self.tr('插入点','Insert point'),command=self.insert_point)
         self.insert_button.pack(side='left')
-        self.hold_button=ttk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold)
+        self.hold_button=tk.Button(actions,text=self.tr('切换驻留点','Toggle hold'),command=self.toggle_hold)
         # Independent waits are edited in the panel below, not a hold toggle.
-        self.wait_button=ttk.Button(actions,text=self.tr('添加等待点','Add wait point'),command=self.edit_point_condition)
+        self.wait_button=tk.Button(actions,text=self.tr('添加等待点','Add wait point'),command=self.edit_point_condition)
         self.wait_button.pack(side='left')
-        self.wait_panel=ttk.LabelFrame(right,text=self.tr('等待点编辑','Wait point editor'))
-        self.wait_panel.grid(row=22,column=0,sticky='ew',pady=(5,0))
+        self.wait_panel_section, self.wait_panel, unused_title = ui_layout.section(tk, right, text=self.tr('等待点编辑','Wait point editor'))
+        self.wait_panel_section.grid(row=22,column=0,sticky='ew',pady=(5,0))
         self.wait_edit_var=tk.BooleanVar(value=False)
         self.wait_edit_check=ttk.Checkbutton(self.wait_panel,text=self.tr('编辑等待点（最多3个）','Edit wait points (maximum 3)'),
             variable=self.wait_edit_var,command=self.change_wait_edit)
@@ -514,13 +523,13 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.wait_heading_preview=tk.StringVar(value='')
         ttk.Label(self.wait_panel,textvariable=self.wait_heading_preview).pack(anchor='w')
         actions_wait=ttk.Frame(self.wait_panel);actions_wait.pack(fill='x')
-        self.wait_apply=ttk.Button(actions_wait,text=self.tr('设置时间和朝向','Set time and heading'),command=self.update_wait_time);self.wait_apply.pack(side='left')
-        self.wait_delete=ttk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
+        self.wait_apply=tk.Button(actions_wait,text=self.tr('设置时间和朝向','Set time and heading'),command=self.update_wait_time);self.wait_apply.pack(side='left')
+        self.wait_delete=tk.Button(actions_wait,text=self.tr('删除等待点','Delete wait point'),command=self.delete_wait_point);self.wait_delete.pack(side='left')
         ttk.Label(self.wait_panel,text=self.tr('圆环为半径6米的实际抵达范围；箭头为偏好朝向，交战可自由转向。勾选后点击添加或拖动；Delete删除。',
             'Ring: actual 6 m arrival radius. Arrow: preferred idle heading; combat can turn freely. Click to add/drag; Delete removes.'),wraplength=250).pack(anchor='w')
-        self.node_legend=ttk.LabelFrame(right,text=self.tr('节点图例','Node legend'))
+        self.node_legend_section, self.node_legend, self.node_legend_title = ui_layout.section(tk, right, text=self.tr('节点图例','Node legend'))
         self._build_connections(right)
-        self.node_legend.grid(row=25,column=0,sticky='ew',pady=(5,0))
+        self.node_legend_section.grid(row=25,column=0,sticky='ew',pady=(5,0))
         for row,(radius,zh,en) in enumerate(((4,'普通节点','Normal waypoint'),
                 (7,'大圆点：等待点组（点击展开）','Large circle: wait group (click to expand)'),
                 (4,'方点：等待位；圆环：抵达半径6米','Square: wait place; ring: 6 m arrival radius'))):
@@ -536,8 +545,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
             '总路线显示各车型生效路线，可选中拖动；重叠时从列表选择。\n选择车型后，默认路线修改只用于该车型。\n全部车型编辑统一同一路线各车型的点位、点序和回防；之后单车型可独立编辑，再次共同编辑会覆盖。\n选中或双击大点展开等待点；右侧编辑各点时间。\n勾选路线对称后，两队反向共用节点。\n每条最多16点，保存并应用到下一局。\n普通点击空白不加点；Shift+点击插入中间点；固定首尾不可移动或删除。\n滚轮缩放；中键拖动。',
             'All class routes shows effective routes; select overlapping routes from the list.\nClass selection scopes default-route edits to that class.\nAll classes resets the same family to common points, order and defense. Later class edits stay independent until another common edit.\nSelect or double-click a large node to expand wait places; edit times on the right.\nSymmetry shares reversed nodes between teams.\nUp to 16 points; save and apply next round.\nBlank clicks do not add points; Shift-click inserts between fixed endpoints.\nWheel zooms; middle-drag pans.'),justify='left',wraplength=250).grid(row=26,column=0,sticky='w',pady=8)
 
-        danger=ttk.LabelFrame(right,text=self.tr('危险区参数（只读）','Danger parameters (read only)'))
-        danger.grid(row=27,column=0,sticky='ew',pady=(0,8))
+        danger_section, danger, unused_title = ui_layout.section(tk, right, text=self.tr('危险区参数（只读）','Danger parameters (read only)'))
+        danger_section.grid(row=27,column=0,sticky='ew',pady=(0,8))
         self.danger_parameters_var=tk.StringVar()
         ttk.Label(danger,textvariable=self.danger_parameters_var,justify='left',wraplength=245).pack(anchor='w',padx=4,pady=4)
         ttk.Label(danger,text=self.tr(
@@ -585,7 +594,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
                      self.tr('显示导航网格','Show navigation grid'),self.tr('显示危险区网格','Show danger grid')}
         def walk(parent):
             for widget in parent.winfo_children():
-                if widget not in allowed and isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,ttk.Button,ttk.Menubutton,SlotsDropdown)):
+                if widget not in allowed and isinstance(widget,(ttk.Entry,ttk.Combobox,ttk.Checkbutton,tk.Button,tk.Menubutton,ttk.Menubutton,SlotsDropdown)):
                     if str(widget.cget('text')) not in view_labels if 'text' in widget.configure() else True:
                         self._default_disabled.append((widget,str(widget.cget('state'))));widget.configure(state='disabled')
                 walk(widget)
@@ -1042,7 +1051,7 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.item_fields['route_priority'][1].config(state='readonly')
         self.item_fields['priority'][1].config(state='readonly')
         self.classes_frame.grid() if route and not attack and not self.network_mode and self.route_class_var.get()!='total' else self.classes_frame.grid_remove()
-        self.wait_panel.grid_remove() if attack or self.network_mode else self.wait_panel.grid()
+        self.wait_panel_section.grid_remove() if attack or self.network_mode else self.wait_panel_section.grid()
         for widget in (self.points,self.point_actions):
             widget.grid() if route or builtin else widget.grid_remove()
         self.wait_button.config(state='normal' if (route or builtin) and not

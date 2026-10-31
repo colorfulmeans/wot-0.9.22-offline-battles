@@ -7,6 +7,11 @@ library and Tk so the Windows launcher keeps its existing packaging boundary.
 
 from __future__ import annotations
 
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
 import base64
 from collections import OrderedDict
 import math
@@ -913,11 +918,11 @@ class ArmorViewerPanel(object):
         self.frame.grid_columnconfigure(0, weight=1)
         self.frame.grid_rowconfigure(4, weight=1)
         modes = tk_module.Frame(self.frame)
-        modes.grid(row=1, column=0, sticky='w')
+        modes.grid(row=1, column=0, sticky='ew')
         self._widget(tk_module.Button, modes, text='Armor',
-                     command=lambda: self.set_view_mode('armor')).pack(side='left')
+                     command=lambda: self.set_view_mode('armor')).pack(side='left', fill='x', expand=True)
         self._widget(tk_module.Button, modes, text='Internal modules',
-                     command=lambda: self.set_view_mode('internal')).pack(side='left')
+                     command=lambda: self.set_view_mode('internal')).pack(side='left', fill='x', expand=True)
         self._widget(tk_module.Label,
             self.frame,
             text="Drag to orbit · wheel to zoom · click armor to select its field",

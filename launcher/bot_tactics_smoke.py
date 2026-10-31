@@ -4,6 +4,7 @@ import json
 import tempfile
 from pathlib import Path
 import traceback
+import ui_layout
 
 
 def _verify_vehicle_editor_language(root, tk, ttk):
@@ -73,6 +74,7 @@ def _verify_maintenance_controls(root, tk):
         owner.maintenance_help.config(text='\n'.join(
             wot_launcher._CHINESE[line] if language == 'zh' else line
             for line in wot_launcher._MAINTENANCE_HELP))
+        ui_layout.polish(window)
         window.update_idletasks()
         width = panel.winfo_reqwidth()
         height = panel.winfo_reqheight()
@@ -82,7 +84,8 @@ def _verify_maintenance_controls(root, tk):
         for button, position in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
             info = button.grid_info()
             assert (int(info['row']), int(info['column'])) == position
-            assert int(info['padx']) == 3 and int(info['pady']) == 3
+            assert tuple(map(int, info['padx'])) == ((0, 3) if position[1] == 0 else (3, 0))
+            assert tuple(map(int, info['pady'])) == (0, 6)
         assert len({b.winfo_width() for b in buttons}) <= 2
         assert min(b.winfo_width() for b in buttons) > 1
         assert max(b.winfo_width() for b in buttons) - min(b.winfo_width() for b in buttons) <= 1
@@ -124,7 +127,7 @@ def run(destination):
             assert [str(w.cget('text')) for w in toolbar]==[
                 'New route','New SPG','Duplicate','Delete','Undo','Redo',
                 'Make main','Make reserve','Check map','Fit view','Load image','Restore']
-            assert [(int(w.grid_info()['row']),int(w.grid_info()['column'])) for w in toolbar]==[(i//6,i%6) for i in range(12)]
+            assert [(int(w.grid_info()['row']),int(w.grid_info()['column'])) for w in toolbar]==[(i//6,(i%6)*2) for i in range(12)]
             assert str(ui.route_restore_button.cget('state'))=='disabled'
             ui.set_language('zh')
             assert ui.route_restore_button.cget('text')=='恢复'
@@ -197,7 +200,7 @@ def run(destination):
             root.geometry('1000x300');root.deiconify();root.update()
             assert len({button.winfo_width() for button in buttons})<=2
             assert [int(button.grid_info()['row']) for button in buttons]==[0]*4+[1]*4
-            assert [int(button.grid_info()['column']) for button in buttons]==list(range(4))*2
+            assert [int(button.grid_info()['column']) for button in buttons]==list(range(0,8,2))*2
             owner.save_panel.destroy();root.withdraw()
             report['save_actions_two_by_four']=True
 
