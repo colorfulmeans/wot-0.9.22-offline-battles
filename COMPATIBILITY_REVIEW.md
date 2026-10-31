@@ -11753,3 +11753,15 @@ The adapter now uses the exact enum for earnings, historical crew facts and rese
 errors. Any individual receipt's enum/formatter failure remains queued but does
 not prevent later receipts from being attempted. The first native attempt is a
 failed acceptance, not a pass, and is being rerun with the corrected package.
+
+
+The 1576a30 rerun admitted earnings, exterior and crew invoices, then exposed
+an independent badge wire bug. The native invoice reader compares dossier
+blocks to `dossiers2.ui.achievements.BADGES_BLOCK == playerBadges`; `badges`
+falls into achievement-name text formatting and fails on the integer badge ID.
+Both grant and withdrawal now use playerBadges. A Python 2.7 exact-client audit
+executes #1513's compiled __prerocessRareAchievements against actual adapter
+payloads and verifies badgeAchievement/removedBadgeAchievement classification.
+Receipt-local failures retry at most every five seconds rather than every
+postbattle polling tick. The full startup fixture now includes and asserts the
+new lobby-ready drain callback; its old fake caused the first full CI failure.

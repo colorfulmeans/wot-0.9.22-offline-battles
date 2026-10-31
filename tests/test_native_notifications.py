@@ -81,7 +81,7 @@ class NativeNotificationTests(unittest.TestCase):
         assets = self.module.reward_assets([
             {'kind': 'badge', 'id': 7, 'count': 1},
             {'kind': 'token', 'id': 'free_award_list', 'count': 2}])
-        self.assertEqual({'value': 1}, assets['dossier']['account'][('badges', 7)])
+        self.assertEqual({'value': 1}, assets['dossier']['account'][('playerBadges', 7)])
         self.assertEqual({'count': 2}, assets['tokens']['free_award_list'])
 
     def test_earnings_notice_uses_message_enum_not_formatter_template_name(self):

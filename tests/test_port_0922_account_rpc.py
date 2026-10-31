@@ -219,6 +219,9 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual(set(), delivered)
         self.assertEqual([], saved)
         store.flush.assert_not_called()
+        self.assertEqual((0, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual(1, system.pushMessage.call_count)
+        server._context['native_notice_retry_at'].clear()
         system.pushMessage.side_effect = None
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])

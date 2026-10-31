@@ -153,7 +153,7 @@ def reward_assets(rows, sign=1):
             assets.setdefault('tokens', {})[row['id']] = {'count': count}
         elif kind == 'badge':
             assets.setdefault('dossier', {}).setdefault('account', {})[
-                ('badges', int(row['id']))] = {'value': count}
+                ('playerBadges', int(row['id']))] = {'value': count}
         elif kind == 'dossier':
             assets.setdefault('dossier', {}).setdefault('account', {})[
                 ('achievements', row['id'])] = {'value': count}

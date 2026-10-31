@@ -7,6 +7,7 @@ except ImportError:
 import zlib
 import traceback
 import copy
+import time
 
 from gui.mods.offline_lan_0922.account_rpc import commands, data, requests
 
@@ -335,13 +336,17 @@ class FakeServer(object):
             return 0, True
         from gui.mods.offline_lan_0922.personal_campaign_ui import notify
         published = 0
+        retry_at = self._context.setdefault('native_notice_retry_at', {})
         for row in rows:
             identifier = row['id']
             if identifier not in delivered:
+                if time.time() < retry_at.get(identifier, 0):
+                    continue
                 try:
                     if notify(row.get('settlement'), identifier=identifier):
                         published += 1
                 except Exception as error:
+                    retry_at[identifier] = time.time() + 5.0
                     # Historical count-only receipts cannot reconstruct crew
                     # identities. Retain their evidence without blocking the
                     # later, complete invoices in this account's outbox.
@@ -355,6 +360,7 @@ class FakeServer(object):
                 # An obsolete empty message can be acknowledged too. The
                 # enqueue path only writes messages with visible content.
                 delivered.add(identifier)
+                retry_at.pop(identifier, None)
             if self._player() is not player:
                 return published, True
             # Stage just the acknowledgement. Mutating the live queue before
