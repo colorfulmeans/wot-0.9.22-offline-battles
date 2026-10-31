@@ -57,7 +57,35 @@ exact #1513 notification audit passed. Native 2cf046c acceptance granted 3 premi
 3 crew-XP reserves on a fresh save; all receipts drained. Re-entry after
 removing premium, reducing both reserve stocks and debiting all four currencies
 admitted three native Remove notices and drained both durable receipts.
-Final-package entry-state acceptance and cloud identities remain pending.
+The final runtime is 1f87b3974eb4a0dc3d5561be857bb8f6462d3c4d.
+The registered native consumer requests lowercase `lobbyMenu.swf`, although
+the source archive movie is `LobbyMenu.swf`; the packaged override uses the
+consumer's exact spelling. Final cloud Tests 41190448895 and Battle review
+package 41190448896 both passed. The final artifact SHA-256 is
+9e68bb24937f7f5926bbf8604f34876212ff1c23bc99d08e776ac86f938db048.
+Independent inspection verified all 225 client modules, 41 frozen launcher
+modules, 232 bundled server sources, current native fingerprints and packaged
+editor smoke. The native menu bytes match the source; its JSON proof matches
+semantically (archive packaging normalizes line endings).
+
+Final #1513 Windows acceptance used the diagnostic launcher build
+colorfulmeans-41190448896-1. Gold purchase stayed in the garage without opening
+a website. Logoff rendered the stock disabled hatch/grey state and ignored a
+direct click. The campaign setting had no orange highlight, while the unrelated
+battle-notification new-item badge remained. Hotspot, Academy and Stronghold
+stayed grey in the LAN waiting room; direct clicks on all three did not navigate.
+Leaving the room restored the garage with the locks intact, and the strategic
+task page still displayed 12 cards with the approved day/week/month layout.
+The existing service save retained premium=0, slots=37, reserves XP=2/crew-XP=1
+and wallet credits=190000/gold=900/crystal=90/freeXP=90, with no pending inboxes.
+
+The launcher generated wot-error-report-20261031-180647-04498ee9fc6b.zip for
+session 20261031T100038Z-04498ee9fc6b. All three roles identify the final build;
+player/worker logs contain no ERROR/CRITICAL/traceback or failed policy/notice,
+both exception trails contain session headers only, and sound error counts are
+zero. Native player fini completed and the launcher stopped worker/server.
+This final session exercised lobby, settings, room and tasks, not a battle;
+it does not add new physics/navigation acceptance evidence.
 
 ## Strategic prizes and current-policy verification (October 31)
 
