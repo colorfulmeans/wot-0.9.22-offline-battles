@@ -233,6 +233,7 @@ jobs:
           --pattern test_port_0922_contact_chain.py
           --pattern test_port_0922_settings_policy.py
           --pattern test_port_0922_locked_entries.py
+          --pattern test_port_0922_soft_vegetation_felling.py
           --pattern test_offline_menu_timeline.py
           --pattern test_port_0922_default_styles.py
           --pattern test_port_0922_outfit_stock.py

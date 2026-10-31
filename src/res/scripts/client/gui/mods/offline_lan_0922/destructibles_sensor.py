@@ -99,6 +99,32 @@ except NameError:
 	_INTEGER_TYPES = (int,)
 
 
+# Exact Chinese #1513 speedtree/bushes.xml tokens, shared with the foliage
+# baker's filename-stem classification. Low health alone also includes real trees.
+_SOFT_VEGETATION_TOKENS_1513 = (
+    'northernratacluster', 'rododendronpink_1', 'rododendronpink_2',
+    'broomsnakeweed_2', 'creepingjuniper', 'cattailcluster', 'bamboocluster',
+    'juniper_grass', 'rododendron_1', 'redrosebush', 'redyucca_rt',
+    'canereeds1', 'shrub_tree', 'shrubsouth', 'amurmaple', 'mulga_1',
+    'thicket', 'azalea', 'shrub2', 'shrub3', 'cedar', 'mulga', 'shrub', 'bush')
+
+
+def _skip_soft_vegetation_felling_1513(filename, descriptor, tree_type):
+	"""Suppress only the whole-model fall animation of identified soft plants."""
+	if descriptor.get('type') != tree_type:
+		return False
+	health = descriptor.get('health')
+	if (isinstance(health, bool) or
+			not isinstance(health, _INTEGER_TYPES + (float,)) or
+			not 0 < health <= 5):
+		return False
+	name = _normalized_filename(filename)
+	if not name:
+		return False
+	stem = name.rsplit('/', 1)[-1].rsplit('.', 1)[0]
+	return any(token in stem for token in _SOFT_VEGETATION_TOKENS_1513)
+
+
 def _normalized_filename(filename):
 	if not isinstance(filename, _STRING_TYPES):
 		return None
@@ -6008,8 +6034,6 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 		# descriptor reader above records that first divergence.
 		return False
 
-	# Data-driven vegetation gate: soft vegetation (bush/shrub/fern)
-	# ships with health <= 5; real fallable trees start at 10.
 	typ = desc.get('type')
 	known_types = (
 		AreaDestructibles.DESTR_TYPE_TREE,
@@ -6085,6 +6109,9 @@ def _try_destroy_destructible(spaceID, matInfo, yaw, vel,
 	if typ == AreaDestructibles.DESTR_TYPE_TREE and isShotDamage:
 		return False
 	if typ == AreaDestructibles.DESTR_TYPE_TREE:
+		if _skip_soft_vegetation_felling_1513(fname, desc, typ):
+			combat_count('soft_vegetation_felling_skips')
+			return False
 		_hp_gate = desc.get('health', 0)
 		try:
 			_valid_tree_health = 0 < _hp_gate <= 1000
@@ -7263,6 +7290,10 @@ def _fell_trees_near(
 						# BananaTree_03 has health 3. Health is not a size/type
 						# classifier. Keep nonpositive and unrammable sentinels out.
 						if typ == AreaDestructibles.DESTR_TYPE_TREE:
+							if _skip_soft_vegetation_felling_1513(_raw_normalized, desc, typ):
+								_slot_diag['result'] = 'soft_vegetation_no_felling'
+								combat_count('soft_vegetation_felling_skips')
+								continue
 							_hp_gate = desc.get('health', 0)
 							registry['tree_health'][_ti] = _hp_gate
 							if _hp_gate <= 0 or _hp_gate > 1000:

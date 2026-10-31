@@ -323,7 +323,7 @@ class VehicleEditorWindow(object):
                 state='normal' if index == 3 else 'readonly')
             box.grid(row=selector_row + 1, column=column,
                 columnspan=3 if index == 5 else 1,
-                sticky='we', padx=(0, 6), pady=(0, 4))
+                sticky='we', padx=(0, 0 if index in (3, 5) else 8), pady=(0, 4))
             boxes.append(box)
             if index < 4:
                 selectors.grid_columnconfigure(column, weight=(1, 1, 0, 3)[index])
@@ -398,6 +398,10 @@ class VehicleEditorWindow(object):
             self.root.minsize(1180, 650)
 
     def _widget(self, factory, parent, text=None, text_args=(), **options):
+        if factory is self._tk.Label:
+            options.setdefault('padx', 0)
+            options.setdefault('pady', 0)
+            options.setdefault('borderwidth', 0)
         if text is not None:
             options['text'] = self._t(text) % text_args if text_args else self._t(text)
         widget = factory(parent, **options)

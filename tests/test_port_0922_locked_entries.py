@@ -62,7 +62,7 @@ class LockedEntryTests(unittest.TestCase):
                 header.menuItemClick('missions'); header.onPremShopClick()
                 menu._populate(); menu.logoffClick()
                 self.assertNotIn(('premShop', True), calls)
-                self.assertNotIn(('gold', True), calls)
+                self.assertIn(('gold', True), calls)
                 self.assertIn(('credits', True), calls)
                 self.assertNotIn('payment', calls)
                 self.assertIn(('click', 'missions'), calls)

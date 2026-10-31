@@ -885,7 +885,7 @@ def _install_unavailable_entries():
     from gui.Scaleform.daapi.view.common.settings.new_settings_counter import invalidateSettings
     locked_tabs = frozenset((LobbyHeader.TABS.BROWSER, LobbyHeader.TABS.ACADEMY,
                             LobbyHeader.TABS.STRONGHOLD))
-    locked_buttons = frozenset(('premShop', 'gold'))
+    locked_buttons = frozenset(('premShop',))
     original_items = LobbyHeader._getHangarMenuItemDataProvider
     original_populate = LobbyHeader._populate
     original_disable = LobbyHeader.as_doDisableHeaderButtonS
@@ -921,7 +921,7 @@ def _install_unavailable_entries():
         if view._isDAAPIInited():
             view._updateHangarMenuData()
             lock_header(view)
-            print('[Offline LAN 0.9.22] UI POLICY screen=%s locked=browser,academy,stronghold,premShop,gold' % alias)
+            print('[Offline LAN 0.9.22] UI POLICY screen=%s locked=browser,academy,stronghold,premShop payment=blocked' % alias)
         return result
 
     def click(view, alias):

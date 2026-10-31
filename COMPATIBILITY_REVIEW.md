@@ -1,5 +1,31 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Clean-launch selection, editor layout and soft-plant felling (October 31)
+
+This follow-up supersedes the gold disabled appearance below. Gold retains the
+native enabled color and hover/click appearance; only onPayment dispatch remains
+blocked. Other unavailable-entry locks retain the preceding accepted behavior.
+The vehicle editor uses a common outer inset, zero-inset detail labels and a
+shared right edge for vehicle/field selectors and Save. The viewer uses a plain
+border with an internal translated title, aligned to the left explanation's top.
+Real Tk checks cover aligned edges at two window sizes and language switching.
+
+Only felling changes for soft vegetation: native TREE descriptors with health
+1 through 5 and a filename stem matching the exact #1513 bushes.xml taxonomy
+are excluded from both direct contact felling and proximity felling registration.
+Normal trees (including health-3 BananaTree_03), high-health bushes and all other
+destructible types retain their behavior. Collision, projectile/aim, spotting,
+foliage volumes, route planning and destruction authority code are unchanged.
+The existing per-slot diagnostic result records soft_vegetation_no_felling and
+the combat counter records soft_vegetation_felling_skips. Tests compare all pinned
+taxonomy tokens against the exact installed client and exercise contact refusal.
+
+Initial local validation: 342 client tests across destructibles, entry guards
+and the new felling policy passed; 49 related launcher tests passed, including
+real bilingual widgets and resize geometry. All 225 client modules compile with
+Python 2.7.18. Cloud packaging, clean local data reset and final-package native
+acceptance remain pending; they are not inferred from these local checks.
+
 ## Unavailable entries and launcher service editors (October 31 follow-up)
 
 The current source supersedes older notification-title and vehicle-default

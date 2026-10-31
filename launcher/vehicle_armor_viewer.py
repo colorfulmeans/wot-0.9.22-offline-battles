@@ -905,12 +905,15 @@ class ArmorViewerPanel(object):
         self._dragged = False
         self._item_surface = {}
 
-        self.frame = self._widget(tk_module.LabelFrame,
-            parent, text="3D armor viewer", padx=8, pady=8)
+        self.frame = tk_module.Frame(parent, borderwidth=1, relief="solid",
+                                     padx=8, pady=8)
+        self.title_label = self._widget(tk_module.Label, self.frame,
+            text="3D armor viewer", anchor="w", padx=0, pady=0)
+        self.title_label.grid(row=0, column=0, sticky="we", pady=(0, 6))
         self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_rowconfigure(3, weight=1)
+        self.frame.grid_rowconfigure(4, weight=1)
         modes = tk_module.Frame(self.frame)
-        modes.grid(row=0, column=0, sticky='w')
+        modes.grid(row=1, column=0, sticky='w')
         self._widget(tk_module.Button, modes, text='Armor',
                      command=lambda: self.set_view_mode('armor')).pack(side='left')
         self._widget(tk_module.Button, modes, text='Internal modules',
@@ -918,19 +921,19 @@ class ArmorViewerPanel(object):
         self._widget(tk_module.Label,
             self.frame,
             text="Drag to orbit · wheel to zoom · click armor to select its field",
-            anchor="w").grid(row=1, column=0, sticky="we")
+            anchor="w", padx=0, pady=0).grid(row=2, column=0, sticky="we")
         self.selection = tk_module.StringVar(
             value=self._t("No armor field selected"))
         self._widget(tk_module.Label,
             self.frame, textvariable=self.selection, anchor="w",
             justify="left", wraplength=520).grid(
-                row=2, column=0, sticky="we", pady=(4, 6))
+                row=3, column=0, sticky="we", pady=(4, 6))
         self.canvas = tk_module.Canvas(
             self.frame, width=540, height=500, background="#171b22",
             highlightthickness=1, highlightbackground="#414958")
-        self.canvas.grid(row=3, column=0, sticky="nsew")
+        self.canvas.grid(row=4, column=0, sticky="nsew")
         controls = tk_module.Frame(self.frame)
-        controls.grid(row=4, column=0, sticky="we", pady=(6, 0))
+        controls.grid(row=5, column=0, sticky="we", pady=(6, 0))
         self._widget(tk_module.Button,
             controls, text="Reset view", command=self.reset_view).pack(
                 side="right")
