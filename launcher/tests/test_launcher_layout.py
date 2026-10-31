@@ -115,7 +115,9 @@ class LayoutTests(unittest.TestCase):
             walk(dialog); dialog.update_idletasks()
             buttons = [w for w in widgets if isinstance(w, tk.Button)]
             seen.append(([b.cget('text') for b in buttons],
-                         [b.winfo_width() for b in buttons]))
+                         [b.winfo_width() for b in buttons],
+                         self.edges(dialog.entry),
+                         (self.edges(buttons[0])[0], self.edges(buttons[-1])[1])))
             buttons[0].invoke()
         self.app.root.after(10, accept)
         value = ui.ui_layout.ask_string('Layout input', '方案名称：', parent=self.app.root,
@@ -123,6 +125,7 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual('Layout QA', value)
         self.assertEqual(['确定', '取消'], seen[0][0])
         self.assertLessEqual(max(seen[0][1]) - min(seen[0][1]), 1)
+        self.assertEqual(seen[0][2], seen[0][3])
 
 
 if __name__ == '__main__':

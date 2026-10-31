@@ -48,6 +48,7 @@ def ask_string(title, prompt, parent=None, initialvalue=None, language='zh'):
             return self.entry
 
         def buttonbox(self):
+            self.entry.master.pack_configure(fill='x', padx=MARGIN, pady=(MARGIN, 0))
             actions = tk.Frame(self)
             actions.pack(fill='x', padx=MARGIN, pady=MARGIN)
             for text, command in ((('确定' if language == 'zh' else 'OK'), self.ok),
