@@ -1067,6 +1067,7 @@ class ArmorViewerPanel(object):
         if getattr(self, '_view_mode', 'armor') == 'internal':
             self.set_view_mode('internal')
             return True
+        self._draw_legend()
         self._redraw()
         if focus_record is None:
             self.selection.set(self._t(

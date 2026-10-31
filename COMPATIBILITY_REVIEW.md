@@ -12122,3 +12122,10 @@ continues to discover the full launcher suite. Local isolated coverage passed
 after final presentation adjustments. Packaged Windows visual acceptance must
 still verify both modes, module/armor selection, orbit/zoom/reset, small-window
 legend reflow, missing interiors and no stale selection after vehicle changes.
+
+The first review-package run (41217213215) exposed a missing Pillow install in
+its early Tk-test job; packaging itself had not started. The workflow now
+installs the same pinned Pillow already shipped by the launcher before those
+tests, without skipping the alpha-shell checks. A fourth widget regression
+also verifies vehicle reload clears module selection and refreshes the
+unmapped-thickness legend (current local coverage: 1213 tests).

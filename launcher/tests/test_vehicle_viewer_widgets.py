@@ -88,3 +88,18 @@ class ViewerWidgetTests(unittest.TestCase):
         p._selected_module=self.module
         p.set_language('en');self.assertIn('crew 1', p.selection.get())
         p.set_language('zh');self.assertEqual('乘员1',p.selection.get())
+
+    def test_vehicle_reload_clears_module_selection_and_refreshes_unmapped_legend(self):
+        p = self.panel
+        p._vehicle_member = 'scripts/item_defs/vehicles/usa/A_Test.xml'
+        p._selected_module = self.module
+        p._scene_loader = lambda *a, **k: dict(p._scene, parts=({'surfaces': (
+            dict(self.surface, thickness=None),)},))
+        self.assertTrue(p._load_scene())
+        self.root.update()
+        self.assertIsNone(p._selected_module)
+        self.assertIn('未映射', self.label_texts())
+        p._scene_loader = lambda *a, **k: dict(p._scene, parts=({'surfaces': (self.surface,)},))
+        self.assertTrue(p._load_scene())
+        self.root.update()
+        self.assertNotIn('未映射', self.label_texts())
