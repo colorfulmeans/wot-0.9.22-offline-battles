@@ -11739,9 +11739,8 @@ allocation is unchanged. Per-actor initial evidence includes candidate tier,
 priority, same-class and total loads at selection. A reserve route is not itself
 a failure: compare its allocation-time candidates and class occupancy.
 
-Validation status: final focused regressions and Python 2.7 compile are being
-recorded for this change; package inspection, pushed-commit CI and the requested
-Windows save/notification/Mittengard sequence remain pending until performed.
+Validation status and native acceptance are recorded below. Earlier attempts
+that exposed native enum/dossier failures are explicitly failed attempts.
 
 
 The first e15abc3 native attempt reproduced and isolated another cause:
@@ -11765,3 +11764,82 @@ payloads and verifies badgeAchievement/removedBadgeAchievement classification.
 Receipt-local failures retry at most every five seconds rather than every
 postbattle polling tick. The full startup fixture now includes and asserts the
 new lobby-ready drain callback; its old fake caused the first full CI failure.
+
+Final production source c554a89 passed 639 tests in 11 focused files and the
+126 related tests in six files. All 40 launcher files passed with the full
+Windows Python/Tk runtime (1196 tests, 16 documented skips). The isolated
+Python runtime without Tk is not a launcher UI acceptance environment. Python
+2.7 compiled all 225 modules. Exact #1513 native quest parsing and invoice badge
+grant/withdrawal audits passed. Full Tests run 41168151745 passed all eight jobs;
+Battle review package run 41168151897 passed all three jobs. The downloaded
+55,755,708-byte c554a89 ZIP passed CRC/path checks, x64 launcher and x86 native
+module checks; its nested mod matches all 225 current source modules. Build
+identity: colorfulmeans-41168151897-1.
+
+Cross-day evidence uses actual saved inventories for slots 1, 2 and the fresh
+test account with injected times, without changing Windows time. All 24 week/
+month previews retained their identities across the Beijing 08:00 daily reset;
+12 daily draws used the next day. Unit checks separately cover Monday/month
+rollover, leap dates, Account reconstruction and ownership-based reselection.
+This is deterministic clock-injection evidence, not a claim that the machine
+waited through a real 08:00 during acceptance. The old reported change still
+lacks enough historical eligibility evidence for a single proved attribution.
+
+The packaged diagnostic launcher was operated through Computer Use against the
+installed CN HD 0.9.22.0.1 #1513 client. Test setup called the same production
+editor persistence functions separately for wallet, earnings, badges, 113,
+paint, preset style, random crew and all 75 StuG IV missions. GUI acceptance
+also opened the editor tabs, saved account values, and cleared/saved the StuG
+IV light group through the actual personal-mission editor. It did not manually
+type every setup value into every dialog; the distinction matters when reusing
+this acceptance record as a UI test baseline.
+
+The fresh PR116-Notice-QA-1031-2 account rendered native messages for all four
+currencies, earnings 100% -> 200%, badge, paint x3, style, recruited crew, 113
+and its crew, and campaign rewards. The actual task page showed 12 strategic
+tasks grouped simple/normal/hard/elite, with day/week/month columns and native
+rental/permanent reward icons. Withdrawing all 75 missions on restart emitted
+78 native debit invoices, removed StuG IV and its campaign rewards, retained
+the manually added 113 and independent editor assets, and restored credits
+from 5,300,000 to 200,000. The notification outbox reached zero with no pending
+formatter errors or Python traceback. Report 124439-013bd5200241 contains this
+withdrawal session and no exception events beyond exception-log headers.
+
+Existing slot 1 admitted 88 native messages (75 campaign, 11 invoice, two admin)
+and acknowledged all 11 receipts to zero. Slot 2 admitted 93 messages (75
+campaign, 16 invoice, two admin), including previously queued messages, and
+acknowledged all 15 receipts to zero. Neither session had a traceback or pending
+formatter error. Both then withdrew all 75 StuG IV missions, emitted 78 debit
+invoices, reached zero pending receipts, retained 113 and their non-campaign
+assets, and restored credits to 1,100,000. These checks validate existing-save
+settlement rather than treating a clean-save currency toast as sufficient.
+
+Native initial-route acceptance used newly added 113, standard mode, Mittengard
+(100_thepit), 15/15 participants and the eight-to-ten tier range. The complete
+four-part allocation record reconstructed without errors: total_limit null,
+class_limit 3, 29 Bot actors, all 29 initially on main routes. No reserve actor
+had an eligible main candidate. Screens and subsequent motion logs showed Bots
+leaving spawn and fighting. This one roster does not prove every possible
+composition or eliminate valid reserve/overflow selection; those boundaries
+remain covered separately by the allocation regressions.
+
+The Mittengard round finished normally by base capture. The player remained
+at spawn for route observation; this is not a claim of manual driving/combat
+input acceptance. Native results showed the Saturday first-win x5, and the
+113 carousel multiplier disappeared after settlement. The six-task ordinary
+page showed the one-win task completed and its 40,000-credit system message;
+the strategic simple-day/week/month counters remained zero for this below-
+threshold base-XP round rather than counting boosted XP. Two later Bot route
+changes were separately identified: pressure_rebalance (18) and
+recovery_at_start (21), both to main routes, not initial reserve allocation.
+
+Final report wot-error-report-20261031-130910-0a77fc289006.zip was generated
+after normal launcher shutdown and audited across launcher/server/player/worker.
+All ten expected files are present, with no missing/not-run role, no Python
+traceback, no pending native-notice error, no dump and no native exception event
+beyond the two exception-log headers. All fragmented evidence reconstructed
+without parse issues. Existing warnings concern unavailable Vivox, RSS, disabled
+30v30 settings and view/ranked-overlay lifecycle; they are not evidence of a
+new notification crash. Sound resource membership reports no failure, but this
+does not substitute for an audible playback acceptance test. No additional
+confirmed defect was established from this report.
