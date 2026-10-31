@@ -12134,3 +12134,22 @@ Native source-window inspection exposed initial long-status clipping despite
 the outer cells fitting: Tk had not yet resolved newly created label requests.
 Legend columns now use measured font widths plus swatch/control insets, and the
 real-widget regression checks the full caption request as well as cell bounds.
+
+Final viewer build: colorfulmeans-41217695775-1, source commit
+`d8f9743956668d0a4f6273082f59ed309d229ee0`, PR116-fixes-d8f9743.zip.
+On 2026-11-01 the final local isolated suite passed all 44 files / 1213 tests
+with 14 documented resource/platform skips. Review-package run 41217695775
+passed. Independent inspection verified ZIP CRC, x64 launcher / x86 client
+binaries, 232 bundled server sources, 225 Python 2.7 modules, both UI movies,
+and source equality of all 42 frozen launcher modules. The final executable's
+--verify-bot-editor exited 0 with ok true and isolated_profile true.
+
+Actual source-window inspection on Windows verified filled armor, mode-aware
+help, the simplified translucent interior shell and the Chinese observation-
+device warning. The final package was launched and its build identity logged;
+its initial ProcDump download/enable consent dialog still awaits the human's
+choice. Do not report final packaged editor visual acceptance as complete from
+the earlier source window or the separate packaged smoke alone. The full Tests
+run 41217695707 had passed Windows editor, native geometry, navigation, Bot
+behavior and Windows server jobs at this checkpoint; client-suite / downstream
+packaging jobs were still running.
