@@ -12297,3 +12297,56 @@ as the final corrected viewer package. No donated interior layout was installed.
 After acceptance the launcher choice was restored to Original vehicle values;
 the final launcher remains open for the user. Its current session log contains
 no traceback or Tk callback exception.
+
+
+### Complete depth-buffered viewer and display categories (2026-11-01)
+
+This round supersedes the previous convex context envelope and Canvas polygon
+painter. Geometry still comes from exact #1513 collision resources and the
+existing component-frame-verified decoded interior catalogue. No donated
+layout, guessed observation device, rescaling, battle rule or vehicle value
+has been installed or changed.
+
+Armor exposes Main armor, Spaced armor and External modules. X-ray exposes
+External modules, Internal modules and Crew. Tracks, gun and observation
+surfaces come from the PC collision model in both views, using the same
+purple/blue/cyan category colors inspected in the live WOTInspector Skorpion
+page. Armor thickness retains numeric vehicle-relative ramps; external
+categories no longer share the armor thickness legend. All groups can be
+hidden independently, with individual components, modules and actual seats
+in Display settings. Combined duties remain one physical seat, duplicate
+roles remain separately named, and absent geometry has disabled, explicit
+no-data entries rather than a hidden-state claim.
+
+The renderer rasterizes barycentric depth at each pixel. Each physical
+surface layer supplies its nearest fragment; per-pixel sorted alpha
+compositing replaces centroid ordering. Actual component geometry supplies
+pale transparent context, without convex fills or triangle wire overlays.
+Context does not intercept module selection; a fully opaque context blocks
+invisible rear picks. Hidden or zero-opacity objects cannot be picked.
+Camera framing fits projected stock geometry; orbit uses reduced resolution
+while dragging and redraws full resolution on release. Rendering is local
+CPU/NumPy/Pillow, not a WebView or a new graphics-driver dependency. This is
+an inspection renderer; it does not claim physically simulated optical
+transparency or alter shot collision.
+
+The new baseline tests crossing/intersecting triangle depth independently of
+submission order, alpha composition and volume seams, opaque occlusion,
+zero-alpha and context picking, group and individual-seat visibility,
+missing versus hidden data, component reloads, numeric legend updates and
+bilingual narrow-window layout. The obsolete convex-envelope assertion was
+removed; existing source/frame checks remain. NumPy 2.3.5 is pinned in the
+launcher build and every workflow which invokes these renderer tests.
+
+Exact-resource audit found PC observation surfaces in NC-31, T29 and Tiger
+131, but none in the selected G114_Skorpian collision configuration. The
+latter remains explicitly unavailable. T29 has six actual seats; Skorpian
+four; Tiger 131 has five seats but no decoded interior. A 600x450 interior-only
+CPU raster sample took 187/213/309 ms for NC-31/Skorpian/T29 respectively on
+this machine; these are resource-render benchmarks, not final UI frame-rate
+or native battle evidence. Final package/native acceptance is pending.
+
+Local full launcher discovery passed 45 files / 1223 tests, with 14 documented
+environment skips. Final renderer/UI bytes were separately rechecked in the
+five-file focused suite after camera/drag refinements. No failing assertions
+remain. Cloud packaging and final native desktop checks follow.

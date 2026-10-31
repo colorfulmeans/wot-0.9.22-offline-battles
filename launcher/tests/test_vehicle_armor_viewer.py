@@ -290,49 +290,6 @@ class VehicleArmorGeometryTest(unittest.TestCase):
         }, reload_scene=False))
         self.assertEqual(panel._scene_error, panel.selection.get())
 
-    def test_internal_shell_has_no_mesh_diagonals_and_does_not_hide_or_capture_modules(self):
-        panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
-        panel._view_mode = 'internal'
-        panel._yaw = panel._pitch = 0.0
-        panel._zoom = 1.0
-        panel._focus_key = None
-        triangles = (((-1., -1., 0.), (1., -1., 0.), (1., 1., 0.)),
-                     ((-1., -1., 0.), (1., 1., 0.), (-1., 1., 0.)))
-        shell = dict(role='hull', component='hull', triangles=triangles)
-        module = dict(moduleLabel='engine', color='#df8c42',
-                      triangles=triangles[:1])
-        panel._scene = dict(bounds=((-1., -1., -1.), (1., 1., 1.)),
-                            parts=({'surfaces': (shell,)},))
-        panel._internal_scene = dict(parts=({'surfaces': (module,)},))
-
-        class Canvas:
-            def __init__(self):
-                self.calls = []
-            def winfo_width(self): return 400
-            def winfo_height(self): return 300
-            def delete(self, unused): pass
-            def create_polygon(self, coords, **options):
-                self.calls.append((coords, options))
-                return len(self.calls)
-            def create_line(self, *args, **options):
-                self.calls.append((args, options))
-                return len(self.calls)
-
-        panel.canvas = Canvas()
-        contexts = []
-        panel._draw_context_shell = lambda w, h: contexts.extend(
-            panel._projected_shell_outlines(w, h))
-        panel._redraw()
-        self.assertEqual(1, len(panel.canvas.calls))
-        self.assertEqual(4, len(contexts[0]))
-        self.assertEqual('', panel.canvas.calls[0][1]['outline'])
-        self.assertEqual({1: module}, panel._item_surface)
-        self.assertEqual(1, len(panel._projected_triangles(400, 300)))
-        self.assertEqual(1, len(panel._projected_shell_outlines(400, 300)))
-        panel._yaw = 0.4
-        self.assertNotEqual([v for p in contexts[0] for v in p],
-            [value for point in panel._projected_shell_outlines(400, 300)[0]
-             for value in point])
 
     def test_flat_plate_drops_internal_diagonal_but_keeps_selected_boundary(self):
         surface = dict(role='hull', component='hull')
@@ -350,6 +307,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_component_switch_invalidates_internal_geometry_before_display(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._settings_window = None
         panel._vehicle_member = 'scripts/item_defs/vehicles/usa/T29.xml'
         panel._game_root, panel._records = 'client', []
         panel._internal_scene = {'old_turret': True}

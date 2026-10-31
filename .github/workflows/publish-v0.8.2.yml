@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install test dependencies
-        run: python -m pip install Pillow==12.3.0
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5
       - name: Run client test suite
         env:
           PYTHONDONTWRITEBYTECODE: "1"
