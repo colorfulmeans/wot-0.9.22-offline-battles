@@ -12356,3 +12356,12 @@ components with indistinguishable captions. Display settings now appends the
 actual Hull/Turret role and opens centered over its owner; focused Tk/pixel
 regressions passed after that correction. The intermediate 1717c4d package is
 not the final acceptance artifact.
+
+
+Final-package acceptance found that the newly added settings list initially
+supported scrollbar dragging but not wheel scrolling. Wheel events are now
+scoped to the list and its item descendants in that settings Toplevel; they
+do not scroll it when input belongs to an opacity scale. Real-Tk regression
+shrinks the dialog, checks wheel scrolling and scale isolation. The 5b7fd81
+artifact is superseded for this final usability correction; its unchanged
+geometry/group/picking evidence remains explicitly intermediate.

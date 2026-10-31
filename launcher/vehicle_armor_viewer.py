@@ -1644,6 +1644,18 @@ class ArmorViewerPanel(object):
         canvas.configure(yscrollcommand=bar.set)
         canvas.grid(row=0, column=0, sticky='nsew'); bar.grid(row=0, column=1, sticky='ns')
         body = tk.Frame(canvas)
+        def wheel(event):
+            widget = event.widget
+            while widget is not None and widget not in (body, canvas, win):
+                widget = getattr(widget, 'master', None)
+            if widget not in (body, canvas):
+                return
+            if event.delta:
+                canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
+            return 'break'
+        # Bind at this Toplevel, not globally; events from checkbuttons bubble
+        # here too, while opacity scales retain their own input behavior.
+        win.bind('<MouseWheel>', wheel)
         item = canvas.create_window(0, 0, window=body, anchor='nw')
         body.bind('<Configure>', lambda e: canvas.config(scrollregion=canvas.bbox('all')))
         canvas.bind('<Configure>', lambda e: canvas.itemconfigure(item, width=e.width))
