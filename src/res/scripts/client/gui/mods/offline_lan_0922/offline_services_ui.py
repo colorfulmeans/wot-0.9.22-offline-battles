@@ -879,55 +879,64 @@ def _install_ordinary_mission_presentation():
 
 
 def _install_unavailable_entries():
-    """Keep unavailable stock entries visible, disabled and inert."""
-    import BigWorld
+    """Retain locks after the native bar re-enables renderers on screen changes."""
     from gui.Scaleform.daapi.view.lobby.header.LobbyHeader import LobbyHeader
     from gui.Scaleform.daapi.view.lobby.LobbyMenu import LobbyMenu
     from gui.Scaleform.daapi.view.common.settings.new_settings_counter import invalidateSettings
+    locked_tabs = frozenset((LobbyHeader.TABS.BROWSER, LobbyHeader.TABS.ACADEMY,
+                            LobbyHeader.TABS.STRONGHOLD))
+    locked_buttons = frozenset(('premShop', 'gold'))
     original_items = LobbyHeader._getHangarMenuItemDataProvider
     original_populate = LobbyHeader._populate
     original_disable = LobbyHeader.as_doDisableHeaderButtonS
+    original_screen = LobbyHeader.as_setScreenS
     original_click = LobbyHeader.menuItemClick
-    original_menu_populate = LobbyMenu._populate
 
     def items(view, *args, **kwargs):
         rows = original_items(view, *args, **kwargs)
         for row in rows:
-            if row.get('value') in ('browser', 'academy'):
+            if row.get('value') in locked_tabs:
                 row['enabled'] = False
         return rows
 
     def disable(view, identifier, enabled):
-        return original_disable(view, identifier, False if identifier == 'premShop' else enabled)
+        return original_disable(view, identifier,
+                                False if identifier in locked_buttons else enabled)
+
+    def lock_header(view):
+        for identifier in locked_buttons:
+            view.as_doDisableHeaderButtonS(identifier, False)
 
     def populate(view):
-        # Offline preferences are pinned after service installation and before
-        # Account creation. Never touch the login/online settings owner here.
+        # Offline preferences are pinned before Account creation, not install.
         invalidateSettings('GameSettings', None, 'gameplay_epicStandard')
         result = original_populate(view)
-        view.as_doDisableHeaderButtonS('premShop', False)
-        print('[Offline LAN 0.9.22] UI POLICY locked premium shop, browser and academy')
+        lock_header(view)
+        return result
+
+    def screen(view, alias):
+        result = original_screen(view, alias)
+        # MainMenuButtonBar.setCurrent changes parent enabled, overwriting its
+        # children's states. Re-publish per-entry data after that stock call.
+        if view._isDAAPIInited():
+            view._updateHangarMenuData()
+            lock_header(view)
+            print('[Offline LAN 0.9.22] UI POLICY screen=%s locked=browser,academy,stronghold,premShop,gold' % alias)
         return result
 
     def click(view, alias):
-        if alias not in ('browser', 'academy'):
+        if alias not in locked_tabs:
             return original_click(view, alias)
-
-    def menu_populate(view):
-        result = original_menu_populate(view)
-        def lock():
-            if view._isDAAPIInited():
-                view.flashObject.logoffBtn.enabled = False
-                print('[Offline LAN 0.9.22] UI POLICY locked logoff button')
-        BigWorld.callback(0, lock)
-        return result
 
     _patch(LobbyHeader, '_getHangarMenuItemDataProvider', items)
     _patch(LobbyHeader, 'as_doDisableHeaderButtonS', disable)
+    _patch(LobbyHeader, 'as_setScreenS', screen)
     _patch(LobbyHeader, '_populate', populate)
     _patch(LobbyHeader, 'menuItemClick', click)
     _patch(LobbyHeader, 'onPremShopClick', lambda view: None)
-    _patch(LobbyMenu, '_populate', menu_populate)
+    _patch(LobbyHeader, 'onPayment', lambda view: None)
+    # LobbyMenu.swf disables logoff in all four FRAME_CONSTRUCTED inspector
+    # states. The guard also rejects an old cached Flash callback.
     _patch(LobbyMenu, 'logoffClick', lambda view: None)
 
 

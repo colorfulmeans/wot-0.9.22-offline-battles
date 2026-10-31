@@ -4,11 +4,18 @@
 
 The current source supersedes older notification-title and vehicle-default
 acceptance below. Disconnected login is not a usable offline account selector:
-LobbyMenu's logoff button is disabled and its native callback is guarded.
+LobbyMenu's logoff callback is guarded. Native acceptance of 2cf046c found
+that a pre-frame Python enabled assignment was overwritten by the stock
+FRAME_CONSTRUCTED inspector. The exact menu has four separate logoff
+initializers; the generated LobbyMenu movie now disables those four only,
+preserving all non-ABC graphics/linkage/timeline tags. The builder verifies
+the compiled four-state result and removes unchanged compile-time lobby ABCs.
 Premium shop, CN browser/hotspot and Academy remain visible and disabled; native
 MainMenuButton.checkBrowserEffect schedules a one-second color toggle only for
-browser, and changeEffectState terminates when disabled. Header regeneration
-retains the locked states. Only GameSettings/gameplay_epicStandard is marked
+browser, and changeEffectState terminates when disabled. Native waiting-room acceptance also exposed MainMenuButtonBar.setCurrent
+overwriting child enabled states via its parent bar. Each native screen
+transition now republishes per-entry flags afterward, including Stronghold,
+and retains payment/shop locks. Gold payment dispatch is explicitly blocked. Only GameSettings/gameplay_epicStandard is marked
 viewed through the native settings-counter owner after offline preferences are
 pinned; c11nHistoricallyAccurate and other counters remain unchanged.
 
@@ -46,8 +53,11 @@ current editor gate. Exact #1513 bytecode audit now also checks the Remove type,
 synchronous invoice composer and nested reserve counts. Local final-tree verification passed all 42 launcher files (1201 tests; 16
 documented unavailable-client/symlink skips) and all 12 relevant client files
 (564 tests). All 225 client modules compiled with Python 2.7.18, and the
-exact #1513 notification audit passed. Native final-package acceptance and
-cloud run identities will be recorded after they finish.
+exact #1513 notification audit passed. Native 2cf046c acceptance granted 3 premium days, 7 slots, 5 combat-XP and
+3 crew-XP reserves on a fresh save; all receipts drained. Re-entry after
+removing premium, reducing both reserve stocks and debiting all four currencies
+admitted three native Remove notices and drained both durable receipts.
+Final-package entry-state acceptance and cloud identities remain pending.
 
 ## Strategic prizes and current-policy verification (October 31)
 

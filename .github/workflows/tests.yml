@@ -401,6 +401,7 @@ jobs:
         run: >-
           python tools/run_test_suite.py --jobs 1 --logs build/windows-service-contracts
           --pattern test_native_notifications.py --pattern test_port_0922_locked_entries.py
+          --pattern test_offline_menu_timeline.py
           --pattern test_port_0922_offline_services_ui.py
       - name: Run actual Tk editor tests on Windows
         run: python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/windows-editor-results
