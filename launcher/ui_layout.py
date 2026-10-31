@@ -5,6 +5,64 @@ GAP = 6
 MARGIN = 12
 
 
+class ChoiceVariable:
+    """Display localized built-in choices without changing saved identities."""
+    def __init__(self, tk, translate, reserved, value=''):
+        self.variable = tk.StringVar()
+        self.translate, self.reserved = translate, tuple(reserved)
+        self.aliases = {name: name for name in reserved}
+        self.set(value)
+
+    def __str__(self):
+        return str(self.variable)
+
+    def display(self, value):
+        if value in self.reserved:
+            label = self.translate(value)
+            self.aliases[label] = value
+            return label
+        return value
+
+    def get(self):
+        value = self.variable.get()
+        return self.aliases.get(value, value)
+
+    def set(self, value):
+        self.variable.set(self.display(self.aliases.get(value, value)))
+
+
+def ask_string(title, prompt, parent=None, initialvalue=None, language='zh'):
+    """Use the launcher's button presentation for its own text-input dialogs."""
+    import tkinter as tk
+    from tkinter.simpledialog import Dialog
+
+    class TextDialog(Dialog):
+        def body(self, master):
+            tk.Label(master, text=prompt, anchor='w', justify='left',
+                     wraplength=520).pack(fill='x', pady=(0, GAP))
+            self.entry = tk.Entry(master, width=40)
+            self.entry.pack(fill='x')
+            if initialvalue is not None:
+                self.entry.insert(0, initialvalue)
+                self.entry.select_range(0, 'end')
+            return self.entry
+
+        def buttonbox(self):
+            actions = tk.Frame(self)
+            actions.pack(fill='x', padx=MARGIN, pady=MARGIN)
+            for text, command in ((('确定' if language == 'zh' else 'OK'), self.ok),
+                                  (('取消' if language == 'zh' else 'Cancel'), self.cancel)):
+                tk.Button(actions, text=text, command=command).pack(side='left')
+            self.bind('<Return>', self.ok)
+            self.bind('<Escape>', self.cancel)
+            polish(self)
+
+        def apply(self):
+            self.result = self.entry.get()
+
+    return TextDialog(parent, title).result
+
+
 def section(tk, parent, text='', padding=8):
     """Return an outer border, an ordinary content frame and an inside title."""
     outer = tk.Frame(parent, borderwidth=1, relief='solid', padx=padding, pady=padding)

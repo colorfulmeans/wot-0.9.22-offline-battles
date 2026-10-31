@@ -18,7 +18,7 @@ class ReservesPanel(object):
         scroll.grid(row=0, column=3, sticky='ns')
         self.tree.configure(yscrollcommand=scroll.set)
         controls = tk.Frame(frame)
-        controls.grid(row=1, column=0, columnspan=3, sticky='ew', pady=6)
+        controls.grid(row=1, column=0, columnspan=4, sticky='ew', pady=6)
         for column in (0, 1):
             controls.grid_columnconfigure(column, weight=1, uniform='reserve_actions')
         quantity_row = tk.Frame(controls)
@@ -32,9 +32,9 @@ class ReservesPanel(object):
         self.set_button = tk.Button(controls, command=self.set_quantity)
         self.set_button.grid(row=0, column=1, sticky='ew', padx=(3, 0))
         self.save_button = tk.Button(frame, command=self.save)
-        self.save_button.grid(row=2, column=0, columnspan=3, sticky='ew')
+        self.save_button.grid(row=2, column=0, columnspan=4, sticky='ew')
         self.feedback = tk.Label(frame, justify='left', anchor='w', wraplength=620)
-        self.feedback.grid(row=3, column=0, columnspan=3, sticky='ew', pady=8)
+        self.feedback.grid(row=3, column=0, columnspan=4, sticky='ew', pady=8)
         frame.grid_rowconfigure(0, weight=1)
         frame.grid_columnconfigure(0, weight=1)
         self.counts, self.loaded_slot = {}, None

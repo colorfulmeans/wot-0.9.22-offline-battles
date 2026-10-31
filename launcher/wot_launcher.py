@@ -79,6 +79,8 @@ _CHINESE = {
     'Personal reserves': '个人储备', 'Bonus': '加成', 'Duration (hours)': '时长（小时）',
     'Inventory': '库存', 'Quantity': '数量', 'Set selected quantities': '设置选中储备数量',
     'Personal reserves saved.': '个人储备已保存。', 'Add garage slots': '添加车位',
+    'Start LAN room': '启动局域网房间', 'Stop LAN room': '关闭局域网房间',
+    'Original vehicle values': '原始车辆属性', 'Automatic lineup': '自动阵容',
     'Garage slots': '车位',
     'Garage slots: %d': '车位总数：%d', 'Select a personal reserve.': '请先选择个人储备。',
     'Quantity must be positive.': '数量必须大于零。',
@@ -1120,7 +1122,8 @@ class LauncherWindow(object):
         self.bot_lineup_profile_label = tk.Label(
             self.bot_lineup_panel, text="")
         self.bot_lineup_profile_label.grid(row=0, column=0, sticky="w")
-        self.bot_lineup_profile = tk.StringVar(value=settings.get(
+        self.bot_lineup_profile = ui_layout.ChoiceVariable(tk, self._t,
+            (bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL,), value=settings.get(
             "bot_lineup_profile",
             bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL))
         self.bot_lineup_profile_box = self._ttk.Combobox(
@@ -1151,8 +1154,8 @@ class LauncherWindow(object):
 
         self.vehicle_profile_label = tk.Label(self.vehicle_panel, text="")
         self.vehicle_profile_label.grid(row=0, column=0, sticky="w")
-        self.vehicle_profile = tk.StringVar(
-            value=settings.get(
+        self.vehicle_profile = ui_layout.ChoiceVariable(tk, self._t,
+            (vehicle_overlays.ORIGINAL_PROFILE_LABEL,), value=settings.get(
                 "vehicle_profile", vehicle_overlays.ORIGINAL_PROFILE_LABEL))
         self.vehicle_profile_box = self._ttk.Combobox(
             self.vehicle_panel, textvariable=self.vehicle_profile,
@@ -1350,6 +1353,8 @@ class LauncherWindow(object):
         self.maintenance_help.config(text='\n'.join(self._t(line) for line in _MAINTENANCE_HELP))
         self.report_button.config(text=self._t("Create error report..."))
         self.log_title.config(text=self._t("Activity log"))
+        self._refresh_profiles()
+        self._refresh_bot_lineup_profiles()
         self._update_action_controls()
         if refresh:
             self._refresh_client()
@@ -1609,9 +1614,11 @@ class LauncherWindow(object):
         self._profile_names = list(names)
         values = tuple(
             [vehicle_overlays.ORIGINAL_PROFILE_LABEL] + self._profile_names)
-        self.vehicle_profile_box.config(values=values)
+        self.vehicle_profile_box.config(values=tuple(self.vehicle_profile.display(v) for v in values))
         if self.vehicle_profile.get().strip() not in values:
             self.vehicle_profile.set(vehicle_overlays.ORIGINAL_PROFILE_LABEL)
+        else:
+            self.vehicle_profile.set(self.vehicle_profile.get())
         return values
 
     def _profile_selected(self, unused_event=None):
@@ -1695,10 +1702,8 @@ class LauncherWindow(object):
         return True
 
     def _ask_save_slot_name(self, title, current=None):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
-            self._t(title), self._t("Save name:"), initialvalue=current)
+        return ui_layout.ask_string(
+            self._t(title), self._t("Save name:"), initialvalue=current, parent=self.root, language=self.language)
 
     def _open_save_dialog(self):
         if self._busy or self._maintenance_busy:
@@ -2246,10 +2251,12 @@ class LauncherWindow(object):
         values = tuple(
             [bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL] +
             self._bot_lineup_profile_names)
-        self.bot_lineup_profile_box.config(values=values)
+        self.bot_lineup_profile_box.config(values=tuple(self.bot_lineup_profile.display(v) for v in values))
         if self.bot_lineup_profile.get().strip() not in values:
             self.bot_lineup_profile.set(
                 bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
+        else:
+            self.bot_lineup_profile.set(self.bot_lineup_profile.get())
         return values
 
     def _bot_lineup_profile_selected(self, unused_event=None):
@@ -2827,17 +2834,13 @@ class LauncherWindow(object):
         return self._start_maintenance(core.reset_offline_preferences)
 
     def _ask_profile_name(self):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
+        return ui_layout.ask_string(
             self._t("New vehicle profile"),
-            self._t("Profile name:"))
+            self._t("Profile name:"), parent=self.root, language=self.language)
 
     def _ask_bot_lineup_profile_name(self):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
-            self._t("New Bot lineup profile"), self._t("Profile name:"))
+        return ui_layout.ask_string(
+            self._t("New Bot lineup profile"), self._t("Profile name:"), parent=self.root, language=self.language)
 
     def _confirm_delete_bot_lineup_profile(self, profile_name):
         from tkinter import messagebox

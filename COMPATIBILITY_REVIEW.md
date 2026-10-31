@@ -12040,3 +12040,16 @@ sub-micropixel float roundoff (4 versus 3.9999999999999716) without changing
 waypoint positions, waiting radii or navigation rules. Final focused reruns also
 cover minimum readable equal-button captions, Default read-only guards, route
 editing, real launcher geometry and the shipped smoke verifier.
+
+
+Actual packaged per-tab inspection of build colorfulmeans-41205341845-1 found
+additional old UI localization gaps: Start/Stop LAN room, the original-vehicle
+and automatic-lineup choices, English text-dialog buttons, and Save translated
+as the save-slot noun in badge/campaign editors. The follow-up localizes these
+captions while retaining canonical settings/runtime identities, uses equal
+localized text-input actions, wraps long wait headings, and aligns reserve
+actions with the full table including its scrollbar. New real-Tk regressions
+cover bilingual choice identities and actual modal input acceptance. Native
+armor/interior, exact lineup, tactical behavior/maps, effective preview and map
+check windows were clicked without a runtime exception. No gameplay rule was
+changed to address presentation findings.

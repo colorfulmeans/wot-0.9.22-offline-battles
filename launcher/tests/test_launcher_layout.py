@@ -58,6 +58,9 @@ class LayoutTests(unittest.TestCase):
             self.assertEqual(self.edges(a.buy_gold_vehicle_button), self.edges(a.add_slots_button))
             a.save_tabs.select(a.reserves_panel); a.root.update()
             r = a.reserves_editor
+            scroll = next(w for w in a.reserves_panel.winfo_children() if isinstance(w, ttk.Scrollbar))
+            self.assertEqual(self.edges(r.tree)[0], self.edges(r.save_button)[0])
+            self.assertEqual(self.edges(scroll)[1], self.edges(r.save_button)[1])
             midpoint = sum(self.edges(r.save_button)) / 2
             gap_midpoint = (self.edges(r.quantity_box)[1] + self.edges(r.set_button)[0]) / 2
             self.assertLessEqual(abs(midpoint - gap_midpoint), .5)
@@ -79,6 +82,47 @@ class LayoutTests(unittest.TestCase):
             a.premium_entry.delete(0, 'end'); a.premium_entry.insert(0, str(days))
             self.assertTrue(a._apply_account())
             self.assertEqual(days, ui.save_ledger.premium_days(slot['id']))
+
+    def test_builtin_choices_translate_without_changing_saved_or_runtime_keys(self):
+        a = self.app
+        original = ui.vehicle_overlays.ORIGINAL_PROFILE_LABEL
+        automatic = ui.bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL
+        a.vehicle_profile.set(original); a.bot_lineup_profile.set(automatic)
+        for language, captions in (('中文', ('原始车辆属性', '自动阵容')),
+                                   ('English', (original, automatic)),
+                                   ('中文', ('原始车辆属性', '自动阵容'))):
+            a.language_choice.set(language); a._language_selected(); a.root.update()
+            self.assertEqual(original, a.vehicle_profile.get())
+            self.assertEqual(automatic, a.bot_lineup_profile.get())
+            self.assertEqual(captions, (a.vehicle_profile_box.get(), a.bot_lineup_profile_box.get()))
+            self.assertEqual([], ui.bot_lineup_profiles.runtime_assignments(
+                a._bot_lineup_store, a.bot_lineup_profile.get()))
+        self.assertEqual('启动局域网房间', a.server_button.cget('text'))
+
+    def test_own_text_dialog_has_localized_equal_readable_buttons(self):
+        seen = []
+        def accept():
+            dialogs = [w for w in self.app.root.winfo_children() if isinstance(w, tk.Toplevel)
+                       and w.title() == 'Layout input']
+            if not dialogs:
+                self.app.root.after(10, accept)
+                return
+            dialog = dialogs[0]
+            widgets = []
+            def walk(parent):
+                for child in parent.winfo_children():
+                    widgets.append(child); walk(child)
+            walk(dialog); dialog.update_idletasks()
+            buttons = [w for w in widgets if isinstance(w, tk.Button)]
+            seen.append(([b.cget('text') for b in buttons],
+                         [b.winfo_width() for b in buttons]))
+            buttons[0].invoke()
+        self.app.root.after(10, accept)
+        value = ui.ui_layout.ask_string('Layout input', '方案名称：', parent=self.app.root,
+                                       initialvalue='Layout QA', language='zh')
+        self.assertEqual('Layout QA', value)
+        self.assertEqual(['确定', '取消'], seen[0][0])
+        self.assertLessEqual(max(seen[0][1]) - min(seen[0][1]), 1)
 
 
 if __name__ == '__main__':

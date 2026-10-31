@@ -512,11 +512,11 @@ class BotTacticsEditor(ConnectionEditorMixin):
         self.wait_list=ttk.Combobox(self.wait_panel,state='readonly',width=28)
         self.wait_list.pack(fill='x');self.wait_list.bind('<<ComboboxSelected>>',self.choose_wait)
         self.wait_list.bind('<Delete>',lambda event:self.delete_wait_point())
-        ttk.Label(self.wait_panel,text=self.tr('本等待点停留秒数（-1一直停留）','Wait seconds for this place (-1 stays)')).pack(anchor='w')
+        ttk.Label(self.wait_panel,text=self.tr('本等待点停留秒数（-1一直停留）','Wait seconds for this place (-1 stays)'),wraplength=250).pack(anchor='w')
         self.wait_seconds=tk.StringVar(value='60')
         self.wait_entry=ttk.Combobox(self.wait_panel,textvariable=self.wait_seconds,values=('-1',)+tuple(map(str,range(3601))),state='readonly',width=12)
         self.wait_entry.pack(fill='x');self.wait_entry.bind('<Return>',self.update_wait_time)
-        ttk.Label(self.wait_panel,text=self.tr('就位偏好朝向（度，0=北；留空朝向下一点）','Arrival heading (deg, 0=N; blank=next waypoint)')).pack(anchor='w')
+        ttk.Label(self.wait_panel,text=self.tr('就位偏好朝向（度，0=北；留空朝向下一点）','Arrival heading (deg, 0=N; blank=next waypoint)'),wraplength=250).pack(anchor='w')
         self.wait_heading=tk.StringVar(value='')
         self.wait_heading_entry=ttk.Combobox(self.wait_panel,textvariable=self.wait_heading,values=('',)+tuple(map(str,range(-180,181))),state='readonly',width=12)
         self.wait_heading_entry.pack(fill='x');self.wait_heading_entry.bind('<Return>',self.update_wait_time)
@@ -1816,8 +1816,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def new_profile(self):
         if not self.discard_prompt():return
-        name=simpledialog.askstring(self.tr('新建方案','New profile'),self.tr('方案名称','Profile name'),
-                                    initialvalue=self.tr('新方案','New profile'),parent=self.root)
+        name=ui_layout.ask_string(self.tr('新建方案','New profile'),self.tr('方案名称','Profile name'),
+                                    initialvalue=self.tr('新方案','New profile'),parent=self.root, language=self.language)
         if name is None:return
         try:
             name=self.store.check_name(name.strip())
@@ -1826,8 +1826,8 @@ class BotTacticsEditor(ConnectionEditorMixin):
 
     def rename_profile(self):
         if self.builtin:return
-        name=simpledialog.askstring(self.tr('重命名','Rename'),self.tr('方案名称','Profile name'),
-                                    initialvalue=self.document['name'],parent=self.root)
+        name=ui_layout.ask_string(self.tr('重命名','Rename'),self.tr('方案名称','Profile name'),
+                                    initialvalue=self.document['name'],parent=self.root, language=self.language)
         if name is None:return
         try:
             name=contract._text(name.strip(),48)
@@ -1853,9 +1853,9 @@ class BotTacticsEditor(ConnectionEditorMixin):
             try:
                 doc=self.store.import_file(filename)
                 if any(n.casefold()==doc['name'].casefold() for n in self.store.names()):
-                    name=simpledialog.askstring(self.tr('名称已存在','Name already exists'),
+                    name=ui_layout.ask_string(self.tr('名称已存在','Name already exists'),
                         self.tr('导入方案名称已存在，请输入其他名称。','Choose another name for the imported profile.'),
-                        initialvalue=doc['name'],parent=self.root)
+                        initialvalue=doc['name'],parent=self.root, language=self.language)
                     if name is None:return
                     doc['name']=name.strip()
                 self.store.check_name(doc['name'])
