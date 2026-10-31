@@ -1,6 +1,7 @@
 import math
 import struct
 import unittest
+from unittest import mock
 
 import vehicle_armor_viewer as viewer
 
@@ -188,15 +189,32 @@ class VehicleArmorGeometryTest(unittest.TestCase):
                          [viewer._armor_identity(record)
                           for record in records])
 
-    def test_every_thickness_bin_stays_distinct_from_unmapped_under_lighting(self):
-        unknown = viewer.thickness_color(None)
-        for threshold, unused in viewer._COLOR_STOPS:
-            color = viewer.thickness_color(threshold)
-            self.assertNotEqual(unknown, color)
-            for light in (-.10, 0, .12):
-                rgb = tuple(int(viewer._shade(color, light)[i:i+2],16) for i in (1,3,5))
-                # Known thickness remains visibly chromatic after lighting.
-                self.assertGreater(max(rgb)-min(rgb), 60)
+    def test_classification_uses_material_damage_factor_instead_of_thickness(self):
+        layers=[packed_element((('armor',element_value((
+            ('armor_1',element_value((('vehicleDamageFactor',string_value(b'0.0')),))),
+            ('armor_2',string_value(b'22')),
+        ))),))]
+        mesh=dict(surfaces=tuple(dict(material=m,triangles=()) for m in ('armor_1','armor_2','gun')))
+        with mock.patch.object(viewer,'_collision_model',return_value='gun.model'), \
+             mock.patch.object(viewer,'_mesh_for_model',return_value=mesh):
+            part=viewer._part_scene('', 'gun','Gun',layers,(0,0,0),[],(None,))
+        self.assertEqual(['spaced','main','gun'],[s['armorKind'] for s in part['surfaces']])
+
+    def test_vehicle_relative_scales_separate_thin_plates_and_external_modules(self):
+        surfaces = [dict(thickness=v, armorKind='main') for v in (0,8,16,22)]
+        track = dict(thickness=5, armorKind='tracks')
+        scene = dict(parts=({'surfaces':tuple(surfaces+[track])},))
+        scales = viewer._armor_scales(scene)
+        self.assertEqual([0,8,16,22], scales['main'])
+        self.assertEqual([0,5], scales['external'])
+        self.assertEqual(4, len({viewer._armor_color(s, scales) for s in surfaces}))
+        self.assertNotEqual(viewer._armor_color(track, scales), viewer._armor_color(surfaces[2], scales))
+        self.assertEqual('#555b66', viewer._armor_color(dict(thickness=None), scales))
+        for surface in surfaces+[track]:
+            color = viewer._armor_color(surface, scales)
+            for light in (-.10,0,.12):
+                rgb = tuple(int(viewer._shade(color,light)[i:i+2],16) for i in (1,3,5))
+                self.assertGreater(max(rgb)-min(rgb),60)
 
     def test_thickness_colors_use_fixed_absolute_stops(self):
         self.assertEqual(viewer.thickness_color(20),
@@ -324,10 +342,11 @@ class VehicleArmorGeometryTest(unittest.TestCase):
         self.assertEqual(4, len(viewer._surface_edges(triangles)))
         self.assertEqual(4, len(viewer._surface_edges(triangles, boundary_only=True)))
 
-    def test_nominal_bins_keep_exact_boundary_and_unknown_values(self):
-        for low, high in ((0, 20), (20, 50), (50, 100), (100, 150), (150, 250), (250, 400)):
-            self.assertEqual(viewer.thickness_color(low), viewer.thickness_color(high - .001))
-            self.assertNotEqual(viewer.thickness_color(low), viewer.thickness_color(high))
+    def test_relative_ramp_is_continuous_and_rejects_unknown_numbers(self):
+        for value in (None, float('nan'),float('inf'),-1):
+            self.assertEqual('#555b66',viewer.thickness_color(value,22))
+        self.assertNotEqual(viewer.thickness_color(8,22),viewer.thickness_color(16,22))
+        self.assertEqual(viewer.thickness_color(22,22),viewer.thickness_color(100,100))
 
     def test_component_switch_invalidates_internal_geometry_before_display(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)

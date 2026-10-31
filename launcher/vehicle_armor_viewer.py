@@ -57,6 +57,10 @@ _ZH = {
     "Radio": "电台", "Crew": "乘员",
     "Ammo rack": "弹药架", "Fuel tank": "油箱",
     "Turret rotation mechanism": "炮塔旋转机构",
+    "Main armor (mm, vehicle scale)": "主装甲（毫米，本车色阶）",
+    "Spaced armor / external modules (mm, vehicle scale)": "间隙装甲／外部模块（毫米，本车色阶）",
+    "Tracks (external module)": "履带（外部模块）",
+    "Tracks": "履带", "Gun": "炮管", "Spaced armor": "间隙装甲",
     "Modules": "模块", "Commander": "车长", "Gunner": "炮手",
     "Driver": "驾驶员", "Loader": "装填手", "Radio operator": "通信兵",
     "%s (also %s)": "%s（兼%s）",
@@ -642,6 +646,11 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
                 thickness = float(raw_value)
             except (TypeError, ValueError, OverflowError):
                 thickness = None
+        factor = _value_text(_layer_values(layers, ('armor', material, 'vehicleDamageFactor')))
+        kind = ('tracks' if role == 'chassis' else
+                'gun' if role == 'gun' and material == 'gun' else
+                'observation' if material == 'surveyingDevice' else
+                'spaced' if factor is not None and float(factor) == 0 else 'main')
         translated_triangles = tuple(
             tuple(_add_points(point, offset) for point in triangle)
             for triangle in surface["triangles"])
@@ -652,6 +661,7 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
             "fieldKey": ((record["member"], record["fieldPath"])
                          if record is not None else None),
             "thickness": thickness,
+            "armorKind": kind,
             "triangles": translated_triangles,
         })
     return {
@@ -863,31 +873,49 @@ def _interpolate(left, right, amount):
                  for index in range(3))
 
 
-# Saturated nominal-thickness bins, inspired by tanks.gg's collision palette.
-# Neutral gray is reserved exclusively for unmapped surfaces.
-_COLOR_STOPS = (
-    (0.0, (32, 200, 58)),
-    (20.0, (144, 213, 44)),
-    (50.0, (242, 220, 54)),
-    (100.0, (244, 154, 36)),
-    (150.0, (237, 64, 52)),
-    (250.0, (163, 83, 223)),
-    (400.0, (228, 78, 214)),
-)
+# Vehicle-relative thickness ramps, matching the two-scale collision-view
+# convention observed on tanks.gg. Neither scale is penetration probability.
+_PRIMARY_PALETTE = ((0., (20, 196, 36)), (.5, (245, 221, 40)), (1., (239, 39, 29)))
+_SECONDARY_PALETTE = ((0., (31, 211, 217)), (.33, (48, 135, 239)),
+                      (.66, (83, 39, 231)), (1., (229, 30, 219)))
 
 
-def thickness_color(thickness):
-    """Use the same absolute thickness bins as the viewer's labelled legend."""
+def thickness_color(thickness, maximum=400., secondary=False):
     try:
-        value = max(0.0, float(thickness))
+        value = float(thickness)
+        if not math.isfinite(value) or value < 0:
+            return '#555b66'
     except (TypeError, ValueError, OverflowError):
-        return "#555b66"
-    stop = _COLOR_STOPS[0][1]
-    for threshold, color in _COLOR_STOPS:
-        if value < threshold:
-            break
-        stop = color
-    return "#%02x%02x%02x" % stop
+        return '#555b66'
+    fraction = min(1., value / max(1., maximum))
+    palette = _SECONDARY_PALETTE if secondary else _PRIMARY_PALETTE
+    for (low, left), (high, right) in zip(palette, palette[1:]):
+        if fraction <= high:
+            return '#%02x%02x%02x' % _interpolate(left, right, (fraction-low)/(high-low))
+    return '#%02x%02x%02x' % palette[-1][1]
+
+
+def _palette_group(surface):
+    kind = surface.get('armorKind', 'tracks' if surface.get('role') == 'chassis' else 'main')
+    return 'main' if kind == 'main' else 'external'
+
+
+def _armor_scales(scene):
+    values = {'main': {0.}, 'external': {0.}}
+    present = set()
+    for part in (scene or {}).get('parts', ()):
+        for surface in part['surfaces']:
+            value = surface.get('thickness')
+            if value is not None and math.isfinite(value) and value >= 0:
+                group = _palette_group(surface)
+                present.add(group)
+                values[group].add(value)
+    return {group: sorted(values[group]) for group in values if group in present}
+
+
+def _armor_color(surface, scales):
+    group = _palette_group(surface)
+    return thickness_color(surface.get('thickness'), max(scales.get(group, (1.,))), group == 'external')
 
 
 def _shade(color, amount):
@@ -1151,6 +1179,14 @@ class ArmorViewerPanel(object):
             current = record.get("currentValue", record.get("originalValue", "-"))
             self.selection.set(self._t("Selected: %s · %s mm") % (
                 record.get("fieldLabel", record.get("fieldPath", "-")), current))
+        if self._scene is not None and new_key is not None:
+            selected_surface = next((surface for part in self._scene['parts']
+                for surface in part['surfaces'] if surface.get('fieldKey') == new_key), None)
+            if selected_surface and _palette_group(selected_surface) == 'external':
+                source = {'tracks':'Tracks (external module)', 'gun':'Gun',
+                          'spaced':'Spaced armor', 'observation':'Observation devices'}.get(
+                              selected_surface.get('armorKind'), 'Tracks (external module)')
+                self.selection.set(self.selection.get() + ' · ' + self._t(source))
         self._redraw()
         return new_key is not None and self._scene_contains_key(new_key)
 
@@ -1178,6 +1214,7 @@ class ArmorViewerPanel(object):
                             surface["thickness"] = float(current_value)
                         except (TypeError, ValueError, OverflowError):
                             surface["thickness"] = None
+        self._draw_legend()
         if self._focus_key == key:
             self.focus_field(record, reload_scene=False)
         else:
@@ -1231,11 +1268,17 @@ class ArmorViewerPanel(object):
                     label, color = self._t('%s (no data)') % label, '#838b97'
                 entries.append((label, color, 'Crew'))
         else:
-            values = [stop[0] for stop in _COLOR_STOPS]
-            entries = [('%g–%g' % (value, values[index + 1])
-                        if index + 1 < len(values) else '%g+' % value,
-                        thickness_color(value), None)
-                       for index, value in enumerate(values)]
+            scales = _armor_scales(self._scene)
+            entries = []
+            for group, values in scales.items():
+                maximum = max(values)
+                # Preserve exact material values on simple tanks; cap crowded
+                # legends to nine labeled samples of the same continuous ramp.
+                ticks = values if len(values) <= 9 else [maximum*i/8 for i in range(9)]
+                title = ('Main armor (mm, vehicle scale)' if group == 'main' else
+                         'Spaced armor / external modules (mm, vehicle scale)')
+                entries.extend(('%g' % value, thickness_color(value, maximum, group == 'external'), title)
+                               for value in ticks)
             if any(surface.get('thickness') is None
                    for part in (self._scene or {}).get('parts', ())
                    for surface in part['surfaces']):
@@ -1492,6 +1535,7 @@ class ArmorViewerPanel(object):
         minimum, maximum = self._scene['bounds']
         radius = max(.001, max(maximum[i]-minimum[i] for i in range(3))*.5)
         depth_scale = min(width, height)*.43*self._zoom/radius
+        scales = _armor_scales(self._scene) if not internal else {}
         selected_module = getattr(self, '_selected_module', None)
         selected_label = (selected_module or {}).get('moduleLabel')
         for unused_depth, projected, surface, area in triangles:
@@ -1499,7 +1543,7 @@ class ArmorViewerPanel(object):
             focused = ((surface.get('moduleLabel') == selected_label)
                        if internal and selected_label else
                        key is not None and key == self._focus_key)
-            base = surface.get('color') or thickness_color(surface.get("thickness"))
+            base = surface.get('color') or _armor_color(surface, scales)
             fill = _shade(base, _face_light(projected, depth_scale))
             if focused:
                 fill = _shade(base, 0.34)

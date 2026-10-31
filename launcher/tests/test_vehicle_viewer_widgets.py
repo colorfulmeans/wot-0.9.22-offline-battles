@@ -39,7 +39,7 @@ class ViewerWidgetTests(unittest.TestCase):
                 self.root.geometry('%dx820' % width)
                 for mode in ('armor', 'internal'):
                     p.set_view_mode(mode); self.root.update()
-                    self.assertEqual(7, len(p._legend_cells))
+                    self.assertEqual(7 if mode == "internal" else 2, len(p._legend_cells))
                     columns = p._legend_columns
                     for index, cell in enumerate(p._legend_cells):
                         self.assertGreaterEqual(cell.winfo_x(), 0)
@@ -135,3 +135,17 @@ class ViewerWidgetTests(unittest.TestCase):
         for cell, slot in zip(p._legend_cells[6:], slots):
             swatch = next(child for child in cell.winfo_children() if isinstance(child, tk.Canvas))
             self.assertEqual(slot['color'], swatch.itemcget(swatch.find_all()[0], 'fill'))
+
+    def test_armor_legend_matches_current_vehicle_scales_and_refreshes_after_edit(self):
+        p=self.panel
+        plates=tuple(dict(self.surface, thickness=value, fieldKey=('m',str(value))) for value in (0,8,16,22))
+        track=dict(self.surface, thickness=5, armorKind='tracks')
+        p._scene=dict(p._scene, parts=({'surfaces':plates+(track,)},))
+        p._draw_legend();self.root.update()
+        self.assertEqual(['主装甲（毫米，本车色阶）','间隙装甲／外部模块（毫米，本车色阶）'],
+                         [h.cget('text') for _,h in p._legend_headers])
+        self.assertEqual(['0','8','16','22','0','5'],self.label_texts())
+        p._record_by_key={('m','22'):dict(currentValue='22')}
+        p.update_field('m','22','30');self.root.update()
+        self.assertIn('30',self.label_texts())
+        self.assertNotIn('22',self.label_texts())

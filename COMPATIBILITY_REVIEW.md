@@ -12219,3 +12219,36 @@ documented resource/platform skips. Exact-client inspection reconfirmed Chinese
 HD #1513 x86. Real data probes verified Skorpian (four seats, commander also
 loader), MS-1 (two seats, combined commander duties) and T29 (six seats, two
 numbered loaders) without modifying geometry or vehicle properties.
+
+
+#### Same-vehicle comparison correction: relative armor scales
+
+The user's follow-up exposed an insufficient acceptance baseline: the first
+palette revision still grouped NC-31's thin armor into broad absolute bins, so
+it appeared almost entirely green. It must not be presented as final acceptance.
+Direct Edge comparison of https://tanks.gg/tank/nc-31/model showed a primary
+0/8/16/22-mm scale and an independent 0/5/8/10/16/22-mm scale for spaced armor
+and external modules. Exact #1513 packed data and selected collision surfaces
+produce the same value sets. The website's current model is a presentation
+reference, not a replacement for local #1513 geometry or gameplay rules.
+
+The corrected renderer scales the primary green/yellow/red ramp to the current
+vehicle's primary armor maximum and uses a separate cyan/blue/purple/magenta
+ramp for spaced armor and external modules. Legends retain exact material
+thickness values up to nine entries; more complex vehicles use nine samples of
+the same continuous numeric ramp. Titles explicitly state vehicle-relative mm
+scales, so a red thin tank is not implied to have heavy armor or poor penetration
+probability. Unmapped surfaces remain neutral gray. No geometry changes.
+
+Tracks derive from the chassis role; the gun material and observation-device
+material remain external; spaced armor requires the explicit zero
+vehicleDamageFactor material marker. Unmarked material does not become spaced
+armor merely because it is thin or belongs to a gun component. Track selection
+is explicitly labeled as an external module. Editing armor thickness refreshes
+the visible scales as well as surfaces. Tests now require these semantics and
+NC-31's distinct plate colors; fixed-bin tests have been replaced rather than
+retained as a conflicting baseline. Final corrected package acceptance pending.
+
+Corrected local launcher suite: 44 files / 1219 tests passed, with 14
+documented environment skips. The earlier e4828f5 artifact is superseded for
+final visual acceptance by this same-vehicle scale correction.
