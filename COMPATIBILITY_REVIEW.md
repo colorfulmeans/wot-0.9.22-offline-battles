@@ -12465,7 +12465,7 @@ comparison frames per case had median 392-848 ms even with its 640-pixel cap.
 No orbit reuploaded geometry. The benchmark suppresses only known missing-data
 dialogs; it does not reinterpret missing layouts or alter vehicle values.
 
-Final package/cloud and native desktop acceptance are recorded below after build.
+The final package/cloud and native desktop acceptance below supersede intermediate runs.
 
 
 The expanded all-resource mount census found integral float levels on
@@ -12481,3 +12481,53 @@ the hosted Windows worker: setUpClass skipped the whole GPU class, leaving zero
 executed tests, correctly rejected by the repository's empty-test guard. GPU
 cases now individually report their unavailable-context skips; the empty-test
 guard is unchanged. Actual local GPU execution remains mandatory in acceptance.
+
+
+Final runtime/editor commit: 56da0417172bdee8942802dbd03654f569a2c686.
+Final local full discovery passed 47 files / 1240 tests with 14 documented skips;
+actual GPU pixel tests ran, not skipped. All 614 stock vehicle topologies and
+1,632 turret/gun combinations were resolved. All 2,432 component price lookups
+were scalar stock numeric prices; no compound/currency-tagged price was found.
+Cloud Tests 41237924895 and Battle review package 41237924892 both succeeded,
+including the current Windows editor tests. GPU-unavailable hosted workers
+accurately skip their five pixel cases and do not count as hardware acceptance.
+
+Final ZIP: PR116-fixes-56da041.zip, build colorfulmeans-41237924892-1,
+68,003,696 bytes. SHA-256:
+6a84e05e8a3de498aee4caac76ac4db04abca2fe4ba4c49a2d85e95e58c920c0.
+Independent inspection verified archive CRC, launcher x64/client x86 boundaries,
+232 server sources, 225 Python 2.7 client modules, both native UI movies and all
+44 frozen launcher modules against current source. ModernGL 5.12.0, glcontext's
+WGL extension and the ModernGL native extension are present with NumPy 2.3.5.
+The final executable's --verify-bot-editor returned exit 0 / ok true.
+
+Actual final-package Windows acceptance launched from
+D:/Games/wot-mod/9.22/PR116-fixes-56da041 with diagnostics. Its log confirms the
+NVIDIA hardware OpenGL context, not CPU fallback. NC-31 track picking selected
+the original 5-mm field. T29 changed 105-mm to 90-mm geometry, then T136 to T123
+geometry while preserving its compatible 90-mm gun. Armor/X-ray shared the
+mount. Drag orbit and wheel zoom worked. In the settings dialog, shell opacity
+16 was dragged to 54 and Engine hidden; Restore default display restored all
+visibility and 16/85 while retaining T123/90-mm and the changed camera.
+
+The real incompatibility case used ordinary G04_PzVI_Tiger_I (not the similarly
+named White Tiger): starting E turret/long 88 L71, selecting H2 automatically
+chose the first compatible short 88 L56. Selecting L71 then retained that new
+gun and automatically selected E. Both changes updated the mounted geometry in
+X-ray. Reset view restored the camera without altering E/L71. Initial White
+Tiger selection separately showed its genuine one-option turret as disabled,
+without fabricating alternatives. Different vehicles did not retain old modules.
+
+The final mixed-operation Chinese editor session logged 38 redraws,
+p50 8.90 ms / p95 52.43 ms, including geometry uploads and configuration changes.
+A seven-frame English open/close session logged p50 9.28 ms / p95 33.48 ms.
+These cold/mixed samples are explicitly separate from the 80-frame-per-view
+warm benchmark above; they are not reported as passing a warm-frame budget.
+Actual package controls, dialogs and rendering were checked in both languages;
+Preview turret/gun, Restore default display and Reset view fit their controls.
+Repeated editor close/open released/recreated its OpenGL context without a
+callback error. Current final-session logs contain no traceback, Tk callback
+exception or OpenGL fallback. No vehicle property was saved, no save/profile
+was created or removed; existing profile 1 was reused. Chinese was restored and
+the final launcher remains open on Vehicle modifier. No new battle or donated
+interior-position accuracy acceptance is claimed for this viewer-only follow-up.
