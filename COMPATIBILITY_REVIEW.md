@@ -11,9 +11,12 @@ border with an internal translated title, aligned to the left explanation's top.
 Real Tk checks cover aligned edges at two window sizes and language switching.
 
 Only felling changes for soft vegetation: native TREE descriptors with health
-1 through 5 and a filename stem matching the exact #1513 bushes.xml taxonomy
+1 through 5 and a filename stem matching the exact #1513 bushes.xml taxonomy or the
+reviewed native grass/herb stems
 are excluded from both direct contact felling and proximity felling registration.
-Normal trees (including health-3 BananaTree_03), high-health bushes and all other
+The complete 176-resource low-health census retains two real tree stems
+(applewowtree/BananaTree_03) and unresolved jux; no species is inferred from
+health alone. Normal trees (including health-3 BananaTree_03), high-health bushes and all other
 destructible types retain their behavior. Collision, projectile/aim, spotting,
 foliage volumes, route planning and destruction authority code are unchanged.
 The existing per-slot diagnostic result records soft_vegetation_no_felling and

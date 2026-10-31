@@ -108,6 +108,13 @@ _SOFT_VEGETATION_TOKENS_1513 = (
     'canereeds1', 'shrub_tree', 'shrubsouth', 'amurmaple', 'mulga_1',
     'thicket', 'azalea', 'shrub2', 'shrub3', 'cedar', 'mulga', 'shrub', 'bush')
 
+# Grass/herb resources in native destructibles.xml that are not concealment
+# bushes.xml tokens. Exact stems avoid matching unrelated model names.
+_SOFT_PLANT_STEMS_1513 = frozenset((
+    'aloevera_02', 'azaliapatch_ld', 'broomsankeweed_alone', 'broomsnakeweed',
+    'cacti', 'canereeds', 'fern', 'grapes_1', 'grapes_2', 'horseweed', 'ivy',
+    'knapweed', 'marigoldpatch', 'scrub', 'sedge_1', 'waterlily'))
+
 
 def _skip_soft_vegetation_felling_1513(filename, descriptor, tree_type):
 	"""Suppress only the whole-model fall animation of identified soft plants."""
@@ -122,7 +129,8 @@ def _skip_soft_vegetation_felling_1513(filename, descriptor, tree_type):
 	if not name:
 		return False
 	stem = name.rsplit('/', 1)[-1].rsplit('.', 1)[0]
-	return any(token in stem for token in _SOFT_VEGETATION_TOKENS_1513)
+	return (stem in _SOFT_PLANT_STEMS_1513 or
+		any(token in stem for token in _SOFT_VEGETATION_TOKENS_1513))
 
 
 def _normalized_filename(filename):
