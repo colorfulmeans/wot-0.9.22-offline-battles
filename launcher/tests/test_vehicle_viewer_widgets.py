@@ -157,6 +157,8 @@ class ViewerWidgetTests(unittest.TestCase):
         p._display_buttons[2][0].invoke()
         self.assertFalse(p._pick_buffer.any())
         p._display_buttons[2][0].invoke()
+        self.assertEqual('观察装置 / 车体', p._surface_name(dict(armorKind='observation',role='hull')))
+        self.assertEqual('观察装置 / 炮塔', p._surface_name(dict(armorKind='observation',role='turret')))
         p._open_settings(); self.root.update()
         def children(widget):
             yield widget

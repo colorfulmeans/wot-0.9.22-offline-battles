@@ -1585,9 +1585,13 @@ class ArmorViewerPanel(object):
         if surface.get('moduleLabel'):
             return self._module_caption(surface)
         kind = surface.get('armorKind', 'main')
-        return self._t({'tracks':'Tracks', 'gun':'Gun', 'observation':'Observation devices'}.get(
+        name = self._t({'tracks':'Tracks', 'gun':'Gun', 'observation':'Observation devices'}.get(
             kind, {'hull':'Hull', 'turret':'Turret', 'chassis':'Chassis', 'gun':'Gun'}.get(
                 surface.get('role'), 'Main armor')))
+        if kind == 'observation' and surface.get('role'):
+            name += ' / ' + self._t({'hull':'Hull', 'turret':'Turret', 'gun':'Gun',
+                                    'chassis':'Chassis'}.get(surface['role'], surface['role']))
+        return name
 
     def _groups(self):
         return (('External modules', 'Internal modules', 'Crew') if self._view_mode == 'internal'
@@ -1625,7 +1629,10 @@ class ArmorViewerPanel(object):
         win = self._settings_window = tk.Toplevel(self.frame)
         win.title(self._t('Display settings'))
         win.transient(self.frame.winfo_toplevel())
-        win.geometry('440x570')
+        parent = self.frame.winfo_toplevel()
+        x = max(0, parent.winfo_rootx()+(parent.winfo_width()-440)//2)
+        y = max(0, parent.winfo_rooty()+(parent.winfo_height()-570)//2)
+        win.geometry('440x570+%d+%d' % (x, y))
         win.grid_columnconfigure(0, weight=1)
         win.grid_rowconfigure(0, weight=1)
         host = tk.Frame(win, padx=8, pady=8)

@@ -12350,3 +12350,9 @@ Local full launcher discovery passed 45 files / 1223 tests, with 14 documented
 environment skips. Final renderer/UI bytes were separately rechecked in the
 five-file focused suite after camera/drag refinements. No failing assertions
 remain. Cloud packaging and final native desktop checks follow.
+
+Intermediate T29 desktop inspection exposed two legitimate PC observation
+components with indistinguishable captions. Display settings now appends the
+actual Hull/Turret role and opens centered over its owner; focused Tk/pixel
+regressions passed after that correction. The intermediate 1717c4d package is
+not the final acceptance artifact.
