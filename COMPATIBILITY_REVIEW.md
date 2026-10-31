@@ -12408,3 +12408,61 @@ completed successfully for 89ddf8b, including actual Windows editor tests and
 the updated renderer/settings baseline. The earlier 1717c4d/5b7fd81 builds
 remain intermediate evidence only; PR116-fixes-89ddf8b.zip is the handoff.
 This round did not start another native game battle or install donated data.
+
+
+## Mounted preview, display defaults and GPU rendering (November 1)
+
+The preview now explicitly selects its turret and gun. A new selection wins;
+its compatible partner is retained, otherwise the first compatible item in the
+native fitting order is used. Armor and X-ray share this configuration, and
+unrelated editor fields cannot silently select a different model. A mount
+change invalidates the interior scene before rechecking its PC component frame.
+One-option controls display their mounted component without offering empty choices.
+
+Pinned sorting evidence comes from scripts.pkg's
+scripts/client/gui/Scaleform/daapi/view/lobby/shared/fitting_select_popover.pyc
+(_getSuitableItems: data.sort(reverse=True)) and
+scripts/client/gui/shared/gui_items/fitting_item.pyc (__cmp__: item type, level,
+buy-price currencies, userName), with gui_item.HasIntCD comparing nation first.
+Within one vehicle's turret/gun selectors, nation/type are fixed and these stock
+components cost credits; reverse level/price/localized-name order applies.
+Topology order is the stable tie-break. The exact T29 defines T136 before T123
+in fitting order and allows 76/90/105-mm guns on both. The modern website is an
+interaction reference only; its observed turret/gun mismatch is not imported.
+
+Display settings now restore all group/item visibility and shell/module opacity
+16/85 without changing the camera, vehicle, mounted configuration or editor value.
+Reset view remains a separate camera operation. Both actions are translated.
+
+A pinned ModernGL 5.12.0 / glcontext 3.0.0 standalone OpenGL 3.3 context replaces
+CPU projection/rasterization on capable desktops. Geometry remains resident;
+orbit, visibility, alpha and picking do not reupload it. A tiled GPU atlas keeps
+one nearest surface per physical object, then composites depth-sorted layers
+per pixel. Transparent context does not intercept interior picking; opaque
+context does. FBO readback updates the existing Tk image. The NumPy CPU renderer
+remains an explicit logged fallback, not evidence of hardware acceleration.
+Context creation/render failures are contained; editor teardown releases GPU
+resources and records end-to-end redraw percentiles and device identity.
+
+Acceptance baseline: matching mounted geometry and valid partner preservation;
+first native-order fallback for incompatible partners; fresh/missing interiors
+without stale surfaces; Chinese/English controls; display reset independent of
+camera reset; depth/alpha/picking pixels; independent context teardown; resident
+camera geometry; real-resource warm-frame p95 <=33.3 ms on the measured desktop.
+Use tools/benchmark_vehicle_viewer.py --output build/viewer-performance.json
+--compare-cpu with WOT_0922_CLIENT and launcher build dependencies. This is a
+viewer benchmark, not a game FPS or input-latency claim. Cloud machines without
+OpenGL 3.3 explicitly skip GPU pixel tests; WOT_REQUIRE_GPU=1 makes missing local
+hardware a failure. Cloud Windows still exercises the real Tk layout and fallback.
+
+Local full launcher discovery passed 47 files / 1238 tests, with 14 documented
+resource/platform skips. Actual local GPU pixel tests ran with WOT_REQUIRE_GPU=1;
+all mount, widget and renderer files were rerun after final integration changes.
+NVIDIA RTX 5000 Ada Laptop / driver 572.83, 642-pixel-wide actual Tk previews:
+NC-31 armor/X-ray p95 3.85/3.79 ms, T29 3.92/4.05 ms, Skorpian 3.71/3.22 ms,
+80 warm frames each, including FBO readback and Tk image copy. Three old-CPU
+comparison frames per case had median 392-848 ms even with its 640-pixel cap.
+No orbit reuploaded geometry. The benchmark suppresses only known missing-data
+dialogs; it does not reinterpret missing layouts or alter vehicle values.
+
+Final package/cloud and native desktop acceptance are recorded below after build.

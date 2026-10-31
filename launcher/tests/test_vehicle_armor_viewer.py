@@ -307,6 +307,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_component_switch_invalidates_internal_geometry_before_display(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._mounted = None
         panel._settings_window = None
         panel._vehicle_member = 'scripts/item_defs/vehicles/usa/T29.xml'
         panel._game_root, panel._records = 'client', []

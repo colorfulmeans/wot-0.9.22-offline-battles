@@ -394,6 +394,8 @@ class VehicleEditorWindow(object):
         self.armor_viewer = viewer_factory(
             frame, tk, self.select_field_from_viewer, self._language,
             self._game_root)
+        if hasattr(self.armor_viewer, 'set_diagnostic_callback'):
+            self.armor_viewer.set_diagnostic_callback(self._log)
         self.armor_viewer.grid(
             row=0, column=3, rowspan=row + 1, sticky="nsew",
             padx=(14, 0))

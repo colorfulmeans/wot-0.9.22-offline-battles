@@ -14,7 +14,7 @@ class ViewerWidgetTests(unittest.TestCase):
         self.root = tk.Tk()
         self.addCleanup(self.root.destroy)
         self.selected = []
-        self.panel = viewer.ArmorViewerPanel(self.root, tk, self.selected.append, 'zh', '')
+        self.panel = viewer.ArmorViewerPanel(self.root, tk, self.selected.append, 'zh', '', gpu_factory=lambda: None)
         self.panel.frame.pack(fill='both', expand=True)
         triangle = ((-1., -1., 0.), (1., -1., 0.), (1., 1., 0.))
         self.surface = dict(role='hull', component='hull', fieldKey=('m', 'f'),
@@ -180,3 +180,45 @@ class ViewerWidgetTests(unittest.TestCase):
         self.assertTrue(p._visible(dict(self.module,moduleLabel='crew 2')))
         p.set_language('en')
         self.assertIsNone(p._settings_window)
+
+    def test_display_restore_preserves_camera_vehicle_mount_and_editor_focus(self):
+        p=self.panel
+        p._mounted=dict(turret=('turrets0','chosen'),gun='chosen_gun')
+        p._vehicle_member='current_vehicle'
+        p._yaw,p._pitch,p._zoom=.8,.4,1.4
+        p._focus_key=('m','f')
+        p._hidden.add(p._surface_identity(self.module))
+        p._group_visible['Crew']=False
+        p._shell_alpha.set(99);p._module_alpha.set(4)
+        p._open_settings();self.root.update()
+        p.restore_display();self.root.update()
+        self.assertEqual((16,85),(p._shell_alpha.get(),p._module_alpha.get()))
+        self.assertEqual((.8,.4,1.4),(p._yaw,p._pitch,p._zoom))
+        self.assertEqual(dict(turret=('turrets0','chosen'),gun='chosen_gun'),p._mounted)
+        self.assertEqual(('current_vehicle',('m','f')),(p._vehicle_member,p._focus_key))
+        self.assertFalse(p._hidden);self.assertFalse(p._group_visible)
+        self.assertIsNotNone(p._settings_window)
+
+    def test_explicit_preview_mount_is_not_overwritten_by_unrelated_field(self):
+        p=self.panel
+        p._mounted=dict(turret=('turrets0','chosen'),gun='chosen_gun')
+        with mock.patch.object(p,'_load_scene') as reload:
+            p.focus_field(dict(member='m',fieldPath='turrets0/other/armor/armor_1'))
+        reload.assert_not_called()
+        self.assertEqual('chosen_gun',p._mounted['gun'])
+
+    def test_component_selectors_have_equal_width_and_do_not_recursive_reload(self):
+        p=self.panel
+        choices=dict(turrets=(dict(name='top',label='Top',key=('turrets0','top'),guns=('large','small')),
+                              dict(name='stock',label='Stock',key=('turrets0','stock'),guns=('small',))),
+                     guns=(dict(name='large',label='Large'),dict(name='small',label='Small')))
+        p._component_choices=choices
+        p._scene=dict(p._scene,configuration=dict(turretGroup='turrets0',turret='top',gun='large'))
+        p._refresh_mounts();self.root.update()
+        turret,gun=p._mount_boxes['turret'],p._mount_boxes['gun']
+        self.assertLessEqual(abs(turret.winfo_width()-gun.winfo_width()),1)
+        turret.current(1)
+        with mock.patch.object(p,'_load_scene',return_value=True) as reload:
+            turret.event_generate('<<ComboboxSelected>>');self.root.update()
+        reload.assert_called_once()
+        self.assertEqual(dict(turret=('turrets0','stock'),gun='small'),p._mounted)

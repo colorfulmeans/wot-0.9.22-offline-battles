@@ -19,6 +19,7 @@ import re
 import struct
 import zipfile
 import zlib
+import time
 
 try:
     import packed_xml
@@ -51,6 +52,8 @@ _ZH = {
     'X-ray': '透视',
     'External modules': '外部模块',
     'Main armor': '主装甲', 'Exterior opacity': '车体不透明度',
+    'Preview turret': '预览炮塔', 'Preview gun': '预览火炮',
+    'Restore default display': '恢复默认显示',
     'Module opacity': '模块不透明度', 'Display settings': '显示设置',
     'Show all': '全部显示', 'Hide all': '全部隐藏', 'Close': '关闭',
     'Hull': '车体', 'Turret': '炮塔', 'Chassis': '底盘',
@@ -680,7 +683,67 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
     }
 
 
-def _configuration(vehicle_root, component_roots, focus):
+def component_choices(vehicle_root, component_roots, translations=None):
+    """Mirror #1513 fitting popover's reverse FittingItem comparison.
+
+    Nation and item type are constant within each selector. The remaining
+    comparator fields are level, purchase currencies and localized userName.
+    Original topology order is the stable tie-break, not a synthetic name sort.
+    """
+    turrets, guns = [], {}
+    def metadata(name, layers):
+        raw = _value_text(_layer_values(layers, ('userString',))) or name
+        key = raw.rsplit(':',1)[-1].lstrip('#')
+        label = translations.gettext(key) if translations else name
+        if not label or label == key: label = name
+        return dict(name=name, label=label,
+                    level=int(_value_text(_layer_values(layers, ('level',))) or 0),
+                    price=float(_value_text(_layer_values(layers, ('price',))) or 0))
+    for raw_group, value in vehicle_root.children:
+        group = raw_group.decode('utf-8')
+        if not _TURRET_GROUP.fullmatch(group) or value.value_type != packed_xml.TYPE_ELEMENT:
+            continue
+        for raw_name, _ in value.value.children:
+            name = raw_name.decode('utf-8')
+            layers = _entry_layers([vehicle_root], group, name)
+            shared = _shared_entry(component_roots.get('turrets'), name)
+            if shared is not None: layers.append(shared)
+            row = metadata(name, layers)
+            row['key'] = (group, name)
+            row['guns'] = tuple(_ordered_entry_names(layers, 'guns'))
+            turrets.append(row)
+            for gun in row['guns']:
+                ls = _entry_layers(layers, 'guns', gun)
+                shared = _shared_entry(component_roots.get('guns'), gun)
+                if shared is not None: ls.append(shared)
+                if gun not in guns: guns[gun] = metadata(gun, ls)
+    order = lambda row:(row['level'],row['price'],row['label'])
+    return dict(turrets=tuple(sorted(turrets,key=order,reverse=True)),
+                guns=tuple(sorted(guns.values(),key=order,reverse=True)))
+
+
+def resolve_mount(choices, current=None, role=None, value=None):
+    """Keep the user's new choice, preserve its valid partner, else first fit."""
+    current = dict(current or {})
+    if role == 'turret': current['turret'] = tuple(value)
+    if role == 'gun': current['gun'] = value
+    turrets = choices['turrets']
+    if not turrets: raise ArmorViewerError('The vehicle has no turret configuration.')
+    turret = next((r for r in turrets if r['key'] == tuple(current.get('turret', ()))), None)
+    if role == 'turret' and turret is None:
+        raise ArmorViewerError('The selected turret is not in the vehicle topology.')
+    if role == 'gun' and (turret is None or value not in turret['guns']):
+        turret = next((r for r in turrets if value in r['guns']), None)
+        if turret is None: raise ArmorViewerError('The selected gun has no compatible turret.')
+    if turret is None: turret = turrets[0]
+    gun = current.get('gun')
+    if gun not in turret['guns']:
+        gun = next((r['name'] for r in choices['guns'] if r['name'] in turret['guns']), None)
+    if gun is None: raise ArmorViewerError('The selected turret has no gun configuration.')
+    return dict(turret=turret['key'], gun=gun)
+
+
+def _configuration(vehicle_root, component_roots, focus, mounted=None):
     focus_role = focus[0] if focus else None
     focus_name = focus[1] if focus else None
     focus_context = focus[3] if focus else None
@@ -741,6 +804,10 @@ def _configuration(vehicle_root, component_roots, focus):
             if focus_name in _ordered_entry_names(turret_layers, "guns"):
                 chosen_turret = item
                 break
+    if mounted is not None:
+        chosen_turret = tuple(mounted['turret'])
+        if chosen_turret not in turret_candidates:
+            raise ArmorViewerError('The selected turret is not in the vehicle topology.')
     if chosen_turret is None:
         chosen_turret = turret_candidates[0]
 
@@ -763,6 +830,10 @@ def _configuration(vehicle_root, component_roots, focus):
         raise ArmorViewerError("The selected turret has no gun configuration.")
     gun_name = (focus_name if focus_role == "gun" and
                 focus_name in gun_names else gun_names[0])
+    if mounted is not None:
+        gun_name = mounted['gun']
+        if gun_name not in gun_names:
+            raise ArmorViewerError('The selected gun is not compatible with the turret.')
     gun_layers = _entry_layers(turret_layers, "guns", gun_name)
     shared_gun = _shared_entry(component_roots.get("guns"), gun_name)
     if shared_gun is not None:
@@ -794,7 +865,7 @@ def _scene_bounds(parts):
 
 
 def load_vehicle_armor_scene(game_root, vehicle_member, records,
-                             focus_record=None):
+                             focus_record=None, mounted=None):
     """Load one mounted configuration around the requested armor field."""
     status, package_path = vehicle_overlays._require_target(game_root)
     match = vehicle_overlays._VEHICLE_MEMBER.fullmatch(vehicle_member)
@@ -808,7 +879,10 @@ def load_vehicle_armor_scene(game_root, vehicle_member, records,
         raise ArmorViewerError(str(error))
     component_roots = _component_roots(package_path, nation)
     focus = _focus_identity(focus_record)
-    config = _configuration(vehicle_root, component_roots, focus)
+    choices = component_choices(vehicle_root, component_roots,
+        vehicle_overlays._vehicle_translations(status['path'], nation))
+    resolved = resolve_mount(choices, mounted) if mounted is not None else None
+    config = _configuration(vehicle_root, component_roots, focus, resolved)
 
     chassis_name, chassis_layers = config["chassis"]
     hull_name, hull_layers = config["hull"]
@@ -860,6 +934,7 @@ def load_vehicle_armor_scene(game_root, vehicle_member, records,
                   for key, value in crew.value.children) if (
                       crew is not None and crew.value_type == packed_xml.TYPE_ELEMENT) else ()
     return {
+        "componentChoices": choices,
         "crewRoles": roles,
         "vehicleMember": vehicle_member,
         "configuration": {
@@ -969,12 +1044,21 @@ class ArmorViewerPanel(object):
     """Depth-buffered scene presentation with orbit, visibility and picking."""
 
     def __init__(self, parent, tk_module, on_select, language, game_root,
-                 scene_loader=load_vehicle_armor_scene):
+                 scene_loader=load_vehicle_armor_scene, gpu_factory=None):
         self._tk = tk_module
         self._on_select = on_select
         self._language = i18n.resolve_language(language)
         self._game_root = game_root
         self._scene_loader = scene_loader
+        self._mounted = {} if scene_loader is load_vehicle_armor_scene else None
+        self._component_choices = {}
+        self._gpu_factory = gpu_factory
+        self._gpu = None
+        self._gpu_attempted = False
+        self._gpu_key = None
+        self._gpu_objects = []
+        self._frame_times = []
+        self._diagnostic = lambda message: None
         self._vehicle_member = None
         self._records = []
         self._record_by_key = {}
@@ -1065,6 +1149,60 @@ class ArmorViewerPanel(object):
         self.canvas.bind("<Button-4>", lambda event: self._zoom_by(1.12))
         self.canvas.bind("<Button-5>", lambda event: self._zoom_by(1.0 / 1.12))
         self.frame.bind('<Configure>', self._wrap_text)
+        self.frame.bind('<Destroy>', self._destroy_renderer)
+        from tkinter import ttk
+        mounts = tk_module.Frame(self.frame)
+        for widget in (self.help_label, self.selection_label, display, self.canvas,
+                       controls, self.reset_button):
+            widget.grid_configure(row=int(widget.grid_info()['row'])+1)
+        self.frame.grid_rowconfigure(5, weight=0)
+        self.frame.grid_rowconfigure(6, weight=1)
+        mounts.grid(row=2, column=0, sticky='ew', pady=(4, 0))
+        self._mount_boxes = {}
+        for column, (role, label) in enumerate((('turret', 'Preview turret'), ('gun', 'Preview gun'))):
+            box = tk_module.Frame(mounts)
+            box.grid(row=0, column=column, sticky='ew', padx=(0 if column == 0 else 4, 4 if column == 0 else 0))
+            mounts.grid_columnconfigure(column, weight=1, uniform='mount')
+            self._widget(tk_module.Label, box, text=label, anchor='w').pack(fill='x')
+            combo = ttk.Combobox(box, state='disabled', width=12)
+            combo.pack(fill='x')
+            combo.bind('<<ComboboxSelected>>', lambda event, r=role: self._change_mount(r))
+            self._mount_boxes[role] = combo
+
+    def set_diagnostic_callback(self, callback):
+        self._diagnostic = callback
+
+    def _destroy_renderer(self, event):
+        if event.widget is not self.frame:
+            return
+        if self._frame_times:
+            import numpy as np
+            self._diagnostic('Viewer frames: count=%d p50=%.2fms p95=%.2fms backend=%s' % (
+                len(self._frame_times), np.percentile(self._frame_times, 50),
+                np.percentile(self._frame_times, 95), 'OpenGL' if self._gpu else 'CPU'))
+        if self._gpu:
+            self._gpu.release()
+            self._gpu = None
+
+    def _refresh_mounts(self):
+        if not self._component_choices:
+            return
+        config = self._scene['configuration']
+        self._mounted = dict(turret=(config['turretGroup'], config['turret']), gun=config['gun'])
+        for role, combo in self._mount_boxes.items():
+            rows = self._component_choices[role+'s']
+            combo.configure(values=[row['label'] if row['label'] == row['name'] else
+                                    row['label'] + ' (' + row['name'] + ')' for row in rows],
+                            state='readonly' if len(rows)>1 else 'disabled')
+            combo.current(next(i for i, row in enumerate(rows)
+                               if (row['key'] if role == 'turret' else row['name']) == self._mounted[role]))
+
+    def _change_mount(self, role):
+        row = self._component_choices[role+'s'][self._mount_boxes[role].current()]
+        self._mounted = resolve_mount(self._component_choices, self._mounted, role,
+                                     row['key'] if role == 'turret' else row['name'])
+        self._hidden.clear()
+        self._load_scene(self._record_by_key.get(self._focus_key))
 
     def _widget(self, factory, parent, text=None, **options):
         if text is not None:
@@ -1102,6 +1240,11 @@ class ArmorViewerPanel(object):
         return self.frame.grid(*args, **kwargs)
 
     def load_vehicle(self, vehicle_member, records, focus_record=None):
+        self._mounted = {} if self._scene_loader is load_vehicle_armor_scene else None
+        self._component_choices = {}
+        for combo in self._mount_boxes.values():
+            combo.set('')
+            combo.configure(values=(), state='disabled')
         self._internal_scene = None
         self._hidden.clear()
         self._group_visible.clear()
@@ -1128,9 +1271,12 @@ class ArmorViewerPanel(object):
         self._internal_scene = None
         self._selected_module = None
         try:
+            options = dict(focus_record=focus_record)
+            if self._mounted is not None:
+                options['mounted'] = self._mounted
             self._scene = self._scene_loader(
                 self._game_root, self._vehicle_member, self._records,
-                focus_record=focus_record)
+                **options)
         except (ArmorViewerError, vehicle_overlays.VehicleOverlayError,
                 IOError, OSError, ValueError, zipfile.BadZipFile) as error:
             self._scene = None
@@ -1141,6 +1287,8 @@ class ArmorViewerPanel(object):
             return False
         self._scene_error = ""
         self._scene_error_source = ""
+        self._component_choices = self._scene.get('componentChoices', {})
+        self._refresh_mounts()
         if getattr(self, '_view_mode', 'armor') == 'internal':
             self.set_view_mode('internal')
             return True
@@ -1200,7 +1348,7 @@ class ArmorViewerPanel(object):
         identity = _focus_identity(record)
         new_key = ((record.get("member"), record.get("fieldPath"))
                    if identity is not None else None)
-        if (reload_scene and new_key is not None and self._scene is not None and
+        if (reload_scene and getattr(self, '_mounted', None) is None and new_key is not None and self._scene is not None and
                 not self._scene_contains_key(new_key)):
             self._focus_key = new_key
             return self._load_scene(record)
@@ -1487,7 +1635,11 @@ class ArmorViewerPanel(object):
 
     def _pick(self, x, y):
         surface = None
-        if self._pick_buffer is not None:
+        if self._gpu is not None:
+            cw, ch = self._pick_size
+            w, h = self._gpu._size[:2]
+            surface = self._item_surface.get(self._gpu.pick(int(x*w/cw), int(y*h/ch)))
+        elif self._pick_buffer is not None:
             h, w = self._pick_buffer.shape
             cw, ch = self._pick_size
             px, py = int(x*w/cw), int(y*h/ch)
@@ -1706,10 +1858,133 @@ class ArmorViewerPanel(object):
                      command=lambda value: self._redraw()).grid(sticky='ew', columnspan=2)
         def close():
             win.destroy(); self._settings_window = None
+        tk.Button(host, text=self._t('Restore default display'), command=self.restore_display).grid(
+            sticky='ew', columnspan=2, pady=(6, 0))
         tk.Button(host, text=self._t('Close'), command=close).grid(sticky='ew', columnspan=2, pady=(6, 0))
         win.protocol('WM_DELETE_WINDOW', close)
 
+    def restore_display(self):
+        self._hidden.clear()
+        self._group_visible.clear()
+        self._shell_alpha.set(16)
+        self._module_alpha.set(85)
+        self._refresh_groups()
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
+            self._open_settings()
+        self._redraw()
+
+    def _try_gpu(self):
+        if not self._gpu_attempted:
+            self._gpu_attempted = True
+            try:
+                if self._gpu_factory is None:
+                    try:
+                        from .vehicle_gpu_renderer import GpuRenderer
+                    except ImportError:
+                        from vehicle_gpu_renderer import GpuRenderer
+                    self._gpu = GpuRenderer()
+                else:
+                    self._gpu = self._gpu_factory()
+                if self._gpu:
+                    self._diagnostic('Viewer OpenGL device: %s' % self._gpu.info)
+            except Exception as error:
+                self._diagnostic('Viewer OpenGL unavailable; CPU fallback: %s' % error)
+        return self._gpu is not None
+
+    def _redraw_gpu(self):
+        import numpy as np
+        from PIL import ImageTk
+        start = time.perf_counter()
+        width, height = max(10, self.canvas.winfo_width()), max(10, self.canvas.winfo_height())
+        internal = self._view_mode == 'internal'
+        surfaces = self._surfaces()
+        # Geometry and material uploads are invalidated by scene changes, not
+        # camera, visibility, opacity or selection. Keep the source objects alive.
+        key = (id(self._scene), id(self._internal_scene), internal,
+               tuple((id(s), s.get('thickness'), s.get('color')) for s in surfaces))
+        if key != self._gpu_key:
+            objects, self._item_surface = {}, {}
+            scales = _armor_scales(self._scene)
+            for surface in surfaces:
+                identity = self._surface_identity(surface)
+                obj = objects.setdefault(identity, dict(surface=surface, triangles=[]))
+                pick_id = len(self._item_surface)+1
+                self._item_surface[pick_id] = surface
+                color = surface.get('color') or dict(tracks='#a35edb', gun='#3689f5',
+                    observation='#22dced').get(surface.get('armorKind')) or _armor_color(surface, scales)
+                rgb = tuple(int(color[i:i+2],16) for i in (1,3,5))
+                obj['triangles'].extend((triangle, rgb, pick_id) for triangle in surface['triangles'])
+            if internal:
+                for part in self._scene['parts']:
+                    for surface in part['surfaces']:
+                        if self._surface_group(surface) == 'External modules': continue
+                        identity = ('context', surface.get('role'), surface.get('component'))
+                        obj = objects.setdefault(identity, dict(surface=None, triangles=[]))
+                        obj['triangles'].extend((triangle,(184,200,216),0) for triangle in surface['triangles'])
+            self._gpu_objects = list(objects.values())
+            self._gpu.load(self._gpu_objects)
+            self._gpu_key = key
+            self._gpu_points = np.asarray([p for part in self._scene['parts']
+                for s in part['surfaces'] for triangle in s['triangles'] for p in triangle], dtype=np.float32)
+        cy, sy, cp, sp = math.cos(self._yaw), math.sin(self._yaw), math.cos(self._pitch), math.sin(self._pitch)
+        rotation = np.asarray(((cy,0,sy),(sp*sy,cp,-sp*cy),(-cp*sy,sp,cp*cy)))
+        minimum, maximum = np.asarray(self._scene['bounds'])
+        center = (minimum+maximum)*.5
+        points = (self._gpu_points-center) @ rotation.T
+        low, high = points.min(axis=0), points.max(axis=0)
+        scale = min(width*.90/max(.001, high[0]-low[0]), height*.86/max(.001, high[1]-low[1]))*self._zoom
+        # OpenGL's nearest depth is -1; Tk's vertical direction is inverted
+        # only when the final framebuffer is copied, not in world space.
+        matrix = np.eye(4)
+        matrix[:3,:3] = rotation
+        matrix[:3,3] = -rotation @ center
+        matrix[0,3] -= (low[0]+high[0])*.5
+        matrix[1,3] -= (low[1]+high[1])*.5
+        matrix[0,:] *= 2*scale/width
+        matrix[1,:] *= 2*scale/height
+        matrix[2,:] *= -1/max(1.,float(np.linalg.norm(maximum-minimum))*4)
+        selected_id = 0
+        if not internal:
+            selected_id = next((i for i,s in self._item_surface.items()
+                                if s.get('fieldKey') is not None and s.get('fieldKey') == self._focus_key),0)
+        styles = []
+        for obj in self._gpu_objects:
+            surface = obj['surface']
+            if surface is None:
+                styles.append(dict(alpha=self._shell_alpha.get()/100))
+                continue
+            focused = internal and self._selected_module is not None and (
+                self._surface_identity(surface) == self._surface_identity(self._selected_module))
+            alpha = self._module_alpha.get()/100 if internal else 1.
+            if internal and self._surface_group(surface) == 'External modules': alpha *= .65
+            if focused: alpha = 1.
+            elif internal and self._selected_module is not None: alpha *= .4
+            styles.append(dict(alpha=alpha if self._visible(surface) else 0., selected=focused,
+                               tint=-.22 if internal and self._selected_module is not None else 0.))
+        image = self._gpu.render(width,height,matrix,rotation,styles,selected_id)
+        if self._shell_image is not None and self._shell_image.width() == width and self._shell_image.height() == height and self.canvas.find_withtag('depth_scene'):
+            self._shell_image.paste(image)
+        else:
+            self.canvas.delete('all')
+            self._shell_image = ImageTk.PhotoImage(image, master=self.canvas)
+            self.canvas.create_image(0,0,image=self._shell_image,anchor='nw',tags=('depth_scene',))
+        self._pick_buffer = None
+        self._pick_size = (width,height)
+        self._frame_times.append((time.perf_counter()-start)*1000)
+        self._frame_times = self._frame_times[-240:]
+
     def _redraw(self, unused_event=None):
+        if self._scene is not None and self._try_gpu():
+            try:
+                self._redraw_gpu()
+                return
+            except Exception as error:
+                self._diagnostic('Viewer OpenGL rendering failed; CPU fallback: %s' % error)
+                self._gpu.release()
+                self._gpu = None
+                self._gpu_key = None
         from PIL import ImageTk
         try:
             from .vehicle_scene_renderer import rasterize
