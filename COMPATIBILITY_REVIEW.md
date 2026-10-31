@@ -12053,3 +12053,43 @@ cover bilingual choice identities and actual modal input acceptance. Native
 armor/interior, exact lineup, tactical behavior/maps, effective preview and map
 check windows were clicked without a runtime exception. No gameplay rule was
 changed to address presentation findings.
+
+Final layout acceptance uses runtime/editor commit
+`4ff9f19dace55bb227324d6e2f19203c2b308006`, package build
+`colorfulmeans-41209322093-1` (PR116-fixes-4ff9f19.zip).
+Cloud Tests 41209322083 and Battle review package 41209322093 both completed
+successfully. The isolated 43-file local run contained 1205 tests and 14 skips;
+two subsequent real-Tk regressions bring current coverage to 1207 tests.
+Affected localization/geometry/widget files were rerun successfully after the
+follow-up changes, and the final Windows editor job passed the complete suite.
+The final executable's --verify-bot-editor returned exit 0 / ok true, including
+maintenance English/Chinese geometry, two-by-four save actions, Default guards,
+route controls, language switching and isolated profile transactions.
+
+Independent final archive inspection passed CRC and verified 232 server sources,
+225 CPython 2.7 client modules, exact native/UI fingerprints and code equality
+for all 42 frozen launcher modules. The final text-entry dialog aligns its input
+and equal Chinese Confirm/Cancel actions to the same outer insets.
+
+Native Windows inspection clicked all eight main play/tool tabs and all six
+custom-save pages. On the final package, appearance My styles/Preset styles,
+badge and personal-mission editors were opened and checked again; their Save
+captions are now verbs rather than the save-slot noun. Reserve input/action
+edges include the scrollbar width; garage Add slots has its own full-width row;
+account Save/Edit badges have separate rows. Clean default choices were Type64
+in the garage and China Renault NC-31 in the member editor, rather than IS.
+Armor/interior rendering, exact lineup, both tactical tabs, effective-values
+preview and map-check windows were additionally clicked on the preceding layout
+package; the final frozen-module comparison and executable smoke cover the
+subsequent narrow localization/margin changes. This is launcher UI acceptance,
+not a new native battle/navigation acceptance claim.
+
+External input interrupted an intermediate reset inspection, so that observation
+is not treated as a confirmed reset defect. After all launcher/client processes
+were closed, project-owned Local/Roaming roots were resolved and checked for
+redirects. The production factory-reset function with the final bundled payload
+completed, removed launcher settings and recreated exactly one default save;
+the installed payload identity is colorfulmeans-41209322093-1. Test profiles,
+history and reports were removed without backup as authorized. Only the client
+location and Chinese UI preference are restored for convenient handoff; no
+test vehicle/profile/lineup selection is retained.
