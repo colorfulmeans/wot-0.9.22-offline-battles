@@ -12252,3 +12252,48 @@ retained as a conflicting baseline. Final corrected package acceptance pending.
 Corrected local launcher suite: 44 files / 1219 tests passed, with 14
 documented environment skips. The earlier e4828f5 artifact is superseded for
 final visual acceptance by this same-vehicle scale correction.
+
+
+Final corrected viewer acceptance (2026-11-01): runtime/editor commit
+`89a5466530af70cc769293d8a85e5057bee8f13c`, package PR116-fixes-89a5466.zip,
+build colorfulmeans-41224580533-1. Tests 41224580536 and review-package
+41224580533 both completed successfully. The local 44-file suite passed 1219
+tests; the initial invocation omitted WOT_0922_CLIENT and skipped two resource
+cases, which were subsequently rerun successfully with the exact client. The
+combined result has 14 remaining documented environment skips.
+
+Independent final package inspection passed ZIP CRC, x64 launcher/x86 client,
+232 bundled server sources, 225 Python 2.7 modules and both UI movies. All 42
+frozen launcher modules equal the reviewed source. The final executable's
+--verify-bot-editor returned exit 0 / ok true. These are package/editor checks,
+not a new battle claim.
+
+The actual final launcher displayed the corrected NC-31 model: orange 16-mm
+hull, red 22-mm turret and blue 5-mm tracks, matching the observed site's
+two-scale convention. The primary legend displayed 0/8/16/22 and the secondary
+legend 0/5/8/10/16/22, plus neutral Unmapped. Clicking a track selected its
+5-mm original field and explicitly labeled it Tracks (external module).
+
+Native final-package T29 acceptance displayed all six crew seats, with separate
+Loader 1 and Loader 2 swatches and independently clickable/highlighted source
+regions. Orbit, wheel zoom and Reset view worked with the selection retained.
+Changing country/vehicle cleared that selection. Ltraktor showed combined
+commander duties in one seat. Skorpian showed four seats including Commander
+(also Loader), its Chinese observation-device warning and gray missing marker.
+Clicking the combined-duty region displayed its complete Chinese name; clicking
+the turret mechanism displayed the corrected Turret rotation mechanism name.
+Tiger 131 showed the Chinese unavailable-data warning, only the transparent
+context shell, six gray module entries and five gray actual-seat entries. No
+Skorpian regions or selected names remained. Grouped labels fit the actual
+ordinary editor window; narrow bilingual reflow is separately covered by real
+Tk tests, not inferred from that desktop inspection.
+
+No vehicle value was saved during this round. The existing profile was used
+only for viewing; no new profile or game save was created or removed. Both
+intermediate source windows and the superseded package were closed normally.
+The e4828f5 fixed-bin artifact remains historical and must not be recommended
+as the final corrected viewer package. No donated interior layout was installed.
+
+After acceptance the launcher choice was restored to Original vehicle values;
+the final launcher remains open for the user. Its current session log contains
+no traceback or Tk callback exception.
