@@ -12365,3 +12365,46 @@ do not scroll it when input belongs to an opacity scale. Real-Tk regression
 shrinks the dialog, checks wheel scrolling and scale isolation. The 5b7fd81
 artifact is superseded for this final usability correction; its unchanged
 geometry/group/picking evidence remains explicitly intermediate.
+
+
+Final renderer runtime/editor commit: `89ddf8bed1f9a4695ccfe4a6a0ff90de3cdfdaef`.
+Final package `PR116-fixes-89ddf8b.zip`, build colorfulmeans-41231470481-1,
+67,851,880 bytes, SHA-256
+`85e606981a082b84eb29f1bff1159e86085dc83ae6387a569eb7cbd600791b7f`.
+Independent final inspection passed all ZIP CRCs, x64 launcher/x86 client,
+232 bundled server sources, 225 Python 2.7 client modules and both UI movies.
+All 43 frozen launcher modules equal reviewed source, including the new
+pixel renderer. Bundled NumPy version is exactly 2.3.5. The final executable's
+--verify-bot-editor completed with exit 0 / ok true; this is not battle evidence.
+
+On the preceding 5b7fd81 package, native desktop acceptance verified NC-31
+track picking into the original 5-mm field; independent external/internal/
+crew group hiding; complete combined-duty captions; and T29 Loader 1 hidden
+while Loader 2 remained. Actual PC Hull/Turret observation entries had distinct
+names. The exterior opacity slider changed 16 to 40; orbit, wheel zoom and
+Reset view worked. Skorpian warned in Chinese about its absent observation
+geometry and retained four real crew seats. Tiger 131 retained real external
+modules and pale actual context, disabled unavailable interior/crew groups,
+and showed five actual seats marked no data; no Skorpian surfaces leaked.
+This package revealed the settings-list wheel omission, repaired before final
+handoff, rather than counting the missing behavior as a pass.
+
+Actual final 89ddf8b package acceptance repeated ordinary-window armor and
+X-ray rendering, including NC-31/T1/T29 changes, current numeric legends,
+all three mode-specific group labels and T29's six crew seats. Settings opened
+centered and showed the two PC observation owners. Scrolling the list with
+the physical wheel revealed both loaders; wheel input over the opacity slider
+did not move the list. Loader 2 was independently hidden then restored while
+Loader 1 stayed visible. The dialog closed normally; all groups and crew
+were restored, opacity stayed at defaults 16/85 and the final T29 X-ray editor
+remains open for the user. No vehicle property was saved; existing profile 1
+was reused and no game save/profile was created, removed or reset. Current
+final-session launcher log has no traceback/Tk callback exception. Broader
+unchanged geometry/group checks above are explicitly from the intermediate
+package; byte equality independently covers the narrow final wheel change.
+
+Final cloud Tests 41231470611 and Battle review package 41231470481 both
+completed successfully for 89ddf8b, including actual Windows editor tests and
+the updated renderer/settings baseline. The earlier 1717c4d/5b7fd81 builds
+remain intermediate evidence only; PR116-fixes-89ddf8b.zip is the handoff.
+This round did not start another native game battle or install donated data.
