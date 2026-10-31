@@ -989,6 +989,7 @@ def _selected_vehicle(config, restore_saved=True):
         offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
+            result.update(port_config.save_slot_initial_services())
             initial_berths = port_config.save_slot_initial_berths()
             if initial_berths is not None:
                 result['accountBerths'] = initial_berths

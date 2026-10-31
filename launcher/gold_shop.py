@@ -10,11 +10,11 @@ import json
 import os
 
 try:
-    from . import save_ledger, save_slots, vehicle_overlays
+    from . import save_ledger, save_slots, vehicle_overlays, nation_choices
 except ImportError:
     import save_ledger
     import save_slots
-    import vehicle_overlays
+    import vehicle_overlays, nation_choices
 
 
 class GoldShopError(Exception):
@@ -100,7 +100,7 @@ def list_offers(slot_id, game_root, environment=None, root=None,
         offer["pending"] = row["name"] in pending
         offer["available"] = not (offer["owned"] or offer["pending"])
         offers.append(offer)
-    return offers
+    return sorted(offers, key=nation_choices.vehicle_key)
 
 
 def add_vehicle(slot_id, name, game_root, environment=None, root=None,

@@ -23,6 +23,7 @@ if __package__ in (None, ""):
     import i18n
     import gold_shop
     import save_ledger
+    import save_services, reserves_ui
     import save_personal_missions
     import personal_missions_ui
     import customizations_ui
@@ -34,7 +35,7 @@ if __package__ in (None, ""):
     import vehicle_overlays
     import window_diagnostics
 else:
-    from . import customizations_ui, crew_ui, nation_choices
+    from . import customizations_ui, crew_ui, nation_choices, save_services, reserves_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -67,6 +68,19 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Premium account days': '高级账号天数',
+    'Premium days must be a non-negative whole number.': '高级账号天数必须为非负整数。',
+    'Premium days are outside the supported range.': '高级账号天数超出客户端支持范围。',
+    'Personal reserves': '个人储备', 'Bonus': '加成', 'Duration (hours)': '时长（小时）',
+    'Inventory': '库存', 'Quantity': '数量', 'Set selected quantities': '设置选中储备数量',
+    'Personal reserves saved.': '个人储备已保存。', 'Add garage slots': '添加车位',
+    'Garage slots: %d': '车位总数：%d', 'Select a personal reserve.': '请先选择个人储备。',
+    'Quantity must be positive.': '数量必须大于零。',
+    'Quantity must be a non-negative whole number.': '数量必须为非负整数。',
+    'Select the save again before editing.': '存档已切换，请重新打开个人储备后编辑。',
+    'Unknown personal reserve.': '无法识别的个人储备。',
+    'Combat XP': '战斗经验', 'Crew XP': '乘员经验', 'Free XP': '全局经验',
+
     'Tier': '级别',
     'No vehicles match these filters.': '没有符合筛选条件的车辆。',
     'Appearance inventory': '外观库存',
@@ -939,11 +953,13 @@ class LauncherWindow(object):
         self.save_tabs = self._ttk.Notebook(self.save_dialog)
         self.save_tabs.pack(fill='both', expand=True, padx=12, pady=12)
         self.account_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.reserves_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        self.reserves_editor = reserves_ui.ReservesPanel(self, self.reserves_panel)
         self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.crew_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
-        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
+        for panel in (self.account_panel, self.reserves_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
             self.save_tabs.add(panel)
         self.crew_editor = crew_ui.CrewPanel(self, self.crew_panel)
         self.save_tabs.bind('<<NotebookTabChanged>>', self._save_tab_changed)
@@ -1009,18 +1025,22 @@ class LauncherWindow(object):
         # What this save multiplies its battle earnings by.  It belongs to the
         # launcher's own save record rather than to the client's state, so it
         # can be set on a save that has never been started.
+        self.premium_label = tk.Label(self.account_panel, text="")
+        self.premium_label.grid(row=len(save_ledger.CURRENCIES), column=0, sticky="w", pady=(0, 4))
+        self.premium_entry = tk.Entry(self.account_panel, width=16)
+        self.premium_entry.grid(row=len(save_ledger.CURRENCIES), column=1, sticky="w", padx=(6, 0), pady=(0, 4))
         self.earnings_label = tk.Label(self.account_panel, text="")
         self.earnings_label.grid(
-            row=len(save_ledger.CURRENCIES), column=0, sticky="w", pady=(0, 4))
+            row=len(save_ledger.CURRENCIES) + 1, column=0, sticky="w", pady=(0, 4))
         earnings_row = tk.Frame(self.account_panel)
         earnings_row.grid(
-            row=len(save_ledger.CURRENCIES), column=1, sticky="w",
+            row=len(save_ledger.CURRENCIES) + 1, column=1, sticky="w",
             padx=(6, 0), pady=(0, 4))
         self.earnings_entry = tk.Entry(earnings_row, width=8)
         self.earnings_entry.pack(side="left")
         account_actions = tk.Frame(self.account_panel)
         account_actions.grid(
-            row=len(save_ledger.CURRENCIES) + 1, column=0, columnspan=2,
+            row=len(save_ledger.CURRENCIES) + 2, column=0, columnspan=2,
             sticky="we", pady=(6, 0))
         self.save_account_button = tk.Button(
             account_actions, text="", command=self._apply_account)
@@ -1031,7 +1051,7 @@ class LauncherWindow(object):
             self.account_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.account_help_label.grid(
-            row=len(save_ledger.CURRENCIES) + 2, column=0, columnspan=2,
+            row=len(save_ledger.CURRENCIES) + 3, column=0, columnspan=2,
             sticky="we", pady=(8, 0))
         self.account_panel.grid_columnconfigure(1, weight=1)
 
@@ -1074,11 +1094,18 @@ class LauncherWindow(object):
         self.buy_gold_vehicle_button = tk.Button(
             shop_actions, text="", command=self._buy_gold_vehicle)
         self.buy_gold_vehicle_button.pack(side="left", fill="x", expand=True)
+        slots_row = tk.Frame(self.shop_panel)
+        slots_row.grid(row=5, column=0, columnspan=2, sticky="we", pady=(6, 0))
+        self.slots_quantity = tk.StringVar(value="1")
+        self._ttk.Spinbox(slots_row, from_=1, to=save_ledger.MAX_BALANCE,
+                         textvariable=self.slots_quantity, width=12).pack(side="left")
+        self.add_slots_button = tk.Button(slots_row, command=self._add_garage_slots)
+        self.add_slots_button.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.shop_help_label = tk.Label(
             self.shop_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.shop_help_label.grid(
-            row=5, column=0, columnspan=2, sticky="we", pady=(8, 0))
+            row=6, column=0, columnspan=2, sticky="we", pady=(8, 0))
         self.shop_panel.grid_columnconfigure(1, weight=1)
 
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(
@@ -1269,6 +1296,8 @@ class LauncherWindow(object):
         for name, label in self.balance_labels.items():
             label.config(text=self._t(_BALANCE_LABELS[name]))
         self.save_account_button.config(text=self._t("Save changes"))
+        self.premium_label.config(text=self._t("Premium account days"))
+        self.add_slots_button.config(text=self._t("Add garage slots"))
         self.earnings_label.config(text=self._t("Earnings multiplier"))
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
@@ -1277,9 +1306,10 @@ class LauncherWindow(object):
         self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
         self.edit_customizations_button.config(text=self._t('Edit appearance inventory...'))
-        for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
+        for panel, label in ((self.account_panel, 'Account'), (self.reserves_panel, 'Personal reserves'), (self.shop_panel, 'Garage vehicles'),
                              (self.customizations_panel, 'Coatings'), (self.crew_panel, 'Crew members'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))
+        self.reserves_editor.translate()
         self.crew_editor.translate()
         self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
@@ -1697,6 +1727,8 @@ class LauncherWindow(object):
         return self._open_personal_editor(customizations_ui.CustomizationsDialog)
 
     def _save_tab_changed(self, unused=None):
+        if self.save_tabs.select() == str(self.reserves_panel):
+            self.reserves_editor.refresh()
         if self.save_tabs.select() == str(self.crew_panel):
             self.crew_editor.refresh()
 
@@ -1717,10 +1749,13 @@ class LauncherWindow(object):
         try:
             balances = save_ledger.read_balances(
                 self._save_slot_id, game_root or None)
+            premium = save_ledger.premium_days(self._save_slot_id, game_root or None)
         except save_ledger.SaveLedgerError as error:
             if hasattr(self, "log_view"):
                 self._log("The balances could not be read: %s" % error)
-            balances = None
+            balances, premium = None, 0
+        self.premium_entry.delete(0, "end")
+        self.premium_entry.insert(0, str(premium))
         editable = balances is not None
         for name, entry in self.balance_entries.items():
             entry.config(state="normal")
@@ -1775,6 +1810,11 @@ class LauncherWindow(object):
                          self._earnings_text(save_slots.MAX_EARNINGS_PERCENT)))
             self._refresh_earnings()
             return False
+        try:
+            premium = int(self.premium_entry.get().strip())
+        except ValueError:
+            self._log(self._t("Premium days must be a non-negative whole number."))
+            return False
         wanted = {}
         for name, entry in self.balance_entries.items():
             raw = entry.get().strip()
@@ -1790,7 +1830,7 @@ class LauncherWindow(object):
         game_root = self.game_root.get().strip()
         try:
             balances = save_ledger.write_balances(
-                self._save_slot_id, wanted, game_root or None)
+                self._save_slot_id, wanted, game_root or None, premium_days=premium)
         except save_ledger.SaveLedgerError as error:
             self._log("The balances could not be saved: %s" % error)
             self._refresh_balances()
@@ -1905,6 +1945,18 @@ class LauncherWindow(object):
         available = any(row["name"] == selected and row["available"]
                         for row in self._gold_offers)
         self.buy_gold_vehicle_button.config(state="normal" if available else "disabled")
+
+    def _add_garage_slots(self):
+        try:
+            if self._busy or self._maintenance_busy:
+                return False
+            total = save_services.add_slots(self._save_slot_id, int(self.slots_quantity.get()),
+                                             self.game_root.get().strip() or None)
+            self.save_dialog_feedback.config(text=self._t("Garage slots: %d") % total)
+            return True
+        except (ValueError, OSError, save_ledger.SaveLedgerError, save_slots.SaveSlotError) as error:
+            self.save_dialog_feedback.config(text=self._t(str(error)))
+            return False
 
     def _buy_gold_vehicle(self):
         if self._busy or self._maintenance_busy:

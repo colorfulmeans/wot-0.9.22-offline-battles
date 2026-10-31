@@ -58,7 +58,20 @@ def main(client):
         result = owner._InvoiceReceivedFormatter__dossierResult
         assert result[0][0] == expected, result
         assert '#badge:badge_10' in result[0][1]['ctx']['badges'], result
-    print('Exact #1513 badge grant/withdrawal reader and admin enum passed')
+
+    system = compiled('client/gui/SystemMessages')
+    assert 'Remove' in system.co_consts
+    compose = next(c for c in codes(compiled('client/messenger/formatters/service_channel'))
+                   if c.co_name == '_composeOperations')
+    assert not (compose.co_flags & 32), 'Removal body cannot be an asynchronous generator'
+    assert 'goodies' in compose.co_consts and 'premium' in compose.co_consts
+    assert '__getFinOperationString' in ' '.join(compose.co_names)
+    goodies_reader = next(c for c in codes(compiled('client/messenger/formatters/service_channel'))
+                          if c.co_name == '_getGoodiesString')
+    assert 'count' in goodies_reader.co_consts
+    assert 'boostersInvoiceReceived' in goodies_reader.co_consts
+    assert 'getBooster' in goodies_reader.co_names
+    print('Exact #1513 badge, Remove type, synchronous invoice and reserve-count contracts passed')
 
 
 if __name__ == '__main__':

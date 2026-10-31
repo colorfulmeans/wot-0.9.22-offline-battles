@@ -878,10 +878,64 @@ def _install_ordinary_mission_presentation():
     ordinary_missions_native.install_presentation(_patch)
 
 
+def _install_unavailable_entries():
+    """Keep unavailable stock entries visible, disabled and inert."""
+    import BigWorld
+    from gui.Scaleform.daapi.view.lobby.header.LobbyHeader import LobbyHeader
+    from gui.Scaleform.daapi.view.lobby.LobbyMenu import LobbyMenu
+    from gui.Scaleform.daapi.view.common.settings.new_settings_counter import invalidateSettings
+    original_items = LobbyHeader._getHangarMenuItemDataProvider
+    original_populate = LobbyHeader._populate
+    original_disable = LobbyHeader.as_doDisableHeaderButtonS
+    original_click = LobbyHeader.menuItemClick
+    original_menu_populate = LobbyMenu._populate
+
+    def items(view, *args, **kwargs):
+        rows = original_items(view, *args, **kwargs)
+        for row in rows:
+            if row.get('value') in ('browser', 'academy'):
+                row['enabled'] = False
+        return rows
+
+    def disable(view, identifier, enabled):
+        return original_disable(view, identifier, False if identifier == 'premShop' else enabled)
+
+    def populate(view):
+        # Offline preferences are pinned after service installation and before
+        # Account creation. Never touch the login/online settings owner here.
+        invalidateSettings('GameSettings', None, 'gameplay_epicStandard')
+        result = original_populate(view)
+        view.as_doDisableHeaderButtonS('premShop', False)
+        print('[Offline LAN 0.9.22] UI POLICY locked premium shop, browser and academy')
+        return result
+
+    def click(view, alias):
+        if alias not in ('browser', 'academy'):
+            return original_click(view, alias)
+
+    def menu_populate(view):
+        result = original_menu_populate(view)
+        def lock():
+            if view._isDAAPIInited():
+                view.flashObject.logoffBtn.enabled = False
+                print('[Offline LAN 0.9.22] UI POLICY locked logoff button')
+        BigWorld.callback(0, lock)
+        return result
+
+    _patch(LobbyHeader, '_getHangarMenuItemDataProvider', items)
+    _patch(LobbyHeader, 'as_doDisableHeaderButtonS', disable)
+    _patch(LobbyHeader, '_populate', populate)
+    _patch(LobbyHeader, 'menuItemClick', click)
+    _patch(LobbyHeader, 'onPremShopClick', lambda view: None)
+    _patch(LobbyMenu, '_populate', menu_populate)
+    _patch(LobbyMenu, 'logoffClick', lambda view: None)
+
+
 def install():
     if _patches:
         return
     try:
+        _install_unavailable_entries()
         _install_item_comparisons()
         _install_directive_fitting()
         _install_store_filters()

@@ -12,15 +12,25 @@ _sent = set()
 
 
 def publish(kind, data, identifier=None, timestamp=None):
-    from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
-    from messenger import MessengerEntry
     stamp = int(time.time() if timestamp is None else timestamp)
-    message_type = getattr(SYS_MESSAGE_TYPE, kind)
     identifier = int(identifier if identifier is not None else
                      (uuid.uuid4().int & 0x7fffffffffffffff))
     identity = (kind, identifier)
     if identity in _sent:
         return identifier
+    if kind == 'offlineRemoved':
+        from gui import SystemMessages
+        from messenger.formatters.service_channel import InvoiceReceivedFormatter
+        operations = InvoiceReceivedFormatter()._composeOperations(copy.deepcopy(data))
+        if not operations:
+            raise ValueError('Native removal formatter produced no operations')
+        SystemMessages.pushMessage('<br/>'.join(operations), type=SystemMessages.SM_TYPE.Remove)
+        _sent.add(identity)
+        print('[Offline LAN 0.9.22] NATIVE NOTICE admitted type=Remove id=%s' % identifier)
+        return identifier
+    from chat_shared import SYS_MESSAGE_IMPORTANCE, SYS_MESSAGE_TYPE
+    from messenger import MessengerEntry
+    message_type = getattr(SYS_MESSAGE_TYPE, kind)
     action = {'sentTime': stamp, 'data': {
         'messageID': identifier, 'user_id': 0,
         'type': message_type.index(),
@@ -108,6 +118,8 @@ def reward_assets(rows, sign=1):
         elif kind == 'premium':
             seconds = int(row.get('seconds', int(row.get('count', 0)) * 86400))
             _add(assets, 'premium', sign * seconds / 86400.0)
+        elif kind == 'reserve':
+            assets.setdefault('goodies', {})[int(row['id'])] = {'count': count}
         elif kind == 'item':
             items = assets.setdefault('items', {})
             identifier = int(row['id'])
@@ -243,7 +255,7 @@ def settlement_messages(settlement, timestamp=None):
                 if row.get(name) and (name == 'main_quest' or int(row.get('after', 0)) == 2))
             result.append(('potapovQuestBonus', quest_payload(assets)))
         elif assets:
-            result.append(('invoiceReceived', invoice(assets, timestamp)))
+            result.append(('offlineRemoved', invoice(assets, timestamp)))
     for row in list(settlement.get('operations', ())) + list(settlement.get('account_changes', ())):
         rewards = row.get('rewards', ())
         for reward in rewards:
@@ -257,5 +269,6 @@ def settlement_messages(settlement, timestamp=None):
                                 if reward.get('kind') != 'earnings_percent'],
             -1 if row.get('phase') == 'revoked' else 1)
         if assets:
-            result.append(('invoiceReceived', invoice(assets, timestamp)))
+            result.append(('offlineRemoved' if row.get('phase') == 'revoked' else
+                           'invoiceReceived', invoice(assets, timestamp)))
     return result

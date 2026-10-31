@@ -681,6 +681,25 @@ def save_slot_initial_customizations(slot=None, user_data_dir=None):
         return {}
 
 
+
+def save_slot_initial_services(slot=None, user_data_dir=None):
+    """Launcher starting services; the persisted garage ledger wins afterward."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            value = json.load(stream)
+        result = {'premiumExpiryTime': max(0, int(value.get('initial_premium_expiry', 0)))}
+        slots = value.get('initial_slots')
+        if slots is not None and not isinstance(slots, bool) and 0 <= int(slots) <= 2147483647:
+            result['accountSlots'] = int(slots)
+        from gui.mods.offline_lan_0922 import offline_services
+        services = value.get('initial_services')
+        if isinstance(services, dict):
+            result['personalReserves'] = offline_services.reserve_state(services)
+        return result
+    except (IOError, OSError, TypeError, ValueError):
+        return {}
+
 def save_slot_initial_personal_progress(slot=None, user_data_dir=None):
     """Starting campaign state; an existing garage ledger takes priority."""
     path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)

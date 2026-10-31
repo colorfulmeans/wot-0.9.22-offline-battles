@@ -32,7 +32,7 @@ class CrewCatalogueTests(unittest.TestCase):
              patch.object(store.vehicle_overlays.packed_xml,'read_packed_xml',side_effect=native):
             archive.return_value.__enter__.return_value.read.side_effect=lambda name:name
             rows=store.catalogue('game')
-        self.assertEqual(['germany:G85_Auf_Panther','ussr:R11_MS-1'],[r['name'] for r in rows])
+        self.assertEqual(['ussr:R11_MS-1','germany:G85_Auf_Panther'],[r['name'] for r in rows])
 
 
 class CrewStoreTests(unittest.TestCase):

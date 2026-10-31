@@ -184,6 +184,7 @@ class _FakeTk(object):
 
 class _FakeTtk(object):
     Combobox = _Widget
+    Spinbox = _Widget
     Notebook = _Notebook
 
 
@@ -274,6 +275,9 @@ class WindowTest(unittest.TestCase):
             wot_launcher.i18n, "detect_system_language", return_value="en")
         language_patch.start()
         self.addCleanup(language_patch.stop)
+        reserve_patch = mock.patch.object(wot_launcher.reserves_ui, 'ReservesPanel')
+        reserve_patch.start()
+        self.addCleanup(reserve_patch.stop)
         self.dialog = _FakeFileDialog()
         self.window = wot_launcher.LauncherWindow(_FakeTk, _FakeTtk, self.dialog)
 
@@ -1637,7 +1641,7 @@ class WindowTest(unittest.TestCase):
         values = self.window._refresh_gold_shop()
 
         self.assertEqual(
-            ("Lowe (germany:G51_Lowe)", "Type 59 (china:Ch01_Type59)"),
+            ("Type 59 (china:Ch01_Type59)", "Lowe (germany:G51_Lowe)"),
             values)
         self.assertEqual(
             "normal", self.window.buy_gold_vehicle_button.cget("state"))

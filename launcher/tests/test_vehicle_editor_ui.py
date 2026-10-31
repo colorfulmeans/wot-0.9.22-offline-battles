@@ -645,7 +645,7 @@ class VehicleEditorWindowTest(unittest.TestCase):
             self.parent, "C:/WoT", "Fast MS-1", _FakeTk, _FakeTtk,
             self.messagebox, service=service)
 
-        self.assertEqual(('Experimental tank (ussr:R12_Test)', 'MS-1 (ussr:R11_MS-1)'),
+        self.assertEqual(('MS-1 (ussr:R11_MS-1)', 'Experimental tank (ussr:R12_Test)'),
                          window.vehicle_box.cget("values"))
         window.vehicle.set("R12_Test")
 

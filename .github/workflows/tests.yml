@@ -394,13 +394,23 @@ jobs:
           python-version: "3.11"
       - name: Install pinned test dependencies
         run: python -m pip install Pillow==12.3.0
+      - name: Verify current save service edits and native unavailable-entry guards
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests;server;src/res/scripts/client;launcher;launcher/tests
+        run: >-
+          python tools/run_test_suite.py --jobs 1 --logs build/windows-service-contracts
+          --pattern test_native_notifications.py --pattern test_port_0922_locked_entries.py
+          --pattern test_port_0922_offline_services_ui.py
       - name: Run actual Tk editor tests on Windows
         run: python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/windows-editor-results
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: windows-editor-results
-          path: build/windows-editor-results/
+          path: |
+            build/windows-editor-results/
+            build/windows-service-contracts/
           if-no-files-found: error
 
   windows-server:

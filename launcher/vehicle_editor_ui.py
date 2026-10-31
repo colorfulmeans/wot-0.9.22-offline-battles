@@ -273,10 +273,10 @@ class VehicleEditorWindow(object):
                      row=0, column=0, columnspan=3, sticky="we",
                      pady=(0, 10))
 
-        self.nation = tk.StringVar(value=DEFAULT_NATION)
+        self.nation = tk.StringVar(value="")
         self.vehicle_class = tk.StringVar(value=self._t(ALL_FILTER))
         self.tier = tk.StringVar(value=self._t(ALL_FILTER))
-        self.vehicle = tk.StringVar(value=DEFAULT_VEHICLE)
+        self.vehicle = tk.StringVar(value="")
         self.category = tk.StringVar(value=self._category_label("Vehicle"))
         self.field = tk.StringVar(value="")
         self.member = tk.StringVar(value=DEFAULT_MEMBER)
@@ -291,6 +291,11 @@ class VehicleEditorWindow(object):
         self.overlay_path = tk.StringVar(value="-")
         self.status = tk.StringVar(value=self._t("Choose a vehicle field."))
 
+        self.restore_button = self._widget(tk.Button,
+            frame, text="Clear all edits in this profile...",
+            command=self.restore_defaults)
+        self.restore_button.grid(row=1, column=0, columnspan=3,
+                                 sticky="w", pady=(0, 8))
         self.exclude_edited_vehicles_from_bots = tk.BooleanVar(value=False)
         self.bot_exclusion_button = self._widget(tk.Checkbutton,
             frame, text="Exclude edited vehicles from automatic Bots "
@@ -298,7 +303,7 @@ class VehicleEditorWindow(object):
             variable=self.exclude_edited_vehicles_from_bots,
             command=self.save_profile_options)
         self.bot_exclusion_button.grid(
-            row=1, column=0, columnspan=3, sticky="w", pady=(0, 8))
+            row=2, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
         boxes = []
         entries = (("Nation", self.nation), ("Type", self.vehicle_class),
@@ -307,7 +312,7 @@ class VehicleEditorWindow(object):
         for index, (label, variable) in enumerate(entries):
             if index == 0:
                 selectors = tk.Frame(frame)
-                selectors.grid(row=2, column=0,
+                selectors.grid(row=3, column=0,
                     columnspan=3, sticky='we', pady=(0, 4))
             column = index if index < 4 else (0 if index == 4 else 1)
             selector_row = 0 if index < 4 else 2
@@ -324,7 +329,7 @@ class VehicleEditorWindow(object):
                 selectors.grid_columnconfigure(column, weight=(1, 1, 0, 3)[index])
         (self.nation_box, self.vehicle_class_box, self.tier_box,
          self.vehicle_box, self.category_box, self.field_box) = boxes
-        row = 3
+        row = 4
         self.nation_box.bind("<<ComboboxSelected>>", self.refresh_vehicles)
         self.vehicle_class_box.bind(
             "<<ComboboxSelected>>", self.refresh_vehicles)
@@ -364,12 +369,6 @@ class VehicleEditorWindow(object):
         self.apply_button.grid(row=row, column=2, sticky="e", pady=(8, 0))
         row += 1
 
-        self.restore_button = self._widget(tk.Button,
-            frame, text="Clear all edits in this profile...",
-            command=self.restore_defaults)
-        self.restore_button.grid(
-            row=row, column=1, columnspan=2, sticky="w", pady=(10, 0))
-        row += 1
 
         self._widget(tk.Label, frame, textvariable=self.status, anchor="w", justify="left",
                  wraplength=720).grid(
@@ -645,9 +644,7 @@ class VehicleEditorWindow(object):
                 clear_contract=True)
         self._vehicle_choices = sorted(
             choices,
-            key=lambda choice: (
-                choice["nation"], self._choice_label(choice).casefold(),
-                choice["vehicle"]))
+            key=nation_choices.vehicle_key)
         self._refresh_nation_options(self._selected_nation())
         self._refresh_filter_options()
         return self.refresh_vehicles()
@@ -690,7 +687,7 @@ class VehicleEditorWindow(object):
         self._nation_by_label = {nation_choices.caption(n, self._t): n for n in nations}
         self.nation_box.config(values=tuple(self._nation_by_label))
         if selected not in nations:
-            selected = DEFAULT_NATION if DEFAULT_NATION in nations else nations[0]
+            selected = nations[0]
         self.nation.set(next(label for label, nation in self._nation_by_label.items() if nation == selected))
 
     def _selected_vehicle_class(self):
@@ -727,9 +724,7 @@ class VehicleEditorWindow(object):
         selected_choice = self._resolve_vehicle_choice(
             selected, choices=choices)
         if selected_choice is None:
-            selected_choice = next((
-                choice for choice in choices
-                if choice["vehicle"] == DEFAULT_VEHICLE), choices[0])
+            selected_choice = choices[0]
         self.vehicle.set(self._choice_label(selected_choice))
         return self._load_vehicle_fields(selected_choice)
 

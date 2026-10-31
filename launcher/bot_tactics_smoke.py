@@ -210,6 +210,7 @@ def run(destination):
                 game_root=tk.StringVar(value='smoke fixture'),_save_slot_id='smoke',_busy=False,_maintenance_busy=False)
             panel=crew_ui.CrewPanel(owner,ttk.Frame(root))
             panel.vehicles=[dict(name='ussr:R11_MS-1',nation='ussr',label='MS-1',roles=('commander','driver'),vehicleClass='lightTank',seats=crew_ui.store.crew_skills.seats('ussr:R11_MS-1'))]
+            panel.variables['nation'].set('USSR')  # This fixture contains only a USSR hull.
             panel.capacity_state=dict(total=2000,occupied=0,pending=0,available=2000)
             panel.filter();assert panel.by_label
             panel.variables['female'].set('Female');panel.variables['skills'].set('2')

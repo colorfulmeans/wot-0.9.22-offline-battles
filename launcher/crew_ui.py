@@ -45,7 +45,7 @@ class CrewPanel(object):
         old={k:self.maps.get(k,{}).get(v.get()) for k,v in self.variables.items()}
         names=dict(nation='Nation',**{'class':'Tank type'},tier='Tier',vehicle='Vehicle',seat='Profession',female='Gender',training='Training level',skills='Skills and perks')
         for k,name in names.items():self.labels[k].config(text=tr(name))
-        self._choices('nation',{nation_choices.caption(k,tr):k for k in nation_choices.ORDER},old.get('nation') or 'ussr')
+        self._choices('nation',{nation_choices.caption(k,tr):k for k in nation_choices.ORDER},old.get('nation'))
         self._choices('class',{tr(v):k for k,v in CLASS_NAMES.items()},old.get('class'))
         self._choices('female',{tr('Male'):False,tr('Female'):True},old.get('female'))
         self._choices('training',{str(k)+'%':k for k in (50,75,100)},old.get('training') or 100)
@@ -59,6 +59,11 @@ class CrewPanel(object):
         if getattr(self,'selected_slot',None)!=slot:self.feedback.config(text='');self.selected_slot=slot
         try:
             if root!=self.cached_root:self.vehicles=store.catalogue(root);self.cached_root=root
+            present = nation_choices.ordered(row['nation'] for row in self.vehicles)
+            current = self.maps['nation'].get(self.variables['nation'].get())
+            if current not in present and present:
+                self.variables['nation'].set(next(label for label, key in self.maps['nation'].items()
+                                                 if key == present[0]))
             self.filter()
             self.refresh_capacity()
         except (OSError,ValueError,store.vehicle_overlays.VehicleOverlayError) as error:

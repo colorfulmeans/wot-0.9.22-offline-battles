@@ -44,6 +44,26 @@ class NativeNotificationTests(unittest.TestCase):
         self.assertEqual(-123, self.module.reward_assets(rewards[:1], -1)['credits'])
         self.assertEqual(original, rewards)
 
+    def test_withdrawal_uses_stock_remove_type_and_native_invoice_body_once(self):
+        settlement = {'account_changes': [{'phase': 'revoked', 'rewards': [
+            {'kind': 'gold', 'count': 10}, {'kind': 'reserve', 'id': 92001, 'count': 2}]}]}
+        kind, payload = self.module.settlement_messages(settlement, 123)[0]
+        self.assertEqual('offlineRemoved', kind)
+        self.assertEqual(-10, payload['data']['gold'])
+        self.assertEqual({'count': -2}, payload['data']['goodies'][92001])
+        compose = mock.Mock(return_value=['native removed gold', 'native reserves'])
+        push = mock.Mock()
+        gui = types.ModuleType('gui')
+        gui.SystemMessages = types.SimpleNamespace(pushMessage=push, SM_TYPE=types.SimpleNamespace(Remove=17))
+        formatter = types.SimpleNamespace(InvoiceReceivedFormatter=lambda: types.SimpleNamespace(_composeOperations=compose))
+        with mock.patch.dict(sys.modules, {'gui': gui,
+                'messenger.formatters.service_channel': formatter, 'messenger': types.ModuleType('messenger'),
+                'chat_shared': types.SimpleNamespace(SYS_MESSAGE_IMPORTANCE=None, SYS_MESSAGE_TYPE=None)}):
+            self.module.publish(kind, payload, 991)
+            self.module.publish(kind, payload, 991)
+        compose.assert_called_once_with(payload)
+        push.assert_called_once_with('native removed gold<br/>native reserves', type=17)
+
     def test_missing_crew_identity_is_not_acknowledged_as_a_count_only_notice(self):
         with self.assertRaisesRegex(ValueError, 'passports'):
             self.module.reward_assets([{'kind': 'crew', 'count': 1}])

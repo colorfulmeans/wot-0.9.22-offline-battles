@@ -312,6 +312,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
         # beside the mode, and the client reads both once at startup.
         config_module.save_slot_earnings_percent = lambda: (
             100 if earnings_percent is None else earnings_percent)
+        config_module.save_slot_initial_services = lambda: {}
         config_module.save_slot_initial_berths = lambda: initial_berths
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
         config_module.save_slot_mission_seed = lambda: 'a' * 32

@@ -470,3 +470,10 @@ excluding requests whose durable delivery receipt already exists. A full
 barracks refuses new recruits with a warning; old pending requests are kept.
 Initial berth grants survive the first game startup, backup and restore.
 Initialize save returns capacity to the save type's original default.
+
+Save account editors also support remaining premium-account days (zero removes
+premium), personal reserve inventory, and positive garage-slot grants. Close the
+game before editing. Asset changes appear through native system messages on
+next entry; unchanged saves do not reissue asset notices. Active reserve effects
+are preserved when stock quantities change. Unavailable Premium Shop, Hotspot,
+Training Center and Disconnect controls remain visible but disabled.

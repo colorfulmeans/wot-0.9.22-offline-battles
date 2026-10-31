@@ -1,5 +1,54 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Unavailable entries and launcher service editors (October 31 follow-up)
+
+The current source supersedes older notification-title and vehicle-default
+acceptance below. Disconnected login is not a usable offline account selector:
+LobbyMenu's logoff button is disabled and its native callback is guarded.
+Premium shop, CN browser/hotspot and Academy remain visible and disabled; native
+MainMenuButton.checkBrowserEffect schedules a one-second color toggle only for
+browser, and changeEffectState terminates when disabled. Header regeneration
+retains the locked states. Only GameSettings/gameplay_epicStandard is marked
+viewed through the native settings-counter owner after offline preferences are
+pinned; c11nHistoricallyAccurate and other counters remain unchanged.
+
+Launcher account edits include remaining premium days after bonds and before
+the earnings factor. Same displayed day count preserves the absolute expiry;
+changes queue actual seconds, with zero clearing premium. The reserve tab edits
+all current offline catalogue stock counts, preserving active/history intervals.
+Garage capacity grants accept a positive quantity. Metadata-only new saves and
+persisted garages use the same current fields; the existing garage wins during
+bootstrap. Asset writes and their notices share one atomic file replacement.
+Reserve/capacity edits refuse live-game ownership, invalid quantities and signed
+32-bit overflow. Save switches cannot commit a stale reserve draft to another
+slot. Repeated unchanged saves enqueue no asset notification.
+
+Withdrawals use stock SystemMessages.SM_TYPE.Remove (RemoveSysMessage), with
+InvoiceReceivedFormatter._composeOperations constructing the localized signed
+asset body. Grants retain native Received invoices; no new template is created.
+Reserve invoices carry goodies IDs with a nested count, as the exact #1513
+_getGoodiesString consumer requires. Personal campaign rules and battle bonds
+are unchanged. Launcher vehicle lists use the shared native nation order, then
+tier/name/identity, and valid selections survive refreshes. New modifier/member
+windows no longer force USSR/IS/MS-1; Bot random and exact saved assignments
+remain intact. The clear-profile action moved above the Bot exclusion control
+without removing its confirmation.
+
+Verification baseline: new persistence tests cover fresh/existing saves,
+premium expiry/no-op/removal, active reserves, exact grant/debit deltas and
+bounds. Real bilingual Tk tests edit actual disposable save files, switch saves
+and verify placement. Locked-entry tests exercise repeated population,
+re-enable attempts, retired callbacks, action guards and reversible patch
+ownership. The packaged editor smoke now explicitly chooses its sole USSR
+fixture vehicle instead of depending on the retired USSR default. Both cloud
+workflows include the new tests; broad launcher discovery remains the complete
+current editor gate. Exact #1513 bytecode audit now also checks the Remove type,
+synchronous invoice composer and nested reserve counts. Local final-tree verification passed all 42 launcher files (1201 tests; 16
+documented unavailable-client/symlink skips) and all 12 relevant client files
+(564 tests). All 225 client modules compiled with Python 2.7.18, and the
+exact #1513 notification audit passed. Native final-package acceptance and
+cloud run identities will be recorded after they finish.
+
 ## Strategic prizes and current-policy verification (October 31)
 
 This follow-up supersedes the preceding daily-rental cadence, thresholds and

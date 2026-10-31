@@ -111,7 +111,7 @@ class BotLineupEditorWindow:
     def _load_choices(self):
         try:
             self._choices = profiles.eligible_vehicle_choices(vehicle_overlays.list_vehicle_choices(self._game_root))
-            self._choices.sort(key=lambda r: (-r.get('level', 0), r['nation'], r['vehicle']))
+            self._choices.sort(key=nation_choices.vehicle_key)
             counts = Counter((r['nation'], r['label']) for r in self._choices)
             for choice in self._choices:
                 caption = '%s — %d' % (choice['label'], choice.get('level', 0))
