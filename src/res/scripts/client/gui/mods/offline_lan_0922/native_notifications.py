@@ -195,7 +195,7 @@ def settlement_messages(settlement, timestamp=None):
     result = []
     if settlement.get('reset_error'):
         from gui.mods.offline_lan_0922.personal_campaign_ui import _reset_error
-        result.append(('adminMessage', _reset_error(settlement['reset_error'])))
+        result.append(('adminTextMessage', _reset_error(settlement['reset_error'])))
 
     def assets_for(rows, sign=1):
         # Old saves recorded a count but not the members' native passports.
@@ -205,7 +205,7 @@ def settlement_messages(settlement, timestamp=None):
         for row in rows:
             if row.get('kind') == 'crew' and not row.get('passports') and sign > 0:
                 from gui.mods.offline_lan_0922.ui_i18n import tr
-                result.append(('adminMessage', tr('Crew members: %d') % int(row['count'])))
+                result.append(('adminTextMessage', tr('Crew members: %d') % int(row['count'])))
             else:
                 current.append(row)
         return reward_assets(current, sign)
@@ -251,7 +251,7 @@ def settlement_messages(settlement, timestamp=None):
                 # This offline-only setting is not an asset grant. Use the
                 # stock general server notice, never a counterfeit invoice.
                 from gui.mods.offline_lan_0922.ui_i18n import tr
-                result.append(('adminMessage', tr('Battle earnings multiplier: %d%% -> %d%%') %
+                result.append(('adminTextMessage', tr('Battle earnings multiplier: %d%% -> %d%%') %
                     (int(reward['before']), int(reward['count']))))
         assets = assets_for([reward for reward in rewards
                                 if reward.get('kind') != 'earnings_percent'],

@@ -84,12 +84,22 @@ class NativeNotificationTests(unittest.TestCase):
         self.assertEqual({'value': 1}, assets['dossier']['account'][('badges', 7)])
         self.assertEqual({'count': 2}, assets['tokens']['free_award_list'])
 
+    def test_earnings_notice_uses_message_enum_not_formatter_template_name(self):
+        rows = self.module.settlement_messages({'account_changes': [
+            {'phase': 'updated', 'rewards': [
+                {'kind': 'earnings_percent', 'before': 100, 'count': 200}]}]})
+        # #1513 chat_shared.SYS_MESSAGE_TYPE exposes adminTextMessage.
+        # AdminMessageFormatter uses adminMessage only as its template key.
+        self.assertEqual('adminTextMessage', rows[0][0])
+        self.assertIsInstance(rows[0][1], str)
+        self.assertIn('200', rows[0][1])
+
     def test_failed_reset_has_a_stock_notice_without_assets(self):
         settlement = {'reset_error':
             'PERSONAL_MISSION_RESET_WALLET_UNAVAILABLE: credits required=100 available=0'}
         rows = self.module.settlement_messages(settlement)
         self.assertEqual(1, len(rows))
-        self.assertEqual('adminMessage', rows[0][0])
+        self.assertEqual('adminTextMessage', rows[0][0])
         self.assertIn('100', rows[0][1])
         self.assertNotIn('PERSONAL_MISSION_RESET', rows[0][1])
 
@@ -103,6 +113,6 @@ class NativeNotificationTests(unittest.TestCase):
         settlement = {'account_changes': [{'rewards': [
             {'kind': 'crew', 'count': 2}, {'kind': 'credits', 'count': 50}]}]}
         rows = self.module.settlement_messages(settlement)
-        self.assertEqual(['adminMessage', 'invoiceReceived'], [row[0] for row in rows])
+        self.assertEqual(['adminTextMessage', 'invoiceReceived'], [row[0] for row in rows])
         self.assertIn('2', rows[0][1])
         self.assertEqual({'credits': 50}, rows[1][1]['data'])

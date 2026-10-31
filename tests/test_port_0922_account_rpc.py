@@ -214,8 +214,7 @@ class AccountRpcTests(unittest.TestCase):
         server, state, store, system, saved, unused_context = self._campaign_outbox()
         delivered = set()
         system.pushMessage.side_effect = RuntimeError('lobby message service not ready')
-        with self.assertRaises(RuntimeError):
-            server.publish_campaign_notifications(delivered)
+        self.assertEqual((0, True), server.publish_campaign_notifications(delivered))
         self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
         self.assertEqual(set(), delivered)
         self.assertEqual([], saved)
@@ -223,6 +222,17 @@ class AccountRpcTests(unittest.TestCase):
         system.pushMessage.side_effect = None
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
+    def test_bad_notice_does_not_block_later_receipts_or_get_acknowledged(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        later = copy.deepcopy(state.snapshot()['personalMissionNotifications'][0])
+        later['id'] = 'notice-2'
+        state.snapshot()['personalMissionNotifications'].append(later)
+        system.pushMessage.side_effect = [AttributeError('unknown native message type'), None]
+        delivered = set()
+        self.assertEqual((1, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual({'notice-2'}, delivered)
+        self.assertEqual(['notice-1'], [r['id'] for r in state.snapshot()['personalMissionNotifications']])
 
     def test_launcher_asset_notice_uses_native_publisher_without_reapplying_assets(self):
         server, state, store, system, saved, unused_context = self._campaign_outbox()

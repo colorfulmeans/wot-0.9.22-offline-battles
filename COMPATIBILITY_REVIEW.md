@@ -11742,3 +11742,14 @@ a failure: compare its allocation-time candidates and class occupancy.
 Validation status: final focused regressions and Python 2.7 compile are being
 recorded for this change; package inspection, pushed-commit CI and the requested
 Windows save/notification/Mittengard sequence remain pending until performed.
+
+
+The first e15abc3 native attempt reproduced and isolated another cause:
+`adminMessage` is AdminMessageFormatter's template key, not a member of
+#1513 SYS_MESSAGE_TYPE. The supported enum is `adminTextMessage`; its formatter
+accepts the text returned by decompressSysMessage (including plain text).
+An earnings receipt threw before subsequent appearance/crew/campaign receipts.
+The adapter now uses the exact enum for earnings, historical crew facts and reset
+errors. Any individual receipt's enum/formatter failure remains queued but does
+not prevent later receipts from being attempted. The first native attempt is a
+failed acceptance, not a pass, and is being rerun with the corrected package.

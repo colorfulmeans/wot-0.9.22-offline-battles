@@ -341,10 +341,11 @@ class FakeServer(object):
                 try:
                     if notify(row.get('settlement'), identifier=identifier):
                         published += 1
-                except ValueError as error:
+                except Exception as error:
                     # Historical count-only receipts cannot reconstruct crew
                     # identities. Retain their evidence without blocking the
                     # later, complete invoices in this account's outbox.
+                    # Native enum/formatter failures are receipt-local too.
                     errors = self._context.setdefault('native_notice_errors', set())
                     if identifier not in errors:
                         print('[Offline LAN 0.9.22] NATIVE NOTICE pending id=%s error=%s' %
