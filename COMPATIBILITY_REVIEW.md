@@ -12153,3 +12153,29 @@ the earlier source window or the separate packaged smoke alone. The full Tests
 run 41217695707 had passed Windows editor, native geometry, navigation, Bot
 behavior and Windows server jobs at this checkpoint; client-suite / downstream
 packaging jobs were still running.
+
+Final packaged acceptance completed after the human handled ProcDump consent
+on 2026-11-01. Tests 41217695707 and review-package 41217695775 both finished
+successfully. The actual d8f9743 launcher created an empty VIEWER_QA profile and
+opened its stock vehicle editor. China Renault NC-31 armor picking selected the
+corresponding turret field at 22 mm and highlighted its boundary. Interior
+selection displayed Crew 2 in Chinese, brightened that source surface and
+dimmed unrelated regions. Native dragging changed the view, wheel input changed
+scale, and Reset view restored the initial camera/scale. Switching to Germany's
+Ltraktor cleared the selected crew and loaded the new vehicle's regions.
+
+The Skorpian selection showed the Chinese observation-device warning, preserved
+the existing decoded interiors and displayed the complete no-data legend suffix
+in equal wrapped columns. Tiger 131, which lacks a decoded interior, showed its
+Chinese unavailable-data warning, only the translucent context shell, and seven
+grey no-data entries without leaking the previous tank's modules. Ordinary and
+maximized editor windows kept complete legend text and aligned viewer/reset
+edges; narrow 380/620-pixel bilingual caption bounds are covered separately by
+the real-Tk regressions rather than inferred from a maximize operation.
+
+No vehicle property was saved during acceptance. After normal editor/launcher
+closure, only the newly created empty VIEWER_QA profile was deleted, the original
+vehicle-data choice restored, and the pre-existing profile(s) preserved exactly.
+The current packaged launcher session had no traceback or callback exception.
+This completes the requested launcher-viewer acceptance, not native battle or
+accuracy acceptance of the uninstalled donated module layouts.
