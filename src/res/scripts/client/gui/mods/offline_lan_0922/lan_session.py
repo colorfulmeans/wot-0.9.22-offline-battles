@@ -934,11 +934,16 @@ class LANSession(object):
                 getattr(BigWorld.player(), 'fakeServer', None),
                 'publish_campaign_notifications', None)
             if not callable(publisher):
+                if not getattr(self, '_campaign_account_pending_reported', False):
+                    sys.stdout.write('[Offline LAN 0.9.22] NATIVE NOTICE waiting reason=account_not_ready\n')
+                    self._campaign_account_pending_reported = True
+                self._schedule_postbattle_publish()
                 return False
             if self._battle_started or not self._lobby_ready():
                 self._schedule_postbattle_publish()
                 return False
             published, pending = publisher(self._campaign_notifications_sent)
+            self._campaign_account_pending_reported = False
             self._campaign_notification_error_reported = False
             if pending:
                 self._schedule_postbattle_publish()

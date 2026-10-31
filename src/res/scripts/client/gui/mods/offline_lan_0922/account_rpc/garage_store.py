@@ -409,6 +409,8 @@ def _apply_ledger(staged, stored):
         staged.update(offline_services.saved_fields(services))
     if isinstance(personal_missions, dict):
         staged.update(personal_campaign.restored_fields(personal_missions))
+        print('[Offline LAN 0.9.22] NATIVE NOTICE restored count=%d' %
+              len(staged.get('personalMissionNotifications') or ()))
         regular = data.personal_mission_regular_selection(
             personal_missions.get('regular', ()))
         staged['personalMissionSelections'] = {'regular': regular}

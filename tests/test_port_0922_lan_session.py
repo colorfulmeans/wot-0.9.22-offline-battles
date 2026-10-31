@@ -1317,6 +1317,23 @@ class LANSessionTests(unittest.TestCase):
         publisher.assert_called_once_with(session._campaign_notifications_sent)
         self.assertIsNone(session._postbattle_callback_id)
 
+    def test_launcher_outbox_survives_missing_account_at_install_and_lobby_event(self):
+        callbacks = []
+        player = [None]
+        publisher = mock.Mock(return_value=(7, False))
+        session = self.module.LANSession({}, lobby_ready=lambda: True,
+            callback=lambda delay, function: callbacks.append(function) or len(callbacks))
+        with mock.patch.dict(sys.modules, {'BigWorld': types.SimpleNamespace(player=lambda: player[0])}):
+            self.assertFalse(session._publish_campaign_notifications())
+            self.assertEqual(1, len(callbacks))
+            callbacks.pop(0)()
+            self.assertEqual(1, len(callbacks))
+            player[0] = types.SimpleNamespace(fakeServer=types.SimpleNamespace(
+                publish_campaign_notifications=publisher))
+            callbacks.pop(0)()
+            publisher.assert_called_once_with(session._campaign_notifications_sent)
+            self.assertIsNone(session._postbattle_callback_id)
+
     def test_launcher_campaign_outbox_retries_failed_push_and_cancels_stale_callback(self):
         callbacks = []
         publisher = mock.Mock(side_effect=[RuntimeError('native UI loading'), (1, False)])

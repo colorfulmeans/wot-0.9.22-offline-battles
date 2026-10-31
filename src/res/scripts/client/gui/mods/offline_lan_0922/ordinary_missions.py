@@ -115,6 +115,11 @@ def assignment_bounds(day, key):
 
 
 def reward_seed(snapshot, day, key):
+    raw = snapshot.get('dailyMissions') or {}
+    if raw.get('schema') == SCHEMA and raw.get('periods', {}).get(key) == assignment_bounds(day, key)[0]:
+        saved = raw.get('rewardSeeds', {}).get(key)
+        if saved:
+            return saved
     return '%s:%d:%s' % (snapshot.get('missionSeed', snapshot.get('accountDBID', 'default')),
                         assignment_bounds(day, key)[0], key)
 
@@ -125,10 +130,15 @@ def state(snapshot, now=None):
     same = raw.get('schema') == SCHEMA
     ids = assignments(day, str(snapshot.get('missionSeed', snapshot.get('accountDBID', 'default'))))
     result = dict(schema=SCHEMA, day=day, missions=ids, claimed=[],
-                  progress={}, rewards={}, periods={})
+                  progress={}, rewards={}, periods={}, rewardSeeds={})
     for key in ids:
         start, finish = assignment_bounds(day, key)
         result['periods'][key] = start
+        if 'vehicle_prize' in BY_ID[key]['rewards']:
+            # Keep the draw identity with its own period, not the daily cache
+            # or a newly reconstructed Account. Inventory eligibility remains
+            # live so acquiring the preview vehicle selects another candidate.
+            result['rewardSeeds'][key] = reward_seed(snapshot, day, key)
         result['progress'][key] = dict((metric, 0) for metric in BY_ID[key]['goals'])
         if same and raw.get('periods', {}).get(key) == start:
             result['progress'][key] = copy.deepcopy(raw.get('progress', {}).get(key, result['progress'][key]))

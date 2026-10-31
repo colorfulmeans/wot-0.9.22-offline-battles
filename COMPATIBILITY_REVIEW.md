@@ -11706,3 +11706,39 @@ selection preservation and tier-only browsing are also exercised by the
 regressions. The source and packaged acceptance launchers were closed after
 testing. No game was started for this UI-only change, and no new combat/error
 report is claimed. The package and prior gameplay reports remain separate.
+
+
+### PR116 rollover, launcher outbox and route capacity follow-up (2026-10-31)
+
+The 08:01/08:03 reports and the saved outbox demonstrate incomplete launcher
+notification acceptance: four wallet currencies rendered, while seven saved
+non-wallet receipts remained pending. Previous fresh-account/win-notice checks
+do not establish the requested existing-save multi-category lifecycle.
+Account-unavailable notification attempts now schedule an identity-fenced retry;
+the verified lobby-ready startup boundary drains the outbox as well. Restore,
+queue discovery, native admission and durable acknowledgement have separate log
+records. The requested native acceptance must check all categories, restart,
+individual campaign withdrawal and absence of repeat grants/notices.
+
+Vehicle draw identities are retained with each mission's own day/week/month
+period and persisted through the normal garage transaction. Rebuilding an
+Account or daily cache must not change a matching week/month identity. Live
+ownership eligibility remains authoritative: acquiring a preview vehicle can
+still select the next eligible candidate; full permanent ownership still pays
+credits. Preview evidence now includes period start and a draw fingerprint.
+The old report lacks enough seed/eligibility evidence to attribute every observed
+08:00 vehicle change to one proved cause; the new logs close that gap. Cross-day,
+Monday, month-start, leap-month and inventory-change cases are separate checks.
+
+The Mittengard report 081040-bfcbe92e0501 records medium tanks initially on
+reserve while each main road had five mixed vehicles but only one medium.
+The five-total threshold is removed. The three-same-class soft threshold remains
+per team and physical route family, with main routes considered before reserve;
+authored overflow remains available when all capacity is exhausted. Artillery
+allocation is unchanged. Per-actor initial evidence includes candidate tier,
+priority, same-class and total loads at selection. A reserve route is not itself
+a failure: compare its allocation-time candidates and class occupancy.
+
+Validation status: final focused regressions and Python 2.7 compile are being
+recorded for this change; package inspection, pushed-commit CI and the requested
+Windows save/notification/Mittengard sequence remain pending until performed.

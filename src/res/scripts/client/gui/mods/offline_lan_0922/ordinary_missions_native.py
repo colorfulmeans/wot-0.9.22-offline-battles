@@ -257,8 +257,10 @@ def sync(snapshot, now=None):
                   (len(definitions), daily['day'], policy.SCHEMA))
             for key in daily['missions']:
                 if 'vehicle_prize' in policy.BY_ID[key]['rewards']:
-                    print('[Offline LAN 0.9.22] NATIVE MISSION rental_preview quest=%s bonus=%s' %
-                          (key, previews[key]))
+                    print('[Offline LAN 0.9.22] NATIVE MISSION rental_preview quest=%s period=%s seed=%s bonus=%s' %
+                          (key, daily['periods'][key],
+                           hashlib.sha256(policy.reward_seed(snapshot, daily['day'], key).encode('utf-8')).hexdigest()[:12],
+                           previews[key]))
         progress = {}
         for key in daily['missions']:
             row = policy.BY_ID[key]

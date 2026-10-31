@@ -324,6 +324,11 @@ class FakeServer(object):
         rows = list(snapshot.get('personalMissionNotifications') or ())
         if not rows:
             return 0, False
+        queued = tuple(row.get('id') for row in rows)
+        if getattr(self, '_notice_queue_logged', None) != queued:
+            print('[Offline LAN 0.9.22] NATIVE NOTICE outbox count=%d ids=%s' %
+                  (len(rows), ','.join(str(value) for value in queued)))
+            self._notice_queue_logged = queued
         store = self._context.get('garage_store')
         player = self._player()
         if store is None or player is None:
@@ -361,10 +366,13 @@ class FakeServer(object):
             staged['personalMissionNotifications'] = remaining
             store.mark_dirty()
             if not store.flush(staged):
+                print('[Offline LAN 0.9.22] NATIVE NOTICE acknowledgement_pending id=%s' % identifier)
                 return published, True
             snapshot['personalMissionNotifications'] = remaining
             state.revision += 1
             self._context['selected_vehicle'] = snapshot
+            print('[Offline LAN 0.9.22] NATIVE NOTICE acknowledged id=%s remaining=%d' %
+                  (identifier, len(remaining)))
         return published, bool(snapshot.get('personalMissionNotifications'))
 
     def _respond(self, request_id, command, args):

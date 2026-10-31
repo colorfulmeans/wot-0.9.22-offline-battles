@@ -7,6 +7,24 @@ import test_ordinary_missions as scenes
 
 
 class StrategicCalendarTests(unittest.TestCase):
+    def test_saved_week_and_month_draws_survive_daily_rollover_and_account_rebuild(self):
+        policy = fixture._load_port_module('ordinary_missions')
+        friday = calendar.timegm((2026,10,30,12,0,0))
+        snapshot = dict(missionSeed='save-a')
+        before = policy.state(snapshot, friday)
+        snapshot.update(dailyMissions=before, missionSeed='rebuilt-account')
+        after = policy.state(snapshot, friday+86400)
+        for key, seed in before['rewardSeeds'].items():
+            if policy.BY_ID[key]['period'] == 'day':
+                self.assertNotEqual(seed, after['rewardSeeds'][key])
+            else:
+                self.assertEqual(seed, after['rewardSeeds'][key])
+        sunday = policy.state(dict(snapshot, dailyMissions=after), friday+2*86400)
+        self.assertNotEqual(after['rewardSeeds']['vehicle_simple_month'],
+                            sunday['rewardSeeds']['vehicle_simple_month'])
+        self.assertEqual(after['rewardSeeds']['vehicle_simple_week'],
+                         sunday['rewardSeeds']['vehicle_simple_week'])
+
     def test_beijing_eight_weekend_and_leap_month_boundaries(self):
         clock=fixture._load_port_module('game_calendar')
         friday=calendar.timegm((2026,10,30,23,59,59))

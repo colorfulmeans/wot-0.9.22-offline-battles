@@ -1018,6 +1018,11 @@ def _selected_vehicle(config, restore_saved=True):
             import uuid
             result['missionSeed'] = uuid.uuid4().hex
             sys.stdout.write('[Offline LAN 0.9.22] MISSION seed awaits normal garage persistence\n')
+        if restore_saved:
+            from gui.mods.offline_lan_0922 import ordinary_missions
+            # Persist with the normal validated garage transaction. A failed
+            # launcher delivery must never be overwritten by an eager flush.
+            result['dailyMissions'] = ordinary_missions.state(result)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot
@@ -1461,6 +1466,9 @@ def _wait_for_lobby():
                     _config.get('startupTimeoutSeconds', 30.0))
                 _schedule(0.10, _wait_for_worker_connection)
             else:
+                # LOBBY_VIEW_LOADED can precede Account promotion and the
+                # hangar model. Drain at the verified readiness boundary too.
+                _session.on_lobby_view_loaded()
                 if not _player_ready_signaled:
                     if not _signal_player_ready():
                         raise RuntimeError(
