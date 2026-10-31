@@ -8,14 +8,20 @@ from vehicle_gpu_renderer import GpuRenderer
 class GpuTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.unavailable = None
         try:
             cls.renderer=GpuRenderer()
         except Exception as error:
             if os.environ.get('WOT_REQUIRE_GPU')=='1':raise
-            raise unittest.SkipTest('OpenGL 3.3 is unavailable: %s'%error)
+            cls.renderer = None
+            cls.unavailable = 'OpenGL 3.3 is unavailable: %s'%error
+
+    def setUp(self):
+        if self.unavailable:self.skipTest(self.unavailable)
 
     @classmethod
-    def tearDownClass(cls):cls.renderer.release()
+    def tearDownClass(cls):
+        if cls.renderer:cls.renderer.release()
 
     def render(self, objects, styles=None):
         r=self.renderer

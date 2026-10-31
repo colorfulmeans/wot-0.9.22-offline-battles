@@ -697,7 +697,7 @@ def component_choices(vehicle_root, component_roots, translations=None):
         label = translations.gettext(key) if translations else name
         if not label or label == key: label = name
         return dict(name=name, label=label,
-                    level=int(_value_text(_layer_values(layers, ('level',))) or 0),
+                    level=int(float(_value_text(_layer_values(layers, ('level',))) or 0)),
                     price=float(_value_text(_layer_values(layers, ('price',))) or 0))
     for raw_group, value in vehicle_root.children:
         group = raw_group.decode('utf-8')

@@ -12466,3 +12466,18 @@ No orbit reuploaded geometry. The benchmark suppresses only known missing-data
 dialogs; it does not reinterpret missing layouts or alter vehicle values.
 
 Final package/cloud and native desktop acceptance are recorded below after build.
+
+
+The expanded all-resource mount census found integral float levels on
+G33_H39_captured, G34_S35_captured and G52_Pz38_NA. Numeric level conversion now
+accepts that stock representation. The regression scans all 614 selectable
+vehicle definitions and each turret/gun option; no synthetic compatibility is
+introduced. Its first fixture incorrectly used Python strings rather than
+Packed XML byte strings; the fixture was corrected and native integer price/
+level ordering is now tested against names deliberately ordered oppositely.
+
+Intermediate review run 41237518469 stopped because OpenGL 3.3 is unavailable on
+the hosted Windows worker: setUpClass skipped the whole GPU class, leaving zero
+executed tests, correctly rejected by the repository's empty-test guard. GPU
+cases now individually report their unavailable-context skips; the empty-test
+guard is unchanged. Actual local GPU execution remains mandatory in acceptance.
