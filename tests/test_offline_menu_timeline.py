@@ -22,7 +22,7 @@ class MenuTimelineTests(unittest.TestCase):
             builder.transform(source.replace('logoffBtn.enabled = true;', '', 1))
 
     def test_shipping_movie_proof_matches_current_builder_and_pinned_menu(self):
-        path = ROOT / 'src/res/gui/flash/LobbyMenu.swf'
+        path = ROOT / 'src/res/gui/flash/lobbyMenu.swf'
         proof = json.loads(path.with_suffix('.swf.json').read_text())
         self.assertEqual(builder.INPUT_SHA256, proof['source_sha256'])
         self.assertEqual(4, proof['disabled_logoff_initializers'])

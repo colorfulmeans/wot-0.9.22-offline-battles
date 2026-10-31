@@ -754,7 +754,7 @@ def _validate_waiting_room_ui(repo_root):
 
 
 def _validate_offline_menu_ui(repo_root):
-    path = os.path.join(repo_root, 'src', 'res', 'gui', 'flash', 'LobbyMenu.swf')
+    path = os.path.join(repo_root, 'src', 'res', 'gui', 'flash', 'lobbyMenu.swf')
     with open(path, 'rb') as stream:
         raw = stream.read()
     with open(path + '.json', 'r') as stream:
