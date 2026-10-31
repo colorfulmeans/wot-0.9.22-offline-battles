@@ -23,11 +23,50 @@ The existing per-slot diagnostic result records soft_vegetation_no_felling and
 the combat counter records soft_vegetation_felling_skips. Tests compare all pinned
 taxonomy tokens against the exact installed client and exercise contact refusal.
 
-Initial local validation: 342 client tests across destructibles, entry guards
-and the new felling policy passed; 49 related launcher tests passed, including
-real bilingual widgets and resize geometry. All 225 client modules compile with
-Python 2.7.18. Cloud packaging, clean local data reset and final-package native
-acceptance remain pending; they are not inferred from these local checks.
+Final runtime: 3b6a44de71f20a4f20c9f126363225a8d1a93226. Local client checks
+passed 343 tests across destructibles, entry guards and felling policy. All 42
+launcher test files passed (1202 tests; 14 documented skips), including exact-client
+catalogue checks and real bilingual Tk resize checks. All 225 client modules
+compiled under Python 2.7.18. Cloud Tests 41198499015 and Battle review package
+41198499045 passed. The final ZIP SHA-256 is
+f7ac059cce13922260aa1a635cfb98809dde9ab01e73b7467fff96c4097f6088.
+Independent package inspection verified 225 client modules, 41 frozen launcher
+modules, 232 bundled server sources and current native fingerprints.
+
+Native Windows acceptance first used a factory-clean 4b84fd2 package. No previous
+launcher.json or named saves remained. The actual garage vehicle chooser selected
+its first entry, China Type64, and its opened dropdown confirmed that ordering.
+The member chooser selected China Renault NC-31; appearance retained its All
+applicable vehicles sentinel followed by Renault NC-31. The modifier selected
+China Renault NC-31 and retained the two-row arrangement, aligned selector/Save
+edges and an internal viewer title in both ordinary and maximized windows.
+The lineup reverted to Automatic instead of inheriting an old exact roster.
+These launcher modules are byte-for-byte verified in the final 3b6a44d package.
+Gold rendered normal and clicking did not navigate. The Karelia battle report
+wot-error-report-20261031-195341-82c2e5f64c21.zip contains worker trace samples
+with soft_vegetation_felling_skips=9 and no player/worker traceback or ERROR.
+That is observed suppression for the initial bush subset, not herb-patch proof.
+
+Final build colorfulmeans-41198499045-1 was then launched and gold clicked again;
+it retained normal color and did not navigate. A Malinovka 15/15 short battle
+ran and shut down cleanly. Report
+wot-error-report-20261031-201109-1c9ead3e0de3.zip has coherent final build identities
+and no server/worker exception. It contains one visible-client stock EffectsList
+exception at 20:07:59: an effect's sound owner was None before getSoundObject.
+The game continued; no cause is inferred and no unrelated audio change is made.
+Instrumented sound-call error counts are zero, which does not erase that separate
+stock traceback. This battle emitted no soft-plant counter sample; the added
+herb coverage is verified by the complete descriptor census and contact tests,
+not claimed as an exact native reproduction of the reported flying patch.
+
+After acceptance, the final package's production factory reset was run again
+with both game and launcher closed. It reinstalled final payload 41198499045-1,
+removed all test profiles/progress/reports and recreated only default. The only
+retained launcher settings are the exact game path and Chinese UI preference;
+no vehicle, lineup or modifier selection remains. The two accepted reports are
+retained in the local verification build directory. Bulk removal of downloaded
+old package copies was rejected by automatic tool policy, so those copies are
+not described as deleted; this does not preserve their old shared test state.
 
 ## Unavailable entries and launcher service editors (October 31 follow-up)
 
