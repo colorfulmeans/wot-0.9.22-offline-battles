@@ -55,7 +55,12 @@ _ZH = {
     "Modules and crew": "模块与乘员",
     "Engine": "发动机", "Ammo": "弹药", "Fuel": "油箱",
     "Radio": "电台", "Crew": "乘员",
-    "Ammo rack": "弹药架", "Gun control": "炮控",
+    "Ammo rack": "弹药架", "Fuel tank": "油箱",
+    "Turret rotation mechanism": "炮塔旋转机构",
+    "Modules": "模块", "Commander": "车长", "Gunner": "炮手",
+    "Driver": "驾驶员", "Loader": "装填手", "Radio operator": "通信兵",
+    "%s (also %s)": "%s（兼%s）",
+    "Crew roster does not match the decoded layout.": "乘员编制与解码布局不匹配。",
     "Observation devices": "观察装置", "Transmission": "传动装置",
     "%s (no data)": "%s（无数据）",
     "%s (incomplete)": "%s（部分缺失）",
@@ -834,7 +839,12 @@ def load_vehicle_armor_scene(game_root, vehicle_member, records,
     if not parts:
         raise ArmorViewerError("; ".join(errors) or
                                "No stock collision models were found.")
+    crew = _unique_child(vehicle_root, "crew")
+    roles = tuple((key.decode("ascii"),) + tuple((_value_text(value) or "").split())
+                  for key, value in crew.value.children) if (
+                      crew is not None and crew.value_type == packed_xml.TYPE_ELEMENT) else ()
     return {
+        "crewRoles": roles,
         "vehicleMember": vehicle_member,
         "configuration": {
             "chassis": chassis_name,
@@ -853,14 +863,16 @@ def _interpolate(left, right, amount):
                  for index in range(3))
 
 
+# Saturated nominal-thickness bins, inspired by tanks.gg's collision palette.
+# Neutral gray is reserved exclusively for unmapped surfaces.
 _COLOR_STOPS = (
-    (0.0, (76, 88, 105)),
-    (20.0, (55, 126, 184)),
-    (50.0, (45, 176, 168)),
-    (100.0, (99, 190, 94)),
-    (150.0, (229, 190, 64)),
-    (250.0, (226, 101, 55)),
-    (400.0, (180, 68, 127)),
+    (0.0, (32, 200, 58)),
+    (20.0, (144, 213, 44)),
+    (50.0, (242, 220, 54)),
+    (100.0, (244, 154, 36)),
+    (150.0, (237, 64, 52)),
+    (250.0, (163, 83, 223)),
+    (400.0, (228, 78, 214)),
 )
 
 
@@ -916,7 +928,7 @@ def _face_light(points, depth_scale):
         return 0.0
     direction = -1 if normal[2] < 0 else 1
     intensity = sum(normal[i]*direction*light for i, light in enumerate((-.4, .7, .6))) / length
-    return -.16 + .36 * max(0.0, min(1.0, intensity))
+    return -.10 + .22 * max(0.0, min(1.0, intensity))
 
 
 class ArmorViewerPanel(object):
@@ -1189,6 +1201,7 @@ class ArmorViewerPanel(object):
         for child in self.legend.winfo_children():
             child.destroy()
         self._legend_cells = []
+        self._legend_headers = []
         self._legend_minwidth = 1
         if getattr(self, '_view_mode', 'armor') == 'internal':
             try:
@@ -1208,18 +1221,31 @@ class ArmorViewerPanel(object):
                     color = '#838b97'
                 elif any(entity in warning for warning in missing):
                     label = self._t('%s (incomplete)') % label
-                entries.append((label, color))
+                entries.append((label, color, 'Modules'))
+            present_seats = {surface.get('moduleLabel', '').split(' / ')[0]
+                             for part in (scene or {}).get('parts', ())
+                             for surface in part['surfaces']}
+            for slot in (scene or {}).get('crewSlots', ()):
+                label, color = self._crew_caption(slot), slot['color']
+                if slot['identity'] not in present_seats:
+                    label, color = self._t('%s (no data)') % label, '#838b97'
+                entries.append((label, color, 'Crew'))
         else:
             values = [stop[0] for stop in _COLOR_STOPS]
             entries = [('%g–%g' % (value, values[index + 1])
                         if index + 1 < len(values) else '%g+' % value,
-                        thickness_color(value))
+                        thickness_color(value), None)
                        for index, value in enumerate(values)]
             if any(surface.get('thickness') is None
                    for part in (self._scene or {}).get('parts', ())
                    for surface in part['surfaces']):
-                entries.append((self._t('Unmapped'), '#555b66'))
-        for label, color in entries:
+                entries.append((self._t('Unmapped'), '#555b66', None))
+        last_group = None
+        for label, color, group in entries:
+            if group != last_group and group is not None:
+                header = self._tk.Label(self.legend, text=self._t(group), anchor='w', padx=0)
+                self._legend_headers.append((len(self._legend_cells), header))
+            last_group = group
             cell = self._tk.Frame(self.legend)
             swatch = self._tk.Canvas(cell, width=16, height=12,
                                      highlightthickness=0)
@@ -1240,16 +1266,29 @@ class ArmorViewerPanel(object):
         available = max(1, self.legend.winfo_width())
         requested = self._legend_minwidth
         columns = min(len(cells), max(1, available // max(1, requested)))
-        if columns == self._legend_columns:
+        if columns == self._legend_columns and available == getattr(self, "_legend_width", None):
             return
+        self._legend_width = available
         for index in range(len(cells)):
             self.legend.grid_columnconfigure(index, weight=0, uniform='')
         for index in range(columns):
             self.legend.grid_columnconfigure(index, weight=1, uniform='legend')
+        headers = dict(getattr(self, '_legend_headers', ()))
+        row, column = 0, 0
         for index, cell in enumerate(cells):
-            cell.grid(row=index // columns, column=index % columns,
-                      sticky='w', padx=(0, 6 if index % columns < columns - 1 else 0),
-                      pady=(0, 4))
+            for child in cell.winfo_children():
+                if isinstance(child, self._tk.Label):
+                    child.configure(wraplength=max(80, available // columns - 34))
+            if index in headers:
+                if column:
+                    row += 1
+                headers[index].grid(row=row, column=0, columnspan=columns, sticky='ew', pady=(2, 4))
+                row, column = row+1, 0
+            cell.grid(row=row, column=column, sticky='w',
+                      padx=(0, 6 if column < columns-1 else 0), pady=(0, 4))
+            column += 1
+            if column == columns:
+                row, column = row+1, 0
         self._legend_columns = columns
 
     def _wrap_text(self, event):
@@ -1258,18 +1297,31 @@ class ArmorViewerPanel(object):
             self.help_label.config(wraplength=available)
             self.selection_label.config(wraplength=available)
 
+    def _crew_caption(self, slot):
+        try:
+            from .vehicle_internal_viewer import CREW_STYLES
+        except ImportError:
+            from vehicle_internal_viewer import CREW_STYLES
+        roles = slot['roles']
+        names = [self._t(CREW_STYLES.get(role, (role, ''))[0]) for role in roles]
+        primary = names[0] + (str(slot['number']) if slot.get('number') else '')
+        return self._t('%s (also %s)') % (primary, ' / '.join(names[1:])) if len(names)>1 else primary
+
     def _module_caption(self, surface):
-        label = surface['moduleLabel']
-        if self._language != i18n.LANGUAGE_CHINESE:
-            return label
-        names = {'engine': '发动机', 'ammoBay': '弹药架',
-                 'fuelTank': '油箱', 'radio': '电台',
-                 'turretRotator': '炮控', 'surveyingDevice': '观察装置',
-                 'transmission': '传动装置'}
-        parts = label.split(' / ')
-        if parts[0].startswith('crew '):
-            return self._t('Crew %s') % parts[0].split()[-1]
-        return ' / '.join(names.get(part, part) for part in parts)
+        try:
+            from .vehicle_internal_viewer import MODULE_STYLES
+        except ImportError:
+            from vehicle_internal_viewer import MODULE_STYLES
+        identity = surface['moduleLabel'].split(' / ')[0]
+        slot = surface.get('crewSlot') or next((slot for slot in
+            (self._internal_scene or {}).get('crewSlots', ()) if slot['identity'] == identity), None)
+        if slot:
+            return self._crew_caption(slot)
+        if identity.startswith('crew '):
+            return self._t('Crew %s') % identity.split()[-1]
+        names = {entity: label for entity, label, unused_color in MODULE_STYLES}
+        names['transmission'] = 'Transmission'
+        return self._t(names.get(identity, identity))
 
     def _internal_warning(self, warning):
         if ': ' in warning:

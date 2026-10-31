@@ -23,16 +23,45 @@ def catalogue():
     return ast.literal_eval(value)
 
 
+# Category colors follow the inspected WOTInspector X-ray legend (2026-11-01).
 MODULE_STYLES = (
-    ('engine', 'Engine', '#df8c42'),
-    ('ammoBay', 'Ammo rack', '#d65b63'),
-    ('fuelTank', 'Fuel', '#e9c64b'),
-    ('radio', 'Radio', '#69b6d7'),
-    ('turretRotator', 'Gun control', '#a889d3'),
-    ('surveyingDevice', 'Observation devices', '#7485bd'),
-    ('crew', 'Crew', '#72c485'),
+    ('engine', 'Engine', '#ff245c'),
+    ('ammoBay', 'Ammo rack', '#f4f72b'),
+    ('fuelTank', 'Fuel tank', '#ff8924'),
+    ('radio', 'Radio', '#20d9b9'),
+    ('turretRotator', 'Turret rotation mechanism', '#3689f5'),
+    ('surveyingDevice', 'Observation devices', '#22dced'),
 )
 COLORS = {entity: color for entity, unused_label, color in MODULE_STYLES}
+CREW_STYLES = {
+    'commander': ('Commander', '#29bdcd'),
+    'gunner': ('Gunner', '#327fbc'),
+    'driver': ('Driver', '#c62859'),
+    'loader': ('Loader', '#cbd03b'),
+    'radioman': ('Radio operator', '#26b99f'),
+}
+
+
+def crew_slots(roles):
+    """Keep actual seats, combined duties and duplicate primary roles distinct."""
+    counts = {}
+    totals = {row[0]: sum(other[0] == row[0] for other in roles) for row in roles if row}
+    result = []
+    for index, duties in enumerate(roles):
+        if not duties:
+            continue
+        role = duties[0]
+        counts[role] = counts.get(role, 0) + 1
+        label, color = CREW_STYLES.get(role, (role, '#72c485'))
+        number = counts[role] if totals[role] > 1 else None
+        if number and number > 1:
+            # Additional seats retain the role's hue with a distinct lighter swatch.
+            rgb = [int(color[i:i+2], 16) for i in (1, 3, 5)]
+            factor = min(.5, .2 * (number - 1))
+            color = '#%02x%02x%02x' % tuple(round(c + (255-c)*factor) for c in rgb)
+        result.append(dict(identity='crew %d' % (index+1), roles=tuple(duties),
+                           number=number, color=color))
+    return tuple(result)
 
 
 def load_scene(armor_scene, layouts=None):
@@ -40,13 +69,22 @@ def load_scene(armor_scene, layouts=None):
     nation, vehicle = member[-2], member[-1].rsplit('.', 1)[0]
     key = (nation, ''.join(c.lower() for c in vehicle if c.isalnum()))
     record = (catalogue() if layouts is None else layouts).get(key)
+    roles = armor_scene.get('crewRoles', record[2] if record else ())
+    slots = crew_slots(roles)
     if record is None:
-        return dict(armor_scene, parts=(), warnings=('No decoded interior geometry is available.',))
+        return dict(armor_scene, parts=(), crewSlots=slots,
+                    warnings=('No decoded interior geometry is available.',))
     modules = [(row[0], row[0], row[1], row[2], row[3]) for row in record[4]]
+    roster_matches = tuple(roles) == tuple(record[2])
     modules.extend(('crew %d' % (index + 1), 'crew', row[0], row[1], row[2])
-                   for index, alternatives in enumerate(record[5]) for row in alternatives or ())
+                   for index, alternatives in enumerate(record[5]) for row in alternatives or ()
+                   if roster_matches)
     parts, missing = [], list(record[3])
     represented, expected = set(), set(row[0] for row in modules)
+    expected.update(slot['identity'] for slot in slots)
+    slot_by_id = {slot['identity']: slot for slot in slots}
+    if not roster_matches:
+        missing.append('Crew roster does not match the decoded layout.')
     for identity, entity, parent, zone, geometry in modules:
         part = next((p for p in armor_scene['parts'] if p['role'] == parent and
                      os.path.basename(p['model']).split('.')[0].lower() == geometry['part']), None)
@@ -72,9 +110,11 @@ def load_scene(armor_scene, layouts=None):
         parts.append({'role': parent, 'surfaces': ({'triangles': tuple(triangles),
             'moduleLabel': '%s / %s' % (identity, zone),
             'moduleEntity': entity, 'fieldKey': None,
-            'color': COLORS.get(entity, '#a889d3')},)})
+            'crewSlot': slot_by_id.get(identity),
+            'color': (slot_by_id[identity]['color'] if identity in slot_by_id
+                      else COLORS.get(entity, '#a889d3'))},)})
         represented.add(identity)
     missing.extend('%s: selected component has no matching interior' % identity
                    for identity in sorted(expected - represented))
-    return dict(armor_scene, parts=tuple(parts), warnings=tuple(sorted(set(missing))),
+    return dict(armor_scene, parts=tuple(parts), crewSlots=slots, warnings=tuple(sorted(set(missing))),
                 provenance='Decoded Console surfaces; selected PC component frame verified')

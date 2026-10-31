@@ -12179,3 +12179,43 @@ vehicle-data choice restored, and the pre-existing profile(s) preserved exactly.
 The current packaged launcher session had no traceback or callback exception.
 This completes the requested launcher-viewer acceptance, not native battle or
 accuracy acceptance of the uninstalled donated module layouts.
+
+
+### Viewer crew identities, terminology and palette (2026-11-01)
+
+The next viewer revision keeps exact decoded triangles and PC component offsets;
+only presentation metadata, colors and captions change. The exact #1513 packed
+vehicle crew roster now accompanies the armor scene, including combined duties.
+Interior seats are matched against the decoded roster before role labels are
+attached; a mismatch suppresses crew geometry and reports it, while other
+verified module geometry remains available. Empty decoded crew slots remain
+explicit no-data entries. Duplicate primary roles use numbered seats and distinct
+shades; a combined-duty commander remains one seat, not several invented people.
+
+Reference review used the actual tanks.gg Tiger I collision viewer and the
+WOTInspector Skorpion G X-ray page in Edge:
+https://tanks.gg/tank/tiger-i/model
+https://armor.wotinspector.com/en/pc/50193-rheinmetall-skorpion-g/
+WOTInspector groups external modules, internal modules and crew, with role-specific
+crew colors and a translucent hull. Its observed module palette uses orange fuel,
+red/pink engine, yellow ammunition, blue turret mechanism and turquoise radio;
+crew roles have separate swatches. Colors here are visual adaptations, not a
+claim of shared hex values or identical data. Fixed absolute nominal-thickness
+bins remain consistent across vehicles, with saturated known colors and neutral
+gray reserved for unmapped surfaces. These are not penetration probabilities.
+Mild lighting preserves chromatic separation. Internal legends separate modules
+and actual crew seats, wrap long combined-duty captions and reflow on resize.
+The old ambiguous Gun control / Chinese caption is replaced throughout the
+legend, surface selection and warnings by Turret rotation mechanism.
+
+Verification baseline adds exact-seat preservation, combined/duplicate duties,
+missing crew and roster mismatch rejection, vertex preservation, known-color
+separation under lighting, bilingual group/caption/swatch consistency, and narrow
+real-Tk caption bounds. Packaged visual acceptance for this revision is pending;
+prior d8f9743 acceptance does not prove these new labels/colors.
+
+Local final launcher verification passed 44 files / 1217 tests, with 14
+documented resource/platform skips. Exact-client inspection reconfirmed Chinese
+HD #1513 x86. Real data probes verified Skorpian (four seats, commander also
+loader), MS-1 (two seats, combined commander duties) and T29 (six seats, two
+numbered loaders) without modifying geometry or vehicle properties.

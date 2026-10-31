@@ -4,6 +4,7 @@ import tkinter as tk
 import unittest
 from unittest import mock
 import vehicle_armor_viewer as viewer
+from vehicle_internal_viewer import crew_slots
 
 
 @unittest.skipUnless(os.name == 'nt' or os.environ.get('DISPLAY'), 'requires Tk display')
@@ -21,9 +22,9 @@ class ViewerWidgetTests(unittest.TestCase):
                                 parts=({'surfaces': (self.surface,)},))
         self.panel._record_by_key = {('m', 'f'): {}}
         self.module = dict(self.surface, fieldKey=None, moduleLabel='crew 1 / crew_00',
-                           moduleEntity='crew', color='#72c485')
+                           moduleEntity='crew', crewSlot=crew_slots((('commander', 'loader'),))[0], color='#29bdcd')
         self.panel._internal_scene = dict(parts=({'surfaces': (self.module,)},),
-                                          warnings=('surveyingDevice',))
+                                          warnings=('surveyingDevice',), crewSlots=crew_slots((('commander', 'loader'),)))
         self.root.geometry('560x740'); self.root.update()
 
     def label_texts(self):
@@ -46,8 +47,8 @@ class ViewerWidgetTests(unittest.TestCase):
                         for child in cell.winfo_children():
                             if isinstance(child, tk.Label):
                                 self.assertGreaterEqual(child.winfo_width(), child.winfo_reqwidth())
-                        if index >= columns:
-                            self.assertGreater(cell.winfo_y(), p._legend_cells[index % columns].winfo_y())
+                        if index:
+                            self.assertGreaterEqual(cell.winfo_y(), p._legend_cells[index-1].winfo_y())
                     self.assertEqual(p.canvas.winfo_x(), p.reset_button.winfo_x())
                     self.assertEqual(p.canvas.winfo_width(), p.reset_button.winfo_width())
                     self.assertGreater(p.reset_button.winfo_y(), p.legend.master.winfo_y())
@@ -68,10 +69,10 @@ class ViewerWidgetTests(unittest.TestCase):
         self.assertEqual('', p.canvas.itemcget(module_id, 'outline'))
         coords = p.canvas.coords(module_id)
         self.assertTrue(p._pick(sum(coords[::2])/3, sum(coords[1::2])/3))
-        self.assertEqual('乘员1', p.selection.get())
+        self.assertEqual('车长（兼装填手）', p.selection.get())
         self.assertTrue(p.canvas.find_withtag('selection_edge'))
         self.assertFalse(p._pick(0, 0))
-        self.assertEqual('乘员1', p.selection.get())
+        self.assertEqual('车长（兼装填手）', p.selection.get())
         p.set_view_mode('armor');self.root.update()
         self.assertFalse(p.canvas.find_withtag('context_shell'))
         module_id = next(iter(p._item_surface))
@@ -83,14 +84,14 @@ class ViewerWidgetTests(unittest.TestCase):
         p = self.panel
         p._internal_scene = None
         with mock.patch('vehicle_internal_viewer.load_scene', return_value=dict(
-                parts=({'surfaces': (self.module,)},), warnings=('surveyingDevice',))), \
+                parts=({'surfaces': (self.module,)},), warnings=('surveyingDevice',), crewSlots=crew_slots((('commander', 'loader'),)))), \
                 mock.patch('tkinter.messagebox.showwarning') as warning:
             p.set_view_mode('internal');p.set_view_mode('armor');p.set_view_mode('internal')
             self.assertEqual(1, warning.call_count)
             self.assertIn('观察装置', warning.call_args.args[1])
         p._selected_module=self.module
-        p.set_language('en');self.assertIn('crew 1', p.selection.get())
-        p.set_language('zh');self.assertEqual('乘员1',p.selection.get())
+        p.set_language('en');self.assertEqual('Commander (also Loader)', p.selection.get())
+        p.set_language('zh');self.assertEqual('车长（兼装填手）',p.selection.get())
 
     def test_vehicle_reload_clears_module_selection_and_refreshes_unmapped_legend(self):
         p = self.panel
@@ -106,3 +107,31 @@ class ViewerWidgetTests(unittest.TestCase):
         self.assertTrue(p._load_scene())
         self.root.update()
         self.assertNotIn('未映射', self.label_texts())
+
+    def test_crew_groups_duplicate_roles_and_complete_labels(self):
+        p = self.panel
+        slots = crew_slots((('commander', 'radioman'), ('loader',), ('loader',)))
+        surfaces = tuple(dict(self.module, moduleLabel=slot['identity'], crewSlot=slot,
+                              color=slot['color']) for slot in slots)
+        p._internal_scene = dict(parts=({'surfaces': surfaces},), crewSlots=slots, warnings=())
+        p.set_view_mode('internal'); self.root.update()
+        self.assertEqual(['模块', '乘员'], [h.cget('text') for _,h in p._legend_headers])
+        self.assertIn('车长（兼通信兵）', self.label_texts())
+        self.assertIn('装填手1', self.label_texts())
+        self.assertIn('装填手2', self.label_texts())
+        self.assertNotEqual(slots[1]['color'], slots[2]['color'])
+        for language in ('zh', 'en'):
+            p.set_language(language)
+            self.root.geometry('380x1000'); self.root.update()
+            for cell in p._legend_cells:
+                self.assertLessEqual(cell.winfo_x()+cell.winfo_width(), p.legend.winfo_width())
+                for child in cell.winfo_children():
+                    if isinstance(child, tk.Label):
+                        self.assertGreaterEqual(child.winfo_width(), child.winfo_reqwidth())
+        p.set_language('zh')
+        self.assertEqual('炮塔旋转机构', p._module_caption({'moduleLabel':'turretRotator / zone0'}))
+        self.assertIn('炮塔旋转机构', p._internal_warning('turretRotator: component frame mismatch'))
+        # Same base color for the selected seat and its legend swatch.
+        for cell, slot in zip(p._legend_cells[6:], slots):
+            swatch = next(child for child in cell.winfo_children() if isinstance(child, tk.Canvas))
+            self.assertEqual(slot['color'], swatch.itemcget(swatch.find_all()[0], 'fill'))

@@ -188,6 +188,16 @@ class VehicleArmorGeometryTest(unittest.TestCase):
                          [viewer._armor_identity(record)
                           for record in records])
 
+    def test_every_thickness_bin_stays_distinct_from_unmapped_under_lighting(self):
+        unknown = viewer.thickness_color(None)
+        for threshold, unused in viewer._COLOR_STOPS:
+            color = viewer.thickness_color(threshold)
+            self.assertNotEqual(unknown, color)
+            for light in (-.10, 0, .12):
+                rgb = tuple(int(viewer._shade(color, light)[i:i+2],16) for i in (1,3,5))
+                # Known thickness remains visibly chromatic after lighting.
+                self.assertGreater(max(rgb)-min(rgb), 60)
+
     def test_thickness_colors_use_fixed_absolute_stops(self):
         self.assertEqual(viewer.thickness_color(20),
                          viewer.thickness_color("20"))
