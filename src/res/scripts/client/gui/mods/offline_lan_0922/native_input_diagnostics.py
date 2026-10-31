@@ -24,7 +24,8 @@ _reports_by_method, _record_sequence = {}, 0
 # Detailed geometry histories are opt-in and bounded independently of errors
 # and lifecycle messages. Never use this budget for gameplay or wire events.
 DETAIL_ENV = 'WOT_OFFLINE_DIAGNOSTICS'
-DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
+DETAIL_LABELS = frozenset(('BOT INITIAL ROUTE CAPACITY', 'BOT WATER DANGER', 'BOT ENVIRONMENT DEATH',
+    'SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT SUPPORT MODE',
     'SUPPORT QUERY PERF', 'BOT GUN SOLUTION', 'BOT SLOPE', 'BOT HEIGHT LINKS',
     'BOT ROUTE CONNECTION', 'STACK CONTACT DECISION', 'BOT SEARCH JOB',
     'PROJECTILE INTERFACE', 'BOT NAV CHOICE', 'BOT EDGE DYNAMICS',
@@ -33,9 +34,14 @@ DETAIL_LABELS = frozenset(('SPG FIRE GATE', 'BOT MOTION', 'BOT SLOPE POSE', 'BOT
     'LOCAL ATTITUDE CHART', 'LOCAL EDGE SUPPORT', 'LOCAL SUPPORT DECISION',
     'RAM CONTACT GEOMETRY', 'RAM TRACK CONTACT', 'RICOCHET SURFACE EVIDENCE',
     'VEHICLE STACK', 'WRECK POSE'))
-DETAIL_WINDOW_BYTES = 2 * 1024 * 1024
-DETAIL_SESSION_BYTES = 32 * 1024 * 1024
+# Test entry only. Verification records have separate stage budgets below.
+DETAIL_WINDOW_BYTES = 32 * 1024 * 1024
+DETAIL_SESSION_BYTES = 256 * 1024 * 1024
 DETAIL_RECORD_BYTES = 256 * 1024
+REVIEW_STAGE_BYTES = 32 * 1024 * 1024
+REVIEW_PRIORITY_BYTES = 4 * 1024 * 1024
+_validation_budget = {'bytes': 0, 'counts': {}, 'dropped': 0}
+_review_drops = {}
 _detail_budget = {'start': None, 'window': 0, 'session': 0, 'dropped': 0,
                   'notice': False}
 _detail_round = None
@@ -292,8 +298,100 @@ def log_summary(phase, round_id):
             _detail_budget.clear()
             _detail_budget.update(start=None, window=0, session=0,
                                   dropped=0, notice=False)
+            _validation_budget.update(bytes=0, counts={}, dropped=0)
+            _review_drops.clear()
         payload = snapshot()
         payload.update(schema=1, pid=os.getpid(), phase=phase, round=round_id)
+        payload.update(review_dropped=dict(_review_drops),
+                       validation_dropped=_validation_budget['dropped'])
         write_json_record('NATIVE INPUT SUMMARY', payload)
     except Exception:
         pass
+
+
+def validation_event(stage, **values):
+    """Low-frequency career evidence, independent of bulk geometry logs."""
+    if not detailed_enabled():
+        return
+    try:
+        budget = _validation_budget
+        count = budget['counts'].get(stage, 0)
+        if budget['bytes'] >= REVIEW_PRIORITY_BYTES or count >= 2048:
+            budget['dropped'] += 1
+            if budget['dropped'] == 1:
+                write_json_record('VALIDATION LIMIT', dict(stage=stage, round=_detail_round))
+            return
+        values.update(schema=1, stage=stage, pid=os.getpid(),
+                      round=_detail_round, wall_time=time.time())
+        size = len(json.dumps(values, separators=(',', ':'))) * 2 + 256
+        if size > DETAIL_RECORD_BYTES or budget['bytes'] + size > REVIEW_PRIORITY_BYTES:
+            budget['dropped'] += 1
+            write_json_record('VALIDATION LIMIT', dict(stage=stage, reason='bytes'))
+            return
+        budget['bytes'] += size
+        budget['counts'][stage] = count + 1
+        write_json_record('VALIDATION', values)
+    except Exception:
+        pass
+
+
+def battle_review_record(owner, stage, key, now, build, interval=1.0, limit=32,
+                         priority=False):
+    """Admit lazy, round-scoped read-only evidence through --diagnostics.
+
+    No engine callbacks, payload construction or retained engine references.
+    Clock values belong to the named process; never compare worker and server
+    monotonic origins. Bulk histories cannot exhaust verification stages.
+    """
+    if not detailed_enabled():
+        return
+    try:
+        round_id = getattr(owner, 'round_id', None)
+        if round_id is None:
+            round_id = getattr(getattr(owner, '_battle_network_client', None), 'round_id', None)
+        if round_id is None:
+            round_id = getattr(getattr(owner, 'client', None), 'round_id', None)
+        if round_id is None:
+            round_id = (getattr(owner, '_start_message', None) or {}).get('round_id')
+        if round_id is None:
+            round_id = getattr(owner, '_battle_server_time_origin', None)
+        state = getattr(owner, '_battle_review_records', None)
+        if state is None or state[0] != round_id:
+            state = (round_id, {}, [0], {})
+            owner._battle_review_records = state
+        stages = state[1]
+        if stage not in stages:
+            if len(stages) >= 32:
+                return
+            stages[stage] = {}
+        records = stages[stage]
+        token = key
+        previous = records.get(token)
+        if previous is None and len(records) >= 64:
+            return
+        count, last = previous if previous is not None else (0, None)
+        if count >= limit or (last is not None and now-last < interval):
+            return
+        used = state[2][0] if priority else state[3].get(stage, 0)
+        ceiling = REVIEW_PRIORITY_BYTES if priority else REVIEW_STAGE_BYTES
+        if used >= ceiling:
+            _review_drops[stage] = _review_drops.get(stage, 0) + 1
+            if _review_drops[stage] == 1:
+                write_json_record('BATTLE REVIEW LIMIT', dict(stage=stage, round=round_id))
+            return
+        records[token] = (count+1, now)
+        payload = build()
+        payload.update(schema=1, stage=stage, round=round_id,
+                       pid=os.getpid(), clock=now, sample=count+1)
+        size = len(json.dumps(payload, separators=(',', ':'))) * 2 + 256
+        if size > DETAIL_RECORD_BYTES or used + size > ceiling:
+            _review_drops[stage] = _review_drops.get(stage, 0) + 1
+            write_json_record('BATTLE REVIEW LIMIT', dict(stage=stage, reason='bytes', round=round_id))
+            return
+        if priority:
+            state[2][0] += size
+        else:
+            state[3][stage] = used + size
+        write_json_record('BATTLE REVIEW EVENT' if priority else 'BATTLE REVIEW', payload)
+    except Exception:
+        pass  # Diagnostics must not change a gameplay result.

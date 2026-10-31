@@ -1,6 +1,7 @@
 """Read-only, scope-complete preview of committed draft behavior rules."""
 import copy
 import json
+import ui_layout
 import tkinter as tk
 from tkinter import ttk
 import bot_tactics_labels as labels
@@ -27,8 +28,12 @@ EN_PRESETS={
 }
 
 
-def grouped(document, team=0, tag='all', slots=''):
+def grouped(document, team=0, tag='all', slots='', lineup=()):
     """Use precisely effective()'s ordered matching; retain each winning source."""
+    from gui.mods.offline_lan_0922 import lineup_slots
+    from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
+    indexed = {(r['team'], r['slot']): r for r in lineup}
+    explicit = lineup_slots.explicit(lineup)
     result = {}
     teams = (int(team),) if int(team) else (1,2)
     tags = (tag,) if tag!='all' else storage.contract.CLASSES
@@ -36,7 +41,16 @@ def grouped(document, team=0, tag='all', slots=''):
     for t in teams:
         for c in tags:
             for slot in selected:
+                pin = indexed.get((t, slot), {})
+                if explicit and not pin.get('enabled'):
+                    continue
+                fixed_class = CLASSES.get(pin.get('vehicle')) or pin.get('vehicle_class')
+                if explicit and fixed_class and fixed_class != c:
+                    continue
                 values,sources = {},{}
+                if pin.get('skill'):
+                    values['skill'] = pin['skill']
+                    sources['skill'] = ('lineup', t, slot)
                 for rule in document.get('behavior',()):
                     if rule['team'] in (0,t) and rule['class_tag'] in ('all',c) and rule['slot'] in (-1,slot):
                         values.update(rule['values'])
@@ -55,6 +69,8 @@ def rows(group, language):
     params=bot_gunnery.skill_parameters(tier) if tier else {}
     def source(key):
         t,c,s=sources[key]
+        if t == 'lineup':
+            return tr('阵容：队伍 %d／槽位 %d', 'Lineup: team %d / slot %d') % (c,s+1)
         return ' / '.join((labels.enum_label('team',t,language),labels.enum_label('class_tag',c,language),
             tr('槽位 %d','Slot %d')%(s+1) if s>=0 else tr('全部槽位','All slots')))
     result=[]
@@ -96,7 +112,9 @@ def rows(group, language):
 
 class PreviewWindow:
     def __init__(self, parent, document, team, tag, slots, language, lineup=(), game_root=''):
-        self.groups=grouped(copy.deepcopy(document),team,tag,slots)
+        self.groups=grouped(copy.deepcopy(document),team,tag,slots,lineup)
+        if not self.groups:
+            self.groups = [dict(values={},sources={},scopes=[])]
         self.language=language
         self.lineup=copy.deepcopy(list(lineup));self.game_root=game_root
         self.root=tk.Toplevel(parent)
@@ -124,9 +142,10 @@ class PreviewWindow:
         notes_scroll=ttk.Scrollbar(notes_frame,orient='vertical',command=self.ammo_note.yview)
         self.ammo_note.configure(yscrollcommand=notes_scroll.set)
         notes_scroll.pack(side='right',fill='y');self.ammo_note.pack(fill='x',expand=True)
-        self.close_button=ttk.Button(self.root,command=self.root.destroy)
-        self.close_button.pack(anchor='e',padx=10,pady=8)
+        self.close_button=tk.Button(self.root,command=self.root.destroy)
+        self.close_button.pack(fill='x',padx=10,pady=8)
         self.set_language(language)
+        ui_layout.polish(self.root)
 
     def set_language(self,language):
         self.language=language;zh=language=='zh'

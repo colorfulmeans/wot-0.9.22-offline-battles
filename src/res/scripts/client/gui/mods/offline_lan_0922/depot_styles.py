@@ -99,8 +99,17 @@ def purchase(view, compact_descr):
         def completed(result):
             view._offline_style_purchase_pending=False
             if BigWorld.player() is not account:return
-            SystemMessages.pushMessage(native_text(tr('Style purchased.') if result==commands.RES_SUCCESS
-                else tr('Style purchase failed.')),type=SystemMessages.SM_TYPE.Information)
+            if result == commands.RES_SUCCESS:
+                from gui.mods.offline_lan_0922.native_notifications import publish, invoice
+                assets = {'customizations': [{'custType': 'style', 'value': 1,
+                                              'isPermanent': not is_rental(style)}]}
+                for currency, amount in zip(('credits', 'gold', 'crystal'), row['price']):
+                    if amount:
+                        assets[currency] = -int(amount)
+                publish('invoiceReceived', invoice(assets))
+            else:
+                SystemMessages.pushMessage(native_text(tr('Style purchase failed.')),
+                                           type=SystemMessages.SM_TYPE.Error)
             if view._isDAAPIInited():view._update()
         try:account.shop.buyCustomizations(vehicle_id,{int(compact_descr):1},completed)
         except Exception:

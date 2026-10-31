@@ -15,6 +15,29 @@ from test_vehicle_editor_ui import _Service
 
 @unittest.skipUnless(os.name == 'nt' or os.environ.get('DISPLAY'), 'requires Tk display')
 class VehicleEditorLanguageTests(unittest.TestCase):
+    def test_editor_edges_and_internal_title_remain_aligned_on_resize(self):
+        root = tk.Tk(); root.withdraw()
+        def viewer(*args):
+            def unavailable(*unused, **kwargs):
+                raise vehicle_armor_viewer.ArmorViewerError('fixture')
+            return vehicle_armor_viewer.ArmorViewerPanel(*args, scene_loader=unavailable)
+        editor = vehicle_editor_ui.VehicleEditorWindow(root, 'fixture', 'Layout',
+            tk, ttk, mock.Mock(), service=_Service(), armor_viewer_factory=viewer)
+        try:
+            for size in ('1320x740', '1480x820'):
+                editor.root.geometry(size); root.update()
+                right = lambda w: w.winfo_rootx() + w.winfo_width()
+                self.assertEqual(right(editor.vehicle_box), right(editor.apply_button))
+                self.assertEqual(right(editor.field_box), right(editor.apply_button))
+                self.assertEqual(editor.nation_box.winfo_rootx(), editor.category_box.winfo_rootx())
+                panel = editor.armor_viewer
+                self.assertEqual('Frame', panel.frame.winfo_class())
+                self.assertGreater(panel.title_label.winfo_rooty(), panel.frame.winfo_rooty())
+                self.assertEqual(editor.nation_box.winfo_rootx() - editor.root.winfo_rootx(),
+                    editor.root.winfo_rootx() + editor.root.winfo_width() - right(panel.frame))
+        finally:
+            editor.root.destroy(); root.destroy()
+
     def test_main_language_event_relabels_open_windows_without_reloading_or_saving(self):
         service = _Service()
         member = vehicle_editor_ui.DEFAULT_MEMBER
@@ -64,7 +87,7 @@ class VehicleEditorLanguageTests(unittest.TestCase):
                     if language == 'zh':
                         self.assertIn('请输入一个数值', editor.status.get())
                         self.assertIn('每扳机发射炮弹', editor.field.get())
-                        self.assertEqual('3D 装甲检视', editor.armor_viewer.frame.cget('text'))
+                        self.assertEqual('3D 装甲检视', editor.armor_viewer.title_label.cget('text'))
                 editor.root.destroy()
                 app.language_choice.set('English')
                 app._language_selected()

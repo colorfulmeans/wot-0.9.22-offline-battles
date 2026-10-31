@@ -753,6 +753,20 @@ def _validate_waiting_room_ui(repo_root):
         raise ValueError('Rebuild scoped native map picker')
 
 
+def _validate_offline_menu_ui(repo_root):
+    path = os.path.join(repo_root, 'src', 'res', 'gui', 'flash', 'lobbyMenu.swf')
+    with open(path, 'rb') as stream:
+        raw = stream.read()
+    with open(path + '.json', 'r') as stream:
+        proof = json.load(stream)
+    with open(os.path.join(repo_root, 'tools', 'build_offline_menu_swf.py'), 'rb') as stream:
+        builder = hashlib.sha256(stream.read().replace(b'\r\n', b'\n')).hexdigest()
+    if (proof.get('builder_sha256') != builder or
+            proof.get('disabled_logoff_initializers') != 4 or
+            proof.get('output_sha256') != hashlib.sha256(raw).hexdigest()):
+        raise ValueError('Rebuild the four-state native offline logoff movie')
+
+
 def build():
     _validate_python()
     repo_root = os.path.abspath(os.path.dirname(__file__))
@@ -760,6 +774,7 @@ def build():
     from verify_native_payload import verify_file
     verify_file(repo_root, os.path.join(repo_root, 'native', NATIVE_MATH_FILENAME))
     _validate_waiting_room_ui(repo_root)
+    _validate_offline_menu_ui(repo_root)
     source_root = os.path.join(repo_root, 'src')
     dist_root = os.path.join(repo_root, 'dist')
     if not os.path.isdir(dist_root):

@@ -118,6 +118,9 @@ class GreatWallGateTests(unittest.TestCase):
         allocation=(contextlib.nullcontext() if getattr(self,'authoritative',False) else mock.patch.object(module.bot_tactics_runtime,'assign_initial_routes',route_scene_fixture.allocate))
         with allocation, mock.patch.object(module.random.SystemRandom, 'getrandbits',return_value=0x0922):
             published=runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
+                                  'bot_tactics': (module.bot_tactics.default_profile()
+                                      if getattr(self, 'authoritative', False)
+                                      else module.bot_tactics.empty()),
                                   'bot_authority_id': 1, 'bots': _bots()})[0]
         if not getattr(self,'authoritative',False):
             for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)

@@ -50,11 +50,12 @@ from vehicle_overlay_store import (
     VehicleOverlayStore,
     VehicleOverlayStoreError,
 )
+from gui.mods.offline_lan_0922 import native_input_diagnostics as battle_review_diagnostics
 from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import snapshot_delta
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
-from gui.mods.offline_lan_0922 import spg_positions, bot_tactics
+from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, lineup_slots
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
@@ -2459,6 +2460,13 @@ class BattleState:
         self.bot_tactics_path = bot_tactics_path
         self.bot_tactics = bot_tactics.empty()
         self.bot_lineup = self._normalize_bot_lineup(bot_lineup)
+        self.lineup_locked = lineup_slots.explicit(self.bot_lineup)
+        if self.lineup_locked:
+            self.team_sizes = {team: len(self._team_slots(team)) for team in (1, 2)}
+            self.bot_tier_mode = 'random'
+            self.bot_skill_mode = 'mixed'
+            self.team_classes = bot_tactics.team_class_choices()
+            team1_size, team2_size = self.team_sizes[1], self.team_sizes[2]
         self.bot_excluded_vehicles = self._normalize_bot_excluded_vehicles(
             bot_excluded_vehicles)
         # Keep the old scalar on the wire for older protocol-v5 consumers.
@@ -2542,6 +2550,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.radio_assist_sources = {}
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -2630,7 +2639,7 @@ class BattleState:
             slot = _exact_int(raw.get("slot"), 0, 14)
             vehicle = raw.get("vehicle")
             skill = raw.get("skill")
-            if vehicle is None and skill is None:
+            if vehicle is None and skill is None and "enabled" not in raw:
                 raise ValueError("empty Bot lineup entry")
             if vehicle is not None:
                 if (not isinstance(vehicle, str) or len(vehicle) > 96 or
@@ -2648,6 +2657,14 @@ class BattleState:
             # A slot may pin its vehicle, its gunnery tier, or both.  What
             # it leaves out stays with the room's own presets.
             entry = {"team": team, "slot": slot}
+            lineup_slots.validate_filters(raw)
+            if 'enabled' in raw:
+                entry['enabled'] = raw['enabled']
+                for field in ('nation', 'vehicle_class'):
+                    if raw.get(field) is not None:
+                        entry[field] = raw[field]
+                if not raw['enabled'] and vehicle is not None:
+                    raise ValueError('Disabled lineup slot carries a vehicle')
             if vehicle is not None:
                 entry["vehicle"] = vehicle
             if skill is not None:
@@ -2711,6 +2728,17 @@ class BattleState:
 
     def _active_map_pool(self):
         return MAP_POOL
+
+    def _lineup_pins_vehicle(self, team, slot, vehicle, class_tag):
+        return any(row.get('team') == team and row.get('slot') == slot and
+                   (row.get('vehicle') == vehicle or
+                    (row.get('enabled') and not row.get('vehicle') and
+                     (row.get('nation') or row.get('vehicle_class')) and
+                     lineup_slots.matches(row, dict(name=vehicle, class_tag=class_tag))))
+                   for row in self.bot_lineup)
+
+    def _team_slots(self, team):
+        return lineup_slots.active_slots(self.bot_lineup, team, self.team_sizes[team])
 
     def _team_sizes_wire(self):
         return {str(team): self.team_sizes[team] for team in (1, 2)}
@@ -2900,7 +2928,7 @@ class BattleState:
         available_callsigns = list(BOT_CALLSIGNS_0922)
         random.shuffle(available_callsigns)
         for team in (1, 2):
-            for slot in range(self.team_sizes[team]):
+            for slot in self._team_slots(team):
                 if (team, slot) in occupied_slots:
                     continue
                 name = available_callsigns.pop()
@@ -2910,6 +2938,14 @@ class BattleState:
                 # across different waiting-room sizes without slot collisions.
                 bot_id = slot + 1 if team == 1 else slot + 16
                 roster.append({"id": bot_id, "team": team, "slot": slot, "name": name})
+        if self.lineup_locked and battle_review_diagnostics.detailed_enabled():
+            battle_review_diagnostics.validation_event('lineup_roster',
+                active={str(t):self._team_slots(t) for t in (1,2)},
+                human_slots=sorted(occupied_slots),
+                difficulty_presets=[dict(team=r['team'], slot=r['slot'],
+                    enabled=r.get('enabled', True), skill=r['skill'])
+                    for r in self.bot_lineup if r.get('skill')],
+                bots=[dict(team=r['team'],slot=r['slot'],id=r['id']) for r in roster])
         return roster
 
     def _elect_bot_authority(self):
@@ -3026,11 +3062,11 @@ class BattleState:
                 automatic.append(participant)
                 continue
             available = [
-                slot for slot in range(self.team_sizes[requested])
+                slot for slot in self._team_slots(requested)
                 if slot not in occupied[requested]]
             if not available:
                 return None
-            slot = (participant.slot if participant.team == requested and
+            slot = (participant.slot if not self.lineup_locked and participant.team == requested and
                     participant.slot in available else available[0])
             occupied[requested].add(slot)
             plan.append((participant, requested, slot))
@@ -3046,7 +3082,7 @@ class BattleState:
                 if len(occupied[team]) == smallest]
             team = random.choice(candidates)
             slot = next(
-                value for value in range(self.team_sizes[team])
+                value for value in self._team_slots(team)
                 if value not in occupied[team])
             occupied[team].add(slot)
             plan.append((participant, team, slot))
@@ -3152,7 +3188,11 @@ class BattleState:
                 if participant.connected]
             if len(self.players) >= self.max_players:
                 return None, "full"
-            if len(connected_players) >= sum(self.team_sizes.values()):
+            if self.lineup_locked and not connected_players and not sum(self.team_sizes.values()):
+                # Let the host inspect an empty custom room; it still cannot
+                # start or accept a participant into either zero-sized team.
+                requested_team = 0
+            if len(connected_players) >= max(1, sum(self.team_sizes.values())):
                 return None, "team_full"
             if self.client_build is None:
                 map_pool = MAP_POOL
@@ -3175,7 +3215,7 @@ class BattleState:
             if requested_team in (1, 2):
                 team = requested_team
                 slot = next(
-                    value for value in range(self.team_sizes[team])
+                    value for value in self._team_slots(team)
                     if value not in occupied[team])
                 x, z, yaw = self._spawn_for(slot, team)
             else:
@@ -3250,7 +3290,7 @@ class BattleState:
                 for candidate in (1, 2)
             }
             available = [
-                slot for slot in range(self.team_sizes[team])
+                slot for slot in self._team_slots(team)
                 if slot not in occupied[team]]
             if not available:
                 return False, "team_full"
@@ -3274,7 +3314,7 @@ class BattleState:
             occupied={(side,slot) for p,side,slot in plan}
             humans=[p for p,side,slot in plan if side==team]
         pinned=[r for r in self.bot_lineup if r.get('team')==team and 'vehicle' in r
-                and (team,r.get('slot')) not in occupied and 0<=r.get('slot',-1)<self.team_sizes[team]]
+                and (team,r.get('slot')) not in occupied and r.get('slot') in self._team_slots(team)]
         tags=[CLASSES.get(r['vehicle']) for r in pinned]
         return max(0,self.team_sizes[team]-len(humans)-len(pinned)),tags,sum(CLASSES.get(p.vehicle)=='SPG' for p in humans)
 
@@ -3291,6 +3331,8 @@ class BattleState:
         return removed
 
     def set_team_class(self, player_id, team, tag, allowed):
+        if self.lineup_locked:
+            return False
         with self.lock:
             player=self.players.get(player_id)
             if player is None or not player.connected or self.phase!='waiting' or player_id!=self.host_player_id:return False
@@ -3314,6 +3356,8 @@ class BattleState:
 
     def set_team_size(self, player_id, requested_team, requested_size):
         """Let the waiting-room host change one next-round team capacity."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3372,6 +3416,8 @@ class BattleState:
 
     def set_bot_skill_mode(self, player_id, requested_mode):
         """Let only the room host choose the next round's Bot skill preset."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3390,6 +3436,8 @@ class BattleState:
 
     def set_bot_tier_mode(self, player_id, requested_mode):
         """Let only the room host choose the next round's Bot tier preset."""
+        if self.lineup_locked:
+            return False, 'host_only'
         with self.lock:
             player = self.players.get(player_id)
             if (player is None or not player.connected or
@@ -3810,6 +3858,7 @@ class BattleState:
         self.track_immobilisers = {}
         self.player_spotted = {}
         self.bot_spotted = {}
+        self.radio_assist_sources = {}
         self.player_environment = {}
         self.player_environment_seq = -1
         self.player_environment_authority_epoch = -1
@@ -3877,6 +3926,11 @@ class BattleState:
 
     def lobby_message(self):
         with self.lock:
+            if self.lineup_locked and self.phase == 'waiting':
+                participants = [p for p in self.players.values() if p.connected and self._requested_team_for_player(p) in (1, 2)]
+                plan = self._waiting_assignment_plan(participants)
+                if plan is not None:
+                    self._apply_waiting_assignment_plan(plan)
             message = {
                 "type": "roster",
                 "protocol": PROTOCOL_VERSION,
@@ -3890,6 +3944,7 @@ class BattleState:
                 "bot_authority_id": self.bot_authority_id,
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -3930,6 +3985,8 @@ class BattleState:
                 return None, "host_only"
             if battle_mode not in ("regular", "training") or not isinstance(training_bots, bool):
                 return None, "invalid_battle_mode"
+            if self.lineup_locked and any(not self._team_slots(team) for team in (1, 2)):
+                return None, 'empty_lineup_team'
             battle_duration_seconds = self._requested_battle_duration(
                 requested_round_seconds)
             if battle_duration_seconds is None:
@@ -4019,6 +4076,19 @@ class BattleState:
                 host_tier=next((r['level'] for r in catalog if r.get('name')==host.vehicle),1)
                 pool=[r for r in catalog if r.get('name') in allowed_names and
                       bot_planner.vehicle_in_bot_tier_mode(host_tier,r.get('level',1),self.bot_tier_mode)]
+                occupied = {(side, slot) for participant, side, slot in assignment_plan}
+                slot_tiers = []
+                for row in self.bot_lineup:
+                    if (row.get('enabled') and not row.get('vehicle') and
+                            (row['team'], row['slot']) not in occupied and
+                            (row.get('nation') or row.get('vehicle_class')) and
+                            not any(lineup_slots.matches(row, candidate) for candidate in pool)):
+                        return None, 'invalid_bot_lineup'
+                    if (row.get('enabled') and not row.get('vehicle') and
+                            (row['team'], row['slot']) not in occupied and
+                            (row.get('nation') or row.get('vehicle_class'))):
+                        slot_tiers.append([candidate.get('level', 1) for candidate in pool
+                                           if lineup_slots.matches(row, candidate)])
                 # The worker reserves every connected human's tier/class, even
                 # in a mixed-tier room outside the host's ordinary tier band.
                 pool_names=set(r['name'] for r in pool)
@@ -4038,8 +4108,10 @@ class BattleState:
                     available_tiers=[r.get('level',1) for r in pool],required_tiers=human_tiers)
                 proposed=tuple(sorted(set(proposed)|set(human_tiers)))
                 tiers=policy.matching_tiers([(r.get('level',1),CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r)) for r in pool],
-                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups)
+                    needed,human_tiers,proposed,self.bot_tier_mode=='random',groups,slot_tiers)
                 if tiers is None:
+                    if slot_tiers:
+                        return None, 'invalid_bot_lineup'
                     available=set(CLASSES.get(r['name']) or bot_planner.vehicle_match_class(r) for r in pool)
                     for team in (1,2):
                         row=self.team_classes[str(team)]
@@ -4129,6 +4201,7 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -4939,6 +5012,7 @@ class BattleState:
                 "bots": list(self.bot_roster),
                 "team_size": self.team_size,
                 "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                 "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                 "bot_tier_mode": self.bot_tier_mode,
@@ -5227,7 +5301,7 @@ class BattleState:
                     return False
                 from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
                 tag=CLASSES.get(entry['vehicle'],entry['profile'].get('class_tag','mediumTank'))
-                pinned=any(row.get('team')==raw_team and row.get('slot')==raw_slot and row.get('vehicle')==entry['vehicle'] for row in self.bot_lineup)
+                pinned=self._lineup_pins_vehicle(raw_team,raw_slot,entry['vehicle'],tag)
                 from gui.mods.offline_lan_0922 import team_class_policy as class_policy
                 if not pinned and not class_policy.allows(self.team_classes[str(raw_team)],tag):
                     self.last_bot_manifest_reject_code='bot_class_excluded'
@@ -5240,7 +5314,7 @@ class BattleState:
             from gui.mods.offline_lan_0922.bot_fitting_data import CLASSES
             for team in (1,2):
                 artillery=[row for row in manifest if row['team']==team and CLASSES.get(row['vehicle'],row['profile'].get('class_tag'))=='SPG']
-                pinned=sum(any(p.get('team')==team and p.get('slot')==row['slot'] and p.get('vehicle')==row['vehicle'] for p in self.bot_lineup) for row in artillery)
+                pinned=sum(self._lineup_pins_vehicle(team,row['slot'],row['vehicle'],'SPG') for row in artillery)
                 humans=sum(p.connected and p.team==team and CLASSES.get(p.vehicle)=='SPG' for p in self.players.values())
                 from gui.mods.offline_lan_0922 import team_class_policy as class_policy
                 row=self.team_classes[str(team)]
@@ -5536,12 +5610,13 @@ class BattleState:
 
     @staticmethod
     def _validated_radio_rows(raw, actors, team, max_duration=None,
-                              exclude=None):
+                              exclude=None, with_sources=False, allow_dead=False):
         """Validate identity lists before committing any observation state.
 
         The worker owns native radio/crew ranges. This boundary checks the
         bounded recipients it proved, without inventing a server-side range.
-        Dead known actors are an ordinary in-flight race and are retired.
+        Dead recipients are retired; a known dead source can retain an
+        already delivered, unexpired lease without becoming a receiver.
         """
         if not isinstance(raw, (list, tuple)) or len(raw) > len(actors):
             raise ValueError("invalid radio recipient list")
@@ -5564,7 +5639,11 @@ class BattleState:
                 if duration <= 0.0:
                     raise ValueError("radio recipient lease must be positive")
                 clean["time_left"] = duration
-            if actor[1]:
+                if with_sources and "sources" in row:
+                    clean["sources"] = BattleState._validated_radio_rows(
+                        row["sources"], actors, team, max_duration=duration,
+                        allow_dead=True)
+            if actor[1] or allow_dead:
                 result.append(clean)
         return result
 
@@ -5650,6 +5729,7 @@ class BattleState:
             team_lit = {1: {}, 2: {}}
             stale_observation = False
             contacts = []
+            assist_sources = {}
             for raw in message.get("contacts"):
                 contact = dict(raw) if isinstance(raw, dict) else raw
                 if (not isinstance(contact, dict) or
@@ -5712,9 +5792,17 @@ class BattleState:
                     try:
                         contact["radio_recipients"] = self._validated_radio_rows(
                             contact["radio_recipients"], radio_actors,
-                            observing_team, max_duration=time_left)
+                            observing_team, max_duration=time_left, with_sources=True)
                     except (ValueError, TypeError):
                         return False
+                    result_target = ("player" if target_kind == "human" else "bot", target_id)
+                    for recipient in contact["radio_recipients"]:
+                        receiver = ("player" if recipient["kind"] == "human" else "bot",
+                                    recipient["id"])
+                        assist_sources[(receiver, result_target)] = {
+                            ("player" if source["kind"] == "human" else "bot", source["id"]):
+                            source["time_left"]
+                            for source in recipient.get("sources", ())}
                 bot_observer_ids = []
                 for raw_bot_id in contact.get("visible_by_bot_ids"):
                     try:
@@ -5837,6 +5925,23 @@ class BattleState:
                         (result_kind, target_id))
                 contacts.append(contact)
             now = time.monotonic()
+            self.radio_assist_sources = {
+                key: {source: now + duration for source, duration in sources.items()}
+                for key, sources in assist_sources.items()}
+            if battle_review_diagnostics.detailed_enabled():
+                battle_review_diagnostics.battle_review_record(
+                    self, 'server_radio_accepted', 'batch', now,
+                    lambda: dict(contacts=[dict((name, row.get(name)) for name in
+                        ('observing_team', 'target_kind', 'target_id', 'visible',
+                         'fresh', 'time_left', 'visible_by_player_ids',
+                         'visible_by_bot_ids', 'radio_recipients')) for row in contacts],
+                        leases=[dict(receiver=receiver, target=target,
+                            sources=[dict(actor=source, deadline=deadline,
+                                          remaining=deadline-now)
+                                     for source, deadline in sorted(sources.items())])
+                            for (receiver, target), sources in
+                                sorted(self.radio_assist_sources.items())]),
+                    interval=1.0, limit=240)
             team_lit = {
                 team: {target: now + time_left
                        for target, time_left in targets.items()}
@@ -6770,6 +6875,8 @@ class BattleState:
             "roll": round(bot_state_codec._wrapped_angle(
                 _finite_float(raw.get("roll"))), 5),
             "aim_yaw": round(_finite_float(raw.get("aim_yaw"), yaw), 5),
+            "turret_yaw": round(bot_state_codec._wrapped_angle(_finite_float(
+                raw.get("turret_yaw"), _finite_float(raw.get("aim_yaw"), yaw) - yaw)), 5),
             "gun_pitch": round(_clamp(_finite_float(raw.get("gun_pitch")), -1.2, 1.2), 5),
             "speed": round(_clamp(
                 _finite_float(raw.get("speed")), -80.0, 80.0), 4),
@@ -7175,7 +7282,7 @@ class BattleState:
         if previous is not None:
             health = min(health, int(previous.get("health", max_health)))
         for name in ("x", "y", "z", "yaw", "pitch", "roll", "aim_yaw",
-                     "gun_pitch", "speed", "movement_dir", "rotation_dir",
+                     "turret_yaw", "gun_pitch", "speed", "movement_dir", "rotation_dir",
                      "world_pose"):
             result[name] = raw[name]
         for name in ("shot_yaw", "shot_pitch"):
@@ -13760,6 +13867,15 @@ class BattleState:
         state = self._vehicle_stun_state(target)
         if state is None or not state["alive"]:
             return False
+        if battle_review_diagnostics.detailed_enabled():
+            battle_review_diagnostics.battle_review_record(self,
+                'server_stun_transition', (tuple(attacker), tuple(target)),
+                self._monotonic(), lambda: dict(
+                    target=target, proposed_attacker=attacker,
+                    previous_attacker=[state['attacker_kind'], state['attacker_id']],
+                    previous_end=state['end'], proposed_end=end_server_time_ms,
+                    action='retain' if int(state['end']) >= end_server_time_ms else 'replace'),
+                interval=0.0, limit=256, priority=True)
         if int(state['end']) >= end_server_time_ms:
             # Repeated/smaller hits must not shorten the existing stun or
             # steal its outstanding assistance attribution.
@@ -14391,34 +14507,33 @@ class BattleState:
                     target in self.bot_spotted.get(actor[1], ()))
 
     def _radio_assisters(self, attacker, target, target_team):
-        """Return the live observers one spotting assist is divided between.
+        """Divide an assist only among the shooter's received, unexpired sources.
 
-        Wargaming pays a spotting assist for damage done to a target the
-        observer is spotting "by team members who are not spotting them
-        themselves", divided "by the number of team members spotting the
-        target".  An attacker that sees its own target therefore earns
-        nobody an assist instead of merely being skipped, which is the rule
-        the Patrol Duty ledger in ``_record_damage`` already applies.
+        Direct LOS can end before its lease expires. Team-wide direct sets
+        neither represent that memory nor prove a source reached this shooter.
+        Missing provenance fails closed rather than inventing a radio link.
         """
-        if self._spots_target(attacker, target):
+        if self._vehicle_team(*attacker) == target_team or self._spots_target(attacker, target):
             return []
-        result = []
-        for reporter_id in sorted(self.player_spotted):
-            reporter = self.players.get(reporter_id)
-            if (reporter is None or not reporter.connected or
-                    not reporter.alive or reporter.team == target_team or
-                    target not in self.player_spotted[reporter_id]):
+        now = time.monotonic()
+        sources = self.radio_assist_sources.get((attacker, target), {})
+        eligible_sources = []
+        for reporter, deadline in sorted(sources.items(), key=lambda item: (
+                0 if item[0][0] == "player" else 1, item[0][1])):
+            if deadline <= now or self._vehicle_team(*reporter) != self._vehicle_team(*attacker):
                 continue
-            result.append(("player", reporter_id))
-        for bot_id in sorted(self.bot_spotted):
-            bot = self.bot_states.get(bot_id)
-            reporter = ("bot", int(bot_id))
-            if (bot is None or not bot.get("alive") or
-                    int(bot.get("team", 0)) == target_team or
-                    target not in self.bot_spotted[bot_id]):
+            if reporter[0] == "player":
+                player = self.players.get(reporter[1])
+                if player is None or not player.connected:
+                    continue
+            elif reporter[1] not in self.bot_states:
                 continue
-            result.append(reporter)
-        return result
+            # Death cannot erase a lease already delivered to this shooter.
+            # A dead shooter's own old observation does not suppress helpers.
+            if reporter == attacker and not (self._vehicle_stun_state(reporter) or {}).get('alive'):
+                continue
+            eligible_sources.append(reporter)
+        return [] if attacker in eligible_sources else eligible_sources
 
     def _vehicle_statistics_payload(self):
         # Compensation eligibility is server settlement state, not a new
@@ -14585,6 +14700,15 @@ class BattleState:
                 spotters[0], set()).add(target)
         credits = [(category, holder, damage) for category, holder in
                    self._impairment_assisters(attacker, target, target_critical)]
+        if battle_review_diagnostics.detailed_enabled() and state is not None and state['end']:
+            battle_review_diagnostics.battle_review_record(self, 'server_stun_credit',
+                (tuple(attacker), tuple(target)), self._monotonic(),
+                lambda: dict(attacker=attacker, target=target, damage=damage,
+                    stun_end=state['end'], server_time_ms=self._server_time_ms(),
+                    stun_owner=[state['attacker_kind'], state['attacker_id']],
+                    credits=[dict(category=category, actor=holder, damage=share)
+                             for category, holder, share in credits]),
+                interval=0.0, limit=256, priority=True)
         self._record_impairment_kill_assists(attacker, target, target_critical)
         # A track or a stun has one owner, but a spotting assist is shared by
         # every observer lighting the target, so each of them is paid its
@@ -14593,6 +14717,40 @@ class BattleState:
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))
+        if battle_review_diagnostics.detailed_enabled():
+            review_now = time.monotonic()
+            def review_assist():
+                sources = self.radio_assist_sources.get((attacker, target), {})
+                candidates = []
+                for reporter, deadline in sorted(sources.items()):
+                    player = self.players.get(reporter[1]) if reporter[0] == "player" else None
+                    alive = (bool(player and player.connected and player.alive)
+                             if reporter[0] == "player" else
+                             bool((self.bot_states.get(reporter[1]) or {}).get("alive")))
+                    same_team = self._vehicle_team(*reporter) == self._vehicle_team(*attacker)
+                    connected = (bool(player and player.connected) if reporter[0] == "player"
+                                 else reporter[1] in self.bot_states)
+                    candidates.append(dict(actor=reporter, deadline=deadline,
+                        remaining=deadline-review_now, alive_connected=alive,
+                        connected=connected,
+                        same_team=same_team, selected=reporter in assisters,
+                        reason=("expired" if deadline <= review_now else
+                                "inactive" if not connected else "other_team" if not same_team else
+                                "retained_after_death" if not alive else
+                                "eligible_source")))
+                return dict(attacker=attacker, target=target, damage=damage,
+                    direct_self_spot=self._spots_target(attacker, target),
+                    suppression=("self_direct" if self._spots_target(attacker, target) else
+                                 "self_memory" if any(row['actor'] == attacker and
+                                     row['remaining'] > 0.0 and row['alive_connected'] and
+                                     row['same_team'] for row in candidates) else
+                                 "friendly_target" if self._vehicle_team(*attacker) == target_team else
+                                 "none"),
+                    candidates=candidates, selected=assisters,
+                    credits=[dict(actor=holder, amount=amount)
+                             for category, holder, amount in credits if category == "radio"])
+            battle_review_diagnostics.battle_review_record(self, 'server_radio_credit',
+                'damage', review_now, review_assist, interval=0.0, limit=512, priority=True)
         for category, assister, amount in credits:
             if amount <= 0:
                 continue
@@ -16352,6 +16510,7 @@ class BattleState:
                     "bots": list(self.bot_roster),
                     "team_size": self.team_size,
                     "team_sizes": self._team_sizes_wire(),
+                "lineup_locked": self.lineup_locked,
                     "team_classes": copy.deepcopy(self.team_classes),
                 "team_class_notice": copy.deepcopy(self.team_class_notice),
                     "bot_tier_mode": self.bot_tier_mode,
@@ -16422,6 +16581,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
             "server_time_ms": state._server_time_ms(),
             "team_size": state.team_size,
             "team_sizes": state._team_sizes_wire(),
+            "lineup_locked": state.lineup_locked,
             "team_classes": copy.deepcopy(state.team_classes),
             "team_class_notice": copy.deepcopy(state.team_class_notice),
             "bot_tier_mode": state.bot_tier_mode,
@@ -16859,6 +17019,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                         "bot_authority_id": server.state.bot_authority_id,
                         "team_size": server.state.team_size,
                         "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                         "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                         "bot_tier_mode": server.state.bot_tier_mode,
@@ -17120,6 +17281,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "code": team_error,
                                     "team": message.get("team"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                                     "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })
@@ -17147,6 +17309,7 @@ class ClientHandler(socketserver.BaseRequestHandler):
                                     "team": message.get("team"),
                                     "size": message.get("size"),
                                     "team_sizes": server.state._team_sizes_wire(),
+                        "lineup_locked": server.state.lineup_locked,
                                     "team_classes": copy.deepcopy(server.state.team_classes),
                                     "team_class_notice": copy.deepcopy(server.state.team_class_notice),
                                 })

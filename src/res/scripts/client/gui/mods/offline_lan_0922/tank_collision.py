@@ -1479,10 +1479,6 @@ def resolve_pairs(tanks, dt, anchor=None):
                 continue
             if anchor is None and a.get('kind') == b.get('kind') == 'player':
                 continue
-            if not (a.get('alive', True) or b.get('alive', True) or
-                    a['vx'] or a['vz'] or b['vx'] or b['vz'] or
-                    a.get('push_yaw') or b.get('push_yaw')):
-                continue
             shape_a, shape_b = shapes[a['id']], shapes[b['id']]
             reach = radii[a['id']]+radii[b['id']]+CONTACT_BROADPHASE_PADDING
             if (a['x']-b['x'])**2 + (a['z']-b['z'])**2 <= reach*reach:
@@ -1498,6 +1494,12 @@ def resolve_pairs(tanks, dt, anchor=None):
                 pairs.append((a, b, projection))
     for unused_pass in range(4):
         for a, b, projection in pairs:
+            # A prior constraint can wake either settled wreck this slice.
+            # Retain the edge, but never separate an untouched resting pile.
+            if not (a.get('alive', True) or b.get('alive', True) or
+                    a['vx'] or a['vz'] or b['vx'] or b['vz'] or
+                    a.get('push_yaw') or b.get('push_yaw')):
+                continue
             hit = physical_planar_contact(a, b, projection)
             hit = _owner_oriented_contact(hit, a['x']-b['x'], a['z']-b['z'], a['id'], b['id'])
             if hit is None:

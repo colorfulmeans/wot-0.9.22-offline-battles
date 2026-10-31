@@ -3538,7 +3538,7 @@ class GaragePersistenceTests(unittest.TestCase):
         snapshot['shopItemPrices'][50002] = {'credits': 0, 'gold': 0}
         return snapshot
 
-    def test_personal_reserves_and_daily_rewards_survive_restart_and_receipt_retry(self):
+    def test_personal_reserves_and_first_win_survive_restart_and_receipt_retry(self):
         policy = self.store_module.offline_services
         state = self._state(self._matching_snapshot())
         state.snapshot()['wallet']['gold'] = 100
@@ -3559,8 +3559,8 @@ class GaragePersistenceTests(unittest.TestCase):
         restored = self._restart(self._matching_snapshot())
         reserves = policy.reserve_state(restored)
         self.assertEqual([100, 3700], reserves['active']['xp'])
-        self.assertEqual(1, reserves['counts']['credits'])
-        self.assertEqual(1, reserves['counts']['crew_xp'])
+        self.assertEqual(0, reserves['counts']['credits'])
+        self.assertEqual(0, reserves['counts']['crew_xp'])
         self.assertEqual(50, restored['wallet']['gold'])
         self.assertEqual([17], restored['selectedBadges'])
         self.assertEqual({'50001': 0}, restored['firstWinDays'])
@@ -3616,28 +3616,37 @@ class GaragePersistenceTests(unittest.TestCase):
         self.assertFalse(restored.get('dailyMissions'))
 
     def test_destroyed_exit_banks_daily_and_first_win_once_after_restart(self):
+        from gui.mods.offline_lan_0922 import ordinary_missions
         snapshot = self._matching_snapshot()
         snapshot['dailyMissions'] = {
-            'day': 0, 'battles': 2, 'damage': 2999, 'wins': 0, 'claimed': []}
+            'schema': ordinary_missions.SCHEMA, 'day': 0, 'missions': ['win1'],
+            'progress': {'win1': {'wins': 0}}, 'claimed': [], 'rewards': {}}
         vehicles, tankmen = _modules()
         arguments = dict(
             tankmen_module=tankmen, vehicles_module=vehicles,
             rewards={'credits': 1000, 'xp': 100, 'free_xp': 5},
             health=0, battle_start=150,
             daily_facts={'damage': 1, 'won': True, 'finished_at': 200,
-                         'premature_leave': False})
-        result = self._store().apply_battle_crew_xp(
-            snapshot, 'destroyed:1', 50001, 100, 1, **arguments)
+                         'premature_leave': False},
+            campaign_receipt=dict(receipt_id='destroyed:1', vehicle='test:vehicle',
+                player_id=1, team=1, winner=1, stats={'damage': 1, 'kills': 0},
+                rewards={'xp': 100}, public_results=[dict(actor_kind='player', actor_id=1,
+                    team=1, health=0, xp=100, stats={'damage': 1})]))
+        with mock.patch.object(ordinary_missions, 'assignments', return_value=['win1']), \
+                mock.patch.object(ordinary_missions.time, 'time', return_value=200):
+            result = self._store().apply_battle_crew_xp(
+                snapshot, 'destroyed:1', 50001, 100, 1, **arguments)
         self.assertTrue(result['income']['first_win'])
-        self.assertEqual(['battles', 'damage', 'wins'], result['daily_missions'])
-        self.assertEqual(['xp', 'credits', 'crew_xp'], result['daily_reserves'])
+        self.assertEqual(1, result['ordinary_missions'][0]['after']['bonusCount'])
+        self.assertEqual([{'kind': 'credits', 'count': 40000}],
+                         result['ordinary_missions'][0]['rewards'])
+        self.assertEqual(1, len(snapshot['personalMissionNotifications']))
         restored = self._restart(self._matching_snapshot())
         before = copy.deepcopy(restored)
         retry = self._store().apply_battle_crew_xp(
             restored, 'destroyed:1', 50001, 100, 1, **arguments)
         self.assertFalse(retry['applied'])
-        self.assertEqual(result['daily_missions'], retry['daily_missions'])
-        self.assertEqual(result['daily_reserves'], retry['daily_reserves'])
+        self.assertEqual(result['ordinary_missions'], retry['ordinary_missions'])
         self.assertEqual(before, restored)
 
     def test_training_spends_ammunition_but_no_repair_rewards_or_daily_progress(self):

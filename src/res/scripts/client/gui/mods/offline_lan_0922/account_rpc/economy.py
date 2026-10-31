@@ -297,7 +297,7 @@ def award_record(value):
 
 
 def battle_income(base, reserves, premium=False, first_win=False,
-                  vehicle_xp_factor=0, xp_penalty=0, original=None):
+                  vehicle_xp_factor=0, xp_penalty=0, original=None, daily_factor=2):
     """One 0.9.22 income calculation shared by banking and result replays.
 
     The native results factors use tenths for account/first-win bonuses and
@@ -306,7 +306,7 @@ def battle_income(base, reserves, premium=False, first_win=False,
     bonds are outside these factors. Round at each native ValueReplay step.
     """
     account = 150 if premium else 100
-    daily = 200 if first_win else 100
+    daily = int(daily_factor) * 100 if first_win else 100
     original = base if original is None else original
     basis = dict((key, min(base.get(key, 0), original.get(key, 0)))
                  for key in ('credits', 'xp', 'free_xp'))
@@ -337,6 +337,7 @@ def battle_income(base, reserves, premium=False, first_win=False,
     crew += premium_xp_bonus(reserves.get('crew_xp', 0), account)
     record = dict(basis)
     record.update({'premium': bool(premium), 'first_win': bool(first_win),
+                   'daily_factor': int(daily_factor) if first_win else 1,
                    'vehicle_xp_factor': int(vehicle_xp_factor),
                    'boosters': boosters})
     return result, crew, record

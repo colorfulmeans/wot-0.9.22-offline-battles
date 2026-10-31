@@ -514,6 +514,7 @@ def write_0_9_22_settings(game_root, mode, host, port, name=None,
                 # account settings from this field, so the selected save takes
                 # effect for the run this launch starts.
                 config["save_slot"] = save_slot
+            save_slots.ensure_mission_seed(config.get('save_slot', 'default'), game_root)
             _write_json(config_path, config)
             written.append(config_path)
     return written
@@ -1280,6 +1281,7 @@ def install_client_mod(game_root, port_version, base_dir=None, force=False):
         identity_actions.append(
             "Install decision: keep the installed 0.9.22 payload; "
             "the build identity and package-owned files are current.")
+        identity_actions.extend(_upgrade_default_save(game_root))
         return identity_actions
     if force:
         decision = "forced reinstall"
@@ -1332,6 +1334,7 @@ def install_client_mod(game_root, port_version, base_dir=None, force=False):
             "Installed 0.9.22 payload after installation: %s." %
             payload_identity_text(installed_payload_identity(
                 game_root, port_version)))
+        actions.extend(_upgrade_default_save(game_root))
         return actions
     except LauncherError as error:
         preserve_transaction = bool(getattr(
@@ -1528,8 +1531,8 @@ def repair_0_9_22_startup(game_root, base_dir=None, is_running=None):
         actions.insert(0, "Quarantined invalid config.json as %s" %
                        os.path.basename(quarantined))
     actions.append(
-        "Startup repair kept the saved endpoint, account, garage, "
-        "post-battle results, and isolated client preferences.")
+        "Startup repair kept the saved endpoint, named saves and isolated "
+        "client preferences; obsolete defaults follow the one-time replacement policy.")
     return actions
 
 
@@ -1769,13 +1772,25 @@ def _fresh_default_save(game_root):
         from . import save_slots
     except ImportError:
         import save_slots
+    save_slots.replace_default(game_root, force=True)
+
+
+def _upgrade_default_save(game_root):
+    try:
+        from . import save_slots
+    except ImportError:
+        import save_slots
     directory = save_slots.slot_dir(save_slots.DEFAULT_SLOT_ID, game_root)
-    os.makedirs(directory, exist_ok=True)
-    _write_json(os.path.join(directory, save_slots.METADATA_NAME), {
-        'schema': save_slots.METADATA_SCHEMA, 'id': save_slots.DEFAULT_SLOT_ID,
-        'name': save_slots.DEFAULT_SLOT_ID, 'mode': save_slots.MODE_UNLOCKED,
-        'skip_legacy_import': True,
-    })
+    metadata = save_slots._read_metadata(os.path.join(directory, save_slots.METADATA_NAME)) or {}
+    if metadata.get('default_revision') == save_slots.DEFAULT_REVISION:
+        return []
+    if game_is_running():
+        raise LauncherError('Close World of Tanks before replacing the old default save.')
+    try:
+        save_slots.replace_default(game_root)
+    except (OSError, save_slots.SaveSlotError) as error:
+        raise LauncherError('The default save could not be updated: %s' % error)
+    return ['Replaced the old default save with fresh fully unlocked defaults; no backup was retained.']
 
 
 def _save_reset_targets(game_root):

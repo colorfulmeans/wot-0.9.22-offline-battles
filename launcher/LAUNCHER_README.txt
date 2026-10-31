@@ -75,7 +75,10 @@ and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.
 Exit both the game and launcher before switching entrances. The fixtures do
 not change saved room presets; the contact fixes also apply in normal battles.
 
-Customize save -> Coatings edits preset-style inventory, including hidden styles.
+Customize save -> Appearance inventory has My style and Preset styles pages,
+with nation/type/vehicle filters, garage-only targets and vehicle-name search.
+My style includes paints, camouflage, emblems, inscriptions and wear; active
+internet-cafe items retain their native restrictions and are labeled explicitly.
 Customize save -> Members adds 100% recruits by nation, role, gender, complete
 skill count and trained vehicle. Skills remain unassigned for the client to
 choose; zero gives no secondary-skill XP. Close the game before adding. The next
@@ -85,10 +88,21 @@ delivery after an interrupted inbox cleanup. The Members tab follows Coatings.
 Bot tactics also has an independent outfit checkbox below consumables: inherit,
 enable or disable the existing seasonal rented styles, keeping locked-outfit
 exceptions. It does not select a style or add a battle-count expiry.
-Select one vehicle or all compatible vehicles, add copies or fill missing styles,
-then Save with the game closed. One rental copy grants its original battle count.
+Select one vehicle or all filtered compatible vehicles and add a positive quantity,
+then Save with the game closed. Saved additions appear in native system messages.
+One rental copy grants its original battle count. There is no subtract button.
 Fully unlocked saves receive one copy per compatible vehicle on their first style
 stock initialization, including existing saves; later use/sales are not replenished.
+Default seed revision 3 replaces Default once without backup. This fresh Default
+and newly created unlocked saves receive 1000 units of each independent exterior
+item, retaining native vehicle bindings. Preset-style quantities are unchanged.
+Existing named saves and new-account saves receive no new exterior-stock grant.
+
+Garage additions, Members and Appearance inventory include Tier after Type.
+Exact lineup Tier narrows vehicle candidates only; selecting a vehicle changes
+the slot. Clear Tier to use Random vehicle. Browsing tiers never rewrites saved
+assignments. The vehicle modifier has aligned nation/type/tier and
+vehicle/modification-category/field rows, using localized garage-order nations.
 
 English release notes:
 https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.0.0
@@ -126,7 +140,8 @@ Full-skill choices are durable member-owned credits; choose skills in the
 native client. Moving seats or restarting never renews credits. Recruits,
 credits and delivery notices commit together to the selected save.
 
-New unlocked saves mount three legal improved devices and the corresponding
+New unlocked saves mount three legal class-priority devices (improved first,
+ordinary fallback within the same family) and the corresponding
 battle directive, with directive auto-resupply checked. Users may change or
 remove them; saved choices are never reapplied as defaults. Career saves remain
 stock. The vehicle editor displays magazine/trigger reload intervals in seconds;
@@ -430,12 +445,16 @@ sources. It includes rules already added to the current draft, not unsubmitted
 form fields. All selected scopes are resolved; inherited difficulty retains
 room rating sampling. Opening this window does not save or apply the profile.
 
-Saves -> Initialize save resets only the selected save after confirmation and
-requires a closed game. Name, save type and earnings multiplier are kept;
-progress and pending rewards return to the current new-save defaults. An
-ordinary ZIP backup is kept inside its pre-initialize recovery folder and can
-be selected with Restore save. Default-save legacy migration is blocked after
-initialization so old progress cannot return automatically.
+The current default-seed revision replaces obsolete Default progress and old
+Default backups once, without keeping a backup or importing legacy progress.
+Completion is marked only after replacement succeeds. Later edits are kept on
+subsequent starts and repairs. Other named saves are preserved.
+
+Saves -> Initialize save requires a closed game and confirmation. Default is
+replaced with the current fully unlocked seed without a backup. For named
+saves, name, type and earnings multiplier are kept; progress and pending rewards
+return to new-save defaults. A ZIP backup is kept in its pre-initialize recovery
+folder and can be selected with Restore save.
 
 Member recruitment uses the same standard, loadable vehicle filter as player
 vehicles, including supported retired vehicles. Garage and Members share full
@@ -451,3 +470,10 @@ excluding requests whose durable delivery receipt already exists. A full
 barracks refuses new recruits with a warning; old pending requests are kept.
 Initial berth grants survive the first game startup, backup and restore.
 Initialize save returns capacity to the save type's original default.
+
+Save account editors also support remaining premium-account days (zero removes
+premium), personal reserve inventory, and positive garage-slot grants. Close the
+game before editing. Asset changes appear through native system messages on
+next entry; unchanged saves do not reissue asset notices. Active reserve effects
+are preserved when stock quantities change. Unavailable Premium Shop, Hotspot,
+Training Center and Disconnect controls remain visible but disabled.

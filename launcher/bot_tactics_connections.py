@@ -1,5 +1,6 @@
 """Route tier and connection editing; all writes remain draft/undo owned."""
 import copy
+import ui_layout
 import tkinter as tk
 from tkinter import ttk, messagebox
 from bot_tactics_artillery import ArtilleryEditorMixin
@@ -9,21 +10,21 @@ from gui.mods.offline_lan_0922 import route_network, bot_tactics as contract
 
 class ConnectionEditorMixin(ArtilleryEditorMixin):
     def _build_connections(self, parent):
-        panel = ttk.LabelFrame(parent, text=self.tr('回防路线编辑', 'Defense connection editor'))
+        self.defense_section, panel, unused_title = ui_layout.section(tk, parent, text=self.tr('回防路线编辑', 'Defense connection editor'))
         self.defense_panel=panel
-        panel.grid(row=23, column=0, sticky='ew', pady=5)
+        self.defense_section.grid(row=23, column=0, sticky='ew', pady=5)
         self.network_mode = ''
         self.network_link = ''
-        self.defense_add = ttk.Button(panel, text=self.tr('添加回防路线', 'Add defense connection'), command=self.add_defense)
+        self.defense_add = tk.Button(panel, text=self.tr('添加回防路线', 'Add defense connection'), command=self.add_defense)
         self.defense_add.pack(fill='x')
-        self.defense_delete = ttk.Button(panel, text=self.tr('删除回防路线', 'Delete defense connection'), command=self.delete_defense)
+        self.defense_delete = tk.Button(panel, text=self.tr('删除回防路线', 'Delete defense connection'), command=self.delete_defense)
         self.defense_delete.pack(fill='x')
-        self.defense_edit=ttk.Button(panel,text=self.tr('编辑／返回回防路线','Edit / leave defense connection'),command=self.edit_defense)
+        self.defense_edit=tk.Button(panel,text=self.tr('编辑／返回回防路线','Edit / leave defense connection'),command=self.edit_defense)
         self.defense_edit.pack(fill='x')
         ttk.Label(panel,text=self.tr('仅普通中间节点可挂接回防线；回防经过等待点不等待。全部车型统一同一路线的点位、点序和回防挂接；单车型及总路线只改选中车型。最后一次实际编辑生效，开启路线对称才同步另一队。',
             'Only ordinary intermediate nodes can own a defense branch; reverse travel skips waits. All classes resets the same route family to the common point sequence and defense junction. A class or Total view edits only the selected class. Last edits win; route symmetry alone also updates the other team.'),wraplength=250).pack(anchor='w')
-        panel=ttk.LabelFrame(parent,text=self.tr('火炮路线编辑','Artillery route editor'))
-        self.artillery_panel=panel;panel.grid(row=24,column=0,sticky='ew',pady=5)
+        self.artillery_section, panel, unused_title = ui_layout.section(tk, parent, text=self.tr('火炮路线编辑','Artillery route editor'))
+        self.artillery_panel=panel;self.artillery_section.grid(row=24,column=0,sticky='ew',pady=5)
         ttk.Label(panel,wraplength=250,text=self.tr(
             '炮位部署、换位及返回炮位使用自动寻路。红色虚线仅用于残局进攻：最多3辆火炮先回己方基地，再沿进攻路线行进；途中回防反向沿进攻路线返回，不另设回防支线。',
             'Parking deployment, relocation and parking return use automatic navigation. Red dashed routes are endgame attacks: up to three artillery Bots return to their base before following an attack route. Defense reverses the attack route; no artillery defense branch is needed.')).pack(anchor='w')
@@ -57,8 +58,8 @@ class ConnectionEditorMixin(ArtilleryEditorMixin):
         if self.network_mode=='defense' and not (item or {}).get('defense'):self.network_mode=''
         ordinary_route=route and not attack
         artillery_view=parking or attack or self.route_class_var.get() in ('SPG','spg_attack')
-        self.artillery_panel.grid() if artillery_view else self.artillery_panel.grid_remove()
-        self.defense_panel.grid_remove() if artillery_view else self.defense_panel.grid()
+        self.artillery_section.grid() if artillery_view else self.artillery_section.grid_remove()
+        self.defense_section.grid_remove() if artillery_view else self.defense_section.grid()
         index = self.selected_point
         ordinary = (ordinary_route and not self.network_mode and index is not None and
                     0 < index < len(item['points'])-1 and not item['points'][index][2] and

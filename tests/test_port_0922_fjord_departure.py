@@ -198,6 +198,7 @@ class SpawnDepartureTests(unittest.TestCase):
                                        return_value=0x0922):
                     runtime.battle_start({
                         'map': map_name,
+                        'bot_tactics': module.bot_tactics.default_profile(),
                         'round_id': fps,
                         'bot_authority_id': 1,
                         'bots': bots,
@@ -208,6 +209,8 @@ class SpawnDepartureTests(unittest.TestCase):
                 # The server owns route expiry/skip/switch. A client-only
                 # loop cannot exercise the current complete departure law.
                 planner = BotPlanner()
+                planner.tactics = runtime._bot_tactics
+                planner.tactics_map = map_name
                 manifest = [runtime._manifest_entry(s) for s in runtime.states.values()]
                 monitor = _EpisodeMonitor()
                 now = [0.0]

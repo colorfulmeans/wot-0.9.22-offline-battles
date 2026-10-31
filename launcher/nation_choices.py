@@ -10,3 +10,11 @@ def ordered(nations):
 def caption(nation,translate):
     text=translate(nation)
     return EN_NAMES.get(nation,nation) if text==nation else text
+
+
+def vehicle_key(row):
+    """Native nation order, then tier and unambiguous vehicle name."""
+    nation = row.get('nation', '')
+    return (ORDER.index(nation) if nation in ORDER else len(ORDER),
+            int(row.get('level') or 99), str(row.get('label', row.get('vehicle', ''))).casefold(),
+            str(row.get('vehicle', row.get('name', ''))))

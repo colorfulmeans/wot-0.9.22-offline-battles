@@ -234,7 +234,7 @@ def _bot_lineup_from_environment(environment=None):
         entry = dict(raw)
         if entry.get("vehicle") in RETIRED_BOT_VEHICLES_0922:
             entry.pop("vehicle", None)
-        if "vehicle" in entry or "skill" in entry:
+        if "vehicle" in entry or "skill" in entry or "enabled" in entry:
             result.append(entry)
     return result
 

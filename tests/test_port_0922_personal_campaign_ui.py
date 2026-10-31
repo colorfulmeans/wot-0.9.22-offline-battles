@@ -146,25 +146,26 @@ class PersonalCampaignMessageTests(unittest.TestCase):
             self.assertIn(expected, result)
         self.assertNotIn('999', result)
 
-    def test_notify_makes_one_native_push_for_entire_receipt_and_no_modal(self):
-        messages = types.SimpleNamespace(SM_TYPE=types.SimpleNamespace(Information=6),
-                                        pushMessage=mock.Mock())
-        gui = sys.modules['gui']
+    def test_notify_uses_native_personal_mission_messages_without_a_custom_modal(self):
+        import importlib
+        native_notifications = importlib.import_module(
+            'gui.mods.offline_lan_0922.native_notifications')
         settlement = {'missions': [mission(), mission(id=1)]}
         before = copy.deepcopy(settlement)
-        with mock.patch.object(gui, 'SystemMessages', messages, create=True):
+        with mock.patch.object(native_notifications, 'publish') as send:
             self.assertTrue(self.ui.notify(settlement))
             self.assertFalse(self.ui.notify({'missions': []}))
-        messages.pushMessage.assert_called_once()
-        args, kwargs = messages.pushMessage.call_args
-        self.assertEqual({'type': 6}, kwargs)
-        self.assertEqual(2, len(args[0].splitlines()))
+        self.assertEqual(2, send.call_count)
+        self.assertEqual(['potapovQuestBonus'] * 2,
+                         [call.args[0] for call in send.call_args_list])
         self.assertEqual(before, settlement)
 
     def test_native_push_failure_propagates_so_receipt_delivery_can_retry(self):
-        messages = types.SimpleNamespace(SM_TYPE=types.SimpleNamespace(Information=6),
-            pushMessage=mock.Mock(side_effect=RuntimeError('Lobby messages not ready')))
-        with mock.patch.object(sys.modules['gui'], 'SystemMessages', messages, create=True):
+        import importlib
+        native_notifications = importlib.import_module(
+            'gui.mods.offline_lan_0922.native_notifications')
+        with mock.patch.object(native_notifications, 'publish',
+                side_effect=RuntimeError('Lobby messages not ready')):
             with self.assertRaisesRegex(RuntimeError, 'not ready'):
                 self.ui.notify({'missions': [mission()]})
 
@@ -252,6 +253,20 @@ class PersonalCampaignMessageTests(unittest.TestCase):
                 {'phase':'updated','rewards':[{'kind':'earnings_percent','before':100,'count':250}]}]})
         self.assertEqual(['Account assets received: Style inventory: Hidden style x2.',
             'Account settings updated: Battle earnings multiplier: 100% -> 250%.'],result)
+
+    def test_typed_appearance_additions_keep_names_and_escape_native_message_markup(self):
+        items=types.ModuleType('items')
+        cache=types.SimpleNamespace(paints={137:types.SimpleNamespace(userString='Paint <gold>')},
+            camouflages={137:types.SimpleNamespace(userString='Different camouflage')},decals={},modifications={})
+        items.vehicles=types.SimpleNamespace(g_cache=types.SimpleNamespace(customization20=lambda:cache))
+        helpers=types.ModuleType('helpers');helpers.i18n=types.SimpleNamespace(makeString=lambda value:value)
+        with mock.patch.dict(sys.modules,{'items':items,'helpers':helpers}):
+            result=self.ui.messages({'account_changes':[{'phase':'granted','rewards':[
+                {'kind':'appearance','type':1,'id':137,'count':7},
+                {'kind':'appearance','type':2,'id':137,'count':3}]}]})
+        self.assertEqual(1,len(result))
+        self.assertIn('Paint &lt;gold&gt; x7',result[0])
+        self.assertIn('Different camouflage x3',result[0])
 
     def test_launcher_vehicle_delivery_commits_notice_once_and_keeps_failed_delivery_pending(self):
         import ast

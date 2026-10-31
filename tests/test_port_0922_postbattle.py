@@ -224,8 +224,8 @@ class PostBattleContractTests(unittest.TestCase):
         # Exercise half-integer rounding, reserve stacking, premium vehicles
         # and penalties with save multipliers; the replay must match banking
         # while keeping extra earnings out of the original gross XP row.
-        for premium, first_win, penalty, percent in itertools.product(
-                (False, True), (False, True), (0, 1, 2), (50, 100, 150, 200)):
+        for premium, first_win, penalty, percent, daily in itertools.product(
+                (False, True), (False, True), (0, 1, 2), (50, 100, 150, 200), (2, 5)):
             with self.subTest(premium=premium, first_win=first_win,
                               penalty=penalty, percent=percent):
                 receipt = _receipt()
@@ -234,14 +234,14 @@ class PostBattleContractTests(unittest.TestCase):
                     original, credits_percent=percent, experience_percent=percent)
                 reserves = {'credits': 500, 'xp': 50, 'free_xp': 10, 'crew_xp': 202}
                 awarded, crew, income = postbattle_store.economy.battle_income(
-                    base, reserves, premium, first_win, 10, penalty, original)
+                    base, reserves, premium, first_win, 10, penalty, original, daily_factor=daily)
                 receipt.update({'awarded': awarded, 'income': income,
                     'friendly_fire': {'victims': [], 'received_damage': 0,
                                       'xp_penalty': penalty}})
                 vehicle = _packed_vehicle(receipt)
                 self.assertEqual(min(101, base['xp']) + penalty, vehicle['originalXP'])
                 self.assertEqual(premium, vehicle['isPremium'])
-                self.assertEqual(20 if first_win else 10, vehicle['dailyXPFactor10'])
+                self.assertEqual(daily*10 if first_win else 10, vehicle['dailyXPFactor10'])
                 for key, native in (('credits', 'credits'), ('xp', 'xp'), ('free_xp', 'freeXP')):
                     self.assertEqual(awarded[key], vehicle[native])
                 self.assertIn('appliedPremiumXPFactor10', vehicle['xpReplay'].decode())
@@ -296,7 +296,7 @@ class PostBattleContractTests(unittest.TestCase):
         version, rows = data.dossiers(
             2, 6, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001)
-        self.assertEqual(2, version)
+        self.assertEqual(4, version)
         self.assertEqual(50001, rows[0][0])
         self.assertEqual(7, rows[0][1])
         self.assertEqual({
@@ -310,10 +310,13 @@ class PostBattleContractTests(unittest.TestCase):
             'piercings': 4, 'damageBlockedByArmor': 100,
             'damageAssistedTrack': 80, 'damageAssistedRadio': 40,
             'damageAssistedStun': 0, 'originalXP': 0,
+            'stunNum': 0, 'battlesOnStunningVehicles': 0,
+            'piercingsReceived': 0, 'noDamageDirectHitsReceived': 0,
+            'explosionHitsReceived': 0, 'explosionHits': 0,
             'directHitsReceived': 0, 'potentialDamageReceived': 0},
             rows[0][2]['a15x15_2'])
-        self.assertEqual((2, []), data.dossiers(
-            2, 7, progress, dossier_factory=factory,
+        self.assertEqual((4, []), data.dossiers(
+            4, 7, progress, dossier_factory=factory,
             vehicle_type_resolver=lambda unused: 50001))
 
     def test_a_receipt_carries_the_health_and_the_rounds_it_fired(self):
@@ -542,12 +545,14 @@ class PostBattleContractTests(unittest.TestCase):
                     'isWinner', 'team', 'winnerIfDraw', 'guiType',
                     'arenaUniqueID', 'offlineDailyMissions',
                     'offlinePersonalMissions',
+                    'dailyXPFactor', 'xpPenalty', 'creditsPenalty',
+                    'creditsContributionIn', 'creditsContributionOut',
                 }, set(service_data))
                 self.assertEqual(receipt['arena_unique_id'],
                                  service_data['arenaUniqueID'])
                 # The per-vehicle entry now carries the mastery class the
                 # hangar message names; this battle earned none.
-                self.assertEqual({50001: {'markOfMastery': 0}},
+                self.assertEqual({50001: {'markOfMastery': 0, 'popUpRecords': []}},
                                  service_data['playerVehicles'])
             finally:
                 postbattle_store._vehicle_type_compact_descr = original_vehicle
@@ -781,8 +786,8 @@ class PostBattleContractTests(unittest.TestCase):
     def test_native_compact_contract_uses_all_six_stock_packers(self):
         packers = _Packers()
         receipt = _receipt()
-        receipt['player_name'] = '玩家'
-        receipt['public_results'][0]['name'] = '玩家'
+        receipt['player_name'] = 'çŽ©å®¶'
+        receipt['public_results'][0]['name'] = 'çŽ©å®¶'
         original_vehicle = postbattle_store._vehicle_type_compact_descr
         original_arena = postbattle_store._arena_type_id
         try:
@@ -800,7 +805,7 @@ class PostBattleContractTests(unittest.TestCase):
             'AVATAR_FULL_RESULTS', 'VEH_FULL_RESULTS', 'PLAYER_INFO',
             'VEH_PUBLIC_RESULTS', 'AVATAR_PUBLIC_RESULTS', 'COMMON_RESULTS'],
             [name for name, unused in packers.calls])
-        self.assertEqual('玩家'.encode('utf-8'),
+        self.assertEqual('çŽ©å®¶'.encode('utf-8'),
                          packers.calls[2][1]['name'])
         avatar = pickle.loads(zlib.decompress(compact[1]))
         vehicles = pickle.loads(zlib.decompress(compact[2]))
@@ -1296,26 +1301,30 @@ class PostBattleContractTests(unittest.TestCase):
                 self.assertTrue(lan_client_module._valid_battle_receipt(receipt))
                 self.assertEqual(receipt, lan_server_module.
                                  _persisted_result_receipt(dict(receipt)))
-                snapshot = {'dailyMissions': {
-                    'day': 1, 'battles': 2, 'damage': 2999,
-                    'wins': 0, 'claimed': []}}
+                from gui.mods.offline_lan_0922 import ordinary_missions
+                from gui.mods.offline_lan_0922.account_rpc.garage import GarageState
+                snapshot = {'dailyMissions': {'schema': ordinary_missions.SCHEMA,
+                    'day': 1, 'missions': ['participate3'], 'claimed': [],
+                    'periods': {'participate3': 86400},
+                    'progress': {'participate3': {'battles': 1}}, 'rewards': {}}}
+                owner = GarageState(snapshot)
+                snapshot = owner.snapshot()
                 applied = []
                 store = postbattle_store.PostBattleStore(path=None)
                 store._account_key = player.account_key
                 def settle(row):
                     applied.append(row['receipt_id'])
-                    return {'daily_reserves': offline_services.advance_daily(
-                        snapshot, {'premature_leave': row['premature_leave'],
-                                   'damage': row['stats']['damage'],
-                                   'won': row['winner'] == row['team']}, 86402)}
+                    with mock.patch.object(ordinary_missions, 'assignments',
+                                           return_value=['participate3']), \
+                            mock.patch.object(ordinary_missions.time, 'time', return_value=86402):
+                        return {'ordinary_missions': ordinary_missions.advance(owner, row, 86402)}
                 store.set_progress_applier(settle)
                 self.assertTrue(store.accept(receipt))
                 self.assertFalse(store.accept(receipt))
                 self.assertEqual([receipt['receipt_id']], applied)
-                self.assertEqual(2 if abandoned else 3,
-                                 snapshot['dailyMissions']['battles'])
-                self.assertEqual([] if abandoned else ['battles', 'damage', 'wins'],
-                                 snapshot['dailyMissions']['claimed'])
+                self.assertEqual(1 if abandoned else 2,
+                    snapshot['dailyMissions']['progress']['participate3']['battles'])
+                self.assertEqual([], snapshot['dailyMissions']['claimed'])
                 self.assertEqual(watched, store.should_show_immediately(
                     receipt['arena_unique_id']))
                 stats = store.progress()['vehicles'][player.vehicle]

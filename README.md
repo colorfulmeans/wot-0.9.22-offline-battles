@@ -9,9 +9,156 @@ and battle logic, a small LAN server and a launcher.
 
 Current release: **v1.0.0** — [release notes](docs/releases/v1.0.0.md).
 
+### Battle fix review (not a release)
+
+This review retains the verified received-source spotting assistance, integer
+sharing, 14-second designated-target lease propagation and removed-target
+radio cleanup. Death now retains an observer's unexpired leases for the
+recipients reached before transmission ended, without granting newcomers
+access to a corpse's memory. Server validation and credit preserve those
+sources until expiry; disconnected sources remain ineligible. Last Effort
+opens once from the pre-death conscious crew state and updates only the
+previous direct target set: two seconds normally, or the projected directive
+duration (bounded to five seconds). It performs no new LOS queries after
+death. Native checkpoints retain the frozen recipients.
+The unaccepted wreck angle coupling change has been withdrawn;
+wreck motion uses the release's angle updates. A new local corpse turret
+candidate replaces the suppressed final model-refresh restore with independent
+matrix targets, using the angles saved by stock code before deactivation.
+It is limited to the current local dead vehicle with an attached turret;
+the unsafe native filter synchronization remains suppressed. Failed display
+readback rolls back the candidate. Native Windows acceptance remains pending.
+
+Use `START_DIAGNOSTIC_TEST.bat` beside the unpacked launcher. Its existing
+`--diagnostics` entrance enables bounded `BATTLE REVIEW` records in the
+visible client, hidden worker and bundled server logs. Ordinary startup does
+not construct these payloads. Records carry round, PID, process-local clock,
+stage and sample number; worker and server clock origins are independent.
+Worker records include active perk/directive duration, native observation
+duration/deadline, radio actor positions/ranges and published per-source
+leases. Server records include accepted leases, source expiry/connection/team
+eligibility, post-death retention, self-spot suppression and integer shares.
+Bulk detail allows 32 MiB/minute and 256 MiB/round. Verification bypasses that
+bulk quota: each `BATTLE REVIEW` stage has 32 MiB/round, priority
+`BATTLE REVIEW EVENT` evidence has a separate 4 MiB/round, and low-frequency
+`VALIDATION` career evidence has another 4 MiB/round. Explicit limit records
+and round summaries expose byte drops. Human observations have their own stage
+so bot source/target keys cannot exhaust their admission slots.
+The launcher-owned diagnostic server log retains up to 256 MiB per run
+(192 MiB after rolling), instead of the ordinary entry's 1 MiB ceiling.
+Worker config records expose the donated radio factor, direct range, relay bonus and crew
+state. Relay uses unboosted links and does not cascade. Signal Strength stays
+owned by the exact client's radio/distance factor and crew/module projection.
+Model records preserve the last sampled alive pose, refresh entry/return,
+deactivation, setupModels, setVehicle, activate, gun-target setup,
+onModelChanged and final-sync boundaries, and eight subsequent existing battle
+frames at least 0.3 seconds apart even when corpse effects ticks stop:
+turret/gun providers, hull and world muzzle
+matrices, filter identities and turret detachment. Missing native readings
+are reported as unavailable. These probes read existing state and schedule
+no engine callbacks.
+`wreck_pose_before/bound/refused/clear` records compare the stock snapshot,
+owned targets and native display readback, including repeated-refresh and
+cleanup outcomes. Provider target identities and local rotator animator matrices
+are also sampled. The candidate never drives the rotator or records replay angles.
+
+Career review restores the explicitly selected published 0.8.11 Personal
+Rating, using lifetime vehicle rows (including sold vehicles), base battle XP,
+and integer truncation. This is the selected historical algorithm, not proof
+of an identical unpublished 9.22 server implementation. Account entitlement
+updates preserve the computed rating. Missing historical inputs publish 0
+and are identified in diagnostics; awarded XP never substitutes for base XP.
+Exact #1513 dossier contracts establish lifetime defence capped at 100 per
+battle, stun counts, and the stunning-capable battle denominator (including
+zero-stun battles). Single-battle defence remains uncapped. Cache version 4
+invalidates earlier dossier snapshots. Only complete retained receipt bodies
+repair missing history; identity-only archives do not. Partial stun coverage
+cannot produce a lifetime average. Multi-SPG overlapping ownership remains
+unchanged: transition and damage-credit logs collect the unresolved boundary.
+
+Validation covers regressions, related battle subsystems, diagnostic laziness,
+byte limits, round reset and stale appearance fencing. CI also checks native
+source parity, CPython 2.7 compilation, shipping native source stamps, archive
+contents and the actual downloaded launcher/server. The full Tests workflow
+remains separate; an artifact does not imply full CI or gameplay acceptance.
+
+For Windows acceptance, use the matching launcher, server and hidden worker:
+1. Turn the turret away from the hull, record its pose, then die. Stay in
+   battle for at least two seconds, observing whether the corpse snaps and
+   whether a turret detaches. Repeat while a wreck is pushed or rotated.
+   Also repeat a model refresh, spectate another vehicle, return to the garage
+   and start another battle. Verify living aim, remote vehicles and detached
+   turrets retain their normal owners. Export the report even if the candidate
+   is refused; successful Python calls alone do not prove rendered recovery.
+2. Spot an enemy, lose direct sight, and have an ally damage it before memory
+   expires. Repeat with two observers and only one radio connection; compare
+   the actual credited sources and damage shares.
+3. Equip the actual designated-target duration directive. Verify its active
+   duration in the config log, then lose sight and check near seconds 12--14
+   and after expiry. A normal 12-second session cannot accept this case.
+4. Export the matching error report and include the launcher build identity.
+   Gameplay acceptance, especially actual model reset and the boosted
+   14-second case, remains pending until this evidence is examined.
+
+Also test dying immediately after spotting: an already informed ally must
+retain the original remaining lease and award assistance on a later hit.
+Repeat without Last Effort and with its carrier incapacitated before death.
+With Last Effort, confirm its short window opens once, never adds an unknown
+target, and expires without erasing delivered memory. A newcomer outside
+radio contact at transmission end must not obtain that corpse's memory.
+Check radio/crew damage and repair, donor death, disconnect, and a new round
+for stale links or leases. Native gameplay acceptance remains pending.
+
+For this career review, also compare the garage rating before/after a battle,
+an entitlement update and restart. Switch between existing and new saves;
+inspect `career_history_coverage` for unavailable inputs instead of treating
+0 as a verified calculation. On a stunning-capable SPG, include a zero-stun
+battle and compare its denominator with a successful-stun battle; a vehicle
+without a stunning shell must not increment it. Check raw battle defence
+against the capped lifetime increment. For overlapping SPGs, record both
+hit orders, expiry and damage credits without assuming ownership is fixed.
+
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
 and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows
 launcher and all eighteen guide files as separate downloads.
+
+### Custom lineup review
+
+The lineup editor follows the launcher's Chinese/English language, with nation,
+type, vehicle and difficulty columns. Nations follow the garage order; vehicles
+sort by descending tier, with distinct captions for duplicate stock names.
+Each team's All row applies one field to that team. Its vehicle menu begins with
+Clear all slots, Individual slot settings, then Random vehicle and actual vehicles.
+Difficulty-only edits never enable an empty slot. An empty slot retains a later
+difficulty preset across Save and reopening; selecting a vehicle activates that
+preset. Choosing Empty or Clear explicitly removes that slot's prior settings.
+Random vehicles obey the saved
+nation/type filters; an empty candidate pool is refused rather than widened.
+
+Edits are drafts until Save succeeds. Failed saves retain the draft and previous
+complete settings; closing a changed draft offers Save and close, Discard, or
+Cancel. Success and failure show a result dialog, including an unavailable vehicle
+catalogue; a failed save does not write or discard the draft. Slot numbers never compact:
+slots 1, 4 and 15 remain those slots and produce a team capacity of three.
+Humans replace enabled slots in order, using their own vehicles; excess humans
+are refused. Each team needs at least one enabled slot to start. Returning humans,
+team changes and the next round recalculate the replacement map.
+
+Custom rooms show random tier, mixed difficulty, computed team capacities and
+unrestricted classes; those controls are disabled and the server rejects changes.
+After a custom room, Automatic starts from 15 slots per team with editable controls.
+Restart the room after selecting or saving a different launcher lineup. Legacy
+profiles retain their unpinned random vehicles and explicitly saved difficulty.
+Random (mixed distribution) draws one stable rating per round/team/slot, not four
+equally likely difficulty labels. Explicit tactics still override lineup difficulty;
+the effective preview identifies lineup sources without modifying tactics files.
+
+Acceptance: test both languages, per-team bulk actions, empty versus random slots,
+clear a team then set Elite, save/reopen and enable Random vehicles (the slots must
+remain Elite); also confirm explicit clearing removes the old difficulty. Test
+only a last slot enabled, duplicate vehicle names, failed save/close choices,
+human replacement and over-capacity refusal, zero-sized teams, and custom-to-
+Automatic restart. Export the diagnostic report to check the generated slot map.
 
 ## Play
 
@@ -309,14 +456,70 @@ Standard and Commander voice settings apply immediately in battle, including
 after preview cancellation. The attached vehicle's native refresh selects
 the language and special crew voices; commander gender remains preserved.
 
+New unlocked player vehicles and Bot fittings use class-specific equipment
+families, in this order:
+
+| Class | Priority |
+| --- | --- |
+| Light | Ventilation, optics, stabilizer, rammer, aim drives |
+| Medium | Stabilizer, rammer, ventilation, optics, aim drives |
+| Heavy | Stabilizer, rammer, ventilation, aim drives, optics |
+| Tank destroyer / artillery | Ventilation, rammer, aim drives, camouflage net, optics |
+
+The player's creation-only installer and the Bot installer remain separate.
+The native client admits player devices; Bot plans are checked against the
+exact #1513 resource filters and load limits. Improved fittings try the improved
+device and then ordinary variants within each family before the next family.
+Rookie Bots mount none, regular Bots one ordinary device, veteran Bots three
+ordinary devices, and elite Bots three compatible improved/fallback devices.
+Only unlocked player defaults and elite equipment mount the directive for the
+first installed family with an available directive. Career creation is unchanged.
+Later saved equipment changes are preserved.
+
+Ordinary tasks and strategic vehicle prizes use the native mission pages,
+progress counters and service notifications. Strategic groups run from simple
+through elite, with daily, weekly and monthly objectives in each group. Each
+qualifying battle must be a victory with at least 1000/1500/2000/2500 base XP.
+Complete 5/25/100 qualifying battles for a 3-day rental, 30-day rental or permanent
+vehicle. Periods reset at 08:00 Beijing, on Monday for weeks and day 1 for months.
+First-win experience is x2 on game-day weekdays and x5 on weekends. Personal
+campaigns and battle bond rewards are separate and unchanged.
+
 ## Saves
 
 The launcher's Saves tab keeps any number of independent saves. Each one owns
 its own garage, crew, account settings and battle results under
 `%APPDATA%/Wargaming.net/WorldOfTanks/offline_lan_0922/saves/<save>/`, and the
 selected save is written into the client configuration when the game starts.
-State written by a build without saves moves into the default save on the next
-start.
+The first installation of the current default-seed revision replaces the old
+Default, including its old backups and legacy progress, without retaining a
+backup. An independent completion marker prevents future starts or repairs
+from replacing later edits. Named unlocked and career saves are preserved.
+Initializing Default explicitly uses this same new seed; initializing a named
+save retains its ordinary recovery backup.
+
+Customize save -> Appearance inventory mirrors the native My style and Preset
+styles pages. Nation/type/vehicle filters follow the garage nation order;
+the optional garage-only filter and vehicle-name search narrow the targets.
+Enter a positive quantity and add selected items, then save with the client
+closed. The next garage startup publishes durable system-message additions.
+Native vehicle-bound items retain their bindings and rental styles retain
+their original battle-count units. Only active #1513 item lists are offered.
+
+Default seed revision 3 and newly created unlocked saves start with 1000 native
+inventory units of each independent paint/camouflage/decal/modification item.
+Preset-style quantities keep their existing initialization law. The separate
+creation marker never replenishes existing named saves, career saves, used
+stock, or sold stock. IGR descriptors are labeled as internet-cafe items;
+ownership does not waive their native vehicle or token restrictions.
+
+Garage additions, Members and Appearance inventory also offer a tier filter
+after vehicle type. Garage labels use the same name/internal-ID form as
+Members. Exact lineup tier controls narrow the candidate lists only; choosing
+a vehicle explicitly changes the slot. They do not rewrite existing or random
+assignments. Clear the tier filter to choose the ordinary random-vehicle mode.
+The vehicle modifier uses two aligned rows of three selectors: nation/type/tier
+above vehicle/modification category/field, with localized garage-order nations.
 
 A new save is created as one of two accounts, and the choice is permanent. A
 fully unlocked save is the historical garage: every vehicle, module and

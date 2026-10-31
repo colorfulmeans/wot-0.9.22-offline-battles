@@ -3247,6 +3247,17 @@ class BotRuntime(object):
         state['_basic_support_handoff'] = receipt
         if supported:
             state.pop('_basic_support_datum', None)
+            # The same footprint just proved the raw basic support pose.
+            # Retire the offset by settling onto that pose, not by deleting
+            # the offset while leaving the hull suspended above it. The latter
+            # enters gravity and the airborne ceiling hides the next uphill
+            # surface after contact pushes (Lakeville T-50 incident).
+            # Only consume a normal downward follow gap. Keep the existing
+            # rise-obstacle veto and real large-drop gravity path intact.
+            drop = float(state['y'])-float(ground)
+            if 0. <= drop <= vehicle_physics.GROUND_FOLLOW_MIN:
+                state['y'] = float(ground)
+            receipt['root_after'] = float(state['y'])
             return 0.
         return datum
 
@@ -3617,6 +3628,10 @@ class BotRuntime(object):
         pins = {}
         for raw in message.get('bot_lineup') or ():
             if not isinstance(raw, dict):
+                continue
+            if raw.get('enabled') is False:
+                # Empty slots may retain a future difficulty preset, but do
+                # not contribute a runtime pin or affect another slot.
                 continue
             skill = raw.get('skill')
             if skill not in bot_gunnery.SKILL_TIERS:
@@ -4430,7 +4445,8 @@ class BotRuntime(object):
         state['z'] = _number(raw.get('z'), state.get('z'))
         state['yaw'] = yaw
         state['aim_yaw'] = aim_yaw
-        state['turret_yaw'] = _angle_delta(aim_yaw, yaw)
+        state['turret_yaw'] = _number(raw.get('turret_yaw'),
+            _angle_delta(aim_yaw, yaw))
         state['gun_pitch'] = gun_pitch
         state['desired_gun_pitch'] = gun_pitch
         state['pitch'] = _number(raw.get('pitch'), state.get('pitch'))
@@ -4892,6 +4908,11 @@ class BotRuntime(object):
             state['_drown_time'] = 0.0
             state['_drowning'] = False
             return False
+        if not state.get('_drowning'):
+            from .native_input_diagnostics import write_json_record
+            write_json_record('BOT WATER DANGER', dict(actor=state['id'], round=self.round_id,
+                position=_position(state), depth=depth, sensor_level=level,
+                elapsed=elapsed, death_after=BOT_DROWNING_SECONDS))
         state['_drowning'] = True
         state['_drown_time'] = state.get('_drown_time', 0.0) + elapsed
         if state['_drown_time'] <= BOT_DROWNING_SECONDS:
@@ -4907,6 +4928,11 @@ class BotRuntime(object):
         state['alive'] = False
         state['display_health'] = display_health
         state['death_reason'] = BOT_DROWNING_DEATH_REASON
+        from .native_input_diagnostics import write_json_record
+        write_json_record('BOT ENVIRONMENT DEATH', dict(actor=state['id'], round=self.round_id,
+            cause='drowning', death_reason=BOT_DROWNING_DEATH_REASON,
+            position=_position(state), depth=depth, sensor_level=level,
+            submerged_seconds=state['_drown_time'], health_before=display_health))
         state['_drowned'] = True
         state['_drown_time'] = BOT_DROWNING_SECONDS
         state['_drowning'] = False
@@ -5436,6 +5462,8 @@ class BotRuntime(object):
     @detailed_observed('bot.radio_configuration')
     def _configure_radio(self, players, now, tick_cache=None):
         actors = {}
+        retiring = set(self._radio_identity(source) for source in self.states.values()
+                       if not source.get('alive', True))
         for source in self.states.values():
             if source.get('alive', True):
                 actors[self._radio_identity(source)] = (
@@ -5444,8 +5472,11 @@ class BotRuntime(object):
         for raw in players or ():
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
+            if not raw.get('alive', True):
+                retiring.add(('human', int(raw['id'])))
             if not raw.get('alive', True) and now >= self._human_vengeance_until.get(
                     int(raw['id']), 0.0):
+                retiring.add(('human', int(raw['id'])))
                 continue
             source = dict(raw, kind='human')
             try:
@@ -5458,7 +5489,7 @@ class BotRuntime(object):
             actors[self._radio_identity(source)] = (
                 int(source.get('team', 0)), _position(source),
                 self._source_radio_range(source, tick_cache), relay_bonus)
-        self._radio_network.configure(actors, now)
+        self._radio_network.configure(actors, now, retiring=retiring)
 
     def _renew_observer_spot(self, source, target, now, duration=None,
                              target_key=None, target_pose=None):
@@ -6106,7 +6137,7 @@ class BotRuntime(object):
         if duration is None:
             duration = spotting.SPOT_MEMORY_SECONDS
         duration = max(
-            0.0, min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS,
+            0.0, min(spotting.MAX_SPOT_MEMORY_SECONDS,
                      duration))
         deadline = now + duration
         self._spot_until[key] = max(
@@ -6118,7 +6149,7 @@ class BotRuntime(object):
         if remaining <= 0.0:
             self._spot_until.pop(key, None)
             return 0.0
-        return min(spotting.DESIGNATED_SPOT_MEMORY_SECONDS, remaining)
+        return min(spotting.MAX_SPOT_MEMORY_SECONDS, remaining)
 
     @detailed_observed('bot.observer_lifecycle')
     def _track_human_observer_lifecycle(
@@ -6140,7 +6171,7 @@ class BotRuntime(object):
                 if _player_spotting_perk(
                         snapshot, prior, 'radioman_lasteffort'):
                     self._human_vengeance_until[player_id] = (
-                        now + spotting.LAST_EFFORT_SECONDS)
+                        now + self._last_effort_duration(snapshot))
             elif alive:
                 critical = raw.get('critical')
                 self._human_last_alive_critical[player_id] = dict(
@@ -6150,6 +6181,7 @@ class BotRuntime(object):
         for player_id in tuple(self._human_observer_alive):
             if player_id in present:
                 continue
+            self._radio_network.forget_target(('human', player_id))
             self._human_observer_alive.pop(player_id, None)
             self._human_last_alive_critical.pop(player_id, None)
             self._human_direct_targets.pop(player_id, None)
@@ -6161,6 +6193,12 @@ class BotRuntime(object):
                 self._human_vengeance_until.pop(player_id, None)
                 self._human_direct_targets.pop(player_id, None)
         return True
+
+    @staticmethod
+    def _last_effort_duration(snapshot):
+        overrides = (snapshot.get('battle_booster') or {}).get('skill_overrides') or {}
+        return max(spotting.LAST_EFFORT_SECONDS, min(5.0, _number(
+            overrides.get('last_effort_duration'), spotting.LAST_EFFORT_SECONDS)))
 
     @staticmethod
     def _designated_spot_duration(source, target, snapshot):
@@ -7519,6 +7557,43 @@ class BotRuntime(object):
             radius=initial.get('radius'), occupied=state.get('_spg_parking_occupied'),
             position_event=state.get('_spg_position_event'), query_policy='existing_state_only'))
 
+    def _review_stalled_control(self, state, command, throttle, turn,
+                                path_clear, motion_probe, now, traffic_output=None):
+        """Keep a small stationary decision receipt outside bulk trace limits."""
+        if not detailed_enabled():
+            return
+        anchor = state.get('_review_stall_anchor')
+        x, z = state['x'], state['z']
+        if anchor is None or (x-anchor[0])**2 + (z-anchor[1])**2 >= 1.0:
+            state['_review_stall_anchor'] = (x, z, now)
+            return
+        if (now-anchor[2] < 5.0 or
+                now-state.get('_review_stall_last', -100.0) < 10.0 or
+                state.get('_review_stall_count', 0) >= 8):
+            return
+        state['_review_stall_last'] = now
+        state['_review_stall_count'] = state.get('_review_stall_count', 0) + 1
+        order = self._server_orders.get(state['id']) or {}
+        cached = self._decision_cache.get(state['id'])
+        search_times = getattr(self.navigator, 'search_times', {})
+        probe = motion_probe if isinstance(motion_probe, dict) else {}
+        from .native_input_diagnostics import validation_event
+        validation_event('bot_stationary_control', battle_round=self.round_id,
+            bot=state['id'], at=now, position=[x, state.get('y'), z],
+            yaw=state.get('yaw'), speed=state.get('speed'),
+            held_seconds=now-anchor[2], mode=command.get('combat_mode'),
+            movement_intent=command.get('movement_intent'),
+            target=command.get('move_position'), recovery=command.get('recovery_mode'),
+            route_id=order.get('route_id'), route_index=order.get('route_index'),
+            throttle=throttle, turn=turn,
+            traffic=(traffic_output or command).get('traffic_mode'),
+            path_clear=path_clear,
+            probe=dict((key, probe.get(key)) for key in ('clear', 'collision', 'reason')),
+            planner_age=now-cached[2] if cached is not None else None,
+            pending_jobs=len(getattr(self.navigator, 'searches', {})),
+            oldest_job_age=max(0., now-min(search_times.values())) if search_times else 0.,
+            query_policy='existing_state_only')
+
     @detailed_observed('bot.motion_diagnostics')
     def _log_motion_stall(self, state, command, throttle, turn,
                           path_clear, motion_probe, now, pose_frozen=False,
@@ -7547,6 +7622,8 @@ class BotRuntime(object):
                         'clear', 'collision', 'reason')}
                         if isinstance(motion_probe, dict) else None))
             return
+        self._review_stalled_control(
+            state, command, throttle, turn, path_clear, motion_probe, now, traffic_output)
         from . import artillery_diagnostics
         artillery_diagnostics.observe(self, state, command, throttle, turn,
                                       path_clear, motion_probe, now,
@@ -8789,6 +8866,7 @@ class BotRuntime(object):
                 state['movement_dir'] = movement_dir
             else:
                 state.pop('movement_dir', None)
+        raw_status = status
         if not commit_enabled and status == 'commit_required':
             # Active-drive previews may propose a crush transaction. Passive
             # separation/rotation has no commit owner, so retain its existing
@@ -8796,10 +8874,22 @@ class BotRuntime(object):
             trace = state.get('_world_contact_trace')
             if isinstance(trace, dict):
                 trace['passive_policy'] = 'uncommitted_contact_blocks_passive_motion'
-            return 'hard'
+            status = 'hard'
         if status not in ('clear', 'crushed', 'soft', 'hard'):
             raise RuntimeError(
                 'bot passive motion resolver returned an invalid status')
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'passive_world_motion', state['id'], now,
+                lambda: dict(actor=state['id'], alive=state.get('alive', True),
+                    position=list(position), hull_yaw=hull_yaw,
+                    motion_yaw=motion_yaw, speed=speed, dt=step,
+                    raw_status=raw_status, status=status,
+                    commit_enabled=bool(commit_enabled),
+                    admitted=status in ('clear', 'crushed'),
+                    world_trace=state.get('_world_contact_trace') or
+                        state.get('_passive_world_diagnostic_trace')),
+                interval=2.0, limit=256)
         return status
 
     @observed('bot.contact_response')
@@ -11568,6 +11658,7 @@ class BotRuntime(object):
         requested_move = (move_x, move_z)
         world_blocked = False
         fraction = 1.0
+        vehicle_contacts = [] if detailed_enabled() else None
         # A zero displacement has no swept volume. Keep its velocity and
         # friction bookkeeping, without rebuilding every other vehicle body.
         if move_x != 0.0 or move_z != 0.0:
@@ -11575,7 +11666,7 @@ class BotRuntime(object):
                 getattr(self, '_contact_players', ()))
             body = self._contact_motion_body(state)
             fraction = tank_collision.translation_fraction(
-                body, (move_x, move_z), bodies)
+                body, (move_x, move_z), bodies, contacts=vehicle_contacts)
             move_x, move_z = tank_collision.slide_translation(
                 body, (move_x, move_z), bodies, first_fraction=fraction)
         else:
@@ -11609,12 +11700,19 @@ class BotRuntime(object):
             position = _position(state)
             candidate = (position[0] + move_x, position[1],
                          position[2] + move_z)
-            if callable(self.motion_resolver):
+            # Reject geometry before a realised world sweep can destroy props.
+            rejection = ('baked_pose' if not self._baked_pose_progress_clear(
+                    state, position, yaw, candidate, yaw) else
+                'detached_turret' if not self._turret_pose_is_clear(
+                    state, position, yaw, candidate, yaw) else None)
+            if rejection is not None:
+                path_blocked = False
+            elif callable(self.motion_resolver):
                 sweep_step = max(float(step), 1.0 / 120.0)
                 world_blocked = self._passive_motion_status(
                     state, position, contact_yaw, move_distance/sweep_step,
                     self._descriptors.get(int(state['id'])), sweep_step,
-                    getattr(self, '_contact_now', 0.0), commit_enabled=False) != 'clear'
+                    getattr(self, '_contact_now', 0.0), commit_enabled=True) not in ('clear', 'crushed')
                 path_blocked = False
             else:
                 # Passive momentum has no navigation goal. A cliff, steep
@@ -11625,11 +11723,23 @@ class BotRuntime(object):
                 path_blocked = (bool(passive_probe.get('collision'))
                                 if isinstance(passive_probe, dict)
                                 else not bool(passive_probe))
-            if (world_blocked or not self._baked_pose_progress_clear(
-                    state, position, yaw, candidate, yaw) or
-                    not self._turret_pose_is_clear(
-                    state, position, yaw, candidate, yaw) or
-                    path_blocked):
+            rejection = rejection or ('world_status' if world_blocked else
+                'direction_probe' if path_blocked else None)
+            if detailed_enabled():
+                from .native_input_diagnostics import battle_review_record
+                battle_review_record(self, 'passive_contact_gate', state['id'],
+                    getattr(self, '_contact_now', 0.0), lambda: dict(
+                        actor=state['id'], alive=state.get('alive', True),
+                        requested=list(requested_move),
+                        vehicle_accepted=[move_x, move_z],
+                        vehicle_fraction=fraction, start=list(position),
+                        candidate=list(candidate), hull_yaw=yaw,
+                        rejection=rejection,
+                        world_trace=(state.get('_world_contact_trace') or
+                            state.get('_passive_world_diagnostic_trace'))
+                            if world_blocked else None),
+                    interval=2.0, limit=256)
+            if rejection is not None:
                 # Requested separation is not proof of an accepted pose.
                 move_x = 0.0
                 move_z = 0.0
@@ -11646,6 +11756,7 @@ class BotRuntime(object):
             if detailed_enabled():
                 state['_contact_compact_receipt'] = dict(at=now,
                     requested=requested_move, accepted=(move_x, move_z),
+                    vehicle_contacts=vehicle_contacts,
                     vehicle_fraction=fraction, native_world=world_blocked)
             sys.stdout.write(
                 '[Offline LAN 0.9.22] CONTACT move bot=%d alive=%s '
@@ -11700,6 +11811,17 @@ class BotRuntime(object):
                                 'suspension_pitch_velocity',
                                 'suspension_roll_velocity')))
 
+    @staticmethod
+    def _set_wreck_yaw(state, yaw):
+        """Rotate an attached passive turret with its hull, including rollback."""
+        relative = state.get('turret_yaw')
+        if relative is None:
+            relative = state.get('aim_yaw', state['yaw']) - state['yaw']
+        state['yaw'] = math.atan2(math.sin(yaw), math.cos(yaw))
+        state['turret_yaw'] = math.atan2(math.sin(relative), math.cos(relative))
+        world = state['yaw'] + state['turret_yaw']
+        state['aim_yaw'] = math.atan2(math.sin(world), math.cos(world))
+
     def _advance_wreck_yaw(self, state, result, step):
         """Integrate the passive yaw impulse through vehicle/world sweeps."""
         omega = state.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
@@ -11726,7 +11848,7 @@ class BotRuntime(object):
                     step, getattr(self, '_contact_now', 0.0), 0.0)
             if not clear:
                 candidate, omega = old_yaw, 0.0
-        state['yaw'] = math.atan2(math.sin(candidate), math.cos(candidate))
+        self._set_wreck_yaw(state, candidate)
         state['push_yaw'] = omega
 
     def _try_wreck_swept_pose(self, state, movement, omega, step):
@@ -11755,20 +11877,20 @@ class BotRuntime(object):
             return False
         descriptor = self._descriptors.get(int(state['id']))
         now = getattr(self, '_contact_now', 0.0)
-        if callable(self.motion_resolver):
-            if self._passive_motion_status(state, start, math.atan2(move_x, move_z),
-                    math.hypot(move_x, move_z)/step, descriptor, step, now,
-                    commit_enabled=False) != 'clear':
-                return False
-        else:
-            # Keep narrow adapters on their established translation gate.
-            return False
         if not self._wreck_rotation_probe(
                 state['id'], start, yaw, end_yaw, descriptor, step, now, 0.0,
                 translation=(move_x, move_z)):
             return False
+        if callable(self.motion_resolver):
+            if self._passive_motion_status(state, start, math.atan2(move_x, move_z),
+                    math.hypot(move_x, move_z)/step, descriptor, step, now,
+                    commit_enabled=True) not in ('clear', 'crushed'):
+                return False
+        else:
+            # Keep narrow adapters on their established translation gate.
+            return False
         state['x'], state['z'] = end[0], end[2]
-        state['yaw'] = math.atan2(math.sin(end_yaw), math.cos(end_yaw))
+        self._set_wreck_yaw(state, end_yaw)
         if fraction < 1.0:
             state['push_yaw'] = 0.0
         return True
@@ -11779,6 +11901,13 @@ class BotRuntime(object):
             return False
         before = _position(state)
         old_yaw = state['yaw']
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'worker_wreck_before', state['id'],
+                getattr(self, '_contact_now', 0.0), lambda: dict(
+                    actor=state['id'], pose=dict((name, state.get(name)) for name in
+                        ('x', 'y', 'z', 'yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch')),
+                    impulse=dict(result)), interval=0.25, limit=48)
         vx = state.get('push_x', 0.0) + result['delta_velocity'][0]
         vz = state.get('push_z', 0.0) + result['delta_velocity'][1]
         omega = state.get('push_yaw', 0.0) + result.get('delta_yaw', 0.0)
@@ -11798,12 +11927,31 @@ class BotRuntime(object):
             self._advance_wreck_yaw(state, motion, step)
         # Run even when translation/rotation stopped: a falling wreck has no
         # live drive tick to finish its flight or landing on its behalf.
-        if self._update_vertical_motion(state, step, before, old_yaw):
+        vertical_rejected = self._update_vertical_motion(state, step, before, old_yaw)
+        if vertical_rejected:
             state['x'], state['y'], state['z'] = before
-            state['yaw'], state['push_yaw'] = old_yaw, 0.0
+            self._set_wreck_yaw(state, old_yaw)
+            state['push_yaw'] = 0.0
         for angle in ('pitch', 'terrain_pitch', 'roll'):
             value = state.get(angle, 0.0)
             state[angle] = math.atan2(math.sin(value), math.cos(value))
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'wreck_motion_outcome', state['id'],
+                getattr(self, '_contact_now', 0.0), lambda: dict(
+                    actor=state['id'], before=list(before), old_yaw=old_yaw,
+                    impulse=dict(result), requested_movement=list(movement),
+                    vertical_rejected=bool(vertical_rejected),
+                    pose=dict((name, state.get(name)) for name in
+                        ('x', 'y', 'z', 'yaw', 'aim_yaw', 'turret_yaw',
+                         'gun_pitch', 'push_x', 'push_z', 'push_yaw'))),
+                interval=2.0, limit=256)
+            battle_review_record(self, 'worker_wreck_after', state['id'],
+                getattr(self, '_contact_now', 0.0), lambda: dict(
+                    actor=state['id'], vertical_rejected=bool(vertical_rejected),
+                    pose=dict((name, state.get(name)) for name in
+                        ('x', 'y', 'z', 'yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch'))),
+                interval=0.25, limit=48)
         moved = _position(state) != before or state['yaw'] != old_yaw
         now = getattr(self, '_contact_now', None)
         if moved and now is not None and now >= state.get('_wreck_motion_log_time', 0.0):
@@ -12375,6 +12523,8 @@ class BotRuntime(object):
                 state.pop('_contact_drive_sweep', None)
                 continue
             if not state_alive and not (
+                    any(physical_results.get(own['id'], {}).get('delta_velocity', ())) or
+                    physical_results.get(own['id'], {}).get('delta_yaw', 0.0) or
                     self._wreck_is_active(state) or
                     state.get('push_x', 0.0) or state.get('push_z', 0.0) or
                     (contact_row[5] if contact_row is not None else
@@ -12469,6 +12619,19 @@ class BotRuntime(object):
         for bot_id in sorted(contacted_bot_ids):
             self._record_traffic_wait_contact(bot_id, step)
         self._ram_contacts = frozenset(current_ram_contacts)
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            # Original inputs and final accepted poses distinguish missing
+            # momentum from grip, actor ownership, and per-body sweep refusal.
+            battle_review_record(self, 'contact_chain', 0, now, lambda: dict(
+                step=step, inputs=tanks,
+                solved=physical_results,
+                native_rows=[list(row[:6]) for row in contact_rows.values()] if contact_rows is not None else None,
+                accepted=[dict(id=s['id'], alive=s.get('alive', True),
+                    x=s['x'], y=s['y'], z=s['z'], speed=s['speed'],
+                    push_x=s.get('push_x', 0.0), push_z=s.get('push_z', 0.0),
+                    motion=s.get('_contact_compact_receipt')) for s in self._ordered_states()]),
+                interval=2.0, limit=256)
         return reports
 
     @staticmethod
@@ -14272,13 +14435,9 @@ class BotRuntime(object):
                 if actor_key not in known_radio_keys:
                     known_radio_keys.add(actor_key)
                     radio_keys.append(actor_key)
-            summarize_radio = getattr(self._radio_network, 'summaries', None)
-            if radio_keys and callable(summarize_radio):
-                radio_values = summarize_radio(
-                    tuple((actor, key[1:]) for actor in radio_keys), now)
-            else:
-                radio_values = tuple(self._radio_network.contact(
-                    actor, key[1:], now)[:2] for actor in radio_keys)
+            radio_values = self._radio_network.summaries(
+                tuple((actor, key[1:]) for actor in radio_keys), now,
+                include_sources=True) if radio_keys else ()
             radio_values = dict(zip(radio_keys, radio_values))
             published_shooters = []
             pending_shooters = []
@@ -14340,7 +14499,12 @@ class BotRuntime(object):
                 'radio_recipients': [
                     {'kind': actor[0], 'id': actor[1],
                      'time_left': round(min(time_left,
-                                           radio_values[actor][0]), 6)}
+                                           radio_values[actor][0]), 6),
+                     'sources': [
+                         {'kind': source[0], 'id': source[1],
+                          'time_left': round(min(time_left, remaining), 6)}
+                         for source, remaining in radio_values[actor][2]
+                         if round(min(time_left, remaining), 6) > 0.0]}
                     for actor in recipients if radio_values[actor][0] > 0.0],
                 # These identities are produced only by the hidden worker's
                 # native LOS probes. Visible clients cannot submit this
@@ -14374,6 +14538,17 @@ class BotRuntime(object):
                     self.states[actor]['_lane_publication_evidence'] = dict(
                         at=now, target=key[1:], reason='no_observation_row',
                         visible=False, lane_clear=None)
+        if detailed_enabled():
+            from .native_input_diagnostics import battle_review_record
+            battle_review_record(self, 'worker_radio_publication', 'batch', now,
+                lambda: dict(contacts=[dict((name, row.get(name)) for name in
+                    ('observing_team', 'target_kind', 'target_id', 'visible', 'fresh',
+                     'time_left', 'visible_by_player_ids', 'visible_by_bot_ids',
+                     'radio_recipients')) for row in packed],
+                    actors=[dict(actor=actor, team=value[0], position=value[1],
+                                 radio_range=value[2])
+                            for actor, value in sorted(self._radio_network.actors.items())]),
+                interval=0.5, limit=4096)
         return packed
 
     @classmethod

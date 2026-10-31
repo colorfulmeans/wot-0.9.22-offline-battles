@@ -1,0 +1,440 @@
+name: Battle review package
+
+# Independently publishes a review build. The full Tests workflow remains required evidence.
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  windows-server:
+    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned viewer test dependency
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
+      - name: Verify actual bilingual lineup widgets, drafts and previews
+        run: >-
+          python tools/run_test_suite.py --directory launcher/tests --jobs 1
+          --logs build/lineup-tk-results
+          --pattern test_bot_lineup_ui.py
+          --pattern test_appearance_widgets.py
+          --pattern test_appearance_inventory.py
+          --pattern test_save_services.py
+          --pattern test_service_widgets.py
+          --pattern test_launcher_layout.py
+          --pattern test_vehicle_viewer_widgets.py
+          --pattern test_vehicle_scene_renderer.py
+          --pattern test_vehicle_gpu_renderer.py
+          --pattern test_vehicle_mounts.py
+          --pattern test_vehicle_armor_viewer.py
+          --pattern test_vehicle_internal_viewer.py
+          --pattern test_crew_store.py
+          --pattern test_vehicle_editor_localization.py
+          --pattern test_bot_lineup_profiles.py
+          --pattern test_bot_tactics_preview.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: lineup-tk-results
+          path: build/lineup-tk-results/
+      - name: Install pinned Windows server packager
+        run: >-
+          python -m pip install
+          -r server/requirements-windows-build.txt
+      - name: Build zero-configuration Windows LAN server
+        shell: pwsh
+        run: >-
+          pwsh -NoProfile -File
+          server/build_windows_server.ps1
+      - name: Verify x64 executable, fixed listener, and protocol welcome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $serverRoot = Join-Path $PWD "dist\server"
+          $serverExe = Join-Path $serverRoot "WoT-0.9.22-LAN-Server.exe"
+          $stdout = Join-Path $env:RUNNER_TEMP "wot-server.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "wot-server.stderr.log"
+          $normalizedExe = $serverExe.Replace("/", "\").ToLowerInvariant()
+          $identity = "$normalizedExe|28782|any"
+          $sha256 = [System.Security.Cryptography.SHA256]::Create()
+          try {
+              $digestBytes = $sha256.ComputeHash(
+                  [System.Text.Encoding]::UTF8.GetBytes($identity))
+          }
+          finally {
+              $sha256.Dispose()
+          }
+          $digest = ([System.BitConverter]::ToString($digestBytes) `
+              -replace "-", "").ToLowerInvariant().Substring(0, 12)
+          $firewallRuleName = "WoT 0.9.22 LAN Server TCP 28782 - $digest"
+
+          Get-NetFirewallRule `
+              -DisplayName $firewallRuleName `
+              -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+
+          @'
+          import struct
+          import sys
+
+          path = sys.argv[1]
+          with open(path, 'rb') as stream:
+              stream.seek(0x3c)
+              pe_offset = struct.unpack('<I', stream.read(4))[0]
+              stream.seek(pe_offset + 4)
+              machine = struct.unpack('<H', stream.read(2))[0]
+          if machine != 0x8664:
+              raise SystemExit('expected x64 PE machine, got 0x%04x' % machine)
+          '@ | python - $serverExe
+          if ($LASTEXITCODE -ne 0) {
+              throw "PE architecture check failed"
+          }
+
+          $ProtocolProbe = @'
+          import json
+          import socket
+
+          hello = {
+              'type': 'hello',
+              'role': 'probe',
+              'protocol': 5,
+              'client_build': 'wot-0.9.22.0.1-cn-1513',
+              'capabilities': ['projectile_ledger_v2',
+                               'destructible_catalog_v5',
+                               'lean_snapshot_manifest_v1',
+                               'ram_contact_ledger_v2',
+                               'human_ram_timeline_v1',
+                               'player_projectile_owner_v1',
+                               'player_environment_v2',
+                               'effective_params_v1',
+                               'ricochet_continuation_v1'],
+              'name': 'CI-Smoke',
+              'vehicle': 'ussr:R11_MS-1',
+              'vehicle_compact_descr': 'AA==',
+              'max_health': 90,
+          }
+          sock = socket.create_connection(('127.0.0.1', 28782), 5.0)
+          try:
+              wire = sock.makefile('rwb', buffering=0)
+              wire.write((json.dumps(hello) + '\n').encode('utf-8'))
+              reply = json.loads(wire.readline().decode('utf-8'))
+          finally:
+              sock.close()
+          assert reply['type'] == 'welcome', reply
+          assert reply['protocol'] == 5, reply
+          assert reply['client_build'] == hello['client_build'], reply
+          assert 'projectile_ledger_v2' in reply['capabilities'], reply
+          '@
+
+          $process = Start-Process `
+              -FilePath $serverExe `
+              -PassThru -WindowStyle Hidden `
+              -RedirectStandardOutput $stdout `
+              -RedirectStandardError $stderr
+          try {
+              $deadline = (Get-Date).AddSeconds(30)
+              $listening = $false
+              while ((Get-Date) -lt $deadline) {
+                  if ($process.HasExited) {
+                      throw "Windows server exited before opening port 28782"
+                  }
+                  $listeners = Get-NetTCPConnection `
+                      -LocalPort 28782 -State Listen -ErrorAction SilentlyContinue
+                  if ($listeners | Where-Object { $_.LocalAddress -eq "0.0.0.0" }) {
+                      $listening = $true
+                      break
+                  }
+                  Start-Sleep -Milliseconds 250
+              }
+              if (-not $listening) {
+                  throw "Windows server did not bind 0.0.0.0:28782"
+              }
+
+              $ProtocolProbe | python -
+              if ($LASTEXITCODE -ne 0) {
+                  throw "LAN protocol smoke failed"
+              }
+
+              $ruleDeadline = (Get-Date).AddSeconds(20)
+              $firewallRule = $null
+              while ((Get-Date) -lt $ruleDeadline) {
+                  $firewallRule = Get-NetFirewallRule `
+                      -DisplayName $firewallRuleName `
+                      -ErrorAction SilentlyContinue | Where-Object {
+                          $_.Direction -eq "Inbound" -and
+                          $_.Enabled -eq "True" -and
+                          $_.Action -eq "Allow"
+                      } | Select-Object -First 1
+                  if ($null -ne $firewallRule) {
+                      break
+                  }
+                  Start-Sleep -Milliseconds 250
+              }
+              if ($null -eq $firewallRule) {
+                  throw "Packaged server did not create its firewall rule"
+              }
+              $application = $firewallRule | Get-NetFirewallApplicationFilter
+              $portFilter = $firewallRule | Get-NetFirewallPortFilter
+              if ($application.Program -ne $serverExe) {
+                  throw "Firewall rule is not scoped to the packaged EXE"
+              }
+              if ($portFilter.Protocol -ne "TCP" -or
+                      $portFilter.LocalPort -ne "28782") {
+                  throw "Firewall rule is not scoped to TCP 28782"
+              }
+          }
+          finally {
+              if (-not $process.HasExited) {
+                  & taskkill.exe /PID $process.Id /T /F | Out-Null
+              }
+              if (Test-Path $stdout) {
+                  Write-Host "--- server stdout ---"
+                  Get-Content $stdout
+              }
+              if (Test-Path $stderr) {
+                  Write-Host "--- server stderr ---"
+                  Get-Content $stderr
+              }
+              Get-NetFirewallRule `
+                  -DisplayName $firewallRuleName `
+                  -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+          }
+      - name: Package Windows server download
+        shell: pwsh
+        run: |
+          Compress-Archive -Force `
+            -Path dist/server/WoT-0.9.22-LAN-Server.exe,dist/server/README.txt `
+            -DestinationPath dist/WoT-0.9.22-LAN-Server-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-0.9.22-lan-server-windows
+          path: |
+            dist/WoT-0.9.22-LAN-Server-Windows.zip
+            dist/server/WoT-0.9.22-LAN-Server.exe
+            dist/server/README.txt
+          if-no-files-found: error
+
+  test:
+    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    needs: windows-server
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install pinned test dependencies
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
+      - name: Run battle regression and related subsystem tests
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python tools/run_test_suite.py --jobs 4 --logs build/client-test-results
+          --pattern test_port_0922_battle_fix_regressions.py
+          --pattern test_port_0922_contact_chain.py
+          --pattern test_port_0922_settings_policy.py
+          --pattern test_port_0922_locked_entries.py
+          --pattern test_port_0922_soft_vegetation_felling.py
+          --pattern test_offline_menu_timeline.py
+          --pattern test_port_0922_default_styles.py
+          --pattern test_port_0922_outfit_stock.py
+          --pattern test_port_0922_sparse_lineup.py
+          --pattern test_port_0922_simulation_worker.py
+          --pattern test_waiting_room_stock_flash.py
+          --pattern test_port_0922_bot_lineup_integration.py
+          --pattern test_team_class_selection.py
+          --pattern test_port_0922_server_team_size.py
+          --pattern test_port_0922_account_rpc.py
+          --pattern test_port_0922_offline_services.py
+          --pattern test_port_0922_garage.py
+          --pattern test_bot_fittings.py
+          --pattern test_port_0922_equipment_policy.py
+          --pattern test_ordinary_missions.py
+          --pattern test_native_notifications.py
+          --pattern test_port_0922_offline_services_ui.py
+          --pattern test_replay_capacity.py
+          --pattern test_port_0922_server_projectiles.py
+          --pattern test_crew_skill_credits.py
+          --pattern test_port_0922_career_review_regressions.py
+          --pattern test_port_0922_career_dossiers.py
+          --pattern test_port_0922_postbattle.py
+          --pattern test_port_0922_spg_missions.py
+          --pattern test_diagnostic_log_modes.py
+          --pattern test_native_input_diagnostics.py
+          --pattern test_port_0922_effective_params.py
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern 'test_port_0922_*diagnostic*.py'
+          --pattern 'test_port_0922_*model*.py'
+          --pattern test_port_0922_battle_achievements.py
+          --pattern test_port_0922_radio_server.py
+          --pattern test_port_0922_spotting_radio.py
+          --pattern test_port_0922_lan_protocol.py
+          --pattern test_port_0922_mission_events.py
+          --pattern test_port_0922_lt12_ht12_missions.py
+          --pattern test_port_0922_target_evidence.py
+          --pattern test_port_0922_gun_angle_recovery.py
+          --pattern test_port_0922_wreck_dynamics.py
+          --pattern test_port_0922_passive_wreck_pose.py
+          --pattern test_port_0922_wreck_contact_commit.py
+          --pattern test_port_0922_bot_state_codec.py
+          --pattern test_port_0922_094_repair.py
+          --pattern test_port_0922_lan_client_queue.py
+          --pattern test_port_0922_snapshot_sync.py
+          --pattern test_port_0922_battle_runtime.py
+          --pattern test_port_0922_server_bot_ai.py
+          --pattern test_port_0922_contact_motion.py
+          --pattern test_port_0922_wreck_push_diagnostics.py
+          --pattern test_port_0922_wreck_pose_readback.py
+          --pattern test_port_0922_battle_projectiles.py
+      - name: Verify default seed revision and save isolation
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: >-
+          python tools/run_test_suite.py --directory launcher/tests --jobs 4
+          --logs build/default-save-test-results
+          --pattern test_default_revision.py
+          --pattern test_save_slots.py
+          --pattern test_launcher_core.py
+          --pattern test_error_reports.py
+          --pattern test_launcher_window.py
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: battle-review-test-results
+          path: |
+            build/client-test-results/
+            build/default-save-test-results/
+          if-no-files-found: error
+      - uses: actions/download-artifact@v4
+        with:
+          name: wot-0.9.22-lan-server-windows
+          path: dist
+      # Never build into dist/: the client artifact below uploads dist/*,
+      # and the launcher job unpacks that before it is packaged.
+      - name: Build the native exception trail probe
+        run: sh tools/build_native_exception_trail_probe.sh native-probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-0.9.22-native-exception-trail-probe
+          path: native-probe/native_exception_trail.exe
+          if-no-files-found: error
+      - name: Reproduce the verified recorder resource
+        run: python tools/build_replay_runtime.py
+      - name: Stage verified style UI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/stage_release_style_ui.py
+      - name: Rebuild and verify the shipping x86 native module
+        run: sh tools/build_math_batch_native.sh
+      - name: Build Python 2.7 0.9.22 LAN client
+        run: >-
+          docker run --rm --platform linux/amd64 -v "$PWD:/work"
+          -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
+          -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
+          -w /work python:2.7.18
+          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
+      - name: Verify all current client bytecode
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_1.0.0.wotmod
+      - name: Validate 0.9.22 wotmod package
+        run: >-
+          python tools/validate_wotmod.py
+          dist/org.colorfulmeans.offline_lan_0922_*.wotmod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wot-0.9.22-lan-client
+          path: dist/*
+          if-no-files-found: error
+
+  windows-launcher:
+    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    runs-on: windows-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11.9"
+          architecture: "x64"
+      - name: Install pinned Windows packager
+        run: >-
+          python -m pip install
+          -r launcher/requirements-build.txt
+      - name: Take the built 0.9.22 client package
+        uses: actions/download-artifact@v4
+        with:
+          name: wot-0.9.22-lan-client
+          path: dist
+      - name: Build the desktop launcher
+        shell: pwsh
+        run: pwsh -NoProfile -File launcher/build_launcher.ps1
+      - uses: actions/upload-artifact@v4
+        id: launcher_download
+        with:
+          name: wot-0.9.22-offline-battles-launcher
+          # Upload the runnable folder; Actions supplies the only outer ZIP.
+          path: launcher/dist/wot-0.9.22-offline-battles/
+          if-no-files-found: error
+          overwrite: true
+      - name: Extract the actual download once
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ steps.launcher_download.outputs.artifact-id }}
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/launcher-download
+      - name: Verify that the bundled servers run from the launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $download = Join-Path $env:RUNNER_TEMP "launcher-download"
+          $launcher = Join-Path $download "wot-0.9.22-offline-battles.exe"
+          if (-not (Test-Path -LiteralPath $launcher) -or
+                  -not (Test-Path -LiteralPath (Join-Path $download "_internal\client\0.9.22.zip")) -or
+                  (Get-ChildItem -LiteralPath $download -Filter *.zip)) {
+              throw "Launcher download must run after one ZIP extraction"
+          }
+          Write-Host "Downloaded launcher is runnable after one ZIP extraction"
+          foreach ($port in @("0.9.22")) {
+              $process = Start-Process -FilePath $launcher `
+                  -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
+              try {
+                  $deadline = (Get-Date).AddSeconds(60)
+                  $listening = $false
+                  while ((Get-Date) -lt $deadline) {
+                      if ($process.HasExited) {
+                          throw "$port server exited before opening port 28782"
+                      }
+                      $listeners = Get-NetTCPConnection `
+                          -LocalPort 28782 -State Listen -ErrorAction SilentlyContinue
+                      if ($listeners | Where-Object { $_.LocalAddress -eq "0.0.0.0" }) {
+                          $listening = $true
+                          break
+                      }
+                      Start-Sleep -Milliseconds 250
+                  }
+                  if (-not $listening) {
+                      throw "$port server did not bind 0.0.0.0:28782"
+                  }
+                  Write-Host "$port server listens through the launcher bundle"
+              }
+              finally {
+                  if (-not $process.HasExited) {
+                      & taskkill.exe /PID $process.Id /T /F | Out-Null
+                  }
+                  $log = Join-Path $env:LOCALAPPDATA "WoTOfflineBattles\server.log"
+                  if (Test-Path $log) {
+                      Write-Host "--- launcher server log ---"
+                      Get-Content $log -Tail 60
+                      Remove-Item -LiteralPath $log -Force
+                  }
+                  Start-Sleep -Seconds 2
+              }
+          }

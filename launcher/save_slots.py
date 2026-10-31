@@ -31,6 +31,9 @@ SAVES_DIR_NAME = "saves"
 DEFAULT_SLOT_ID = "default"
 METADATA_NAME = "save.json"
 METADATA_SCHEMA = 1
+# PR115 review packages used revision 1 before their implementation was accepted.
+# A distinct seed revision must not trust that older completion marker.
+DEFAULT_REVISION = 3
 
 # How a slot was created.  ``unlocked`` is the historical offline garage: every
 # vehicle owned and every balance effectively unlimited.  ``new_account``
@@ -220,6 +223,45 @@ def default_record(game_root=None, environment=None, root=None):
         _read_metadata(os.path.join(directory, METADATA_NAME)))
 
 
+def replace_default(game_root=None, environment=None, root=None, force=False):
+    """Discard the obsolete default once, without backups or legacy import."""
+    root = saves_root(game_root, environment) if root is None else root
+    directory = slot_dir(DEFAULT_SLOT_ID, root=root)
+    metadata = _read_metadata(os.path.join(directory, METADATA_NAME)) or {}
+    if not force and metadata.get('default_revision') == DEFAULT_REVISION:
+        return False
+    legacy_roots = {os.path.dirname(os.path.abspath(root))}
+    if game_root:
+        legacy_roots.add(os.path.join(os.path.abspath(game_root), *LEGACY_RELATIVE.split('/')))
+    legacy_files = []
+    for legacy in sorted(legacy_roots):
+        if not os.path.isdir(legacy):
+            continue
+        for name in os.listdir(legacy):
+            if not _belongs_to_state(name):
+                continue
+            path = _contained(legacy, os.path.join(legacy, name), 'Legacy default state')
+            if os.path.isfile(path):
+                legacy_files.append(path)
+    # Validate all targets before removing anything. slot_dir rejects redirected
+    # default directories; _contained also rejects redirected legacy state files.
+    if os.path.isdir(directory):
+        shutil.rmtree(directory)
+    elif os.path.lexists(directory):
+        os.unlink(directory)
+    os.makedirs(directory)
+    for path in legacy_files:
+        os.unlink(path)
+    # Publish completion only after every obsolete source has been removed.
+    _write_metadata(os.path.join(directory, METADATA_NAME), {
+        'schema': METADATA_SCHEMA, 'id': DEFAULT_SLOT_ID,
+        'name': DEFAULT_SLOT_ID, 'mode': MODE_UNLOCKED,
+        'default_revision': DEFAULT_REVISION, 'skip_legacy_import': True,
+        'appearanceStockSeed': 1,
+    })
+    return True
+
+
 def list_slots(game_root=None, environment=None, root=None):
     """Return every save slot, default first and the rest by name."""
     root = saves_root(game_root, environment) if root is None else root
@@ -300,6 +342,7 @@ def create_slot(name, mode, game_root=None, environment=None, root=None,
             "id": slot_id,
             "name": name,
             "mode": mode,
+            "appearanceStockSeed": 1 if mode == MODE_UNLOCKED else 0,
             EARNINGS_KEY: normalized_earnings_percent(earnings_percent),
             "created": int(time.time() if now is None else now),
         })
@@ -307,6 +350,22 @@ def create_slot(name, mode, game_root=None, environment=None, root=None,
         shutil.rmtree(directory, ignore_errors=True)
         raise SaveSlotError("The save could not be created: %s" % error)
     return read_slot(slot_id, root=root)
+
+
+def ensure_mission_seed(slot_id, game_root=None, environment=None, root=None):
+    """Persist a random identity before any first-login reward preview."""
+    import uuid
+    directory = slot_dir(slot_id, game_root, environment, root)
+    if not os.path.isdir(directory):
+        return None
+    path = os.path.join(directory, METADATA_NAME)
+    metadata = _read_metadata(path) or {}
+    seed = metadata.get('missionSeed')
+    if not isinstance(seed, str) or len(seed) != 32:
+        seed = uuid.uuid4().hex
+        metadata['missionSeed'] = seed
+        _write_metadata(path, metadata)
+    return seed
 
 
 def rename_slot(slot_id, name, game_root=None, environment=None, root=None):
@@ -639,6 +698,8 @@ def restore_slot(slot_id, archive_path, game_root=None, environment=None,
                     metadata.update(id=record['id'],name=record['name'])
                     if slot_id == DEFAULT_SLOT_ID or previous.get('skip_legacy_import') is True:
                         metadata['skip_legacy_import'] = True
+                    if slot_id == DEFAULT_SLOT_ID:
+                        metadata['default_revision'] = DEFAULT_REVISION
                     _write_metadata(target,metadata)
                 else:
                     with open(target, "wb") as destination:
@@ -709,6 +770,13 @@ def initialize_slot(slot_id, game_root=None, environment=None, root=None, is_run
         is_running = core.game_is_running
     if is_running():
         raise SaveSlotError('Close World of Tanks before initializing a save.')
+    if slot_id == DEFAULT_SLOT_ID:
+        try:
+            replace_default(game_root, environment, root, force=True)
+        except OSError as error:
+            raise SaveSlotError('The default save could not be initialized: %s' % error)
+        return dict(record=read_slot(slot_id, game_root, environment, root),
+                    backup=None, recovery=None)
     record = read_slot(slot_id, game_root, environment, root)
     directory = record['path']
     # A unique recovery directory also holds the ordinary, restorable ZIP.

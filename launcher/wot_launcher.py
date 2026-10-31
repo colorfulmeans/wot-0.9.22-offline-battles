@@ -7,6 +7,11 @@ authority, and can run a persistent LAN server explicitly.
 
 from __future__ import annotations
 
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
 import os
 import subprocess
 import sys
@@ -23,6 +28,7 @@ if __package__ in (None, ""):
     import i18n
     import gold_shop
     import save_ledger
+    import save_services, reserves_ui
     import save_personal_missions
     import personal_missions_ui
     import customizations_ui
@@ -34,7 +40,7 @@ if __package__ in (None, ""):
     import vehicle_overlays
     import window_diagnostics
 else:
-    from . import customizations_ui, crew_ui, nation_choices
+    from . import customizations_ui, crew_ui, nation_choices, save_services, reserves_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -67,6 +73,38 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Premium account days': '高级账号天数',
+    'Premium days must be a non-negative whole number.': '高级账号天数必须为非负整数。',
+    'Premium days are outside the supported range.': '高级账号天数超出客户端支持范围。',
+    'Personal reserves': '个人储备', 'Bonus': '加成', 'Duration (hours)': '时长（小时）',
+    'Inventory': '库存', 'Quantity': '数量', 'Set selected quantities': '设置选中储备数量',
+    'Personal reserves saved.': '个人储备已保存。', 'Add garage slots': '添加车位',
+    'Start LAN room': '启动局域网房间', 'Stop LAN room': '关闭局域网房间',
+    'Original vehicle values': '原始车辆属性', 'Automatic lineup': '自动阵容',
+    'Garage slots': '车位',
+    'Garage slots: %d': '车位总数：%d', 'Select a personal reserve.': '请先选择个人储备。',
+    'Quantity must be positive.': '数量必须大于零。',
+    'Quantity must be a non-negative whole number.': '数量必须为非负整数。',
+    'Select the save again before editing.': '存档已切换，请重新打开个人储备后编辑。',
+    'Unknown personal reserve.': '无法识别的个人储备。',
+    'Combat XP': '战斗经验', 'Crew XP': '乘员经验', 'Free XP': '全局经验',
+
+    'Tier': '级别',
+    'No vehicles match these filters.': '没有符合筛选条件的车辆。',
+    'Appearance inventory': '外观库存',
+    'Type': '类型',
+    'winter': '雪地', 'summer': '草地', 'desert': '沙地',
+    'Select at least one appearance item.': '请至少选择一种外观物品。',
+    'Appearance inventory saved.': '外观库存已保存。',
+    'My style': '我的风格', 'Preset styles': '预设风格',
+    'Appearance item': '外观物品', 'Category': '类别', 'Search': '搜索车辆',
+    'Paint': '喷漆', 'Camouflage': '迷彩', 'Emblem': '徽章',
+    'Inscription': '签名', 'Wear': '战损', 'Internet cafe': '网吧专用',
+    'Garage vehicles only': '仅车库车辆',
+    'Quantity to add per selected item': '每种选中物品添加数量',
+    'Add selected items': '添加选中物品',
+    'Add the entered quantity to each selected item. Vehicle-bound items are added for each compatible target vehicle. Rental copies grant their original battle count. Save with the game closed; additions appear in game system messages.':
+        '按填写数量增加选中物品；绑定车辆的物品会分别添加至筛选范围内的适用车辆。租赁风格每份提供原版规定的使用场次。关闭游戏后保存，再次进入游戏时通过系统消息提示。',
     _MAINTENANCE_HELP[0]: "修复模组安装：重新安装此启动器携带的模组，保留存档和自定义方案。",
     _MAINTENANCE_HELP[1]: "重置全部离线客户端设置：重置所有离线账号的画面、声音、按键等客户端设置，保留存档和方案。",
     _MAINTENANCE_HELP[2]: "清空全部离线存档：删除所有离线存档，重新建立默认全解锁存档，保留自定义方案和客户端设置。",
@@ -103,7 +141,7 @@ _CHINESE = {
     'Adds one 100% crew member, with experience for the selected number of complete skills. Choose the skills in the client. No zero-skill perk is added. Close the game before adding; the next startup delivers the recruit and a system message. Insufficient barracks space leaves the request pending.':
         '每次添加一名 100% 成员，附带所选数量的完整技能经验，具体技能在客户端自行选择，不额外附赠零技能。技能数 0 表示只有 100% 基础熟练度。添加前请关闭游戏，下次启动时进入兵营并显示系统消息；兵营空间不足时保留待领取。',
     'Coatings': '涂装',
-    'Edit preset style inventory...': '编辑预设风格库存…',
+    'Edit appearance inventory...': '编辑外观库存…',
     'All compatible vehicles': '全部适用车辆',
     'Vehicle': '车辆',
     'Preset style': '预设风格',
@@ -224,6 +262,8 @@ _CHINESE = {
     "Restore save...": "恢复存档…",
     "Initialize save...": "初始化存档…",
     "Initialize save?": "初始化存档？",
+    "Replace Default with current fully unlocked defaults? All Default progress and old Default backups will be deleted. No backup will be retained. Other saves are kept.": "将默认存档替换为当前的全解锁初始存档？默认存档的全部进度和旧备份都会删除，不保留备份。其他存档会保留。",
+    "Initialized Default with current fully unlocked defaults; no backup was retained.": "默认存档已替换为当前的全解锁初始存档，未保留备份。",
     "Close World of Tanks before initializing a save.": "初始化存档前请先关闭游戏。",
     "The save could not be initialized: %s": "初始化存档失败：%s",
     "Initialized save '%s'. Recovery folder: %s": "已初始化存档“%s”。恢复备份目录：%s",
@@ -564,6 +604,8 @@ def _append_launcher_log(message, path=None, timestamp=None):
 
 SERVER_LOG_MAX_BYTES = 1024 * 1024
 SERVER_LOG_RETAIN_BYTES = 768 * 1024
+DIAGNOSTIC_SERVER_LOG_MAX_BYTES = 256 * 1024 * 1024
+DIAGNOSTIC_SERVER_LOG_RETAIN_BYTES = 192 * 1024 * 1024
 
 
 class _BoundedLogStream(object):
@@ -770,8 +812,8 @@ class LauncherWindow(object):
         self.language_box.bind(
             "<<ComboboxSelected>>", self._language_selected)
 
-        self.game_panel = tk.LabelFrame(frame, text="", padx=8, pady=8)
-        self.game_panel.grid(row=1, column=0, sticky="we", pady=(0, 8))
+        self.game_section, self.game_panel, self.game_title = ui_layout.section(tk, frame)
+        self.game_section.grid(row=1, column=0, sticky="we", pady=(0, 8))
         self.game_folder_label = tk.Label(self.game_panel, text="")
         self.game_folder_label.grid(row=0, column=0, sticky="w")
         self._folders = core.known_folders(settings)
@@ -918,12 +960,14 @@ class LauncherWindow(object):
         self.save_dialog.protocol("WM_DELETE_WINDOW", self._close_save_dialog)
         self.save_tabs = self._ttk.Notebook(self.save_dialog)
         self.save_tabs.pack(fill='both', expand=True, padx=12, pady=12)
-        self.account_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
-        self.shop_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
-        self.personal_missions_panel = tk.LabelFrame(self.save_tabs, padx=10, pady=10)
+        self.account_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        self.reserves_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        self.reserves_editor = reserves_ui.ReservesPanel(self, self.reserves_panel)
+        self.shop_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
+        self.personal_missions_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.customizations_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
         self.crew_panel = tk.Frame(self.save_tabs, padx=10, pady=10)
-        for panel in (self.account_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
+        for panel in (self.account_panel, self.reserves_panel, self.shop_panel, self.customizations_panel, self.crew_panel, self.personal_missions_panel):
             self.save_tabs.add(panel)
         self.crew_editor = crew_ui.CrewPanel(self, self.crew_panel)
         self.save_tabs.bind('<<NotebookTabChanged>>', self._save_tab_changed)
@@ -937,7 +981,7 @@ class LauncherWindow(object):
         self.save_dialog_feedback.pack(fill="x", padx=12, pady=6)
         self.close_save_dialog_button = tk.Button(
             self.save_dialog, text="", command=self._close_save_dialog)
-        self.close_save_dialog_button.pack(anchor="e", padx=12, pady=(0, 12))
+        self.close_save_dialog_button.pack(fill="x", padx=12, pady=(0, 12))
         self.vehicle_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.bot_lineup_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.bot_tactics_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
@@ -989,29 +1033,33 @@ class LauncherWindow(object):
         # What this save multiplies its battle earnings by.  It belongs to the
         # launcher's own save record rather than to the client's state, so it
         # can be set on a save that has never been started.
+        self.premium_label = tk.Label(self.account_panel, text="")
+        self.premium_label.grid(row=len(save_ledger.CURRENCIES), column=0, sticky="w", pady=(0, 4))
+        self.premium_entry = tk.Entry(self.account_panel, width=16)
+        self.premium_entry.grid(row=len(save_ledger.CURRENCIES), column=1, sticky="w", padx=(6, 0), pady=(0, 4))
         self.earnings_label = tk.Label(self.account_panel, text="")
         self.earnings_label.grid(
-            row=len(save_ledger.CURRENCIES), column=0, sticky="w", pady=(0, 4))
+            row=len(save_ledger.CURRENCIES) + 1, column=0, sticky="w", pady=(0, 4))
         earnings_row = tk.Frame(self.account_panel)
         earnings_row.grid(
-            row=len(save_ledger.CURRENCIES), column=1, sticky="w",
+            row=len(save_ledger.CURRENCIES) + 1, column=1, sticky="w",
             padx=(6, 0), pady=(0, 4))
         self.earnings_entry = tk.Entry(earnings_row, width=8)
         self.earnings_entry.pack(side="left")
         account_actions = tk.Frame(self.account_panel)
         account_actions.grid(
-            row=len(save_ledger.CURRENCIES) + 1, column=0, columnspan=2,
+            row=len(save_ledger.CURRENCIES) + 2, column=0, columnspan=2,
             sticky="we", pady=(6, 0))
         self.save_account_button = tk.Button(
             account_actions, text="", command=self._apply_account)
-        self.save_account_button.pack(side="left", fill="x", expand=True)
+        self.save_account_button.pack(fill="x")
         self.edit_badges_button = tk.Button(account_actions, command=self._open_account_badges)
-        self.edit_badges_button.pack(side="left", fill="x", expand=True)
+        self.edit_badges_button.pack(fill="x", pady=(6, 0))
         self.account_help_label = tk.Label(
             self.account_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.account_help_label.grid(
-            row=len(save_ledger.CURRENCIES) + 2, column=0, columnspan=2,
+            row=len(save_ledger.CURRENCIES) + 3, column=0, columnspan=2,
             sticky="we", pady=(8, 0))
         self.account_panel.grid_columnconfigure(1, weight=1)
 
@@ -1022,6 +1070,7 @@ class LauncherWindow(object):
         self._gold_offer_by_label = {}
         self.gold_nation = tk.StringVar(value="")
         self.gold_class = tk.StringVar(value="")
+        self.gold_tier = tk.StringVar(value="")
         self.gold_nation_label = tk.Label(self.shop_panel, text="")
         self.gold_nation_label.grid(row=0, column=0, sticky="w")
         self.gold_nation_box = self._ttk.Combobox(
@@ -1032,27 +1081,40 @@ class LauncherWindow(object):
         self.gold_class_box = self._ttk.Combobox(
             self.shop_panel, textvariable=self.gold_class, state="readonly")
         self.gold_class_box.grid(row=1, column=1, sticky="we", padx=(6, 0))
-        for box in (self.gold_nation_box, self.gold_class_box):
+        self.gold_tier_label = tk.Label(self.shop_panel, text="")
+        self.gold_tier_label.grid(row=2, column=0, sticky="w", pady=(4, 4))
+        self.gold_tier_box = self._ttk.Combobox(
+            self.shop_panel, textvariable=self.gold_tier, state="readonly")
+        self.gold_tier_box.grid(row=2, column=1, sticky="we", padx=(6, 0))
+        for box in (self.gold_nation_box, self.gold_class_box, self.gold_tier_box):
             box.bind("<<ComboboxSelected>>", self._filter_gold_shop)
         self.gold_vehicle_label = tk.Label(self.shop_panel, text="")
-        self.gold_vehicle_label.grid(row=2, column=0, sticky="w")
+        self.gold_vehicle_label.grid(row=3, column=0, sticky="w")
         self.gold_vehicle = tk.StringVar(value="")
         self.gold_vehicle_box = self._ttk.Combobox(
             self.shop_panel, textvariable=self.gold_vehicle, values=(),
             state="readonly", width=48)
-        self.gold_vehicle_box.grid(row=2, column=1, sticky="we", padx=(6, 0))
+        self.gold_vehicle_box.grid(row=3, column=1, sticky="we", padx=(6, 0))
         self.gold_vehicle_box.bind("<<ComboboxSelected>>", self._update_vehicle_add_button)
         shop_actions = tk.Frame(self.shop_panel)
         shop_actions.grid(
-            row=3, column=0, columnspan=2, sticky="we", pady=(6, 0))
+            row=4, column=0, columnspan=2, sticky="we", pady=(6, 0))
         self.buy_gold_vehicle_button = tk.Button(
             shop_actions, text="", command=self._buy_gold_vehicle)
         self.buy_gold_vehicle_button.pack(side="left", fill="x", expand=True)
+        self.slots_label = tk.Label(self.shop_panel)
+        self.slots_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        self.slots_quantity = tk.StringVar(value="1")
+        self.slots_box = self._ttk.Spinbox(self.shop_panel, from_=1,
+            to=save_ledger.MAX_BALANCE, textvariable=self.slots_quantity)
+        self.slots_box.grid(row=5, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+        self.add_slots_button = tk.Button(self.shop_panel, command=self._add_garage_slots)
+        self.add_slots_button.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         self.shop_help_label = tk.Label(
             self.shop_panel, text="", anchor="w", justify="left",
             wraplength=620)
         self.shop_help_label.grid(
-            row=4, column=0, columnspan=2, sticky="we", pady=(8, 0))
+            row=7, column=0, columnspan=2, sticky="we", pady=(8, 0))
         self.shop_panel.grid_columnconfigure(1, weight=1)
 
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(
@@ -1060,7 +1122,8 @@ class LauncherWindow(object):
         self.bot_lineup_profile_label = tk.Label(
             self.bot_lineup_panel, text="")
         self.bot_lineup_profile_label.grid(row=0, column=0, sticky="w")
-        self.bot_lineup_profile = tk.StringVar(value=settings.get(
+        self.bot_lineup_profile = ui_layout.ChoiceVariable(tk, self._t,
+            (bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL,), value=settings.get(
             "bot_lineup_profile",
             bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL))
         self.bot_lineup_profile_box = self._ttk.Combobox(
@@ -1091,8 +1154,8 @@ class LauncherWindow(object):
 
         self.vehicle_profile_label = tk.Label(self.vehicle_panel, text="")
         self.vehicle_profile_label.grid(row=0, column=0, sticky="w")
-        self.vehicle_profile = tk.StringVar(
-            value=settings.get(
+        self.vehicle_profile = ui_layout.ChoiceVariable(tk, self._t,
+            (vehicle_overlays.ORIGINAL_PROFILE_LABEL,), value=settings.get(
                 "vehicle_profile", vehicle_overlays.ORIGINAL_PROFILE_LABEL))
         self.vehicle_profile_box = self._ttk.Combobox(
             self.vehicle_panel, textvariable=self.vehicle_profile,
@@ -1124,8 +1187,8 @@ class LauncherWindow(object):
 
         self._build_maintenance_controls()
 
-        self.log_panel = tk.LabelFrame(frame, text="", padx=6, pady=6)
-        self.log_panel.grid(row=4, column=0, sticky="nsew")
+        self.log_section, self.log_panel, self.log_title = ui_layout.section(tk, frame)
+        self.log_section.grid(row=4, column=0, sticky="nsew")
         self.log_view = tk.Text(
             self.log_panel, height=10, width=72, state="disabled",
                                 wrap="none")
@@ -1165,26 +1228,26 @@ class LauncherWindow(object):
         self.repair_button = tk.Button(
             self.repair_panel, text="",
             command=self._repair_startup)
-        self.repair_button.grid(row=0, column=0, sticky="ew", padx=3, pady=3)
+        self.repair_button.grid(row=0, column=0, sticky="ew", padx=(0,3), pady=(0,6))
         self.reset_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_all_state)
-        self.reset_button.grid(row=1, column=0, sticky="ew", padx=3, pady=3)
+        self.reset_button.grid(row=1, column=0, sticky="ew", padx=(0,3), pady=(0,6))
         self.offline_preferences_button = tk.Button(
             self.repair_panel, text="",
             command=self._reset_offline_client_settings)
         self.offline_preferences_button.grid(
-            row=0, column=1, sticky="ew", padx=3, pady=3)
+            row=0, column=1, sticky="ew", padx=(3,0), pady=(0,6))
         self.factory_reset_button = tk.Button(
             self.repair_panel, text="", command=self._factory_reset)
-        self.factory_reset_button.grid(row=1, column=1, sticky="ew", padx=3, pady=3)
+        self.factory_reset_button.grid(row=1, column=1, sticky="ew", padx=(3,0), pady=(0,6))
         for index in (0, 1):
             self.repair_panel.grid_columnconfigure(index, weight=1, uniform='maintenance_columns')
             self.repair_panel.grid_rowconfigure(index, weight=0)
         self.maintenance_help = tk.Label(self.repair_panel, text="", anchor="nw",
             justify="left", wraplength=620)
         self.maintenance_help.grid(row=2, column=0, columnspan=2,
-            sticky="new", padx=3, pady=(8, 0))
+            sticky="new", pady=(8, 0))
         self.repair_panel.grid_rowconfigure(3, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
@@ -1197,7 +1260,7 @@ class LauncherWindow(object):
 
     def _apply_language(self, refresh=True):
         self.language_label.config(text=self._t("Language"))
-        self.game_panel.config(text=self._t("Game client"))
+        self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
         self.browse_button.config(text=self._t("Browse..."))
         self.crash_report_check.config(
@@ -1239,23 +1302,24 @@ class LauncherWindow(object):
             "battle results. The selected save is the one the game starts "
             "with. Back up a save to a ZIP file, or open its folder and copy "
             "the files out yourself."))
-        self.account_panel.config(text=self._t("Account"))
         for name, label in self.balance_labels.items():
             label.config(text=self._t(_BALANCE_LABELS[name]))
         self.save_account_button.config(text=self._t("Save changes"))
+        self.premium_label.config(text=self._t("Premium account days"))
+        self.add_slots_button.config(text=self._t("Add garage slots"))
+        self.slots_label.config(text=self._t("Garage slots"))
         self.earnings_label.config(text=self._t("Earnings multiplier"))
         self.account_help_label.config(text=self._t(
             "Edit this save's balances and battle earnings. Before the first "
             "game, these are its starting funds. Close the game before editing."))
         self.edit_badges_button.config(text=self._t("Edit account badges..."))
-        self.personal_missions_panel.config(text=self._t("Personal missions"))
         self.edit_personal_missions_button.config(text=self._t("Edit mission progress..."))
-        self.edit_customizations_button.config(text=self._t('Edit preset style inventory...'))
-        for panel, label in ((self.account_panel, 'Account'), (self.shop_panel, 'Garage vehicles'),
+        self.edit_customizations_button.config(text=self._t('Edit appearance inventory...'))
+        for panel, label in ((self.account_panel, 'Account'), (self.reserves_panel, 'Personal reserves'), (self.shop_panel, 'Garage vehicles'),
                              (self.customizations_panel, 'Coatings'), (self.crew_panel, 'Crew members'), (self.personal_missions_panel, 'Personal missions')):
             self.save_tabs.tab(panel, text=self._t(label))
+        self.reserves_editor.translate()
         self.crew_editor.translate()
-        self.shop_panel.config(text=self._t("Garage vehicles"))
         self.gold_vehicle_label.config(text=self._t("Gold and reward vehicle"))
         self.buy_gold_vehicle_button.config(text=self._t("Add to garage"))
         self.shop_help_label.config(text=self._t(_SHOP_HELP))
@@ -1288,10 +1352,13 @@ class LauncherWindow(object):
         self.factory_reset_button.config(text=self._t("Delete all data and restore factory defaults"))
         self.maintenance_help.config(text='\n'.join(self._t(line) for line in _MAINTENANCE_HELP))
         self.report_button.config(text=self._t("Create error report..."))
-        self.log_panel.config(text=self._t("Activity log"))
+        self.log_title.config(text=self._t("Activity log"))
+        self._refresh_profiles()
+        self._refresh_bot_lineup_profiles()
         self._update_action_controls()
         if refresh:
             self._refresh_client()
+        ui_layout.polish(self.root)
 
     def _language_selected(self, unused_event=None):
         self.language_preference = i18n.language_for_choice(
@@ -1305,6 +1372,12 @@ class LauncherWindow(object):
                 editor.set_language(self.language)
                 editors.append(editor)
         self._bot_tactics_editors = editors
+        lineups = []
+        for editor in getattr(self, '_bot_lineup_editors', ()):
+            if editor.root.winfo_exists():
+                editor.set_language(self.language)
+                lineups.append(editor)
+        self._bot_lineup_editors = lineups
         vehicle_editors = []
         for editor in getattr(self, '_vehicle_editors', ()):
             if editor.root.winfo_exists():
@@ -1541,9 +1614,11 @@ class LauncherWindow(object):
         self._profile_names = list(names)
         values = tuple(
             [vehicle_overlays.ORIGINAL_PROFILE_LABEL] + self._profile_names)
-        self.vehicle_profile_box.config(values=values)
+        self.vehicle_profile_box.config(values=tuple(self.vehicle_profile.display(v) for v in values))
         if self.vehicle_profile.get().strip() not in values:
             self.vehicle_profile.set(vehicle_overlays.ORIGINAL_PROFILE_LABEL)
+        else:
+            self.vehicle_profile.set(self.vehicle_profile.get())
         return values
 
     def _profile_selected(self, unused_event=None):
@@ -1627,10 +1702,8 @@ class LauncherWindow(object):
         return True
 
     def _ask_save_slot_name(self, title, current=None):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
-            self._t(title), self._t("Save name:"), initialvalue=current)
+        return ui_layout.ask_string(
+            self._t(title), self._t("Save name:"), initialvalue=current, parent=self.root, language=self.language)
 
     def _open_save_dialog(self):
         if self._busy or self._maintenance_busy:
@@ -1665,6 +1738,8 @@ class LauncherWindow(object):
         return self._open_personal_editor(customizations_ui.CustomizationsDialog)
 
     def _save_tab_changed(self, unused=None):
+        if self.save_tabs.select() == str(self.reserves_panel):
+            self.reserves_editor.refresh()
         if self.save_tabs.select() == str(self.crew_panel):
             self.crew_editor.refresh()
 
@@ -1685,10 +1760,13 @@ class LauncherWindow(object):
         try:
             balances = save_ledger.read_balances(
                 self._save_slot_id, game_root or None)
+            premium = save_ledger.premium_days(self._save_slot_id, game_root or None)
         except save_ledger.SaveLedgerError as error:
             if hasattr(self, "log_view"):
                 self._log("The balances could not be read: %s" % error)
-            balances = None
+            balances, premium = None, 0
+        self.premium_entry.delete(0, "end")
+        self.premium_entry.insert(0, str(premium))
         editable = balances is not None
         for name, entry in self.balance_entries.items():
             entry.config(state="normal")
@@ -1743,6 +1821,11 @@ class LauncherWindow(object):
                          self._earnings_text(save_slots.MAX_EARNINGS_PERCENT)))
             self._refresh_earnings()
             return False
+        try:
+            premium = int(self.premium_entry.get().strip())
+        except ValueError:
+            self._log(self._t("Premium days must be a non-negative whole number."))
+            return False
         wanted = {}
         for name, entry in self.balance_entries.items():
             raw = entry.get().strip()
@@ -1758,9 +1841,9 @@ class LauncherWindow(object):
         game_root = self.game_root.get().strip()
         try:
             balances = save_ledger.write_balances(
-                self._save_slot_id, wanted, game_root or None)
+                self._save_slot_id, wanted, game_root or None, premium_days=premium)
         except save_ledger.SaveLedgerError as error:
-            self._log("The balances could not be saved: %s" % error)
+            self._log(self._t("The balances could not be saved: %s") % self._t(str(error)))
             self._refresh_balances()
             return False
         try:
@@ -1788,10 +1871,8 @@ class LauncherWindow(object):
             state = self._t("queued")
         else:
             state = ""
-        if state:
-            return self._t("%s - tier %d (%s)") % (
-                offer["label"], offer["level"], state)
-        return self._t("%s - tier %d") % (offer["label"], offer["level"])
+        label = '%s (%s)' % (offer['label'], offer['name'])
+        return '%s (%s)' % (label, state) if state else label
 
     def _gold_catalogue(self, game_root):
         """Return the client's gold vehicles, read once per game folder.
@@ -1810,6 +1891,7 @@ class LauncherWindow(object):
     def _refresh_gold_shop(self, status=None):
         old_nation=getattr(self,'_gold_nation_by_label',{}).get(self.gold_nation.get())
         old_class=getattr(self,'_gold_class_by_label',{}).get(self.gold_class.get())
+        old_tier=getattr(self,'_gold_tier_by_label',{}).get(self.gold_tier.get())
         game_root = (status or {}).get("path") or self.game_root.get().strip()
         try:
             offers = gold_shop.list_offers(
@@ -1823,6 +1905,7 @@ class LauncherWindow(object):
         self._gold_offers = offers
         self.gold_nation_label.config(text=self._t("Nation"))
         self.gold_class_label.config(text=self._t("Vehicle type"))
+        self.gold_tier_label.config(text=self._t("Tier"))
         self._gold_nation_by_label = {self._t("All"): None}
         self._gold_nation_by_label.update(
             (nation_choices.caption(nation,self._t), nation)
@@ -1831,24 +1914,30 @@ class LauncherWindow(object):
         self._gold_class_by_label.update(
             (self._t(label), name)
             for name, label in vehicle_editor_ui.VEHICLE_CLASS_LABELS)
+        self._gold_tier_by_label = {self._t('All'): None}
+        self._gold_tier_by_label.update((str(level),level) for level in sorted(set(
+            row['level'] for row in offers if isinstance(row.get('level'),int))))
         for box, variable, choices, selected in (
                 (self.gold_nation_box, self.gold_nation, self._gold_nation_by_label,old_nation),
-                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class)):
+                (self.gold_class_box, self.gold_class, self._gold_class_by_label,old_class),
+                (self.gold_tier_box, self.gold_tier, self._gold_tier_by_label,old_tier)):
             box.config(values=tuple(choices))
             variable.set(next((label for label,value in choices.items() if value==selected),self._t("All")))
-        self.shop_help_label.config(text=self._t(_SHOP_HELP))
         return self._filter_gold_shop()
 
     def _filter_gold_shop(self, unused_event=None):
         selected = self._gold_offer_by_label.get(self.gold_vehicle.get())
         nation = self._gold_nation_by_label.get(self.gold_nation.get())
         vehicle_class = self._gold_class_by_label.get(self.gold_class.get())
+        level = self._gold_tier_by_label.get(self.gold_tier.get())
         self._gold_offer_by_label = {}
         values = []
         for offer in self._gold_offers:
             if nation is not None and offer["nation"] != nation:
                 continue
             if vehicle_class is not None and offer.get("vehicleClass") != vehicle_class:
+                continue
+            if level is not None and offer.get('level') != level:
                 continue
             label = self._gold_offer_label(offer)
             self._gold_offer_by_label[label] = offer["name"]
@@ -1858,7 +1947,7 @@ class LauncherWindow(object):
         self.gold_vehicle_box.config(values=tuple(values))
         if self.gold_vehicle.get() not in self._gold_offer_by_label:
             self.gold_vehicle.set(values[0] if values else "")
-        self.shop_help_label.config(text=self._t(_SHOP_HELP))
+        self.shop_help_label.config(text=self._t(_SHOP_HELP) if values else self._t('No vehicles match these filters.'))
         self._update_vehicle_add_button()
         return tuple(values)
 
@@ -1867,6 +1956,18 @@ class LauncherWindow(object):
         available = any(row["name"] == selected and row["available"]
                         for row in self._gold_offers)
         self.buy_gold_vehicle_button.config(state="normal" if available else "disabled")
+
+    def _add_garage_slots(self):
+        try:
+            if self._busy or self._maintenance_busy:
+                return False
+            total = save_services.add_slots(self._save_slot_id, int(self.slots_quantity.get()),
+                                             self.game_root.get().strip() or None)
+            self.save_dialog_feedback.config(text=self._t("Garage slots: %d") % total)
+            return True
+        except (ValueError, OSError, save_ledger.SaveLedgerError, save_slots.SaveSlotError) as error:
+            self.save_dialog_feedback.config(text=self._t(str(error)))
+            return False
 
     def _buy_gold_vehicle(self):
         if self._busy or self._maintenance_busy:
@@ -2085,7 +2186,9 @@ class LauncherWindow(object):
         save_actions = tk.Frame(self.save_panel)
         save_actions.grid(row=1,column=0,columnspan=2,sticky="we",pady=(6,0))
         for column in range(4):
-            save_actions.grid_columnconfigure(column,weight=1,uniform="save_actions")
+            save_actions.grid_columnconfigure(column*2,weight=1,uniform="save_actions")
+            if column < 3:
+                save_actions.grid_columnconfigure(column*2+1,minsize=6)
         for index,(attribute,command) in enumerate((
                 ('customize_save_button',self._open_save_dialog),
                 ('new_save_slot_button',self._new_save_slot),
@@ -2096,7 +2199,7 @@ class LauncherWindow(object):
                 ('restore_save_button',self._restore_save_slot),
                 ('initialize_save_button',self._initialize_save_slot))):
             button=tk.Button(save_actions,text="",command=command)
-            button.grid(row=index//4,column=index%4,sticky="we",padx=3,pady=3)
+            button.grid(row=index//4,column=(index%4)*2,sticky="we", pady=(0,6))
             setattr(self,attribute,button)
 
     def _initialize_save_slot(self):
@@ -2109,8 +2212,11 @@ class LauncherWindow(object):
         record=self._selected_save_slot_record()
         if record is None:return False
         from tkinter import messagebox
+        prompt = self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account'))
+        if record['id'] == save_slots.DEFAULT_SLOT_ID:
+            prompt = self._t('Replace Default with current fully unlocked defaults? All Default progress and old Default backups will be deleted. No backup will be retained. Other saves are kept.')
         if not messagebox.askyesno(self._t('Initialize save?'),
-                self._t("Initialize save '%s' (%s)? All progress, crew and pending rewards will be reset. Its name, save type and earnings multiplier are kept. An automatic backup is created first. You can restore it with Restore save.") % (record['name'],self._t('Fully unlocked' if record['mode']==save_slots.MODE_UNLOCKED else 'New account')),
+                prompt,
                 icon='warning',default='no',parent=self.root):
             return False
         try:
@@ -2119,7 +2225,10 @@ class LauncherWindow(object):
             self._log(self._t('The save could not be initialized: %s') % error)
             return False
         self._refresh_save_slots()
-        self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
+        if result['recovery'] is None:
+            self._log(self._t('Initialized Default with current fully unlocked defaults; no backup was retained.'))
+        else:
+            self._log(self._t("Initialized save '%s'. Recovery folder: %s") % (record['name'],result['recovery']))
         return True
 
     def _confirm_restore_save_slot(self, record, backup):
@@ -2142,10 +2251,12 @@ class LauncherWindow(object):
         values = tuple(
             [bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL] +
             self._bot_lineup_profile_names)
-        self.bot_lineup_profile_box.config(values=values)
+        self.bot_lineup_profile_box.config(values=tuple(self.bot_lineup_profile.display(v) for v in values))
         if self.bot_lineup_profile.get().strip() not in values:
             self.bot_lineup_profile.set(
                 bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
+        else:
+            self.bot_lineup_profile.set(self.bot_lineup_profile.get())
         return values
 
     def _bot_lineup_profile_selected(self, unused_event=None):
@@ -2590,7 +2701,7 @@ class LauncherWindow(object):
     def _save_settings(self):
         if getattr(self, '_factory_reset_requested', False):
             return
-        core.save_settings({
+        return core.save_settings({
             "game_root": self.game_root.get().strip(),
             "folders": list(self._folders),
             "mode": (core.MODE_SINGLE
@@ -2723,17 +2834,13 @@ class LauncherWindow(object):
         return self._start_maintenance(core.reset_offline_preferences)
 
     def _ask_profile_name(self):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
+        return ui_layout.ask_string(
             self._t("New vehicle profile"),
-            self._t("Profile name:"))
+            self._t("Profile name:"), parent=self.root, language=self.language)
 
     def _ask_bot_lineup_profile_name(self):
-        from tkinter import simpledialog
-
-        return simpledialog.askstring(
-            self._t("New Bot lineup profile"), self._t("Profile name:"))
+        return ui_layout.ask_string(
+            self._t("New Bot lineup profile"), self._t("Profile name:"), parent=self.root, language=self.language)
 
     def _confirm_delete_bot_lineup_profile(self, profile_name):
         from tkinter import messagebox
@@ -2744,9 +2851,13 @@ class LauncherWindow(object):
             icon="warning")
 
     def _save_bot_lineup_store(self, store):
+        previous = self._bot_lineup_store
         self._bot_lineup_store = bot_lineup_profiles.normalize_store(store)
+        if not self._save_settings():
+            self._bot_lineup_store = previous
+            raise IOError('The lineup could not be saved.')
         self._refresh_bot_lineup_profiles()
-        self._save_settings()
+        return True
 
     def _new_bot_lineup_profile(self):
         if self._busy or self._maintenance_busy:
@@ -2759,16 +2870,20 @@ class LauncherWindow(object):
         raw_name = self._ask_bot_lineup_profile_name()
         if raw_name is None:
             return False
+        previous_store = self._bot_lineup_store
+        previous_name = self.bot_lineup_profile.get()
         try:
-            self._bot_lineup_store, profile_name = bot_lineup_profiles.create(
+            candidate, profile_name = bot_lineup_profiles.create(
                 self._bot_lineup_store, raw_name)
-        except bot_lineup_profiles.BotLineupProfileError as error:
+            self.bot_lineup_profile.set(profile_name)
+            self._save_bot_lineup_store(candidate)
+        except (bot_lineup_profiles.BotLineupProfileError, OSError) as error:
+            self._bot_lineup_store = previous_store
+            self.bot_lineup_profile.set(previous_name)
+            self._refresh_bot_lineup_profiles()
             self._log(
                 "Could not create the Bot lineup profile: %s" % error)
             return False
-        self._refresh_bot_lineup_profiles()
-        self.bot_lineup_profile.set(profile_name)
-        self._save_settings()
         return self._open_bot_lineup_editor()
 
     def _open_bot_tactics_editor(self):
@@ -2785,7 +2900,7 @@ class LauncherWindow(object):
             status = self._refresh_client()
             editor = bot_tactics_ui.open_editor(self.root, status.get("path", ""),
                                                language=self.language, log=self._log,
-                                                lineup=lambda:bot_lineup_profiles.assignments_for(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
+                                                lineup=lambda:bot_lineup_profiles.runtime_assignments(self._bot_lineup_store,self.bot_lineup_profile.get().strip()))
             editors = [value for value in getattr(self, '_bot_tactics_editors', ())
                        if value.root.winfo_exists()]
             editors.append(editor)
@@ -2808,10 +2923,21 @@ class LauncherWindow(object):
             self._log("Create or select a Bot lineup profile before editing.")
             return False
         self._remember_folder()
-        bot_lineup_ui.open_bot_lineup_editor(
+        baseline = bot_lineup_profiles.assignments_for(self._bot_lineup_store, profile_name)
+        def save_lineup(candidate):
+            current = bot_lineup_profiles.assignments_for(self._bot_lineup_store, profile_name)
+            if current != baseline:
+                raise ValueError('This lineup changed in another editor; reopen it before saving.')
+            values = bot_lineup_profiles.assignments_for(candidate, profile_name)
+            merged = bot_lineup_profiles.replace_assignments(self._bot_lineup_store, profile_name, values)
+            result = self._save_bot_lineup_store(merged)
+            baseline[:] = values
+            return result
+        editor = bot_lineup_ui.open_bot_lineup_editor(
             self.root, status["path"], profile_name,
-            self._bot_lineup_store, self._save_bot_lineup_store,
-            log=self._log)
+            self._bot_lineup_store, save_lineup,
+            log=self._log, language=self.language)
+        self._bot_lineup_editors = [e for e in getattr(self, '_bot_lineup_editors', ()) if e.root.winfo_exists()] + [editor]
         return True
 
     def _delete_bot_lineup_profile(self):
@@ -2824,17 +2950,20 @@ class LauncherWindow(object):
             return False
         if not self._confirm_delete_bot_lineup_profile(profile_name):
             return False
+        previous_store = self._bot_lineup_store
         try:
-            self._bot_lineup_store = bot_lineup_profiles.delete(
+            candidate = bot_lineup_profiles.delete(
                 self._bot_lineup_store, profile_name)
-        except bot_lineup_profiles.BotLineupProfileError as error:
+            self.bot_lineup_profile.set(
+                bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
+            self._save_bot_lineup_store(candidate)
+        except (bot_lineup_profiles.BotLineupProfileError, OSError) as error:
+            self._bot_lineup_store = previous_store
+            self.bot_lineup_profile.set(profile_name)
+            self._refresh_bot_lineup_profiles()
             self._log(
                 "Could not delete the Bot lineup profile: %s" % error)
             return False
-        self.bot_lineup_profile.set(
-            bot_lineup_profiles.AUTOMATIC_PROFILE_LABEL)
-        self._refresh_bot_lineup_profiles()
-        self._save_settings()
         return True
 
     def _confirm_delete_profile(self, profile_name):
@@ -2958,7 +3087,7 @@ class LauncherWindow(object):
                 "Select Online and a supported game folder first.")
             return False
         try:
-            bot_lineup = bot_lineup_profiles.assignments_for(
+            bot_lineup = bot_lineup_profiles.runtime_assignments(
                 self._bot_lineup_store,
                 self.bot_lineup_profile.get().strip())
         except bot_lineup_profiles.BotLineupProfileError as error:
@@ -3057,7 +3186,7 @@ class LauncherWindow(object):
             session = core.plan_session(
                 status, session_mode, self.join_address.get(),
                 vehicle_profile=profile_name)
-            session["bot_lineup"] = bot_lineup_profiles.assignments_for(
+            session["bot_lineup"] = bot_lineup_profiles.runtime_assignments(
                 self._bot_lineup_store,
                 self.bot_lineup_profile.get().strip())
             if replay_path:
@@ -3919,7 +4048,12 @@ def _open_server_log(path=None):
         directory = os.path.dirname(path)
         if directory and not os.path.isdir(directory):
             os.makedirs(directory)
-        stream = _BoundedLogStream(path)
+        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+            stream = _BoundedLogStream(path,
+                max_bytes=DIAGNOSTIC_SERVER_LOG_MAX_BYTES,
+                retain_bytes=DIAGNOSTIC_SERVER_LOG_RETAIN_BYTES)
+        else:
+            stream = _BoundedLogStream(path)
     except Exception as error:
         try:
             sys.stderr.write(

@@ -1,11 +1,15 @@
 """Interactive armor geometry viewer for the 0.9.22 vehicle editor.
 
-The viewer reads the stock ``collision_client`` resources directly from the
-selected #1513 installation.  It intentionally uses only the Python standard
-library and Tk so the Windows launcher keeps its existing packaging boundary.
+The viewer reads stock #1513 collision resources. A per-pixel depth renderer
+composites actual component surfaces and verified interior volumes into Tk.
 """
 
 from __future__ import annotations
+
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
 
 import base64
 from collections import OrderedDict
@@ -14,6 +18,8 @@ import os
 import re
 import struct
 import zipfile
+import zlib
+import time
 
 try:
     import packed_xml
@@ -43,6 +49,43 @@ _MESH_CACHE = OrderedDict()
 _RESOURCE_PACKAGE_CACHE = {}
 
 _ZH = {
+    'X-ray': '透视',
+    'External modules': '外部模块',
+    'Main armor': '主装甲', 'Exterior opacity': '车体不透明度',
+    'Preview turret': '预览炮塔', 'Preview gun': '预览火炮',
+    'Restore default display': '恢复默认显示',
+    'Module opacity': '模块不透明度', 'Display settings': '显示设置',
+    'Show all': '全部显示', 'Hide all': '全部隐藏', 'Close': '关闭',
+    'Hull': '车体', 'Turret': '炮塔', 'Chassis': '底盘',
+    'No geometry': '无几何数据', 'Display': '显示',
+    "Armor": "装甲",
+    "Internal modules": "内部模块",
+    "Internal module data": "内部模块数据",
+    "Modules and crew": "模块与乘员",
+    "Engine": "发动机", "Ammo": "弹药", "Fuel": "油箱",
+    "Radio": "电台", "Crew": "乘员",
+    "Ammo rack": "弹药架", "Fuel tank": "油箱",
+    "Turret rotation mechanism": "炮塔旋转机构",
+    "Main armor (mm, vehicle scale)": "主装甲（毫米，本车色阶）",
+    "Spaced armor / external modules (mm, vehicle scale)": "间隙装甲／外部模块（毫米，本车色阶）",
+    "Tracks (external module)": "履带（外部模块）",
+    "Tracks": "履带", "Gun": "炮管", "Spaced armor": "间隙装甲",
+    "Modules": "模块", "Commander": "车长", "Gunner": "炮手",
+    "Driver": "驾驶员", "Loader": "装填手", "Radio operator": "通信兵",
+    "%s (also %s)": "%s（兼%s）",
+    "Crew roster does not match the decoded layout.": "乘员编制与解码布局不匹配。",
+    "Observation devices": "观察装置", "Transmission": "传动装置",
+    "%s (no data)": "%s（无数据）",
+    "%s (incomplete)": "%s（部分缺失）",
+    "Crew %s": "乘员%s",
+    "No decoded interior geometry is available.": "没有可用的解码内部曲面。",
+    "component frame mismatch": "部件坐标框架不匹配",
+    "selected component has no matching interior": "当前所选部件没有匹配的内部曲面",
+    "Drag to orbit · wheel to zoom · click a module to inspect it":
+        "拖动旋转 · 滚轮缩放 · 点击模块查看名称",
+    "Console-sourced surfaces; selected PC frame verified. Missing modules are not drawn.":
+        "Console 来源内部表面；已核对当前 PC 部件坐标框架，缺失或不匹配部分不显示。",
+    "Some interior data is unavailable:\n%s": "部分内部模块数据不可用：\n%s",
     "3D armor viewer": "3D 装甲检视",
     "Drag to orbit · wheel to zoom · click armor to select its field":
         "拖动旋转 · 滚轮缩放 · 点击装甲跳转到对应属性",
@@ -566,7 +609,14 @@ def _mesh_for_model(game_root, model_member):
             "material": identifiers[group_index],
             "triangles": tuple(triangles),
         })
-    result = {"model": model_member, "surfaces": tuple(surfaces)}
+    box = _unique_child(visual_root, 'boundingBox')
+    bounds = None
+    if box is not None and box.value_type == packed_xml.TYPE_ELEMENT:
+        low = _vector(_unique_child(box.value, 'min'), default=None)
+        high = _vector(_unique_child(box.value, 'max'), default=None)
+        if low is not None and high is not None:
+            bounds = (low, high)
+    result = {"model": model_member, "surfaces": tuple(surfaces), 'bounds': bounds}
     _MESH_CACHE[cache_key] = result
     while len(_MESH_CACHE) > _MESH_CACHE_LIMIT:
         _MESH_CACHE.popitem(last=False)
@@ -605,6 +655,11 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
                 thickness = float(raw_value)
             except (TypeError, ValueError, OverflowError):
                 thickness = None
+        factor = _value_text(_layer_values(layers, ('armor', material, 'vehicleDamageFactor')))
+        kind = ('tracks' if role == 'chassis' else
+                'gun' if role == 'gun' and material == 'gun' else
+                'observation' if material == 'surveyingDevice' else
+                'spaced' if factor is not None and float(factor) == 0 else 'main')
         translated_triangles = tuple(
             tuple(_add_points(point, offset) for point in triangle)
             for triangle in surface["triangles"])
@@ -615,17 +670,80 @@ def _part_scene(game_root, role, name, layers, offset, records, contexts):
             "fieldKey": ((record["member"], record["fieldPath"])
                          if record is not None else None),
             "thickness": thickness,
+            "armorKind": kind,
             "triangles": translated_triangles,
         })
     return {
         "role": role,
         "component": name,
         "model": model,
+        "offset": offset,
+        "localBounds": mesh.get('bounds'),
         "surfaces": tuple(surfaces),
     }
 
 
-def _configuration(vehicle_root, component_roots, focus):
+def component_choices(vehicle_root, component_roots, translations=None):
+    """Mirror #1513 fitting popover's reverse FittingItem comparison.
+
+    Nation and item type are constant within each selector. The remaining
+    comparator fields are level, purchase currencies and localized userName.
+    Original topology order is the stable tie-break, not a synthetic name sort.
+    """
+    turrets, guns = [], {}
+    def metadata(name, layers):
+        raw = _value_text(_layer_values(layers, ('userString',))) or name
+        key = raw.rsplit(':',1)[-1].lstrip('#')
+        label = translations.gettext(key) if translations else name
+        if not label or label == key: label = name
+        return dict(name=name, label=label,
+                    level=int(float(_value_text(_layer_values(layers, ('level',))) or 0)),
+                    price=float(_value_text(_layer_values(layers, ('price',))) or 0))
+    for raw_group, value in vehicle_root.children:
+        group = raw_group.decode('utf-8')
+        if not _TURRET_GROUP.fullmatch(group) or value.value_type != packed_xml.TYPE_ELEMENT:
+            continue
+        for raw_name, _ in value.value.children:
+            name = raw_name.decode('utf-8')
+            layers = _entry_layers([vehicle_root], group, name)
+            shared = _shared_entry(component_roots.get('turrets'), name)
+            if shared is not None: layers.append(shared)
+            row = metadata(name, layers)
+            row['key'] = (group, name)
+            row['guns'] = tuple(_ordered_entry_names(layers, 'guns'))
+            turrets.append(row)
+            for gun in row['guns']:
+                ls = _entry_layers(layers, 'guns', gun)
+                shared = _shared_entry(component_roots.get('guns'), gun)
+                if shared is not None: ls.append(shared)
+                if gun not in guns: guns[gun] = metadata(gun, ls)
+    order = lambda row:(row['level'],row['price'],row['label'])
+    return dict(turrets=tuple(sorted(turrets,key=order,reverse=True)),
+                guns=tuple(sorted(guns.values(),key=order,reverse=True)))
+
+
+def resolve_mount(choices, current=None, role=None, value=None):
+    """Keep the user's new choice, preserve its valid partner, else first fit."""
+    current = dict(current or {})
+    if role == 'turret': current['turret'] = tuple(value)
+    if role == 'gun': current['gun'] = value
+    turrets = choices['turrets']
+    if not turrets: raise ArmorViewerError('The vehicle has no turret configuration.')
+    turret = next((r for r in turrets if r['key'] == tuple(current.get('turret', ()))), None)
+    if role == 'turret' and turret is None:
+        raise ArmorViewerError('The selected turret is not in the vehicle topology.')
+    if role == 'gun' and (turret is None or value not in turret['guns']):
+        turret = next((r for r in turrets if value in r['guns']), None)
+        if turret is None: raise ArmorViewerError('The selected gun has no compatible turret.')
+    if turret is None: turret = turrets[0]
+    gun = current.get('gun')
+    if gun not in turret['guns']:
+        gun = next((r['name'] for r in choices['guns'] if r['name'] in turret['guns']), None)
+    if gun is None: raise ArmorViewerError('The selected turret has no gun configuration.')
+    return dict(turret=turret['key'], gun=gun)
+
+
+def _configuration(vehicle_root, component_roots, focus, mounted=None):
     focus_role = focus[0] if focus else None
     focus_name = focus[1] if focus else None
     focus_context = focus[3] if focus else None
@@ -686,6 +804,10 @@ def _configuration(vehicle_root, component_roots, focus):
             if focus_name in _ordered_entry_names(turret_layers, "guns"):
                 chosen_turret = item
                 break
+    if mounted is not None:
+        chosen_turret = tuple(mounted['turret'])
+        if chosen_turret not in turret_candidates:
+            raise ArmorViewerError('The selected turret is not in the vehicle topology.')
     if chosen_turret is None:
         chosen_turret = turret_candidates[0]
 
@@ -708,6 +830,10 @@ def _configuration(vehicle_root, component_roots, focus):
         raise ArmorViewerError("The selected turret has no gun configuration.")
     gun_name = (focus_name if focus_role == "gun" and
                 focus_name in gun_names else gun_names[0])
+    if mounted is not None:
+        gun_name = mounted['gun']
+        if gun_name not in gun_names:
+            raise ArmorViewerError('The selected gun is not compatible with the turret.')
     gun_layers = _entry_layers(turret_layers, "guns", gun_name)
     shared_gun = _shared_entry(component_roots.get("guns"), gun_name)
     if shared_gun is not None:
@@ -739,7 +865,7 @@ def _scene_bounds(parts):
 
 
 def load_vehicle_armor_scene(game_root, vehicle_member, records,
-                             focus_record=None):
+                             focus_record=None, mounted=None):
     """Load one mounted configuration around the requested armor field."""
     status, package_path = vehicle_overlays._require_target(game_root)
     match = vehicle_overlays._VEHICLE_MEMBER.fullmatch(vehicle_member)
@@ -753,7 +879,10 @@ def load_vehicle_armor_scene(game_root, vehicle_member, records,
         raise ArmorViewerError(str(error))
     component_roots = _component_roots(package_path, nation)
     focus = _focus_identity(focus_record)
-    config = _configuration(vehicle_root, component_roots, focus)
+    choices = component_choices(vehicle_root, component_roots,
+        vehicle_overlays._vehicle_translations(status['path'], nation))
+    resolved = resolve_mount(choices, mounted) if mounted is not None else None
+    config = _configuration(vehicle_root, component_roots, focus, resolved)
 
     chassis_name, chassis_layers = config["chassis"]
     hull_name, hull_layers = config["hull"]
@@ -800,7 +929,13 @@ def load_vehicle_armor_scene(game_root, vehicle_member, records,
     if not parts:
         raise ArmorViewerError("; ".join(errors) or
                                "No stock collision models were found.")
+    crew = _unique_child(vehicle_root, "crew")
+    roles = tuple((key.decode("ascii"),) + tuple((_value_text(value) or "").split())
+                  for key, value in crew.value.children) if (
+                      crew is not None and crew.value_type == packed_xml.TYPE_ELEMENT) else ()
     return {
+        "componentChoices": choices,
+        "crewRoles": roles,
         "vehicleMember": vehicle_member,
         "configuration": {
             "chassis": chassis_name,
@@ -819,32 +954,49 @@ def _interpolate(left, right, amount):
                  for index in range(3))
 
 
-_COLOR_STOPS = (
-    (0.0, (76, 88, 105)),
-    (20.0, (55, 126, 184)),
-    (50.0, (45, 176, 168)),
-    (100.0, (99, 190, 94)),
-    (150.0, (229, 190, 64)),
-    (250.0, (226, 101, 55)),
-    (400.0, (180, 68, 127)),
-)
+# Vehicle-relative thickness ramps, matching the two-scale collision-view
+# convention observed on tanks.gg. Neither scale is penetration probability.
+_PRIMARY_PALETTE = ((0., (20, 196, 36)), (.5, (245, 221, 40)), (1., (239, 39, 29)))
+_SECONDARY_PALETTE = ((0., (31, 211, 217)), (.33, (48, 135, 239)),
+                      (.66, (83, 39, 231)), (1., (229, 30, 219)))
 
 
-def thickness_color(thickness):
-    """Map nominal millimetres to a stable thin-to-thick color ramp."""
+def thickness_color(thickness, maximum=400., secondary=False):
     try:
-        value = max(0.0, float(thickness))
+        value = float(thickness)
+        if not math.isfinite(value) or value < 0:
+            return '#555b66'
     except (TypeError, ValueError, OverflowError):
-        return "#555b66"
-    for index in range(len(_COLOR_STOPS) - 1):
-        start_value, start_color = _COLOR_STOPS[index]
-        end_value, end_color = _COLOR_STOPS[index + 1]
-        if value <= end_value:
-            amount = ((value - start_value) / (end_value - start_value)
-                      if end_value != start_value else 0.0)
-            color = _interpolate(start_color, end_color, max(0.0, amount))
-            return "#%02x%02x%02x" % color
-    return "#%02x%02x%02x" % _COLOR_STOPS[-1][1]
+        return '#555b66'
+    fraction = min(1., value / max(1., maximum))
+    palette = _SECONDARY_PALETTE if secondary else _PRIMARY_PALETTE
+    for (low, left), (high, right) in zip(palette, palette[1:]):
+        if fraction <= high:
+            return '#%02x%02x%02x' % _interpolate(left, right, (fraction-low)/(high-low))
+    return '#%02x%02x%02x' % palette[-1][1]
+
+
+def _palette_group(surface):
+    kind = surface.get('armorKind', 'tracks' if surface.get('role') == 'chassis' else 'main')
+    return 'main' if kind == 'main' else 'external'
+
+
+def _armor_scales(scene):
+    values = {'main': {0.}, 'external': {0.}}
+    present = set()
+    for part in (scene or {}).get('parts', ()):
+        for surface in part['surfaces']:
+            value = surface.get('thickness')
+            if value is not None and math.isfinite(value) and value >= 0:
+                group = _palette_group(surface)
+                present.add(group)
+                values[group].add(value)
+    return {group: sorted(values[group]) for group in values if group in present}
+
+
+def _armor_color(surface, scales):
+    group = _palette_group(surface)
+    return thickness_color(surface.get('thickness'), max(scales.get(group, (1.,))), group == 'external')
 
 
 def _shade(color, amount):
@@ -858,21 +1010,62 @@ def _shade(color, amount):
     return "#%02x%02x%02x" % result
 
 
+def _surface_edges(triangles, boundary_only=False):
+    """Keep open/silhouette edges, dropping shared tessellation diagonals."""
+    edges = {}
+    for unused_depth, points, surface, area in triangles:
+        component = (surface.get('role'), surface.get('component'))
+        for index in range(3):
+            a, b = points[index], points[(index + 1) % 3]
+            endpoints = tuple(sorted(tuple(round(value, 5) for value in p)
+                                     for p in (a, b)))
+            key = (component, endpoints)
+            record = edges.setdefault(key, [[], (a[0], a[1], b[0], b[1])])
+            record[0].append(area > 0)
+    return [coords for signs, coords in edges.values()
+            if len(signs) == 1 or (not boundary_only and any(signs) and not all(signs))]
+
+
+def _face_light(points, depth_scale):
+    """Stable camera-space lighting without showing triangle boundaries."""
+    edges = [((point[0] - points[0][0]), -(point[1] - points[0][1]),
+              (point[2] - points[0][2]) * depth_scale) for point in points[1:]]
+    a, b = edges
+    normal = (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+    length = math.sqrt(sum(value*value for value in normal))
+    if not length:
+        return 0.0
+    direction = -1 if normal[2] < 0 else 1
+    intensity = sum(normal[i]*direction*light for i, light in enumerate((-.4, .7, .6))) / length
+    return -.10 + .22 * max(0.0, min(1.0, intensity))
+
+
 class ArmorViewerPanel(object):
-    """Tk Canvas software renderer with orbit, zoom, and surface picking."""
+    """Depth-buffered scene presentation with orbit, visibility and picking."""
 
     def __init__(self, parent, tk_module, on_select, language, game_root,
-                 scene_loader=load_vehicle_armor_scene):
+                 scene_loader=load_vehicle_armor_scene, gpu_factory=None):
         self._tk = tk_module
         self._on_select = on_select
         self._language = i18n.resolve_language(language)
         self._game_root = game_root
         self._scene_loader = scene_loader
+        self._mounted = {} if scene_loader is load_vehicle_armor_scene else None
+        self._component_choices = {}
+        self._gpu_factory = gpu_factory
+        self._gpu = None
+        self._gpu_attempted = False
+        self._gpu_key = None
+        self._gpu_objects = []
+        self._frame_times = []
+        self._diagnostic = lambda message: None
         self._vehicle_member = None
         self._records = []
         self._record_by_key = {}
         self._focus_key = None
         self._scene = None
+        self._view_mode = 'armor'
+        self._internal_scene = None
         self._scene_error = ""
         self._scene_error_source = ""
         self._language_widgets = []
@@ -882,38 +1075,70 @@ class ArmorViewerPanel(object):
         self._drag_start = None
         self._drag_last = None
         self._dragged = False
+        self._render_pending = None
         self._item_surface = {}
+        self._selected_module = None
+        self._shell_image = None
+        self._pick_buffer = None
+        self._hidden = set()
+        self._group_visible = {}
+        self._settings_window = None
+        self._shell_alpha = tk_module.DoubleVar(value=16)
+        self._module_alpha = tk_module.DoubleVar(value=85)
 
-        self.frame = self._widget(tk_module.LabelFrame,
-            parent, text="3D armor viewer", padx=8, pady=8)
+        self.frame = tk_module.Frame(parent, borderwidth=1, relief="solid",
+                                     padx=8, pady=8)
+        self.title_label = self._widget(tk_module.Label, self.frame,
+            text="3D armor viewer", anchor="w", padx=0, pady=0)
+        self.title_label.grid(row=0, column=0, sticky="we", pady=(0, 6))
         self.frame.grid_columnconfigure(0, weight=1)
-        self.frame.grid_rowconfigure(2, weight=1)
-        self._widget(tk_module.Label,
+        self.frame.grid_rowconfigure(5, weight=1)
+        modes = tk_module.Frame(self.frame)
+        modes.grid(row=1, column=0, sticky='ew')
+        self._widget(tk_module.Button, modes, text='Armor',
+                     command=lambda: self.set_view_mode('armor')).pack(side='left', fill='x', expand=True)
+        self._widget(tk_module.Button, modes, text='X-ray',
+                     command=lambda: self.set_view_mode('internal')).pack(side='left', fill='x', expand=True)
+        self.help_label = self._widget(tk_module.Label,
             self.frame,
             text="Drag to orbit · wheel to zoom · click armor to select its field",
-            anchor="w").grid(row=0, column=0, sticky="we")
+            anchor="w", justify="left", wraplength=520, padx=0, pady=0)
+        self.help_label.grid(row=2, column=0, sticky="we", pady=(4, 0))
         self.selection = tk_module.StringVar(
             value=self._t("No armor field selected"))
-        self._widget(tk_module.Label,
+        self.selection_label = self._widget(tk_module.Label,
             self.frame, textvariable=self.selection, anchor="w",
-            justify="left", wraplength=520).grid(
-                row=1, column=0, sticky="we", pady=(4, 6))
+            justify="left", wraplength=520)
+        self.selection_label.grid(row=3, column=0, sticky="we", pady=(4, 6))
         self.canvas = tk_module.Canvas(
             self.frame, width=540, height=500, background="#171b22",
             highlightthickness=1, highlightbackground="#414958")
-        self.canvas.grid(row=2, column=0, sticky="nsew")
+        display = tk_module.Frame(self.frame)
+        display.grid(row=4, column=0, sticky='ew', pady=(0, 4))
+        self._display_buttons = []
+        for index in range(3):
+            var = tk_module.BooleanVar(value=True)
+            button = tk_module.Checkbutton(display, variable=var, anchor='w', padx=0,
+                command=lambda i=index: self._toggle_group(i))
+            button.grid(row=0, column=index, sticky='ew')
+            display.grid_columnconfigure(index, weight=1, uniform='display')
+            self._display_buttons.append((button, var))
+        self._widget(tk_module.Button, display, text='Display settings',
+                     command=self._open_settings).grid(row=1, column=0, columnspan=3, sticky='ew')
+        self.canvas.grid(row=5, column=0, sticky="nsew")
         controls = tk_module.Frame(self.frame)
-        controls.grid(row=3, column=0, sticky="we", pady=(6, 0))
-        self._widget(tk_module.Button,
-            controls, text="Reset view", command=self.reset_view).pack(
-                side="right")
-        self._widget(tk_module.Label,
+        controls.grid(row=6, column=0, sticky="we", pady=(6, 0))
+        self.legend_label = self._widget(tk_module.Label,
             controls, text="Nominal thickness (mm)",
-            anchor="w").pack(side="left")
-        self.legend = tk_module.Canvas(
-            controls, width=285, height=28, background="#171b22",
-            highlightthickness=0)
-        self.legend.pack(side="left", padx=(8, 0))
+            anchor="w", padx=0, pady=0)
+        self.legend_label.pack(fill="x", pady=(0, 4))
+        self.legend = tk_module.Frame(controls)
+        self.legend.pack(fill="x")
+        self._legend_cells = []
+        self.reset_button = self._widget(tk_module.Button,
+            self.frame, text="Reset view", command=self.reset_view)
+        self.reset_button.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        self.legend.bind('<Configure>', self._layout_legend)
         self._draw_legend()
 
         self.canvas.bind("<Configure>", self._redraw)
@@ -923,6 +1148,61 @@ class ArmorViewerPanel(object):
         self.canvas.bind("<MouseWheel>", self._wheel)
         self.canvas.bind("<Button-4>", lambda event: self._zoom_by(1.12))
         self.canvas.bind("<Button-5>", lambda event: self._zoom_by(1.0 / 1.12))
+        self.frame.bind('<Configure>', self._wrap_text)
+        self.frame.bind('<Destroy>', self._destroy_renderer)
+        from tkinter import ttk
+        mounts = tk_module.Frame(self.frame)
+        for widget in (self.help_label, self.selection_label, display, self.canvas,
+                       controls, self.reset_button):
+            widget.grid_configure(row=int(widget.grid_info()['row'])+1)
+        self.frame.grid_rowconfigure(5, weight=0)
+        self.frame.grid_rowconfigure(6, weight=1)
+        mounts.grid(row=2, column=0, sticky='ew', pady=(4, 0))
+        self._mount_boxes = {}
+        for column, (role, label) in enumerate((('turret', 'Preview turret'), ('gun', 'Preview gun'))):
+            box = tk_module.Frame(mounts)
+            box.grid(row=0, column=column, sticky='ew', padx=(0 if column == 0 else 4, 4 if column == 0 else 0))
+            mounts.grid_columnconfigure(column, weight=1, uniform='mount')
+            self._widget(tk_module.Label, box, text=label, anchor='w').pack(fill='x')
+            combo = ttk.Combobox(box, state='disabled', width=12)
+            combo.pack(fill='x')
+            combo.bind('<<ComboboxSelected>>', lambda event, r=role: self._change_mount(r))
+            self._mount_boxes[role] = combo
+
+    def set_diagnostic_callback(self, callback):
+        self._diagnostic = callback
+
+    def _destroy_renderer(self, event):
+        if event.widget is not self.frame:
+            return
+        if self._frame_times:
+            import numpy as np
+            self._diagnostic('Viewer frames: count=%d p50=%.2fms p95=%.2fms backend=%s' % (
+                len(self._frame_times), np.percentile(self._frame_times, 50),
+                np.percentile(self._frame_times, 95), 'OpenGL' if self._gpu else 'CPU'))
+        if self._gpu:
+            self._gpu.release()
+            self._gpu = None
+
+    def _refresh_mounts(self):
+        if not self._component_choices:
+            return
+        config = self._scene['configuration']
+        self._mounted = dict(turret=(config['turretGroup'], config['turret']), gun=config['gun'])
+        for role, combo in self._mount_boxes.items():
+            rows = self._component_choices[role+'s']
+            combo.configure(values=[row['label'] if row['label'] == row['name'] else
+                                    row['label'] + ' (' + row['name'] + ')' for row in rows],
+                            state='readonly' if len(rows)>1 else 'disabled')
+            combo.current(next(i for i, row in enumerate(rows)
+                               if (row['key'] if role == 'turret' else row['name']) == self._mounted[role]))
+
+    def _change_mount(self, role):
+        row = self._component_choices[role+'s'][self._mount_boxes[role].current()]
+        self._mounted = resolve_mount(self._component_choices, self._mounted, role,
+                                     row['key'] if role == 'turret' else row['name'])
+        self._hidden.clear()
+        self._load_scene(self._record_by_key.get(self._focus_key))
 
     def _widget(self, factory, parent, text=None, **options):
         if text is not None:
@@ -933,9 +1213,17 @@ class ArmorViewerPanel(object):
         return widget
 
     def set_language(self, language):
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
         self._language = i18n.resolve_language(language)
         for widget, text in self._language_widgets:
             widget.config(text=self._t(text))
+        self._refresh_groups()
+        if self._view_mode == 'internal':
+            self.set_view_mode('internal')
+            return
+        self._draw_legend()
         if self._scene_error_source:
             self._scene_error = self._t('Armor model unavailable: %s') % self._scene_error_source
         record = self._record_by_key.get(self._focus_key)
@@ -952,6 +1240,17 @@ class ArmorViewerPanel(object):
         return self.frame.grid(*args, **kwargs)
 
     def load_vehicle(self, vehicle_member, records, focus_record=None):
+        self._mounted = {} if self._scene_loader is load_vehicle_armor_scene else None
+        self._component_choices = {}
+        for combo in self._mount_boxes.values():
+            combo.set('')
+            combo.configure(values=(), state='disabled')
+        self._internal_scene = None
+        self._hidden.clear()
+        self._group_visible.clear()
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
         self._vehicle_member = vehicle_member
         self._records = [dict(record) for record in records]
         self._record_by_key = dict(
@@ -962,12 +1261,22 @@ class ArmorViewerPanel(object):
         self._load_scene(focus_record)
 
     def _load_scene(self, focus_record=None):
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
         if not self._vehicle_member:
             return False
+        # A field can select a different stock turret/gun on the same tank.
+        # Revalidate interiors against that component rather than its old mesh.
+        self._internal_scene = None
+        self._selected_module = None
         try:
+            options = dict(focus_record=focus_record)
+            if self._mounted is not None:
+                options['mounted'] = self._mounted
             self._scene = self._scene_loader(
                 self._game_root, self._vehicle_member, self._records,
-                focus_record=focus_record)
+                **options)
         except (ArmorViewerError, vehicle_overlays.VehicleOverlayError,
                 IOError, OSError, ValueError, zipfile.BadZipFile) as error:
             self._scene = None
@@ -978,6 +1287,13 @@ class ArmorViewerPanel(object):
             return False
         self._scene_error = ""
         self._scene_error_source = ""
+        self._component_choices = self._scene.get('componentChoices', {})
+        self._refresh_mounts()
+        if getattr(self, '_view_mode', 'armor') == 'internal':
+            self.set_view_mode('internal')
+            return True
+        self._refresh_groups()
+        self._draw_legend()
         self._redraw()
         if focus_record is None:
             self.selection.set(self._t(
@@ -985,15 +1301,61 @@ class ArmorViewerPanel(object):
             return True
         return self.focus_field(focus_record, reload_scene=False)
 
+    def set_view_mode(self, mode):
+        self._view_mode = mode
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
+        self.help_label.config(text=self._t(
+            'Drag to orbit · wheel to zoom · click a module to inspect it'
+            if mode == 'internal' else
+            'Drag to orbit · wheel to zoom · click armor to select its field'))
+        if mode == 'internal' and self._scene is not None:
+            try:
+                from . import vehicle_internal_viewer
+            except ImportError:
+                import vehicle_internal_viewer
+            if self._internal_scene is None:
+                try:
+                    self._internal_scene = vehicle_internal_viewer.load_scene(self._scene)
+                except (ValueError, OSError, KeyError, IndexError, struct.error, zlib.error) as error:
+                    self._internal_scene = dict(self._scene, parts=(), warnings=(str(error),))
+                # Exact PC observation surfaces supersede the absent Console
+                # observation zone, without changing any interior geometry.
+                if any(s.get('armorKind') == 'observation' and s.get('triangles')
+                       for p in self._scene['parts'] for s in p['surfaces']):
+                    self._internal_scene = dict(self._internal_scene, warnings=tuple(
+                        w for w in self._internal_scene.get('warnings', ())
+                        if w != 'surveyingDevice' and not w.startswith('surveyingDevice: ')))
+                if self._internal_scene.get('warnings'):
+                    from tkinter import messagebox
+                    messagebox.showwarning(self._t('Internal module data'),
+                        self._t('Some interior data is unavailable:\n%s') % '\n'.join(
+                            self._internal_warning(warning)
+                            for warning in self._internal_scene['warnings']), parent=self.frame)
+            self.selection.set(self._surface_name(self._selected_module)
+                if self._selected_module else self._t(
+                    'Console-sourced surfaces; selected PC frame verified. Missing modules are not drawn.'))
+        elif mode == 'armor':
+            self.selection.set(self._t('Click an armor surface or choose an armor field.'))
+        self.legend_label.config(text=self._t(
+            'Modules and crew' if mode == 'internal' else 'Nominal thickness (mm)'))
+        self._refresh_groups()
+        self._draw_legend()
+        self._redraw()
+
     def focus_field(self, record, reload_scene=True):
         identity = _focus_identity(record)
         new_key = ((record.get("member"), record.get("fieldPath"))
                    if identity is not None else None)
-        if (reload_scene and new_key is not None and self._scene is not None and
+        if (reload_scene and getattr(self, '_mounted', None) is None and new_key is not None and self._scene is not None and
                 not self._scene_contains_key(new_key)):
             self._focus_key = new_key
             return self._load_scene(record)
         self._focus_key = new_key
+        if self._view_mode == 'internal':
+            self.set_view_mode('internal')
+            return
         if new_key is None:
             self.selection.set(
                 self._scene_error if self._scene is None and self._scene_error
@@ -1014,6 +1376,14 @@ class ArmorViewerPanel(object):
             current = record.get("currentValue", record.get("originalValue", "-"))
             self.selection.set(self._t("Selected: %s · %s mm") % (
                 record.get("fieldLabel", record.get("fieldPath", "-")), current))
+        if self._scene is not None and new_key is not None:
+            selected_surface = next((surface for part in self._scene['parts']
+                for surface in part['surfaces'] if surface.get('fieldKey') == new_key), None)
+            if selected_surface and _palette_group(selected_surface) == 'external':
+                source = {'tracks':'Tracks (external module)', 'gun':'Gun',
+                          'spaced':'Spaced armor', 'observation':'Observation devices'}.get(
+                              selected_surface.get('armorKind'), 'Tracks (external module)')
+                self.selection.set(self.selection.get() + ' · ' + self._t(source))
         self._redraw()
         return new_key is not None and self._scene_contains_key(new_key)
 
@@ -1041,6 +1411,7 @@ class ArmorViewerPanel(object):
                             surface["thickness"] = float(current_value)
                         except (TypeError, ValueError, OverflowError):
                             surface["thickness"] = None
+        self._draw_legend()
         if self._focus_key == key:
             self.focus_field(record, reload_scene=False)
         else:
@@ -1060,18 +1431,162 @@ class ArmorViewerPanel(object):
         self._redraw()
 
     def _draw_legend(self):
-        self.legend.delete("all")
-        values = (0, 20, 50, 100, 150, 250, 400)
-        width = 38
-        for index, value in enumerate(values):
-            left = index * width
-            self.legend.create_rectangle(
-                left, 1, left + width, 13, fill=thickness_color(value),
-                outline="")
-            label = "%s+" % value if index == len(values) - 1 else str(value)
-            self.legend.create_text(
-                left + width / 2, 21, text=label, fill="#d8dde7",
-                font=("TkDefaultFont", 7))
+        from tkinter import font as tkfont
+        for child in self.legend.winfo_children():
+            child.destroy()
+        self._legend_cells = []
+        self._legend_headers = []
+        self._legend_minwidth = 1
+        if getattr(self, '_view_mode', 'armor') == 'internal':
+            try:
+                from .vehicle_internal_viewer import MODULE_STYLES
+            except ImportError:
+                from vehicle_internal_viewer import MODULE_STYLES
+            scene = self._internal_scene
+            present = {surface.get('moduleEntity')
+                       for part in (scene or {}).get('parts', ())
+                       for surface in part['surfaces']}
+            missing = (scene or {}).get('warnings', ())
+            entries = []
+            armor = [s for p in (self._scene or {}).get('parts', ()) for s in p['surfaces']]
+            for kind, source, color in (('tracks','Tracks','#a35edb'), ('gun','Gun','#3689f5'),
+                                       ('observation','Observation devices','#22dced')):
+                exists = any(s.get('armorKind') == kind and s.get('triangles') for s in armor)
+                label = self._t(source) if exists else self._t('%s (no data)') % self._t(source)
+                entries.append((label, color if exists else '#838b97', 'External modules'))
+            for entity, source, color in MODULE_STYLES:
+                if entity == 'surveyingDevice':
+                    continue
+                label = self._t(source)
+                if scene is not None and entity not in present:
+                    label = self._t('%s (no data)') % label
+                    color = '#838b97'
+                elif any(entity in warning for warning in missing):
+                    label = self._t('%s (incomplete)') % label
+                entries.append((label, color, 'Internal modules'))
+            present_seats = {surface.get('moduleLabel', '').split(' / ')[0]
+                             for part in (scene or {}).get('parts', ())
+                             for surface in part['surfaces']}
+            for slot in (scene or {}).get('crewSlots', ()):
+                label, color = self._crew_caption(slot), slot['color']
+                if slot['identity'] not in present_seats:
+                    label, color = self._t('%s (no data)') % label, '#838b97'
+                entries.append((label, color, 'Crew'))
+        else:
+            scales = _armor_scales(self._scene)
+            entries = []
+            surfaces = [s for p in (self._scene or {}).get('parts', ()) for s in p['surfaces']]
+            for group in ('Main armor', 'Spaced armor', 'External modules'):
+                selected = [s for s in surfaces if self._surface_group(s) == group]
+                if group == 'External modules':
+                    for kind, source, color in (('tracks','Tracks','#a35edb'), ('gun','Gun','#3689f5'),
+                                               ('observation','Observation devices','#22dced')):
+                        exists = any(s.get('armorKind') == kind for s in selected)
+                        entries.append((self._t(source) if exists else self._t('%s (no data)') % self._t(source),
+                                        color if exists else '#838b97', group))
+                    continue
+                values = sorted({0.} | {s['thickness'] for s in selected
+                    if s.get('thickness') is not None and math.isfinite(s['thickness']) and s['thickness'] >= 0})
+                if not selected:
+                    entries.append((self._t('No geometry'), '#838b97', group))
+                    continue
+                maximum = max(scales.get('main' if group == 'Main armor' else 'external', [0.]))
+                ticks = values if len(values) <= 7 else [max(values)*i/6 for i in range(7)]
+                entries.extend((('%g' % round(value, 1)), thickness_color(value, maximum, group != 'Main armor'),
+                                group) for value in ticks)
+            if any(surface.get('thickness') is None
+                   for part in (self._scene or {}).get('parts', ())
+                   for surface in part['surfaces']):
+                entries.append((self._t('Unmapped'), '#555b66', None))
+        last_group = None
+        for label, color, group in entries:
+            if group != last_group and group is not None:
+                header = self._tk.Label(self.legend, text=self._t(group), anchor='w', padx=0)
+                self._legend_headers.append((len(self._legend_cells), header))
+            last_group = group
+            cell = self._tk.Frame(self.legend)
+            swatch = self._tk.Canvas(cell, width=16, height=12,
+                                     highlightthickness=0)
+            swatch.create_rectangle(0, 0, 16, 12, fill=color, outline='')
+            swatch.pack(side='left', padx=(0, 6))
+            caption = self._tk.Label(cell, text=label, anchor='w', padx=0, pady=0)
+            caption.pack(side='left')
+            font = tkfont.Font(root=self.legend, font=caption.cget('font'))
+            self._legend_minwidth = max(self._legend_minwidth, min(180, font.measure(label) + 34))
+            self._legend_cells.append(cell)
+        self._legend_columns = None
+        self._layout_legend()
+
+    def _layout_legend(self, unused_event=None):
+        cells = self._legend_cells
+        if not cells:
+            return
+        available = max(1, self.legend.winfo_width())
+        requested = self._legend_minwidth
+        columns = min(len(cells), max(1, available // max(1, requested)))
+        if columns == self._legend_columns and available == getattr(self, "_legend_width", None):
+            return
+        self._legend_width = available
+        for index in range(len(cells)):
+            self.legend.grid_columnconfigure(index, weight=0, uniform='')
+        for index in range(columns):
+            self.legend.grid_columnconfigure(index, weight=1, uniform='legend')
+        headers = dict(getattr(self, '_legend_headers', ()))
+        row, column = 0, 0
+        for index, cell in enumerate(cells):
+            for child in cell.winfo_children():
+                if isinstance(child, self._tk.Label):
+                    child.configure(wraplength=max(80, available // columns - 34))
+            if index in headers:
+                if column:
+                    row += 1
+                headers[index].grid(row=row, column=0, columnspan=columns, sticky='ew', pady=(2, 4))
+                row, column = row+1, 0
+            cell.grid(row=row, column=column, sticky='nw',
+                      padx=(0, 6 if column < columns-1 else 0), pady=(0, 4))
+            column += 1
+            if column == columns:
+                row, column = row+1, 0
+        self._legend_columns = columns
+
+    def _wrap_text(self, event):
+        if event.widget is self.frame:
+            available = max(120, event.width - 18)
+            self.help_label.config(wraplength=available)
+            self.selection_label.config(wraplength=available)
+
+    def _crew_caption(self, slot):
+        try:
+            from .vehicle_internal_viewer import CREW_STYLES
+        except ImportError:
+            from vehicle_internal_viewer import CREW_STYLES
+        roles = slot['roles']
+        names = [self._t(CREW_STYLES.get(role, (role, ''))[0]) for role in roles]
+        primary = names[0] + (str(slot['number']) if slot.get('number') else '')
+        return self._t('%s (also %s)') % (primary, ' / '.join(names[1:])) if len(names)>1 else primary
+
+    def _module_caption(self, surface):
+        try:
+            from .vehicle_internal_viewer import MODULE_STYLES
+        except ImportError:
+            from vehicle_internal_viewer import MODULE_STYLES
+        identity = surface['moduleLabel'].split(' / ')[0]
+        slot = surface.get('crewSlot') or next((slot for slot in
+            (self._internal_scene or {}).get('crewSlots', ()) if slot['identity'] == identity), None)
+        if slot:
+            return self._crew_caption(slot)
+        if identity.startswith('crew '):
+            return self._t('Crew %s') % identity.split()[-1]
+        names = {entity: label for entity, label, unused_color in MODULE_STYLES}
+        names['transmission'] = 'Transmission'
+        return self._t(names.get(identity, identity))
+
+    def _internal_warning(self, warning):
+        if ': ' in warning:
+            name, detail = warning.split(': ', 1)
+            return '%s: %s' % (self._module_caption({'moduleLabel': name}),
+                               self._t(detail))
+        return self._t(self._module_caption({'moduleLabel': warning}))
 
     def _press(self, event):
         self._drag_start = (event.x, event.y)
@@ -1089,13 +1604,24 @@ class ArmorViewerPanel(object):
         self._yaw += dx * 0.012
         self._pitch = max(-1.35, min(1.35, self._pitch + dy * 0.009))
         self._drag_last = (event.x, event.y)
-        self._redraw()
+        if self._render_pending is None:
+            def render_latest():
+                self._render_pending = None
+                self._redraw()
+            self._render_pending = self.canvas.after_idle(render_latest)
 
     def _release(self, event):
         if not self._dragged:
             self._pick(event.x, event.y)
+        dragged = self._dragged
         self._drag_start = None
         self._drag_last = None
+        self._dragged = False
+        if self._render_pending is not None:
+            self.canvas.after_cancel(self._render_pending)
+            self._render_pending = None
+        if dragged:
+            self._redraw()
 
     def _wheel(self, event):
         delta = getattr(event, "delta", 0)
@@ -1108,12 +1634,24 @@ class ArmorViewerPanel(object):
         return "break"
 
     def _pick(self, x, y):
-        matches = self.canvas.find_overlapping(x, y, x, y)
-        surface = next((self._item_surface[item]
-                        for item in reversed(matches)
-                        if item in self._item_surface), None)
+        surface = None
+        if self._gpu is not None:
+            cw, ch = self._pick_size
+            w, h = self._gpu._size[:2]
+            surface = self._item_surface.get(self._gpu.pick(int(x*w/cw), int(y*h/ch)))
+        elif self._pick_buffer is not None:
+            h, w = self._pick_buffer.shape
+            cw, ch = self._pick_size
+            px, py = int(x*w/cw), int(y*h/ch)
+            if 0 <= px < w and 0 <= py < h:
+                surface = self._item_surface.get(int(self._pick_buffer[py, px]))
         if surface is None:
             return False
+        if self._view_mode == 'internal':
+            self._selected_module = surface
+            self.selection.set(self._surface_name(surface))
+            self._redraw()
+            return True
         key = surface.get("fieldKey")
         if key is None or key not in self._record_by_key:
             self.selection.set(self._t(
@@ -1123,7 +1661,7 @@ class ArmorViewerPanel(object):
         self._on_select(key)
         return True
 
-    def _projected_triangles(self, width, height):
+    def _projected_triangles(self, width, height, scene=None):
         if self._scene is None:
             return []
         minimum, maximum = self._scene["bounds"]
@@ -1135,6 +1673,8 @@ class ArmorViewerPanel(object):
         cosine_yaw, sine_yaw = math.cos(self._yaw), math.sin(self._yaw)
         cosine_pitch, sine_pitch = math.cos(self._pitch), math.sin(self._pitch)
 
+        screen_x, screen_y = width*.5, height*.5
+
         def project(point):
             x = point[0] - center[0]
             y = point[1] - center[1]
@@ -1143,11 +1683,26 @@ class ArmorViewerPanel(object):
             rotated_z = -sine_yaw * x + cosine_yaw * z
             rotated_y = cosine_pitch * y - sine_pitch * rotated_z
             depth = sine_pitch * y + cosine_pitch * rotated_z
-            return (width * 0.5 + rotated_x * scale,
-                    height * 0.52 - rotated_y * scale, depth)
+            return (screen_x + rotated_x * scale,
+                    screen_y - rotated_y * scale, depth)
 
+        framing_points = [project(point) for part in self._scene['parts']
+                          for surface in part['surfaces'] for triangle in surface['triangles']
+                          for point in triangle]
+        if framing_points:
+            left, right = min(p[0] for p in framing_points), max(p[0] for p in framing_points)
+            top, bottom = min(p[1] for p in framing_points), max(p[1] for p in framing_points)
+            fit = min(width*.90/max(1.,right-left), height*.86/max(1.,bottom-top))
+            factor = fit*self._zoom
+            screen_x -= ((left+right)*.5-width*.5)*factor
+            screen_y -= ((top+bottom)*.5-height*.5)*factor
+            scale *= factor
+        self._projection_scale = scale
         result = []
-        for part in self._scene["parts"]:
+        if scene is None:
+            scene = (self._internal_scene if getattr(self, '_view_mode', 'armor') == 'internal'
+                     else self._scene)
+        for part in (scene or {}).get('parts', ()):
             for surface in part["surfaces"]:
                 for triangle in surface["triangles"]:
                     projected = tuple(project(point) for point in triangle)
@@ -1163,31 +1718,337 @@ class ArmorViewerPanel(object):
         result.sort(key=lambda item: item[0])
         return result
 
+    def _surface_group(self, surface):
+        if surface.get('moduleEntity'):
+            return 'Crew' if surface['moduleEntity'] == 'crew' else (
+                'External modules' if surface['moduleEntity'] == 'surveyingDevice' else 'Internal modules')
+        return {'tracks':'External modules', 'gun':'External modules',
+                'observation':'External modules', 'spaced':'Spaced armor'}.get(
+                    surface.get('armorKind'), 'Main armor')
+
+    def _surface_identity(self, surface):
+        group = self._surface_group(surface)
+        if surface.get('moduleLabel'):
+            return (group, surface['moduleLabel'].split(' / ')[0])
+        return (group, surface.get('armorKind', 'main'), surface.get('role', ''),
+                surface.get('component', ''))
+
+    def _surface_name(self, surface):
+        if surface.get('moduleLabel'):
+            return self._module_caption(surface)
+        kind = surface.get('armorKind', 'main')
+        name = self._t({'tracks':'Tracks', 'gun':'Gun', 'observation':'Observation devices'}.get(
+            kind, {'hull':'Hull', 'turret':'Turret', 'chassis':'Chassis', 'gun':'Gun'}.get(
+                surface.get('role'), 'Main armor')))
+        if kind == 'observation' and surface.get('role'):
+            name += ' / ' + self._t({'hull':'Hull', 'turret':'Turret', 'gun':'Gun',
+                                    'chassis':'Chassis'}.get(surface['role'], surface['role']))
+        return name
+
+    def _groups(self):
+        return (('External modules', 'Internal modules', 'Crew') if self._view_mode == 'internal'
+                else ('Main armor', 'Spaced armor', 'External modules'))
+
+    def _surfaces(self):
+        armor = [s for p in (self._scene or {}).get('parts', ()) for s in p['surfaces']]
+        if self._view_mode != 'internal':
+            return armor
+        external = [s for s in armor if self._surface_group(s) == 'External modules']
+        inside = [s for p in (self._internal_scene or {}).get('parts', ()) for s in p['surfaces']
+                  if s.get('moduleEntity') != 'surveyingDevice']
+        return external+inside
+
+    def _visible(self, surface):
+        return (self._group_visible.get(self._surface_group(surface), True) and
+                self._surface_identity(surface) not in self._hidden)
+
+    def _refresh_groups(self):
+        present = {self._surface_group(s) for s in self._surfaces() if s.get('triangles')}
+        for (button, var), group in zip(self._display_buttons, self._groups()):
+            button.config(text=self._t(group), state='normal' if group in present else 'disabled')
+            var.set(self._group_visible.get(group, True) and group in present)
+
+    def _toggle_group(self, index):
+        group = self._groups()[index]
+        self._group_visible[group] = bool(self._display_buttons[index][1].get())
+        self._redraw()
+
+    def _open_settings(self):
+        if self._settings_window is not None:
+            self._settings_window.lift()
+            return
+        tk = self._tk
+        win = self._settings_window = tk.Toplevel(self.frame)
+        win.title(self._t('Display settings'))
+        win.transient(self.frame.winfo_toplevel())
+        parent = self.frame.winfo_toplevel()
+        x = max(0, parent.winfo_rootx()+(parent.winfo_width()-440)//2)
+        y = max(0, parent.winfo_rooty()+(parent.winfo_height()-570)//2)
+        win.geometry('440x570+%d+%d' % (x, y))
+        win.grid_columnconfigure(0, weight=1)
+        win.grid_rowconfigure(0, weight=1)
+        host = tk.Frame(win, padx=8, pady=8)
+        host.grid(row=0, column=0, sticky='nsew')
+        host.grid_columnconfigure(0, weight=1)
+        host.grid_rowconfigure(0, weight=1)
+        canvas = tk.Canvas(host, highlightthickness=0)
+        bar = tk.Scrollbar(host, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        canvas.grid(row=0, column=0, sticky='nsew'); bar.grid(row=0, column=1, sticky='ns')
+        body = tk.Frame(canvas)
+        def wheel(event):
+            widget = event.widget
+            while widget is not None and widget not in (body, canvas, win):
+                widget = getattr(widget, 'master', None)
+            if widget not in (body, canvas):
+                return
+            if event.delta:
+                canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
+            return 'break'
+        # Bind at this Toplevel, not globally; events from checkbuttons bubble
+        # here too, while opacity scales retain their own input behavior.
+        win.bind('<MouseWheel>', wheel)
+        item = canvas.create_window(0, 0, window=body, anchor='nw')
+        body.bind('<Configure>', lambda e: canvas.config(scrollregion=canvas.bbox('all')))
+        canvas.bind('<Configure>', lambda e: canvas.itemconfigure(item, width=e.width))
+        rows = {}
+        surfaces = list(self._surfaces())
+        if self._view_mode == 'internal':
+            try:
+                from .vehicle_internal_viewer import MODULE_STYLES
+            except ImportError:
+                from vehicle_internal_viewer import MODULE_STYLES
+            entities = {s.get('moduleEntity') for s in surfaces}
+            for entity, _, color in MODULE_STYLES:
+                if entity != 'surveyingDevice' and entity not in entities:
+                    surfaces.append(dict(moduleLabel=entity, moduleEntity=entity, triangles=(), color=color))
+            seats = {s.get('moduleLabel','').split(' / ')[0] for s in surfaces}
+            for slot in (self._internal_scene or {}).get('crewSlots', ()):
+                if slot['identity'] not in seats:
+                    surfaces.append(dict(moduleLabel=slot['identity'], moduleEntity='crew',
+                                         crewSlot=slot, triangles=(), color=slot['color']))
+        for kind, source in (('tracks','Tracks'),('gun','Gun'),('observation','Observation devices')):
+            if not any(s.get('armorKind') == kind for s in surfaces):
+                surfaces.append(dict(armorKind=kind, triangles=()))
+        for surface in surfaces:
+            rows.setdefault(self._surface_identity(surface), surface)
+        for group in self._groups():
+            tk.Label(body, text=self._t(group), anchor='w').pack(fill='x', pady=(6, 2))
+            found = False
+            for identity, surface in rows.items():
+                if identity[0] != group:
+                    continue
+                found = True
+                var = tk.BooleanVar(value=bool(surface.get('triangles')) and identity not in self._hidden)
+                def change(key=identity, value=var):
+                    if value.get(): self._hidden.discard(key)
+                    else: self._hidden.add(key)
+                    self._redraw()
+                has_data = bool(surface.get('triangles'))
+                caption = self._surface_name(surface)
+                if not has_data: caption = self._t('%s (no data)') % caption
+                tk.Checkbutton(body, text=caption, variable=var,
+                               state='normal' if has_data else 'disabled',
+                               command=change, anchor='w', justify='left', wraplength=380).pack(fill='x')
+            if not found:
+                tk.Label(body, text=self._t('No geometry'), anchor='w', fg='#666666').pack(fill='x')
+        for title, variable in (('Exterior opacity', self._shell_alpha), ('Module opacity', self._module_alpha)):
+            tk.Label(host, text=self._t(title), anchor='w').grid(sticky='ew', columnspan=2)
+            tk.Scale(host, from_=0, to=100, orient='horizontal', variable=variable,
+                     command=lambda value: self._redraw()).grid(sticky='ew', columnspan=2)
+        def close():
+            win.destroy(); self._settings_window = None
+        tk.Button(host, text=self._t('Restore default display'), command=self.restore_display).grid(
+            sticky='ew', columnspan=2, pady=(6, 0))
+        tk.Button(host, text=self._t('Close'), command=close).grid(sticky='ew', columnspan=2, pady=(6, 0))
+        win.protocol('WM_DELETE_WINDOW', close)
+
+    def restore_display(self):
+        self._hidden.clear()
+        self._group_visible.clear()
+        self._shell_alpha.set(16)
+        self._module_alpha.set(85)
+        self._refresh_groups()
+        if self._settings_window is not None:
+            self._settings_window.destroy()
+            self._settings_window = None
+            self._open_settings()
+        self._redraw()
+
+    def _try_gpu(self):
+        if not self._gpu_attempted:
+            self._gpu_attempted = True
+            try:
+                if self._gpu_factory is None:
+                    try:
+                        from .vehicle_gpu_renderer import GpuRenderer
+                    except ImportError:
+                        from vehicle_gpu_renderer import GpuRenderer
+                    self._gpu = GpuRenderer()
+                else:
+                    self._gpu = self._gpu_factory()
+                if self._gpu:
+                    self._diagnostic('Viewer OpenGL device: %s' % self._gpu.info)
+            except Exception as error:
+                self._diagnostic('Viewer OpenGL unavailable; CPU fallback: %s' % error)
+        return self._gpu is not None
+
+    def _redraw_gpu(self):
+        import numpy as np
+        from PIL import ImageTk
+        start = time.perf_counter()
+        width, height = max(10, self.canvas.winfo_width()), max(10, self.canvas.winfo_height())
+        internal = self._view_mode == 'internal'
+        surfaces = self._surfaces()
+        # Geometry and material uploads are invalidated by scene changes, not
+        # camera, visibility, opacity or selection. Keep the source objects alive.
+        key = (id(self._scene), id(self._internal_scene), internal,
+               tuple((id(s), s.get('thickness'), s.get('color')) for s in surfaces))
+        if key != self._gpu_key:
+            objects, self._item_surface = {}, {}
+            scales = _armor_scales(self._scene)
+            for surface in surfaces:
+                identity = self._surface_identity(surface)
+                obj = objects.setdefault(identity, dict(surface=surface, triangles=[]))
+                pick_id = len(self._item_surface)+1
+                self._item_surface[pick_id] = surface
+                color = surface.get('color') or dict(tracks='#a35edb', gun='#3689f5',
+                    observation='#22dced').get(surface.get('armorKind')) or _armor_color(surface, scales)
+                rgb = tuple(int(color[i:i+2],16) for i in (1,3,5))
+                obj['triangles'].extend((triangle, rgb, pick_id) for triangle in surface['triangles'])
+            if internal:
+                for part in self._scene['parts']:
+                    for surface in part['surfaces']:
+                        if self._surface_group(surface) == 'External modules': continue
+                        identity = ('context', surface.get('role'), surface.get('component'))
+                        obj = objects.setdefault(identity, dict(surface=None, triangles=[]))
+                        obj['triangles'].extend((triangle,(184,200,216),0) for triangle in surface['triangles'])
+            self._gpu_objects = list(objects.values())
+            self._gpu.load(self._gpu_objects)
+            self._gpu_key = key
+            self._gpu_points = np.asarray([p for part in self._scene['parts']
+                for s in part['surfaces'] for triangle in s['triangles'] for p in triangle], dtype=np.float32)
+        cy, sy, cp, sp = math.cos(self._yaw), math.sin(self._yaw), math.cos(self._pitch), math.sin(self._pitch)
+        rotation = np.asarray(((cy,0,sy),(sp*sy,cp,-sp*cy),(-cp*sy,sp,cp*cy)))
+        minimum, maximum = np.asarray(self._scene['bounds'])
+        center = (minimum+maximum)*.5
+        points = (self._gpu_points-center) @ rotation.T
+        low, high = points.min(axis=0), points.max(axis=0)
+        scale = min(width*.90/max(.001, high[0]-low[0]), height*.86/max(.001, high[1]-low[1]))*self._zoom
+        # OpenGL's nearest depth is -1; Tk's vertical direction is inverted
+        # only when the final framebuffer is copied, not in world space.
+        matrix = np.eye(4)
+        matrix[:3,:3] = rotation
+        matrix[:3,3] = -rotation @ center
+        matrix[0,3] -= (low[0]+high[0])*.5
+        matrix[1,3] -= (low[1]+high[1])*.5
+        matrix[0,:] *= 2*scale/width
+        matrix[1,:] *= 2*scale/height
+        matrix[2,:] *= -1/max(1.,float(np.linalg.norm(maximum-minimum))*4)
+        selected_id = 0
+        if not internal:
+            selected_id = next((i for i,s in self._item_surface.items()
+                                if s.get('fieldKey') is not None and s.get('fieldKey') == self._focus_key),0)
+        styles = []
+        for obj in self._gpu_objects:
+            surface = obj['surface']
+            if surface is None:
+                styles.append(dict(alpha=self._shell_alpha.get()/100))
+                continue
+            focused = internal and self._selected_module is not None and (
+                self._surface_identity(surface) == self._surface_identity(self._selected_module))
+            alpha = self._module_alpha.get()/100 if internal else 1.
+            if internal and self._surface_group(surface) == 'External modules': alpha *= .65
+            if focused: alpha = 1.
+            elif internal and self._selected_module is not None: alpha *= .4
+            styles.append(dict(alpha=alpha if self._visible(surface) else 0., selected=focused,
+                               tint=-.22 if internal and self._selected_module is not None else 0.))
+        image = self._gpu.render(width,height,matrix,rotation,styles,selected_id)
+        if self._shell_image is not None and self._shell_image.width() == width and self._shell_image.height() == height and self.canvas.find_withtag('depth_scene'):
+            self._shell_image.paste(image)
+        else:
+            self.canvas.delete('all')
+            self._shell_image = ImageTk.PhotoImage(image, master=self.canvas)
+            self.canvas.create_image(0,0,image=self._shell_image,anchor='nw',tags=('depth_scene',))
+        self._pick_buffer = None
+        self._pick_size = (width,height)
+        self._frame_times.append((time.perf_counter()-start)*1000)
+        self._frame_times = self._frame_times[-240:]
+
     def _redraw(self, unused_event=None):
+        if self._scene is not None and self._try_gpu():
+            try:
+                self._redraw_gpu()
+                return
+            except Exception as error:
+                self._diagnostic('Viewer OpenGL rendering failed; CPU fallback: %s' % error)
+                self._gpu.release()
+                self._gpu = None
+                self._gpu_key = None
+        from PIL import ImageTk
+        try:
+            from .vehicle_scene_renderer import rasterize
+        except ImportError:
+            from vehicle_scene_renderer import rasterize
         width = max(10, int(self.canvas.winfo_width()))
         height = max(10, int(self.canvas.winfo_height()))
-        self.canvas.delete("all")
+        self.canvas.delete('all')
         self._item_surface = {}
+        self._pick_buffer = None
         if self._scene is None:
-            self.canvas.create_text(
-                width / 2, height / 2, text=self.selection.get(),
-                fill="#c8ced8", width=max(120, width - 48), justify="center")
+            self.canvas.create_text(width/2, height/2, text=self.selection.get(),
+                fill='#c8ced8', width=max(120, width-48), justify='center')
             return
-        for unused_depth, projected, surface, area in self._projected_triangles(
-                width, height):
-            key = surface.get("fieldKey")
-            focused = key is not None and key == self._focus_key
-            base = thickness_color(surface.get("thickness"))
-            fill = _shade(base, 0.22 if area < 0 else -0.08)
-            if focused:
-                fill = _shade(base, 0.34)
-            coords = [coordinate for point in projected
-                      for coordinate in point[:2]]
-            item = self.canvas.create_polygon(
-                coords, fill=fill,
-                outline="#ffffff" if focused else "#242a34",
-                width=2 if focused else 1)
-            self._item_surface[item] = surface
+        # Bound rendering work during window resizing; retain canvas coordinates
+        # for input, and use a depth buffer rather than Canvas item hit testing.
+        factor = min(1., (400. if self._dragged else 640.)/max(width, height))
+        w, h = max(10, round(width*factor)), max(10, round(height*factor))
+        internal = self._view_mode == 'internal'
+        surfaces = self._surfaces()
+        visible = [s for s in surfaces if self._visible(s)]
+        scene = dict(self._scene, parts=({'surfaces': visible},))
+        triangles = self._projected_triangles(w, h, scene)
+        scales = _armor_scales(self._scene)
+        selected = self._selected_module
+        objects = {}
+        for unused_depth, projected, surface, unused_area in triangles:
+            identity = self._surface_identity(surface)
+            focused = ((selected is not None and self._surface_identity(selected) == identity)
+                       if internal else surface.get('fieldKey') is not None and
+                       surface.get('fieldKey') == self._focus_key)
+            base = surface.get('color') or dict(tracks='#a35edb', gun='#3689f5',
+                observation='#22dced').get(surface.get('armorKind')) or _armor_color(surface, scales)
+            base = _shade(base, .25 if focused else (-.22 if internal and selected else 0.))
+            color = _shade(base, _face_light(projected, self._projection_scale))
+            # A field retains its own picking ID, even inside a shared category.
+            key = id(surface)
+            if key not in objects:
+                pick_id = len(self._item_surface)+1
+                self._item_surface[pick_id] = surface
+                alpha = self._module_alpha.get()/100 if internal else 1.
+                if internal and self._surface_group(surface) == 'External modules': alpha *= .65
+                if focused: alpha = 1.
+                elif internal and selected: alpha *= .4
+                objects[key] = dict(id=pick_id, alpha=alpha, triangles=[])
+            rgb = tuple(int(color[i:i+2], 16) for i in (1, 3, 5))
+            objects[key]['triangles'].append((projected, rgb))
+        if internal and self._shell_alpha.get() > 0:
+            shell = [s for p in self._scene['parts'] for s in p['surfaces']
+                     if self._surface_group(s) != 'External modules']
+            shell_scene = dict(self._scene, parts=({'surfaces': shell},))
+            for _, projected, surface, _ in self._projected_triangles(w, h, shell_scene):
+                key = ('context', surface.get('role'), surface.get('component'))
+                if key not in objects:
+                    objects[key] = dict(id=0, alpha=self._shell_alpha.get()/100, triangles=[])
+                color = _shade('#b8c8d8', _face_light(projected, self._projection_scale))
+                objects[key]['triangles'].append((projected, tuple(int(color[i:i+2],16) for i in (1,3,5))))
+        image, self._pick_buffer = rasterize(w, h, list(objects.values()))
+        self._pick_size = (width, height)
+        if (w, h) != (width, height):
+            from PIL import Image
+            image = image.resize((width, height), Image.Resampling.BILINEAR)
+        self._shell_image = ImageTk.PhotoImage(image, master=self.canvas)
+        self.canvas.create_image(0, 0, image=self._shell_image, anchor='nw', tags=('depth_scene',))
 
 
 class NullArmorViewerPanel(object):

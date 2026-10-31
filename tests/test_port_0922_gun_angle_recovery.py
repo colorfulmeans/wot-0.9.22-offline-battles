@@ -209,6 +209,8 @@ class GunAngleRecoveryTests(unittest.TestCase):
         self.state['_gun_angle_rejected'] = {('human', 2): 9.}
         runtime.states[11] = self.state
         runtime._radio_network = type('Radio', (), {
+            'summaries': lambda unused, pairs, now, include_sources=False: tuple(
+                (10., True, ()) if include_sources else (10., True) for pair in pairs),
             'actors': {}, 'contact': lambda *unused: (10., True)})()
         key = (2, 'human', 2)
         runtime._renew_team_spot(key, 1.)

@@ -49,6 +49,168 @@ def _observe_model_lifecycle(compatibility, appearance, phase, state, caller=Non
         pass
 
 
+
+def _observe_battle_model_pose(compatibility, appearance, phase, vehicle=None):
+    """Read existing providers only; do not restore angles or schedule work."""
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import (
+            detailed_enabled, battle_review_record)
+        if not detailed_enabled() or not compatibility._battle_active:
+            return
+        read = getattr(compatibility, '_original_compound_getattribute', getattr)
+        bound_vehicle = read(appearance, '_CompoundAppearance__vehicle')
+        vehicle = vehicle if vehicle is not None else bound_vehicle
+        if vehicle is None or getattr(vehicle, 'appearance', None) is not appearance:
+            return
+        now = float(compatibility._runtime.bigworld.time())
+        histories = getattr(compatibility, '_battle_model_pose_samples', None)
+        if histories is None:
+            histories = {}
+            compatibility._battle_model_pose_samples = histories
+        key = (id(appearance), id(vehicle))
+        entry = histories.get(key)
+        if entry is None:
+            if len(histories) >= 64:
+                return
+            entry = histories[key] = dict(next_at=0.0, dead_samples=0, alive=None)
+        dead = getattr(vehicle, 'health', 1) <= 0
+        if phase in ('effects_tick', 'frame_tick'):
+            if now < entry['next_at'] or (dead and entry['dead_samples'] >= 8):
+                return
+            entry['next_at'] = now + (0.3 if dead else 0.1)
+        math_module = compatibility._runtime.math
+        def matrix(provider):
+            if provider is None:
+                return None
+            try:
+                value = math_module.Matrix(provider)
+                return dict(identity=id(provider),
+                    target_identity=id(getattr(provider, 'target', None)),
+                    yaw=float(value.yaw), pitch=float(value.pitch), roll=float(value.roll),
+                    position=[float(value.translation[i]) for i in range(3)])
+            except Exception as error:
+                return dict(unavailable=type(error).__name__)
+        model = getattr(vehicle, 'model', None)
+        muzzle = None
+        if model is not None:
+            try:
+                muzzle = matrix(model.node('HP_gunFire'))
+            except Exception as error:
+                muzzle = dict(unavailable=type(error).__name__)
+        filters = {}
+        for name in ('_CompoundAppearance__filter',):
+            try:
+                provider = read(appearance, name)
+                filters[name] = dict(identity=id(provider), type=type(provider).__name__)
+            except Exception as error:
+                filters[name] = dict(unavailable=type(error).__name__)
+        vehicle_filter = getattr(vehicle, 'filter', None)
+        filters['vehicle'] = dict(identity=id(vehicle_filter), type=type(vehicle_filter).__name__)
+        damage = read(appearance, '_CompoundAppearance__currentDamageState')
+        controls = {}
+        try:
+            avatar = compatibility._runtime.bigworld.player()
+            rotator = getattr(avatar, 'gunRotator', None)
+            for name in ('turretYaw', 'gunPitch', '_turretYaw', '_gunPitch'):
+                value = getattr(rotator, name, None)
+                controls[name] = value if type(value) in (int, float) else None
+            for name in ('turret', 'gun'):
+                animator = getattr(rotator, '_VehicleGunRotator__' + name + 'MatrixAnimator', None)
+                controls[name + '_animator'] = matrix(getattr(animator, 'matrix', None))
+        except Exception as error:
+            controls['unavailable'] = type(error).__name__
+        packed_angles = getattr(vehicle, 'gunAngles', None)
+        if type(packed_angles) not in (int, float):
+            packed_angles = None
+        # Exact #1513 Event.Event stores Python callbacks in __delegates.
+        # Record names only: never retain callbacks or invoke a native sync.
+        delegates = []
+        try:
+            event = read(appearance, 'onModelChanged')
+            for delegate in tuple(getattr(event, '_Event__delegates', ())):
+                owner = getattr(delegate, 'im_self', getattr(delegate, '__self__', None))
+                function = getattr(delegate, 'im_func', getattr(delegate, '__func__', delegate))
+                delegates.append(dict(owner=type(owner).__name__,
+                                      function=getattr(function, '__name__', type(function).__name__)))
+        except Exception as error:
+            delegates = [dict(unavailable=type(error).__name__)]
+        payload = dict(phase=phase, vehicle=getattr(vehicle, 'id', None),
+            model_changed_delegates=delegates,
+            appearance_vehicle_bound=bound_vehicle is vehicle,
+            appearance_identity=id(appearance), vehicle_identity=id(vehicle),
+            model_identity=id(model), health=getattr(vehicle, 'health', None),
+            damage_state=str(getattr(damage, 'modelState', None)),
+            detached=bool(getattr(vehicle, 'isTurretDetached', False)),
+            gun_angles=packed_angles,
+            gun_angles_packed=getattr(vehicle, 'gunAnglesPacked', None),
+            player_rotator=controls,
+            turret=matrix(getattr(appearance, 'turretMatrix', None)),
+            gun=matrix(getattr(appearance, 'gunMatrix', None)),
+            hull=matrix(getattr(model, 'matrix', None)), muzzle_world=muzzle,
+            bindings=filters, sampled_at=now)
+        if not dead and phase == 'effects_tick':
+            entry['alive'] = payload
+            return
+        if dead and entry['dead_samples'] == 0 and entry['alive'] is not None:
+            previous = entry['alive']
+            battle_review_record(compatibility, 'model_last_alive', key, now,
+                                 lambda: dict(previous), interval=0.0, limit=1)
+        if phase == 'refresh_after' and dead:
+            entry['dead_samples'] = 0
+            entry['next_at'] = now
+            pending = getattr(compatibility, '_battle_model_pose_pending', None)
+            if pending is None:
+                pending = compatibility._battle_model_pose_pending = {}
+            if len(pending) < 64:
+                pending[key] = (getattr(vehicle, 'id', None),
+                    id(getattr(compatibility, '_model_lifecycle_histories', None)))
+        if phase in ('effects_tick', 'frame_tick'):
+            entry['dead_samples'] += 1
+        battle_review_record(compatibility, 'model_' + phase, key, now,
+            lambda: payload, interval=0.0, limit=32)
+    except Exception as error:
+        try:
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('model_probe_unavailable', phase=phase,
+                appearance_identity=id(appearance), error=type(error).__name__)
+        except Exception:
+            pass
+
+
+def _run_model_pose_step(compatibility, appearance, phase, original, args, kwargs):
+    """Bracket existing Python lifecycle calls; preserve results and exceptions."""
+    vehicle = getattr(compatibility, '_compound_refreshing_vehicle', None)
+    _observe_battle_model_pose(compatibility, appearance, phase + '_before', vehicle)
+    try:
+        return original(*args, **kwargs)
+    finally:
+        _observe_battle_model_pose(compatibility, appearance, phase + '_after', vehicle)
+
+def sample_pending_battle_models(compatibility):
+    """Use the existing battle frame after corpse effects LOD stops ticking."""
+    from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+    if not detailed_enabled() or compatibility is None:
+        return
+    try:
+        pending = getattr(compatibility, '_battle_model_pose_pending', {})
+        for key, (vehicle_id, battle) in list(pending.items()):
+            if (not compatibility._battle_active or battle != id(getattr(
+                    compatibility, '_model_lifecycle_histories', None))):
+                pending.pop(key, None)
+                continue
+            vehicle = compatibility._runtime.bigworld.entity(vehicle_id)
+            appearance = getattr(vehicle, 'appearance', None)
+            if (vehicle is None or (id(appearance), id(vehicle)) != key or
+                    getattr(vehicle, 'health', 1) > 0):
+                pending.pop(key, None)
+                continue
+            _observe_battle_model_pose(compatibility, appearance, 'frame_tick')
+            entry = compatibility._battle_model_pose_samples.get(key, {})
+            if entry.get('dead_samples', 0) >= 8:
+                pending.pop(key, None)
+    except Exception:
+        pass
+
 def _observe_model_refresh_callback(compatibility, appearance, model_state):
     """Retain scalar async ordering evidence only at the diagnostic entrance."""
     try:
@@ -74,6 +236,7 @@ def _observe_model_refresh_callback(compatibility, appearance, model_state):
 
 def _run_model_refresh_callback(compatibility, appearance, model_state, resources):
     row = _observe_model_refresh_callback(compatibility, appearance, model_state)
+    _observe_battle_model_pose(compatibility, appearance, 'refresh_before')
     try:
         result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
     except AssertionError:
@@ -87,6 +250,7 @@ def _run_model_refresh_callback(compatibility, appearance, model_state, resource
         if row is not None:
             _observe_model_lifecycle(compatibility, appearance, 'callback_returned',
                                      None, str(model_state))
+        _observe_battle_model_pose(compatibility, appearance, 'refresh_after')
         return result
 
 
@@ -719,22 +883,28 @@ class _OfflineVehicleFilterSyncProxy(object):
     """Delegate WGVehicleFilter except for unsafe retail-only syncs."""
 
     __slots__ = (
-        '_vehicle_filter', '_pose_matrix', '_velocity', '_acceleration')
+        '_vehicle_filter', '_pose_matrix', '_velocity', '_acceleration',
+        '_wreck_restore')
 
     def __init__(self, vehicle_filter, pose_matrix=None, velocity=None,
-                 acceleration=None):
+                 acceleration=None, wreck_restore=None):
         self._vehicle_filter = vehicle_filter
         self._pose_matrix = pose_matrix
         self._velocity = velocity
         self._acceleration = acceleration
+        self._wreck_restore = wreck_restore
 
     def __getattr__(self, name):
         return getattr(self._vehicle_filter, name)
 
     def syncGunAngles(self, yaw, pitch):
-        # A client-only Vehicle has no retail interpolation filter behind its
-        # initial gun-angle sample.  Exact #1513 asserts a null native filter
-        # here, so the sample cannot be submitted through this native path.
+        # The outer WGVehicleFilter exists. Full #1513 dumps show this native
+        # call fails for client-created Vehicles; the exact missing C++ state
+        # is not established by Python object presence. Keep this seam closed.
+        if self._wreck_restore is not None:
+            from gui.mods.offline_lan_0922.wreck_model_pose import restore
+            owner, appearance, context = self._wreck_restore
+            restore(owner, appearance, context, yaw, pitch)
         return None
 
     def syncStabilisedYPR(self, yaw, pitch, roll):
@@ -2507,6 +2677,20 @@ class OfflineCompatibility(object):
         def compound_getattribute(appearance, name):
             value = compatibility._original_compound_getattribute(
                 appearance, name)
+            if (name in ('_CompoundAppearance__setupModels', 'setVehicle',
+                         'activate', 'setupGunMatrixTargets', 'onModelChanged') and
+                    compatibility._battle_active and
+                    compatibility._compound_refreshing_models is appearance):
+                from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+                if detailed_enabled() and callable(value):
+                    phase = {'_CompoundAppearance__setupModels': 'setup_models',
+                             'setVehicle': 'set_vehicle', 'activate': 'activate',
+                             'setupGunMatrixTargets': 'gun_targets',
+                             'onModelChanged': 'model_changed'}[name]
+                    def observed_call(*args, **kwargs):
+                        return _run_model_pose_step(
+                            compatibility, appearance, phase, value, args, kwargs)
+                    return observed_call
             if (name == '_CompoundAppearance__currentDamageState' and compatibility._battle_active and
                     getattr(compatibility, '_model_lifecycle_enabled', False)):
                 try:
@@ -2528,20 +2712,34 @@ class OfflineCompatibility(object):
                 except (AttributeError, ValueError):
                     caller_code = None
                 if caller_code is compatibility._compound_models_refresh_code:
-                    return _OfflineVehicleFilterSyncProxy(value)
+                    _observe_battle_model_pose(compatibility, appearance, 'refresh_sync_boundary')
+                    context = (getattr(compatibility, '_wreck_pose_battle', None),
+                        getattr(compatibility, '_compound_refresh_token', None),
+                        id(getattr(compatibility, '_compound_refreshing_vehicle', None)))
+                    return _OfflineVehicleFilterSyncProxy(value,
+                        wreck_restore=(compatibility, appearance, context))
             return value
 
         def compound_deactivate(appearance, stopEffects=True):
             original = compatibility._original_compound_deactivate
             def call_original():
+                observed_vehicle = getattr(compatibility, '_compound_refreshing_vehicle', None)
+                if compatibility._compound_refreshing_models is appearance:
+                    _observe_battle_model_pose(compatibility, appearance, 'deactivate_before', observed_vehicle)
                 try:
                     return original(appearance, stopEffects)
                 finally:
+                    if compatibility._compound_refreshing_models is appearance:
+                        _observe_battle_model_pose(compatibility, appearance, 'deactivate_after', observed_vehicle)
                     # A nested model refresh needs the old generation token
                     # so its retained Splodge cannot be mistaken for a child
                     # of the replacement compound.  Final teardown does not.
                     if (compatibility._compound_refreshing_models is not
                             appearance):
+                        from gui.mods.offline_lan_0922.wreck_model_pose import clear
+                        aim = getattr(compatibility, '_local_wreck_aim', None)
+                        if aim is not None and aim.identity[3] == id(appearance):
+                            clear(compatibility, 'deactivate', appearance)
                         clear_ground_decal_visibility_state(appearance)
             if not compatibility._battle_active:
                 return call_original()
@@ -2620,6 +2818,7 @@ class OfflineCompatibility(object):
             steady-state cost is two flag reads.
             """
             original = compatibility._original_compound_effects_lod
+            _observe_battle_model_pose(compatibility, appearance, 'effects_tick')
             if not compatibility._battle_active:
                 return original(appearance, distance_from_player)
             try:
@@ -2639,11 +2838,28 @@ class OfflineCompatibility(object):
             if not compatibility._battle_active:
                 return original(appearance, model_state, resource_list)
             outer_appearance = compatibility._compound_refreshing_models
+            outer_vehicle = getattr(compatibility, '_compound_refreshing_vehicle', None)
+            outer_token = getattr(compatibility, '_compound_refresh_token', None)
+            compatibility._compound_refresh_token = object()
             compatibility._compound_refreshing_models = appearance
             try:
+                compatibility._compound_refreshing_vehicle = (
+                    compatibility._original_compound_getattribute(
+                        appearance, '_CompoundAppearance__vehicle'))
+            except (AttributeError, ReferenceError):
+                compatibility._compound_refreshing_vehicle = None
+            try:
                 return _run_model_refresh_callback(compatibility, appearance, model_state, resource_list)
+            except Exception:
+                from gui.mods.offline_lan_0922.wreck_model_pose import clear
+                aim = getattr(compatibility, '_local_wreck_aim', None)
+                if aim is not None and aim.identity[3] == id(appearance):
+                    clear(compatibility, 'refresh_failed', appearance)
+                raise
             finally:
                 compatibility._compound_refreshing_models = outer_appearance
+                compatibility._compound_refreshing_vehicle = outer_vehicle
+                compatibility._compound_refresh_token = outer_token
 
         def account_getattribute(account, name):
             if name in ('base', 'cell', 'server'):
@@ -3646,10 +3862,16 @@ class OfflineCompatibility(object):
         if arena_type_id is not None:
             self._battle_arena_type_id = int(arena_type_id)
         self.install()
+        from gui.mods.offline_lan_0922.wreck_model_pose import clear
+        clear(self, 'configure_battle')
+        self._wreck_pose_battle = object()
         self._battle_active = True
         from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
         self._model_lifecycle_enabled = detailed_enabled()
         self._model_lifecycle_histories = {}
+        self._battle_model_pose_samples = {}
+        self._battle_model_pose_pending = {}
+        self._battle_review_records = None
         self._model_lifecycle_sequence = 0
         self._strategic_camera_failure_reported = False
         self._vehicle_property_overlays = {}
@@ -4174,6 +4396,9 @@ class OfflineCompatibility(object):
             if self._runtime is not None:
                 self._runtime.offline_map_creator.SetActive(False)
         finally:
+            from gui.mods.offline_lan_0922.wreck_model_pose import clear
+            clear(self, 'deactivate_map')
+            self._wreck_pose_battle = None
             self._battle_active = False
             self._native_battle = False
             self._battle_gui_type = None

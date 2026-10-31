@@ -279,6 +279,12 @@ def controlled_cases():
             .004364000167697668,1.5524429678916931))
         captured_bodies.append(body(identity,**values))
     cases.append(('captured_same_layer_type59',captured_bodies,.1,(),'valid'))
+    import itertools
+    for live_middle, live_tail in itertools.product((True,False), repeat=2):
+        for ids in itertools.permutations((1,2,3)):
+            cases.append(('wake_chain_%s_%s_%s' % (live_middle,live_tail,ids),
+                [body(ids[0],vz=3.),body(ids[1],z=6.98,alive=live_middle),
+                 body(ids[2],z=13.96,alive=live_tail)], .05, (), 'valid'))
     for mode in ('valid', 'missing', 'partial', 'zero'):
         cases.append(('armor_'+mode, [body(1, vz=14.), body(2, z=5.5)], .2, (), mode))
     cases.extend([

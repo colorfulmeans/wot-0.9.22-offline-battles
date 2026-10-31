@@ -103,9 +103,9 @@ class CareerDossierTests(unittest.TestCase):
     def test_schema_upgrade_refreshes_persisted_cache_without_another_battle(self):
         version, rows = data.dossiers(
             1, 99, self.progress, Dossier, self.resolve)
-        self.assertEqual(2, version)
+        self.assertEqual(4, version)
         self.assertEqual(2, len(rows))
-        self.assertEqual((2, []), data.dossiers(
+        self.assertEqual((4, []), data.dossiers(
             version, 4, self.progress, Dossier, self.resolve))
 
 

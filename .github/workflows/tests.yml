@@ -80,7 +80,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned test dependencies
-        run: python -m pip install Pillow==12.3.0
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
       - name: Check traffic, withdrawal and slope aiming independently
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -183,7 +183,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: tests:server:src/res/scripts/client:launcher:launcher/tests
         run: |
-          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/economy --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py
+          python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/economy --pattern test_port_0922_garage.py --pattern test_port_0922_account_rpc.py --pattern test_port_0922_economy.py --pattern test_port_0922_economy_payloads.py --pattern test_port_0922_postbattle.py --pattern test_port_0922_default_styles.py --pattern test_port_0922_bootstrap_lifecycle.py --pattern test_ordinary_missions.py --pattern test_strategic_calendar.py --pattern test_native_notifications.py --pattern test_port_0922_offline_services.py
           python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/bot-test-results/customization --pattern test_save_customizations.py
       - name: Check bonds settlement and worker collision preparation
         if: ${{ !cancelled() }}
@@ -320,7 +320,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned test dependencies
-        run: python -m pip install Pillow==12.3.0
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
       - name: Run gameplay follow-up regressions
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -393,14 +393,25 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned test dependencies
-        run: python -m pip install Pillow==12.3.0
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
+      - name: Verify current save service edits and native unavailable-entry guards
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests;server;src/res/scripts/client;launcher;launcher/tests
+        run: >-
+          python tools/run_test_suite.py --jobs 1 --logs build/windows-service-contracts
+          --pattern test_native_notifications.py --pattern test_port_0922_locked_entries.py
+          --pattern test_offline_menu_timeline.py --pattern test_port_0922_soft_vegetation_felling.py
+          --pattern test_port_0922_offline_services_ui.py
       - name: Run actual Tk editor tests on Windows
         run: python tools/run_test_suite.py --directory launcher/tests --jobs 1 --logs build/windows-editor-results
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: windows-editor-results
-          path: build/windows-editor-results/
+          path: |
+            build/windows-editor-results/
+            build/windows-service-contracts/
           if-no-files-found: error
 
   windows-server:

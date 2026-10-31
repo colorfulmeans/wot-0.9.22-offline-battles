@@ -535,7 +535,10 @@ def _deliver_launcher_purchases(snapshot, vehicles, tankmen, settings):
         rewards = [{'kind': 'vehicle', 'vehicle': name,
                     'vehicle_type': compact_descr}]
         if record.get('tankmen'):
-            rewards.append({'kind': 'crew', 'count': len(record['tankmen'])})
+            import base64
+            rewards.append({'kind': 'crew', 'count': len(record['tankmen']),
+                'passports': [base64.b64encode(raw).decode('ascii')
+                    for unused, raw in sorted(record['tankmen'].items())]})
         queue_notification(staged, {'account_changes': [
             {'phase': 'granted', 'rewards': rewards}]})
         working = staged
@@ -727,6 +730,28 @@ def _grant_default_styles(snapshot, styles, vehicle_types):
             if restriction is None or restriction.matchVehicleType(vehicle_type):
                 bindings[compact_descr] = max(int(bindings.get(compact_descr, 0)), count)
     snapshot['styleStockVersion'] = 1
+
+
+def _grant_initial_appearance(snapshot, cache, vehicle_types):
+    """Seed newly created sandbox slots once, preserving existing player saves."""
+    if not snapshot.get('appearanceStockSeed') or snapshot.get('appearanceStockVersion', 0) >= 1:
+        return
+    inventory = snapshot.setdefault('customizationItems', {})
+    for kind, collection in ((1, cache.paints), (2, cache.camouflages),
+                             (3, cache.decals), (5, cache.modifications)):
+        stock = inventory.setdefault(kind, {})
+        for identifier, item in collection.items():
+            bindings = stock.setdefault(int(identifier), {})
+            if item.isVehicleBound():
+                restriction = item.filter
+                for record in snapshot.get('vehicles') or ():
+                    cd = int(record['vehicleTypeCompactDescr'])
+                    vehicle = vehicle_types.get(cd)
+                    if vehicle is not None and (restriction is None or restriction.matchVehicleType(vehicle)):
+                        bindings[cd] = max(int(bindings.get(cd, 0)), 1000)
+            else:
+                bindings[0] = max(int(bindings.get(0, 0)), 1000)
+    snapshot['appearanceStockVersion'] = 1
 
 
 def _selected_vehicle(config, restore_saved=True):
@@ -964,6 +989,7 @@ def _selected_vehicle(config, restore_saved=True):
         offline_services.publish_offers(result, vehicles)
         if restore_saved:
             result['wallet'].update(port_config.save_slot_initial_wallet())
+            result.update(port_config.save_slot_initial_services())
             initial_berths = port_config.save_slot_initial_berths()
             if initial_berths is not None:
                 result['accountBerths'] = initial_berths
@@ -976,6 +1002,7 @@ def _selected_vehicle(config, restore_saved=True):
         # Overlay the saved garage last, so it wins over the stock fitting but
         # never over the current client's catalogue.
         if restore_saved:
+            result['missionSeed'] = port_config.save_slot_mission_seed()
             _restore_garage(result)
             _deliver_launcher_purchases(
                 result, vehicles, tankmen, default_settings)
@@ -983,6 +1010,20 @@ def _selected_vehicle(config, restore_saved=True):
             _settle_launcher_campaign(result, vehicles, tankmen)
         if not career:
             _grant_default_styles(result, customization_cache.styles, style_vehicle_types)
+            _grant_initial_appearance(result, customization_cache, style_vehicle_types)
+        from gui.mods.offline_lan_0922.customization_rules import report_inventory
+        report_inventory(result, customization_cache)
+        if restore_saved and not result.get('missionSeed'):
+            # Non-launcher entrances retain one seed in this session. Normal
+            # launches persist it in save metadata before starting the client.
+            import uuid
+            result['missionSeed'] = uuid.uuid4().hex
+            sys.stdout.write('[Offline LAN 0.9.22] MISSION seed awaits normal garage persistence\n')
+        if restore_saved:
+            from gui.mods.offline_lan_0922 import ordinary_missions
+            # Persist with the normal validated garage transaction. A failed
+            # launcher delivery must never be overwritten by an eager flush.
+            result['dailyMissions'] = ordinary_missions.state(result)
         return result
     except Exception:
         # _run_once owns startup error reporting.  Returning an empty snapshot
@@ -1426,6 +1467,9 @@ def _wait_for_lobby():
                     _config.get('startupTimeoutSeconds', 30.0))
                 _schedule(0.10, _wait_for_worker_connection)
             else:
+                # LOBBY_VIEW_LOADED can precede Account promotion and the
+                # hangar model. Drain at the verified readiness boundary too.
+                _session.on_lobby_view_loaded()
                 if not _player_ready_signaled:
                     if not _signal_player_ready():
                         raise RuntimeError(

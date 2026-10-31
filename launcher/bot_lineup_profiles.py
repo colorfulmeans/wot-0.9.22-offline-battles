@@ -164,14 +164,29 @@ def _assignments(value):
         if vehicle in RETIRED_BOT_VEHICLES_0922:
             vehicle = None
         skill = _skill(raw.get("skill"))
+        explicit = 'enabled' in raw
         if (team not in (1, 2) or not 0 <= slot < 15 or
                 (team, slot) in seen):
             raise BotLineupProfileError("The Bot lineup is invalid.")
-        if vehicle is None and skill is None:
+        if vehicle is None and skill is None and not explicit:
             # An entry that pins nothing is not a saved slot at all.
             continue
         seen.add((team, slot))
         entry = {"team": team, "slot": slot}
+        if explicit:
+            if type(raw['enabled']) is not bool:
+                raise BotLineupProfileError('The Bot slot state is invalid.')
+            entry['enabled'] = raw['enabled']
+            for key, allowed in (('nation', ('china','ussr','usa','germany','czech','france','uk','japan','poland','sweden')),
+                                 ('vehicle_class', ('lightTank','mediumTank','heavyTank','AT-SPG','SPG'))):
+                if raw.get(key) is not None:
+                    if raw[key] not in allowed:
+                        raise BotLineupProfileError('The Bot filter is invalid.')
+                    entry[key] = raw[key]
+            if not entry['enabled']:
+                # Difficulty/filter edits are inactive presets until a vehicle
+                # is selected. Explicit clearing removes them in the editor.
+                vehicle = None
         if vehicle is not None:
             entry["vehicle"] = vehicle
         if skill is not None:
@@ -247,6 +262,33 @@ def assignments_for(store, raw_name):
             return copy.deepcopy(profile["assignments"])
     raise BotLineupProfileError(
         "That Bot lineup profile does not exist.")
+
+
+def runtime_assignments(store, raw_name):
+    """Legacy unpinned slots stay random; explicit empty slots stay absent."""
+    if not raw_name or raw_name == AUTOMATIC_PROFILE_LABEL:
+        return []
+    values = assignments_for(store, raw_name)
+    explicit = any('enabled' in row for row in values)
+    indexed = {(row['team'], row['slot']): row for row in values}
+    result = []
+    for team in (1, 2):
+        for slot in range(15):
+            row = dict(indexed.get((team, slot), {}))
+            row.update(team=team, slot=slot)
+            row.setdefault('enabled', not explicit)
+            result.append(row)
+    return result
+
+
+def replace_assignments(store, raw_name, assignments):
+    store = normalize_store(store)
+    name = _name(raw_name)
+    for profile in store['profiles']:
+        if profile['name'].casefold() == name.casefold():
+            profile['assignments'] = _assignments(assignments)
+            return store
+    raise BotLineupProfileError('That Bot lineup profile does not exist.')
 
 
 def set_assignment(store, raw_name, team, slot, vehicle=None, skill=None):

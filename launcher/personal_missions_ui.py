@@ -1,6 +1,11 @@
 """Regular campaign completion editor, separate from daily missions."""
 
 try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
+try:
     from . import save_personal_missions as progress_store
     from . import save_ledger, save_slots
 except ImportError:
@@ -69,7 +74,7 @@ class PersonalMissionsDialog(object):
         self.feedback.pack(fill="x", padx=12)
         buttons = tk.Frame(self.window, padx=12, pady=10)
         buttons.pack(fill="x")
-        tk.Button(buttons, text=tr("Save"), command=self.save).pack(side="left", expand=True, fill="x")
+        tk.Button(buttons, text=tr("Save changes"), command=self.save).pack(side="left", expand=True, fill="x")
         tk.Button(buttons, text=tr("Close"), command=self.close).pack(side="right", expand=True, fill="x")
         self.refresh()
         status = progress_store.read_edit_status(self.slot_id, self.game_root)
@@ -79,6 +84,7 @@ class PersonalMissionsDialog(object):
             self.feedback.config(text=tr("Mission edit was not applied: %s") % error_text)
         elif status["pending"]:
             self.feedback.config(text=tr("Mission edits will be applied on the next game launch."))
+        ui_layout.polish(self.window)
         self.window.grab_set()
 
     def ids(self):
@@ -153,9 +159,10 @@ class BadgesDialog(object):
         self.feedback.pack(fill="x", padx=12, pady=8)
         buttons = tk.Frame(self.window, padx=12, pady=10)
         buttons.pack(fill="x")
-        tk.Button(buttons, text=tr("Save"), command=self.save).pack(side="left", fill="x", expand=True)
+        tk.Button(buttons, text=tr("Save changes"), command=self.save).pack(side="left", fill="x", expand=True)
         tk.Button(buttons, text=tr("Close"), command=self.close).pack(side="right", fill="x", expand=True)
         self.refresh()
+        ui_layout.polish(self.window)
         self.window.grab_set()
 
     def selected_id(self):

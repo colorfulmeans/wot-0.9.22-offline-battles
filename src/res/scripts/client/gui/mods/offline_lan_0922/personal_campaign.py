@@ -805,5 +805,9 @@ def claim_tankwoman(state, mission_id, nation, vehicle_id, role_id,
             # The economic receipt owns the dossier inverse for new claims.
             'dossier_count': 0}
         snapshot.setdefault('personalMissionTankwomen', {})[key] = True
+        from gui.mods.offline_lan_0922.personal_campaign_ui import queue_notification
+        queue_notification(snapshot, {'account_changes': [{'phase': 'granted',
+            'rewards': [{'kind': 'crew', 'count': 1,
+                         'passports': [base64.b64encode(descriptor).decode('ascii')]}]}]})
         state.revision += 1
     return tankman_id

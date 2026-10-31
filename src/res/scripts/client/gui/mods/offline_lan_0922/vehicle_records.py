@@ -182,23 +182,34 @@ def initialize_elite_devices(vehicles, descriptor):
     from gui.mods.offline_lan_0922.vehicle_configuration import _installation_accepted
     cache = vehicles.g_cache
     ids = cache.optionalDeviceIDs()
-    priority = ('deluxAimingStabilizer','deluxRammer','deluxEnhancedAimDrives',
-                'deluxImprovedVentilation','deluxCoatedOptics','deluxToolbox')
+    from gui.mods.offline_lan_0922 import equipment_policy
+    tag = equipment_policy.class_tag(descriptor.type.tags)
     installed = []
-    for name in priority:
-        if name not in ids:continue
-        device = cache.optionalDevices()[ids[name]]
-        slot = len(installed)
-        if not _installation_accepted(descriptor.mayInstallOptionalDevice(device.compactDescr,slot)):continue
-        descriptor.installOptionalDevice(device.compactDescr,slot)
-        installed.append(name)
+    for names in equipment_policy.candidates(tag, improved=True):
+        for name in names:
+            if name not in ids:
+                continue
+            device = cache.optionalDevices()[ids[name]]
+            slot = len(installed)
+            if not _installation_accepted(descriptor.mayInstallOptionalDevice(device.compactDescr,slot)):
+                continue
+            descriptor.installOptionalDevice(device.compactDescr,slot)
+            installed.append(name)
+            break
         if len(installed)==3:break
     if len(installed)!=3:
-        raise ValueError('default garage cannot install three improved devices: %s' % descriptor.type.name)
-    boosters = dict(deluxAimingStabilizer='aimingStabilizerBattleBooster',
-                    deluxRammer='rammerBattleBooster',deluxEnhancedAimDrives='enhancedAimDrivesBattleBooster')
-    name = boosters[installed[0]]
-    return cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+        raise ValueError('default garage cannot install three compatible devices: %s' % descriptor.type.name)
+    for name in equipment_policy.directive_candidates(installed):
+        if name in cache.equipmentIDs():
+            directive = cache.equipments()[cache.equipmentIDs()[name]].compactDescr
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('player_fitting_initialized', vehicle=descriptor.type.name,
+                devices=installed, directive=name, directive_compact=directive)
+            return directive
+    from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+    validation_event('player_fitting_initialized', vehicle=descriptor.type.name,
+        devices=installed, directive=None)
+    return 0
 
 
 def build_record(vehicles, tankmen, item_type_indices, type_id,
@@ -367,6 +378,13 @@ def build_record(vehicles, tankmen, item_type_indices, type_id,
         # the record carries the exact 'nation:vehicle' name the client uses.
         'vehicleTypeName': str(descriptor.type.name),
     }
+    if default_elite_equipment:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('player_record_ready', vehicle=descriptor.type.name,
+            mounted_devices=[int(device.compactDescr) for device in descriptor.optionalDevices
+                             if device is not None],
+            inventory_devices=record_inventory_items.get(item_type_indices['optionalDevice'], {}),
+            consumables_and_directive=list(consumables))
     return {
         'record': record,
         'shellCatalog': shell_catalog,

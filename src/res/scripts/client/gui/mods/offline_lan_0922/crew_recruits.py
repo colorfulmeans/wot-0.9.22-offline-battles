@@ -122,8 +122,10 @@ def deliver(snapshot, vehicles, tankmen, store, path, write_pending, report):
             state._to_barracks(identity, raw)
             staged = state.snapshot()
             staged.setdefault(crew_skills.CREDITS,{})[str(identity)]=dict(remaining=row['skills']-int(row['female']),learned=[])
+            import base64
             queue_notification(staged, {'account_changes': [
-                {'phase': 'granted', 'rewards': [{'kind': 'crew', 'count': 1}]}]})
+                {'phase': 'granted', 'rewards': [{'kind': 'crew', 'count': 1,
+                    'passports': [base64.b64encode(raw).decode('ascii')]}]}]})
         except Exception as error:
             remaining.append(row)
             report('crew request %s stays pending: %s' % (row['id'], error))

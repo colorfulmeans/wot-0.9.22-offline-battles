@@ -64,7 +64,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install pinned editor image test dependency
-        run: python -m pip install Pillow==12.3.0
+        run: python -m pip install Pillow==12.3.0 numpy==2.3.5 moderngl==5.12.0 glcontext==3.0.0
       - name: Test launcher and payload staging
         working-directory: launcher
         env:

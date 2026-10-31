@@ -1,5 +1,613 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Clean-launch selection, editor layout and soft-plant felling (October 31)
+
+This follow-up supersedes the gold disabled appearance below. Gold retains the
+native enabled color and hover/click appearance; only onPayment dispatch remains
+blocked. Other unavailable-entry locks retain the preceding accepted behavior.
+The vehicle editor uses a common outer inset, zero-inset detail labels and a
+shared right edge for vehicle/field selectors and Save. The viewer uses a plain
+border with an internal translated title, aligned to the left explanation's top.
+Real Tk checks cover aligned edges at two window sizes and language switching.
+
+Only felling changes for soft vegetation: native TREE descriptors with health
+1 through 5 and a filename stem matching the exact #1513 bushes.xml taxonomy or the
+reviewed native grass/herb stems
+are excluded from both direct contact felling and proximity felling registration.
+The complete 176-resource low-health census retains two real tree stems
+(applewowtree/BananaTree_03) and unresolved jux; no species is inferred from
+health alone. Normal trees (including health-3 BananaTree_03), high-health bushes and all other
+destructible types retain their behavior. Collision, projectile/aim, spotting,
+foliage volumes, route planning and destruction authority code are unchanged.
+The existing per-slot diagnostic result records soft_vegetation_no_felling and
+the combat counter records soft_vegetation_felling_skips. Tests compare all pinned
+taxonomy tokens against the exact installed client and exercise contact refusal.
+
+Final runtime: 3b6a44de71f20a4f20c9f126363225a8d1a93226. Local client checks
+passed 343 tests across destructibles, entry guards and felling policy. All 42
+launcher test files passed (1202 tests; 14 documented skips), including exact-client
+catalogue checks and real bilingual Tk resize checks. All 225 client modules
+compiled under Python 2.7.18. Cloud Tests 41198499015 and Battle review package
+41198499045 passed. The final ZIP SHA-256 is
+f7ac059cce13922260aa1a635cfb98809dde9ab01e73b7467fff96c4097f6088.
+Independent package inspection verified 225 client modules, 41 frozen launcher
+modules, 232 bundled server sources and current native fingerprints.
+
+Native Windows acceptance first used a factory-clean 4b84fd2 package. No previous
+launcher.json or named saves remained. The actual garage vehicle chooser selected
+its first entry, China Type64, and its opened dropdown confirmed that ordering.
+The member chooser selected China Renault NC-31; appearance retained its All
+applicable vehicles sentinel followed by Renault NC-31. The modifier selected
+China Renault NC-31 and retained the two-row arrangement, aligned selector/Save
+edges and an internal viewer title in both ordinary and maximized windows.
+The lineup reverted to Automatic instead of inheriting an old exact roster.
+These launcher modules are byte-for-byte verified in the final 3b6a44d package.
+Gold rendered normal and clicking did not navigate. The Karelia battle report
+wot-error-report-20261031-195341-82c2e5f64c21.zip contains worker trace samples
+with soft_vegetation_felling_skips=9 and no player/worker traceback or ERROR.
+That is observed suppression for the initial bush subset, not herb-patch proof.
+
+Final build colorfulmeans-41198499045-1 was then launched and gold clicked again;
+it retained normal color and did not navigate. A Malinovka 15/15 short battle
+ran and shut down cleanly. Report
+wot-error-report-20261031-201109-1c9ead3e0de3.zip has coherent final build identities
+and no server/worker exception. It contains one visible-client stock EffectsList
+exception at 20:07:59: an effect's sound owner was None before getSoundObject.
+The game continued; no cause is inferred and no unrelated audio change is made.
+Instrumented sound-call error counts are zero, which does not erase that separate
+stock traceback. This battle emitted no soft-plant counter sample; the added
+herb coverage is verified by the complete descriptor census and contact tests,
+not claimed as an exact native reproduction of the reported flying patch.
+
+After acceptance, the final package's production factory reset was run again
+with both game and launcher closed. It reinstalled final payload 41198499045-1,
+removed all test profiles/progress/reports and recreated only default. The only
+retained launcher settings are the exact game path and Chinese UI preference;
+no vehicle, lineup or modifier selection remains. The two accepted reports are
+retained in the local verification build directory. Bulk removal of downloaded
+old package copies was rejected by automatic tool policy, so those copies are
+not described as deleted; this does not preserve their old shared test state.
+
+## Unavailable entries and launcher service editors (October 31 follow-up)
+
+The current source supersedes older notification-title and vehicle-default
+acceptance below. Disconnected login is not a usable offline account selector:
+LobbyMenu's logoff callback is guarded. Native acceptance of 2cf046c found
+that a pre-frame Python enabled assignment was overwritten by the stock
+FRAME_CONSTRUCTED inspector. The exact menu has four separate logoff
+initializers; the generated LobbyMenu movie now disables those four only,
+preserving all non-ABC graphics/linkage/timeline tags. The builder verifies
+the compiled four-state result and removes unchanged compile-time lobby ABCs.
+Premium shop, CN browser/hotspot and Academy remain visible and disabled; native
+MainMenuButton.checkBrowserEffect schedules a one-second color toggle only for
+browser, and changeEffectState terminates when disabled. Native waiting-room acceptance also exposed MainMenuButtonBar.setCurrent
+overwriting child enabled states via its parent bar. Each native screen
+transition now republishes per-entry flags afterward, including Stronghold,
+and retains payment/shop locks. Gold payment dispatch is explicitly blocked. Only GameSettings/gameplay_epicStandard is marked
+viewed through the native settings-counter owner after offline preferences are
+pinned; c11nHistoricallyAccurate and other counters remain unchanged.
+
+Launcher account edits include remaining premium days after bonds and before
+the earnings factor. Same displayed day count preserves the absolute expiry;
+changes queue actual seconds, with zero clearing premium. The reserve tab edits
+all current offline catalogue stock counts, preserving active/history intervals.
+Garage capacity grants accept a positive quantity. Metadata-only new saves and
+persisted garages use the same current fields; the existing garage wins during
+bootstrap. Asset writes and their notices share one atomic file replacement.
+Reserve/capacity edits refuse live-game ownership, invalid quantities and signed
+32-bit overflow. Save switches cannot commit a stale reserve draft to another
+slot. Repeated unchanged saves enqueue no asset notification.
+
+Withdrawals use stock SystemMessages.SM_TYPE.Remove (RemoveSysMessage), with
+InvoiceReceivedFormatter._composeOperations constructing the localized signed
+asset body. Grants retain native Received invoices; no new template is created.
+Reserve invoices carry goodies IDs with a nested count, as the exact #1513
+_getGoodiesString consumer requires. Personal campaign rules and battle bonds
+are unchanged. Launcher vehicle lists use the shared native nation order, then
+tier/name/identity, and valid selections survive refreshes. New modifier/member
+windows no longer force USSR/IS/MS-1; Bot random and exact saved assignments
+remain intact. The clear-profile action moved above the Bot exclusion control
+without removing its confirmation.
+
+Verification baseline: new persistence tests cover fresh/existing saves,
+premium expiry/no-op/removal, active reserves, exact grant/debit deltas and
+bounds. Real bilingual Tk tests edit actual disposable save files, switch saves
+and verify placement. Locked-entry tests exercise repeated population,
+re-enable attempts, retired callbacks, action guards and reversible patch
+ownership. The packaged editor smoke now explicitly chooses its sole USSR
+fixture vehicle instead of depending on the retired USSR default. Both cloud
+workflows include the new tests; broad launcher discovery remains the complete
+current editor gate. Exact #1513 bytecode audit now also checks the Remove type,
+synchronous invoice composer and nested reserve counts. Local final-tree verification passed all 42 launcher files (1201 tests; 16
+documented unavailable-client/symlink skips) and all 12 relevant client files
+(564 tests). All 225 client modules compiled with Python 2.7.18, and the
+exact #1513 notification audit passed. Native 2cf046c acceptance granted 3 premium days, 7 slots, 5 combat-XP and
+3 crew-XP reserves on a fresh save; all receipts drained. Re-entry after
+removing premium, reducing both reserve stocks and debiting all four currencies
+admitted three native Remove notices and drained both durable receipts.
+The final runtime is 1f87b3974eb4a0dc3d5561be857bb8f6462d3c4d.
+The registered native consumer requests lowercase `lobbyMenu.swf`, although
+the source archive movie is `LobbyMenu.swf`; the packaged override uses the
+consumer's exact spelling. Final cloud Tests 41190448895 and Battle review
+package 41190448896 both passed. The final artifact SHA-256 is
+9e68bb24937f7f5926bbf8604f34876212ff1c23bc99d08e776ac86f938db048.
+Independent inspection verified all 225 client modules, 41 frozen launcher
+modules, 232 bundled server sources, current native fingerprints and packaged
+editor smoke. The native menu bytes match the source; its JSON proof matches
+semantically (archive packaging normalizes line endings).
+
+Final #1513 Windows acceptance used the diagnostic launcher build
+colorfulmeans-41190448896-1. Gold purchase stayed in the garage without opening
+a website. Logoff rendered the stock disabled hatch/grey state and ignored a
+direct click. The campaign setting had no orange highlight, while the unrelated
+battle-notification new-item badge remained. Hotspot, Academy and Stronghold
+stayed grey in the LAN waiting room; direct clicks on all three did not navigate.
+Leaving the room restored the garage with the locks intact, and the strategic
+task page still displayed 12 cards with the approved day/week/month layout.
+The existing service save retained premium=0, slots=37, reserves XP=2/crew-XP=1
+and wallet credits=190000/gold=900/crystal=90/freeXP=90, with no pending inboxes.
+
+The launcher generated wot-error-report-20261031-180647-04498ee9fc6b.zip for
+session 20261031T100038Z-04498ee9fc6b. All three roles identify the final build;
+player/worker logs contain no ERROR/CRITICAL/traceback or failed policy/notice,
+both exception trails contain session headers only, and sound error counts are
+zero. Native player fini completed and the launcher stopped worker/server.
+This final session exercised lobby, settings, room and tasks, not a battle;
+it does not add new physics/navigation acceptance evidence.
+
+## Strategic prizes and current-policy verification (October 31)
+
+This follow-up supersedes the preceding daily-rental cadence, thresholds and
+reward-price assumptions; the older acceptance below describes its own package.
+Six small ordinary tasks remain on the native regular page. Twelve quality
+objectives use four native marathon groups, ordered simple/normal/hard/elite,
+with day/week/month cards in each group. Per-battle winning base-XP gates are
+1000/1500/2000/2500; period targets are 5/25/100 qualifying wins. A qualifying
+battle advances every applicable difficulty and period. Rewards are respectively
+3-day rentals, 30-day rentals and permanent vehicles, using tier pools II-IV,
+V-VII, VIII-IX and X. Native group parsing is verified against #1513 bytecode;
+the scoped marathon finder retains all three independent cards without inventing
+a headline token reward. Native acceptance found that the stock marathon header
+still displayed empty token/award columns and a misleading combined date range.
+The final scoped adapter uses #1513's category-header/card linkages, showing the
+native completed count without a combined calendar range; each card retains its
+own reset description. Retail marathon groups continue through the stock method.
+
+Reset time is 08:00 Beijing (UTC midnight), Monday for weeks and day 1 for months.
+Week/month state survives daily resets. Schema-2 task progress is not migrated;
+existing assets, durable receipts and personal campaigns are preserved. Weekday
+first wins pay x2 and game-day weekends x5. Banking, result replay, service
+notification and carousel shop factor share that factor; the existing daily
+rollover requests a native Shop resync. Bonds and premium rules are unchanged.
+
+First-login draws now use a per-save UUID persisted by the launcher in save.json
+before client launch; the garage ledger retains it on later saves. Preview and
+payment use the same period/key/identity. This fixes the missing-accountDBID
+fallback which previously made all new accounts share a day's draw. Missing or
+expired rentals precede active rental extensions. Permanent prizes upgrade the
+same rental hull, clearing rent; all-permanent pools pay the selected vehicle's
+approved full gold valuation x400 in credits. Rental substitutes retain the
+existing integer percentage table. No asset is granted by the UI preview.
+
+The thirteen approved placeholder overrides live only in vehicle_rentals.PRIZE_GOLD,
+including King Tiger (H)=7700 and T-103=9000. Native shop prices are unchanged.
+Chinese #1513 Type59Gold=155520, 121B=32000 and WT(P)=30000 are retained. Modern
+2020/2.0 discounts and modern selling prices are not historical #1513 baselines.
+
+Route assignment now tests five total actors and three of a class per physical
+road before reserving another road. Class variants share that physical road's
+load, teams remain independent and artillery retains its own allocation.
+Overflow still uses authored roads when every eligible lane is saturated.
+The current allocator contract tests replace the old three-total expectation;
+historical movement recordings remain incident fixtures, not default-route truth.
+The owner-reviewed current tactics remain the live configuration baseline.
+
+Lakeville T-50's captured-input Python replay reproduced a supported-datum retirement
+followed by false airborne descent. Settling the already-proven five-point raw
+pose at retirement changes the recorded two steps from y=11.9386 then 11.2627
+and -4.0712 m/s to y=11.8628 then 12.3980, grounded in both steps. This is a
+recorded engine-I/O replay, not proof of native map collision acceptance. The
+existing bridge/roof/slope tests remain authoritative; no global slope threshold
+is relaxed. Diagnostic mode adds route-capacity, water-danger and drowning-death
+receipts, parsed by read_native_evidence. The IS-4/Conqueror avoidance policy and
+low-health destructible policy are deliberately unchanged.
+
+Production source: `2a9ff19365858078fcb875e072277c7293b46881`.
+Full Tests [41121151840](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41121151840)
+and Battle review package [41121151843](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41121151843)
+both completed successfully. Final package `PR116-fixes-2a9ff19.zip` has build
+`colorfulmeans-41121151843-1`, SHA256
+`f57ccbba336e1fc2054995ab95a4ffb4e521501f6e8a3b9cabcd14c0e6669196`.
+Archive integrity, x64 launcher, both x86 extensions and all 225 packaged client
+modules were independently checked; the packaged bytecode matches this source.
+
+Local checks: twelve isolated subsystem files passed 663 tests; subsequent
+support/roof/large-drop checks passed 52. The final header change passed four
+mission/account/bootstrap/calendar files (211 tests) and Python 2.7 compilation.
+Four launcher/editor files passed 86 tests including real Tk geometry, and
+launcher/core plus save-slot checks passed 228 (one unavailable-symlink skip).
+Expanded economy/default-style checks passed. Some expanded local initial-
+allocation/contact-motion cases lacked the matching native simulation; their
+local failures are not relabeled as passes. Current full CI passed separately.
+The exact compiled Source parsed 40 candidate quests plus four groups.
+
+Native acceptance used the exact installed Chinese #1513 client, original
+vehicle values, automatic lineups and current owner-reviewed tactics, under an
+isolated QA APPDATA/LOCALAPPDATA. No player save outside that QA root was edited.
+
+| Acceptance | Observed result and boundary |
+| --- | --- |
+| Packaged mission pages | Six small ordinary tasks; twelve strategic tasks in simple/normal/hard/elite groups, day/week/month left to right. The final package rendered all four corrected native category headers without token columns or combined dates. |
+| Ownership-aware rewards | Full-unlocked account displayed credit compensation. A fresh account displayed clock-marked 3/30-day rental icons and unmarked permanent-vehicle icons, including the tier-X group. Preview alone granted nothing. |
+| Launcher notices | Through final-package UI, the isolated new account received 100 gold and one 100% male IS commander. Both appeared as stock localized Received messages with native icons, date and reward/crew details. |
+| Battle and task result | On source 7b8250f (same final gameplay code), an IS in a Mittengard VII/VIII 15:15 battle remained at spawn while Bots fought and captured. Base XP 150, first-win XP 300. The win task paid 40,000 credits once in the stock result task panel and service history; the IS carousel x2 marker disappeared. Quality tasks correctly stayed unadvanced. This is a passive native round/settlement test, not proof of driving or earned strategic-prize completion. |
+| Initial routes | Worker record for 100_thepit reported total_limit=5 and class_limit=3. Both teams assigned five to each rim road, all six light tanks used main routes; the reserve medium road was selected after shared rim capacity. |
+| Calendar | Local tests cover weekday x2/weekend x5 and period rollover/leap boundaries. Native acceptance occurred before Saturday's 08:00 Beijing game-day reset, so the live result correctly used Friday x2. A native weekend x5 victory was not observed in this session. |
+| Physics incident | Captured-input T-50 regression plus roof/large-drop negative guards passed. This native Mittengard run did not recreate Lakeville T-50's exact incident; native reproduction remains a stated limitation. |
+
+Report `wot-error-report-20261031-041932-524ee4b579cc.zip` was generated through
+the launcher after the Mittengard round: launcher/server/visible/worker logs
+contained 2926/2898/5932/34775 lines, no Python traceback/exception or mission
+parser failure, and no incomplete diagnostic fragments. Final-package fresh-
+account UI report `wot-error-report-20261031-044240-ac3b7475ba03.zip` included all
+expected roles, likewise without script errors or incomplete fragments. Reports
+are retained in the isolated QA reports folder, not committed as user telemetry.
+Optional ProcDump downloading was disabled for this QA run; diagnostic mode and
+manual report generation were enabled. No crash occurred, and no crash-dump
+coverage is claimed. Normal visible-client exit stopped the worker and server.
+
+## Final package acceptance and subsequent gameplay audit (October 30)
+
+Shipping production source is c3c1d279d6bbf3936b824cb1da94109d53cfa38d.
+`PR116-fixes-c3c1d27.zip` is build colorfulmeans-41064767596-1;
+Full Tests 41064767736 and Battle review package 41064767596 both passed.
+Archive integrity and installed package inspection passed; all 224 packaged
+client modules match this source. Final targeted checks passed 441 tests;
+the three editor files passed 49 tests including real Tk containment. The
+full launcher check encountered two live-game guards while the client was
+running; after closing it, both affected files passed (344 tests). This does
+not relabel the earlier broad local run's missing dependencies as successes.
+
+The final packaged editor visibly retains both selector rows, equal nation and
+category widths, distinct resource-qualified 113 entries, and the simplified
+transparent hull outline with internal modules. Selecting a module showed its
+localized radio caption. No vehicle attribute modifications were saved.
+The final native mission page visibly showed 715/8000 assistance, separate
+ordinary objectives, stable completed-card placement, and the tier IX rental
+credit substitute appropriate to this all-permanent QA inventory. Seven cards
+were observed live; eight/nine-card calendar dates have parser/test evidence,
+not live-client acceptance. Launcher-added gold and a crew member reached the
+account, typed native envelopes were admitted, and the durable outbox emptied.
+The invoice history itself was not captured visibly and remains a presentation
+acceptance boundary.
+
+Diagnostic session 20261030T135651Z-4867fedb9429 completed Lakeville and
+Mittengard battles. The report generated at local 22:30:02 includes all four
+log roles and both native exception trails. No Python ERROR/CRITICAL/traceback
+or fragmented-evidence parsing failures were found. Both native exception
+trails contain headers only. Across 2,562 wreck aim samples there were zero
+read failures and zero attached turret/gun discrepancies. Both sound roles
+reported zero diagnostic errors; this is not an audible playback guarantee.
+The Lakeville result advanced current tasks and paid two newly completed goals
+without paying previously claimed goals again. Battle bond rules were unchanged.
+An earlier, superseded 8d486d4 session ended with worker exit 1 and a termination
+dump, without an exception stream identifying a cause. That incident remains
+unresolved; the final two-battle session did not repeat it.
+
+Read-only gameplay audit after acceptance:
+
+- Premature reserve-route allocation is confirmed. The shared allocator counts
+  three vehicles of all classes per physical route before preferring reserves.
+  In Mittengard, WZ131 and AMX 13 75 received reserve orders from spawn, with no
+  route-switch reason. Current owner-reviewed main routes were connected;
+  this was allocation policy, not proof of invalid authored paths. The user
+  approved a NEXT-package limit of five total and three of one class, trying
+  eligible primary roads first. Physical-road counts must remain shared across
+  class variants and independent across teams; SPG parking remains separate.
+  Existing tests explicitly codify the old three-total policy and must change
+  together with that implementation. No such gameplay change is in this ZIP.
+- Lakeville enemy Skoda T50 (bot 5) was pushed uphill, increasing its authoritative
+  height and hull tilt. A later dead-vehicle sample reports native solid contact
+  and rejects inward movement. An earlier stationary segment was an arrived
+  magazine-reload retreat. These facts do not establish or disprove the user's
+  observed terrain penetration; direct body/terrain overlap evidence is missing.
+- Lakeville Rhm. Pzw. (bot 27) left its lake-road elevation, descended from about
+  0.49 to -13.31 metres and then died. Drowning is consistent with this sequence,
+  but a direct death-reason/water-sensor record is absent. Terminal reason,
+  water level and drowning timer are diagnostic follow-ups, not a proven fix.
+- The destructible source retains a soft-vegetation health <=5 comment, while
+  its actual tree health admission is 0 < health <=1000. A blanket low-health
+  prohibition has not been restored. Descriptor health, remaining structure
+  health, object category, destruction and passability must be distinguished;
+  rejecting destruction in a contact-admission path can affect navigation.
+
+Holiday tasks, first-win calendar multipliers and ammunition behavior were not
+changed during this audit. The existing main-shell return policy counts fired
+probe shells independently of their subsequent hit/penetration result.
+
+## October 30: ordinary missions, native notices and current test inputs
+
+### Follow-up: audited notification losses and native progress presentation
+
+The follow-up keeps the approved mission catalogue, reward amounts, battle bond
+economy and personal campaign rules. Holiday assignments and first-win calendar
+multipliers are not part of this change.
+
+Confirmed regression: a failed personal-campaign reset produced readable content
+but no native envelope. The queue could acknowledge and remove it. Reset errors
+now use the stock general service notice with the existing localized reason.
+The delivery boundary refuses to acknowledge other visible settlements with no
+native envelope. Historical count-only crew receipts use a stock general notice
+for their known count; current receipts still require actual passports for the
+stock member invoice. No crew is created or granted by this conversion.
+
+Ordinary event/assistance counts now feed the stock numeric counter with its
+marked custom objective description, rather than a synthetic completion 0/1.
+The combined wins/damage goal retains independent native counters, so damage in
+a defeat appears in battle results without counting a victory. Rental previews
+use the exact pure selector and seed used by payment, current account ownership,
+fixed days and the native VehiclesBonus CD/info contract. Before completion they
+refresh with ownership changes; after completion they display the durable actual
+award. An entirely permanent pool previews the exact credit compensation.
+Inventory-sensitive previews participate in cache invalidation. No preview grants
+or reserves a vehicle. Diagnostic output distinguishes parser success, rental
+preview facts and actual custom-objective formatter invocation.
+
+The editor viewer starts alongside the introduction, category shares the nation's
+column, AT-SPG is translated as the requested Chinese full class name, and every
+vehicle shows its nation/resource discriminator. Enter on an ambiguous bare name
+does not silently retain or select a different vehicle. Shared-component nation
+captions and known internal-module labels are localized.
+
+Local validation: the targeted eight-file task/notification/garage/postbattle
+gate passed (439 tests before the final acknowledgement regression was added);
+all 40 launcher files passed (1,194 tests, 16 skips for optional client resources
+and Windows symlink privileges). All 224 client scripts compile with CPython
+2.7.18. The exact compiled #1513 Source parsed all 55 definitions, including both
+independent counters of the combined objective. The client inspection passed.
+The broad local 444-file run passed 378 files but failed 66, including native
+motion fixtures reporting missing native simulation / DLL dependencies. It is
+not an all-pass run; the configured CI builds native dependencies separately.
+The baseline inventory still identifies 484 files and 45 input-boundary review
+entries; its existing documented classifications remain authoritative, not a
+claim that every fixture is a shipping default or native gameplay acceptance.
+Engine-free results and exact #1513 parser checks are separate from packaged
+Windows/client acceptance below. The previous installed package is not evidence
+for these follow-up changes.
+
+Packaged 8d486d4 exposed a real Tk geometry regression before acceptance: the
+shared selector container spanned two otherwise unoccupied parent rows, and its
+44-pixel allocated height clipped the second selector row at y=67. Removing the
+unneeded rowspan gives it 92 pixels; both rows fit. An actual-Tk containment and
+equal-width regression now supplements fake-widget callback tests. This package
+is superseded for final delivery. Its client code can provide client evidence
+only if final package bytecode equality is independently established.
+
+A final notification-contract audit also found that launcher-added rental styles
+were labelled permanent. Typed style receipts now use the exact native style
+descriptor's isRent flag, matching warehouse purchases, while retaining the
+actual item-unit count. Missing descriptors retain the receipt with a diagnostic
+instead of guessing a permanent label. This changes notification presentation
+only, not inventory units, rental vehicle selection or reward amounts.
+
+This revision replaces the former AI-authored three-reserve daily mission
+system. It does not recover a historical server mission list: the 55 candidates
+in `ordinary_missions.py` are the discussed offline adaptation, with 28 ordinary
+conditions and 27 tier II-X rental conditions. Existing ordinary progress is
+ignored unless it has the new schema and current assignment day. Personal
+campaign conditions, progress, selection and reward amounts remain unchanged.
+Battle bond eligibility, medal table, formula and amounts remain unchanged.
+
+The daily selection is two basic, two advanced, one special and one challenge
+task, plus a one-day rental task; three/seven-day rental tasks appear on the
+corresponding three/seven-day calendar cadence, anchored to day 1 of each
+calendar month (days 1/4/7/... and 1/8/15/22/29 respectively). The UTC day
+boundary already corresponds to 08:00 Beijing; the month anchor uses that
+same game-day date and never an installation timestamp. Every task's progress expires
+at the UTC day boundary (08:00 Beijing), including those periodic assignments.
+A receipt from yesterday cannot finish yesterday's task after that boundary,
+even if no new battle has yet persisted today's assignments. Seven critical
+events are cumulative, using the frozen server `critical_hits` event count,
+not the bit mask or a single-battle assumption. Base XP, team placement,
+starting maximum HP and survival use receipt facts. Missing evidence is logged;
+it is never replaced by a guessed successful condition.
+
+The exact compiled #1513 `quest_xml_source.Source` reads the generated XML.
+Its definitions feed `eventsData[EVENT_CLIENT_DATA.QUEST]`; progress uses
+`quests[id]['progress'][None]`. Native cumulative counters are flat fields
+such as `damageDealt`, not a nested `cumulative` dictionary. The native mission
+page, its filters and result component retain their own lifecycle. The mod
+page replacement, fabricated booster-task list and completion dialog have
+been removed. Composite conditions that have no matching stock counter retain
+their full condition and current progress in the native description; they do
+not borrow an unrelated XP/damage counter. `showCongrats` is false. Ordinary
+payments and their notification receipts commit with the battle marker.
+
+Notifications now carry actual immutable deltas through native service-channel
+types: `invoiceReceived`, `tokenQuests`, `potapovQuestBonus`, `vehicleRented`
+and `rentalsExpired`. Native formatters own names, icons, receipt groups and
+currency/crew/customization layout. Crew invoices carry actual compact crew
+passports instead of a count-only sentence. First-win battle notifications now
+include `dailyXPFactor`; medals use the owning player's real dossier records;
+friendly-fire penalty/contribution fields use the existing settlement. These
+are presentation inputs, not changes to reward calculation. Stock reserve and
+vehicle purchases use their native localized success keys and price formatter.
+Operational errors and offline-only settings use the native general/error
+message path because no stock asset receipt exists for those facts. A legacy
+count-only crew notice stays pending with a diagnostic instead of fabricating
+an identity or blocking later complete receipts. Admission logs are not proof
+of completed asynchronous native formatting; that requires client observation.
+
+Rental selection first considers missing/expired vehicles, then extends an
+active rental when every nonpermanent candidate is already rented. Credits
+replace the reward only when the entire eligible pool is permanently owned.
+Durations are 1/3/7/14/30/90/180/360 days. The corresponding integer compensation
+percentages are 1/3/5/10/25/50/75/100 percent of the selected vehicle's baked
+gold price converted at 400 credits per gold. This is explicit offline policy,
+not a claim about a historical rental offer. Only 1/3/7-day prizes occur in the
+daily pool. Candidates use standard-battle/resource exclusions and a meaningful
+baked gold price; zero-price and high-tier five-gold service placeholders are
+not used to invent a compensation value. The actual selected vehicle, expiry
+or compensation is persisted with payment. #1513 inventory `rent` is a
+four-element sequence `(additionalData, absoluteExpiry, battles, wins)`.
+Converting a rented vehicle to permanent ownership in the launcher clears that
+field on the same hull and preserves crew, fitting, customization and XP.
+
+The vehicle editor now places Nation/Type/Tier/Vehicle on the first row and
+Modification category/Field on the second, with compact details and a final
+stretch spacer. Internal inspection uses existing decoded Console surfaces
+only when their selected PC component and original visual bounding box match.
+No generic module boxes, fitting/rescaling or invented missing geometry is
+drawn. Missing data prompts on selection. This provenance is stated in the
+viewer; component-frame agreement is not proof of identical PC internal meshes.
+
+The user's follow-up adds a transparent shell in interior mode. It is a
+simplified projected convex envelope per selected stock component, with
+sub-pixel curvature removed. It draws no filled armor or triangulation lines,
+shares the interior camera, and does not intercept module selection. This
+is approximate spatial context, not a replacement collision/armor model.
+The armor view itself remains unchanged. Four viewer/editor test files passed
+locally, including a regression for an unfilled four-corner envelope, unchanged
+module triangles/picking, and camera rotation.
+
+### Test baseline review and evidence boundary
+
+`tools/audit_test_baselines.py` inventories all test files, literal battle-start
+inputs, current-profile references and historical scene replay hooks. The
+October 30 inventory examined 484 files and flagged 45 for input-boundary
+review. A missing literal `bot_tactics` is not by itself a defect: many are
+isolated solver/ownership tests or receive their start message through helpers.
+
+| Boundary | Current treatment |
+| --- | --- |
+| First-run/restored route baseline | `default_tactics_owner_20261025.json` and the current `bot_tactics.default_profile()` remain authoritative; the complete owner document and all map/parking exits are checked by the adopted-default launcher tests. No route data is changed here. |
+| Great Wall current allocation | The configured scenario now passes the current profile into both runtime and server planner; mid-route actors rejoin through the production planner. The old empty-profile/frozen-lane replay remains a separately identified physical regression. Its targets and deadlines do not define correct authored routes. |
+| Himmelsdorf and Fjords departure scenarios | Current-allocation paths now receive the current profile in both planner and runtime. Historic Himmelsdorf build-506 lane replay remains isolated. Flattened heights and controlled probes do not certify native city navigation. |
+| Airfield/Highway/support/report replays | Captured poses, erased cells, analytic alleys and controlled probes deliberately reproduce a particular ownership/geometry law. They do not validate the shipping default route selection. |
+| Other flagged runtime/traffic/rotation/contact/aim/wreck tests | Their local commands, descriptors, targets or collision oracles isolate the named law. They are not full default-profile acceptance. Supplying a route policy to every isolated law would change the question being tested. |
+| SPG planning/graph tests | Baked geometry and explicit source plans are separate from native ray/arc acceptance and from the complete human route baseline. |
+| Retired ordinary-task tests | Three-reserve selection, custom-window lifecycle and congratulation-dialog assertions were removed with that implementation. The new cumulative/day/reset/payment/rental/native-shape tests replace that baseline. The review-package workflow selects the new suites. |
+
+Local evidence before packaging: all 40 launcher test files passed (1,191
+discovered tests; 16 skipped for unavailable link privileges or optional exact
+catalogue input). The two exact-catalogue suites were additionally rerun with
+the pinned client configured and passed. Seventeen focused client-policy
+suites cover account, garage, postbattle, services, ordinary tasks, crew and
+personal campaigns. CPython 2.7.18 compiles all 224 current client sources.
+`tools/verify_native_ordinary_missions.py` runs the real compiled #1513 parser
+against all 55 candidates and verifies native common counters and disabled
+congratulations; engine I/O is stubbed and this is not a live GUI test.
+Six current-profile gate/departure scenarios passed in 214.373 seconds at the
+explicit engine-free boundary (`sys.platform='linux'` in the isolated test
+process); no production platform guard is bypassed or altered. These results
+must not be reported as native Windows navigation acceptance.
+
+Package identity, PR checks, live launcher/client observations and generated
+error-report review remain to be recorded after the new artifact is built.
+
+The first packaged native startup (`cb12679`, build
+`colorfulmeans-41041345571-1`, isolated session `d5b208c9d8f6`) reached the garage
+but logged `NATIVE MISSIONS unavailable`: ResMgr could not open the generated
+APPDATA XML as a virtual resource. The file existed; the external-file I/O
+fixture had not proved that native resource-path boundary. The correction
+uses the exact stock prefetcher/WGNC `ResMgr.DataSection().createSectionFromString`
+entrance and passes its `quests` child to the pinned Source's own section
+reader. No global ResMgr patch, alternate condition parser or mod UI fallback
+is installed. The parser audit now exercises this same entrance, with only
+engine DataSection construction stubbed. Native retest remains required.
+Viewer scene reloads also invalidate cached interiors when an armor field
+selects another turret/gun on the same vehicle.
+
+The same first build's launcher-generated report
+`wot-error-report-20261030-185658-d5b208c9d8f6.zip` contains all four primary logs
+and both exception trails. Each trail has only its session header. The visible
+and worker logs each contain the reproduced task-path diagnostic; no Python
+ERROR/CRITICAL/traceback is present. This is failure evidence and garage-startup
+acceptance, not task/reward or battle acceptance. The supported starter stop
+protocol closed the visible client; the launcher then stopped worker/server.
+Two game-window input attempts failed with `foreground window did not report
+a process id`; further game inputs stopped. Launcher report controls worked.
+
+Full Tests `41041345567` on `cb12679` passed 440/444 client files, 40/40 launcher
+files, native geometry, navigation and Windows editor/server jobs. Its four
+failures were stale test contracts: mastery notices omitted `popUpRecords`, a
+bootstrap fixture did not load the new ordinary modules, a depot purchase
+fixture lacked native invoice dependencies, and a LAN retry test expected the
+removed daily dialog and old campaign call signature. These fixtures now
+exercise the new native paths; all four files pass locally (267 tests), with
+the exact client/Python 2.7 filter check enabled. The 151-file Bot behavior
+group passed, including current configured passage/departure scenarios.
+This does not relabel the first full CI run as all green; updated-head checks
+and native task retest are still required.
+
+
+Native follow-up on `cb10604` reached both garages and parsed seven actual
+current-day missions. The external-path error is absent. On `61a180b`, build
+`colorfulmeans-41047471308-1`, the user opened the real MissionsPage: 7/7 cards
+and native credit/gold/free-XP/bond/equipment rewards were visible. This exposed
+a remaining presentation bug: conditions without a stock scalar formatter
+fell back to the native generic "play a battle" text. The correction supplies
+the supported localized title/description on the native `battles` condition.
+Its counter is either actual qualifying battles or completion of the whole
+objective (0/1), never unrelated participation. Full metric progress appears
+in the localized description. Stock parser verification now asserts that this
+metadata survives parsing. This changes presentation only; policy/payment is
+unchanged. Live card retest is still required after rebuilding.
+
+The packaged MS-1 internal view rendered the decoded modules. The user-requested
+simplified transparent shell in `61a180b` was visually checked, rotated, and a
+radio module selected through it. The T-50-2 missing-data case prompted and
+then cleared the interior instead of retaining MS-1 geometry. No attributes
+were saved during these checks. The isolated QA account/profile is separate
+from player saves. Game control failed before input with `foreground window
+did not report a process id`, including after the user changed to windowed
+mode; binding/activation retry did not recover. User-assisted page observation
+is recorded as such, not autonomous battle/notification acceptance.
+
+Full Tests `41045281948` passed all six jobs on `f843ab3`. Its production code
+matches `cb10604`; its delta updated stale test fixtures and this record.
+The later shell revision has passed its four local viewer/editor suites
+(48 tests total) and the review-package build. Current-head full CI and final
+native card/reward/error-report acceptance remain pending.
+
+
+User-assisted native battle on `23b746e`, session `efec15f44734`: S-51 won on
+47_canada_a. Persisted ordinary state records win1/top5/damage2hp claimed once,
+2671 cumulative damage, 715 assisted damage and rental_9_1 qualifying count 1/6.
+Wallet deltas include 80000 mission credits, 500 mission free XP, 100 gold and
+25 mission bonds, separate from battle earnings. Three stock tokenQuests
+messages visibly list the corresponding actual rewards; the battle message
+shows first-win x2 and a Details button. The selected S-51 x2 corner disappeared.
+An initial contrary visual reading was corrected; no first-win-refresh bug is
+claimed. No mod mission-completion modal appeared. Rental delivery/expiry,
+launcher grant families and personal campaign receipts still need separate
+live acceptance; this battle does not certify all notification families.
+
+The card metadata passed the parser but #1513 BattlesCountFormatter bypasses
+its inherited getCustomDescription when formatting its counter. Live cards
+still said "battle count". A narrowly scoped presentation adapter now makes
+that stock formatter honor its existing custom-description reader only for
+conditions marked offlineOrdinary=v2. All other conditions use its original
+method. Stock renderers, cards and icons remain in place. Ordinary-only native
+sorting compares authored priority before completion so completed tasks do not
+move behind rental tasks. Six normal picks remain first, difficulty ascending;
+active rental picks follow in 1/3/7-day order. Rental titles explicitly state
+duration, tier and premium/special vehicle; complete conditions stay in the
+description. No cooldown filler or additional daily rental task is created.
+Same-day ordering/cadence updates preserve shared objective progress and paid
+markers instead of granting them again. Tests cover monthly, year and leap-year
+boundaries, preserved paid markers, scoped ordering and untouched stock fallback.
+Three affected policy/UI/bootstrap files pass locally (including their teardown
+contracts); all 55 definitions still pass the pinned compiled parser. Native
+retest and rebuilt final artifact remain required for these latest changes.
+
+First-win audit (read-only): current offline Shop data is fixed at 2, income
+uses 200%, result packing uses dailyXPFactor10=20 and system summary uses
+ dailyXPFactor=2. #1513 carousel dynamically requests bonus_x{factor}.png;
+actual stock library images include x2/x3/x5 and no x4. Native message text
+formats the supplied integer multiplier. No first-win multiplier/economy change
+was authorized or made here; x3/x4/x5 end-to-end rendering has not been tested.
+
 ## October 24: shared owner routes and generic narrow passages
 
 Adopt the reviewed complete profile 1 as the built-in Default for all users,
@@ -3092,7 +3700,9 @@ boundary. The first access violation was in `WGVehicleFilter.syncGunAngles`
 inside `Vehicle.__startWGPhysics`; the second run passed that address and
 failed in `WGVehicleFilter.syncStabilisedYPR` inside
 `PlayerAvatar.__onSetOwnVehicleAuxPhysicsData`. Both native methods reach the
-same absent retail server-connection/filter chain. A complete exact-`#1513`
+retail server-connection/filter boundary. The outer WGVehicleFilter exists;
+the exact missing C++ initialization dependency is not proved by Python
+object presence or by the faulting method name alone. A complete exact-`#1513`
 bytecode scan inventories every Python reference to those two methods and finds
 four call sites: `Vehicle.__startWGPhysics`, `Vehicle.set_gunAnglesPacked`,
 `CompoundAppearance.__onModelsRefresh`, and the Avatar auxiliary-physics
@@ -10625,3 +11235,1299 @@ shot-line queue metrics explicitly. No world result is cached, no physics or
 weapon safety is reduced, and no native performance gain is claimed without
 the next #1513 runtime capture. The banana-bend local steering feasibility
 question remains open beyond the confirmed ownership defect.
+
+## 2026-10-29 career audit and independent diagnostic admission (PR 116)
+
+The current head was compared directly with closed PR 115
+(`fca7849d50ca1e50181a21614b3c2c4a6c01dbd1`). Only its reviewed career
+subset was reapplied and corrected; no wholesale merge, wreck angle change,
+mission interface change or speculative model synchronization was restored.
+The previous release-angle rollback remains in place.
+
+Exact Chinese HD #1513 `scripts.pkg` contracts were read after a passing
+`tools/inspect_client.py` inventory. `ProfileSummaryPage.getGlobalRating` and
+`AccountDossier.getGlobalRating` consume `items.stats.globalRating`;
+`StatsRequester` defaults that field to 0. The offline producer previously
+hard-coded 0. The user-selected published 0.8.11 Personal Rating is now
+computed from lifetime vehicle rows, including sold vehicles, without adding
+the duplicate account aggregate. The retained formula image is
+https://usercontent.one/wp/hokx.com/wp-content/uploads/2019/12/WTR-Personal-Rating.png.
+This selection is not evidence that the unpublished 9.22 server used identical
+coefficients or rounding. The implementation truncates the final nonnegative
+value to an integer. A fixed 1000-battle vector yields 5843; changing awarded
+XP leaves it unchanged. Entitlement account diffs preserve the computed value.
+
+Exact `dossiers2/custom/battle_results_processors.__updateBaseStatistics`
+increments `battlesOnStunningVehicles` from `results['canStun']`, copies
+`stunNum`, and adds `min(droppedCapturePoints, 100)` to the lifetime block.
+Exact `_Battle2StatsBlock` reads `stunNum` and divides average stun counts and
+stun assistance by `battlesOnStunningVehicles`. Therefore a stunning-capable
+zero-stun battle counts, and a non-stunning vehicle does not. The adapter
+uses the frozen mounted descriptor's `gun.shots[].shell.stun` component,
+never a vehicle-class or calibre guess. Single-battle defence stays raw.
+The reviewed receiving-hit/explosion counters now reach their native dossier
+fields as well. Dossier version 4 invalidates both the prior version 2 and
+the version 3 used by the abandoned PR 115 package.
+
+Missing original XP is not reconstructed from awarded XP. Missing rating
+inputs remain explicitly marked across reloads; an incomplete rating returns
+the native nonnegative unavailable value 0 and logs its missing inputs.
+Only a complete unique set of retained non-training receipt bodies can repair
+those missing inputs or recalculate lifetime defence. Identity-only history
+is insufficient. Stun coverage is tracked separately; partial coverage never
+divides lifetime assistance, and older receipt bodies lacking stun facts cannot
+erase better existing coverage. Migration and repeat-load tests cover these
+cases. No user's live save was rewritten or initialized during this audit.
+
+The 132743 report still establishes a model replacement followed by turret
+angles becoming zero, not the native cause. Exact `CompoundAppearance`
+refresh order supplies new read-only brackets around deactivation,
+`__setupModels`, `setVehicle`, `activate`, `setupGunMatrixTargets` and
+`onModelChanged`, in addition to the existing final-sync boundary and eight
+post-death frame samples. A transient call-stack vehicle reference allows the
+deactivate-after probe to work after the private binding is cleared. It is
+restored in `finally`; no engine callback or angle write is introduced.
+Tests preserve original callable results, exceptions and ordinary-entry
+behavior. Actual native reset localization remains pending the new report.
+
+Diagnostic entry alone enables these probes and career records. It now allows
+bulk 32 MiB/minute and 256 MiB/round, superseding the earlier 2/32 limits.
+Verification admission is independent: 32 MiB per stage/owner/round, 4 MiB
+per owner/round for priority events, and 4 MiB per process/round for low-frequency
+career validation. Limit records and round summaries disclose byte drops.
+Human observations use a separate stage from bot observations; radio publication
+can record at 0.5-second cadence up to 4096 samples per key. The limits remain
+finite, with stage/key bounds and round reset tested. Ordinary entry constructs
+none of the new payloads. No gameplay cadence or radio calculation is changed.
+The launcher server log was another admission boundary: its ordinary 1 MiB
+rolling file could erase early verification records. Diagnostic entry now
+retains up to 256 MiB per server run, rolling to 192 MiB; ordinary entry keeps
+its original 1 MiB bound. A production-stream regression writes past the basic
+ceiling and verifies early evidence survives only in diagnostic mode. Report
+export already copies the complete current session byte range without a
+16 MiB truncation; the 16 MiB maintenance threshold trims idle logs before a
+new session checkpoint, not the current report.
+
+The original official 9.18 SPG explanation describes 70/30 sharing for
+overlapping active stuns (https://worldoftanks.asia/en/news/general-news/update-918-spg-revision/).
+The present server retains one canonical owner. Its exact 9.22 overlap and
+expiry boundary is not yet accepted: this revision records proposed/retained
+owners, deadlines and actual damage credits without changing attribution.
+
+Local focused verification: nine isolated files, 153 tests, no failures or
+skips (`build/career-review-accepted/summary.json`). They cover chosen-rating
+inputs, entitlement diffs, capped/raw defence, zero-stun capability, incomplete
+history, migration idempotence, cache invalidation, model probe contracts,
+basic-entry laziness and independent diagnostic budgets. A related 20-file
+local run passed 17 files; gun-angle recovery, wreck dynamics and wreck-push
+diagnostics could not create the matching native simulation in this Windows
+Python 3.11 environment. Their errors are retained, not counted as passes;
+Linux CI builds the reference extension and reruns them. Related subsystem
+tests and matching-head CI/package receipts are tracked in PR 116; prior-head
+artifacts are not evidence for this revision. Native gameplay acceptance is
+still required for turret rendering, old-save UI refresh and actual battle
+statistics. README supplies the diagnostic-entry acceptance procedure.
+
+## Sparse lineup editor and diagnostic regression follow-up
+
+The full prior-head suite exposed diagnostic regressions omitted by its focused
+package gate: optional progress was passed to input_coverage(None), interrupting
+account publication, and stun transition evidence sampled server time again
+inside an already frozen projectile batch. The null input is now supported and
+diagnostic payload failures cannot escape the account publication boundary.
+Stun evidence records the supplied deadlines without rereading the resolution
+clock. The account dossier test uses the current cache-version constant; the
+crew rollback fake is accepted without manufacturing a runtime account failure.
+Focused reruns include account RPC, garage, recovery, orders, sales, crew credits
+and the existing frozen-clock projectile test with diagnostic entry enabled.
+
+An explicit enabled flag now separates an empty slot from a random vehicle.
+The launcher materializes every custom roster slot; older profiles keep their
+former random fill and fixed skill pins. Windows server environment parsing
+preserves empty/random rows, so their absence cannot accidentally select Automatic.
+The shared Python 2-compatible slot contract supplies sparse slot identities.
+Server capacities count enabled slots; player admission, team switching, start
+planning and Bot roster generation use their actual numbers. Bot IDs remain
+slot+1 or slot+16. Humans replace enabled slots in order, and a zero-capacity
+team refuses start. An entirely empty custom room can still admit its pending
+host to inspect the room. The server owns locked random/mixed defaults and
+rejects room size, class, tier and difficulty changes. Wire messages publish
+the lock with capacities; zero capacities are accepted only with that explicit
+lock. Waiting preferences do not replay old overrides into a custom room and
+reset the next Automatic capacities to 15.
+
+The editor uses a draft and an atomic whole-settings replacement. A failed
+write retains the previous persisted state and the editable draft. A stale
+second editor cannot overwrite a newer save, and saving one lineup merges into
+the current store without overwriting another profile. Country/type filters,
+random vehicle and disabled slot are distinct. Per-team bulk difficulty changes
+cannot enable empty slots. Duplicate stock captions carry their canonical vehicle
+identifier; UI language changes preserve the draft identities. Slot numbers are
+never reordered and independent tactics files are not rewritten. Preview grouping
+includes lineup skill pins, but ordered explicit tactic rules retain precedence.
+The Windows package workflow now gates the real Tk Chinese/English widgets,
+bulk filtering, save failures, content-sized close-dialog buttons and previews,
+in addition to sparse server/client and account regressions.
+
+The exact 150330 report uses build colorfulmeans-40830724235-1. At 15:02:17
+the local player's model turret/gun changes from -16.160/+2.708 degrees to zero
+during deactivation and remains zero after activation and eight later frames.
+The gun rotator retains its nonzero angles. Other logged Bot model refreshes
+temporarily zero their providers but restore their poses during activation.
+This narrows the missing restoration path without identifying a safe native fix.
+Exact scripts/common/Event.pyc stores Event callbacks in _Event__delegates;
+diagnostic-only model records now add callback function/owner type names, retaining
+no callbacks and invoking no synchronization or angle write. Native turret
+acceptance remains unresolved. Matching-head CI and actual artifact results are
+recorded in PR 116; the prior package is superseded once this follow-up ships.
+
+The complete follow-up run found a strict welcome-key assertion that did not
+yet include lineup_locked. Its expected wire contract now includes the field
+and verifies False for an Automatic room. The package gate also runs the full
+simulation-worker socket file, retaining its existing liveness assertions.
+The separate Great Wall opposed-gate failure remains the previously reproduced
+release-baseline issue; no unrelated steering or collision change is inferred.
+
+## Empty-slot difficulty persistence and save failure review
+
+Reconnection review reproduced a missing save/reopen transition: editing an empty
+slot's difficulty worked in the draft, but profile normalization deleted it.
+The All row retained its previous caption, so enabling random vehicles afterwards
+silently used mixed difficulty. Normalization now retains an inactive difficulty
+preset. The server accepts and validates that preset without adding capacity or
+generating a Bot; the worker excludes explicitly disabled entries from active
+skill pins. Explicit Empty/Clear actions still erase the slot's previous settings.
+Legacy entries without an enabled flag retain their original pin semantics.
+
+The editor also returned silently when its catalogue was unavailable. Save now
+uses the existing localized failure dialog in that case and preserves both the
+draft and the last persisted state. No write callback is invoked.
+
+Regressions cover clear -> difficulty -> Save -> JSON reload -> random enable,
+explicit clearing afterwards, isolation from the other team, environment parsing,
+server capacity/roster, inactive worker pins and invalid inactive difficulty.
+Diagnostic-entry-only lineup_roster evidence now includes enabled/inactive
+difficulty presets alongside the actual active and human-replaced slot map.
+Basic entry does not construct or publish that evidence.
+Actual Windows Tk tests also compare All/slot captions after saving, reopen the
+saved profile and enable random vehicles, and check the localized catalogue
+failure dialog. They run in the existing package gate; local embedded Python has
+no Tk and does not supply native-window acceptance. Matching-head CI and package
+results are recorded in PR 116. Turret delegate/lifecycle diagnostics remain
+read-only and diagnostic-entry-only; no new turret angle correction is inferred.
+
+## Local corpse model-refresh candidate (2026-10-29)
+
+The later coherent report 20261029-194244 uses colorfulmeans-40855572272-1.
+Local vehicle 2130706436 enters refresh at -47.715/-3.113 degrees; deactivation
+zeros both providers, and refresh plus eight later frames through 19:36:56.643
+leave them zero. Its onModelChanged event executes with no delegates. Twenty
+other observed vehicles recover their angles; native-remote on_model_changed
+rebinds its independent aim targets inside that event. This is a demonstrated
+missing local restore path, not proof that the native sync is safe to reenable.
+
+tools/inspect_client.py passed again against Chinese HD #1513. Read-only
+bytecode review of scripts/client/vehicle_systems/CompoundAppearance.pyc
+confirms WGAdaptiveMatrixProvider display matrices, deactivate clearing their
+targets and resetting the filter, and __onModelsRefresh saving yaw/pitch before
+deactivation and restoring them with syncGunAngles after reactivation.
+setupGunMatrixTargets(target) assigns target.turretMatrix/gunMatrix directly;
+None selects the filter. VehicleGunRotator.pyc confirms its private animators
+expose matrix properties and update/replay side effects; the candidate does
+not invoke them.
+
+Only the proxy returned to the original refresh code object's private-filter
+lookup receives the candidate restore context. Nested activation/deactivation
+still sees and stores the real filter. The candidate consumes stock's saved
+angles without unpacking network samples or changing hull/wreck motion.
+Current battle token, synchronous refresh token, registered local entity and
+appearance identities, dead health, attached turret and absence of the remote
+adapter are required. There are no scheduled callbacks or event subscriptions.
+
+The compatibility owner retains only the two Math matrices, saved angles and
+scalar identities plus a battle token. Repeated corpse refreshes reuse that
+snapshot even if deactivation clears the providers again. A partial bind or
+native readback mismatch rolls back only targets still owned by the candidate;
+it never invokes the suppressed native sync. Final deactivation, failed stock
+refresh, revival/detachment refresh, next battle and map exit release ownership
+without clearing a newer writer. No entity, appearance or rotator is retained.
+
+test_port_0922_wreck_model_pose.py covers the installed wrapper, nested filter
+identity, basic-entry restoration, repeated reset, stale context refusal,
+partial failure/readback rollback, owner replacement and lifecycle cleanup.
+Detailed diagnostics record target identities, animator matrices, stock and
+read-back angles, refusal and cleanup. Eight existing frame samples are spaced
+at least 0.3 seconds apart and reset after each completed corpse refresh.
+Normal entry does not build those diagnostic payloads. Exact Windows rendered
+recovery, detached turrets, spectating, repeated refresh and next-round safety
+remain acceptance requirements. Matching-head CI and package evidence belongs
+in PR 116; the known Great Wall gate failure remains separate.
+
+
+## Reimplemented PR115 fitting and daily-window requirements (2026-10-29)
+
+PR115 is historical evidence, not a merge source. Current sparse-lineup,
+spotting, career, corpse-target ownership and diagnostic budgets remain in
+place. The five-class equipment policy is shared data only; player and Bot
+installation owners remain independent. Player admission uses the native
+VehicleDescr.mayInstallOptionalDevice before installation. The exact-client
+resource audit checks 576 Bot vehicles and 9216 tier/module combinations,
+including family priority, per-family ordinary fallback, device filters, module
+load, magazine allocation and directive order. This is static evidence, not
+proof of every fitting in BigWorld. Detailed fitting records observe installed
+devices, native directives, numeric crew factors and player inventory through
+PR116's bounded validation channel.
+
+Default seed revision 2 does not trust the unaccepted PR115 revision-1 marker.
+The launcher validates contained default/legacy paths before removal, removes
+obsolete defaults without backups, and publishes its revision only after
+successful cleanup. Subsequent edits and named saves are retained. Fresh
+unlocked saves and default initialization reach the same creation-only player
+policy; career creation is unchanged. Local migration tests use throwaway
+directories and do not modify the user's actual saves.
+
+The daily adapter uses current-token RoomWindow dispatch. Only an initialized
+current view owns a refresh timer; cancellation, external disposal and an old
+cancelled callback delivered after reopen are covered. Existing native model
+diagnostics and corpse restoration are not replaced by PR115 callbacks.
+The room/daily movie is compiled from pinned #1513 training and lobby movies.
+Compile-only lobby definitions are removed, and the output is exported again
+to check its daily mode and sizing code. Native testing found that the 1px
+initial SoundButtonEx face plus dynamicSizeByText left a collapsed transform
+until rollover. Footer controls now start at the stock settings face width and
+use the regular width path after measuring the native text. The 100px settings
+face minus the localized #settings:ok_button glyph width establishes total side
+clearance; paddingHorizontal=5 alone is not the rendered glyph clearance.
+BlackButton retains its own face-resizing override. Settings submit/cancel
+positions 491/596 establish a 5px gap. Initial, rendered, rollover and rollout
+diagnostics include actual bounds, glyph margins and upper/lower footer gaps.
+Window retains native background/content padding. Rendered
+footer spacing, daily interaction and repeated lobby/battle transitions still
+require exact-client acceptance. The packed local replay sample now reads
+Vehicle.gunAnglesPacked; float turret/gun fields remain independent.
+
+Native follow-up on the rebuilt movie observed stable initial/rendered/hover
+sizes: Start 191x22, Reserves 127x22, Close/Leave 100x22. Reserves opens the stock
+window. Glyph-clearance records remain unchanged on rollover. These observations
+accept the exercised Chinese captions, not every localization or resolution.
+
+Report containment now compares real parent directory identities after rejecting
+links/reparse points; Windows MSIX can return different spellings for the same
+directory. New-session preparation first invalidates the previous export
+boundary. Actual diagnostic startup created a fresh three-role session, and a
+throwaway filesystem export excluded old-session markers. Filtered random slot
+constraints now participate in server and client tier-window feasibility;
+impossible combinations remain in the waiting room. New/Delete lineup settings
+write failures restore both the profile store and selection.
+
+Diagnostic Bot factors include descriptor misc attributes and final reload
+seconds. A compact stationary-control receipt has independent priority budget,
+at most eight records per hull, with no extra geometry/path query. It records
+route, actual throttle/turn/traffic, probe verdict and planner/job age even when
+bulk motion histories have filled their budget. Normal entry does not build it.
+
+The unaccepted old rotated-wreck collision coupling is not restored. Three
+Mittengard VII-VIII acceptance matches and the separate Great Wall finding
+remain open; its engine-free fixture still fails and no navigation law is
+changed on that evidence alone.
+
+## Reviewed passive-wreck and footer follow-up (2026-10-30)
+
+This supersedes the rotated-wreck exclusion above with fresh source evidence.
+Report 79f2cd83009d uses build 40530145249-1, not the current PR116 package.
+Tiger Bot 4 aimed 32 shots at T29 Bot 18 without damage; T29 aimed 16 back,
+with two damage credits of 320/386. The worker explicitly logged eight turret
+and four gun impacts on Emil 1951 wreck Bot 16. The report proves repeated
+wreck obstruction, not the pre-fire verdict of every unsuccessful shell.
+
+Current-source reproduction found that both passive yaw paths updated hull
+yaw while retaining inconsistent world/relative turret angles. Native aim
+presentation derives relative yaw from world-minus-hull; projectile authority
+retains the explicit relative angle. Applying the report's 0.38762-radian hull
+turn in an isolated reproduction separated these consumers by 22.209 degrees.
+That is a code reproduction, not a measured runtime matrix difference. Both
+rotation paths now preserve the passive relative angle and update world aim
+together. Vertical pose rejection restores world aim along with hull yaw.
+Wraparound, all existing sweep vetoes and unchanged gun pitch are covered.
+This does not reenable suppressed native gun synchronization or replace native
+turret-detachment ownership.
+
+Two passive translation gates rejected the valid resolver status `crushed`,
+despite other motion consumers admitting it. They now admit `clear` and
+`crushed`; `soft`, `hard` and uncommitted transactions still block. This defect
+is reproducible but is not established as the cause of report 69355839c587's
+Bat-Chat 12t: all 38 logged nonzero nudges were rejected by the world gate,
+but their resolver return values were absent. The old Emil report also has
+four such rejected nudges, after earlier accepted movement.
+
+Diagnostic entry now records raw/normalized passive resolver verdicts, actual
+hull/travel headings, step/distance inputs, catalog-soft/native refusal detail,
+the first rejecting contact gate, and requested versus final wreck poses and
+angles. A separately bounded firing-lane record compares existing native aim
+and cached projectile pose on actual tested wreck candidates, including clear
+verdicts. It issues no extra collision queries and does not alter firing policy.
+Each new stage admits at most 256 samples per actor/round at a two-second
+interval, using its own review-stage budget rather than the bulk history or
+shared priority allowance. Basic entry does not build or read native diagnostic
+payloads. Additional soft-contact traces are diagnostic-only and are not placed
+in the gameplay impact-damage receipt.
+
+The native room and daily window form edge is moved three pixels upward,
+preserving the accepted lower button inset and 191/127/100x22 button sizes.
+Upper clearance is matched independently to the stock settings reference;
+no equal-upper/lower-spacing rule is imposed. The mod-owned movie was rebuilt
+and exported for inspection with pinned FFDec 26.3.0/Java 17 and #1513 assets.
+
+Local isolated verification passed five files / 217 tests without skips,
+including six new rotation/rollback/status/lane-diagnostic checks. Three related
+full motion fixture files could not create the matching native simulation in
+the local embedded Windows Python; they are not passing evidence. The review
+package gate now includes those files and the new regression file on Linux.
+Matching-head CI, package inspection and subsequent #1513 rendered/gameplay
+receipts are recorded in PR116. Random matches alone do not accept the original
+12t rejection cause or every wreck firing configuration.
+
+The first current-package native session 5a8c228d6176 started through the
+diagnostic entrance and exercised both windows. Initial/rendered/hover footer
+measurements are now 4/19 bounds units (previously 1/19); button dimensions
+remain unchanged. Reserves navigation and daily reopen worked. Actual passive
+probes returned `crushed` as well as clear/hard. The new lane record contained
+an AttributeError because native remote entities do not expose getAimParams.
+It now reads the already-reviewed #1513 appearance turret/gun matrix providers
+directly and retains read failures as evidence. Battle review admission also
+recognizes BattleRuntime.client and its start-message round, so these samples
+are round-tagged and their per-round budgets reset. Native acceptance of this
+diagnostic correction requires the rebuilt package; the first session is not
+silently relabelled as running the correction.
+
+
+### Passive wreck destruction and tilted Bot aim follow-up
+
+Report 9910694a59d3 proves passive motion can reject an uncommitted catalog
+proposal. Two realised contact paths now enable destruction at the existing
+world/catalog seam, after vehicle, arena and detached-turret guards. Candidate
+probes remain read-only. Passive calls temporarily clear drive intent and use
+actual transferred speed and the contacted hull descriptor; they never borrow
+the dead vehicle's directional drive cap. Existing strength/energy laws and
+post-destruction world recasts still apply. Slow-speed failures remain a
+separate gameplay investigation, not grounds to destroy every fragile prop.
+A real catalog regression distinguishes a 0.16 m/s rejection from a 20 m/s
+physical crush and checks that the drive-cap function is never called.
+
+The same report's AMX 13 75 body pitch/roll exposed a separate coordinate-space
+error: the renderer subtracted hull yaw from world barrel yaw while projectile
+geometry used the actual hull-relative traverse. World yaw already contains
+pitch/roll projection, so those expressions differ on tilted bodies. Authority
+presentation now uses the same retained relative traverse as collision. The
+positional Bot codec, server admission/contained-combat motion, takeover and
+remote interpolation retain that angle explicitly so visible peers use the
+same geometry. Player pose messages retain their existing convention. This
+covers live Bots and corpses; it does not change gun rotation or shot policy.
+
+Diagnostic entry records realised passive commit mode/results alongside the
+existing per-identity crush energy evidence. A separately bounded
+wreck_aim_published stage reads actual appearance matrix providers and compares
+them to projectile angles even without a shot through that corpse. Read errors
+remain explicit. Windows acceptance must distinguish a successful prop commit,
+a physical-energy rejection, a hard world blocker and pose-read failure.
+
+Native synchronization remains a separate investigation. Do not reenable the
+two faulting methods merely because a Python filter object exists. The dumps
+establish failing boundaries, not a complete safe C++ initialization recipe.
+Any future experiment needs the exact #1513 connection/entity lifecycle and
+an isolated dump-backed run before gameplay acceptance. This follow-up changes
+no native synchronization call or server-connection initialization.
+
+### PR116 settings, independent appearance inventory and contact chains (2026-10-30)
+
+The stock #1513 SettingsParams forwards SettingsCore.packSettings(GAME.ALL()).
+GameplaySetting already represents an unavailable checkbox with None. The
+offline adapter publishes that sentinel for gameplay-mode toggles and server
+aim, and removes those keys from apply/default diffs. Standard mode keeps the
+native fixed-selection control, explicitly packed as True. Unrelated settings
+and training Bot controls retain their owners. Build 9042143 was installed
+through the launcher and observed in the actual Chinese HD #1513 client:
+standard checked/disabled, other mode choices and server aim off/disabled.
+Clicking standard, Assault and server aim did not change their state.
+
+The active packed lists contain 1341 typed entries: 93 paints, 338 camouflage,
+305 emblems, 575 inscriptions, 3 modifications and 27 preset styles. IDs are
+scoped by type; raw style 137 in special_ru is not an active style. Thirty
+camouflage and fifteen decal entries carry premiumIGR. Fifteen Polish legacy
+camouflage definitions have no matching selectable #1513 vehicle and remain
+excluded by normal vehicle filtering. No resource-only style is activated.
+Native CustomizationType IDs are 1 paint, 2 camouflage, 3 decal, 4 style and
+5 modification. ItemTags.VEHICLE_BOUND is vehicleBound; the cache's
+isVehicleBound/filter contracts decide placement, not item names or guesses.
+BaseCustomizationItemXmlReader applies item-local tags/filters over its group
+prototype (105 bound legacy camouflage and 29 local decal filters). FilterNode
+uses customizationNationID, not the tech-tree nation: T-55A uses USSR exterior
+rules and Panther/M10 uses USA rules. Tag requirements are a proper subset.
+The launcher follows these exact contracts and retains seasonal captions.
+
+Default seed revision 3 and newly created unlocked metadata explicitly opt
+into the independent 1000-unit grant. appearanceStockVersion is durable in
+garage ledgers and prevents replenishing subsequent use/sales. Existing named
+saves lack this creation marker. Preset-style quantity rules are unchanged.
+Typed launcher additions use the existing durable account-change notification
+queue. Diagnostic entry publishes APPEARANCE INVENTORY with IGR ownership and
+remaining token restrictions; client installation and persistence need native
+acceptance, not merely an edited JSON count.
+
+The contact candidate roster now retains resting wreck edges, but evaluates
+the active/moving condition during each sequential pass. This wakes a tail
+wreck within the same slice while leaving a completely resting pile untouched.
+Both Python and C++ follow this law. Worker application also recognizes the
+newly solved impulse instead of requiring an initially active peer. Four
+live/dead combinations and all six actor-ID orders transmit momentum in the
+first reference slice; a resting overlapping pile remains at rest. Native
+conformance cases cover the same chains. This does not change track friction,
+world-destruction strength or player-wreck ownership.
+
+Detailed contact_chain evidence retains frozen body velocities, mass, grip,
+ownership flags, solved impulses and final worker poses. Individual refused
+translations include vehicle blocker IDs/fractions. Player-wreck ownership,
+longer-chain stalls and the first IS-2 shove remain investigations rather than
+claims of a universal physics fix.
+
+Local validation before native packaging: all 39 launcher test files passed
+(1183 tests, one existing symlink-environment skip), including real bilingual
+Tk interaction and save isolation. The two launcher core/window files were
+rerun after stopping the real game so its running-process gate did not affect
+the fixtures; all 343 tests in those files passed.
+Targeted reference bootstrap/contact and existing garage/settings/message
+regressions passed. The exact installed Chinese HD #1513 resources passed
+inspect_client.py. The original-resource exterior dialog was visually checked
+in both tabs on Windows using a disposable save; game-client checks and final
+package/CI identity are recorded after their actual completion below.
+
+Native build 9042143 / colorfulmeans-40945824237-1 exposed a pre-existing
+independent-outfit settlement omission: three seasonal FN3 hull applications
+previewed 1007 -> 1004, but CMD 119 saved the three outfits while leaving free
+stock at 1007. Exact #1513 customization/shared.getItemInventoryCount computes
+free stock + original - modified copies; applied copies are separate from free
+inventory. CMD 119 now stages typed per-area differences, checks the entire
+inventory transfer before mutation, consumes owned vehicle/public buckets,
+and returns removed copies to their native binding. Selecting a preset returns
+the displaced independent components without changing preset quantity rules.
+Modification arrays contain integer IDs; paint/camouflage/decal masks expand
+one copy per applied bit. Unchanged existing outfits do not trigger a stock
+migration. APPEARANCE TRANSFER exposes committed typed stock in diagnostic runs.
+Five focused regressions plus all 294 garage, 24 campaign-reward and seven
+creation/style regressions passed locally. Acceptance of the new transfer
+requires a rebuilt native package; the 9042143 observation is not its proof.
+The descriptor's BaseCustomizationItem.isVehicleBound is a method, not the
+GUI item's property. Exact bytecode inspection corrected creation grants,
+refund binding and diagnostic flags to call it. Test descriptors now model
+that callable contract; a false-returning method must never count as bound
+merely because its function object is truthy.
+
+Final production candidate be7c534ad8b3626b956e016270fe6b62ee662117 was packaged
+by successful Package run 40950329097, all three jobs. The downloaded launcher
+artifact 12930224087 identifies colorfulmeans-40950329097-1. Outer/nested ZIP
+integrity, x64 launcher and x86 native module machines, and all 221 Python 2.7
+bytecode members were checked. Installed through that launcher's own updater.
+Tests run 40950328867 passed native geometry/C API chain conformance, Windows
+Tk editors, Bot behavior, navigation and Windows server jobs. The full client
+suite passed 442/443 files; the single existing GreatWallGateTests
+test_new_allocation_with_server_recovery_clears_opposed_gate failure remains
+[] != [(17, -154.1)]. All 39 launcher files passed. This is not an all-green CI.
+
+Native session ff470c8ac277 used a newly created unlocked PR116 Exterior QA
+save that had never opened the launcher inventory editor. First client boot
+created version 1 with 93 paint/338 camouflage/880 decal/3 modification entries
+and the unchanged 27 preset entries. All 45 active IGR entries were diagnosed
+as shared, with 1000 free units and no required token. In the native E-100
+exterior panel FN3 started at 1000; installing the hull for three seasons
+showed 999/998/997 and emitted three committed APPEARANCE TRANSFER receipts.
+The durable ledger and reopened native panel both retained 997. All pre-test
+default save file digests remained unchanged, proving this separate slot did
+not reset default again. The normal menu exit completed without a crash.
+Launcher-generated report wot-error-report-20261030-045425-ff470c8ac277.zip
+contains all four primary logs, worker starter, both native exception trails
+and sound/resource analysis. Parsed appearance receipts have no fragment
+issues or script errors; exception trails contain session headers only.
+
+Restart session 3552a0b25ca9 reached HANGAR READY and retained appearance
+version 1 and FN3 free stock 997. No creation grant was reapplied. The native
+bound camouflage 15335 retains separate compatible-vehicle 1000-unit buckets;
+IGR camouflage 15124/15125 retain shared 1000-unit buckets. Empty bound-item
+entries have no stock to preserve and are omitted by normal reload
+normalization (338 initial camouflage keys, 329 nonempty keys after reload).
+The production report collector, called with its pinned Python 3.11 runtime,
+generated live-session report 045740-3552a0b25ca9 with all four primary logs,
+no missing roles, no parsed appearance issue/script error, no native exception
+entry and no sound/resource failure. This is a garage-only live snapshot, not
+a second completed battle or normal-exit receipt.
+
+Computer Use failed during restart observation with `foreground window did
+not report a process id`, including one fresh-window/activation retry. No
+further input was issued. Native removal/refund, explicit IGR application and
+assistant-driven chain pushing remain unaccepted UI/gameplay cases; removal
+and preset refund are covered only by focused stock regressions. The tested
+QA slot and current diagnostic client remain open for user follow-up. It is
+separate from default and other saves. Existing-save/no-refill rules are also
+covered by isolated persistence fixtures; no old player progress is migrated.
+
+The preceding 9042143 native session 8221657557c9 completed an actual 15v15
+Mittengard battle with E-100 and tier 8-10 Bots, ending by team elimination
+and returning to the garage. Launcher-generated report
+wot-error-report-20261030-043144-8221657557c9.zip has all four logs and no dump.
+Its 234 contact_chain samples include 17 wreck impulse rows and six accepted
+wreck translations (maximum sampled displacement 0.170582 m). All 3364
+wreck_aim_published samples parsed, with no matrix read failure or attached
+angle mismatch above 1e-5. Neither client log has script errors; both sound
+analyses have error_count 0 and no resource membership failure. The final
+candidate changes only appearance stock settlement/binding since that build;
+these battle receipts do not prove manual player-driven multi-wreck chains,
+every IGR item installation or every unresolved first-push cause.
+
+An earlier b218235 session ended with worker exit 1 during an Alt-F4/testing
+window. Its automatically collected all-log report 041020-b4c854392ca9 contains
+a termination dump without an exception stream, and neither native trail
+records an exception. This is not a proved native fault or a repaired cause.
+Both later normal-menu shutdowns completed; retain the earlier termination as
+an unresolved isolated observation. Raw reports remain local, not uploaded.
+
+### Launcher tier filters and aligned modifier selectors (2026-10-30)
+
+Garage additions, Members and independent/preset appearance inventory expose
+catalog-derived tier choices after type. They intersect the existing nation,
+class, garage ownership and search filters. Empty results clear the visible
+vehicle selection and cannot add a hidden previous target. Garage labels now
+use the Members name/internal-ID form, retaining owned/queued status separately.
+The modifier has two rows of three selectors, sharing column widths between
+rows: nation/type/tier and vehicle/modification category/field. Nations use the
+existing garage order and localized captions while retaining canonical IDs.
+Language changes preserve canonical nation, tier and uncommitted field input.
+
+Lineup adds a compact tier column to each team, including bulk selection.
+These are browsing filters, never persisted assignment rules: filtering cannot
+disable slots, erase exact vehicles, change difficulty or constrain a random
+runtime draw. A hidden prior selection shows an explicit choose-filtered-vehicle
+placeholder. Selecting a concrete candidate changes the assignment; Random
+vehicle is available again with All tiers. Existing nation/class/difficulty
+and sparse slot persistence retain their previous behavior and schema.
+
+Local final-source validation passed all 39 launcher test files. Regressions
+exercise intersecting/empty tiers, canonical identities across language changes,
+add-only exterior quantities, and lineup bulk tier browsing without assignment
+mutation followed by explicit selection and save/reopen. Actual Windows window
+inspection and exact pushed-head CI are recorded after their completion below.
+
+Production head e38fab25560d5396274cf2b627cbc6bf2bee491c passed all three
+jobs of package run 41000067010. Downloaded launcher artifact 12953371128 is
+55,708,360 bytes and identifies colorfulmeans-41000067010-1. Verified the
+download digest against the Actions artifact gate, extraction containment,
+outer/nested/mod CRCs, x64 launcher, both x86 sidecar modules and 221 Python
+2.7 bytecode members. No client/server/native production source changed in
+this launcher follow-up. Final full Tests run 41000066820 passed all 39
+launcher files and native geometry, Windows editor, Bot behavior, navigation
+and Windows server jobs. Client files remain 442/443, solely the previously
+recorded Great Wall opposed-gate assertion; no all-green CI claim.
+
+The local full run found 1187 tests across 39 passing files, with 16 skips:
+14 Windows symlink privilege skips and two exact-client catalogue tests.
+Both catalogue files were subsequently rerun with WOT_0922_CLIENT set to the
+installed #1513 path, without those resource skips. After the final empty-pool
+message change, all three affected editor files passed again. This includes
+real Windows Tk interactions, not only widget fakes.
+
+Computer Use inspected the actual Windows launcher/editor implementation
+against the installed #1513 resources in an isolated Roaming/Local acceptance
+directory, leaving the user's real saves/profiles/settings untouched. Garage
+tier 8 selected 59 (china:Ch01_Type59), added that exact identity to the isolated
+inbox and retained the queued status. Members tier 1 selected MS-1; USSR +
+heavy + tier 1 cleared vehicle/seat and disabled recruitment. Exterior tier 8
+plus search 121B produced no rows; clearing tier restored one compatible
+vehicle. The original search behavior is unchanged.
+
+The modifier's 1327x740 Chinese window displayed both three-column rows with
+equal upper/lower widths per column. Its dropdown showed China/USSR/USA/
+Germany/Czech/France/UK/Japan/Poland/Sweden in Chinese. Selecting China loaded
+110's fields and actual armor model. The 1476x545 lineup window displayed both
+teams and the new tier columns. Bulk tier 1 kept 15/15 participants; choosing
+NC-31 for team 1 slot 0 and saving/reopening retained that exact vehicle and
+the other 29 random slots. The persisted schema contains no tier browsing
+keys. These checks used the production source UI; the final packaged launcher
+was then opened against the same isolated acceptance data.
+
+The actual colorfulmeans-41000067010-1 executable was checked separately:
+Members' empty tier/class intersection displayed the Chinese no-match message
+with recruitment disabled. Its English modifier window (1309x740) displayed
+the complete aligned selector rows, canonical USSR caption, field values and
+armor model; content-sized save/reset buttons remained readable. Bilingual
+selection preservation and tier-only browsing are also exercised by the
+regressions. The source and packaged acceptance launchers were closed after
+testing. No game was started for this UI-only change, and no new combat/error
+report is claimed. The package and prior gameplay reports remain separate.
+
+
+### PR116 rollover, launcher outbox and route capacity follow-up (2026-10-31)
+
+The 08:01/08:03 reports and the saved outbox demonstrate incomplete launcher
+notification acceptance: four wallet currencies rendered, while seven saved
+non-wallet receipts remained pending. Previous fresh-account/win-notice checks
+do not establish the requested existing-save multi-category lifecycle.
+Account-unavailable notification attempts now schedule an identity-fenced retry;
+the verified lobby-ready startup boundary drains the outbox as well. Restore,
+queue discovery, native admission and durable acknowledgement have separate log
+records. The requested native acceptance must check all categories, restart,
+individual campaign withdrawal and absence of repeat grants/notices.
+
+Vehicle draw identities are retained with each mission's own day/week/month
+period and persisted through the normal garage transaction. Rebuilding an
+Account or daily cache must not change a matching week/month identity. Live
+ownership eligibility remains authoritative: acquiring a preview vehicle can
+still select the next eligible candidate; full permanent ownership still pays
+credits. Preview evidence now includes period start and a draw fingerprint.
+The old report lacks enough seed/eligibility evidence to attribute every observed
+08:00 vehicle change to one proved cause; the new logs close that gap. Cross-day,
+Monday, month-start, leap-month and inventory-change cases are separate checks.
+
+The Mittengard report 081040-bfcbe92e0501 records medium tanks initially on
+reserve while each main road had five mixed vehicles but only one medium.
+The five-total threshold is removed. The three-same-class soft threshold remains
+per team and physical route family, with main routes considered before reserve;
+authored overflow remains available when all capacity is exhausted. Artillery
+allocation is unchanged. Per-actor initial evidence includes candidate tier,
+priority, same-class and total loads at selection. A reserve route is not itself
+a failure: compare its allocation-time candidates and class occupancy.
+
+Validation status and native acceptance are recorded below. Earlier attempts
+that exposed native enum/dossier failures are explicitly failed attempts.
+
+
+The first e15abc3 native attempt reproduced and isolated another cause:
+`adminMessage` is AdminMessageFormatter's template key, not a member of
+#1513 SYS_MESSAGE_TYPE. The supported enum is `adminTextMessage`; its formatter
+accepts the text returned by decompressSysMessage (including plain text).
+An earnings receipt threw before subsequent appearance/crew/campaign receipts.
+The adapter now uses the exact enum for earnings, historical crew facts and reset
+errors. Any individual receipt's enum/formatter failure remains queued but does
+not prevent later receipts from being attempted. The first native attempt is a
+failed acceptance, not a pass, and is being rerun with the corrected package.
+
+
+The 1576a30 rerun admitted earnings, exterior and crew invoices, then exposed
+an independent badge wire bug. The native invoice reader compares dossier
+blocks to `dossiers2.ui.achievements.BADGES_BLOCK == playerBadges`; `badges`
+falls into achievement-name text formatting and fails on the integer badge ID.
+Both grant and withdrawal now use playerBadges. A Python 2.7 exact-client audit
+executes #1513's compiled __prerocessRareAchievements against actual adapter
+payloads and verifies badgeAchievement/removedBadgeAchievement classification.
+Receipt-local failures retry at most every five seconds rather than every
+postbattle polling tick. The full startup fixture now includes and asserts the
+new lobby-ready drain callback; its old fake caused the first full CI failure.
+
+Final production source c554a89 passed 639 tests in 11 focused files and the
+126 related tests in six files. All 40 launcher files passed with the full
+Windows Python/Tk runtime (1196 tests, 16 documented skips). The isolated
+Python runtime without Tk is not a launcher UI acceptance environment. Python
+2.7 compiled all 225 modules. Exact #1513 native quest parsing and invoice badge
+grant/withdrawal audits passed. Full Tests run 41168151745 passed all eight jobs;
+Battle review package run 41168151897 passed all three jobs. The downloaded
+55,755,708-byte c554a89 ZIP passed CRC/path checks, x64 launcher and x86 native
+module checks; its nested mod matches all 225 current source modules. Build
+identity: colorfulmeans-41168151897-1.
+
+Cross-day evidence uses actual saved inventories for slots 1, 2 and the fresh
+test account with injected times, without changing Windows time. All 24 week/
+month previews retained their identities across the Beijing 08:00 daily reset;
+12 daily draws used the next day. Unit checks separately cover Monday/month
+rollover, leap dates, Account reconstruction and ownership-based reselection.
+This is deterministic clock-injection evidence, not a claim that the machine
+waited through a real 08:00 during acceptance. The old reported change still
+lacks enough historical eligibility evidence for a single proved attribution.
+
+The packaged diagnostic launcher was operated through Computer Use against the
+installed CN HD 0.9.22.0.1 #1513 client. Test setup called the same production
+editor persistence functions separately for wallet, earnings, badges, 113,
+paint, preset style, random crew and all 75 StuG IV missions. GUI acceptance
+also opened the editor tabs, saved account values, and cleared/saved the StuG
+IV light group through the actual personal-mission editor. It did not manually
+type every setup value into every dialog; the distinction matters when reusing
+this acceptance record as a UI test baseline.
+
+The fresh PR116-Notice-QA-1031-2 account rendered native messages for all four
+currencies, earnings 100% -> 200%, badge, paint x3, style, recruited crew, 113
+and its crew, and campaign rewards. The actual task page showed 12 strategic
+tasks grouped simple/normal/hard/elite, with day/week/month columns and native
+rental/permanent reward icons. Withdrawing all 75 missions on restart emitted
+78 native debit invoices, removed StuG IV and its campaign rewards, retained
+the manually added 113 and independent editor assets, and restored credits
+from 5,300,000 to 200,000. The notification outbox reached zero with no pending
+formatter errors or Python traceback. Report 124439-013bd5200241 contains this
+withdrawal session and no exception events beyond exception-log headers.
+
+Existing slot 1 admitted 88 native messages (75 campaign, 11 invoice, two admin)
+and acknowledged all 11 receipts to zero. Slot 2 admitted 93 messages (75
+campaign, 16 invoice, two admin), including previously queued messages, and
+acknowledged all 15 receipts to zero. Neither session had a traceback or pending
+formatter error. Both then withdrew all 75 StuG IV missions, emitted 78 debit
+invoices, reached zero pending receipts, retained 113 and their non-campaign
+assets, and restored credits to 1,100,000. These checks validate existing-save
+settlement rather than treating a clean-save currency toast as sufficient.
+
+Native initial-route acceptance used newly added 113, standard mode, Mittengard
+(100_thepit), 15/15 participants and the eight-to-ten tier range. The complete
+four-part allocation record reconstructed without errors: total_limit null,
+class_limit 3, 29 Bot actors, all 29 initially on main routes. No reserve actor
+had an eligible main candidate. Screens and subsequent motion logs showed Bots
+leaving spawn and fighting. This one roster does not prove every possible
+composition or eliminate valid reserve/overflow selection; those boundaries
+remain covered separately by the allocation regressions.
+
+The Mittengard round finished normally by base capture. The player remained
+at spawn for route observation; this is not a claim of manual driving/combat
+input acceptance. Native results showed the Saturday first-win x5, and the
+113 carousel multiplier disappeared after settlement. The six-task ordinary
+page showed the one-win task completed and its 40,000-credit system message;
+the strategic simple-day/week/month counters remained zero for this below-
+threshold base-XP round rather than counting boosted XP. Two later Bot route
+changes were separately identified: pressure_rebalance (18) and
+recovery_at_start (21), both to main routes, not initial reserve allocation.
+
+Final report wot-error-report-20261031-130910-0a77fc289006.zip was generated
+after normal launcher shutdown and audited across launcher/server/player/worker.
+All ten expected files are present, with no missing/not-run role, no Python
+traceback, no pending native-notice error, no dump and no native exception event
+beyond the two exception-log headers. All fragmented evidence reconstructed
+without parse issues. Existing warnings concern unavailable Vivox, RSS, disabled
+30v30 settings and view/ranked-overlay lifecycle; they are not evidence of a
+new notification crash. Sound resource membership reports no failure, but this
+does not substitute for an audible playback acceptance test. No additional
+confirmed defect was established from this report.
+
+
+### PR116 launcher layout acceptance baseline (2026-10-31)
+
+Launcher presentation now shares classic Tk action buttons, a six-pixel
+control gap, equal action groups and left-anchored explanatory/feedback text.
+Bordered sections use a complete outer frame and an ordinary title inside it;
+custom-save notebook pages do not repeat their tab captions in inner frames.
+No account, reward, campaign, battle or navigation rules change in this pass.
+
+The geometry baseline is the agreed current UI, not the former content-sized
+button rows: save actions form four equal columns; vehicle/lineup profile
+operations form three; paired actions and armor/interior modes form halves.
+The reserve quantity/button gap is centered on the Save button midpoint.
+Garage slot quantities use the same label/input columns as vehicle filters,
+followed by a full-width Add slots row. Account Save and Edit badges occupy
+separate full-width rows. Team lineup Save/Close share a bottom action row;
+Bot tactics keeps its draft/apply distinction in equal bottom actions.
+
+`test_launcher_layout.py` measures actual Tk widgets at two window widths,
+checks contained titles and uniform save-page containers, and verifies the
+translated million-day rejection followed by successful one-day/zero-day
+premium saves. Existing lineup, route, language, maintenance and packaged
+smoke tests now target the agreed button classes and contained section titles.
+The package workflow explicitly includes the new geometry regression; the
+Windows editor job continues to run every launcher test in isolation.
+
+Packaged visual acceptance must separately click every play/tools tab and all
+six custom-save pages, then open appearance (both tabs), badges, personal
+missions, vehicle armor/interior, exact lineup, and both Bot tactics tabs and
+its effective-values/map-check windows. Check Chinese labels, equal action
+widths, shared edges, read-only Default guards, resized-window clipping and
+normal close behavior. Test fixtures use isolated stores; UI checks must not
+invoke destructive repair/reset operations merely to inspect their buttons.
+
+The local isolated suite exercised 43 files / 1205 tests with 14 platform or
+resource skips. Superseded geometry fixtures were corrected and rerun, including
+the packaged smoke's spacer-column indices. Canvas radius comparison allows
+sub-micropixel float roundoff (4 versus 3.9999999999999716) without changing
+waypoint positions, waiting radii or navigation rules. Final focused reruns also
+cover minimum readable equal-button captions, Default read-only guards, route
+editing, real launcher geometry and the shipped smoke verifier.
+
+
+Actual packaged per-tab inspection of build colorfulmeans-41205341845-1 found
+additional old UI localization gaps: Start/Stop LAN room, the original-vehicle
+and automatic-lineup choices, English text-dialog buttons, and Save translated
+as the save-slot noun in badge/campaign editors. The follow-up localizes these
+captions while retaining canonical settings/runtime identities, uses equal
+localized text-input actions, wraps long wait headings, and aligns reserve
+actions with the full table including its scrollbar. New real-Tk regressions
+cover bilingual choice identities and actual modal input acceptance. Native
+armor/interior, exact lineup, tactical behavior/maps, effective preview and map
+check windows were clicked without a runtime exception. No gameplay rule was
+changed to address presentation findings.
+
+Final layout acceptance uses runtime/editor commit
+`4ff9f19dace55bb227324d6e2f19203c2b308006`, package build
+`colorfulmeans-41209322093-1` (PR116-fixes-4ff9f19.zip).
+Cloud Tests 41209322083 and Battle review package 41209322093 both completed
+successfully. The isolated 43-file local run contained 1205 tests and 14 skips;
+two subsequent real-Tk regressions bring current coverage to 1207 tests.
+Affected localization/geometry/widget files were rerun successfully after the
+follow-up changes, and the final Windows editor job passed the complete suite.
+The final executable's --verify-bot-editor returned exit 0 / ok true, including
+maintenance English/Chinese geometry, two-by-four save actions, Default guards,
+route controls, language switching and isolated profile transactions.
+
+Independent final archive inspection passed CRC and verified 232 server sources,
+225 CPython 2.7 client modules, exact native/UI fingerprints and code equality
+for all 42 frozen launcher modules. The final text-entry dialog aligns its input
+and equal Chinese Confirm/Cancel actions to the same outer insets.
+
+Native Windows inspection clicked all eight main play/tool tabs and all six
+custom-save pages. On the final package, appearance My styles/Preset styles,
+badge and personal-mission editors were opened and checked again; their Save
+captions are now verbs rather than the save-slot noun. Reserve input/action
+edges include the scrollbar width; garage Add slots has its own full-width row;
+account Save/Edit badges have separate rows. Clean default choices were Type64
+in the garage and China Renault NC-31 in the member editor, rather than IS.
+Armor/interior rendering, exact lineup, both tactical tabs, effective-values
+preview and map-check windows were additionally clicked on the preceding layout
+package; the final frozen-module comparison and executable smoke cover the
+subsequent narrow localization/margin changes. This is launcher UI acceptance,
+not a new native battle/navigation acceptance claim.
+
+External input interrupted an intermediate reset inspection, so that observation
+is not treated as a confirmed reset defect. After all launcher/client processes
+were closed, project-owned Local/Roaming roots were resolved and checked for
+redirects. The production factory-reset function with the final bundled payload
+completed, removed launcher settings and recreated exactly one default save;
+the installed payload identity is colorfulmeans-41209322093-1. Test profiles,
+history and reports were removed without backup as authorized. Only the client
+location and Chinese UI preference are restored for convenient handoff; no
+test vehicle/profile/lineup selection is retained.
+
+### Armor/interior presentation baseline (2026-10-31)
+
+The launcher viewer now draws filled source surfaces with mild camera-space
+lighting and no tessellation wireframe. Selection keeps its boundary highlight
+and original field callback; internal selection names the actual crew slot or
+module and dims unrelated surfaces. Interior context uses one low-alpha Pillow
+layer of simplified per-component screen envelopes behind the exact decoded
+surfaces. That layer never enters the picking map or changes geometry.
+
+Legends use normal Tk text, shared edges and responsive equal-width cells;
+Reset view occupies its own full-width row. Absolute nominal-armor bins
+0/20/50/100/150/250/400 mm now drive both the legend and surface base colors;
+lighting is presentation only. The interior legend shares the renderer's seven
+category colors, including gun control and observation devices, with explicit
+missing/partial-data labels. Help switches with mode and wraps to actual viewer
+width. Missing-data dialog names are localized. No donated layout, inferred
+region, battle damage, module placement or native physics change is included.
+
+Tests cover real Tk layouts at 380/620 pixels in both languages, mode switching,
+missing-data dialog admission, selected-crew translation, context-layer ordering,
+click-through context, original armor field selection, bin boundaries and the
+removal of shared triangle diagonals from selection borders. The package
+workflow includes all three viewer test files; the main Windows editor job
+continues to discover the full launcher suite. Local isolated coverage passed
+44 files / 1212 tests with 14 resource/platform skips; affected files are rerun
+after final presentation adjustments. Packaged Windows visual acceptance must
+still verify both modes, module/armor selection, orbit/zoom/reset, small-window
+legend reflow, missing interiors and no stale selection after vehicle changes.
+
+The first review-package run (41217213215) exposed a missing Pillow install in
+its early Tk-test job; packaging itself had not started. The workflow now
+installs the same pinned Pillow already shipped by the launcher before those
+tests, without skipping the alpha-shell checks. A fourth widget regression
+also verifies vehicle reload clears module selection and refreshes the
+unmapped-thickness legend (current local coverage: 1213 tests).
+
+Native source-window inspection exposed initial long-status clipping despite
+the outer cells fitting: Tk had not yet resolved newly created label requests.
+Legend columns now use measured font widths plus swatch/control insets, and the
+real-widget regression checks the full caption request as well as cell bounds.
+
+Final viewer build: colorfulmeans-41217695775-1, source commit
+`d8f9743956668d0a4f6273082f59ed309d229ee0`, PR116-fixes-d8f9743.zip.
+On 2026-11-01 the final local isolated suite passed all 44 files / 1213 tests
+with 14 documented resource/platform skips. Review-package run 41217695775
+passed. Independent inspection verified ZIP CRC, x64 launcher / x86 client
+binaries, 232 bundled server sources, 225 Python 2.7 modules, both UI movies,
+and source equality of all 42 frozen launcher modules. The final executable's
+--verify-bot-editor exited 0 with ok true and isolated_profile true.
+
+Actual source-window inspection on Windows verified filled armor, mode-aware
+help, the simplified translucent interior shell and the Chinese observation-
+device warning. The final package was launched and its build identity logged;
+its initial ProcDump download/enable consent dialog still awaits the human's
+choice. Do not report final packaged editor visual acceptance as complete from
+the earlier source window or the separate packaged smoke alone. The full Tests
+run 41217695707 had passed Windows editor, native geometry, navigation, Bot
+behavior and Windows server jobs at this checkpoint; client-suite / downstream
+packaging jobs were still running.
+
+Final packaged acceptance completed after the human handled ProcDump consent
+on 2026-11-01. Tests 41217695707 and review-package 41217695775 both finished
+successfully. The actual d8f9743 launcher created an empty VIEWER_QA profile and
+opened its stock vehicle editor. China Renault NC-31 armor picking selected the
+corresponding turret field at 22 mm and highlighted its boundary. Interior
+selection displayed Crew 2 in Chinese, brightened that source surface and
+dimmed unrelated regions. Native dragging changed the view, wheel input changed
+scale, and Reset view restored the initial camera/scale. Switching to Germany's
+Ltraktor cleared the selected crew and loaded the new vehicle's regions.
+
+The Skorpian selection showed the Chinese observation-device warning, preserved
+the existing decoded interiors and displayed the complete no-data legend suffix
+in equal wrapped columns. Tiger 131, which lacks a decoded interior, showed its
+Chinese unavailable-data warning, only the translucent context shell, and seven
+grey no-data entries without leaking the previous tank's modules. Ordinary and
+maximized editor windows kept complete legend text and aligned viewer/reset
+edges; narrow 380/620-pixel bilingual caption bounds are covered separately by
+the real-Tk regressions rather than inferred from a maximize operation.
+
+No vehicle property was saved during acceptance. After normal editor/launcher
+closure, only the newly created empty VIEWER_QA profile was deleted, the original
+vehicle-data choice restored, and the pre-existing profile(s) preserved exactly.
+The current packaged launcher session had no traceback or callback exception.
+This completes the requested launcher-viewer acceptance, not native battle or
+accuracy acceptance of the uninstalled donated module layouts.
+
+
+### Viewer crew identities, terminology and palette (2026-11-01)
+
+The next viewer revision keeps exact decoded triangles and PC component offsets;
+only presentation metadata, colors and captions change. The exact #1513 packed
+vehicle crew roster now accompanies the armor scene, including combined duties.
+Interior seats are matched against the decoded roster before role labels are
+attached; a mismatch suppresses crew geometry and reports it, while other
+verified module geometry remains available. Empty decoded crew slots remain
+explicit no-data entries. Duplicate primary roles use numbered seats and distinct
+shades; a combined-duty commander remains one seat, not several invented people.
+
+Reference review used the actual tanks.gg Tiger I collision viewer and the
+WOTInspector Skorpion G X-ray page in Edge:
+https://tanks.gg/tank/tiger-i/model
+https://armor.wotinspector.com/en/pc/50193-rheinmetall-skorpion-g/
+WOTInspector groups external modules, internal modules and crew, with role-specific
+crew colors and a translucent hull. Its observed module palette uses orange fuel,
+red/pink engine, yellow ammunition, blue turret mechanism and turquoise radio;
+crew roles have separate swatches. Colors here are visual adaptations, not a
+claim of shared hex values or identical data. Fixed absolute nominal-thickness
+bins remain consistent across vehicles, with saturated known colors and neutral
+gray reserved for unmapped surfaces. These are not penetration probabilities.
+Mild lighting preserves chromatic separation. Internal legends separate modules
+and actual crew seats, wrap long combined-duty captions and reflow on resize.
+The old ambiguous Gun control / Chinese caption is replaced throughout the
+legend, surface selection and warnings by Turret rotation mechanism.
+
+Verification baseline adds exact-seat preservation, combined/duplicate duties,
+missing crew and roster mismatch rejection, vertex preservation, known-color
+separation under lighting, bilingual group/caption/swatch consistency, and narrow
+real-Tk caption bounds. Packaged visual acceptance for this revision is pending;
+prior d8f9743 acceptance does not prove these new labels/colors.
+
+Local final launcher verification passed 44 files / 1217 tests, with 14
+documented resource/platform skips. Exact-client inspection reconfirmed Chinese
+HD #1513 x86. Real data probes verified Skorpian (four seats, commander also
+loader), MS-1 (two seats, combined commander duties) and T29 (six seats, two
+numbered loaders) without modifying geometry or vehicle properties.
+
+
+#### Same-vehicle comparison correction: relative armor scales
+
+The user's follow-up exposed an insufficient acceptance baseline: the first
+palette revision still grouped NC-31's thin armor into broad absolute bins, so
+it appeared almost entirely green. It must not be presented as final acceptance.
+Direct Edge comparison of https://tanks.gg/tank/nc-31/model showed a primary
+0/8/16/22-mm scale and an independent 0/5/8/10/16/22-mm scale for spaced armor
+and external modules. Exact #1513 packed data and selected collision surfaces
+produce the same value sets. The website's current model is a presentation
+reference, not a replacement for local #1513 geometry or gameplay rules.
+
+The corrected renderer scales the primary green/yellow/red ramp to the current
+vehicle's primary armor maximum and uses a separate cyan/blue/purple/magenta
+ramp for spaced armor and external modules. Legends retain exact material
+thickness values up to nine entries; more complex vehicles use nine samples of
+the same continuous numeric ramp. Titles explicitly state vehicle-relative mm
+scales, so a red thin tank is not implied to have heavy armor or poor penetration
+probability. Unmapped surfaces remain neutral gray. No geometry changes.
+
+Tracks derive from the chassis role; the gun material and observation-device
+material remain external; spaced armor requires the explicit zero
+vehicleDamageFactor material marker. Unmarked material does not become spaced
+armor merely because it is thin or belongs to a gun component. Track selection
+is explicitly labeled as an external module. Editing armor thickness refreshes
+the visible scales as well as surfaces. Tests now require these semantics and
+NC-31's distinct plate colors; fixed-bin tests have been replaced rather than
+retained as a conflicting baseline. Final corrected package acceptance pending.
+
+Corrected local launcher suite: 44 files / 1219 tests passed, with 14
+documented environment skips. The earlier e4828f5 artifact is superseded for
+final visual acceptance by this same-vehicle scale correction.
+
+
+Final corrected viewer acceptance (2026-11-01): runtime/editor commit
+`89a5466530af70cc769293d8a85e5057bee8f13c`, package PR116-fixes-89a5466.zip,
+build colorfulmeans-41224580533-1. Tests 41224580536 and review-package
+41224580533 both completed successfully. The local 44-file suite passed 1219
+tests; the initial invocation omitted WOT_0922_CLIENT and skipped two resource
+cases, which were subsequently rerun successfully with the exact client. The
+combined result has 14 remaining documented environment skips.
+
+Independent final package inspection passed ZIP CRC, x64 launcher/x86 client,
+232 bundled server sources, 225 Python 2.7 modules and both UI movies. All 42
+frozen launcher modules equal the reviewed source. The final executable's
+--verify-bot-editor returned exit 0 / ok true. These are package/editor checks,
+not a new battle claim.
+
+The actual final launcher displayed the corrected NC-31 model: orange 16-mm
+hull, red 22-mm turret and blue 5-mm tracks, matching the observed site's
+two-scale convention. The primary legend displayed 0/8/16/22 and the secondary
+legend 0/5/8/10/16/22, plus neutral Unmapped. Clicking a track selected its
+5-mm original field and explicitly labeled it Tracks (external module).
+
+Native final-package T29 acceptance displayed all six crew seats, with separate
+Loader 1 and Loader 2 swatches and independently clickable/highlighted source
+regions. Orbit, wheel zoom and Reset view worked with the selection retained.
+Changing country/vehicle cleared that selection. Ltraktor showed combined
+commander duties in one seat. Skorpian showed four seats including Commander
+(also Loader), its Chinese observation-device warning and gray missing marker.
+Clicking the combined-duty region displayed its complete Chinese name; clicking
+the turret mechanism displayed the corrected Turret rotation mechanism name.
+Tiger 131 showed the Chinese unavailable-data warning, only the transparent
+context shell, six gray module entries and five gray actual-seat entries. No
+Skorpian regions or selected names remained. Grouped labels fit the actual
+ordinary editor window; narrow bilingual reflow is separately covered by real
+Tk tests, not inferred from that desktop inspection.
+
+No vehicle value was saved during this round. The existing profile was used
+only for viewing; no new profile or game save was created or removed. Both
+intermediate source windows and the superseded package were closed normally.
+The e4828f5 fixed-bin artifact remains historical and must not be recommended
+as the final corrected viewer package. No donated interior layout was installed.
+
+After acceptance the launcher choice was restored to Original vehicle values;
+the final launcher remains open for the user. Its current session log contains
+no traceback or Tk callback exception.
+
+
+### Complete depth-buffered viewer and display categories (2026-11-01)
+
+This round supersedes the previous convex context envelope and Canvas polygon
+painter. Geometry still comes from exact #1513 collision resources and the
+existing component-frame-verified decoded interior catalogue. No donated
+layout, guessed observation device, rescaling, battle rule or vehicle value
+has been installed or changed.
+
+Armor exposes Main armor, Spaced armor and External modules. X-ray exposes
+External modules, Internal modules and Crew. Tracks, gun and observation
+surfaces come from the PC collision model in both views, using the same
+purple/blue/cyan category colors inspected in the live WOTInspector Skorpion
+page. Armor thickness retains numeric vehicle-relative ramps; external
+categories no longer share the armor thickness legend. All groups can be
+hidden independently, with individual components, modules and actual seats
+in Display settings. Combined duties remain one physical seat, duplicate
+roles remain separately named, and absent geometry has disabled, explicit
+no-data entries rather than a hidden-state claim.
+
+The renderer rasterizes barycentric depth at each pixel. Each physical
+surface layer supplies its nearest fragment; per-pixel sorted alpha
+compositing replaces centroid ordering. Actual component geometry supplies
+pale transparent context, without convex fills or triangle wire overlays.
+Context does not intercept module selection; a fully opaque context blocks
+invisible rear picks. Hidden or zero-opacity objects cannot be picked.
+Camera framing fits projected stock geometry; orbit uses reduced resolution
+while dragging and redraws full resolution on release. Rendering is local
+CPU/NumPy/Pillow, not a WebView or a new graphics-driver dependency. This is
+an inspection renderer; it does not claim physically simulated optical
+transparency or alter shot collision.
+
+The new baseline tests crossing/intersecting triangle depth independently of
+submission order, alpha composition and volume seams, opaque occlusion,
+zero-alpha and context picking, group and individual-seat visibility,
+missing versus hidden data, component reloads, numeric legend updates and
+bilingual narrow-window layout. The obsolete convex-envelope assertion was
+removed; existing source/frame checks remain. NumPy 2.3.5 is pinned in the
+launcher build and every workflow which invokes these renderer tests.
+
+Exact-resource audit found PC observation surfaces in NC-31, T29 and Tiger
+131, but none in the selected G114_Skorpian collision configuration. The
+latter remains explicitly unavailable. T29 has six actual seats; Skorpian
+four; Tiger 131 has five seats but no decoded interior. A 600x450 interior-only
+CPU raster sample took 187/213/309 ms for NC-31/Skorpian/T29 respectively on
+this machine; these are resource-render benchmarks, not final UI frame-rate
+or native battle evidence. Final package/native acceptance is pending.
+
+Local full launcher discovery passed 45 files / 1223 tests, with 14 documented
+environment skips. Final renderer/UI bytes were separately rechecked in the
+five-file focused suite after camera/drag refinements. No failing assertions
+remain. Cloud packaging and final native desktop checks follow.
+
+Intermediate T29 desktop inspection exposed two legitimate PC observation
+components with indistinguishable captions. Display settings now appends the
+actual Hull/Turret role and opens centered over its owner; focused Tk/pixel
+regressions passed after that correction. The intermediate 1717c4d package is
+not the final acceptance artifact.
+
+
+Final-package acceptance found that the newly added settings list initially
+supported scrollbar dragging but not wheel scrolling. Wheel events are now
+scoped to the list and its item descendants in that settings Toplevel; they
+do not scroll it when input belongs to an opacity scale. Real-Tk regression
+shrinks the dialog, checks wheel scrolling and scale isolation. The 5b7fd81
+artifact is superseded for this final usability correction; its unchanged
+geometry/group/picking evidence remains explicitly intermediate.
+
+
+Final renderer runtime/editor commit: `89ddf8bed1f9a4695ccfe4a6a0ff90de3cdfdaef`.
+Final package `PR116-fixes-89ddf8b.zip`, build colorfulmeans-41231470481-1,
+67,851,880 bytes, SHA-256
+`85e606981a082b84eb29f1bff1159e86085dc83ae6387a569eb7cbd600791b7f`.
+Independent final inspection passed all ZIP CRCs, x64 launcher/x86 client,
+232 bundled server sources, 225 Python 2.7 client modules and both UI movies.
+All 43 frozen launcher modules equal reviewed source, including the new
+pixel renderer. Bundled NumPy version is exactly 2.3.5. The final executable's
+--verify-bot-editor completed with exit 0 / ok true; this is not battle evidence.
+
+On the preceding 5b7fd81 package, native desktop acceptance verified NC-31
+track picking into the original 5-mm field; independent external/internal/
+crew group hiding; complete combined-duty captions; and T29 Loader 1 hidden
+while Loader 2 remained. Actual PC Hull/Turret observation entries had distinct
+names. The exterior opacity slider changed 16 to 40; orbit, wheel zoom and
+Reset view worked. Skorpian warned in Chinese about its absent observation
+geometry and retained four real crew seats. Tiger 131 retained real external
+modules and pale actual context, disabled unavailable interior/crew groups,
+and showed five actual seats marked no data; no Skorpian surfaces leaked.
+This package revealed the settings-list wheel omission, repaired before final
+handoff, rather than counting the missing behavior as a pass.
+
+Actual final 89ddf8b package acceptance repeated ordinary-window armor and
+X-ray rendering, including NC-31/T1/T29 changes, current numeric legends,
+all three mode-specific group labels and T29's six crew seats. Settings opened
+centered and showed the two PC observation owners. Scrolling the list with
+the physical wheel revealed both loaders; wheel input over the opacity slider
+did not move the list. Loader 2 was independently hidden then restored while
+Loader 1 stayed visible. The dialog closed normally; all groups and crew
+were restored, opacity stayed at defaults 16/85 and the final T29 X-ray editor
+remains open for the user. No vehicle property was saved; existing profile 1
+was reused and no game save/profile was created, removed or reset. Current
+final-session launcher log has no traceback/Tk callback exception. Broader
+unchanged geometry/group checks above are explicitly from the intermediate
+package; byte equality independently covers the narrow final wheel change.
+
+Final cloud Tests 41231470611 and Battle review package 41231470481 both
+completed successfully for 89ddf8b, including actual Windows editor tests and
+the updated renderer/settings baseline. The earlier 1717c4d/5b7fd81 builds
+remain intermediate evidence only; PR116-fixes-89ddf8b.zip is the handoff.
+This round did not start another native game battle or install donated data.
+
+
+## Mounted preview, display defaults and GPU rendering (November 1)
+
+The preview now explicitly selects its turret and gun. A new selection wins;
+its compatible partner is retained, otherwise the first compatible item in the
+native fitting order is used. Armor and X-ray share this configuration, and
+unrelated editor fields cannot silently select a different model. A mount
+change invalidates the interior scene before rechecking its PC component frame.
+One-option controls display their mounted component without offering empty choices.
+
+Pinned sorting evidence comes from scripts.pkg's
+scripts/client/gui/Scaleform/daapi/view/lobby/shared/fitting_select_popover.pyc
+(_getSuitableItems: data.sort(reverse=True)) and
+scripts/client/gui/shared/gui_items/fitting_item.pyc (__cmp__: item type, level,
+buy-price currencies, userName), with gui_item.HasIntCD comparing nation first.
+Within one vehicle's turret/gun selectors, nation/type are fixed and these stock
+components cost credits; reverse level/price/localized-name order applies.
+Topology order is the stable tie-break. The exact T29 defines T136 before T123
+in fitting order and allows 76/90/105-mm guns on both. The modern website is an
+interaction reference only; its observed turret/gun mismatch is not imported.
+
+Display settings now restore all group/item visibility and shell/module opacity
+16/85 without changing the camera, vehicle, mounted configuration or editor value.
+Reset view remains a separate camera operation. Both actions are translated.
+
+A pinned ModernGL 5.12.0 / glcontext 3.0.0 standalone OpenGL 3.3 context replaces
+CPU projection/rasterization on capable desktops. Geometry remains resident;
+orbit, visibility, alpha and picking do not reupload it. A tiled GPU atlas keeps
+one nearest surface per physical object, then composites depth-sorted layers
+per pixel. Transparent context does not intercept interior picking; opaque
+context does. FBO readback updates the existing Tk image. The NumPy CPU renderer
+remains an explicit logged fallback, not evidence of hardware acceleration.
+Context creation/render failures are contained; editor teardown releases GPU
+resources and records end-to-end redraw percentiles and device identity.
+
+Acceptance baseline: matching mounted geometry and valid partner preservation;
+first native-order fallback for incompatible partners; fresh/missing interiors
+without stale surfaces; Chinese/English controls; display reset independent of
+camera reset; depth/alpha/picking pixels; independent context teardown; resident
+camera geometry; real-resource warm-frame p95 <=33.3 ms on the measured desktop.
+Use tools/benchmark_vehicle_viewer.py --output build/viewer-performance.json
+--compare-cpu with WOT_0922_CLIENT and launcher build dependencies. This is a
+viewer benchmark, not a game FPS or input-latency claim. Cloud machines without
+OpenGL 3.3 explicitly skip GPU pixel tests; WOT_REQUIRE_GPU=1 makes missing local
+hardware a failure. Cloud Windows still exercises the real Tk layout and fallback.
+
+Local full launcher discovery passed 47 files / 1238 tests, with 14 documented
+resource/platform skips. Actual local GPU pixel tests ran with WOT_REQUIRE_GPU=1;
+all mount, widget and renderer files were rerun after final integration changes.
+NVIDIA RTX 5000 Ada Laptop / driver 572.83, 642-pixel-wide actual Tk previews:
+NC-31 armor/X-ray p95 3.85/3.79 ms, T29 3.92/4.05 ms, Skorpian 3.71/3.22 ms,
+80 warm frames each, including FBO readback and Tk image copy. Three old-CPU
+comparison frames per case had median 392-848 ms even with its 640-pixel cap.
+No orbit reuploaded geometry. The benchmark suppresses only known missing-data
+dialogs; it does not reinterpret missing layouts or alter vehicle values.
+
+The final package/cloud and native desktop acceptance below supersede intermediate runs.
+
+
+The expanded all-resource mount census found integral float levels on
+G33_H39_captured, G34_S35_captured and G52_Pz38_NA. Numeric level conversion now
+accepts that stock representation. The regression scans all 614 selectable
+vehicle definitions and each turret/gun option; no synthetic compatibility is
+introduced. Its first fixture incorrectly used Python strings rather than
+Packed XML byte strings; the fixture was corrected and native integer price/
+level ordering is now tested against names deliberately ordered oppositely.
+
+Intermediate review run 41237518469 stopped because OpenGL 3.3 is unavailable on
+the hosted Windows worker: setUpClass skipped the whole GPU class, leaving zero
+executed tests, correctly rejected by the repository's empty-test guard. GPU
+cases now individually report their unavailable-context skips; the empty-test
+guard is unchanged. Actual local GPU execution remains mandatory in acceptance.
+
+
+Final runtime/editor commit: 56da0417172bdee8942802dbd03654f569a2c686.
+Final local full discovery passed 47 files / 1240 tests with 14 documented skips;
+actual GPU pixel tests ran, not skipped. All 614 stock vehicle topologies and
+1,632 turret/gun combinations were resolved. All 2,432 component price lookups
+were scalar stock numeric prices; no compound/currency-tagged price was found.
+Cloud Tests 41237924895 and Battle review package 41237924892 both succeeded,
+including the current Windows editor tests. GPU-unavailable hosted workers
+accurately skip their five pixel cases and do not count as hardware acceptance.
+
+Final ZIP: PR116-fixes-56da041.zip, build colorfulmeans-41237924892-1,
+68,003,696 bytes. SHA-256:
+6a84e05e8a3de498aee4caac76ac4db04abca2fe4ba4c49a2d85e95e58c920c0.
+Independent inspection verified archive CRC, launcher x64/client x86 boundaries,
+232 server sources, 225 Python 2.7 client modules, both native UI movies and all
+44 frozen launcher modules against current source. ModernGL 5.12.0, glcontext's
+WGL extension and the ModernGL native extension are present with NumPy 2.3.5.
+The final executable's --verify-bot-editor returned exit 0 / ok true.
+
+Actual final-package Windows acceptance launched from
+D:/Games/wot-mod/9.22/PR116-fixes-56da041 with diagnostics. Its log confirms the
+NVIDIA hardware OpenGL context, not CPU fallback. NC-31 track picking selected
+the original 5-mm field. T29 changed 105-mm to 90-mm geometry, then T136 to T123
+geometry while preserving its compatible 90-mm gun. Armor/X-ray shared the
+mount. Drag orbit and wheel zoom worked. In the settings dialog, shell opacity
+16 was dragged to 54 and Engine hidden; Restore default display restored all
+visibility and 16/85 while retaining T123/90-mm and the changed camera.
+
+The real incompatibility case used ordinary G04_PzVI_Tiger_I (not the similarly
+named White Tiger): starting E turret/long 88 L71, selecting H2 automatically
+chose the first compatible short 88 L56. Selecting L71 then retained that new
+gun and automatically selected E. Both changes updated the mounted geometry in
+X-ray. Reset view restored the camera without altering E/L71. Initial White
+Tiger selection separately showed its genuine one-option turret as disabled,
+without fabricating alternatives. Different vehicles did not retain old modules.
+
+The final mixed-operation Chinese editor session logged 38 redraws,
+p50 8.90 ms / p95 52.43 ms, including geometry uploads and configuration changes.
+A seven-frame English open/close session logged p50 9.28 ms / p95 33.48 ms.
+These cold/mixed samples are explicitly separate from the 80-frame-per-view
+warm benchmark above; they are not reported as passing a warm-frame budget.
+Actual package controls, dialogs and rendering were checked in both languages;
+Preview turret/gun, Restore default display and Reset view fit their controls.
+Repeated editor close/open released/recreated its OpenGL context without a
+callback error. Current final-session logs contain no traceback, Tk callback
+exception or OpenGL fallback. No vehicle property was saved, no save/profile
+was created or removed; existing profile 1 was reused. Chinese was restored and
+the final launcher remains open on Vehicle modifier. No new battle or donated
+interior-position accuracy acceptance is claimed for this viewer-only follow-up.

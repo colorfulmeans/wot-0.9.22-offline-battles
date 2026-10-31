@@ -1458,6 +1458,9 @@ class ServerBotObservationRelayTests(unittest.TestCase):
     def test_worker_human_spot_is_idempotent_and_earns_assist(self):
         server, unused_authority_socket, unused_guest_socket = self._server()
         message = self._human_message(server.round_id)
+        message['contacts'][0]['radio_recipients'] = [
+            {'kind': 'human', 'id': 2, 'time_left': 10.0,
+             'sources': [{'kind': 'human', 'id': 1, 'time_left': 10.0}]}]
 
         self.assertIsInstance(server.update_bot_observation(
             SIMULATION_WORKER_AUTHORITY_ID, message), dict)
@@ -7301,7 +7304,7 @@ class BotRuntimeTests(unittest.TestCase):
 
     def test_publication_edge_revision_is_monotonic_across_reverted_edges(self):
         continuous = set((
-            'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw',
+            'x', 'y', 'z', 'yaw', 'pitch', 'roll', 'aim_yaw', 'turret_yaw',
             'gun_pitch', 'speed', 'push_x', 'push_z', 'movement_dir', 'rotation_dir',
             'reload_time', 'burst_time_left', 'siege_time_left_ms',
             'combat_fire_elapsed', 'combat_fire_timer', 'aim_feedback_error'))

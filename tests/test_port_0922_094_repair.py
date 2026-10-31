@@ -102,9 +102,12 @@ class MatchmakingRepairTests(unittest.TestCase):
 
 
 class ContactWireRepairTests(unittest.TestCase):
-    def test_legacy_row_without_extension_keeps_its_columns(self):
+    def test_relative_traverse_addition_preserves_every_legacy_column(self):
         row = cf.codec.encode_row(cf._bot_state())
-        digest = hashlib.sha256(json.dumps(row, separators=(',', ':')).encode()).hexdigest()
+        legacy = list(row)
+        relative = legacy.pop(cf.codec._SCALAR_INDEX['turret_yaw'])
+        self.assertEqual(13776, relative)
+        digest = hashlib.sha256(json.dumps(legacy, separators=(',', ':')).encode()).hexdigest()
         self.assertEqual('15470dd5fdc0a5a25926f937b5cafb4f9d916e7489bf3d0a3ada2d62f65e4017', digest)
         decoded = cf.codec.decode_row(row, cf.STATIC)
         self.assertNotIn('contact_push_acks', decoded)

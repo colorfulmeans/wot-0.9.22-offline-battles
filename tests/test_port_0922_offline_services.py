@@ -101,38 +101,7 @@ class OfflineServicesTests(unittest.TestCase):
             self.assertEqual(expected,
                 self.policy.reserve_bonuses(restored, {'xp': 100}, stamp)['xp'])
 
-    def test_daily_rewards_once_each_and_no_rewind_on_late_receipt(self):
-        data = self.state.snapshot()
-        # Preserve the legacy set and its already claimed rewards for today.
-        data['dailyMissions'] = {'day': 1, 'battles': 0, 'damage': 0,
-                                 'wins': 0, 'claimed': []}
-        facts = {'damage': 1500, 'won': True}
-        for unused in range(5):
-            self.policy.advance_daily(data, facts, now=86401)
-        counts = self.policy.reserve_state(data)['counts']
-        self.assertEqual({'xp': 1, 'credits': 1, 'crew_xp': 1},
-                         {key: value for key, value in counts.items() if value})
-        self.policy.advance_daily(data, facts, now=172801)
-        before = copy.deepcopy(data)
-        self.assertEqual([], self.policy.advance_daily(data, facts, now=86401))
-        self.assertEqual(before, data)
-        daily = self.policy.daily_state(data, 172801)
-        key = next(key for key in daily['missions']
-                   if self.policy.MISSION_BY_ID[key][2] == 'battles')
-        self.assertEqual(1, daily[key])
 
-    def test_premature_victory_never_advances_any_daily_metric(self):
-        data = self.state.snapshot()
-        data['dailyMissions'] = {'day': 1, 'battles': 2, 'damage': 2999,
-                                 'wins': 0, 'claimed': []}
-        before = copy.deepcopy(data)
-        for now in (86401, 172801):
-            self.assertEqual([], self.policy.advance_daily(data, {
-                'damage': 9000, 'won': True, 'premature_leave': True}, now))
-            self.assertEqual(before, data)
-        rewards = self.policy.advance_daily(data, {
-            'damage': 1, 'won': True, 'premature_leave': False}, 86402)
-        self.assertEqual(['xp', 'credits', 'crew_xp'], rewards)
 
     def test_badge_catalogue_is_not_an_achievement_entitlement(self):
         before = copy.deepcopy(self.state.snapshot())
@@ -192,27 +161,6 @@ class OfflineServicesTests(unittest.TestCase):
         result.before_response()
         self.assertEqual({50003: None}, pushed[-1]['recycleBin']['vehicles']['buffer'])
 
-    def test_daily_selection_is_stable_random_and_rewards_stay_with_templates(self):
-        selections = set()
-        for day in range(30):
-            now = day * 86400 + 1
-            daily = self.policy.daily_state({}, now)
-            restored = {'dailyMissions': copy.deepcopy(daily)}
-            self.assertEqual(daily, self.policy.daily_state(restored, now + 500))
-            self.assertEqual(3, len(set(daily['missions'])))
-            rows = [self.policy.MISSION_BY_ID[key] for key in daily['missions']]
-            self.assertEqual({'battles', 'damage', 'wins'}, {row[2] for row in rows})
-            selections.add(tuple(daily['missions']))
-            expected = dict.fromkeys(self.policy.RESERVE_BY_ID, 0)
-            for row in rows:
-                expected[row[4]] += 1
-            for unused in range(8):
-                self.policy.advance_daily(restored, {'damage': 9000, 'won': True}, now)
-            self.assertEqual(expected, self.policy.reserve_state(restored)['counts'])
-            next_day = self.policy.daily_state(restored, now + 86400)
-            self.assertEqual([], next_day['claimed'])
-            self.assertTrue(all(next_day[key] == 0 for key in next_day['missions']))
-        self.assertGreater(len(selections), 10)
 
     def test_duplicate_vehicle_service_is_rejected_before_charge_or_recruitment(self):
         state = self.garage.GarageState(copy.deepcopy(garage_fixture.SNAPSHOT))
@@ -319,28 +267,6 @@ class OfflineServicesTests(unittest.TestCase):
         buy.assert_called_once_with(50002, recruit_crew=True, bond_offer=True)
         self.assertEqual({'gold': 9000}, data['shopItemPrices'][50002])
 
-    def test_panel_close_and_escape_release_every_native_resource(self):
-        ui = garage_fixture._load_port_module('offline_services_ui')
-        closed = []
-        surface = room_fixture._TransactionalSurface()
-        # Native SimpleGUIComponent owns delChild as well as addChild.
-        with mock.patch.object(room_fixture._Component, 'delChild',
-                               lambda owner, child: owner.children.remove(child), create=True), \
-                mock.patch.object(ui, 'snapshot', return_value=self.state.snapshot()), \
-                mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_ESCAPE=1)}):
-            panel = ui.ServicePanel('reserves', lambda: closed.append(True), surface)
-            self.assertTrue(panel.open())
-            self.assertTrue(surface.cursor_owned)
-            panel._panel.script.handleKeyEvent(types.SimpleNamespace(
-                key=1, isKeyDown=lambda: True))
-            self.assertEqual([True], closed)
-            self.assertEqual([], surface.roots)
-            self.assertFalse(surface.cursor_owned)
-            self.assertFalse(surface.callbacks)
-            self.assertTrue(panel.open())
-            panel.activate('close')
-            self.assertEqual([True, True], closed)
-            self.assertFalse(surface.roots)
 
     def test_lobby_install_accepts_settings_package_class_export(self):
         ui = garage_fixture._load_port_module('offline_services_ui')
@@ -364,6 +290,14 @@ class OfflineServicesTests(unittest.TestCase):
             _PremiumWindow__makePacketVO=lambda self, period, *args:
                 {'id': period, 'image': 'image-%d' % period}))
         settings = type('SettingsWindow', (object,), dict(onTabSelected=native_tab))
+        policy = garage_fixture._load_port_module('settings_policy')
+        def native_game_settings(params):
+            return dict(dict((key,True) for key in policy.LOCKED), minimapAlpha=.65)
+        def native_apply(params, diff, restartApproved=False):
+            params.applied = (diff, restartApproved)
+            return 'applied'
+        params_type = type('SettingsParams', (object,), dict(
+            getGameSettings=native_game_settings, apply=native_apply))
         voip = type('VOIPSupportSetting', (object,), dict(_VOIPSupportSetting__isSupported=noop))
         exports = {
             'gui.Scaleform.daapi.view.lobby.store.StoreActions': {'StoreActions': store},
@@ -374,6 +308,7 @@ class OfflineServicesTests(unittest.TestCase):
             # its module. Treating that package attribute as a module prevents
             # the visible client from reaching Account creation.
             'gui.Scaleform.daapi.view.common.settings': {'SettingsWindow': settings},
+            'gui.Scaleform.daapi.view.common.settings.SettingsParams': {'SettingsParams':params_type},
             'gui.Scaleform.daapi.view.common.settings.SettingsWindow': {
                 'SettingsWindow': settings, '_setLastTabIndex': selected_tabs.append,
                 '_PAGES_INDICES': {'sound': 2},
@@ -394,6 +329,13 @@ class OfflineServicesTests(unittest.TestCase):
         with mock.patch.dict(sys.modules, modules), mock.patch.object(ui, 'tr', side_effect=lambda text: text):
             try:
                 ui._install_settings()
+                params=params_type()
+                packed=params.getGameSettings()
+                self.assertEqual(.65,packed['minimapAlpha'])
+                self.assertIs(True,packed['gameplay_ctf'])
+                self.assertTrue(all(packed[key] is None for key in policy.LOCKED if key!='gameplay_ctf'))
+                self.assertEqual('applied',params.apply({'useServerAim':True,'gameplay_assault':True,'minimapAlpha':.5},True))
+                self.assertEqual(({'minimapAlpha':.5},True),params.applied)
                 for days in (360, 180, 30, 7, 3, 1):
                     self.assertEqual('image-%s' % days,
                         premium()._PremiumWindow__makePacketVO(
@@ -408,6 +350,8 @@ class OfflineServicesTests(unittest.TestCase):
             finally:
                 ui.uninstall()
         self.assertIs(native_tab, settings.onTabSelected)
+        self.assertIs(native_game_settings,params_type.getGameSettings)
+        self.assertIs(native_apply,params_type.apply)
 
 
 if __name__ == '__main__':

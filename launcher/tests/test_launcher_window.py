@@ -184,6 +184,7 @@ class _FakeTk(object):
 
 class _FakeTtk(object):
     Combobox = _Widget
+    Spinbox = _Widget
     Notebook = _Notebook
 
 
@@ -231,6 +232,28 @@ class _StoppableProcess(_Process):
 
 
 class WindowTest(unittest.TestCase):
+    def test_failed_lineup_create_and_delete_preserve_store_selection_and_disk(self):
+        self._game()
+        profiles = wot_launcher.bot_lineup_profiles
+        store, name = profiles.create(profiles.empty_store(), 'Existing')
+        self.window._bot_lineup_store = store
+        self.window.bot_lineup_profile.set(name)
+        self.window._refresh_bot_lineup_profiles()
+        self.assertTrue(self.window._save_settings())
+        before = core.load_settings()
+        with mock.patch.object(self.window, '_save_settings', return_value=False), \
+                mock.patch.object(self.window, '_ask_bot_lineup_profile_name', return_value='New'), \
+                mock.patch.object(self.window, '_open_bot_lineup_editor') as editor, \
+                mock.patch.object(self.window, '_confirm_delete_bot_lineup_profile', return_value=True):
+            self.assertFalse(self.window._new_bot_lineup_profile())
+            editor.assert_not_called()
+            self.assertEqual(store, self.window._bot_lineup_store)
+            self.assertEqual(name, self.window.bot_lineup_profile.get())
+            self.assertFalse(self.window._delete_bot_lineup_profile())
+            self.assertEqual(store, self.window._bot_lineup_store)
+            self.assertEqual(name, self.window.bot_lineup_profile.get())
+        self.assertEqual(before, core.load_settings())
+
     def setUp(self):
         self.settings_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.settings_dir, True)
@@ -252,6 +275,9 @@ class WindowTest(unittest.TestCase):
             wot_launcher.i18n, "detect_system_language", return_value="en")
         language_patch.start()
         self.addCleanup(language_patch.stop)
+        reserve_patch = mock.patch.object(wot_launcher.reserves_ui, 'ReservesPanel')
+        reserve_patch.start()
+        self.addCleanup(reserve_patch.stop)
         self.dialog = _FakeFileDialog()
         self.window = wot_launcher.LauncherWindow(_FakeTk, _FakeTtk, self.dialog)
 
@@ -269,13 +295,13 @@ class WindowTest(unittest.TestCase):
         return game_root
 
     def test_custom_save_restores_original_vehicle_labels_and_exposes_progress_editors(self):
-        self.assertEqual("Garage vehicles", self.window.shop_panel.cget("text"))
+        self.assertEqual("Garage vehicles", self.window.save_tabs.tab(self.window.shop_panel).get("text"))
         self.assertEqual("Gold and reward vehicle", self.window.gold_vehicle_label.cget("text"))
-        self.assertEqual("Personal missions", self.window.personal_missions_panel.cget("text"))
+        self.assertEqual("Personal missions", self.window.save_tabs.tab(self.window.personal_missions_panel).get("text"))
         self.assertFalse(hasattr(self.window, "orders_entry"))
         self.assertFalse(hasattr(self.window, "orders_label"))
-        self.assertEqual("Lowe - tier 8", self.window._gold_offer_label({
-            "label": "Lowe", "level": 8, "owned": False, "pending": False,
+        self.assertEqual("Lowe (germany:G51_Lowe)", self.window._gold_offer_label({
+            "name": "germany:G51_Lowe", "label": "Lowe", "level": 8, "owned": False, "pending": False,
             "offerKinds": ("gold", "reward")}))
 
     def test_layout_separates_play_vehicle_and_repair_controls(self):
@@ -305,8 +331,8 @@ class WindowTest(unittest.TestCase):
         for button, (row, column) in zip(buttons, ((0, 0), (0, 1), (1, 0), (1, 1))):
             self.assertEqual(row, button.grid_options['row'])
             self.assertEqual(column, button.grid_options['column'])
-            self.assertEqual(3, button.grid_options['padx'])
-            self.assertEqual(3, button.grid_options['pady'])
+            self.assertEqual((0, 3) if column == 0 else (3, 0), button.grid_options['padx'])
+            self.assertEqual((0, 6), button.grid_options['pady'])
             self.assertEqual('ew', button.grid_options['sticky'])
         self.assertIs(
             self.window.offline_preferences_button.master,
@@ -514,7 +540,7 @@ class WindowTest(unittest.TestCase):
             reopened = wot_launcher.LauncherWindow(
                 _FakeTk, _FakeTtk, self.dialog)
 
-        self.assertEqual("游戏客户端", reopened.game_panel.cget("text"))
+        self.assertEqual("游戏客户端", reopened.game_title.cget("text"))
         self.assertEqual(
             "开始单人战斗", reopened.single_start_button.cget("text"))
         self.assertEqual(
@@ -528,7 +554,7 @@ class WindowTest(unittest.TestCase):
         reopened.language_choice.set("English")
         reopened._language_selected()
 
-        self.assertEqual("Game client", reopened.game_panel.cget("text"))
+        self.assertEqual("Game client", reopened.game_title.cget("text"))
         self.assertEqual(
             "Start single-player battle",
             reopened.single_start_button.cget("text"))
@@ -1566,16 +1592,30 @@ class WindowTest(unittest.TestCase):
         self.window._refresh_gold_shop()
         self.window.gold_nation.set("Germany")
         self.window.gold_class.set("Heavy tank")
-        self.assertEqual(("Lowe - tier 8",), self.window._filter_gold_shop())
+        self.assertEqual(("Lowe (germany:G51_Lowe)",), self.window._filter_gold_shop())
         self.window.gold_class.set("Medium tank")
         self.assertEqual((), self.window._filter_gold_shop())
         self.assertEqual("", self.window.gold_vehicle.get())
         self.assertEqual("disabled", self.window.buy_gold_vehicle_button.cget("state"))
+
         self.window.gold_nation.set("All")
-        self.assertEqual(("Type 59 - tier 8",), self.window._filter_gold_shop())
+        self.assertEqual(("Type 59 (china:Ch01_Type59)",), self.window._filter_gold_shop())
         self.window.gold_class.set("All")
         self.assertEqual(2, len(self.window._filter_gold_shop()))
-        self.assertEqual("Type 59 - tier 8", self.window.gold_vehicle.get())
+        self.assertEqual("Type 59 (china:Ch01_Type59)", self.window.gold_vehicle.get())
+
+    def test_garage_tier_keeps_identity_and_disables_empty_result(self):
+        self._saves_root();self._with_shop();self.window._refresh_gold_shop()
+        self.window.gold_tier.set('8');self.window.gold_nation.set('China')
+        self.window._filter_gold_shop()
+        self.assertEqual('Type 59 (china:Ch01_Type59)',self.window.gold_vehicle.get())
+        self.window._gold_tier_by_label['1']=1;self.window.gold_tier.set('1')
+        self.assertEqual((),self.window._filter_gold_shop())
+        self.assertEqual('',self.window.gold_vehicle.get())
+        self.assertEqual('disabled',self.window.buy_gold_vehicle_button.cget('state'))
+        self.window.gold_tier.set('8');self.window.language='zh';self.window._refresh_gold_shop()
+        self.assertEqual('8',self.window.gold_tier.get())
+        self.assertEqual('china:Ch01_Type59',self.window._gold_offer_by_label[self.window.gold_vehicle.get()])
 
     def test_add_preserves_filters_selection_and_unsaved_account_edits(self):
         self._saves_root()
@@ -1588,7 +1628,7 @@ class WindowTest(unittest.TestCase):
         with mock.patch.object(core, "game_is_running", return_value=False):
             self.assertTrue(self.window._buy_gold_vehicle())
         self.assertEqual("China", self.window.gold_nation.get())
-        self.assertEqual("Type 59 - tier 8 (queued)", self.window.gold_vehicle.get())
+        self.assertEqual("Type 59 (china:Ch01_Type59) (queued)", self.window.gold_vehicle.get())
         self.assertEqual("disabled", self.window.buy_gold_vehicle_button.cget("state"))
         self.assertEqual("1234", self.window.balance_entries["gold"].get())
 
@@ -1601,7 +1641,7 @@ class WindowTest(unittest.TestCase):
         values = self.window._refresh_gold_shop()
 
         self.assertEqual(
-            ("Lowe - tier 8", "Type 59 - tier 8"),
+            ("Type 59 (china:Ch01_Type59)", "Lowe (germany:G51_Lowe)"),
             values)
         self.assertEqual(
             "normal", self.window.buy_gold_vehicle_button.cget("state"))
@@ -1613,7 +1653,7 @@ class WindowTest(unittest.TestCase):
         self.window._refresh_balances()
         self._with_shop()
         self.window._refresh_gold_shop()
-        self.window.gold_vehicle.set("Lowe - tier 8")
+        self.window.gold_vehicle.set("Lowe (germany:G51_Lowe)")
 
         with mock.patch.object(core, "game_is_running", return_value=False):
             self.assertTrue(self.window._buy_gold_vehicle())
@@ -1628,7 +1668,7 @@ class WindowTest(unittest.TestCase):
         self.assertIn("Added Lowe", self._log_text())
         # The row now says the vehicle is waiting for the game.
         self.assertIn(
-            "Lowe - tier 8 (queued)",
+            "Lowe (germany:G51_Lowe) (queued)",
             tuple(self.window.gold_vehicle_box.cget("values")))
 
     def test_a_vehicle_can_be_added_with_no_gold(self):
@@ -1645,7 +1685,7 @@ class WindowTest(unittest.TestCase):
             wot_launcher.save_slots.DEFAULT_SLOT_ID, saves_root, gold=20000)
         self._with_shop()
         self.window._refresh_gold_shop()
-        self.window.gold_vehicle.set("Lowe - tier 8")
+        self.window.gold_vehicle.set("Lowe (germany:G51_Lowe)")
 
         with mock.patch.object(core, "game_is_running", return_value=True):
             self.assertFalse(self.window._buy_gold_vehicle())
@@ -1675,7 +1715,7 @@ class WindowTest(unittest.TestCase):
 
         values = self.window._refresh_gold_shop()
 
-        self.assertIn("Lowe - tier 8 (owned)", values)
+        self.assertIn("Lowe (germany:G51_Lowe) (owned)", values)
 
     def test_legacy_unnamed_garages_do_not_block_the_add_button(self):
         saves_root = self._saves_root()

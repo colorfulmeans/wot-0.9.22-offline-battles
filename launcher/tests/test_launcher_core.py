@@ -16,6 +16,7 @@ import core
 import preferences_overlay
 import server_imports
 import stage_payload
+import save_slots
 
 
 class EndpointTest(unittest.TestCase):
@@ -922,12 +923,13 @@ class ClientInstallTest(unittest.TestCase):
             "mods/configs/offline_lan_0922/config.json"))
         self.assertEqual("{broken", self._read(
             "mods/configs/offline_lan_0922/config.json.invalid"))
-        for name in ("server_endpoint.json", "account_state.json",
-                     "garage_state.json"):
-            self.assertEqual("saved-" + name, self._read(
-                "mods/configs/offline_lan_0922/" + name))
-        self.assertEqual(postbattle, self._read(
-            "mods/configs/offline_lan_0922/postbattle_state.json"))
+        self.assertEqual('saved-server_endpoint.json', self._read(
+            'mods/configs/offline_lan_0922/server_endpoint.json'))
+        for name in ('account_state.json', 'garage_state.json', 'postbattle_state.json'):
+            self.assertFalse(os.path.exists(os.path.join(
+                self.game, 'mods', 'configs', 'offline_lan_0922', name)))
+        metadata = save_slots._read_metadata(save_slots.metadata_path('default', self.game))
+        self.assertEqual(save_slots.DEFAULT_REVISION, metadata['default_revision'])
         self.assertEqual("theirs", self._read(
             "mods/0.9.22.0.1/com.other.mod.wotmod"))
         self.assertIn("kept the saved endpoint", " ".join(actions))
@@ -969,6 +971,8 @@ class ClientInstallTest(unittest.TestCase):
         self._make_0_9_22_target()
         app_data = os.path.join(self.work, "app-data")
         relative_root = "Wargaming.net/WorldOfTanks/offline_lan_0922"
+        # Once upgraded, default edits must survive every later install/repair.
+        save_slots.replace_default(self.game, environment={'APPDATA': app_data})
         saved_files = {}
         for slot in ("default", "career-2"):
             for name in ("garage_state.json", "account_state.json",
@@ -1163,8 +1167,9 @@ class ClientInstallTest(unittest.TestCase):
         core.reset_0_9_22_state(
             self.game, self.payload, is_running=lambda: False)
 
-        self.assertFalse(os.path.exists(os.path.join(
-            self.game, *saves_root.rstrip("/").split("/"))))
+        directory = os.path.join(self.game, *saves_root.rstrip('/').split('/'))
+        self.assertEqual(['default'], os.listdir(directory))
+        self.assertEqual(['save.json'], os.listdir(os.path.join(directory, 'default')))
         self.assertEqual("keep", self._read(state_root + "notes.json"))
 
     def test_reset_deletes_save_slots_from_appdata(self):
@@ -1187,7 +1192,8 @@ class ClientInstallTest(unittest.TestCase):
             core.reset_0_9_22_state(
                 self.game, self.payload, is_running=lambda: False)
 
-        self.assertFalse(os.path.exists(saves_root))
+        self.assertEqual(['default'], os.listdir(saves_root))
+        self.assertEqual(['save.json'], os.listdir(os.path.join(saves_root, 'default')))
         self.assertFalse(os.path.exists(os.path.join(
             state_root, "garage_state.json")))
         with open(os.path.join(state_root, "notes.json")) as stream:

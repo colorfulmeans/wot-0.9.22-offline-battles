@@ -28,6 +28,22 @@ def lanes(capacity=3, priorities=(5,5,5), symmetric=True):
 
 
 class InitialRouteLotteryTests(unittest.TestCase):
+    def test_main_lane_admits_three_per_class_without_a_total_limit(self):
+        catalog=lanes()
+        for side in catalog.values():
+            side[:]=side[:2]
+            side[1]['_route_tier']='reserve'
+            for r in side:r['class_weights']={'heavyTank':1.,'lightTank':1.}
+        states=actors(3,'heavyTank')+actors(3,'lightTank')
+        for s in states:
+            if s['profile']['class_tag']=='lightTank':s['id']+=10
+        plans,unused,usage=self.assign(catalog,states)
+        for team in (1,2):
+            main=[s for s in states if s['team']==team and plans[s['id']]['id']=='lane_0']
+            self.assertEqual(6,len(main))
+            self.assertLessEqual(max(sum(s['profile']['class_tag']==tag for s in main)
+                                     for tag in ('lightTank','heavyTank')),3)
+
     def assign(self, catalog=None, states=None, seed=7, raw=None, graph=None):
         return planning.assign_initial_routes(raw or cfg.empty(), '08_ruinberg', graph or {},
                                              states or actors(), catalog or lanes(), seed)
@@ -356,7 +372,12 @@ class ParkingLotteryTests(unittest.TestCase):
 class RuntimeLotteryTests(unittest.TestCase):
     setUp = editor_tests.RealRuntimeIntegrationTests.setUp
     tearDown = editor_tests.RealRuntimeIntegrationTests.tearDown
-    runtime = editor_tests.RealRuntimeIntegrationTests.runtime
+    def runtime(self):
+        runtime = editor_tests.RealRuntimeIntegrationTests.runtime(self)
+        # This suite proves allocation/handoff, not the x86 engine lifetime.
+        # Windows hosts must use the same engine-free boundary as Linux CI.
+        runtime._ensure_native_simulation = mock.Mock()
+        return runtime
     message = editor_tests.RealRuntimeIntegrationTests.message
 
     def test_fresh_round_draw_is_shared_with_both_spg_allocators_and_handoff_does_not_draw(self):

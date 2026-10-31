@@ -7,6 +7,7 @@ except ImportError:
 import zlib
 import traceback
 import copy
+import time
 
 from gui.mods.offline_lan_0922.account_rpc import commands, data, requests
 
@@ -267,6 +268,10 @@ class FakeServer(object):
         from gui.mods.offline_lan_0922 import offline_services
         diff.update(offline_services.service_diff(
             self._context.get('selected_vehicle') or {}))
+        if 'quests' in diff:
+            # Day changes replace ordinary definitions and counters; never
+            # retain yesterday's cache rows or touch potapovQuests.
+            diff[('quests', '_r')] = diff.pop('quests')
         touched = self._context.get('postbattle_touched_vehicles')
         touched = set(touched or ())
         # A battle spends rounds and consumables, and the vehicle's own
@@ -320,20 +325,42 @@ class FakeServer(object):
         rows = list(snapshot.get('personalMissionNotifications') or ())
         if not rows:
             return 0, False
+        queued = tuple(row.get('id') for row in rows)
+        if getattr(self, '_notice_queue_logged', None) != queued:
+            print('[Offline LAN 0.9.22] NATIVE NOTICE outbox count=%d ids=%s' %
+                  (len(rows), ','.join(str(value) for value in queued)))
+            self._notice_queue_logged = queued
         store = self._context.get('garage_store')
         player = self._player()
         if store is None or player is None:
             return 0, True
         from gui.mods.offline_lan_0922.personal_campaign_ui import notify
         published = 0
+        retry_at = self._context.setdefault('native_notice_retry_at', {})
         for row in rows:
             identifier = row['id']
             if identifier not in delivered:
-                if notify(row.get('settlement')):
-                    published += 1
+                if time.time() < retry_at.get(identifier, 0):
+                    continue
+                try:
+                    if notify(row.get('settlement'), identifier=identifier):
+                        published += 1
+                except Exception as error:
+                    retry_at[identifier] = time.time() + 5.0
+                    # Historical count-only receipts cannot reconstruct crew
+                    # identities. Retain their evidence without blocking the
+                    # later, complete invoices in this account's outbox.
+                    # Native enum/formatter failures are receipt-local too.
+                    errors = self._context.setdefault('native_notice_errors', set())
+                    if identifier not in errors:
+                        print('[Offline LAN 0.9.22] NATIVE NOTICE pending id=%s error=%s' %
+                              (identifier, error))
+                        errors.add(identifier)
+                    continue
                 # An obsolete empty message can be acknowledged too. The
                 # enqueue path only writes messages with visible content.
                 delivered.add(identifier)
+                retry_at.pop(identifier, None)
             if self._player() is not player:
                 return published, True
             # Stage just the acknowledgement. Mutating the live queue before
@@ -346,10 +373,13 @@ class FakeServer(object):
             staged['personalMissionNotifications'] = remaining
             store.mark_dirty()
             if not store.flush(staged):
+                print('[Offline LAN 0.9.22] NATIVE NOTICE acknowledgement_pending id=%s' % identifier)
                 return published, True
             snapshot['personalMissionNotifications'] = remaining
             state.revision += 1
             self._context['selected_vehicle'] = snapshot
+            print('[Offline LAN 0.9.22] NATIVE NOTICE acknowledged id=%s remaining=%d' %
+                  (identifier, len(remaining)))
         return published, bool(snapshot.get('personalMissionNotifications'))
 
     def _respond(self, request_id, command, args):

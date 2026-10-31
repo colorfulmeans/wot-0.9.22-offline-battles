@@ -1,4 +1,7 @@
 import copy
+import contextlib
+import io
+import json
 import types
 import unittest
 from unittest import mock
@@ -19,6 +22,40 @@ class DefaultStyleStockTests(unittest.TestCase):
         self.bootstrap._grant_default_styles(self.snapshot,self.styles,self.types)
         self.assertEqual({1:{101:100,102:100},128:{101:1}},self.snapshot['customizationItems'][4])
         self.assertEqual({'gold':10},self.snapshot['wallet'])
+
+    def test_independent_seed_uses_native_bindings_once_and_does_not_change_styles(self):
+        shared=types.SimpleNamespace(isVehicleBound=lambda:False,filter=None)
+        bound=types.SimpleNamespace(isVehicleBound=lambda:True,filter=types.SimpleNamespace(
+            matchVehicleType=lambda v:v.name=='first'))
+        cache=types.SimpleNamespace(paints={137:shared},camouflages={77:bound},decals={},modifications={})
+        self.snapshot.update(appearanceStockSeed=1,customizationItems={4:{128:{101:1}}})
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual({137:{0:1000}},self.snapshot['customizationItems'][1])
+        self.assertEqual({77:{101:1000}},self.snapshot['customizationItems'][2])
+        self.assertEqual({128:{101:1}},self.snapshot['customizationItems'][4])
+        self.snapshot['customizationItems'][1][137][0]=3
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual(3,self.snapshot['customizationItems'][1][137][0])
+
+    def test_existing_unlocked_save_without_seed_flag_is_not_replenished(self):
+        cache=types.SimpleNamespace(paints={},camouflages={},decals={},modifications={})
+        before=copy.deepcopy(self.snapshot)
+        self.bootstrap._grant_initial_appearance(self.snapshot,cache,self.types)
+        self.assertEqual(before,self.snapshot)
+
+    def test_inventory_diagnostic_uses_the_real_entry_and_emits_parseable_igr_evidence(self):
+        diagnostics=harness.NATIVE_INPUT_DIAGNOSTICS
+        item=types.SimpleNamespace(tags=frozenset(['premiumIGR']),isVehicleBound=lambda:False,requiredToken='')
+        cache=types.SimpleNamespace(paints={},camouflages={77:item},decals={},modifications={})
+        rules=self.modules['gui.mods.offline_lan_0922.customization_rules']
+        output=io.StringIO()
+        with mock.patch.object(diagnostics,'detailed_enabled',return_value=True),contextlib.redirect_stdout(output):
+            rules.report_inventory(dict(customizationItems={2:{77:{0:1000}}},appearanceStockVersion=1),cache)
+        text=output.getvalue()
+        self.assertNotIn('unavailable',text)
+        row=json.loads(text.split('APPEARANCE INVENTORY ',1)[1])
+        self.assertEqual(1,row['version'])
+        self.assertEqual({'0':1000},row['igr'][0]['stock'])
 
     def test_used_or_sold_inventory_is_not_reset_on_next_start(self):
         self.bootstrap._grant_default_styles(self.snapshot,self.styles,self.types)

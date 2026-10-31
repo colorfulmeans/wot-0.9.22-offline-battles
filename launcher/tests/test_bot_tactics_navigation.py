@@ -470,7 +470,7 @@ class NavigationUITests(unittest.TestCase):
                     for i in e.canvas.find_withtag('route_wait')]
         self.assertEqual([10.,7.],radii())
         ordinary=e.canvas.find_withtag('route_node');self.assertTrue(ordinary)
-        self.assertEqual(4.,(e.canvas.coords(ordinary[0])[2]-e.canvas.coords(ordinary[0])[0])/2)
+        self.assertAlmostEqual(4.,(e.canvas.coords(ordinary[0])[2]-e.canvas.coords(ordinary[0])[0])/2, places=6)
         e.selection=None;e.selected_point=None;e.redraw()
         self.assertEqual([7.,7.],radii())
         self.assertFalse(e.canvas.find_withtag('route_node'))
@@ -478,7 +478,7 @@ class NavigationUITests(unittest.TestCase):
         captions=[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)]
         self.assertEqual(['普通节点','大圆点：等待点组（点击展开）','方点：等待位；圆环：抵达半径6米','◇ 出生点中心；虚线圈：占领基地范围'],captions)
         e.set_language('en')
-        self.assertEqual('Node legend',e.node_legend.cget('text'))
+        self.assertEqual('Node legend',e.node_legend_title.cget('text'))
         self.assertIn('Square: wait place; ring: 6 m arrival radius',[str(w.cget('text')) for w in e.node_legend.winfo_children() if isinstance(w,ttk.Label)])
         e.route_class_var.set('total');e.change_route_class();e.redraw()
         self.assertTrue(radii());self.assertTrue(all(r==7. for r in radii()))

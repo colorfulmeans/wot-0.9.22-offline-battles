@@ -2276,11 +2276,12 @@ class SimulationWorkerSocketTests(unittest.TestCase):
                 'map_pool', 'host_player_id', 'phase', 'round_id',
                 'state_revision', 'spawn', 'bot_authority_id', 'team_size',
                 'authority_epoch', 'capabilities', 'server_capabilities',
-                'team_sizes', 'team_classes', 'team_class_notice', 'requested_team', 'bot_tier_mode',
+                'team_sizes', 'lineup_locked', 'team_classes', 'team_class_notice', 'requested_team', 'bot_tier_mode',
                 'bot_skill_mode',
                 'worker_status', 'vehicle_compact_descr',
                 'effective_params',
             }, set(welcome))
+            self.assertIs(False, welcome['lineup_locked'])
             self.assertEqual(0, welcome['requested_team'])
             self.assertEqual(0, welcome['team'])
             self.assertEqual(-1, welcome['slot'])

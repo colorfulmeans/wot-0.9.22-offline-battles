@@ -7194,7 +7194,8 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.instance_guard')
         instance_guard.release_if_requested = mock.Mock(return_value=False)
         session = types.SimpleNamespace(
-            install=mock.Mock(return_value=True), stop=mock.Mock())
+            install=mock.Mock(return_value=True), stop=mock.Mock(),
+            on_lobby_view_loaded=mock.Mock())
         lan_session = types.ModuleType(
             'gui.mods.offline_lan_0922.lan_session')
         lan_session.LANSession = mock.Mock(return_value=session)
@@ -7411,6 +7412,7 @@ class BootstrapContractTests(unittest.TestCase):
             module.fini()
             self.assertFalse(module._started)
             module._signal_player_ready.assert_called_once_with()
+            session.on_lobby_view_loaded.assert_called_once_with()
             services_ui_module.uninstall.assert_called_once_with()
             engine_audio_module.uninstall.assert_called_once_with()
 

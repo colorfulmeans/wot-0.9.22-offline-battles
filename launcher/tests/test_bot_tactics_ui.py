@@ -85,8 +85,8 @@ class EditorUITests(unittest.TestCase):
         self.ui.new_route();self.click((-96,276),shift=True);self.click((-126,246),shift=True)
         self.ui.selected_point=0;self.ui.edit_point_condition()
         self.assertTrue(self.ui.wait_edit)
-        self.assertLess(int(self.ui.point_actions.grid_info()['row']),int(self.ui.wait_panel.grid_info()['row']))
-        self.assertLess(int(self.ui.wait_panel.grid_info()['row']),int(self.ui.node_legend.grid_info()['row']))
+        self.assertLess(int(self.ui.point_actions.grid_info()['row']),int(self.ui.wait_panel_section.grid_info()['row']))
+        self.assertLess(int(self.ui.wait_panel_section.grid_info()['row']),int(self.ui.node_legend_section.grid_info()['row']))
         for point,seconds in [((-66,306),10),((-6,306),20),((54,306),30)]:
             self.click(point);self.ui.wait_seconds.set(str(seconds));self.ui.update_wait_time()
         self.assertEqual([10,20,30],[p[2] for p in self.ui._wait_point()[4]])
@@ -429,12 +429,9 @@ class EditorUITests(unittest.TestCase):
     def test_apply_controls_remain_visible_at_minimum_window_size(self):
         self.ui.root.geometry('1000x700');self.root.update()
         self.assertLess(self.ui.book.winfo_y(),self.ui.root.winfo_height())
-        for label in self.ui.root.winfo_children():
-            if isinstance(label,ttk.Frame):
-                for child in label.winfo_children():
-                    if isinstance(child,ttk.Button) and '下一局' in str(child.cget('text')):
-                        self.assertTrue(child.winfo_ismapped())
-                        self.assertLess(child.winfo_rooty(),self.ui.root.winfo_rooty()+self.ui.root.winfo_height())
+        self.assertTrue(self.ui.apply_button.winfo_ismapped())
+        self.assertLess(self.ui.apply_button.winfo_rooty(), self.ui.root.winfo_rooty()+self.ui.root.winfo_height())
+
 
 
 @unittest.skipUnless(os.name=='nt' or os.environ.get('DISPLAY'),'requires actual Tk display')

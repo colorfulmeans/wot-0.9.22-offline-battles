@@ -206,15 +206,23 @@ def _safe_dump_directory(directory, create=False):
                 not stat.S_ISDIR(value.st_mode)):
             raise core.LauncherError(
                 "The diagnostic dump folder is not a regular directory.")
-    try:
-        contained = os.path.commonpath(
-            (os.path.realpath(base), os.path.realpath(directory))) == (
-                os.path.realpath(base))
-    except ValueError:
-        contained = False
+    contained = _same_directory_parent(base, directory)
     if not contained:
         raise core.LauncherError("The diagnostic dump folder is unsafe.")
     return True
+
+
+def _same_directory_parent(base, directory):
+    """Check the actual parent identity, including Windows package redirection.
+
+    MSIX may resolve an existing child into LocalCache while realpath(base)
+    retains the virtual spelling. Both names still identify the same directory.
+    Reparse points are rejected by the caller before this identity check.
+    """
+    try:
+        return os.path.samefile(base, os.path.dirname(os.path.realpath(directory)))
+    except (OSError, ValueError):
+        return False
 
 
 def _prepare_session_dump_directory(session_id):
@@ -326,14 +334,14 @@ def _prepare_session_server_directory(session_id):
     for candidate in (base, directory):
         if os.path.lexists(candidate):
             value = os.lstat(candidate)
-            if stat.S_ISLNK(value.st_mode) or not stat.S_ISDIR(value.st_mode):
+            if (_is_reparse_point(value) or stat.S_ISLNK(value.st_mode) or
+                    not stat.S_ISDIR(value.st_mode)):
                 raise core.LauncherError(
                     "The diagnostic server log folder is not a regular "
                     "directory.")
         else:
             os.makedirs(candidate)
-    if os.path.commonpath((os.path.realpath(base), os.path.realpath(directory))
-                          ) != os.path.realpath(base):
+    if not _same_directory_parent(base, directory):
         raise core.LauncherError(
             "The diagnostic server log folder is unsafe.")
     return directory
@@ -432,6 +440,9 @@ def begin_session(game_root, needs_worker=False, local_server=False,
                   session_id=None, started_at=None):
     """Replace the report boundary before any process for a game starts."""
     previous = _read_state()
+    # Invalidate the old boundary before any fallible preparation. An export
+    # after failed startup must never silently collect the previous game.
+    _write_state({"schema": SESSION_SCHEMA, "initializing": True})
     if isinstance(previous, dict):
         try:
             if _recorded_dump_layout(previous, required=False) is not None:

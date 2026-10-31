@@ -385,6 +385,7 @@ class SpotKillReceiptTests(MissionEventReceiptTests):
                         'health': 100, 'vehicle': 'ussr:R11_MS-1',
                         'x': 100., 'y': 0., 'z': 0.}
                 state.player_spotted[1] = {target}
+                state.radio_assist_sources[(('player', 3), target)] = {('player', 1): float('inf')}
                 state._record_damage(('player', 3), target, 20, {})
                 interaction = state._statistics_interaction(('player', 1), target)
                 self.assertEqual(0, interaction['kills_assisted_radio'])
@@ -413,26 +414,29 @@ class SpotKillReceiptTests(MissionEventReceiptTests):
         state._record_kill(('player', 3), target, 0)
         self.assertEqual([], state._receipt_interactions(('player', 1)))
 
-    def test_canonical_zero_hp_loss_kill_credits_current_spotters_only(self):
+    def test_canonical_zero_hp_loss_kill_credits_received_sources_only(self):
         state, spotter, victim = self.state()
         state.players[3] = Player(3, _Socket(), ('127.0.0.1', 3), team=1)
         target = ('player', 2)
         # A crew knockout leaves positive hull HP, yet is a canonical kill.
         victim.alive, victim.health = False, 100
         state.player_spotted[1] = {target}
+        state.radio_assist_sources[(('player', 3), target)] = {('player', 1): float('inf')}
         self.assertTrue(state._record_frag('player', 3, 2, 'player', 2))
         row = state._statistics_interaction(('player', 1), target)
         self.assertEqual(1, row['kills_assisted_radio'])
         self.assertEqual(0, row['assist_radio'])
-        # Earlier damage does not earn the kill after this observer loses
-        # contact. The friendly kill path must not award it either.
+        # Earlier damage does not earn the kill after the received source
+        # expires. The friendly kill path must not award it either.
         for team in (1, 2):
             state, spotter, victim = self.state()
             state.players[3] = Player(3, _Socket(), ('127.0.0.1', 3), team=team)
             state.player_spotted[1] = {target}
+            state.radio_assist_sources[(('player', 3), target)] = {('player', 1): float('inf')}
             state._record_damage(('player', 3), target, 20, {})
             if team == 1:
                 state.player_spotted[1].clear()
+                state.radio_assist_sources.clear()
             victim.alive = False
             state._record_frag('player', 3, 2, 'player', 2)
             self.assertEqual(0, state._statistics_interaction(
