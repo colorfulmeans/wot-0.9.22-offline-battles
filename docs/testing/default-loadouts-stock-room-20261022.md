@@ -26,7 +26,7 @@ All 224 client files passed CPython 2.7 compilation and final-package bytecode
 signature comparison. Cloud Tests run 41326363485 (f5a5828) passed all eight jobs;
 Windows build 41326069674 (runtime 0e60da5) passed all three jobs. Independent ZIP,
 x64 launcher, x86 native payload and bundled-source checks passed. Exact-package
-Windows battle observations remain pending; do not reuse older acceptance.
+Windows observations are recorded below; do not reuse older acceptance.
 Firefighting and full native fire/ram calibration are not claimed fixed.
 
 The first cloud candidate exposed an extra diagnostic dependency in the lethal
@@ -49,14 +49,46 @@ WOT_OFFLINE_DIAGNOSTICS: 538/550 passed, with 12 log assertions failing due to
 missing detailed records. All 12 passed when rerun with diagnostics enabled;
 the cloud full-file Bot suite also passed. No navigation expectation was weakened.
 
-Native acceptance setup: the inspected runtime is extracted at
-`D:/Games/wot-mod/9.22/PR119-0e60da5`; diagnostic user data is isolated under
-`PR119-0e60da5-QA`. The launcher displayed the intended fresh unlocked QA save
-and the server admitted the 30-slot elite fitting profile. Worker startup reached
-ready; the visible client reached the stock EULA. Acceptance is **pending user
-handling of the EULA**, not a passed garage/battle check. No battle or final
-session error-report audit is claimed yet. Original launcher selections were
-restored; the separate QA process keeps its own configuration.
+### Exact-package Windows acceptance (2026-11-02)
+
+Runtime `0e60da5`, build identity `colorfulmeans-41326069674-1`, was independently
+inspected and run from `D:/Games/wot-mod/9.22/PR119-0e60da5` using the diagnostic
+entry. User data was isolated in `PR119-0e60da5-QA`; original launcher selections
+were restored. The user handled the original EULA and assisted gameplay.
+
+Mittengard round 1 ran with one visible leFH18B2 player and 29 elite Bots covering
+IS-7, KV-2, AT 15, Tiger I, T29 and Centurion 7/1. Both visible and hidden clients
+installed the six native fitting identities. Worker evidence contains 29 initial
+ammunition records, 25 effective-factor states (16 with injured crew), and 31 old
+Intuition decisions, including 10 successes across one/two-loader eligibility.
+The battle ended by team elimination and the visible client applied one career
+receipt before returning to the garage. Native crew decoding did not throw.
+
+The launcher's report export produced
+`wot-error-report-20261102-013519-cd8e6d47a1d6.zip` in the isolated QA reports folder.
+Its ZIP integrity, coherent session logs and exception trails were checked:
+no Python traceback/assertion/type error was found; exception trails contain
+session headers only. The one rejected `simulation_progress` command follows the
+last terminal projectile within the battle-end transition, immediately before
+the logged result; no mid-battle rejection was observed.
+Three native fire observations record decay factors 1.09245, 1.0940625 and
+1.1057083333333333, `native_health_burn_per_second=0` and `skill_applied=false`.
+This confirms diagnostic delivery and the missing native fire contract, not a
+Firefighting repair. Static dependency scanning found no missing physical imports;
+virtual API-set resolution remains outside that static check.
+
+The user's moving KV-2 hit was traced to Bot 2, shot 6, projectile `1:b:2:6`:
+HE penetrated and removed the player's remaining 260 HP at approximately 223 m.
+Adjacent pose samples show about 6.10 m/s (22 km/h). The same KV-2 hit four of
+nine shots overall; this isolated hit is not evidence of guaranteed accuracy.
+
+Limits: this session proves real fitting/crew lifecycle, injured-factor donation,
+Intuition decisions, combat/settlement and fire diagnostics for the exercised
+lineup. It does not statistically prove all 49 device effects, every directive,
+liner saving-throw probabilities or suspension impact reduction in native play;
+those consumers have focused contract/rule tests. Full native fire and ram
+calibration remain unresolved. Full cloud Tests at `7d27a8e`, run 41328312147,
+passed; subsequent changes to this record do not change packaged runtime code.
 
 ## Scope
 

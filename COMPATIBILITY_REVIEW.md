@@ -44,8 +44,14 @@ test process for a gameplay assertion. CI now has a dedicated equipment/crew/
 directive regression step. Cloud Tests 41326363485 passed all eight jobs at
 f5a5828; build 41326069674 passed all three jobs for runtime 0e60da5. The actual
 Windows ZIP, x64 launcher, x86 native payload, bundled source and all 224 client
-bytecode signatures passed independent inspection. Exact-package Windows battle
-acceptance is still pending; older ammunition evidence does not validate it.
+bytecode signatures passed independent inspection. Exact-package Mittengard acceptance then exercised one player and 29 elite Bots,
+including injured native crew-factor states and 31 Intuition decisions (10
+successes). The battle and career receipt completed. Report
+`wot-error-report-20261102-013519-cd8e6d47a1d6.zip` has no Python exception or native
+exception-trail entry. Three actual fire starts recorded the missing-contract
+boundary with native decay factors and `skill_applied=false`. This is not proof
+of every device effect or a Firefighting repair; full observations and limits are
+in the equipment follow-up section of the existing default-loadouts test record.
 
 ## Clean-launch selection, editor layout and soft-plant felling (October 31)
 
