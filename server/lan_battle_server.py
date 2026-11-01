@@ -122,7 +122,7 @@ MISSION_VIEW_RANGE_STALE_TICKS = int(round(TICK_HZ))
 PLAYER_LANDING_MAX_IMPACT_SPEED = 200.0
 PLAYER_LANDING_HISTORY = 64
 BOT_FIRE_DURATION_SECONDS = 10.0
-BOT_FIRE_TICK_SECONDS = 1.0
+BOT_FIRE_TICK_SECONDS = 10.000001
 MAX_LINE_BYTES = 256 * 1024
 # Overlay member payloads travel as one base64 JSON line; the store bounds
 # member size, so the line cap is the base64 expansion plus framing slack.

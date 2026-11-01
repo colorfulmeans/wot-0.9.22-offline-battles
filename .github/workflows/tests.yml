@@ -186,6 +186,12 @@ jobs:
           --logs build/bot-test-results/fittings-ammunition
           --pattern test_bot_fittings.py
           --pattern test_port_0922_equipment_skill_effects.py
+          --pattern test_fire_decay_model.py
+          --pattern test_equipment_followup.py
+          --pattern test_port_0922_roof_crush_test.py
+          --pattern test_port_0922_equipment_mechanics.py
+          --pattern test_port_0922_consumable_audit.py
+          --pattern test_bot_tier_consumables.py
           --pattern test_port_0922_conditional_crew.py
           --pattern test_port_0922_loadout.py
           --pattern test_port_0922_equipment_policy.py

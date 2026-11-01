@@ -293,7 +293,7 @@ class FittingContracts(unittest.TestCase):
         descriptor = NS(type=NS(name='ussr:R04_T-34'),miscAttrs={'ammoBayHealthFactor':1.0},
                         hull={'ammoBayHealth':{'maxHealth':180,'maxRegenHealth':120}})
         fitting.register(descriptor, dict(wire={'crew_level':100},crew_roster=('commander','loader1')))
-        def factors(unused,activity_flags,is_fire,crew_level):
+        def factors(unused,activity_flags,is_fire,crew_level,equipments=()):
             return {'gun/reloadTime':1.0 if activity_flags[1] else 1.4,
                     'shotDispersion':(1.0,), 'offline/ammoBayHealth':1.2,
                     'offline/adrenaline_health_fraction':0.1 if activity_flags[1] else 0.0,

@@ -1,6 +1,36 @@
 # Special defaults, sandbox crew and stock waiting-room controls
 
-## Current follow-up: equipment effects and crew consumers (2026-11-02)
+
+## Current follow-up: fire, consumables, priorities and diagnostic scenes
+
+Acceptance baseline is the user-approved official-first/community-second source
+order. Known ineffective behavior is not preserved merely because server data is
+stripped from the client. Fire shape follows the linked community experiment;
+absolute five-percent initial rate and ten-second bare-crew duration are labelled
+offline calibration. Expected 1000-HP bare-crew fire integral is 250 HP, full
+native factor 1.0 is 142 HP after integer integration (5.7 s); native directive
+factors accelerate decay further. Check interval splitting, injury continuity,
+slow-frame cutoff, reignition, server receipt/handoff and module ownership.
+
+Equipment baseline is the new five-class priority table in equipment_policy,
+with separate Bot table and player default installation verification. Existing
+explicitly unlocked saves reset once; zero-start metadata and state must remain
+byte-identical. Mouse-fire equipment targets and shot-triggered bridge drops are
+selected inside the diagnostic Repair tab. No third external launcher entry.
+
+Local evidence: 18 isolated core files / 566 tests passed; 57 launcher tests
+passed, including unlocked-reset idempotence and zero-start preservation. All
+227 client modules compile with CPython 2.7.18. Static native-resource audit
+passed 576 vehicles / 9,216 fittings. The full battle runtime file passed 1,016
+tests. Restored drop fixtures passed 25 tests. Bot lineage fire expectations were
+updated to the new integral; full final/cloud acceptance remains pending.
+Do not reuse the previous runtime/package hash or its
+Mittengard session as acceptance for this candidate. First local iteration found
+old fixed-fire numeric expectations and a synthetic Bot factor-cache identity
+that omitted consumables; their explicit fixture contracts were updated, without
+relaxing receipt deduplication, injury eligibility or geometry validation.
+
+## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for
 the new equipment-consumer fixes only. Original fitting/ammunition decisions and

@@ -1805,13 +1805,13 @@ def report_fire_model(vehicle, native_decay_factor):
     validation_event('fire_model_boundary', actor=getattr(vehicle, 'actor_kind', 'bot'),
         actor_id=getattr(vehicle, 'id', None), native_decay_factor=native_decay_factor,
         native_health_burn_per_second=raw_burn,
-        applied_model='legacy_fixed_burn', skill_applied=False,
+        applied_model='community_linear_decay', skill_applied=True,
         missing_contract='per_vehicle_initial_burn_and_base_decay',
         legacy_tick_seconds=1.0, legacy_duration=_device_damage.FIRE_DURATION_SECONDS,
         legacy_damage_fraction=_device_damage.FIRE_DAMAGE_FRACTION_PER_SEC)
 
 
-def tick_fire(vehicle, dt, now=None, module_test_mode=False):
+def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor=0.57):
     """Advance every elapsed fire second without losing slow-frame time."""
     if vehicle is None or dt is None or dt <= 0.0:
         return 0, None
@@ -1825,47 +1825,20 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False):
             now = float(BigWorld.time())
         except Exception:
             now = None
-    dt = float(dt)
-    started = getattr(vehicle, '_fire_started', None)
-    if started is None and now is not None:
-        # An engine-free authority can receive an already-burning snapshot
-        # without BigWorld.time(). The tank was burning throughout this rule
-        # interval, so anchor the missing edge at its beginning, not its end.
-        started = float(now) - dt
-        vehicle._fire_started = started
-    active_dt = dt
-    burnt_out = False
-    if started is not None and now is not None:
-        now = float(now)
-        started = float(started)
-        fire_end = started + _device_damage.FIRE_DURATION_SECONDS
-        active_start = max(now - dt, started)
-        active_end = min(now, fire_end)
-        active_dt = max(0.0, active_end - active_start)
-        burnt_out = now >= fire_end
-    timer = (float(getattr(vehicle, '_fire_timer', 0.0) or 0.0) +
-             active_dt)
-    damage = 0
-    completed_ticks = int(math.floor(timer + 1e-9))
-    if completed_ticks > 0:
-        timer = max(0.0, timer - float(completed_ticks))
-        damage_per_tick = max(1, int(
-            float(getattr(vehicle, 'maxHealth', 0.0) or 0.0) *
-            _device_damage.FIRE_DAMAGE_FRACTION_PER_SEC))
-        from gui.mods.offline_lan_0922 import environment_modules
-        for unused_tick in range(completed_ticks):
-            if not module_test_mode:
-                damage += damage_per_tick
-                if damage >= int(vehicle.health):
-                    break
-            module_terminal, unused_payload = environment_modules.apply_losses(vehicle,
-                [(name, environment_modules.FIRE_MODULE_HP_PER_SECOND)
-                 for name in sorted(environment_modules.FIRE_DEVICES)], 'fire',
-                allow_terminal=not module_test_mode)
-            if module_terminal and not module_test_mode:
-                damage = max(damage, module_terminal)
-                break
-    vehicle._fire_timer = timer
+    from gui.mods.offline_lan_0922 import fire_model, environment_modules
+    progress, damage, active_dt, burnt_out = fire_model.advance(
+        getattr(vehicle, '_fire_timer', 0.0) or 0.0,
+        float(dt), native_decay_factor,
+        float(getattr(vehicle, 'maxHealth', 0.0) or 0.0))
+    if module_test_mode:
+        damage = 0
+    module_terminal, unused_payload = environment_modules.apply_losses(vehicle,
+        [(name, environment_modules.FIRE_MODULE_HP_PER_SECOND * active_dt)
+         for name in sorted(environment_modules.FIRE_DEVICES)], 'fire',
+        allow_terminal=not module_test_mode)
+    if module_terminal and not module_test_mode:
+        damage = max(damage, module_terminal)
+    vehicle._fire_timer = progress
     if burnt_out:
         # The interval may complete the final burn tick before the fire-out
         # transition. Only time after this exact boundary is excluded.

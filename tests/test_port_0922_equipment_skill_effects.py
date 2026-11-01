@@ -195,7 +195,7 @@ class EquipmentSkillEffectsTests(unittest.TestCase):
         with mock.patch('gui.mods.offline_lan_0922.native_input_diagnostics.validation_event') as emit:
             critical_damage.report_fire_model(target, factors['fire_decay_factor'])
         data = emit.call_args.kwargs
-        self.assertFalse(data['skill_applied'])
+        self.assertTrue(data['skill_applied'])
         self.assertIsNone(data['native_health_burn_per_second'])
         self.assertEqual(1.215, data['native_decay_factor'])
 

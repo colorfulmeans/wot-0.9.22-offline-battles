@@ -58,8 +58,8 @@ class BattleRuntime(NativeBattleRuntime):
             factors={}, skill_snapshot={'crew': {'members': []}}))
         context = bot_fittings.context(descriptor)
         plain = _plain_bot_factors(descriptor, crew_level=wire['crew_level'])
-        context['factors'][(id(descriptor), (), False)] = plain
-        context['factors'][(id(descriptor), (), True)] = plain
+        context['factors'][(id(descriptor), (), False, ())] = plain
+        context['factors'][(id(descriptor), (), True, ())] = plain
         return descriptor
 
 
@@ -13274,7 +13274,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
                         'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
                         'name': 'Player', 'worker_mode': worker}, start, client))
                 self.assertIsNone(battle._combat_diagnostics)
-                self.assertFalse(hasattr(battle, '_wait_for_roof_test_geometry'))
+                self.assertNotEqual('creating_map', battle.state)
                 battle.stop(restore_account=False)
 
     def test_combat_profile_start_restart_and_teardown_are_round_local(self):
@@ -35640,3 +35640,19 @@ class LocalEngineAudioMotionTests(unittest.TestCase):
         # A native link that outlives teardown must still be answerable.
         self.assertEqual(0.0, battle._read_local_vehicle_speed())
         self.assertEqual(0.0, battle._read_local_vehicle_rotation_speed())
+
+
+# These Python-3 fixture suites exercise engine-free laws. The native backend
+# contract is tested separately; a missing shipping x86 Python-2 extension must
+# not turn every Windows-hosted fixture into an installation failure.
+def setUpModule():
+    from unittest import mock
+    from types import SimpleNamespace
+    from gui.mods.offline_lan_0922 import native_simulation
+    global _engine_free_platform
+    _engine_free_platform = mock.patch.object(native_simulation, 'sys', SimpleNamespace(platform='linux'))
+    _engine_free_platform.start()
+
+
+def tearDownModule():
+    _engine_free_platform.stop()

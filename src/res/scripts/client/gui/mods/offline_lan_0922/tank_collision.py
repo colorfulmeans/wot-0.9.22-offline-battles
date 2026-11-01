@@ -57,7 +57,11 @@ SPATIAL_CELL_SIZE = 24.0
 WEIGHT_SCALE = 0.001
 RAM_KINETIC_FACTOR = 0.5
 RAM_HE_DAMAGE_FACTOR = 0.5
-RAM_ARMOR_ABSORPTION_FACTOR = 1.1
+# Community patch supplied by the user: user-supplied collision tuning note, section 3.
+# Preserve the existing quarter-energy calibration, but do not quarter the
+# armour absorption too: .25 * (HE - 4.4*A) == .25*HE - 1.1*A.
+# This is an explicitly labelled offline calibration, not a native WG constant.
+RAM_ARMOR_ABSORPTION_FACTOR = 4.4
 # Temporary product tuning while the exact #1513 ramming curve is audited.
 # Keep every physical input and modifier intact; scale only the final HP loss.
 RAM_DAMAGE_COEFFICIENT = 0.25

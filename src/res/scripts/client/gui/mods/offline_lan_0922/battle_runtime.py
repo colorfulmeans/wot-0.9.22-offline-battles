@@ -2521,13 +2521,14 @@ class BattleRuntime(object):
         self._replay_muzzle_count = 0
         self._replay_gun_signature = None
         self._replay_publishing = False
-        # Keep the bounded baseline sampler and the existing explicit profiler.
+        # Sparse, bounded worker samples expose the hot inner stages in normal
+        # test reports. Explicit profile entries retain their denser cadence.
         self._combat_diagnostics = (
             WorkerCombatDiagnostics(_PROFILE_CLOCK, detail_stride=8)
             if os.environ.get('WOT_OFFLINE_COMBAT_PROFILE') == '1' else
             (WorkerCombatDiagnostics.audit_sample(_PROFILE_CLOCK)
-             if self._worker_mode and
-             'WOT_OFFLINE_COMBAT_PROFILE' not in os.environ else None))
+             if self._worker_mode and 'WOT_OFFLINE_COMBAT_PROFILE' not in os.environ
+             else None))
         if self._worker_mode:
             self._config['native_remote_vehicles'] = False
             self._config['bot_track_animation'] = False
@@ -2983,9 +2984,18 @@ class BattleRuntime(object):
             # battle, not the viewer mode used by OfflineMapCreator.  destroy()
             # does not require Active(), so it still owns the exact space ids.
             self._runtime.offline_map_creator.SetActive(False)
-            # Publish arena metadata before a fast space-complete callback
-            # requests the final battle page while geometry is still loading.
-            self._create_entities()
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                # Fixture poses require a native bridge-layer query. Unlike
+                # ordinary authored spawn hints, they cannot be resolved while
+                # OfflineMapCreator is still streaming collision geometry.
+                print('[ROOF CRUSH TEST] waiting for native spawn geometry')
+                self._wait_for_roof_test_geometry()
+            else:
+                # Ordinary spawn hints need no collision query. Publish arena
+                # metadata before a fast space-complete callback requests the
+                # final battle page, while geometry is still loading.
+                self._create_entities()
             return self.state != 'failed'
         except Exception as error:
             self._fail(error)
@@ -3743,6 +3753,39 @@ class BattleRuntime(object):
         else:
             if self._callback_token is token:
                 self._callback_id = callback_id
+
+    def _wait_for_roof_test_geometry(self):
+        if self.state != 'creating_map':
+            return
+        try:
+            from . import roof_crush_test
+            progress = float(self._runtime.bigworld.spaceLoadStatus())
+            seed, unused_yaw = roof_crush_test.player_seed()
+            height = (self._ground_y(seed[0], seed[2], seed[1], allow_wide=False)
+                      if progress >= 1.0 else None)
+            ready = height is not None and abs(height-seed[1]) <= 4.0
+            if ready and roof_crush_test.shot_drop_enabled():
+                # The player's lower floor cannot prove the upper bridge
+                # exists. Wait for every queued native spawn column as well.
+                for slot in range(15):
+                    upper, unused = roof_crush_test.enemy_seed(slot)
+                    upper_y = self._ground_y(upper[0], upper[2], upper[1], allow_wide=False)
+                    if upper_y is None or abs(upper_y-upper[1]) > 4.0:
+                        ready = False
+                        break
+            if ready:
+                print('[ROOF CRUSH TEST] native spawn geometry ready '
+                      'space_load=%s player_ground=%s position=%s' %
+                      (progress, height, seed))
+                self._create_entities()
+                return
+            if self._clock() >= self._deadline:
+                raise RuntimeError('roof test spawn geometry timed out: '
+                    'space_load=%s player_ground=%s position=%s' %
+                    (progress, height, seed))
+            self._schedule(0.05, self._wait_for_roof_test_geometry)
+        except Exception as error:
+            self._fail(error)
 
     def _local_battle_descriptor(self, vehicle_name):
         """Return the player's own descriptor with the garage fitting on it.
@@ -5819,6 +5862,26 @@ class BattleRuntime(object):
                 self._spawn_planner.assign_artillery_rear(classes))
 
     def _formation_pose(self, team, slot):
+        from . import roof_crush_test
+        test_friendly = int(team) == 1 and 0 <= int(slot) < 15
+        if roof_crush_test.enabled() and (int(team) == 2 or test_friendly):
+            key = (int(team), int(slot))
+            if key not in self._spawn_cache:
+                seed, yaw = (roof_crush_test.player_seed() if test_friendly and int(slot)==0
+                    else roof_crush_test.friendly_seed(slot) if test_friendly
+                    else roof_crush_test.enemy_seed(slot))
+                height = self._ground_y(seed[0], seed[2], seed[1],
+                                         allow_wide=False)
+                if height is None or ((test_friendly or roof_crush_test.shot_drop_enabled()) and abs(height-seed[1]) > 4.):
+                    raise ValueError('roof test native spawn layer is unproved: %s' % (seed,))
+                self._spawn_cache[key] = ((seed[0], height, seed[2]), yaw)
+                print('[ROOF CRUSH TEST] team=%s slot=%s layer=%s position=%s yaw=%s' %
+                    (team, slot, ('below_deck' if roof_crush_test.shot_drop_enabled() and test_friendly
+                                 else 'deck' if roof_crush_test.shot_drop_enabled()
+                                 else 'bridgehead' if test_friendly and int(slot)>roof_crush_test.DECK_FRIENDLIES
+                                 else 'deck' if test_friendly else 'below_deck'),
+                     self._spawn_cache[key][0], yaw))
+            return self._spawn_cache[key]
         key = (int(team), int(slot))
         cached = self._spawn_cache.get(key)
         if cached is not None:
@@ -9802,7 +9865,8 @@ class BattleRuntime(object):
     def _active_engine_power_factor(self):
         return max(0.0, _number(
             equipment_mechanics.passive_effects(
-                self._equipment_state or ()).get(
+                tuple(item for item in (self._equipment_state or ())
+                      if item.contract.get('kind') == 'rpm_limiter')).get(
                     'enginePowerFactor'), 1.0))
 
     @staticmethod

@@ -58,7 +58,7 @@ def merge(shared, local):
     return result
 
 
-def audit(client):
+def audit(client, rebuild=False):
     client = Path(client)
     cache, translations, rows, invalid = {}, {}, [], []
     def gui_key(name, value):
@@ -155,8 +155,11 @@ def audit(client):
                                 expected.append(candidate)
                                 base_mass += weight
                                 break
-                    assert expected == fitting['devices'], (vehicle,tier,'priority order',expected,fitting['devices'])
                     expected_directive = next(equipment_policy.directive_candidates(expected), None) if tier=='elite' else None
+                    if rebuild:
+                        fitting['devices'] = list(expected)
+                        fitting['directive'] = expected_directive
+                    assert expected == fitting['devices'], (vehicle,tier,'priority order',expected,fitting['devices'])
                     assert expected_directive == fitting['directive'], (vehicle,tier,'directive order')
                 if mass > float(components['chassis'][modules['chassis']]['maxLoad']):
                     if '_' not in tier:raise AssertionError((vehicle,tier,mass))

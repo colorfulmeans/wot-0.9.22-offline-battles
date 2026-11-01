@@ -71,7 +71,7 @@ class Release111Tests(unittest.TestCase):
                 archive.writestr('mods/configs/offline_lan_0922/build_identity.json',
                                  json.dumps({'semanticVersion': '1.1.1'}))
                 archive.writestr('mods/current_1.1.1.wotmod', inner.read_bytes())
-            with self.assertRaisesRegex(ValueError, 'Retired development scenario'):
+            with self.assertRaisesRegex(ValueError, 'Ungated development scenario'):
                 ASSETS.prepare(launcher, Path(directory) / 'release')
 
     def test_release_notes_are_english_and_identify_both_supported_entries(self):

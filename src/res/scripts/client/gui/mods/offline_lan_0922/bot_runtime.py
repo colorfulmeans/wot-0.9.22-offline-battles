@@ -254,7 +254,7 @@ FRIENDLY_REPOSITION_RETRY_SECONDS = 8.0
 # exact hard receipt still vetoes motion immediately.
 MAX_WORLD_RECEIPTS_PER_FRAME = 13
 FIRE_DURATION_SECONDS = 10.0
-FIRE_TICK_SECONDS = 1.0
+FIRE_TICK_SECONDS = 10.000001
 SIEGE_ENABLE_DEBOUNCE_SECONDS = 0.30
 SIEGE_DISABLE_DEBOUNCE_SECONDS = 0.80
 SIEGE_LONG_TRAVEL_METRES = 35.0
@@ -602,10 +602,10 @@ def _bot_default_crew_factors(descriptor, crew_level=None):
     return factors
 
 
-def _bot_profile(descriptor, crew_level=None, critical=None):
+def _bot_profile(descriptor, crew_level=None, critical=None, equipments=()):
     """Spotting inputs for a vehicle whose crew is the #1513 default crew."""
     from gui.mods.offline_lan_0922 import bot_fittings
-    factors = (bot_fittings.native_factors(descriptor, critical)
+    factors = (bot_fittings.native_factors(descriptor, critical, equipments=equipments)
                if bot_fittings.context(descriptor) is not None else
                _bot_default_crew_factors(descriptor, crew_level))
     return loadout.spotting_profile(descriptor, None, factors=factors)
@@ -1002,7 +1002,9 @@ def _critical_factor(state, descriptor, stat):
     if bot_fittings.context(descriptor) is None:
         return device_damage.crew_stat_factor(crew_ko, stat) * module_factor
     base = bot_fittings.native_factors(descriptor)
-    current = bot_fittings.native_factors(descriptor, state.get('critical'))
+    mounted = state.get('_factor_consumables', ())
+    current = (bot_fittings.native_factors(descriptor, state.get('critical'), equipments=mounted)
+               if mounted else bot_fittings.native_factors(descriptor, state.get('critical')))
     if stat == 'vision' and 'surveyingDeviceHealth' in destroyed:
         module_factor *= crew_battle.from_native(current)['damaged_optics_recon_ratio']
     keys = {'reload': 'gun/reloadTime', 'aim_time': 'gun/aimingTime',
@@ -2876,7 +2878,7 @@ class BotRuntime(object):
         params = self._physics_params.get(bot_id)
         if params is not None:
             combat_count('physics_parameters_cached')
-            return params
+            return self._governor_physics(bot_id, params)
         combat_count('physics_parameters_rebuilt')
         descriptor = self._descriptors.get(bot_id)
         if descriptor is None or (isinstance(descriptor, dict) and
@@ -2886,7 +2888,29 @@ class BotRuntime(object):
             params = _bot_physics_params(
                 descriptor, self.bot_crew_level(bot_id))
         self._physics_params[bot_id] = params
-        return params
+        return self._governor_physics(bot_id, params)
+
+    def _factor_consumables(self, bot_id):
+        return tuple(item.contract['compactDescr'] for item in
+                     self._equipment_states.get(int(bot_id), ())
+                     if item.contract['kind'] in ('fuel', 'stimulator'))
+
+    def _governor_physics(self, bot_id, params):
+        items = tuple(item for item in self._equipment_states.get(bot_id, ())
+                      if item.contract['kind'] == 'rpm_limiter')
+        factor = equipment_mechanics.passive_effects(items)['enginePowerFactor']
+        from gui.mods.offline_lan_0922 import bot_fittings
+        descriptor = self._descriptors.get(bot_id)
+        mounted = self._factor_consumables(bot_id)
+        if mounted and bot_fittings.context(descriptor) is not None:
+            base = bot_fittings.native_factors(descriptor)
+            current = bot_fittings.native_factors(descriptor, equipments=mounted)
+            factor *= current.get('engine/power', 1.) / base.get('engine/power', 1.)
+        if factor == 1.0:
+            return params
+        result = dict(params)
+        result['powerW'] *= factor
+        return result
 
     def replica_contact_params(self, raw, descriptor):
         """Derive contact forces without an authority-owned descriptor cache.
@@ -3423,6 +3447,10 @@ class BotRuntime(object):
             equipment_mechanics.passive_effects(
                 self._equipment_states.get(bot_id, ()))
         self._repair_factors.pop(bot_id, None)
+        state = self.states.get(bot_id)
+        if state is not None:
+            state['_factor_consumables'] = self._factor_consumables(bot_id)
+        self._physics_params.pop(bot_id, None)
         return self._equipment_passives[bot_id]
 
     def _advance_equipment_clock(self, step):
@@ -4758,6 +4786,12 @@ class BotRuntime(object):
                                     strict=False):
         """Apply one already-authorized bot consumable through shared law."""
         action = str((effect or {}).get('action') or '')
+        if action == 'set_rpm_limiter':
+            for item in self._equipment_states.get(int(state['id']), ()):
+                if item.contract['kind'] == 'rpm_limiter':
+                    item.active = bool(effect['active'])
+            self._refresh_equipment_passives(state['id'])
+            return True
         shadow = _BotCriticalVehicle(
             state, descriptor, None,
             _number(state.get('combat_fire_timer')),
@@ -4811,7 +4845,17 @@ class BotRuntime(object):
         """Run fixed bot kit policy and return replayable effect records."""
         effects = []
         for equipment in self._equipment_states.get(int(state['id']), ()):
-            effect = equipment.poll_bot(
+            if equipment.contract['kind'] == 'rpm_limiter':
+                # Assist actual movement, stop at rest or with a damaged engine.
+                wanted = (abs(_number(state.get('speed'))) > 0.1 and
+                          equipment_mechanics.bot_device_states(
+                              state.get('critical')).get('engineHealth') not in
+                          ('critical', 'destroyed'))
+                effect = (equipment.activate(self._equipment_now,
+                          state.get('critical'), requested_active=wanted)
+                          if wanted != equipment.active else None)
+            else:
+                effect = equipment.poll_bot(
                 self._equipment_now, state.get('critical'),
                 stunned=self._bot_stunned(state), skill=self.bot_consumable_skill(state['id']))
             if effect is None:
@@ -4839,10 +4883,14 @@ class BotRuntime(object):
         # Repair, consumables and fire may replace the canonical payload. Never
         # carry a parsed view across that mutation boundary.
         _clear_critical_parts_tick_cache(state)
+        state['_factor_consumables'] = self._factor_consumables(state['id'])
         payload = state.get('critical')
+        has_governor = any(item.contract['kind'] == 'rpm_limiter' for item in
+                           self._equipment_states.get(int(state['id']), ()))
         if ((not isinstance(payload, dict) or not payload) and
-                not self._bot_stunned(state)):
+                not self._bot_stunned(state) and not has_governor):
             return False
+        payload = payload or {}
         before_signature = _combat_signature(state)
         was_on_fire = bool(payload.get('fire', False))
         sync = self._combat_sync_state(state)
@@ -4872,16 +4920,24 @@ class BotRuntime(object):
         repair_payload = critical_damage.tick_repair(
             shadow, step,
             repair_factor=self._bot_repair_factor(state['id'], descriptor))
+        passives = self._equipment_passives.get(int(state['id']), {})
+        wear = passives.get('engineHpLossPerSecond', 0.0)
+        if wear > 0 and abs(_number(state.get('speed'))) < _forward_speed(descriptor) * 0.5:
+            wear_payload = critical_damage.damage_device_over_time(
+                shadow, 'engineHealth', wear * float(step), 'equipment')
+            if wear_payload is not None:
+                repair_payload = wear_payload
         fire_damage = 0
         fire_payload = None
         if advance_fire:
+            from gui.mods.offline_lan_0922 import bot_fittings
+            decay = (bot_fittings.battle_factors(descriptor, state.get('critical'),
+                         equipments=self._factor_consumables(state['id']))['fire_decay_factor']
+                     if bot_fittings.context(descriptor) is not None else 0.57)
             if was_on_fire and fire_elapsed == 0.0:
-                from gui.mods.offline_lan_0922 import bot_fittings
-                decay = (bot_fittings.battle_factors(descriptor, state.get('critical'))['fire_decay_factor']
-                         if bot_fittings.context(descriptor) is not None else 0.57)
                 critical_damage.report_fire_model(shadow, decay)
             fire_damage, fire_payload = critical_damage.tick_fire(
-                shadow, step, now=now)
+                shadow, step, now=now, native_decay_factor=decay)
             if state.get('_environment_fire') and fire_payload is not None:
                 critical_statistics.accumulate(self._environment_critical_totals,
                     state['id'], 'fire', repair_payload or state.get('critical'), fire_payload)
@@ -5358,7 +5414,7 @@ class BotRuntime(object):
             if bot_fittings.context(descriptor) is not None:
                 critical = target.get('critical') or {}
                 dynamic_key = (tuple(sorted(critical.get('crew_ko') or ())),
-                               bool(critical.get('fire', False)))
+                               bool(critical.get('fire', False)), self._factor_consumables(target_id))
         key = ((kind, int(target_id), dynamic_key) if kind == 'bot' and dynamic_key is not None else
                (kind, int(target_id)) if kind == 'bot' else
                (kind, int(target_id), dynamic_key))
@@ -5368,7 +5424,8 @@ class BotRuntime(object):
         if kind == 'bot':
             descriptor = self._descriptors.get(int(target_id), {})
             profile = _bot_profile(
-                descriptor, self.bot_crew_level(target_id), target.get('critical'))
+                descriptor, self.bot_crew_level(target_id), target.get('critical'),
+                equipments=self._factor_consumables(target_id))
             cached = (_base_invisibility(descriptor, profile),
                       _shot_invisibility_factor(descriptor), profile)
         else:
@@ -16815,6 +16872,13 @@ class BotRuntime(object):
         self._advance_probe_timing(now)
         self._advance_equipment_clock(frame_step)
         players = list(players or [])
+        from . import roof_crush_test
+        if roof_crush_test.shot_drop_enabled():
+            queue = getattr(self, '_roof_shot_drop_queue', None)
+            if queue is None or getattr(self, '_roof_shot_drop_round', None) != self.round_id:
+                queue = self._roof_shot_drop_queue = roof_crush_test.ShotDropQueue()
+                self._roof_shot_drop_round = self.round_id
+            queue.observe(players, self.states)
         if refresh_control:
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
@@ -17623,6 +17687,17 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
+            from . import roof_crush_test
+            if roof_crush_test.enabled():
+                if roof_crush_test.shot_drop_enabled():
+                    command = self._roof_shot_drop_queue.command(command, state)
+                    from .native_input_diagnostics import write_json_record
+                    for event in self._roof_shot_drop_queue.drain_events():
+                        event['round'] = self.round_id
+                        write_json_record('ROOF SHOT DROP', event)
+                else:
+                    command = roof_crush_test.hold_command(command, position)
+                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
@@ -18084,7 +18159,12 @@ class BotRuntime(object):
                 motion_probe.get('collision', False) and
                 not motion_probe.get('water', False) and
                 abs(_number(motion_probe.get('slope', 0.0))) <= 0.55)
+            # The drop fixture intentionally drives off a cliff. Its scripted
+            # input bypasses only the anticipatory driving veto; the exact
+            # hull sweep, support, gravity and contact response still run.
             path_clear = (True if (catchup_motion_hold or probe_deferred or
+                                   (roof_crush_test.shot_drop_enabled() and
+                                    command.get('recovery_mode') == 'roof_shot_drop') or
                                    motion_probe is None or
                                    exact_motion_owns_collision or
                                    (abs(throttle) <= 0.01 and

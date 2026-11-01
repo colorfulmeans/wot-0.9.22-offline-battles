@@ -123,7 +123,7 @@ class EnvironmentalModulesTests(unittest.TestCase):
         v=self.target()
         with contextlib.redirect_stdout(io.StringIO()):
             damage,payload=cd.tick_fire(v,1.,now=1.)
-        self.assertEqual(50,damage)
+        self.assertEqual(47,damage)
         for name in em.FIRE_DEVICES:
             self.assertEqual(dd.device_max_hp(v.typeDescriptor,name)-10.,v.devices_hp[name])
         for name in ('leftTrackHealth','rightTrackHealth','gunHealth','surveyingDeviceHealth'):

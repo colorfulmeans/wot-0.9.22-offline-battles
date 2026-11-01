@@ -1,5 +1,64 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+
+## Equipment, consumables and community-law follow-up (November 2)
+
+This section supersedes the previous package's unfinished fire/consumable status
+below. Source priority is official/exact-client evidence, community research,
+then explicitly labelled offline reconstruction. No-effect diagnostics are not
+completion evidence.
+
+* Fire uses the linear decay observed in Jak_Atackka's July 23, 2020 controlled
+  study: https://www.reddit.com/r/WorldofTanks/comments/hw7wph/ . The native
+  healthBurnPerSecLossFraction factor now reaches both player and Bot damage.
+  Missing server parameters use explicit offline calibration: initial rate 5%
+  of maximum HP/second, ten-second untrained duration, factor 0.57 baseline.
+  Full factor 1.0 gives 5.7 seconds and 57% of untrained integrated damage.
+  These absolute rates are not claimed per-vehicle retail values. Progress is
+  carried in combat_fire_timer (now decay progress, range 0..10), through Bot
+  publication, acknowledgement, replay and handoff; injury changes future decay
+  without resetting an existing fire. Server and worker bounds were updated
+  together. Firefighting directives use the same native factor. First-fire
+  diagnostics name the applied community model and its remaining calibration.
+* Bot live food/fuel compact descriptors reach native crew/stat factors; cache
+  identity includes them, and changing the ledger invalidates physics. Player
+  fuel remains in native base factors and is no longer multiplied a second time
+  in the movement consumer. Only the switched governor adds power there.
+* Custom governor-equipped Bots enable it while moving with a functional engine,
+  stop at rest or with a yellow/destroyed engine, apply its native +10% power
+  once, and lose the native 1.5 engine-module HP/second below half their base
+  forward limit. The half-speed condition is the existing user-supplied offline
+  experiment, not a recovered server predicate. Default Bots retain the three
+  kits/extinguisher; no food or governor is automatically substituted for them.
+* Ram calibration follows the user's supplied 08 collision-tuning note, section
+  3: retain quarter-energy tuning but preserve full armour absorption, equivalent
+  to .25*(.5*alpha - 4.4*armour*liner). Geometry/contact-normal and mass inputs,
+  moving Controlled Impact, and no friendly ram damage remain owned by their
+  existing consumers. 4.4 is labelled community/offline calibration, not an
+  official native coefficient. No arbitrary damage cap or speed floor is added.
+* Player and Bot installers share the approved class priorities, but remain
+  separate installation owners. LT: optics/rammer/stabilizer/ventilation/GLD;
+  MT: rammer/stabilizer/optics/ventilation/GLD; HT: compatible liner/rammer/
+  stabilizer/ventilation/GLD (no optics); TD and SPG: rammer/ventilation/GLD/net/
+  binoculars. Native compatibility and chassis load remain mandatory. Bot tables
+  are rebaked separately; player factory defaults use native installation calls.
+* Default revision 6 and one-time unlocked-save equipment revision reset default
+  and existing explicitly unlocked saves without backups as authorized. New
+  unlocked saves carry the marker immediately. Zero-start saves are untouched.
+* The diagnostic launcher's Repair tab exposes legal equipment/crew target
+  scenes and the restored shot-triggered bridge drop scene. There are still only
+  two outer launch entries. Both fixtures require diagnostic mode; normal single
+  play clears fixture flags. Drop geometry waits for actual native upper/lower
+  surfaces; it changes voluntary orders, not gravity/contact/damage laws.
+
+Audit boundaries: existing class-calibrated automatic repair times (tracks 12 s,
+other modules 21.6 s), critical threshold 50%, and internal fire module loss
+10 HP/s remain labelled reconstructions. Do not present them as exact per-vehicle
+native data. The 25 skills, 49 devices, 15 directives and 21 ordinary consumables
+must be distinguished from 25/49/15/21 independently demonstrated native effects.
+Actual validation and the final artifact identity belong in the existing testing
+record; native acceptance is pending for this candidate.
+
 ## Equipment effects and living Bot crew audit (November 2)
 
 The exact #1513 optional-device catalogue contains 49 definitions, including
@@ -34,7 +93,12 @@ per-vehicle initial burn/base decay are stripped by the client reader's
 server-only guard. The donation survives player crew-state projection and a
 bounded `fire_model_boundary` diagnostic explicitly reports `skill_applied=false`,
 the native factor, missing contract and retained legacy fixed-burn parameters.
-Neither a community approximation nor invented per-vehicle values replace them.
+This records the previous package's unfinished implementation, not a restriction
+on sources. The user authorizes official/client evidence first, community
+measurements second, and explicitly labelled reconstruction third. Missing
+official server parameters must not prevent evaluating community fire-decay
+models or correcting the known fixed-burn defect. Diagnostics alone are not a
+Firefighting fix.
 
 Local validation: 18 isolated suites / 576 tests passed; all 224 client modules
 compiled with CPython 2.7.18; `inspect_client.py` confirmed the pinned x86 Chinese

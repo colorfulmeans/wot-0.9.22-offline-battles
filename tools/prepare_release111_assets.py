@@ -37,7 +37,9 @@ def prepare(launcher, output):
             raise ValueError('Incorrect embedded mod')
         with zipfile.ZipFile(io.BytesIO(client.read(mods[0]))) as mod:
             if any(name.rsplit('/', 1)[-1] in ('roof_crush_test.py', 'roof_crush_test.pyc') for name in mod.namelist()):
-                raise ValueError('Retired development scenario is embedded in the mod')
+                sources = [name for name in mod.namelist() if name.endswith('/roof_crush_test.py')]
+                if not sources or b"WOT_OFFLINE_DIAGNOSTICS" not in mod.read(sources[0]):
+                    raise ValueError('Ungated development scenario is embedded in the mod')
             if mod.testzip() is not None or ElementTree.fromstring(mod.read('meta.xml')).findtext('version') != VERSION:
                 raise ValueError('Incorrect mod metadata or CRC')
         native = client.read('mods/0.9.22.0.1/offline_math_batch_native.pyd')

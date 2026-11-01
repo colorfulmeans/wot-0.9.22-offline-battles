@@ -62,7 +62,10 @@ integrity checks still apply. Compressed file size is not the replay size bound.
 
 Use the launcher's built-in vehicle editor and error-report controls. The player
 download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and the normal EXE for regular play. The normal EXE
+and the normal EXE for regular play. In diagnostic mode the Repair tab also
+provides Equipment and crew test and Shot-triggered drop test buttons. These
+are temporary scenes, not extra launch files; normal single play clears them.
+The normal EXE
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
 and 32 MiB per client process, with explicit suppression notices. Exhausted
 budgets skip further JSON encoding; motion histories also skip construction

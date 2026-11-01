@@ -72,7 +72,7 @@ def clear():
     _CONTEXTS.clear()
 
 
-def native_factors(descriptor, critical=None):
+def native_factors(descriptor, critical=None, equipments=()):
     """Cache native factors by immutable fitting and actual crew/fire state."""
     from gui.mods.offline_lan_0922 import loadout
     value = context(descriptor)
@@ -82,11 +82,12 @@ def native_factors(descriptor, critical=None):
     knocked_out = frozenset(critical.get('crew_ko') or ())
     flags = tuple(name not in knocked_out for name in value['crew_roster'])
     fire = bool(critical.get('fire', False))
-    key = (id(descriptor), flags, fire)
+    consumables = tuple(equipments or ())
+    key = (id(descriptor), flags, fire, consumables)
     cache = value.setdefault('factors', {})
     if key not in cache:
         factors = loadout.attribute_factors(
-            descriptor, activity_flags=flags, is_fire=fire,
+            descriptor, equipments=consumables, activity_flags=flags, is_fire=fire,
             crew_level=value['wire']['crew_level'])
         if factors is None:
             raise RuntimeError('native Bot fitting crew factors were rejected')
@@ -117,9 +118,9 @@ def native_factors(descriptor, critical=None):
     return cache[key]
 
 
-def battle_factors(descriptor, critical=None):
+def battle_factors(descriptor, critical=None, equipments=()):
     from gui.mods.offline_lan_0922 import crew_battle
-    return crew_battle.from_native(native_factors(descriptor, critical))
+    return crew_battle.from_native(native_factors(descriptor, critical, equipments=equipments))
 
 
 def skill_snapshot(descriptor):

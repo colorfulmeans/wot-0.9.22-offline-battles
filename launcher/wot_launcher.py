@@ -1246,7 +1246,17 @@ class LauncherWindow(object):
             justify="left", wraplength=620)
         self.maintenance_help.grid(row=2, column=0, columnspan=2,
             sticky="new", pady=(8, 0))
-        self.repair_panel.grid_rowconfigure(3, weight=1)
+        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
+            zh = self.language == i18n.LANGUAGE_CHINESE
+            tk.Button(self.repair_panel,
+                text='配件与技能测试' if zh else 'Equipment and crew test',
+                command=lambda: self._start_diagnostic_scene('equipment')).grid(
+                    row=3, column=0, sticky='ew', padx=(0,3), pady=(6,0))
+            tk.Button(self.repair_panel,
+                text='开炮触发掉车测试' if zh else 'Shot-triggered drop test',
+                command=lambda: self._start_diagnostic_scene('drop')).grid(
+                    row=3, column=1, sticky='ew', padx=(3,0), pady=(6,0))
+        self.repair_panel.grid_rowconfigure(4, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
 
@@ -1405,7 +1415,20 @@ class LauncherWindow(object):
             self.mode.set(core.MODE_SINGLE if index == 0 else core.MODE_JOIN)
         self._refresh_mode(sync_tab=False)
 
+    def _start_diagnostic_scene(self, scene):
+        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
+            return
+        os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = '1' if scene == 'equipment' else '0'
+        os.environ['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
+        os.environ['WOT_OFFLINE_ROOF_SHOT_DROP'] = '1' if scene == 'drop' else '0'
+        self._replay_tab = False
+        self.mode.set(core.MODE_SINGLE)
+        self._refresh_mode()
+        return self._start()
+
     def _start_single(self):
+        for name in ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST', 'WOT_OFFLINE_ROOF_SHOT_DROP'):
+            os.environ[name] = '0'
         self._replay_tab = False
         self.mode.set(core.MODE_SINGLE)
         self._refresh_mode()
@@ -4089,6 +4112,8 @@ def main(argv=None):
     # A normal entry must not inherit a stale diagnostic setting from a shell.
     if core.SERVE_FLAG not in argv:
         os.environ['WOT_OFFLINE_DIAGNOSTICS'] = ('1' if '--diagnostics' in argv else '0')
+        for name in ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST', 'WOT_OFFLINE_ROOF_SHOT_DROP'):
+            os.environ[name] = '0'
     if '--verify-style-editor' in argv:
         index = argv.index('--verify-style-editor')
         if index + 2 >= len(argv):

@@ -1383,7 +1383,7 @@ class CriticalDamageTests(unittest.TestCase):
             set((event['kind'], event['state']) for event in events))
         self.assertTrue(all(event['cause'] == 'shot' for event in events))
 
-    def test_fire_uses_one_second_five_percent_tick_and_burns_out(self):
+    def test_fire_linear_decay_burns_out_and_restores_fuel(self):
         vehicle = types.SimpleNamespace(
             typeDescriptor=_descriptor(), health=500, maxHealth=500,
             devices_hp={'fuelTankHealth': 0.0},
@@ -1394,16 +1394,16 @@ class CriticalDamageTests(unittest.TestCase):
                 sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}):
             damage, payload = critical_damage.tick_fire(
                 vehicle, 1.0, now=1.0)
-        self.assertEqual(25, damage)
+        self.assertEqual(23, damage)
         self.assertIsNotNone(payload)
         self.assertEqual(90.0, vehicle.devices_hp['engineHealth'])
 
-        vehicle._fire_timer = 0.9
+        vehicle._fire_timer = 9.9
         with mock.patch.dict(
                 sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}):
             damage, payload = critical_damage.tick_fire(
                 vehicle, 0.1, now=10.0)
-        self.assertEqual(25, damage)
+        self.assertEqual(1, damage)
         self.assertFalse(vehicle.is_on_fire)
         self.assertEqual(50.0, vehicle.devices_hp['fuelTankHealth'])
         self.assertNotIn('fuelTankHealth', vehicle._destroyed_devices)
@@ -1423,26 +1423,26 @@ class CriticalDamageTests(unittest.TestCase):
             damage, payload = critical_damage.tick_fire(
                 vehicle, 3.2, now=3.2)
 
-        self.assertEqual(75, damage)
-        self.assertAlmostEqual(0.6, vehicle._fire_timer)
+        self.assertEqual(64, damage)
+        self.assertAlmostEqual(3.6, vehicle._fire_timer)
         self.assertTrue(vehicle.is_on_fire)
         self.assertIsNotNone(payload)
-        self.assertEqual(70.0, vehicle.devices_hp['engineHealth'])
+        self.assertAlmostEqual(68.0, vehicle.devices_hp['engineHealth'])
 
     def test_fire_slow_frame_stops_exactly_at_burnout_boundary(self):
         vehicle = types.SimpleNamespace(
             typeDescriptor=_descriptor(), health=500, maxHealth=500,
             devices_hp={'fuelTankHealth': 0.0},
             _destroyed_devices=set(['fuelTankHealth']), _crew_ko=set(),
-            is_on_fire=True, _fire_started=0.0, _fire_timer=0.4)
+            is_on_fire=True, _fire_started=0.0, _fire_timer=7.0)
 
         with mock.patch.dict(
                 sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}):
             damage, payload = critical_damage.tick_fire(
                 vehicle, 5.0, now=12.0)
 
-        self.assertEqual(75, damage)
-        self.assertAlmostEqual(0.4, vehicle._fire_timer)
+        self.assertEqual(12, damage)
+        self.assertAlmostEqual(10.0, vehicle._fire_timer)
         self.assertFalse(vehicle.is_on_fire)
         self.assertEqual(50.0, vehicle.devices_hp['fuelTankHealth'])
         self.assertIsNotNone(payload)

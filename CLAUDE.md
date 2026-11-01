@@ -77,6 +77,19 @@ committed; remove only exact generated targets after verifying what they are.
 
 ## Evidence ladder
 
+### Gameplay reconstruction source priority
+
+Use official documentation and exact client data first. When these do not
+provide a gameplay law or server-only parameter, continue with community
+research, controlled measurements and historical footage. Record source dates,
+version differences and confidence. Official-first does not mean official-only.
+If both are insufficient, explicitly labelled offline reconstruction and
+calibration are preferable to silently retaining a known broken law. Leaving
+an effect unimplemented is the last resort: state what was investigated and
+what remains missing. User instructions take precedence over this document.
+Do not treat successful installation, factor donation, diagnostics or passing
+synthetic tests as proof that the battle consumer actually applies an effect.
+
 Use the lowest layer that answers the question, but never claim that it proves
 a higher layer:
 
@@ -207,8 +220,9 @@ temporary output and diff it before replacing tracked catalogs.
   permits immediate refiring is a bug.
 - Use exact client descriptors and client-owned input for the vehicle, gun,
   shell, crew, equipment, muzzle, pose, and control state the client already
-  knows. Do not invent coefficients, clamps, fallback parameters, or simplified
-  formulas to make a result look plausible.
+  knows. Do not invent undocumented coefficients, clamps or fallback parameters
+  to make a result look plausible. For unavailable gameplay laws, follow the
+  source priority above and label any reconstruction and calibration explicitly.
 
 ## Runtime lessons from Windows playtesting
 
