@@ -49,6 +49,15 @@ WOT_OFFLINE_DIAGNOSTICS: 538/550 passed, with 12 log assertions failing due to
 missing detailed records. All 12 passed when rerun with diagnostics enabled;
 the cloud full-file Bot suite also passed. No navigation expectation was weakened.
 
+Native acceptance setup: the inspected runtime is extracted at
+`D:/Games/wot-mod/9.22/PR119-0e60da5`; diagnostic user data is isolated under
+`PR119-0e60da5-QA`. The launcher displayed the intended fresh unlocked QA save
+and the server admitted the 30-slot elite fitting profile. Worker startup reached
+ready; the visible client reached the stock EULA. Acceptance is **pending user
+handling of the EULA**, not a passed garage/battle check. No battle or final
+session error-report audit is claimed yet. Original launcher selections were
+restored; the separate QA process keeps its own configuration.
+
 ## Scope
 
 This PR candidate shares one explicit fitting policy between factory sandbox

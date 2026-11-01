@@ -41,8 +41,11 @@ compiled with CPython 2.7.18; `inspect_client.py` confirmed the pinned x86 Chine
 HD build. Environmental law tests explicitly omit native simulation on all hosts;
 they no longer mistake an unavailable x86 Python-2 extension in a Windows Python-3
 test process for a gameplay assertion. CI now has a dedicated equipment/crew/
-directive regression step. Cloud/package/native acceptance must be recorded for
-the new exact runtime; older ammunition-package evidence does not validate it.
+directive regression step. Cloud Tests 41326363485 passed all eight jobs at
+f5a5828; build 41326069674 passed all three jobs for runtime 0e60da5. The actual
+Windows ZIP, x64 launcher, x86 native payload, bundled source and all 224 client
+bytecode signatures passed independent inspection. Exact-package Windows battle
+acceptance is still pending; older ammunition evidence does not validate it.
 
 ## Clean-launch selection, editor layout and soft-plant felling (October 31)
 
