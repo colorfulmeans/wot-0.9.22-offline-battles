@@ -79,6 +79,71 @@ the actual BattleRuntime resolver and canonical consumable validator. Contract
 errors include the rejected names. Ordinary game skill/loadout policy is unchanged.
 This failed native session is 20261101T213157Z-c669b2651a15.
 
+### Final runtime f73d9893: actual Windows acceptance
+
+Shipping runtime is f73d98930ec4da9c70eb18a53fbe05fd4dde9c08, build identity
+colorfulmeans-41353174329-1. Cloud Tests 41353177539 passed all eight jobs;
+Build Windows launcher 41353174329 passed all three jobs. Artifact 13102034051
+is 124,889,048 bytes. Independent download checks passed ZIP CRC, path/symlink
+safety, x64 launcher, x86 native module, exactly two outer launch entries,
+bundled server-source equality and all 227 Python-2.7 client code signatures.
+The extracted package is PR119-f73d9893. Documentation-only acceptance updates
+after this runtime do not change the tested binary identity.
+
+Final affected local suites passed 1,624 tests across five isolated files
+(follow-up 10, battle runtime 1,016, Bot runtime 550, consumables 21, bridge 27).
+The isolated launcher suite passed 47 files / 1,239 tests. Exact-client static
+resource fitting audit passed 576 vehicles / 9,216 cases. These are separate
+checks, not counts of independently observed retail effects.
+
+The exact Chinese HD #1513 client was operated through the downloaded diagnostic
+launcher, without a source-tree client overlay. Governor scene session
+20261101T215722Z-37b0d333cd90 ran 15:15 on 100_thepit. Fifteen distinct vehicle
+fitting records all used elite skill; the visible player's Caernarvon AX retained
+the new HT liner/rammer/stabilizer arrangement. Completed session logs recorded
+125 governor transitions across 17 Bots (63 on / 62 off). Uphill enable waits were
+2.0000--2.1940 simulation seconds; stop and non-uphill transitions disabled it.
+Actual wreck contact was exercised as well: four continuous-contact no-progress
+shutdowns occurred after 2.039, 2.159, 2.099 and 2.045 seconds. Other records showed
+contact departure disabling it. Recontact is a new attempt; this does not stop
+the ordinary vehicle recovery planner. Eight large-medkit effects and one
+automatic-extinguisher effect were also recorded. This establishes live effect
+dispatch and governor switching, not an isolated retail engine-wear measurement.
+
+Governor report wot-error-report-20261102-060201-37b0d333cd90.zip was exported
+while the round was running. Its four logs passed CRC and contained zero Python
+tracebacks, consumable-contract rejections or worker failures. That report was
+captured before the later wreck-contact transitions; the completed session log
+audit native-equipment-20261101T215722Z-37b0d333cd90.json preserves those later
+records separately. Do not attribute later events to the earlier ZIP capture.
+
+Bridge scene session 20261101T220416Z-a72e9b12127e ran 1:15 on 37_caucasus.
+One acknowledged player shot released enemy Bot 16, then recorded two apron
+waypoints and native falling at y=-4.0184. Native world geometry supplied the
+upper bridge and lower player positions. The visible enemy landed on the player;
+both lost HP and native/server VEHICLE STACK records confirmed sustained contact.
+The fixture did not set velocity, gravity or damage. Its report
+wot-error-report-20261102-061007-a72e9b12127e.zip passed CRC; all four logs had zero
+Python tracebacks and zero worker failures. Server log contained 1,175 stack
+records; worker log contained four shot-drop events. The subsequent intentional
+Close game action emitted worker_disconnected, which is an operator termination,
+not a failed native startup. An initial transient invalid-roster toast cleared
+when remembered room controls replayed; the room then started successfully.
+
+Static equipment scene session 20261101T221243Z-3c8630970ed5 then ran 15:15 on
+100_thepit. Fifteen distinct elite fitting records were present, targets held
+position and did not return fire, and mouse fire consumed player AP (40 -> 39)
+with acknowledged PLAYER SHOT TIMING. Report
+wot-error-report-20261102-061842-3c8630970ed5.zip passed CRC. All four logs had
+zero Python tracebacks, worker failures, removedRpmLimiter mentions and shot-drop
+events. This checks scene switching and absence of governor/drop flag leakage;
+it is not a controlled per-equipment damage comparison.
+
+These scenes prove actual installation, live switching and restored contact-test
+delivery. They do not by themselves measure every skill, directive, repair time,
+fire chance, HE liner reduction or collision coefficient. Community calibration
+and the remaining reconstruction boundaries above are retained explicitly.
+
 ## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for

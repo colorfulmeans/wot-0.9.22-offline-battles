@@ -28,8 +28,9 @@ completion evidence.
   of uphill movement, or during admitted actual wreck contact. Two seconds without
   0.1 m wreck translation switches it off until actual progress/departure; rotation
   alone cannot renew it. Level/downhill/stopped/airborne states reset uphill waiting.
-  Both policies require a functional engine. They
-  stop at rest or with a yellow/destroyed engine, apply its native +10% power
+  Both policies require a functional engine. The uphill branch stops at rest;
+  the contact branch can assist a stationary push until its stall timeout.
+  They stop with a yellow/destroyed engine, apply its native +10% power
   once, and lose the native 1.5 engine-module HP/second below half their base
   forward limit. The half-speed condition is the existing user-supplied offline
   experiment, not a recovered server predicate. Default Bots retain the three
@@ -62,7 +63,10 @@ other modules 21.6 s), critical threshold 50%, and internal fire module loss
 native data. The 25 skills, 49 devices, 15 directives and 21 ordinary consumables
 must be distinguished from 25/49/15/21 independently demonstrated native effects.
 Actual validation and the final artifact identity belong in the existing testing
-record; native acceptance is pending for this candidate.
+record. Runtime f73d9893 passed cloud checks and native governor/bridge scene
+acceptance on the exact #1513 client. This is not independent native proof of
+every catalogue effect; the record identifies observed effects and remaining
+calibration limits.
 
 ## Equipment effects and living Bot crew audit (November 2)
 
