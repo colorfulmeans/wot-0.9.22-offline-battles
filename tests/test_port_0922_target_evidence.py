@@ -216,6 +216,9 @@ class LanePublicationTests(unittest.TestCase):
         self.radio_left = 5.
         self.runtime._radio_network = type('Radio', (), {
             'actors': {('bot', 11): (1,)},
+            'summaries': lambda unused, pairs, now, include_sources=False: tuple(
+                (self.radio_left, False, ()) if include_sources else (self.radio_left, False)
+                for pair in pairs),
             'contact': lambda *args: (self.radio_left, False, None)})()
         self.runtime._shot_los_cache[(11, 'bot', 19)] = (1.1, True)
 

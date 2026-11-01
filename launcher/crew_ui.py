@@ -18,20 +18,20 @@ class CrewPanel(object):
         self.capacity_state=None
         self.variables,self.labels,self.boxes={},{},{}
         tk,ttk=owner._tk,owner._ttk
-        for index,key in enumerate(('nation','class','vehicle','seat','female','training','skills')):
+        for index,key in enumerate(('nation','class','tier','vehicle','seat','female','training','skills')):
             label=tk.Label(frame,anchor='w');label.grid(row=index,column=0,sticky='w',pady=3)
             var=tk.StringVar(master=frame)
             box=ttk.Combobox(frame,textvariable=var,state='readonly',width=65)
             box.grid(row=index,column=1,sticky='ew',pady=3)
             self.variables[key],self.labels[key],self.boxes[key]=var,label,box
-            if key in ('nation','class'):box.bind('<<ComboboxSelected>>',self.filter)
+            if key in ('nation','class','tier'):box.bind('<<ComboboxSelected>>',self.filter)
             elif key=='vehicle':box.bind('<<ComboboxSelected>>',self.select_vehicle)
             elif key in ('seat','female','training'):box.bind('<<ComboboxSelected>>',self.update_skills)
-        self.button=tk.Button(frame,command=self.add);self.button.grid(row=7,column=0,columnspan=2,sticky='ew',pady=6)
-        self.expand_button=tk.Button(frame,command=self.expand);self.expand_button.grid(row=8,column=0,columnspan=2,sticky='ew',pady=3)
-        self.capacity_label=tk.Label(frame,justify='left',anchor='w');self.capacity_label.grid(row=9,column=0,columnspan=2,sticky='ew',pady=3)
-        self.help=tk.Label(frame,justify='left',wraplength=620);self.help.grid(row=10,column=0,columnspan=2,sticky='ew',pady=6)
-        self.feedback=tk.Label(frame,justify='left',wraplength=620);self.feedback.grid(row=11,column=0,columnspan=2,sticky='ew')
+        self.button=tk.Button(frame,command=self.add);self.button.grid(row=8,column=0,columnspan=2,sticky='ew',pady=6)
+        self.expand_button=tk.Button(frame,command=self.expand);self.expand_button.grid(row=9,column=0,columnspan=2,sticky='ew',pady=3)
+        self.capacity_label=tk.Label(frame,justify='left',anchor='w');self.capacity_label.grid(row=10,column=0,columnspan=2,sticky='ew',pady=3)
+        self.help=tk.Label(frame,justify='left',wraplength=620);self.help.grid(row=11,column=0,columnspan=2,sticky='ew',pady=6)
+        self.feedback=tk.Label(frame,justify='left',wraplength=620);self.feedback.grid(row=12,column=0,columnspan=2,sticky='ew')
         frame.grid_columnconfigure(1,weight=1)
         self.maps={};self.translate()
 
@@ -43,9 +43,9 @@ class CrewPanel(object):
     def translate(self):
         tr=self.owner._t
         old={k:self.maps.get(k,{}).get(v.get()) for k,v in self.variables.items()}
-        names=dict(nation='Nation',**{'class':'Tank type'},vehicle='Vehicle',seat='Profession',female='Gender',training='Training level',skills='Skills and perks')
+        names=dict(nation='Nation',**{'class':'Tank type'},tier='Tier',vehicle='Vehicle',seat='Profession',female='Gender',training='Training level',skills='Skills and perks')
         for k,name in names.items():self.labels[k].config(text=tr(name))
-        self._choices('nation',{nation_choices.caption(k,tr):k for k in nation_choices.ORDER},old.get('nation') or 'ussr')
+        self._choices('nation',{nation_choices.caption(k,tr):k for k in nation_choices.ORDER},old.get('nation'))
         self._choices('class',{tr(v):k for k,v in CLASS_NAMES.items()},old.get('class'))
         self._choices('female',{tr('Male'):False,tr('Female'):True},old.get('female'))
         self._choices('training',{str(k)+'%':k for k in (50,75,100)},old.get('training') or 100)
@@ -59,6 +59,11 @@ class CrewPanel(object):
         if getattr(self,'selected_slot',None)!=slot:self.feedback.config(text='');self.selected_slot=slot
         try:
             if root!=self.cached_root:self.vehicles=store.catalogue(root);self.cached_root=root
+            present = nation_choices.ordered(row['nation'] for row in self.vehicles)
+            current = self.maps['nation'].get(self.variables['nation'].get())
+            if current not in present and present:
+                self.variables['nation'].set(next(label for label, key in self.maps['nation'].items()
+                                                 if key == present[0]))
             self.filter()
             self.refresh_capacity()
         except (OSError,ValueError,store.vehicle_overlays.VehicleOverlayError) as error:
@@ -67,9 +72,19 @@ class CrewPanel(object):
     def filter(self,unused=None,vehicle=None,seat=None,skills=None):
         nation=self.maps['nation'].get(self.variables['nation'].get())
         tag=self.maps['class'].get(self.variables['class'].get())
+        tiers={self.owner._t('All'):None}
+        tiers.update((str(n),n) for n in sorted(set(r['level'] for r in self.vehicles if isinstance(r.get('level'),int))))
+        self._choices('tier',tiers)
+        level=self.maps['tier'].get(self.variables['tier'].get())
         choices={r['label']+' ('+r['name']+')':r['name'] for r in self.vehicles
-                 if r['nation']==nation and (tag=='all' or r['vehicleClass']==tag)}
+                 if r['nation']==nation and (tag=='all' or r['vehicleClass']==tag)
+                 and (level is None or r.get('level')==level)}
         self._choices('vehicle',choices,vehicle);self.by_label=choices
+        if not choices:
+            self.feedback.config(text=self.owner._t('No vehicles match these filters.'))
+        elif getattr(self,'_empty_filter',False):
+            self.feedback.config(text='')
+        self._empty_filter=not bool(choices)
         self.select_vehicle(seat=seat,skills=skills)
 
     def select_vehicle(self,unused=None,seat=None,skills=None):

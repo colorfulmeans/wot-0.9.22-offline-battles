@@ -884,18 +884,14 @@ class LANSession(object):
                     arena_unique_id, error)
                 return False
             self._battle_messages_sent.add(arena_unique_id)
-            if result_data.get('offlineDailyMissions'):
-                try:
-                    from gui.mods.offline_lan_0922.offline_services_ui import notify_missions
-                    notify_missions(result_data['offlineDailyMissions'])
-                except Exception as error:
-                    self._report_postbattle_notification_error(arena_unique_id, error)
         # A mission-message failure may retry without replaying the battle
-        # result or daily reward notice already admitted to the native channel.
+        # result already admitted to the native channel. Ordinary rewards use
+        # the durable account notification outbox instead of a modal window.
         if result_data.get('offlinePersonalMissions'):
             try:
                 from gui.mods.offline_lan_0922.personal_campaign_ui import notify
-                notify(result_data['offlinePersonalMissions'])
+                notify(result_data['offlinePersonalMissions'],
+                       identifier='battle:%s' % arena_unique_id)
             except Exception as error:
                 self._report_postbattle_notification_error(arena_unique_id, error)
                 return False
@@ -938,11 +934,16 @@ class LANSession(object):
                 getattr(BigWorld.player(), 'fakeServer', None),
                 'publish_campaign_notifications', None)
             if not callable(publisher):
+                if not getattr(self, '_campaign_account_pending_reported', False):
+                    sys.stdout.write('[Offline LAN 0.9.22] NATIVE NOTICE waiting reason=account_not_ready\n')
+                    self._campaign_account_pending_reported = True
+                self._schedule_postbattle_publish()
                 return False
             if self._battle_started or not self._lobby_ready():
                 self._schedule_postbattle_publish()
                 return False
             published, pending = publisher(self._campaign_notifications_sent)
+            self._campaign_account_pending_reported = False
             self._campaign_notification_error_reported = False
             if pending:
                 self._schedule_postbattle_publish()
@@ -1410,24 +1411,24 @@ class LANSession(object):
             'preferred': self._room_preferences.get('team', 0),
             'sizes': sizes,
             'classes': getattr(self.client, 'team_classes', {}),
-            'class_supported': callable(getattr(self.client,'set_team_class',None)),
+            'class_supported': callable(getattr(self.client,'set_team_class',None)) and not getattr(self.client,'lineup_locked',False),
             'counts': counts,
             'supported': self._server_supports_team_selection(),
-            'size_supported': self._server_supports_team_size_selection(),
+            'size_supported': self._server_supports_team_size_selection() and not getattr(self.client,'lineup_locked',False),
         }
 
     def _bot_tier_status(self):
         return {
             'mode': getattr(self.client, 'bot_tier_mode', 'random'),
             'supported': callable(getattr(
-                self.client, 'set_bot_tier_mode', None)),
+                self.client, 'set_bot_tier_mode', None)) and not getattr(self.client,'lineup_locked',False),
         }
 
     def _bot_skill_status(self):
         return {
             'mode': getattr(self.client, 'bot_skill_mode', 'mixed'),
             'supported': callable(getattr(
-                self.client, 'set_bot_skill_mode', None)),
+                self.client, 'set_bot_skill_mode', None)) and not getattr(self.client,'lineup_locked',False),
         }
 
     def select_team(self, team):
@@ -1579,6 +1580,14 @@ class LANSession(object):
     def _restore_waiting_preferences(self):
         """Apply saved difficulty, capacities and team once per connection."""
         generation = self._client_generation
+        if getattr(self.client, 'lineup_locked', False):
+            # A custom roster owns these controls. Keep the next Automatic
+            # room's capacities at 15 rather than replaying a sparse size.
+            self._restored_skill_generation = generation
+            self._restored_team_sizes_generation = generation
+            if self._room_preferences.get('team_sizes') != {1: 15, 2: 15}:
+                self._room_preferences['team_sizes'] = {1: 15, 2: 15}
+                self._save_room_preferences()
         saved_skill = self._room_preferences.get('bot_skill_mode')
         if (self._restored_skill_generation != generation and self._is_local_host()):
             setter = getattr(self.client, 'set_bot_skill_mode', None)
@@ -2856,6 +2865,8 @@ class LANSession(object):
                 self._status_notifier(tr('Team %d cannot start: %s. Adjust the class selection or team size.') %
                     (detail.get('team',0),reasons.get(detail.get('reason'),tr('invalid Bot class selection'))+
                      (u' ('+u', '.join(tr(tag) for tag in detail.get('classes',[]))+u')' if detail.get('classes') else u'')))
+            elif _message_value(message, 'code') == 'empty_lineup_team':
+                self._status_notifier(tr('Custom lineup has an empty team. Configure at least one slot per team.'))
             elif _message_value(message, 'code') == 'host_only':
                 self._status_notifier(
                     tr('Only the LAN room host can choose the map and start.'))

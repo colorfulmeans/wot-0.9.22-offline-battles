@@ -319,6 +319,9 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 with allocation,mock.patch.object(module.random.SystemRandom,'getrandbits',return_value=0x0922):
                     published=runtime.battle_start({
                         'map': '86_himmelsdorf_winter',
+                        'bot_tactics': (module.bot_tactics.default_profile()
+                            if getattr(self, 'authoritative', False)
+                            else module.bot_tactics.empty()),
                         'round_id': fps,
                         'bot_authority_id': 1,
                         'bots': bots,
@@ -326,6 +329,8 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 if not getattr(self,'authoritative',False):
                     for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)
                 planner=BotPlanner()
+                planner.tactics = runtime._bot_tactics
+                planner.tactics_map = '86_himmelsdorf_winter'
                 starts = dict(
                     (bot_id, (state['x'], state['z']))
                     for bot_id, state in runtime.states.items())

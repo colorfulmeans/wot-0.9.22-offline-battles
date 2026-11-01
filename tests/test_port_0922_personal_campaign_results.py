@@ -23,7 +23,9 @@ class PersonalCampaignResultsTests(unittest.TestCase):
 
     def test_pack_both_native_quest_ids_and_keep_daily_missions(self):
         receipt = fixture._receipt()
-        receipt['daily_missions'] = ['battles']
+        receipt['ordinary_missions'] = [{'id': 'offline_daily_v2_1_participate3',
+            'before': {'bonusCount': 0, 'battlesCount': 2},
+            'after': {'bonusCount': 1, 'battlesCount': 3}}]
         receipt['personal_missions'] = self.settlement()
         packers = fixture._Packers()
         with mock.patch.object(fixture.postbattle_store,
@@ -35,11 +37,11 @@ class PersonalCampaignResultsTests(unittest.TestCase):
                                                fixture._ReplayConnector))
         avatar = next(value for name, value in packers.calls
                       if name == 'AVATAR_FULL_RESULTS')
-        self.assertEqual({'offline_daily_battles', 'native_main_270',
+        self.assertEqual({'offline_daily_v2_1_participate3', 'native_main_270',
                           'native_add_270'}, set(avatar['questsProgress']))
         for identifier, row in avatar['questsProgress'].items():
             group, previous, current = row
-            self.assertEqual(0, group)
+            self.assertEqual(None if identifier.startswith('offline_daily_') else 0, group)
             self.assertEqual(0 if identifier == 'native_main_270' else 1,
                 current['bonusCount'] - previous['bonusCount'])
 

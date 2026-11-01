@@ -281,7 +281,6 @@ std::vector<Result> solve(std::vector<Body> bodies,double dt) {
         for(uint32_t j=i+1;j<bodies.size();++j) {
             const Body &b=bodies[j];
             if(a.has(Player) && b.has(Player)) continue;
-            if(!(a.has(Alive)||b.has(Alive)||a.vx||a.vz||b.vx||b.vz||a.push_yaw||b.push_yaw)) continue;
             const double reach=radii[i]+radii[j]+PADDING;
             if(square(a.x-b.x)+square(a.z-b.z)<=reach*reach && vertical_overlap(a,b))
                 pairs.push_back(Pair{i,j,projection(a,b)});
@@ -330,6 +329,9 @@ std::vector<Result> solve(std::vector<Body> bodies,double dt) {
     for(unsigned pass=0;pass<4;++pass) {
         for(const Pair &p:pairs) {
             Body &a=bodies[p.a], &b=bodies[p.b];
+            // Keep settled edges available for impulses arriving this pass.
+            // An entirely resting wreck pile must remain undisturbed.
+            if(!(a.has(Alive)||b.has(Alive)||a.vx||a.vz||b.vx||b.vz||a.push_yaw||b.push_yaw)) continue;
             const Hit hit=physical_contact(a,b,p.projection);
             if(!hit.valid) continue;
             const double ia=a.has(Immovable)?0.:1./std::max(a.mass,1.),ib=b.has(Immovable)?0.:1./std::max(b.mass,1.);

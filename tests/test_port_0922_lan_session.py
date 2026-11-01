@@ -1317,6 +1317,23 @@ class LANSessionTests(unittest.TestCase):
         publisher.assert_called_once_with(session._campaign_notifications_sent)
         self.assertIsNone(session._postbattle_callback_id)
 
+    def test_launcher_outbox_survives_missing_account_at_install_and_lobby_event(self):
+        callbacks = []
+        player = [None]
+        publisher = mock.Mock(return_value=(7, False))
+        session = self.module.LANSession({}, lobby_ready=lambda: True,
+            callback=lambda delay, function: callbacks.append(function) or len(callbacks))
+        with mock.patch.dict(sys.modules, {'BigWorld': types.SimpleNamespace(player=lambda: player[0])}):
+            self.assertFalse(session._publish_campaign_notifications())
+            self.assertEqual(1, len(callbacks))
+            callbacks.pop(0)()
+            self.assertEqual(1, len(callbacks))
+            player[0] = types.SimpleNamespace(fakeServer=types.SimpleNamespace(
+                publish_campaign_notifications=publisher))
+            callbacks.pop(0)()
+            publisher.assert_called_once_with(session._campaign_notifications_sent)
+            self.assertIsNone(session._postbattle_callback_id)
+
     def test_launcher_campaign_outbox_retries_failed_push_and_cancels_stale_callback(self):
         callbacks = []
         publisher = mock.Mock(side_effect=[RuntimeError('native UI loading'), (1, False)])
@@ -1378,8 +1395,10 @@ class LANSessionTests(unittest.TestCase):
                 123, result))
 
         self.assertEqual(1, len(received))
-        services_ui.notify_missions.assert_called_once_with(['damage', 'wins'])
-        self.assertEqual([mock.call(campaign), mock.call(campaign)],
+        # Legacy ordinary receipt keys cannot reopen the retired mod dialog.
+        services_ui.notify_missions.assert_not_called()
+        self.assertEqual([mock.call(campaign, identifier='battle:123'),
+                          mock.call(campaign, identifier='battle:123')],
                          campaign_ui.notify.call_args_list)
         action = received[0]
         self.assertEqual(123, action['data']['messageID'])

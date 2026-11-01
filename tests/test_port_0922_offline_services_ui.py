@@ -64,9 +64,9 @@ class NativeServiceUITests(unittest.TestCase):
                 return 200 - other
 
         original = FittingItem.__dict__['__cmp__']
-        other_installs = ('_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
+        other_installs = ('_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_store_filters', '_install_shop',
             '_install_vehicle_filters_and_recovery', '_install_reserves',
-            '_install_account', '_install_daily', '_install_mission_results',
+            '_install_account',
             '_install_settings', '_install_exchange_dialog_limits',
             '_schedule_daily_rollover')
         with native_modules({
@@ -93,7 +93,7 @@ class NativeServiceUITests(unittest.TestCase):
         original = FittingItem.__dict__['__cmp__']
         with native_modules({
                 'gui.shared.gui_items.fitting_item': {'FittingItem': FittingItem}
-                }), mock.patch.object(self.ui, '_install_directive_fitting'), \
+                }), mock.patch.object(self.ui, '_install_unavailable_entries'), mock.patch.object(self.ui, '_install_directive_fitting'), \
                 mock.patch.object(self.ui, '_install_store_filters',
                                       side_effect=RuntimeError('startup failed')):
             with self.assertRaises(RuntimeError):
@@ -747,51 +747,6 @@ class NativeServiceUITests(unittest.TestCase):
             self.assertFalse(page.locked['badgesData'][0]['enabled'])
             self.ui.uninstall()
 
-    def test_daily_page_does_not_populate_retail_empty_tabs_or_arrows(self):
-        calls = []
-
-        class Base(object):
-            def _populate(self):
-                calls.append('base_populate')
-
-            def _dispose(self):
-                calls.append('base_dispose')
-
-        class Page(Base):
-            def _populate(self):
-                raise AssertionError('would create empty retail tabs')
-
-            def _dispose(self):
-                raise AssertionError('would remove unsubscribed builders')
-
-            def _invalidate(self, ctx=None):
-                raise AssertionError('would restore empty retail tabs')
-
-            def onClose(self):
-                calls.append('hangar')
-
-            def as_setTabsDataProviderS(self, tabs):
-                self.tabs = tabs
-
-            def as_showFilterS(self, visible):
-                self.filter = visible
-
-        panel = mock.Mock()
-        panel.open.return_value = True
-        exports = {'gui.Scaleform.daapi.view.lobby.missions.regular.missions_page': {'MissionsPage': Page}}
-        with native_modules(exports), mock.patch.object(self.ui, 'ServicePanel', return_value=panel):
-            self.ui._install_daily()
-            page = Page()
-            page._populate()
-            self.assertEqual([], page.tabs)
-            self.assertFalse(page.filter)
-            page._invalidate()
-            panel.refresh.assert_called_once()
-            page._dispose()
-            panel.uninstall.assert_called_once()
-            self.assertFalse(self.ui._panels)
-            self.ui.uninstall()
-        self.assertEqual(['base_populate', 'base_dispose'], calls)
 
     def test_purchase_notification_and_callback_follow_account_acknowledgement(self):
         callbacks, notices, finished = [], [], []
@@ -800,15 +755,22 @@ class NativeServiceUITests(unittest.TestCase):
             'BigWorld': {'player': lambda: account},
             'gui': {'SystemMessages': types.SimpleNamespace(
                 pushMessage=lambda text, **kwargs: notices.append((text, kwargs['type'])),
+                pushI18nMessage=lambda key, **kwargs: notices.append((key, kwargs['type'], kwargs)),
                 SM_TYPE=types.SimpleNamespace(Error='error', PurchaseForGold='gold',
                     Information='info', PurchaseForCrystal='crystal'))},
+            'dependency': {'instance': lambda interface: types.SimpleNamespace(
+                getBooster=lambda uid: types.SimpleNamespace(userName='Native XP booster'))},
+            'skeletons.gui.goodies': {'IGoodiesCache': object},
+            'gui.shared.money': {'Money': lambda **kwargs: kwargs},
+            'gui.shared.formatters': {'formatPrice': lambda value: value},
             'gui.mods.offline_lan_0922.account_rpc.commands': {'CMD_OFFLINE_SERVICE': 19900},
         }
         with native_modules(exports), mock.patch.object(self.ui, 'tr', side_effect=lambda x: x):
             self.ui.request('buy_reserve', 'xp', lambda *result: finished.append(result))
             self.assertFalse(notices)
             callbacks[0](1, 0, '')
-            self.assertIn('Spent 50 gold', notices[0][0])
+            self.assertEqual('#system_messages:booster_buy/success', notices[0][0])
+            self.assertEqual({'gold': 50}, notices[0][2]['money'])
             self.assertEqual('gold', notices[0][1])
             self.assertEqual([(True, '')], finished)
             self.ui.request('buy_reserve', 'xp', lambda *result: finished.append(result))
@@ -824,7 +786,8 @@ class MissionResultUITests(unittest.TestCase):
 
     def test_midnight_refresh_waits_for_lobby_then_replaces_account_stats(self):
         callbacks = []
-        server = types.SimpleNamespace(publish_postbattle_progress=mock.Mock())
+        server = types.SimpleNamespace(publish_postbattle_progress=mock.Mock(),
+                                       publish_campaign_notifications=mock.Mock())
         lobby = [False]
         exports = {
             'BigWorld': {
@@ -833,7 +796,9 @@ class MissionResultUITests(unittest.TestCase):
                 'cancelCallback': lambda unused: None},
             'helpers': {'isPlayerAccount': lambda: lobby[0]},
         }
-        with native_modules(exports), mock.patch.object(self.ui.time, 'time', return_value=172799):
+        with native_modules(exports), mock.patch.object(self.ui.time, 'time', return_value=172799), \
+                mock.patch.object(self.ui, 'snapshot', return_value={}), \
+                mock.patch.object(self.ui, 'request', side_effect=lambda action, key, callback: callback(True, '')):
             self.ui._schedule_daily_rollover()
             self.assertAlmostEqual(1.1, callbacks[0][0])
             callbacks.pop(0)[1]()
@@ -845,66 +810,7 @@ class MissionResultUITests(unittest.TestCase):
             self.assertEqual(1, len(callbacks))
             self.ui.uninstall()
 
-    def test_completed_daily_rows_use_native_results_and_open_daily_page(self):
-        stock, opened = [], []
-        class Block(object):
-            def setRecord(self, result, reusable):
-                stock.append(result)
-            def getNextComponentIndex(self):
-                return len(self.rows)
-            def addComponent(self, index, value):
-                self.rows.append(value)
-        class Window(object):
-            def showEventsWindow(self, key, kind):
-                opened.append(key)
-            def destroy(self):
-                opened.append('closed')
-        exports = {
-            'constants': {'EVENT_TYPE': types.SimpleNamespace(BATTLE_QUEST=2)},
-            'gui.battle_results.components.progress': {'QuestsProgressBlock': Block},
-            'gui.battle_results.components.base': {'DirectStatsItem': lambda unused, info: info},
-            'gui.server_events.formatters': {
-                'PROGRESS_BAR_TYPE': types.SimpleNamespace(SIMPLE=1, NONE=0),
-                'packSimpleBonusesBlock': lambda values: {'rewards': values},
-                'todict': lambda values: values},
-            'gui.server_events.bonuses': {'GoodiesBonus': lambda name, value:
-                types.SimpleNamespace(formattedList=lambda: [(name, value)])},
-            'gui.Scaleform.genConsts.MISSIONS_STATES': {'MISSIONS_STATES': types.SimpleNamespace(COMPLETED='done')},
-            'gui.Scaleform.genConsts.QUESTS_ALIASES': {'QUESTS_ALIASES': types.SimpleNamespace(RENDERER_TYPE_QUEST='quest')},
-            'gui.Scaleform.daapi.view.battle_results_window': {'BattleResultsWindow': Window},
-            'gui.server_events.events_dispatcher': {'showMissions': lambda: opened.append('daily')},
-        }
-        with native_modules(exports):
-            self.ui._install_mission_results()
-            block = Block()
-            block.rows = []
-            block.setRecord('receipt', types.SimpleNamespace(personal=types.SimpleNamespace(
-                getQuestsProgress=lambda: {'offline_daily_wins': (), 'retail': ()})))
-            self.assertEqual(['receipt'], stock)
-            self.assertEqual(1, len(block.rows))
-            self.assertEqual('done', block.rows[0]['questInfo']['status'])
-            self.assertEqual('', block.rows[0]['alertMsg'])
-            self.assertEqual([], block.rows[0]['progressList'])
-            self.assertEqual(0, block.rows[0]['questInfo']['progrBarType'])
-            self.assertEqual([{'rewards': [('goodies', {92002: {'count': 1}})]}],
-                             block.rows[0]['awards'])
-            Window().showEventsWindow('offline_daily_wins', 2)
-            self.assertEqual(['daily', 'closed'], opened)
 
-    def test_one_native_popup_combines_simultaneous_rewards(self):
-        messages, dialogs = [], []
-        exports = {
-            'gui.SystemMessages': {'pushMessage': lambda message, **kw: messages.append(message),
-                'SM_TYPE': types.SimpleNamespace(Information=1)},
-            'gui.DialogsInterface': {'showDialog': lambda meta, callback: dialogs.append(meta)},
-            'gui.Scaleform.daapi.view.dialogs': {
-                'SimpleDialogMeta': lambda *args: args, 'InfoDialogButtons': lambda label: label},
-        }
-        with native_modules(exports):
-            self.ui.notify_missions(['damage', 'wins'])
-        self.assertEqual(1, len(messages))
-        self.assertEqual(1, len(dialogs))
-        self.assertIn('\n', messages[0])
 
 
 
@@ -992,10 +898,10 @@ class ExchangeDialogLimitTests(unittest.TestCase):
 
     def test_regular_services_install_and_rollback_own_the_native_base_hook(self):
         original = self.meta_type.makeVO
-        others = ('_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
+        others = ('_install_unavailable_entries', '_install_ordinary_mission_presentation', '_install_crew_skill_counter', '_install_directive_fitting', '_install_item_comparisons', '_install_store_filters',
             '_install_shop', '_install_vehicle_filters_and_recovery',
-            '_install_reserves', '_install_account', '_install_daily',
-            '_install_mission_results', '_install_settings', '_schedule_daily_rollover')
+            '_install_reserves', '_install_account',
+            '_install_settings', '_schedule_daily_rollover')
         with native_modules({
                 'gui.Scaleform.daapi.view.dialogs.ExchangeDialogMeta': {
                     '_ExchangeDialogMeta': self.meta_type},

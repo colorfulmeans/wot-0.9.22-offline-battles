@@ -8,9 +8,9 @@ from contextlib import contextmanager
 import threading
 
 try:
-    from . import core, save_ledger, save_slots, vehicle_overlays, bot_lineup_profiles
+    from . import core, save_ledger, save_slots, vehicle_overlays, bot_lineup_profiles, nation_choices
 except ImportError:
-    import core, save_ledger, save_slots, vehicle_overlays, bot_lineup_profiles
+    import core, save_ledger, save_slots, vehicle_overlays, bot_lineup_profiles, nation_choices
 
 # Loading the tactics store installs the shared Python-2-compatible contract path.
 try:
@@ -36,7 +36,7 @@ def catalogue(game_root):
                 if len(seats)!=len(roles) or any(r[0]!=role for r,role in zip(seats,roles)):
                     raise ValueError('The crew table does not match the selected client.')
                 result.append(dict(vehicle,name=name,roles=roles,seats=seats))
-    return result
+    return sorted(result, key=nation_choices.vehicle_key)
 
 
 def inbox_path(slot, game_root=None, root=None):

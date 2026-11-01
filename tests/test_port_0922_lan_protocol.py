@@ -685,6 +685,7 @@ class LanProtocolTests(unittest.TestCase):
             'fire': False, 'ammo_rack_death': False, 'events': []}
         state.track_immobilisers[('player', 2)] = ('player', 1)
         state.player_spotted[1] = frozenset([('player', 2)])
+        state.radio_assist_sources[(('player', 3), ('player', 2))] = {('player', 1): float('inf')}
         state._record_damage(('player', 3), ('player', 2), 240, tracked)
         state._record_critical_damage(('player', 3), ('player', 2), {}, tracked)
         state._record_critical_damage(('player', 3), ('player', 1), {}, tracked)

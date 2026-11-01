@@ -9,7 +9,7 @@ from unittest import mock
 import save_customizations as store
 
 
-VEHICLES = [dict(name='china:Tank8', compact_descr=101, nation='china', level=8, tags=['premium']),
+VEHICLES = [dict(name='china:Tank8', compact_descr=101, nation='china', level=8, tags=['premium','heavyTank']),
             dict(name='china:Tank1', compact_descr=102, nation='china', level=1, tags=[]),
             dict(name='usa:Tank10', compact_descr=103, nation='usa', level=10, tags=[])]
 STYLES = [dict(id=1, rent_count=100, rules=[('include', {'nations':['china']})]),
@@ -141,6 +141,7 @@ class StyleInventoryTests(unittest.TestCase):
         price=section([(b'name',text('hidden')),(b'notInShop',p.PackedValue(5,base64.b64decode('True')))])
         package=os.path.join(self.root,'scripts.pkg')
         with zipfile.ZipFile(package,'w') as archive:
+            archive.writestr('scripts/item_defs/vehicles/china/Tank8.xml',packed([]))
             archive.writestr('scripts/item_defs/customization/styles/list.xml',packed([(b'itemGroup',group)]))
             archive.writestr('scripts/item_defs/customization/priceGroups/styles.xml',packed([(b'priceGroup',price)]))
             archive.writestr('scripts/item_defs/vehicles/china/list.xml',packed([(b'Tank8',section([

@@ -10,6 +10,10 @@ except ImportError:
     import core, save_ledger, save_slots, vehicle_overlays
 
 STYLE_TYPE = 4  # #1513 items.components.c11n_constants.CustomizationType.STYLE
+CUSTOM_TYPES = ((1, 'paints', 'paint', 'Paint'),
+                (2, 'camouflages', 'camouflage', 'Camouflage'),
+                (3, 'decals', 'decal', 'Decal'),
+                (5, 'modifications', 'modification', 'Wear'))
 STOCK_VERSION = 1
 INITIAL_KEY = 'initial_customizations'
 NATIONS = ('ussr', 'germany', 'usa', 'china', 'france', 'uk', 'japan', 'czech', 'sweden', 'poland')
@@ -26,6 +30,16 @@ def _text(value):
     if isinstance(value.value, bytes):
         return value.value.decode('utf8')
     return str(value.value).lower()
+
+
+def _vehicle_rules(fields):
+    section = fields.get('vehicleFilter')
+    if section is None or section.value_type != 0:
+        return []
+    return [(action.decode('ascii'), {
+                key.decode('ascii'): _text(value).split()
+                for key, value in (rule.value.children if rule.value_type == 0 else ())})
+            for action, rule in section.value.children]
 
 
 def catalogue(game_root):
@@ -83,6 +97,11 @@ def catalogue(game_root):
                 vehicle['tags'] = tuple(set(vehicle['tags']) | {'premium'})
             vehicle['compact_descr'] = 1 | (NATIONS.index(nation) << 4) | (identifier << 8)
             vehicle['name'] = nation + ':' + vehicle['vehicle']
+            definition = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
+                'scripts/item_defs/vehicles/%s/%s.xml' % (nation, vehicle['vehicle'])))
+            customization_nation = _fields(definition).get('customizationNation')
+            vehicle['customization_nation'] = (_text(customization_nation)
+                if customization_nation is not None else nation)
     if not styles or len({s['id'] for s in styles}) != len(styles):
         raise save_ledger.SaveLedgerError('The style catalogue is invalid.')
     return styles, vehicles
@@ -91,16 +110,92 @@ def catalogue(game_root):
 def compatible(style, vehicle):
     def matches(rule):
         for key, allowed in rule.items():
-            if key == 'nations': actual = {vehicle['nation']}
+            if key == 'nations': actual = {vehicle.get('customization_nation', vehicle['nation'])}
             elif key == 'levels': actual = {str(vehicle['level'])}
             elif key == 'vehicles': actual = {vehicle['name']}
-            elif key == 'tags': actual = set(vehicle['tags'])
+            elif key == 'tags':
+                # #1513 FilterNode uses a proper subset, not any shared tag.
+                if allowed and not set(allowed) < set(vehicle['tags']): return False
+                continue
             else: raise save_ledger.SaveLedgerError('Unknown style vehicle filter: ' + key)
             if not actual.intersection(allowed): return False
         return True
     included = [rule for action, rule in style['rules'] if action == 'include']
     excluded = [rule for action, rule in style['rules'] if action == 'exclude']
     return (not included or any(matches(rule) for rule in included)) and not any(matches(rule) for rule in excluded)
+
+
+def appearance_catalogue(game_root):
+    """Read only active #1513 lists, with IDs scoped by customization type."""
+    styles, vehicles = catalogue(game_root)
+    status, package = vehicle_overlays._require_target(game_root)
+    translations = {}
+    for domain in ('vehicle_customization', 'vehicle_customization_cn'):
+        path = os.path.join(status['path'], 'res', 'text', 'LC_MESSAGES', domain + '.mo')
+        if os.path.isfile(path):
+            with open(path, 'rb') as stream:
+                translations[domain] = gettext.GNUTranslations(stream)
+    items = []
+    with zipfile.ZipFile(package) as archive:
+        price_root = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
+            'scripts/item_defs/customization/priceGroups/list.xml'))
+        price_flags = {}
+        for tag, raw in price_root.children:
+            if tag != b'priceGroup': continue
+            fields = _fields(raw.value)
+            price_flags[_text(fields['name'])] = ('notInShop' in fields and
+                _text(fields['notInShop']).lower() in ('true', '1'))
+        for kind, folder, item_tag, label in CUSTOM_TYPES:
+            section = vehicle_overlays.packed_xml.read_packed_xml(archive.read(
+                'scripts/item_defs/customization/%s/list.xml' % folder))
+            for tag, raw in section.children:
+                if tag != b'itemGroup': continue
+                group = _fields(raw.value)
+                for tag, raw_item in raw.value.children:
+                    if tag != item_tag.encode('ascii'): continue
+                    fields = _fields(raw_item.value)
+                    # BaseCustomizationItemXmlReader assigns item fields over
+                    # its group prototype. A local filter REPLACES that filter.
+                    effective = dict(group)
+                    effective.update(fields)
+                    key = _text(fields.get('userString') or group['userString'])
+                    if ':' in key:
+                        domain, text = key.lstrip('#').split(':', 1)
+                        name = translations.get(domain, gettext.NullTranslations()).gettext(text)
+                    else:
+                        name = key or '%s %s' % (label, _text(fields['id']))
+                    price_group = _text(effective['priceGroup'])
+                    tags = _text(effective['tags']).split() if 'tags' in effective else []
+                    category = label
+                    if kind == 3:
+                        category = ('Inscription' if _text(effective['type']).upper() == 'INSCRIPTION'
+                                    else 'Emblem')
+                    items.append(dict(id=int(_text(fields['id'])), kind=kind,
+                        label=name, category=category, rules=_vehicle_rules(effective),
+                        igr='premiumIGR' in tags, hidden=price_flags[price_group],
+                        vehicle_bound='vehicleBound' in tags,
+                        season=_text(effective['season']) if 'season' in effective else 'ALL',
+                        required_token=_text(effective['requiredToken']) if 'requiredToken' in effective else '',
+                        rent_count=0, price_group=price_group))
+    for item in styles:
+        item.update(kind=STYLE_TYPE, category='Preset style', igr=False)
+    return items + styles, vehicles
+
+
+def add_item(inventory, item, vehicles, count, bound_vehicle=False):
+    if item['kind'] == STYLE_TYPE:
+        return add_style(inventory, item, vehicles, count, bound_vehicle)
+    if type(count) is not int or not 1 <= count <= 100000:
+        raise save_ledger.SaveLedgerError('Enter a quantity between 1 and 100000.')
+    applicable = [v for v in vehicles if compatible(item, v)]
+    if not applicable:
+        raise save_ledger.SaveLedgerError('This item cannot be installed on the selected vehicle.')
+    stock = inventory.setdefault(str(item['kind']), {}).setdefault(str(item['id']), {})
+    bindings = [str(v['compact_descr']) for v in applicable] if item.get('vehicle_bound') else ['0']
+    updates = {binding:stock.get(binding, 0)+count for binding in bindings}
+    if any(value > 2**31-1 for value in updates.values()):
+        raise save_ledger.SaveLedgerError('The inventory quantity is too large.')
+    stock.update(updates)
 
 
 def display_name(style, styles, translate=lambda value:value):
@@ -170,6 +265,27 @@ def _inventory(value):
         raise save_ledger.SaveLedgerError('The style inventory is not in the expected format.')
 
 
+def seed_initial_appearance(inventory, metadata, game_root):
+    if not metadata.get('appearanceStockSeed') or metadata.get('appearanceStockVersion', 0) >= 1:
+        return
+    items, vehicles = appearance_catalogue(game_root)
+    for item in items:
+        if item['kind'] == STYLE_TYPE: continue
+        bindings = inventory.setdefault(str(item['kind']), {}).setdefault(str(item['id']), {})
+        keys = [str(v['compact_descr']) for v in vehicles if compatible(item, v)] if item.get('vehicle_bound') else ['0']
+        for key in keys:bindings[key] = max(bindings.get(key, 0), 1000)
+
+
+def _seed_styles(inventory, styles, vehicles):
+    stock = inventory.setdefault(str(STYLE_TYPE), {})
+    for style in styles:
+        bindings = stock.setdefault(str(style['id']), {})
+        for vehicle in vehicles:
+            if compatible(style, vehicle):
+                cd = str(vehicle['compact_descr'])
+                bindings[cd] = max(bindings.get(cd, 0), style['rent_count'] or 1)
+
+
 def read_inventory(slot_id, game_root, styles, vehicles, environment=None, root=None):
     unused_path, state, container, key, has_garage = _target(slot_id, game_root, environment, root)
     inventory = container.get(key, {})
@@ -181,14 +297,10 @@ def read_inventory(slot_id, game_root, styles, vehicles, environment=None, root=
         owned = set(state.get('vehicles', {}))
         vehicles = [v for v in vehicles if str(v['compact_descr']) in owned]
     metadata = save_ledger._read_state(save_slots.metadata_path(slot_id, game_root, environment, root)) or {}
+    if not has_garage:
+        seed_initial_appearance(result, metadata, game_root)
     if metadata.get('mode', save_slots.MODE_UNLOCKED) == save_slots.MODE_UNLOCKED and container.get('styleStockVersion', 0) < STOCK_VERSION:
-        stock = result.setdefault(str(STYLE_TYPE), {})
-        for style in styles:
-            bindings = stock.setdefault(str(style['id']), {})
-            for vehicle in vehicles:
-                if compatible(style, vehicle):
-                    cd = str(vehicle['compact_descr'])
-                    bindings[cd] = max(bindings.get(cd, 0), style['rent_count'] or 1)
+        _seed_styles(result, styles, vehicles)
     return result
 
 
@@ -217,19 +329,31 @@ def write_inventory(slot_id, game_root, inventory, environment=None, root=None, 
         raise save_ledger.SaveLedgerError('Close World of Tanks before changing style inventory.')
     path, state, container, key, has_garage = _target(slot_id, game_root, environment, root)
     previous = _inventory(container.get(key, {}))
+    if not has_garage:
+        seed_initial_appearance(previous, container, game_root)
+        if container.get('appearanceStockSeed') and container.get('styleStockVersion', 0) < STOCK_VERSION:
+            # The untouched creation grant is the baseline, not a manual add.
+            styles, vehicles = catalogue(game_root)
+            _seed_styles(previous, styles, vehicles)
     updated = _inventory(inventory)
     changes = []
-    before = previous.get(str(STYLE_TYPE), {})
-    after = updated.get(str(STYLE_TYPE), {})
-    for phase, sign in (('granted', 1), ('revoked', -1)):
-        rewards = []
-        for identifier in sorted(set(before) | set(after), key=int):
-            delta = sign * (sum(after.get(identifier, {}).values()) -
-                            sum(before.get(identifier, {}).values()))
-            if delta > 0:rewards.append({'kind':'style','id':int(identifier),'count':delta})
-        if rewards:changes.append({'phase':phase,'rewards':rewards})
+    for kind in sorted(set(previous) | set(updated), key=int):
+        before, after = previous.get(kind, {}), updated.get(kind, {})
+        for phase, sign in (('granted', 1), ('revoked', -1)):
+            rewards = []
+            for identifier in sorted(set(before) | set(after), key=int):
+                delta = sign * (sum(after.get(identifier, {}).values()) -
+                                sum(before.get(identifier, {}).values()))
+                if delta > 0:
+                    reward = {'kind':'style' if int(kind)==STYLE_TYPE else 'appearance',
+                              'id':int(identifier),'count':delta}
+                    if int(kind) != STYLE_TYPE: reward['type'] = int(kind)
+                    rewards.append(reward)
+            if rewards:changes.append({'phase':phase,'rewards':rewards})
     container[key] = updated
     container['styleStockVersion'] = STOCK_VERSION
+    if not has_garage and container.get('appearanceStockSeed'):
+        container['appearanceStockVersion'] = 1
     save_ledger.queue_account_changes(container, changes, has_garage)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     save_ledger._write_state(path, state)

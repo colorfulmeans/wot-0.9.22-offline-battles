@@ -147,7 +147,7 @@ class BaselineEditorTests(unittest.TestCase):
 
     def test_new_profile_uses_adopted_baseline_and_remains_unsaved(self):
         e=self.editor;e.document['maps'].clear()
-        with mock.patch.object(e,'discard_prompt',return_value=True),mock.patch.object(ui.simpledialog,'askstring',return_value='New'):e.new_profile()
+        with mock.patch.object(e,'discard_prompt',return_value=True),mock.patch.object(ui.ui_layout,'ask_string',return_value='New'):e.new_profile()
         self.assertEqual(storage.contract.default_profile()['maps'],e.document['maps'])
         self.assertTrue(e.unsaved_new);self.assertTrue(e.dirty())
         e.set_language('en');self.root.update()

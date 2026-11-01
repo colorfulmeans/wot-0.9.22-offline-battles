@@ -166,6 +166,8 @@ class LT12HT12ReceiptTests(unittest.TestCase):
             scout.max_health, scout.outfits = 100, {}
             actor, target, shooter = ('player', 1), ('player', 2), ('player', 4)
             state.player_spotted = {1: {target}, 3: {target}, 2: {('player', 3)}}
+            state.radio_assist_sources[(shooter, target)] = {
+                ('player', 1): float('inf'), ('player', 3): float('inf')}
             state._record_damage(shooter, target, 501, {})
             self.assertEqual([['assist_radio', 60000, 251, True]],
                              state._receipt_interactions(actor)[0]['mission_events'])

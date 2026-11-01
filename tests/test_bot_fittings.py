@@ -15,6 +15,23 @@ from gui.mods.offline_lan_0922.bot_fitting_data import PLANS, CLASSES
 
 
 class FittingContracts(unittest.TestCase):
+    def test_diagnostic_reload_includes_descriptor_rammer_and_native_crew_product(self):
+        from gui.mods.offline_lan_0922 import loadout, native_input_diagnostics as diagnostic
+        descriptor = NS(type=NS(name='ussr:R04_T-34'), gun=NS(reloadTime=10.0),
+                        optionalDevices=(), miscAttrs={'gunReloadTimeFactor':0.875})
+        fitting.register(descriptor, dict(wire={'crew_level':100},
+                         crew_roster=('commander',), crew_skills=()))
+        with patch.object(loadout, 'attribute_factors', return_value={'gun/reloadTime':0.9}), \
+                patch.object(diagnostic, 'detailed_enabled', return_value=True), \
+                patch.object(diagnostic, 'validation_event') as event:
+            fitting.native_factors(descriptor)
+            fitting.native_factors(descriptor)
+        self.assertEqual(1, event.call_count)
+        row = event.call_args.kwargs
+        self.assertEqual(0.875, row['descriptor_misc']['gunReloadTimeFactor'])
+        self.assertAlmostEqual(0.7875, row['final_modifiers']['reload_factor'])
+        self.assertAlmostEqual(7.875, row['effective_reload_seconds'])
+
     def tearDown(self):
         fitting.clear()
 
@@ -202,6 +219,23 @@ class FittingContracts(unittest.TestCase):
                 bad = dict(context['wire'], descriptor=base64.b64encode(b'other').decode())
                 with self.assertRaisesRegex(ValueError, 'restored'):
                     fitting.build(native, 'ussr:R04_T-34', tier, restored=bad)
+
+    def test_diagnostic_fitting_record_observes_installed_native_devices(self):
+        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
+        with patch.dict(sys.modules, self._items()), \
+             patch.object(diagnostic, 'detailed_enabled', return_value=True), \
+             patch.object(diagnostic, 'write_json_record') as write:
+            descriptor = fitting.build(self._native('ussr:R04_T-34', 'elite'),
+                                       'ussr:R04_T-34', 'elite')
+        row = write.call_args.args[1]
+        self.assertEqual('bot_fitting_installed', row['stage'])
+        self.assertEqual([d.name for d in descriptor.optionalDevices if d], row['devices'])
+        self.assertEqual([row['directive']], row['native_directives'])
+        with patch.dict(sys.modules, self._items()), \
+             patch.object(diagnostic, 'detailed_enabled', return_value=False), \
+             patch.object(diagnostic, 'write_json_record') as write:
+            fitting.build(self._native('ussr:R04_T-34', 'regular'), 'ussr:R04_T-34', 'regular')
+        write.assert_not_called()
 
     def test_native_device_refusal_does_not_install(self):
         with patch.dict(sys.modules, self._items()), self.assertRaisesRegex(ValueError, 'installation refused'):

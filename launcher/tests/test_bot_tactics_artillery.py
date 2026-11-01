@@ -88,7 +88,7 @@ class ArtilleryEditorTests(unittest.TestCase):
         self.assertEqual(g['objective_bases'][1],row['points'][-1][:2])
         for key in ('route_priority','policy','capacity','weight','slots'):
             self.assertFalse(e.item_fields[key][0].grid_info(),key)
-        self.assertFalse(e.classes_frame.grid_info());self.assertFalse(e.wait_panel.grid_info())
+        self.assertFalse(e.classes_frame.grid_info());self.assertFalse(e.wait_panel_section.grid_info())
         self.assertEqual('disabled',str(e.tier_buttons['main'].cget('state')))
         self.assertEqual('disabled',str(e.defense_add.cget('state')))
         before=copy.deepcopy(e.document);e.set_tier('reserve');self.assertEqual(before,e.document)

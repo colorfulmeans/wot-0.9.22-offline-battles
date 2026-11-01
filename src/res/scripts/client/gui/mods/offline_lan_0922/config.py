@@ -618,6 +618,17 @@ def save_slot_mode(slot=None, user_data_dir=None):
     return mode if mode in SAVE_MODES else SAVE_MODE_UNLOCKED
 
 
+def save_slot_mission_seed(slot=None, user_data_dir=None):
+    """Read the launcher's per-save identity without writing player assets."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            seed = json.load(stream).get('missionSeed')
+        return seed if isinstance(seed, string_types) and len(seed) == 32 else None
+    except (IOError, OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
 def save_slot_initial_wallet(slot=None, user_data_dir=None):
     """Read launcher-selected starting balances; a saved ledger takes priority."""
     path = os.path.join(
@@ -663,10 +674,31 @@ def save_slot_initial_customizations(slot=None, user_data_dir=None):
             return {}
         from gui.mods.offline_lan_0922.account_rpc.garage_store import _customization_inventory
         return {'customizationItems': _customization_inventory(value.get('initial_customizations')),
+                'appearanceStockSeed': max(0, int(value.get('appearanceStockSeed', 0))),
+                'appearanceStockVersion': max(0, int(value.get('appearanceStockVersion', 0))),
                 'styleStockVersion': max(0, int(value.get('styleStockVersion', 0)))}
     except (IOError, OSError, TypeError, ValueError):
         return {}
 
+
+
+def save_slot_initial_services(slot=None, user_data_dir=None):
+    """Launcher starting services; the persisted garage ledger wins afterward."""
+    path = os.path.join(save_slot_dir(slot, user_data_dir), SAVE_METADATA_FILE_NAME)
+    try:
+        with open(path, 'rb') as stream:
+            value = json.load(stream)
+        result = {'premiumExpiryTime': max(0, int(value.get('initial_premium_expiry', 0)))}
+        slots = value.get('initial_slots')
+        if slots is not None and not isinstance(slots, bool) and 0 <= int(slots) <= 2147483647:
+            result['accountSlots'] = int(slots)
+        from gui.mods.offline_lan_0922 import offline_services
+        services = value.get('initial_services')
+        if isinstance(services, dict):
+            result['personalReserves'] = offline_services.reserve_state(services)
+        return result
+    except (IOError, OSError, TypeError, ValueError):
+        return {}
 
 def save_slot_initial_personal_progress(slot=None, user_data_dir=None):
     """Starting campaign state; an existing garage ledger takes priority."""

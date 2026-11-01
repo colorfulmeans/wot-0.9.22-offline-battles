@@ -9,6 +9,7 @@ missing here.
 import argparse
 import array
 import base64
+import calendar
 import collections
 import contextlib
 import functools
@@ -42,6 +43,7 @@ SERVER_STDLIB_MODULES = (
     argparse.__name__,
     array.__name__,
     base64.__name__,
+    calendar.__name__,
     collections.__name__,
     contextlib.__name__,
     functools.__name__,

@@ -1,6 +1,7 @@
 import math
 import struct
 import unittest
+from unittest import mock
 
 import vehicle_armor_viewer as viewer
 
@@ -188,6 +189,33 @@ class VehicleArmorGeometryTest(unittest.TestCase):
                          [viewer._armor_identity(record)
                           for record in records])
 
+    def test_classification_uses_material_damage_factor_instead_of_thickness(self):
+        layers=[packed_element((('armor',element_value((
+            ('armor_1',element_value((('vehicleDamageFactor',string_value(b'0.0')),))),
+            ('armor_2',string_value(b'22')),
+        ))),))]
+        mesh=dict(surfaces=tuple(dict(material=m,triangles=()) for m in ('armor_1','armor_2','gun')))
+        with mock.patch.object(viewer,'_collision_model',return_value='gun.model'), \
+             mock.patch.object(viewer,'_mesh_for_model',return_value=mesh):
+            part=viewer._part_scene('', 'gun','Gun',layers,(0,0,0),[],(None,))
+        self.assertEqual(['spaced','main','gun'],[s['armorKind'] for s in part['surfaces']])
+
+    def test_vehicle_relative_scales_separate_thin_plates_and_external_modules(self):
+        surfaces = [dict(thickness=v, armorKind='main') for v in (0,8,16,22)]
+        track = dict(thickness=5, armorKind='tracks')
+        scene = dict(parts=({'surfaces':tuple(surfaces+[track])},))
+        scales = viewer._armor_scales(scene)
+        self.assertEqual([0,8,16,22], scales['main'])
+        self.assertEqual([0,5], scales['external'])
+        self.assertEqual(4, len({viewer._armor_color(s, scales) for s in surfaces}))
+        self.assertNotEqual(viewer._armor_color(track, scales), viewer._armor_color(surfaces[2], scales))
+        self.assertEqual('#555b66', viewer._armor_color(dict(thickness=None), scales))
+        for surface in surfaces+[track]:
+            color = viewer._armor_color(surface, scales)
+            for light in (-.10,0,.12):
+                rgb = tuple(int(viewer._shade(color,light)[i:i+2],16) for i in (1,3,5))
+                self.assertGreater(max(rgb)-min(rgb),60)
+
     def test_thickness_colors_use_fixed_absolute_stops(self):
         self.assertEqual(viewer.thickness_color(20),
                          viewer.thickness_color("20"))
@@ -197,6 +225,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_projection_depth_sorts_and_keeps_finite_screen_points(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._scene = {
             "bounds": ((-1.0, -1.0, -1.0), (1.0, 1.0, 1.0)),
             "parts": ({"surfaces": ({
@@ -225,6 +254,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_focus_field_reports_when_the_collision_model_has_no_surface(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._language = viewer.i18n.LANGUAGE_ENGLISH
         panel._scene_error = ""
         panel._focus_key = None
@@ -245,6 +275,7 @@ class VehicleArmorGeometryTest(unittest.TestCase):
 
     def test_non_armor_focus_does_not_hide_a_scene_load_error(self):
         panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._view_mode = 'armor'
         panel._language = viewer.i18n.LANGUAGE_ENGLISH
         panel._scene = None
         panel._scene_error = "Armor model unavailable: stock resource missing"
@@ -258,6 +289,35 @@ class VehicleArmorGeometryTest(unittest.TestCase):
             "category": "vehicle",
         }, reload_scene=False))
         self.assertEqual(panel._scene_error, panel.selection.get())
+
+
+    def test_flat_plate_drops_internal_diagonal_but_keeps_selected_boundary(self):
+        surface = dict(role='hull', component='hull')
+        a, b, c, d = (0., 0., 0.), (2., 0., 0.), (2., 2., 0.), (0., 2., 0.)
+        triangles = [(0, (a, b, c), surface, 4),
+                     (0, (a, c, d), surface, 4)]
+        self.assertEqual(4, len(viewer._surface_edges(triangles)))
+        self.assertEqual(4, len(viewer._surface_edges(triangles, boundary_only=True)))
+
+    def test_relative_ramp_is_continuous_and_rejects_unknown_numbers(self):
+        for value in (None, float('nan'),float('inf'),-1):
+            self.assertEqual('#555b66',viewer.thickness_color(value,22))
+        self.assertNotEqual(viewer.thickness_color(8,22),viewer.thickness_color(16,22))
+        self.assertEqual(viewer.thickness_color(22,22),viewer.thickness_color(100,100))
+
+    def test_component_switch_invalidates_internal_geometry_before_display(self):
+        panel = viewer.ArmorViewerPanel.__new__(viewer.ArmorViewerPanel)
+        panel._mounted = None
+        panel._settings_window = None
+        panel._vehicle_member = 'scripts/item_defs/vehicles/usa/T29.xml'
+        panel._game_root, panel._records = 'client', []
+        panel._internal_scene = {'old_turret': True}
+        panel._view_mode = 'internal'
+        panel._scene_loader = lambda *args, **kwargs: {'new_turret': True}
+        observed = []
+        panel.set_view_mode = lambda mode: observed.append((mode, panel._internal_scene, panel._scene))
+        self.assertTrue(panel._load_scene({'fieldPath': 'turrets0/second/armor/armor_1'}))
+        self.assertEqual([('internal', None, {'new_turret': True})], observed)
 
 
 if __name__ == "__main__":

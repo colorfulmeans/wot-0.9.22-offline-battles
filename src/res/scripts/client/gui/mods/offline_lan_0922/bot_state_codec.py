@@ -137,6 +137,7 @@ SCALARS = (
     ('stun_end_server_time_ms', None),
     ('shot_yaw', ANGLE_SCALE),
     ('shot_pitch', ANGLE_SCALE),
+    ('turret_yaw', ANGLE_SCALE),
 )
 SCALAR_COUNT = len(SCALARS)
 _SCALAR_INDEX = dict(
@@ -387,8 +388,11 @@ def encode_row(state):
                 raise BotStateCodecError('%s: %s' % (name, error))
             continue
         value = state.get(name, 0)
+        if name == 'turret_yaw':
+            value = state.get(name, float(state.get('aim_yaw',
+                state.get('yaw', 0))) - float(state.get('yaw', 0)))
         try:
-            if name in ('pitch', 'roll'):
+            if name in ('pitch', 'roll', 'turret_yaw'):
                 value = _wrapped_angle(value)
             if scale is None:
                 row.append(_exact(value))

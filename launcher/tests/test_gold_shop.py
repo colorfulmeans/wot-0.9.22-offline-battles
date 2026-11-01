@@ -56,6 +56,22 @@ class GoldShopTest(unittest.TestCase):
             self.slot, name, self.game, root=self.root,
             is_running=lambda: False, **kwargs)
 
+    def test_rented_hull_becomes_permanent_without_replacing_its_contents(self):
+        rented = {'name': LOWE['name'], 'rent': [{}, 12345, 0, 0],
+                  'compDescr': 'existing fitting', 'crew': {'0': 'existing crew'},
+                  'outfits': {'1': ['existing outfit', True]}, 'settings': 37}
+        path = self._write_state(vehicles={'50001': rented})
+        self.assertNotIn(LOWE['name'], gold_shop.owned_vehicles(
+            self.slot, self.game, root=self.root))
+        self._buy(LOWE['name'])
+        with io.open(path, encoding='utf-8') as stream:
+            saved = json.load(stream)
+        self.assertEqual(dict((k, v) for k, v in rented.items() if k != 'rent'),
+                         saved['vehicles']['50001'])
+        self.assertIsNone(self._inbox())
+        notice = saved['ledger']['personalMissions']['notifications'][0]
+        self.assertEqual('vehicle', notice['settlement']['account_changes'][0]['rewards'][0]['kind'])
+
     def test_adding_preserves_the_wallet_and_queues_the_vehicle(self):
         path = self._write_state(gold=20000)
 

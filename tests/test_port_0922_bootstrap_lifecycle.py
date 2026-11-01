@@ -68,7 +68,8 @@ def _economy_modules(package_stubs):
                 _real_module('crew_recruits'))
             _ECONOMY_MODULES['gui.mods.offline_lan_0922.offline_services'] = (
                 _real_module('offline_services'))
-            for name in ('ui_i18n', 'personal_campaign_ui'):
+            for name in ('ui_i18n', 'personal_campaign_ui', 'ordinary_missions',
+                         'ordinary_missions_native'):
                 _ECONOMY_MODULES['gui.mods.offline_lan_0922.' + name] = _real_module(name)
     return dict(_ECONOMY_MODULES)
 
@@ -78,6 +79,8 @@ ACCOUNT_DATA = _real_module(
 VEHICLE_BLACKLIST = _real_module('vehicle_blacklist')
 VEHICLE_CONFIGURATION = _real_module('vehicle_configuration')
 VEHICLE_RECORDS = _real_module('vehicle_records')
+EQUIPMENT_POLICY = _real_module('equipment_policy')
+NATIVE_INPUT_DIAGNOSTICS = _real_module('native_input_diagnostics')
 DEFAULT_LOADOUTS = _real_module('default_loadouts')
 DEFAULT_CREW = _real_module('default_crew')
 
@@ -309,8 +312,10 @@ class BootstrapLifecycleTests(unittest.TestCase):
         # beside the mode, and the client reads both once at startup.
         config_module.save_slot_earnings_percent = lambda: (
             100 if earnings_percent is None else earnings_percent)
+        config_module.save_slot_initial_services = lambda: {}
         config_module.save_slot_initial_berths = lambda: initial_berths
         config_module.save_slot_initial_wallet = lambda: dict(initial_wallet or {})
+        config_module.save_slot_mission_seed = lambda: 'a' * 32
         config_module.save_slot_initial_personal_progress = lambda: {}
         config_module.save_slot_initial_customizations = lambda: {}
         config_module.ACTIVE_SAVE_SLOT = object()
@@ -385,7 +390,7 @@ class BootstrapLifecycleTests(unittest.TestCase):
                 name=name or 'nation-%d:vehicle-%d' % (
                     nation_id, vehicle_type_id),
                 crewRoles=(('commander',), ('driver',)),
-                tags=frozenset(tags),
+                tags=frozenset(tags) | (frozenset() if set(tags).intersection(EQUIPMENT_POLICY.PRIORITIES) else frozenset(('lightTank',))),
                 chassis=[_part(base + 2, 2), _part(base + 12, 5)],
                 turrets=turrets,
                 engines=[_part(base + 5, 2), _part(base + 15, 5)],
@@ -641,6 +646,8 @@ class BootstrapLifecycleTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.vehicle_configuration': (
                 VEHICLE_CONFIGURATION),
             'gui.mods.offline_lan_0922.vehicle_records': VEHICLE_RECORDS,
+            'gui.mods.offline_lan_0922.equipment_policy': EQUIPMENT_POLICY,
+            'gui.mods.offline_lan_0922.native_input_diagnostics': NATIVE_INPUT_DIAGNOSTICS,
             'gui.mods.offline_lan_0922.default_loadouts': DEFAULT_LOADOUTS,
             'gui.mods.offline_lan_0922.default_crew': DEFAULT_CREW,
             'gui.app_loader': app_loader_module,

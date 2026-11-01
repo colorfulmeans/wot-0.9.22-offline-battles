@@ -149,7 +149,7 @@ class ReportUITests(unittest.TestCase):
                 tree=next(x for x in window.winfo_children() if isinstance(x,ttk.Treeview))
                 self.assertEqual(('correct','incorrect','unconfigured'),tree.get_children())
                 tree.selection_set('row0')
-                locate=next(x for x in window.winfo_children() if isinstance(x,ttk.Button) and x.cget('text') in ('Locate selection','定位选中项'))
+                locate=next(x for f in window.winfo_children() for x in f.winfo_children() if isinstance(x,tk.Button) and x.cget('text') in ('Locate selection','定位选中项'))
                 before=copy.deepcopy(e.document);locate.invoke();root.update()
                 self.assertEqual('defense',e.network_mode);self.assertEqual(row['identity'],e._selected_parent()['id'])
                 self.assertEqual(before,e.document)

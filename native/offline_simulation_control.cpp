@@ -254,6 +254,22 @@ void Store::forget_traffic(std::int64_t id) {
       ++i;
 }
 void Store::configure_radio() {
+  for (auto &entry : actors_) {
+    auto &a = entry.second;
+    if (a.sample.alive) {
+      if (a.radio_retired) {
+        observations_.erase(entry.first);
+        observer_order_.erase(entry.first);
+      }
+      a.retired_receivers.clear();
+      a.radio_retired = false;
+    } else if (!a.radio_retired || now_ < a.vengeance_until) {
+      a.radio_retired = true;
+      for (const auto &recipient : radio_ranges_)
+        if (!(recipient.first == entry.first) && connected(recipient.first, entry.first))
+          a.retired_receivers.insert(recipient.first);
+    }
+  }
   radio_ranges_.clear();
   radio_positions_.clear();
   for (const auto &key : actor_order_) {
@@ -276,7 +292,7 @@ void Store::configure_radio() {
     entry.second *= 1. + bonus;
   }
   for (auto i = observations_.begin(); i != observations_.end();) {
-    if (!radio_ranges_.count(i->first)) {
+    if (!radio_ranges_.count(i->first) && !actors_.count(i->first)) {
       observer_order_.erase(i->first);
       i = observations_.erase(i);
       continue;
@@ -306,6 +322,18 @@ bool Store::connected(const ActorKey &a, const ActorKey &b) const {
   double reach = ar->second + br->second;
   return squared <= reach * reach;
 }
+bool Store::received_from(const ActorKey &recipient, const ActorKey &source) const {
+  if (!radio_ranges_.count(recipient))
+    return false;
+  auto owner = actors_.find(source);
+  if (owner == actors_.end())
+    return false;
+  if (!owner->second.sample.alive &&
+      owner->second.config.team == actors_.at(recipient).config.team &&
+      owner->second.retired_receivers.count(recipient))
+    return true;
+  return connected(recipient, source);
+}
 void Store::observe(const ActorKey &source, const ActorKey &target,
                     double sampled, double duration, const PoseSample &pose) {
   if (!observations_.count(source))
@@ -316,7 +344,7 @@ void Store::observe(const ActorKey &source, const ActorKey &target,
   entry.pose = pose;
   entry.direct = true;
   auto &team = team_spots_[{actors_.at(source).config.team, target}];
-  team.deadline = std::max(team.deadline, sampled + clamp(duration, 0., 12.));
+  team.deadline = std::max(team.deadline, sampled + clamp(duration, 0., 14.));
   team.sampled_at = sampled;
   team.pose = pose;
   events_.push_back({source, target, sampled, duration, pose});
@@ -337,7 +365,7 @@ Contact Store::radio_contact(const ActorKey &s, const ActorKey &t,
   bool has_fresh = false;
   const RadioObservation *latest = nullptr;
   for (const auto &owner : observer_order_.keys()) {
-    if (!connected(s, owner))
+    if (!received_from(s, owner))
       continue;
     auto i = observations_.find(owner);
     if (i == observations_.end())
@@ -361,6 +389,20 @@ Contact Store::radio_contact(const ActorKey &s, const ActorKey &t,
     result.pose = latest->pose;
     result.sampled_at = latest->sampled_at;
     result.visible = true;
+  }
+  return result;
+}
+std::vector<std::pair<ActorKey, double>> Store::recipient_sources(
+    const ActorKey &recipient, const ActorKey &target, double now) const {
+  std::vector<std::pair<ActorKey, double>> result;
+  if (!radio_ranges_.count(recipient))
+    return result;
+  for (const auto &owner : observations_) {
+    if (!received_from(recipient, owner.first))
+      continue;
+    auto found = owner.second.find(target);
+    if (found != owner.second.end() && found->second.deadline > now)
+      result.push_back({owner.first, found->second.deadline - now});
   }
   return result;
 }
@@ -408,7 +450,7 @@ void Store::begin(const TickToken &token, const std::vector<ActorKey> &order,
       throw std::invalid_argument("missing actor sample");
     if (a.lifecycle_initialized && a.last_alive && !a.sample.alive &&
         a.last_alive_effort)
-      a.vengeance_until = now_ + 2.;
+      a.vengeance_until = now_ + a.config.last_effort_duration;
     if (a.sample.alive) {
       a.vengeance_until = 0.;
       a.last_alive_effort = a.sample.last_effort;
@@ -698,7 +740,7 @@ void Store::observe_humans(const SightProbe &probe) {
                            : s.sample.pose.values[3];
           if (dx * dx + dz * dz <= .000001 ||
               std::abs(angle(std::atan2(dx, dz), gun)) <= pi / 36. + 1e-9)
-            duration = 12.;
+            duration = s.config.designated_duration;
         }
         observe(source, target, sampled, duration, t.sample.pose);
       }
@@ -716,7 +758,7 @@ std::vector<TeamContact> Store::team_contacts() const {
   for (const auto &row : team_spots_)
     if (row.second.deadline > now_)
       result.push_back({row.first.first, row.first.second,
-                        std::min(12., row.second.deadline - now_),
+                        std::min(14., row.second.deadline - now_),
                         row.second.pose});
   return result;
 }

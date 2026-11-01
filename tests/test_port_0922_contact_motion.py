@@ -408,7 +408,7 @@ class WorkerSolidMotionTests(unittest.TestCase):
             self.assertEqual(1, len(seen))
             self.assertAlmostEqual(math.hypot(.2,.3), seen[0][1])
             self.assertIs(runtime._descriptors[11], seen[0][2])
-            self.assertFalse(seen[0][3])
+            self.assertTrue(seen[0][3])
             self.assertAlmostEqual(math.atan2(.2,.3), seen[0][4])
 
     def test_drive_sweep_keeps_a_live_player_solid_with_receipt_transport(self):

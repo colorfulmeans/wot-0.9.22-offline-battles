@@ -6,6 +6,18 @@ import bot_tactics_store as storage
 from gui.mods.offline_lan_0922 import bot_gunnery
 
 class PreviewTests(unittest.TestCase):
+    def test_lineup_difficulty_is_visible_but_explicit_tactics_still_win(self):
+        document=storage.contract.empty()
+        lineup=[dict(team=1,slot=14,enabled=True,skill='elite')]
+        groups=preview.grouped(document,1,'heavyTank','15',lineup)
+        self.assertEqual('elite',groups[0]['values']['skill'])
+        self.assertIn('Lineup: team 1 / slot 15',str(preview.rows(groups[0],'en')))
+        document['behavior']=[dict(team=1,class_tag='all',slot=14,values=dict(skill='rookie'))]
+        groups=preview.grouped(document,1,'heavyTank','15',lineup)
+        self.assertEqual('rookie',groups[0]['values']['skill'])
+        self.assertNotIn('Lineup:',str(preview.rows(groups[0],'en')))
+        self.assertEqual([],preview.grouped(document,1,'heavyTank','1',lineup))
+
     def test_all_scopes_are_covered_and_slot_exceptions_stay_visible(self):
         document=storage.contract.empty()
         document['behavior']=[dict(team=0,class_tag='all',slot=-1,values=dict(skill='regular')),

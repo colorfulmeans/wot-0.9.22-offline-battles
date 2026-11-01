@@ -7,6 +7,9 @@ wire shapes can be tested without importing BigWorld.
 
 import time
 
+from gui.mods.offline_lan_0922.personal_rating import personal_rating
+from gui.mods.offline_lan_0922.game_calendar import first_win_factor
+
 
 VEHICLE_ITEM_TYPE = 1
 TANKMAN_ITEM_TYPE = 8
@@ -512,7 +515,7 @@ def inventory(selected_vehicle=None, validate=True, only_vehicles=None,
     vehicle_values = {
         'repair': {}, 'lastCrew': {}, 'crew': {}, 'settings': {},
         'compDescr': {}, 'eqs': {}, 'eqsLayout': {}, 'shells': {},
-        'shellsLayout': {}, 'lock': {},
+        'shellsLayout': {}, 'lock': {}, 'rent': {},
     }
     all_tankmen = {}
     tankman_vehicles = {}
@@ -521,6 +524,10 @@ def inventory(selected_vehicle=None, validate=True, only_vehicles=None,
         vehicle_id = int(record.get('id', 1))
         if only_vehicles is not None and vehicle_id not in only_vehicles:
             continue
+        if record.get('rent') is not None:
+            vehicle_values['rent'][vehicle_id] = tuple(record['rent'])
+        elif delta:
+            vehicle_values['rent'][vehicle_id] = None
         crew = list(record.get('crew', ()))
         tankmen = dict(record.get('tankmen', {}))
         vehicle_values['crew'][vehicle_id] = crew
@@ -805,7 +812,7 @@ def stats(selected_vehicle=None, postbattle_progress=None):
             'attrs': DAILY_MULTIPLIED_XP_ATTR | (
                 PREMIUM_ACCOUNT_ATTR if premium_active else 0),
             'premiumExpiryTime': premium_expiry if premium_active else 0,
-            'autoBanTime': 0, 'globalRating': 0,
+            'autoBanTime': 0, 'globalRating': personal_rating(progress),
         },
         'stats': {
             'credits': balances['credits'],
@@ -1116,7 +1123,7 @@ def shop(revision=0, selected_vehicle=None):
         # exact #1513 shop field so the requester does not use its retail
         # crystal-price fallback.
         'paidDeluxeRemovalCost': {'crystal': 200},
-        'dailyXPFactor': 2,
+        'dailyXPFactor': first_win_factor(),
         # The crew shop.  These three are #1513's own ShopCommonStats
         # fallbacks rather than offline policy, and the garage charges the
         # same numbers the player is shown here.
@@ -1236,9 +1243,15 @@ _DOSSIER_COUNTERS2 = (
     ('damageAssistedTrack', 'damageAssistedTrack'),
     ('damageAssistedRadio', 'damageAssistedRadio'),
     ('damageAssistedStun', 'damageAssistedStun'),
+    ('stunNum', 'stunNum'),
+    ('battlesOnStunningVehicles', 'battlesOnStunningVehicles'),
+    ('piercingsReceived', 'piercingsReceived'),
+    ('noDamageDirectHitsReceived', 'noDamageDirectHitsReceived'),
+    ('explosionHitsReceived', 'explosionHitsReceived'),
+    ('explosionHits', 'explosionHits'),
     ('hitsReceived', 'directHitsReceived'),
     ('potentialDamageReceived', 'potentialDamageReceived'))
-_VEHICLE_DOSSIER_VERSION = 2
+_VEHICLE_DOSSIER_VERSION = 4
 
 
 def _write_battle_statistics(dossier, stats):
@@ -1253,6 +1266,9 @@ def _write_battle_statistics(dossier, stats):
     block2 = dossier['a15x15_2']
     for name, native_name in _DOSSIER_COUNTERS2:
         block2[native_name] = max(0, int(stats.get(name, 0) or 0))
+    if int(stats.get('stunStatsCoverage', 0) or 0) != battles:
+        # A partial historical denominator must never divide lifetime assistance.
+        block2['battlesOnStunningVehicles'] = 0
     for name in ('maxXP', 'maxDamage', 'maxFrags'):
         dossier['max15x15'][name] = max(0, int(stats.get(name, 0) or 0))
     for name in ('creationTime', 'lastBattleTime'):
@@ -1296,6 +1312,8 @@ def account_dossier(postbattle_progress=None, dossier_factory=None,
             for name, value in (('battles', battles), ('wins', wins),
                                 ('losses', losses)):
                 totals[name] = totals.get(name, 0) + value
+            totals['stunStatsCoverage'] = totals.get('stunStatsCoverage', 0) + max(
+                0, int(stats.get('stunStatsCoverage', 0) or 0))
             for name, unused_native in _DOSSIER_COUNTERS + _DOSSIER_COUNTERS2:
                 totals[name] = totals.get(name, 0) + max(
                     0, int(stats.get(name, 0) or 0))

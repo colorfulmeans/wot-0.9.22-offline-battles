@@ -29,6 +29,19 @@ def start(directory):
         start={'type':'battle_start'},snapshot={'type':'snapshot'},config={}))
 
 class ReplayCapacityTests(unittest.TestCase):
+    def test_local_pose_records_the_native_packed_gun_field(self):
+        from types import SimpleNamespace as NS
+        entity = NS(health=123, gunAnglesPacked=45678, gunAngles=9)
+        runtime = NS(_local_position=(1, 2, 3), _server=NS(vehicle_id=7),
+            _server_entity=lambda identity: entity, _avatar=NS(gunRotator=NS(
+                turretYaw=1.2, gunPitch=0.3, dispersionAngle=0.01)), _records={})
+        state = legacy.local_state(runtime)
+        self.assertEqual(45678, state['gun_angles'])
+        self.assertEqual(1.2, state['turret_yaw'])
+        self.assertEqual(0.3, state['gun_pitch'])
+        runtime._server = None
+        self.assertEqual(0, legacy.local_state(runtime)['gun_angles'])
+
     def test_all_stream_limits_match_and_row_bounds_stay_small(self):
         self.assertEqual(8*1024**3,writer.MAX_TOTAL)
         self.assertEqual(writer.MAX_TOTAL,reader.MAX_TOTAL)

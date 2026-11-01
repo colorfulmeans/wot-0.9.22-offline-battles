@@ -10,9 +10,7 @@ import time
 
 from gui.mods.offline_lan_0922 import offline_services as policy
 from gui.mods.offline_lan_0922.ui_i18n import tr, as_text
-from gui.mods.offline_lan_0922.waiting_room_ui import (
-    WaitingRoomUI, _ControlScript, CONTROL_Z, CONTROL_TEXT_COLOUR,
-    OUTLINE_TEXTURE, NativeSurface)
+from gui.mods.offline_lan_0922.waiting_room_ui import WaitingRoomUI
 
 _patches = []
 _panels = []
@@ -26,6 +24,10 @@ def _schedule_daily_rollover(delay=None):
     global _daily_timer
     if delay is None:
         delay = 86400 - time.time() % 86400 + 0.1
+        for record in snapshot().get('vehicles', ()):
+            rental = record.get('rent')
+            if rental and rental[0].get('offlineNoticeExpiry') != int(rental[1]):
+                delay = min(delay, max(0, int(rental[1]) - time.time()) + 0.1)
 
     def refresh():
         from helpers import isPlayerAccount
@@ -36,10 +38,20 @@ def _schedule_daily_rollover(delay=None):
         if not isPlayerAccount() or server is None:
             _schedule_daily_rollover(5.0)
             return
-        try:
-            server.publish_postbattle_progress()
-        finally:
-            _schedule_daily_rollover()
+        def expired(success, error):
+            try:
+                if success:
+                    # #1513 Shop.synchronize(serverCacheRev) requests its own
+                    # async table when the supplied revision differs. Refresh
+                    # dailyXPFactor along with mission/first-win reset fields.
+                    shop = getattr(account, 'shop', None)
+                    if shop is not None:
+                        shop.synchronize(-1)
+                    server.publish_postbattle_progress()
+                    server.publish_campaign_notifications()
+            finally:
+                _schedule_daily_rollover(None if success else 5.0)
+        request('expire_rentals', '', expired)
     _daily_timer = BigWorld.callback(delay, refresh)
 
 
@@ -49,98 +61,38 @@ def snapshot():
     return state.snapshot() if state is not None else {}
 
 
-def mission_reward_text(key):
-    row = policy.MISSION_BY_ID[key]
-    return tr('Mission completed: %s. Reward: %s reserve x1.') % (
-        mission_label(row), tr(policy.RESERVE_BY_ID[row[4]][1]))
-
-
-def notify_missions(keys):
-    """Publish one combined native dialog for this durably completed battle."""
-    from gui import SystemMessages, DialogsInterface
-    from gui.Scaleform.daapi.view.dialogs import SimpleDialogMeta, InfoDialogButtons
-    lines = [mission_reward_text(key) for key in keys if key in policy.MISSION_BY_ID]
-    if not lines:
-        return
-    text = u'\n'.join(lines)
-    SystemMessages.pushMessage(text, type=SystemMessages.SM_TYPE.Information)
-    DialogsInterface.showDialog(SimpleDialogMeta(
-        tr('Mission completed'), text, InfoDialogButtons(tr('CLOSE'))), lambda unused: None)
-
-
-def _install_mission_results():
-    from constants import EVENT_TYPE
-    from gui.battle_results.components import progress, base
-    from gui.server_events.formatters import PROGRESS_BAR_TYPE
-    from gui.Scaleform.genConsts.MISSIONS_STATES import MISSIONS_STATES
-    from gui.Scaleform.genConsts.QUESTS_ALIASES import QUESTS_ALIASES
-    from gui.Scaleform.daapi.view.battle_results_window import BattleResultsWindow
-    from gui.server_events import bonuses, formatters
-    original = progress.QuestsProgressBlock.setRecord
-
-    def set_record(block, result, reusable):
-        original(block, result, reusable)
-        for key in sorted(reusable.personal.getQuestsProgress()):
-            if not str(key).startswith('offline_daily_'):
-                continue
-            mission_id = key[len('offline_daily_'):]
-            if mission_id not in policy.MISSION_BY_ID:
-                continue
-            row = policy.MISSION_BY_ID[mission_id]
-            reward = bonuses.GoodiesBonus('goodies', {
-                policy.RESERVE_IDS[row[4]]: {'count': 1}})
-            awards = [formatters.packSimpleBonusesBlock(reward.formattedList())]
-            # Stock completed quests show their reward and COMPLETED tick.
-            # alertMsg is reserved for a reset/warning, not success text.
-            info = {'title': mission_label(row), 'awards': formatters.todict(awards),
-                'alertMsg': '',
-                'questInfo': {'questID': key, 'eventType': EVENT_TYPE.BATTLE_QUEST,
-                    'IGR': False, 'taskType': '', 'tasksCount': 1,
-                    'progrBarType': PROGRESS_BAR_TYPE.NONE, 'progrTooltip': None,
-                    'maxProgrVal': 0, 'currentProgrVal': 0,
-                    'rendererType': QUESTS_ALIASES.RENDERER_TYPE_QUEST,
-                    'timerDescription': '', 'status': MISSIONS_STATES.COMPLETED,
-                    'description': mission_label(row), 'tooltip': '',
-                    'isSelectable': True, 'isNew': False, 'isAvailable': True},
-                'personalInfo': [],
-                'questType': EVENT_TYPE.BATTLE_QUEST,
-                'progressList': []}
-            block.addComponent(block.getNextComponentIndex(), base.DirectStatsItem('', info))
-    _patch(progress.QuestsProgressBlock, 'setRecord', set_record)
-    original_show = BattleResultsWindow.showEventsWindow
-
-    def show_events(view, event_id, event_type):
-        if str(event_id).startswith('offline_daily_'):
-            from gui.server_events.events_dispatcher import showMissions
-            showMissions()
-            view.destroy()
-        else:
-            original_show(view, event_id, event_type)
-    _patch(BattleResultsWindow, 'showEventsWindow', show_events)
-
-
 def _notify(action, key, success, error):
     from gui import SystemMessages
     if not success:
         SystemMessages.pushMessage(error, type=SystemMessages.SM_TYPE.Error)
         return
-    if action == 'expire_reserves':
+    if action in ('expire_reserves', 'expire_rentals'):
         return
     if action in ('buy_reserve', 'activate_reserve'):
+        import dependency
+        from skeletons.gui.goodies import IGoodiesCache
+        from gui.shared.money import Money
+        from gui.shared.formatters import formatPrice
         row = policy.RESERVE_BY_ID[key]
-        hours = row.duration // 3600
-        text = (tr('Purchased personal reserve: %s +%d%%, %d h. Spent %d gold.') %
-                (tr(row.label), row.percent, hours, row.price) if action == 'buy_reserve' else
-                tr('Activated personal reserve: %s +%d%%, %d h.') %
-                (tr(row.label), row.percent, hours))
-        kind = (SystemMessages.SM_TYPE.PurchaseForGold if action == 'buy_reserve'
-                else SystemMessages.SM_TYPE.Information)
+        booster = dependency.instance(IGoodiesCache).getBooster(policy.RESERVE_IDS[key])
+        if action == 'buy_reserve':
+            SystemMessages.pushI18nMessage('#system_messages:booster_buy/success',
+                boosterName=booster.userName, count=1, money=formatPrice(Money(gold=row.price)),
+                type=SystemMessages.SM_TYPE.PurchaseForGold)
+        else:
+            SystemMessages.pushI18nMessage('#system_messages:booster_activate/success',
+                boosterName=booster.userName, time=booster.getEffectTimeStr(),
+                type=SystemMessages.SM_TYPE.Information)
+        return
     elif action == 'vehicle':
         offer = next(row for row in snapshot()['offlineVehicleOffers']
                      if row['name'] == key)
-        text = tr('Purchased %s for %d bonds. Includes a slot and 100%% crew.') % (
-            as_text(offer['label']), offer['price'])
-        kind = SystemMessages.SM_TYPE.PurchaseForCrystal
+        from gui.shared.money import Money
+        from gui.shared.formatters import formatPrice
+        SystemMessages.pushI18nMessage('#system_messages:vehicle_buy/success',
+            vehName=as_text(offer['label']), price=formatPrice(Money(crystal=offer['price'])),
+            type=SystemMessages.SM_TYPE.PurchaseForCrystal)
+        return
     else:
         text, kind = tr('Badge selection saved.'), SystemMessages.SM_TYPE.Information
     SystemMessages.pushMessage(text, type=kind)
@@ -665,22 +617,6 @@ def _install_reserves():
         else:
             submit()
 
-    def daily_boosters(tab):
-        daily = policy.daily_state(snapshot())
-        tab._boosters = []
-        for key in daily['missions']:
-            row = policy.MISSION_BY_ID[key]
-            label = mission_label(row)
-            label += ' (%d/%d)' % (daily[key], row[3])
-            if key in daily['claimed']:
-                label += tr(' (RECEIVED)')
-            booster = tab.goodiesCache.getBooster(policy.RESERVE_IDS[row[4]])
-            if booster is not None:
-                tab._boosters.append((key, label, booster, 1))
-        tab._totalCount = len(tab._boosters)
-        tab._boosters = [row for row in tab._boosters if tab._isBoosterValid(row[2])]
-        tab._count = len(tab._boosters)
-
     original_notify = BoostersController._BoostersController__notifyBoosterTime
 
     def notify(controller):
@@ -702,7 +638,6 @@ def _install_reserves():
 
     _patch(BoostersWindow, '__init__', boosters_init)
     _patch(BoostersWindow, 'onBoosterActionBtnClick', action)
-    _patch(booster_tabs.QuestsBoostersTab, '_processBoostersData', daily_boosters)
     _patch(BoostersController, '_BoostersController__notifyBoosterTime', notify)
 
 
@@ -803,143 +738,23 @@ def _install_account():
     _patch(BadgesPage, 'onDeselectBadge', select_badge)
 
 
-def mission_label(row):
-    label = tr(row[1])
-    return label % row[3] if '%d' in label else label
-
-
-class _ServiceControl(_ControlScript):
-    def handleKeyEvent(self, event):
-        import Keys
-        if event.key == Keys.KEY_ESCAPE and event.isKeyDown():
-            self._room.activate('close')
-            return True
-        return False
-
-
-class _DailySurface(NativeSurface):
-    def window(self):
-        return self._gui.Window(OUTLINE_TEXTURE)
-
-
-class ServicePanel(WaitingRoomUI):
-    # Waiting-room restyling does not repaint the independent daily panel.
-    panel_size = (680, 340)
-    panel_font = 'system/fonts/offline_lan_cjk.font'
-    control_text_colour = CONTROL_TEXT_COLOUR
-    control_hover_colour = (14, 82, 140, 255)
-
-    def _control_texture(self, role):
-        return 'system/maps/col_white.dds'
-
-    """Daily missions on an empty native page, with no stock tab below it."""
-    def __init__(self, page='daily', on_close=None, surface=None):
-        WaitingRoomUI.__init__(self, lambda unused: False, lambda: (),
-                               on_close=on_close, surface=surface or _DailySurface())
-        self._last_paint = 0
-
-    def install(self):
-        if self._panel is not None:
-            return True
-        WaitingRoomUI.install(self)
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._panel.delChild(component)
-        self._controls, self._labels = {}, {}
-        self._panel.script = _ServiceControl(self, None)
-        self._make_label('title', tr('DAILY MISSIONS'), (-0.89, 0.82, 0), 1.8, 0.12)
-        for index in range(3):
-            self._make_label('row%d' % index, '',
-                             (-0.89, 0.48 - index * 0.3, 0), 1.8, 0.2)
-        self._make_label('note', tr('Standard battles only. Rewards automatic. Resets at 00:00 UTC.'),
-                         (-0.89, -0.55, 0), 1.8, 0.13)
-        for role, label, x in (('reserves', tr('PERSONAL RESERVES'), -0.45),
-                               ('close', tr('CLOSE'), 0.55)):
-            self._make_control(role, (x, -0.85, CONTROL_Z), 0.75, 0.16)
-            self._make_label(role, label, (x, -0.85, 0), 0.75, 0.14,
-                             anchor='CENTER', colour=CONTROL_TEXT_COLOUR)
-            self._controls[role].script = _ServiceControl(self, role)
-        return True
-
-    def _sync_selection(self):
-        return ()
-
-    def _move_pointer(self):
-        WaitingRoomUI._move_pointer(self)
-        stamp = int(time.time())
-        if self._open and self._last_paint != stamp:
-            self._last_paint = stamp
-            self.refresh()
-
-    def _refresh_contents(self):
-        self._apply_layout()
-        daily = policy.daily_state(snapshot())
-        for index, key in enumerate(daily['missions']):
-            row = policy.MISSION_BY_ID[key]
-            self._set_text('row%d' % index, tr('%s: %d/%d | Reward: %s reserve x1%s') % (
-                mission_label(row), daily[key], row[3],
-                tr(policy.RESERVE_BY_ID[row[4]][1]),
-                tr(' (RECEIVED)') if key in daily['claimed'] else ''))
-        for component in list(self._controls.values()) + list(self._labels.values()):
-            self._set(component, 'visible', True)
-        self._set(self._panel, 'visible', True)
-        self._paint()
-        return True
-
-    def activate(self, role):
-        if not self._open or role not in ('close', 'reserves'):
-            return False
-        self.close()
-        if callable(self._on_close):
-            self._on_close()
-        if role == 'reserves':
-            from gui.shared.event_dispatcher import showBoostersWindow
-            showBoostersWindow()
-        return True
-
-
-def close_panel(view):
-    panel = getattr(view, '_offlineServicePanel', None)
-    if panel is not None:
-        panel.uninstall()
-        if panel in _panels:
-            _panels.remove(panel)
-        view._offlineServicePanel = None
-
-
-def _install_daily():
-    from gui.Scaleform.daapi.view.lobby.missions.regular.missions_page import MissionsPage
-
-    def populate(view):
-        super(MissionsPage, view)._populate()
-        view.as_setTabsDataProviderS([])
-        view.as_showFilterS(False)
-        panel = ServicePanel(on_close=view.onClose)
-        view._offlineServicePanel = panel
-        _panels.append(panel)
-        if not panel.open():
-            close_panel(view)
-            view.onClose()
-            raise RuntimeError('the offline daily mission page could not open')
-
-    def dispose(view):
-        close_panel(view)
-        super(MissionsPage, view)._dispose()
-
-    def invalidate(view, ctx=None):
-        # Do not rebuild retail tabs/empty messages on an offline task page.
-        panel = getattr(view, '_offlineServicePanel', None)
-        if panel is not None:
-            panel.refresh()
-
-    _patch(MissionsPage, '_populate', populate)
-    _patch(MissionsPage, '_dispose', dispose)
-    _patch(MissionsPage, '_invalidate', invalidate)
-
-
 def _install_settings():
     from gui.Scaleform.daapi.view.common.settings.SettingsWindow import (
         SettingsWindow, SETTINGS, _PAGES_INDICES, _setLastTabIndex)
     from account_helpers.settings_core.options import VOIPSupportSetting
+    from gui.Scaleform.daapi.view.common.settings.SettingsParams import SettingsParams
+    from . import settings_policy
+    original_game = SettingsParams.getGameSettings
+    original_apply = SettingsParams.apply
+
+    def game_settings(params):
+        return settings_policy.pack(original_game(params))
+
+    def apply_settings(params, diff, *args, **kwargs):
+        return original_apply(params, settings_policy.editable(diff), *args, **kwargs)
+
+    _patch(SettingsParams, 'getGameSettings', game_settings)
+    _patch(SettingsParams, 'apply', apply_settings)
     original_tab = SettingsWindow.onTabSelected
 
     def tab_selected(view, tab):
@@ -1058,10 +873,78 @@ def _install_crew_skill_counter():
     _patch(Tankman,'newSkillCount',property(count))
 
 
+def _install_ordinary_mission_presentation():
+    from gui.mods.offline_lan_0922 import ordinary_missions_native
+    ordinary_missions_native.install_presentation(_patch)
+
+
+def _install_unavailable_entries():
+    """Retain locks after the native bar re-enables renderers on screen changes."""
+    from gui.Scaleform.daapi.view.lobby.header.LobbyHeader import LobbyHeader
+    from gui.Scaleform.daapi.view.lobby.LobbyMenu import LobbyMenu
+    from gui.Scaleform.daapi.view.common.settings.new_settings_counter import invalidateSettings
+    locked_tabs = frozenset((LobbyHeader.TABS.BROWSER, LobbyHeader.TABS.ACADEMY,
+                            LobbyHeader.TABS.STRONGHOLD))
+    locked_buttons = frozenset(('premShop',))
+    original_items = LobbyHeader._getHangarMenuItemDataProvider
+    original_populate = LobbyHeader._populate
+    original_disable = LobbyHeader.as_doDisableHeaderButtonS
+    original_screen = LobbyHeader.as_setScreenS
+    original_click = LobbyHeader.menuItemClick
+
+    def items(view, *args, **kwargs):
+        rows = original_items(view, *args, **kwargs)
+        for row in rows:
+            if row.get('value') in locked_tabs:
+                row['enabled'] = False
+        return rows
+
+    def disable(view, identifier, enabled):
+        return original_disable(view, identifier,
+                                False if identifier in locked_buttons else enabled)
+
+    def lock_header(view):
+        for identifier in locked_buttons:
+            view.as_doDisableHeaderButtonS(identifier, False)
+
+    def populate(view):
+        # Offline preferences are pinned before Account creation, not install.
+        invalidateSettings('GameSettings', None, 'gameplay_epicStandard')
+        result = original_populate(view)
+        lock_header(view)
+        return result
+
+    def screen(view, alias):
+        result = original_screen(view, alias)
+        # MainMenuButtonBar.setCurrent changes parent enabled, overwriting its
+        # children's states. Re-publish per-entry data after that stock call.
+        if view._isDAAPIInited():
+            view._updateHangarMenuData()
+            lock_header(view)
+            print('[Offline LAN 0.9.22] UI POLICY screen=%s locked=browser,academy,stronghold,premShop payment=blocked' % alias)
+        return result
+
+    def click(view, alias):
+        if alias not in locked_tabs:
+            return original_click(view, alias)
+
+    _patch(LobbyHeader, '_getHangarMenuItemDataProvider', items)
+    _patch(LobbyHeader, 'as_doDisableHeaderButtonS', disable)
+    _patch(LobbyHeader, 'as_setScreenS', screen)
+    _patch(LobbyHeader, '_populate', populate)
+    _patch(LobbyHeader, 'menuItemClick', click)
+    _patch(LobbyHeader, 'onPremShopClick', lambda view: None)
+    _patch(LobbyHeader, 'onPayment', lambda view: None)
+    # LobbyMenu.swf disables logoff in all four FRAME_CONSTRUCTED inspector
+    # states. The guard also rejects an old cached Flash callback.
+    _patch(LobbyMenu, 'logoffClick', lambda view: None)
+
+
 def install():
     if _patches:
         return
     try:
+        _install_unavailable_entries()
         _install_item_comparisons()
         _install_directive_fitting()
         _install_store_filters()
@@ -1069,9 +952,8 @@ def install():
         _install_vehicle_filters_and_recovery()
         _install_reserves()
         _install_account()
-        _install_daily()
-        _install_mission_results()
         _install_settings()
+        _install_ordinary_mission_presentation()
         _install_exchange_dialog_limits()
         _install_crew_skill_counter()
         from gui.mods.offline_lan_0922 import crew_voice

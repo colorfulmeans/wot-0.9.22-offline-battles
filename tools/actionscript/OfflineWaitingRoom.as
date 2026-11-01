@@ -2,6 +2,7 @@ package {
     import flash.display.DisplayObject;
     import flash.display.DisplayObjectContainer;
     import flash.events.Event;
+    import flash.events.MouseEvent;
     import flash.geom.Point;
     import flash.geom.Rectangle;
     import flash.text.TextField;
@@ -26,6 +27,11 @@ package {
         private var bodyFormat:TextFormat;
         private var embedded:Boolean;
         private var reportedLayout:Boolean = false;
+        private var daily:Boolean = false;
+        private var footerSamples:int = 0;
+        private var layoutFrames:int = 0;
+        // #1513 settingsWindow.swf: 100px submit/cancel faces at x=491/596.
+        private static const FOOTER_GAP:Number = 5;
 
         public function TrainingWindow() { super(); }
 
@@ -34,7 +40,7 @@ package {
             // The retained authoring prototype is not the content's geometry.
             // Window constraints capture scale before configUI runs.
             _originalWidth = 660;
-            _originalHeight = 282;
+            _originalHeight = 298;
             setActualScale(1, 1);
         }
 
@@ -45,9 +51,9 @@ package {
             bodyFormat.color = 11711136;
             while (numChildren) removeChildAt(0);
             graphics.beginFill(0, 0);
-            graphics.drawRect(0, 0, 660, 282);
+            graphics.drawRect(0, 0, 660, 298);
             graphics.endFill();
-            setSize(660, 282);
+            setSize(660, 298);
             super.configUI();
             text("room", 0, 2, 660);
             text("players", 0, 24, 660);
@@ -83,8 +89,87 @@ package {
             button("team_random", "ButtonNormal", 226, 215, 208);
             button("team2", "ButtonNormal", 452, 215, 208);
             text("message", 0, 240, 660);
-            button("start", "ButtonRed", 378, 260, 180);
-            button("close", "ButtonBlack", 566, 260, 94);
+            button("start", "ButtonRed", 0, 276, 100);
+            button("close", "ButtonBlack", 0, 276, 100);
+        }
+
+        private function configureDaily():void {
+            clearControls();
+            daily = true;
+            _originalWidth = 560;
+            _originalHeight = 266;
+            graphics.clear();
+            graphics.beginFill(0, 0);
+            graphics.drawRect(0, 0, 560, 266);
+            graphics.endFill();
+            setSize(560, 266);
+            for (var index:int = 0; index < 3; ++index) {
+                text("row" + index, 0, 6 + index * 64, 560);
+                text("reward" + index, 0, 28 + index * 64, 560);
+            }
+            text("note", 0, 208, 560);
+            button("reserves", "ButtonNormal", 0, 244, 100);
+            button("close", "ButtonBlack", 0, 244, 100);
+        }
+
+        private function sizeFooter():void {
+            var close:Object = widgets["close"];
+            var primary:Object = widgets[daily ? "reserves" : "start"];
+            sizeFooterButton(close);
+            sizeFooterButton(primary);
+            close.x = (daily ? 560 : 660) - close.width;
+            primary.x = close.x - FOOTER_GAP - primary.width;
+        }
+
+        private function sizeFooterButton(item:Object):void {
+            // Stock settings has a 100px face around its localized OK label.
+            // Measure that label in this control's own native font, preserving
+            // its total side clearance for longer translated captions.
+            var sample:TextField = new TextField();
+            sample.defaultTextFormat = item.textField.defaultTextFormat;
+            sample.embedFonts = item.textField.embedFonts;
+            sample.text = App.utils.locale.makeString("#settings:ok_button");
+            var clearance:Number = 100 - sample.textWidth;
+            item.width = Math.ceil(item.textField.textWidth + clearance);
+            item.validateNow();
+        }
+
+        private function footerState(event:MouseEvent):void {
+            reportFooter(event.type);
+        }
+
+        private function footerFrame(event:Event):void {
+            if (++layoutFrames < 2) return;
+            removeEventListener(Event.ENTER_FRAME, footerFrame);
+            reportFooter("rendered");
+        }
+
+        private function reportFooter(phase:String):void {
+            if (offlineAction == null || footerSamples++ >= 12) return;
+            var frame:Rectangle = window.getBackground().getBounds(this);
+            var form:Rectangle = Object(window).bgForm.getBounds(this);
+            for each (var role:String in [daily ? "reserves" : "start", "close"]) {
+                var item:Object = widgets[role];
+                var bounds:Rectangle = DisplayObject(item).getBounds(this);
+                var text:TextField = item.textField;
+                var glyphs:Rectangle = null;
+                for (var index:int = 0; index < text.length; ++index) {
+                    var glyph:Rectangle = text.getCharBoundaries(index);
+                    if (glyph != null) glyphs = glyphs == null ? glyph : glyphs.union(glyph);
+                }
+                var left:Number = NaN; var right:Number = NaN;
+                if (glyphs != null) {
+                    var p:Point = globalToLocal(text.localToGlobal(new Point(glyphs.left, glyphs.top)));
+                    var q:Point = globalToLocal(text.localToGlobal(new Point(glyphs.right, glyphs.bottom)));
+                    left = p.x - bounds.left; right = bounds.right - q.x;
+                }
+                offlineAction("diagnostics", "phase=" + phase + " control=" + role +
+                    " logical=" + item.width + "x" + item.height +
+                    " rendered=" + bounds.width + "x" + bounds.height +
+                    " glyphMargins=" + left + "," + right +
+                    " footerMargins=" + (bounds.top - form.bottom) + "," + (frame.bottom - bounds.bottom) +
+                    " actualScale=" + item.actualScaleX + "," + item.actualScaleY);
+            }
         }
 
         private function text(key:String, xPos:Number, yPos:Number, w:Number):void {
@@ -116,6 +201,16 @@ package {
 
         private function button(key:String, linkage:String, xPos:Number, yPos:Number, w:Number):void {
             var item:Object = component(key, linkage, xPos, yPos, w);
+            if (key == "start" || key == "reserves" || key == "close") {
+                // #1513 SoundButtonEx dynamic sizing calls setActualSize on
+                // its animated display bounds; a 1px initial face can retain
+                // that transform until rollover. Use the stable width path.
+                item.dynamicSizeByText = false;
+                item.changeSizeOnlyUpwards = false;
+                item.paddingHorizontal = 5;
+                item.addEventListener(MouseEvent.ROLL_OVER, footerState);
+                item.addEventListener(MouseEvent.ROLL_OUT, footerState);
+            }
             item.addEventListener(ButtonEvent.CLICK, clicked);
         }
 
@@ -155,9 +250,16 @@ package {
             // Build the fields before publishing data; otherwise the first
             // model is discarded and the wrapper measures only the prototype.
             validateNow();
+            if (data.daily === true && !daily) configureDaily();
             updating = true;
             window.title = data.title;
             window.useBottomBtns = true;
+            // Match the stock settings' visible upper clearance separately
+            // from its lower frame inset. Default Window footer padding leaves
+            // our 22px controls only 1px below bgForm's measured bounds.
+            // The extra 3px moves the form edge, preserving the accepted lower
+            // inset, button sizes and content dimensions in both panels.
+            window.formBgPadding = new Padding(33, 11, 45, 10);
             for (var key:String in fields) fields[key].text = data.labels[key] == null ? "" : String(data.labels[key]);
             for (key in widgets) {
                 var widget:Object = widgets[key];
@@ -179,8 +281,10 @@ package {
                 } else {
                     widget.label = state.label;
                     widget.selected = state.selected;
+                    widget.validateNow();
                 }
             }
+            sizeFooter();
             // Window.updateSource caches content size. Re-measure after our
             // dynamic children exist, using the native padding/chrome contract.
             UIComponent(window).invalidate(Window.INVALID_SRC_VIEW);
@@ -188,12 +292,15 @@ package {
             updating = false;
             placeRoom();
             if (!reportedLayout && offlineAction != null) {
+                reportFooter("initial");
+                addEventListener(Event.ENTER_FRAME, footerFrame);
                 reportedLayout = true;
                 offlineAction("diagnostics", "content=" + width + "x" + height +
                     " actualScale=" + actualScaleX + "," + actualScaleY +
                     " frame=" + window.width + "x" + window.height +
-                    " roomChars=" + TextField(fields["room"]).length +
-                    " mapChars=" + String(widgets["map"].label).length);
+                    " daily=" + daily + " footerGap=" + FOOTER_GAP +
+                    " roomChars=" + (daily ? 0 : TextField(fields["room"]).length) +
+                    " mapChars=" + (daily ? 0 : String(widgets["map"].label).length));
                 for (var role:String in widgets) {
                     var control:Object = widgets[role];
                     var bounds:Rectangle = DisplayObject(control).getBounds(this);
@@ -231,9 +338,9 @@ package {
 
         private function placeRoom():void {
             if (window == null || stage == null || window.parent == null) return;
-            if (queue == null || queue.parent == null) queue = findQueue(App.stage as DisplayObjectContainer);
-            var top:Number = stage.stageHeight * 0.24;
-            var bottom:Number = stage.stageHeight * 0.80;
+            if (!daily && (queue == null || queue.parent == null)) queue = findQueue(App.stage as DisplayObjectContainer);
+            var top:Number = daily ? 0 : stage.stageHeight * 0.24;
+            var bottom:Number = daily ? stage.stageHeight : stage.stageHeight * 0.80;
             if (queue != null) {
                 var titleBounds:Rectangle = queue.modeTitle.getBounds(stage);
                 var footerBounds:Rectangle = DisplayObject(queue.exitButton).getBounds(stage);
@@ -251,17 +358,26 @@ package {
             window.y = Math.round(localPos.y);
         }
 
-        override protected function onDispose():void {
+        private function clearControls():void {
+            removeEventListener(Event.ENTER_FRAME, footerFrame);
             for each (var icon:Object in icons) icon.dispose();
             icons = {};
             for (var key:String in widgets) {
                 var widget:Object = widgets[key];
                 widget.removeEventListener(ButtonEvent.CLICK, clicked);
                 widget.removeEventListener(ListEvent.INDEX_CHANGE, selected);
+                widget.removeEventListener(MouseEvent.ROLL_OVER, footerState);
+                widget.removeEventListener(MouseEvent.ROLL_OUT, footerState);
                 if (key == "tier" || key == "skill" || key == "size1" || key == "size2") widget.close();
                 widget.dispose();
             }
-            widgets = {}; fields = {}; queue = null; offlineAction = null;
+            widgets = {}; fields = {}; queue = null;
+            while (numChildren) removeChildAt(0);
+        }
+
+        override protected function onDispose():void {
+            clearControls();
+            offlineAction = null;
             super.onDispose();
         }
     }

@@ -32,7 +32,7 @@ class CrewCatalogueTests(unittest.TestCase):
              patch.object(store.vehicle_overlays.packed_xml,'read_packed_xml',side_effect=native):
             archive.return_value.__enter__.return_value.read.side_effect=lambda name:name
             rows=store.catalogue('game')
-        self.assertEqual(['germany:G85_Auf_Panther','ussr:R11_MS-1'],[r['name'] for r in rows])
+        self.assertEqual(['ussr:R11_MS-1','germany:G85_Auf_Panther'],[r['name'] for r in rows])
 
 
 class CrewStoreTests(unittest.TestCase):
@@ -185,6 +185,20 @@ class BerthTests(CrewStoreTests):
 
 @unittest.skipUnless(os.name=='nt' or os.environ.get('DISPLAY'),'requires actual Tk display')
 class CrewUITests(unittest.TestCase):
+    def test_tier_intersects_class_and_nation_without_recruiting_hidden_vehicle(self):
+        p=self.panel
+        p.vehicles=[dict(v,level=1 if v['nation']=='ussr' else 2) for v in p.vehicles]
+        p.filter();p.variables['tier'].set('2');p.filter()
+        self.assertFalse(p.by_label)
+        self.assertEqual('',p.variables['vehicle'].get())
+        self.assertEqual('disabled',str(p.button.cget('state')))
+        p.variables['nation'].set('USA');p.filter()
+        self.assertEqual(['usa:A01_T1_Cunningham'],list(p.by_label.values()))
+        p.owner._t=lambda text:'translated '+text
+        p.translate()
+        self.assertEqual(2,p.maps['tier'][p.variables['tier'].get()])
+        self.assertEqual('usa:A01_T1_Cunningham',p.maps['vehicle'][p.variables['vehicle'].get()])
+
     def setUp(self):
         import tkinter as tk
         from tkinter import ttk
@@ -234,7 +248,7 @@ class CrewUITests(unittest.TestCase):
         self.assertEqual('1',p.variables['skills'].get());self.assertEqual('disabled',str(p.boxes['skills'].cget('state')))
         p.variables['training'].set('100%');p.update_skills()
         self.assertEqual(1,min(p.maps['skills'].values()));self.assertEqual('readonly',str(p.boxes['skills'].cget('state')))
-        self.assertEqual(['nation','class','vehicle','seat','female','training','skills'],list(p.variables))
+        self.assertEqual(['nation','class','tier','vehicle','seat','female','training','skills'],list(p.variables))
         p.variables['female'].set('Male');p.variables['training'].set('50%');p.update_skills()
         self.assertEqual('0',p.variables['skills'].get())
 

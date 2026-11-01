@@ -1,5 +1,6 @@
 from __future__ import print_function
 from gui.mods.offline_lan_0922 import bot_tactics
+from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
 
 """Playable #1513 battle runtime built on stock Avatar and Vehicle entities."""
 
@@ -5691,9 +5692,18 @@ class BattleRuntime(object):
                 row=room_choices[str(side)]
                 needed.update(class_policy.required(row,pinned_tags))
                 if len(slots)>len(pinned_names) and not row['random']:groups.append([tag for tag in bot_tactics.CLASSES if row[tag]])
+            from gui.mods.offline_lan_0922 import lineup_slots
+            active_slots = set((side, int(raw.get('slot', 0)))
+                               for side in (1, 2) for raw in bots_by_team[side])
+            filtered_slots = [row for row in self._start_message.get('bot_lineup') or ()
+                              if row.get('enabled') and not row.get('vehicle') and
+                              (row.get('team'), row.get('slot')) in active_slots and
+                              (row.get('nation') or row.get('vehicle_class'))]
+            slot_tiers = [[v['level'] for v in candidates if v['name'] not in excluded_names
+                           and lineup_slots.matches(row, v)] for row in filtered_slots]
             resolved=class_policy.matching_tiers([(v['level'],bot_planner.vehicle_match_class(v)) for v in candidates
                                                   if v['name'] not in excluded_names],needed,
-                [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups)
+                [v['level'] for values in humans_by_team.values() for v in values],match_tiers,tier_mode=='random',groups,slot_tiers)
             if resolved is None:raise ValueError('No legal battle-tier window can supply the selected Bot classes')
             match_tiers=resolved
             team_size = max(
@@ -5728,7 +5738,17 @@ class BattleRuntime(object):
                     pinned_vehicles[key] = raw['vehicle']
             artillery_names = set(candidate['name'] for candidate in all_candidates
                                   if bot_planner.vehicle_match_class(candidate) == 'SPG')
-            assignments = {}
+            from gui.mods.offline_lan_0922 import lineup_slots
+            for row in self._start_message.get('bot_lineup') or ():
+                key = (row.get('team'), row.get('slot'))
+                if (row.get('enabled') and not row.get('vehicle') and key in bot_slots and
+                        (row.get('nation') or row.get('vehicle_class'))):
+                    pool = [candidate for candidate in automatic_candidates
+                            if lineup_slots.matches(row, candidate)]
+                    if not pool:
+                        raise ValueError('No vehicles match lineup slot %s' % (key,))
+                    pinned_vehicles[key] = lineup_random.choice(pool)['name']
+            assignments = dict(pinned_vehicles)
             for team in (1, 2):
                 team_bots = bots_by_team[team]
                 picked = bot_planner.remaining_match_template(
@@ -19505,6 +19525,9 @@ class BattleRuntime(object):
     def _frame(self):
         if self.state != 'running':
             return
+        if detailed_enabled():
+            from .compat import sample_pending_battle_models
+            sample_pending_battle_models(getattr(self._runtime, 'compatibility', None))
         if self._worker_mode:
             self._worker_frame_callbacks += 1
         diagnostics = self._frame_diagnostics
@@ -22733,6 +22756,8 @@ class BattleRuntime(object):
         # Evidence only: candidate probes cannot apply HP. BotRuntime consumes
         # the primary realised hard contact before trying alternate headings.
         bot_state.pop('_world_contact_trace', None)
+        if detailed_enabled():
+            bot_state.pop('_passive_world_diagnostic_trace', None)
         airborne = bool(bot_state.get('airborne', False))
         movement_dir = int(bot_state.get('movement_dir', 0))
         rotation_dir = int(bot_state.get('rotation_dir', 0))
@@ -22826,8 +22851,14 @@ class BattleRuntime(object):
                 sampled_at=now, source='native_world', commit_enabled=commit_enabled)
             return 'hard'
         if self._destructibles is None:
+            if detailed_enabled() and world_status != 'clear':
+                bot_state['_passive_world_diagnostic_trace'] = dict(contact_trace,
+                    source='native_world_without_catalog', status=world_status)
             return 'clear' if world_status == 'clear' else 'hard'
         if airborne:
+            if detailed_enabled() and world_status != 'clear':
+                bot_state['_passive_world_diagnostic_trace'] = dict(contact_trace,
+                    source='native_world_airborne', status=world_status)
             return 'clear' if world_status == 'clear' else 'hard'
         # A native kinetic result is only a forward candidate.  Always hand it
         # to the catalog's exact contact seam; its ``approach`` result keeps a
@@ -22869,6 +22900,13 @@ class BattleRuntime(object):
             return 'commit_required'
         used_kinetic_speed = bool(detail.get('used_kinetic_speed', False))
         accepted_now = bool(detail.get('accepted_now', False))
+        if detailed_enabled() and motion_yaw is not None:
+            bot_state['_passive_world_diagnostic_trace'] = dict(
+                source='realised_passive_catalog', status=status,
+                speed=speed, kinetic_speed=kinetic_speed,
+                allow_crush_drive=allow_crush_drive,
+                accepted_now=accepted_now, used_kinetic_speed=used_kinetic_speed,
+                token=detail.get('token'), requires_commit=detail.get('requires_commit'))
         if used_kinetic_speed and not (
                 accepted_now and status == 'crushed' and
                 detail.get('token')):
@@ -22897,6 +22935,13 @@ class BattleRuntime(object):
             return self._complete_bot_tree_contact(
                 tree, position, yaw, contact_end, yaw,
                 descriptor, speed, now, dt, commit_enabled, status)
+        if detailed_enabled():
+            bot_state['_passive_world_diagnostic_trace'] = dict(reason='catalog_' + status,
+                sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
+                dt=dt, commit_enabled=commit_enabled,
+                native_status=world_status, native_contact=contact_trace,
+                catalog={key: detail.get(key) for key in
+                         ('status', 'kinds', 'reason', 'token', 'requires_commit')})
         return status
 
     @staticmethod
@@ -27008,15 +27053,19 @@ class BattleRuntime(object):
             # identical setHullAimingAnglesDelta input every render callback
             # does not advance them; current hull pitch and Siege state below
             # fence every input that can change that value.
+            # World barrel yaw includes hull pitch/roll. The matrix setter
+            # consumes hull-relative traverse, just like projectile geometry.
+            presentation_aim = (yaw + turret_yaw
+                if 'turret_yaw' in state else aim_yaw)
             aim_signature = (
-                lifecycle, yaw, aim_yaw, gun_pitch,
+                lifecycle, yaw, presentation_aim, gun_pitch,
                 rotation[1], int(state.get('siege_state', 0) or 0))
             if record.get('_authority_aim_signature') == aim_signature:
                 self._authority_aim_skips += 1
             else:
                 try:
                     self._binding.update_vehicle_aim(
-                        engine_id, yaw, aim_yaw, gun_pitch)
+                        engine_id, yaw, presentation_aim, gun_pitch)
                 except Exception as error:
                     record.pop('_authority_aim_signature', None)
                     self._warn_optional_failure(
@@ -27053,6 +27102,8 @@ class BattleRuntime(object):
                 self._run_optional_feature(
                     'bot track animation', self._update_bot_tracks,
                     (record, state, now))
+            if not motion_alive:
+                self._observe_wreck_aim(record, now)
             applied = True
         return applied
 
@@ -27687,6 +27738,61 @@ class BattleRuntime(object):
             rows.append((record, vehicle, position))
         return tuple(rows)
 
+    def _wreck_lane_evidence(self, record, vehicle, points, blocked):
+        """Observe the existing lane/model and projectile poses; never requery."""
+        if not detailed_enabled():
+            return
+        from .native_input_diagnostics import battle_review_record
+        def build():
+            state = record.get('state') or {}
+            native_aim, error = None, None
+            try:
+                appearance = vehicle.appearance
+                turret = self._runtime.math.Matrix(appearance.turretMatrix)
+                gun = self._runtime.math.Matrix(appearance.gunMatrix)
+                native_aim = [float(turret.yaw), float(gun.pitch)]
+            except Exception as failure:
+                error = type(failure).__name__
+            return dict(actor=record.get('network_id'), blocked=bool(blocked),
+                ray_start=list(_xyz(points[0])), ray_end=list(_xyz(points[-1])),
+                state=dict((key, state.get(key)) for key in
+                    ('yaw', 'aim_yaw', 'turret_yaw', 'gun_pitch')),
+                projectile_pose=record.get('projectile_collision_pose'),
+                native_aim=native_aim, native_aim_error=error,
+                native_aim_source='appearance_matrix_providers')
+        battle_review_record(
+            self, 'wreck_firing_lane', record.get('engine_id'),
+            self._last_frame_time, build, interval=2.0, limit=256)
+
+    def _observe_wreck_aim(self, record, now):
+        """Sample actual providers even when no shot crosses this corpse."""
+        if not detailed_enabled():
+            return
+        from .native_input_diagnostics import battle_review_record
+        def build():
+            pose = record.get('projectile_collision_pose') or {}
+            row = dict(actor=record.get('network_id'), projectile_pose=pose,
+                native_aim=None, native_aim_error=None)
+            try:
+                vehicle = self._remote_factory.get(record['engine_id'])
+                appearance = vehicle.appearance
+                from .entities.remote_vehicle import _component_aim_angles
+                expected = _component_aim_angles(
+                    getattr(vehicle, 'typeDescriptor', None),
+                    pose['turret_yaw'], pose['gun_pitch'])
+                row['expected_component_aim'] = list(expected)
+                row['turret_detached'] = bool(getattr(vehicle, 'isTurretDetached', False))
+                yaw = float(self._runtime.math.Matrix(appearance.turretMatrix).yaw)
+                pitch = float(self._runtime.math.Matrix(appearance.gunMatrix).pitch)
+                row['native_aim'] = [yaw, pitch]
+                row['yaw_error'] = _angle_delta(expected[0], yaw)
+                row['pitch_error'] = pitch - expected[1]
+            except Exception as error:
+                row['native_aim_error'] = type(error).__name__
+            return row
+        battle_review_record(self, 'wreck_aim_published', record.get('engine_id'),
+            now, build, interval=2.0, limit=256)
+
     def _bot_lane_row_contact(self, rows, points, splash_radius=0.0,
                               exclude=()):
         """Return the first supplied hull one bot shell path contacts.
@@ -27707,6 +27813,7 @@ class BattleRuntime(object):
                 splash_radius > 0.0 and
                 sum((position[index] - terminal[index]) ** 2
                     for index in range(3)) <= splash_radius ** 2)
+            tested = blocked
             if not blocked:
                 for first, second in zip(points, points[1:]):
                     if (not point_in_expanded_segment_bounds(
@@ -27717,6 +27824,7 @@ class BattleRuntime(object):
                         continue
                     start = self._vector(first)
                     end = self._vector(second)
+                    tested = True
                     if (record.get('local') and
                             self._local_matrix is not None):
                         collisions = collide_vehicle_at_matrix(
@@ -27739,6 +27847,8 @@ class BattleRuntime(object):
                     if collisions:
                         blocked = True
                         break
+            if tested and not (record.get('state') or {}).get('alive', True):
+                self._wreck_lane_evidence(record, vehicle, points, blocked)
             if blocked:
                 return record, vehicle, position
         return None
@@ -29116,6 +29226,8 @@ class BattleRuntime(object):
             pitch = pose.get('pitch', 0.0)
             roll = pose.get('roll', 0.0)
             aim_yaw = pose.get('aim_yaw', yaw)
+            presentation_aim = (yaw + pose['turret_yaw']
+                if 'turret_yaw' in pose else aim_yaw)
             gun_pitch = pose.get('gun_pitch', 0.0)
             collision_pose = self._projectile_plain_pose(
                 (x, y, z), pose)
@@ -29124,7 +29236,7 @@ class BattleRuntime(object):
             record['projectile_collision_pose'] = collision_pose
             alive = bool(state.get('alive', True)) and int(
                 state.get('health', 1) or 0) > 0
-            signature = (x, y, z, yaw, pitch, roll, aim_yaw, gun_pitch)
+            signature = (x, y, z, yaw, pitch, roll, presentation_aim, gun_pitch)
             lifecycle = (self._generation, record['engine_id'], id(record))
             pose_changed = (
                 signature != record.get('_remote_pose_signature') or
@@ -29170,7 +29282,7 @@ class BattleRuntime(object):
             # for a worker's hydraulic geometry, and an applied Siege edge
             # can replace the installed gun's static component angles.
             aim_signature = (
-                lifecycle, yaw, pitch, aim_yaw, gun_pitch,
+                lifecycle, yaw, pitch, presentation_aim, gun_pitch,
                 record.get('presented_siege_state'))
             aim_changed = aim_signature != record.get('_remote_aim_signature')
             if aim_changed:
@@ -29178,8 +29290,10 @@ class BattleRuntime(object):
                 # signature no longer describes that partially written aim.
                 record.pop('_remote_aim_signature', None)
                 self._binding.update_vehicle_aim(
-                    record['engine_id'], yaw, aim_yaw, gun_pitch)
+                    record['engine_id'], yaw, presentation_aim, gun_pitch)
                 record['_remote_aim_signature'] = aim_signature
+            if not alive:
+                self._observe_wreck_aim(record, now)
             if record.get('kind') in ('bot', 'player'):
                 # Keep the zero-turn sample fresh through playback holds.
                 turn = self._remember_remote_track_turn(record, yaw, now)

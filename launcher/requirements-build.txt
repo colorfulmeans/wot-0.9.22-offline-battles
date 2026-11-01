@@ -1,2 +1,5 @@
 -r ../server/requirements-windows-build.txt
 Pillow==12.3.0
+numpy==2.3.5
+moderngl==5.12.0
+glcontext==3.0.0

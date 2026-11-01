@@ -350,7 +350,7 @@ class PortSourceTests(unittest.TestCase):
         build_script = (PORT_ROOT / 'build_for_client.sh').read_text(
             encoding='utf-8')
 
-        self.assertEqual('1.0.0', packager.MOD_VERSION)
+        self.assertEqual('1.1.0', packager.MOD_VERSION)
         self.assertEqual(packager.MOD_VERSION, package.PORT_VERSION)
         self.assertEqual(packager.MOD_VERSION, meta_version)
         self.assertIn(
@@ -367,10 +367,10 @@ class PortSourceTests(unittest.TestCase):
             self.assertEqual([packager.MOD_VERSION], values, filename)
         for directory in ('launcher', 'server'):
             source = (PORT_ROOT / directory / 'version_info.txt').read_text()
-            self.assertIn("StringStruct('FileVersion', '1.0.0')", source)
-            self.assertIn("StringStruct('ProductVersion', '1.0.0')", source)
-            self.assertIn('filevers=(1, 0, 0, 0)', source)
-            self.assertIn('prodvers=(1, 0, 0, 0)', source)
+            self.assertIn("StringStruct('FileVersion', '1.1.0')", source)
+            self.assertIn("StringStruct('ProductVersion', '1.1.0')", source)
+            self.assertIn('filevers=(1, 1, 0, 0)', source)
+            self.assertIn('prodvers=(1, 1, 0, 0)', source)
 
     def test_port_sources_are_python_2_compatible_syntax(self):
         source_root = PORT_ROOT / 'src'
@@ -493,7 +493,7 @@ class PortSourceTests(unittest.TestCase):
                 config_path.parent / packager.BUILD_IDENTITY_FILENAME
             ).read_text(encoding='utf-8'))
             self.assertEqual(1, identity['schema'])
-            self.assertEqual('1.0.0', identity['semanticVersion'])
+            self.assertEqual('1.1.0', identity['semanticVersion'])
             self.assertRegex(
                 identity['buildIdentity'],
                 r'^local-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$')
@@ -7194,7 +7194,8 @@ class BootstrapContractTests(unittest.TestCase):
             'gui.mods.offline_lan_0922.instance_guard')
         instance_guard.release_if_requested = mock.Mock(return_value=False)
         session = types.SimpleNamespace(
-            install=mock.Mock(return_value=True), stop=mock.Mock())
+            install=mock.Mock(return_value=True), stop=mock.Mock(),
+            on_lobby_view_loaded=mock.Mock())
         lan_session = types.ModuleType(
             'gui.mods.offline_lan_0922.lan_session')
         lan_session.LANSession = mock.Mock(return_value=session)
@@ -7411,6 +7412,7 @@ class BootstrapContractTests(unittest.TestCase):
             module.fini()
             self.assertFalse(module._started)
             module._signal_player_ready.assert_called_once_with()
+            session.on_lobby_view_loaded.assert_called_once_with()
             services_ui_module.uninstall.assert_called_once_with()
             engine_audio_module.uninstall.assert_called_once_with()
 

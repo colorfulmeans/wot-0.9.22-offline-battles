@@ -183,10 +183,16 @@ class AccountRpcTests(unittest.TestCase):
                             context)
         system = types.SimpleNamespace(pushMessage=mock.Mock(),
             SM_TYPE=types.SimpleNamespace(Information='info'))
-        patch = mock.patch.object(sys.modules['gui'], 'SystemMessages', system,
-                                  create=True)
+        import importlib
+        native = importlib.import_module('gui.mods.offline_lan_0922.native_notifications')
+        patch = mock.patch.object(native, 'publish', system.pushMessage)
         patch.start()
         self.addCleanup(patch.stop)
+        constants = sys.modules.setdefault('constants', types.ModuleType('constants'))
+        invoice_patch = mock.patch.object(constants, 'INVOICE_ASSET',
+            types.SimpleNamespace(DATA=6), create=True)
+        invoice_patch.start()
+        self.addCleanup(invoice_patch.stop)
         return server, state, store, system, saved, context
 
     def test_campaign_outbox_pushes_once_and_acknowledges_shared_garage(self):
@@ -195,7 +201,8 @@ class AccountRpcTests(unittest.TestCase):
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
         system.pushMessage.assert_called_once()
-        self.assertIn('1234', system.pushMessage.call_args[0][0])
+        self.assertEqual('potapovQuestBonus', system.pushMessage.call_args.args[0])
+        self.assertEqual(1234, system.pushMessage.call_args.args[1]['credits'])
         self.assertEqual({'notice-1'}, delivered)
         self.assertEqual([], state.snapshot()['personalMissionNotifications'])
         self.assertEqual([], saved[0]['personalMissionNotifications'])
@@ -207,27 +214,42 @@ class AccountRpcTests(unittest.TestCase):
         server, state, store, system, saved, unused_context = self._campaign_outbox()
         delivered = set()
         system.pushMessage.side_effect = RuntimeError('lobby message service not ready')
-        with self.assertRaises(RuntimeError):
-            server.publish_campaign_notifications(delivered)
+        self.assertEqual((0, True), server.publish_campaign_notifications(delivered))
         self.assertEqual(1, len(state.snapshot()['personalMissionNotifications']))
         self.assertEqual(set(), delivered)
         self.assertEqual([], saved)
         store.flush.assert_not_called()
+        self.assertEqual((0, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual(1, system.pushMessage.call_count)
+        server._context['native_notice_retry_at'].clear()
         system.pushMessage.side_effect = None
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
+
+    def test_bad_notice_does_not_block_later_receipts_or_get_acknowledged(self):
+        server, state, store, system, saved, unused_context = self._campaign_outbox()
+        later = copy.deepcopy(state.snapshot()['personalMissionNotifications'][0])
+        later['id'] = 'notice-2'
+        state.snapshot()['personalMissionNotifications'].append(later)
+        system.pushMessage.side_effect = [AttributeError('unknown native message type'), None]
+        delivered = set()
+        self.assertEqual((1, True), server.publish_campaign_notifications(delivered))
+        self.assertEqual({'notice-2'}, delivered)
+        self.assertEqual(['notice-1'], [r['id'] for r in state.snapshot()['personalMissionNotifications']])
 
     def test_launcher_asset_notice_uses_native_publisher_without_reapplying_assets(self):
         server, state, store, system, saved, unused_context = self._campaign_outbox()
         state.snapshot()['personalMissionNotifications'][0]['settlement'] = {
             'account_changes': [{'phase': 'granted', 'rewards': [
-                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4}]}]}
+                {'kind': 'credits', 'count': 4321}, {'kind': 'crew', 'count': 4,
+                    'passports': ['YQ=='] * 4}]}]}
         delivered = set()
         self.assertEqual((1, False), server.publish_campaign_notifications(delivered))
         self.assertEqual((0, False), server.publish_campaign_notifications(delivered))
         system.pushMessage.assert_called_once()
-        self.assertIn('4321', system.pushMessage.call_args[0][0])
-        self.assertEqual('info', system.pushMessage.call_args[1]['type'])
+        self.assertEqual('invoiceReceived', system.pushMessage.call_args.args[0])
+        self.assertEqual(4321, system.pushMessage.call_args.args[1]['data']['credits'])
+        self.assertEqual(4, len(system.pushMessage.call_args.args[1]['data']['tankmen']))
         self.assertEqual([], saved[0]['personalMissionNotifications'])
         self.assertEqual({'credits': 7777}, state.snapshot()['wallet'])
 
@@ -1596,7 +1618,7 @@ class AccountRpcTests(unittest.TestCase):
         for change in value[1]:
             self.assertEqual(
                 CONTRACT['dossiers']['changeTupleArity'], len(change))
-        self.assertEqual((2, []), value)
+        self.assertEqual((account_data._VEHICLE_DOSSIER_VERSION, []), value)
 
     def test_old_chat_mailbox_does_not_echo_command_as_chat_action(self):
         events = []

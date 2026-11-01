@@ -140,6 +140,7 @@ class DepotStyleTests(unittest.TestCase):
         self.assertFalse(next(row for row in rows if row['id']=='256')['disabled'])
 
     def test_shop_purchase_confirmation_submits_one_native_transaction_and_refreshes(self):
+        notifier = fixture._load_port_module('native_notifications')
         state={'shopItemPrices':{34*256:{'gold':750}},'notInShopItems':[],
                'customizationItems':{4:{}}}
         pending=[];messages=[]
@@ -149,6 +150,8 @@ class DepotStyleTests(unittest.TestCase):
         def module(name,**values):
             result=types.ModuleType(name);result.__dict__.update(values);return result
         modules={
+            'gui.mods.offline_lan_0922.native_notifications': notifier,
+            'constants': module('constants',INVOICE_ASSET=types.SimpleNamespace(DATA=6)),
             'BigWorld':module('BigWorld',player=lambda:account),
             'items.vehicles':module('vehicles',g_cache=types.SimpleNamespace(
                 customization20=lambda:types.SimpleNamespace(styles=self.styles))),
@@ -169,7 +172,8 @@ class DepotStyleTests(unittest.TestCase):
         for name in sorted(modules,key=lambda value:value.count('.'),reverse=True):
             if '.' in name:
                 parent,child=name.rsplit('.',1);setattr(modules[parent],child,modules[name])
-        with mock.patch.dict(sys.modules,modules),mock.patch.object(self.depot,'_selected_vehicle',return_value=(9,None)):
+        with mock.patch.dict(sys.modules,modules),mock.patch.object(self.depot,'_selected_vehicle',return_value=(9,None)), \
+                mock.patch.object(notifier,'publish',side_effect=lambda kind, data: messages.append((kind,data))):
             self.depot.purchase(view,34*256)
             self.assertEqual(1,len(pending))
             pending[0](False);account.shop.buyCustomizations.assert_not_called()
@@ -181,6 +185,10 @@ class DepotStyleTests(unittest.TestCase):
             pending[0](True);self.assertEqual(1,account.shop.buyCustomizations.call_count)
             view._update.assert_called_once()
             self.assertEqual(1,len(messages))
+            self.assertEqual('invoiceReceived', messages[0][0])
+            self.assertEqual(-750, messages[0][1]['data']['gold'])
+            self.assertEqual([{'custType':'style','value':1,'isPermanent':True}],
+                             messages[0][1]['data']['customizations'])
             self.assertFalse(view._offline_style_purchase_pending)
 
     @unittest.skipUnless(os.environ.get('WOT_0922_CLIENT') and os.environ.get('WOT_0922_PY27'),

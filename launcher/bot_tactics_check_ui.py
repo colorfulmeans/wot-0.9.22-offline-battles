@@ -1,4 +1,9 @@
 """Navigable three-category map checks; reports never mutate route data."""
+try:
+    from . import ui_layout
+except ImportError:
+    import ui_layout
+
 import copy
 import tkinter as tk
 from tkinter import ttk
@@ -80,11 +85,13 @@ def show(editor):
             e.view.pan_x+=e.canvas.winfo_width()/2-x;e.view.pan_y+=e.canvas.winfo_height()/2-y;e.redraw()
         e.root.lift()
     tree.bind('<Double-1>',locate)
-    ttk.Button(window,text=e.tr('定位选中项','Locate selection'),command=locate).pack(side='left',padx=8,pady=8)
-    ttk.Button(window,text=e.tr('关闭','Close'),command=window.destroy).pack(side='right',padx=8,pady=8)
+    actions=tk.Frame(window); actions.pack(fill='x', padx=8, pady=8)
+    tk.Button(actions,text=e.tr('定位选中项','Locate selection'),command=locate).pack(side='left',padx=8,pady=8)
+    tk.Button(actions,text=e.tr('关闭','Close'),command=window.destroy).pack(side='right',padx=8,pady=8)
     def cancel(event):
         if event.widget is window and timer[0] is not None:
             window.after_cancel(timer[0]);timer[0]=None
     window.bind('<Destroy>',cancel,add='+')
     timer[0]=window.after(300,refresh)
+    ui_layout.polish(window)
     return window

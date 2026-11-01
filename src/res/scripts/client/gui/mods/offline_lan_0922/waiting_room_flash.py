@@ -46,6 +46,7 @@ def _view_type():
             owner, self.owner = self.owner, None
             if owner is not None and owner.view is self:
                 owner.view = None
+                owner.view_disposed()
             super(RoomView, self)._dispose()
 
     return RoomView
@@ -99,8 +100,14 @@ class RoomWindow(object):
 
     def refresh(self):
         if self.view is not None and self.view._isDAAPIInited():
-            self.view.flashObject.as_update(model(self.room))
+            self.view.flashObject.as_update(self.model())
         return True
+
+    def model(self):
+        return model(self.room)
+
+    def view_disposed(self):
+        pass
 
     def action(self, role, value):
         room = self.room
@@ -202,7 +209,8 @@ def model(room):
         sizes = teams.get('sizes') or {}
         current = int(sizes.get(team, sizes.get(str(team), 15)))
         if room._pending_team_sizes.get(team) == current: room._pending_team_sizes.pop(team, None)
-        menu('size%d' % team, [(str(i), str(i)) for i in range(1, 16)], room._pending_team_sizes.get(team, current),
+        first = 0 if current == 0 and not teams.get('size_supported') else 1
+        menu('size%d' % team, [(str(i), str(i)) for i in range(first, 16)], room._pending_team_sizes.get(team, current),
              host and teams.get('size_supported'))
     from gui.mods.offline_lan_0922 import bot_tactics
     choices=bot_tactics.team_class_choices(teams.get('classes') or None)

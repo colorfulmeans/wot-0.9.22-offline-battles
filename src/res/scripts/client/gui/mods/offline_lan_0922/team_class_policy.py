@@ -62,14 +62,16 @@ def validate(row,automatic,pinned,candidates,spg_limit):
         return 'pool'
     return None
 
-def matching_tiers(candidates,needed,humans,proposed,random_mode,groups=()):
+def matching_tiers(candidates,needed,humans,proposed,random_mode,groups=(),slot_tiers=()):
     """Choose one legal random window that can supply every guaranteed class."""
     proposed=tuple(sorted(set(proposed)))
     needed=set(needed)
-    if not needed and not groups:return proposed
+    if not needed and not groups and not slot_tiers:return proposed
     def covered(tiers):
         present=set(tag for level,tag in candidates if level in tiers)
-        return needed.issubset(present) and all(set(group).intersection(present) for group in groups)
+        return (needed.issubset(present) and
+                all(set(group).intersection(present) for group in groups) and
+                all(set(levels).intersection(tiers) for levels in slot_tiers))
     if covered(proposed):return proposed
     if not random_mode:return None
     humans=set(humans)

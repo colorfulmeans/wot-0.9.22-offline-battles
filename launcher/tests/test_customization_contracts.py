@@ -103,7 +103,7 @@ class EditorProtectionTests(unittest.TestCase):
         self.assertEqual('60',e.wait_seconds.get());self.assertEqual({'behavior':([],[]),'maps':([],[])},e.histories)
     def test_import_collision_is_rejected_without_replacing_default(self):
         e=self.editor;source=Path(self.temp.name)/'import.json';storage._atomic(source,storage.contract.default_profile())
-        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.simpledialog,'askstring',return_value='Default'),mock.patch.object(e,'error') as errors:
+        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.ui_layout,'ask_string',return_value='Default'),mock.patch.object(e,'error') as errors:
             e.import_profile()
         errors.assert_called_once()
         self.assertTrue(e.builtin)

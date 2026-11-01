@@ -1399,6 +1399,7 @@ class SpottingAssistTests(unittest.TestCase):
                 state, player = self._battle()
                 target = ('bot', 1)
                 state.bot_spotted = {2: frozenset({target})}
+                state.radio_assist_sources[(attacker, target)] = {('bot', 2): float('inf')}
                 # Death arrives before the next observation batch clears
                 # the shooter's old direct-vision set.
                 if attacker[0] == 'player':
@@ -1423,6 +1424,7 @@ class SpottingAssistTests(unittest.TestCase):
         target = ('bot', 1)
         state.player_spotted = {1: frozenset({target})}
         state.bot_spotted = {2: frozenset({target})}
+        state.radio_assist_sources[(('player', 1), target)] = {('bot', 2): float('inf')}
         player.connected = False
 
         state._record_damage(('player', 1), target, 240, {})
@@ -1434,6 +1436,8 @@ class SpottingAssistTests(unittest.TestCase):
         state, unused_player = self._battle()
         state.player_spotted = {1: frozenset({('bot', 1)})}
         state.bot_spotted = {2: frozenset({('bot', 1)})}
+        state.radio_assist_sources[(('bot', 3), ('bot', 1))] = {
+            ('player', 1): float('inf'), ('bot', 2): float('inf')}
 
         state._record_damage(('bot', 3), ('bot', 1), 241, {})
 
@@ -1451,6 +1455,7 @@ class SpottingAssistTests(unittest.TestCase):
     def test_one_spotter_still_earns_the_whole_damage(self):
         state, unused_player = self._battle()
         state.player_spotted = {1: frozenset({('bot', 1)})}
+        state.radio_assist_sources[(('bot', 3), ('bot', 1))] = {('player', 1): float('inf')}
 
         state._record_damage(('bot', 3), ('bot', 1), 241, {})
 
@@ -1461,6 +1466,8 @@ class SpottingAssistTests(unittest.TestCase):
         state, unused_player = self._battle()
         state.player_spotted = {1: frozenset({('bot', 1)})}
         state.bot_spotted = {2: frozenset({('bot', 1)})}
+        state.radio_assist_sources[(('bot', 3), ('bot', 1))] = {
+            ('player', 1): float('inf'), ('bot', 2): float('inf')}
         state.track_immobilisers[('bot', 1)] = ('player', 1)
 
         state._record_damage(('bot', 3), ('bot', 1), 241, {

@@ -18,6 +18,20 @@ def selection(tags):
 
 
 class PositiveSelectionTests(unittest.TestCase):
+    def test_slot_filters_choose_a_common_legal_window_even_in_random_class_mode(self):
+        candidates = [(level, 'mediumTank') for level in range(6, 11)]
+        for proposed in ((8,), (8, 9), (8, 9, 10), (7, 8), (6, 7, 8)):
+            with self.subTest(proposed=proposed):
+                result = p.matching_tiers(candidates, [], [8], proposed, True,
+                                          slot_tiers=[[6], [7, 8]])
+                self.assertEqual((6, 7, 8), result)
+        self.assertIsNone(p.matching_tiers(candidates, [], [8], (8,), False,
+                                          slot_tiers=[[6]]))
+        self.assertIsNone(p.matching_tiers(candidates, [], [8], (8,), True,
+                                          slot_tiers=[[6], [10]]))
+        self.assertIsNone(p.matching_tiers(candidates, [], [8], (8,), True,
+                                          slot_tiers=[[]]))
+
     def test_all_masks_capacities_trim_newest_and_never_restore_on_growth(self):
         for count in range(16):
             for mask in range(1,32):
@@ -101,6 +115,28 @@ class ActualRosterTests(unittest.TestCase):
 
 
 class StartPreflightTests(unittest.TestCase):
+    def test_filtered_random_slots_are_preflighted_together_before_loading(self):
+        state, host, names = self.state()
+        state.bot_tier_mode = 'random'
+        filtered = next(n for n in VEHICLE_CLASSES if n.startswith('poland:'))
+        other = names['mediumTank']
+        state.vehicle_catalogs[host.player_id] = (
+            dict(name=host.vehicle, level=8, tags=['lightTank']),
+            dict(name=filtered, level=6, tags=['mediumTank']),
+            dict(name=other, level=10, tags=['mediumTank']))
+        state.bot_lineup = [dict(team=1, slot=0, enabled=True),
+                           dict(team=2, slot=0, enabled=True, nation='poland')]
+        start, error = state.request_start(host.player_id)
+        self.assertIsNone(error)
+        self.assertIsNotNone(start)
+        state.phase = 'waiting'
+        state.bot_lineup.append(dict(team=2, slot=1, enabled=True,
+                                   nation=other.split(':')[0], vehicle_class='mediumTank'))
+        start, error = state.request_start(host.player_id)
+        self.assertEqual('invalid_bot_lineup', error)
+        self.assertIsNone(start)
+        self.assertEqual('waiting', state.phase)
+
     def state(self,size=15):
         state=BattleState(team_size=size);_attach_worker(state)
         host,error=state.add_player(_Connection(),('127.0.0.1',1001),_hello(1,team=1))

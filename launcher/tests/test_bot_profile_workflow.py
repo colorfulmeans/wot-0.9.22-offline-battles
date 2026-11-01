@@ -93,7 +93,7 @@ class ProfileEditorTests(unittest.TestCase):
 
     def test_new_and_import_are_unsaved_and_export_requires_save(self):
         e=self.e
-        with mock.patch.object(ui.simpledialog,'askstring',return_value='New'):e.new_profile()
+        with mock.patch.object(ui.ui_layout,'ask_string',return_value='New'):e.new_profile()
         self.assertTrue(e.dirty());self.assertIsNone(e.saved_name)
         with mock.patch.object(ui.messagebox,'showinfo') as info,mock.patch.object(ui.filedialog,'asksaveasfilename') as dialog:
             e.export_profile();info.assert_called_once();dialog.assert_not_called()
@@ -107,7 +107,7 @@ class ProfileEditorTests(unittest.TestCase):
     def test_rename_is_draft_until_save_and_undo_never_restores_name(self):
         e=self.e;e.adopt(self.store.read('A'))
         e.rule_vars['skill'].set('elite');e.save_rule()
-        with mock.patch.object(ui.simpledialog,'askstring',return_value='Renamed'):e.rename_profile()
+        with mock.patch.object(ui.ui_layout,'ask_string',return_value='Renamed'):e.rename_profile()
         self.assertTrue(e.dirty());self.assertTrue(self.store.profile_path('A').exists())
         self.assertFalse(self.store.profile_path('Renamed').exists())
         e.save();self.assertFalse(e.dirty());self.assertFalse(self.store.profile_path('A').exists())
@@ -144,13 +144,13 @@ class ProfileEditorTests(unittest.TestCase):
 
     def test_new_collision_and_cancelled_import_keep_current_draft(self):
         e=self.e;before=copy.deepcopy(e.document)
-        with mock.patch.object(ui.simpledialog,'askstring',return_value='A'):e.new_profile()
+        with mock.patch.object(ui.ui_layout,'ask_string',return_value='A'):e.new_profile()
         self.assertEqual(before,e.document);self.errors.assert_called_once()
         source=Path(self.temp.name)/'default.json';storage._atomic(source,storage.contract.default_profile())
-        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.simpledialog,'askstring',return_value=None):
+        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.ui_layout,'ask_string',return_value=None):
             e.import_profile()
         self.assertEqual(before,e.document)
-        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.simpledialog,'askstring',return_value='Imported default'):
+        with mock.patch.object(ui.filedialog,'askopenfilename',return_value=str(source)),mock.patch.object(ui.ui_layout,'ask_string',return_value='Imported default'):
             e.import_profile()
         self.assertFalse(e.builtin);self.assertTrue(e.dirty());e.save()
         self.assertEqual('Imported default',e.saved_name)
@@ -158,7 +158,7 @@ class ProfileEditorTests(unittest.TestCase):
 
     def test_save_failure_keeps_renamed_draft_and_old_owner(self):
         e=self.e;e.adopt(self.store.read('A'))
-        with mock.patch.object(ui.simpledialog,'askstring',return_value='Renamed'):e.rename_profile()
+        with mock.patch.object(ui.ui_layout,'ask_string',return_value='Renamed'):e.rename_profile()
         with mock.patch.object(self.store,'save',side_effect=OSError('write')):e.save(True)
         self.assertEqual('Renamed',e.document['name']);self.assertEqual('A',e.saved_name)
         self.assertTrue(e.dirty());self.assertTrue(self.store.profile_path('A').exists())

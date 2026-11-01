@@ -1,0 +1,7 @@
+{
+  "source_sha256": "ae1d2ff617578395e2a425cf7b502ad92cea7a19631455352f4fdb25245eb027",
+  "output_sha256": "d107c2c127c3db76816b9728b250c1fcb34e72e8149288963a8db7f1accf962e",
+  "builder_sha256": "3d80ca028862370f1c24cfb5d7f30c44d16dbb2cbe578a88ca9bb1d3b5493d18",
+  "disabled_logoff_initializers": 4,
+  "client": "Chinese HD 0.9.22.0.1 #1513"
+}

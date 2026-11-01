@@ -14,6 +14,67 @@ def rental_battles(style):
     return max(0, int(getattr(style, 'rentCount', 0) or 0))
 
 
+def outfit_item_counts(outfit):
+    """Count native independent units, expanding each applied-area bit."""
+    result = {}
+    if getattr(outfit, 'styleId', 0):
+        return result
+    for kind, name in ((1, 'paints'), (2, 'camouflages'), (3, 'decals')):
+        for component in getattr(outfit, name, ()):
+            # CustomizationOutfit.applyAreaBitmaskToDict expands these bits.
+            key = (kind, int(component.id))
+            result[key] = result.get(key, 0) + bin(int(component.appliedTo)).count('1')
+    for component in getattr(outfit, 'modifications', ()):
+        # Native modifications is an array of IDs, unlike the area components.
+        key = (5, int(component))
+        result[key] = result.get(key, 0) + 1
+    return result
+
+
+def report_outfit_transfer(updates):
+    try:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled, write_json_record
+        if detailed_enabled() and updates:
+            write_json_record('APPEARANCE TRANSFER', dict(stage='committed', items=[
+                dict(type=kind, id=identifier, stock=bindings)
+                for (kind, identifier), bindings in sorted(updates.items())]))
+    except Exception as error:
+        import sys
+        sys.stdout.write('[Offline LAN 0.9.22] APPEARANCE DIAGNOSTIC transfer unavailable: %s\n' % error)
+
+
+def report_inventory(snapshot, cache):
+    """Expose IGR ownership and remaining token restrictions in diagnostic runs."""
+    try:
+        _report_inventory(snapshot, cache)
+    except Exception as error:
+        # Observation must not prevent a valid garage from opening.
+        import sys
+        sys.stdout.write('[Offline LAN 0.9.22] APPEARANCE DIAGNOSTIC unavailable: %s\n' % error)
+
+
+def _report_inventory(snapshot, cache):
+    from gui.mods.offline_lan_0922.native_input_diagnostics import detailed_enabled
+    if not detailed_enabled():
+        return
+    from gui.mods.offline_lan_0922.native_input_diagnostics import write_json_record
+    inventory = snapshot.get('customizationItems', {})
+    rows = []
+    for kind, items in ((1, cache.paints), (2, cache.camouflages),
+                        (3, cache.decals), (5, cache.modifications)):
+        for identifier, item in items.items():
+            if 'premiumIGR' not in item.tags and 'IGR' not in item.tags:
+                continue
+            rows.append(dict(type=kind, id=int(identifier), tags=sorted(item.tags),
+                bound=bool(item.isVehicleBound()), token=item.requiredToken,
+                stock=inventory.get(kind, {}).get(int(identifier), {})))
+    write_json_record('APPEARANCE INVENTORY', dict(
+        seed=snapshot.get('appearanceStockSeed', 0),
+        version=snapshot.get('appearanceStockVersion', 0),
+        counts=dict((str(kind), len(items)) for kind, items in inventory.items()),
+        igr=rows))
+
+
 def report_style(stage, record, snapshot, styles, parser, identity, receipt=None):
     """Read-only evidence for one vehicle; logging must never affect a save."""
     try:

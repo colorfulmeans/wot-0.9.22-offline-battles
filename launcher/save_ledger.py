@@ -17,6 +17,7 @@ import io
 import json
 import os
 import uuid
+import time
 
 try:
     from . import save_slots
@@ -49,7 +50,8 @@ def queue_account_changes(container, changes, has_garage=True):
     key = 'notifications' if has_garage else 'initial_account_notifications'
     owner.setdefault(key, []).append({
         'id': uuid.uuid4().hex,
-        'settlement': {'account_changes': changes}})
+        'settlement': {'account_changes': changes,
+                       'notification_at': int(time.time())}})
 
 
 def _wallet_changes(before, after):
@@ -130,12 +132,17 @@ def read_balances(slot_id, game_root=None, environment=None, root=None):
 
 
 def write_balances(slot_id, balances, game_root=None, environment=None,
-                   root=None, is_running=None):
+                   root=None, is_running=None, premium_days=None, now=None):
     """Replace one save's balances, keeping everything else it holds.
 
     Existing garages keep their crew, research and receipts untouched.
     A save without a garage stores initial balances in save.json instead.
     """
+    stamp = int(time.time() if now is None else now)
+    if premium_days is not None:
+        if (isinstance(premium_days, bool) or not isinstance(premium_days, int)
+                or premium_days < 0 or stamp + premium_days * 86400 > MAX_BALANCE):
+            raise SaveLedgerError('Premium days are outside the supported range.')
     if is_running is None:
         try:
             from . import core
@@ -160,7 +167,9 @@ def write_balances(slot_id, balances, game_root=None, environment=None,
             slot_id, game_root, environment, root)
         metadata = _read_state(metadata_path) or {}
         metadata[INITIAL_WALLET_KEY] = updated
-        queue_account_changes(metadata, _wallet_changes(previous, updated), False)
+        changes = _wallet_changes(previous, updated)
+        _update_premium(metadata, 'initial_premium_expiry', premium_days, stamp, changes)
+        queue_account_changes(metadata, changes, False)
         os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
         _write_state(metadata_path, metadata)
         return updated
@@ -175,7 +184,9 @@ def write_balances(slot_id, balances, game_root=None, environment=None,
         if name in balances:
             updated[name] = _balance(balances[name])
     ledger["wallet"] = updated
-    queue_account_changes(ledger, _wallet_changes(wallet, updated))
+    changes = _wallet_changes(wallet, updated)
+    _update_premium(ledger, 'premiumExpiryTime', premium_days, stamp, changes)
+    queue_account_changes(ledger, changes)
     _write_state(path, state)
     return dict((name, _balance(updated.get(name))) for name in CURRENCIES)
 
@@ -194,3 +205,29 @@ def _write_state(path, state):
         except (IOError, OSError):
             pass
         raise SaveLedgerError("The save could not be written: %s" % error)
+
+
+def premium_days(slot_id, game_root=None, environment=None, root=None, now=None):
+    stamp = int(time.time() if now is None else now)
+    path = ledger_path(slot_id, game_root, environment, root)
+    state = _read_state(path)
+    owner = (state or {}).get('ledger', {}) if state is not None else (_read_state(
+        save_slots.metadata_path(slot_id, game_root, environment, root)) or {})
+    expiry = int(owner.get('premiumExpiryTime' if state is not None else
+                           'initial_premium_expiry', 0))
+    return (max(0, expiry - stamp) + 86399) // 86400
+
+
+def _update_premium(owner, key, days, stamp, changes):
+    if days is None:
+        return
+    before = max(stamp, int(owner.get(key, 0)))
+    remaining = (before - stamp + 86399) // 86400
+    if days == remaining:
+        return
+    after = stamp + days * 86400 if days else 0
+    owner[key] = after
+    delta = max(stamp, after) - before
+    if delta:
+        changes.append({'phase': 'granted' if delta > 0 else 'revoked',
+                        'rewards': [{'kind': 'premium', 'seconds': abs(delta)}]})
