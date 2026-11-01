@@ -50,4 +50,4 @@ else
 fi
 
 python3 "$repo_root/tools/validate_wotmod.py" \
-  "$repo_root/dist/org.colorfulmeans.offline_lan_0922_1.0.0.wotmod"
+  "$repo_root/dist/org.colorfulmeans.offline_lan_0922_1.1.0.wotmod"

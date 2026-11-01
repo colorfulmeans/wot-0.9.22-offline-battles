@@ -12543,3 +12543,31 @@ two files). The source-based real Windows T29 preview was opened and both modes
 visually checked: roof, turret top and side are visible together. This narrow
 preview follows the 56da041 package; the package identity above remains valid
 for that earlier build and is not presented as containing this later angle.
+
+
+## v1.1.0 release preparation (November 1)
+
+The owner explicitly authorized publishing v1.1.0 with English release notes.
+The release includes the reviewed PR116 runtime through 83097bf, including
+its upper 20-degree default camera. That exact prior head passed Tests
+41271605080 and Battle review package 41271605081. The release preparation
+changes version pins, packaging gates and release documentation; it does not
+introduce further gameplay changes.
+
+All current launcher, server, client mod, replay payload names and Windows
+version resources now agree on 1.1.0 / 1.1.0.0. Historical 1.0.0 release guides
+and their exporter remain historical. The new release ships one complete x64
+Windows launcher ZIP, rebuilt by the reusable Windows workflow. Its embedded
+game extension remains x86. English notes describe strategic vehicle missions
+as new, notification delivery as rebuilt, and distinguish the old total-three
+road preference from the current same-class-three preference.
+
+Local release preparation verification passed: 47 isolated launcher files /
+1,240 tests with 14 documented skips, including real GPU rendering tests;
+four isolated release/version/server contract files / 222 tests with no skips.
+The publication regressions reject an old semantic identity, a new identity
+wrapping an old mod, and an x86 launcher. Publication also requires the main
+commit's complete Tests workflow to pass, verifies the tag and main identity,
+checks the uploaded asset name and size, and only then publishes the draft.
+Actual release run identities and final asset inspection follow on GitHub;
+these local results alone are not represented as a published build.
