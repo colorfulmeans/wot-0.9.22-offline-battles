@@ -328,7 +328,7 @@ def bot_consumable_contracts(descriptor, snapshot=None):
                 result[0]['autoactivate'] and result[1]['repairAll']):
             return result
     if names not in (DEFAULT_BOT_CONSUMABLE_NAMES, BOT_SMALL_CONSUMABLE_NAMES):
-        raise ValueError('bot consumable contract order is invalid')
+        raise ValueError('bot consumable contract order is invalid: %r' % (names,))
     if tuple(value['kind'] for value in result) != (
             'extinguisher', 'medkit', 'repairkit'):
         raise ValueError('bot consumable contract kinds are invalid')

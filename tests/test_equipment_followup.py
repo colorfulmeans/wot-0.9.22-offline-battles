@@ -16,6 +16,30 @@ def item(name, **kwargs):
 
 
 class FollowupTests(unittest.TestCase):
+    def test_saved_mixed_difficulty_cannot_override_diagnostic_skill_and_loadout(self):
+        class Battle:
+            def __init__(self, **kwargs): self.initial = kwargs
+            def request_start(self, player_id, **kwargs): return kwargs
+        class Planner: pass
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1', equipment_test.ENV:'2'}):
+            equipment_test.install_server(Battle, Planner)
+            battle = Battle()
+            self.assertTrue(all(row['skill']=='elite' for row in battle.initial['bot_lineup']))
+            battle.bot_skill_mode, battle.bot_tier_mode = 'mixed', 'random'
+            battle.request_start(1)
+            self.assertEqual(('elite','elite'), (battle.bot_skill_mode,battle.bot_tier_mode))
+            values = _defaults() + (_equipment('removedRpmLimiter',12,11012,tags=('trigger',),
+                enginePowerFactor=1.1,engineHpLossPerSecond=1.5),)
+            cache = types.SimpleNamespace(equipmentIDs=lambda:{v.name:v.id[1] for v in values},
+                equipments=lambda:{v.id[1]:v for v in values})
+            owner = object.__new__(battle_runtime.BattleRuntime)
+            owner._runtime = types.SimpleNamespace(vehicles=types.SimpleNamespace(g_cache=cache))
+            for skill in ('rookie','regular','veteran','elite'):
+                raw = owner._default_bot_equipment_contracts(skill)
+                self.assertEqual(('autoExtinguishers','largeMedkit','removedRpmLimiter'),
+                                 tuple(v['name'] for v in raw))
+                self.assertEqual(raw, em.bot_consumable_contracts({'botConsumables':raw}))
+
     def test_diagnostic_native_governor_survives_the_real_contract_validator(self):
         raw = _equipment('removedRpmLimiter', 12, 11012, tags=('trigger',),
                          enginePowerFactor=1.1, engineHpLossPerSecond=1.5)

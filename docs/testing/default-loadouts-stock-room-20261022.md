@@ -67,6 +67,18 @@ queue excludes team 1; both regression tests pass (27 total bridge tests). This
 observation is not accepted as a successful falling/contact test. Final-package
 native acceptance must be repeated after both diagnostic repairs.
 
+Candidate 31e63597 repeated the native governor startup failure. Its actual
+BOT FITTING records revealed mixed rookie/regular/veteran/elite levels despite
+the scene constructor requesting elite: saved room options replayed later, and
+explicit lineups themselves reset the room's initial difficulty. The restricted
+governor validator correctly rejected small-kit or empty rookie loadouts. The
+fixture now pins skill on every lineup assignment, reasserts elite skill/tier at
+request_start, and resolves diagnostic consumables from the elite native cache
+for every incoming skill. The regression covers all four incoming ratings through
+the actual BattleRuntime resolver and canonical consumable validator. Contract
+errors include the rejected names. Ordinary game skill/loadout policy is unchanged.
+This failed native session is 20261101T213157Z-c669b2651a15.
+
 ## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for

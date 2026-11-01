@@ -9256,7 +9256,8 @@ class BattleRuntime(object):
             return ()
         from . import equipment_test
         return equipment_test.consumables(cache,
-            equipment_mechanics.default_bot_consumables(cache, skill))
+            equipment_mechanics.default_bot_consumables(
+                cache, 'elite' if equipment_test.enabled() else skill))
 
     def _restore_local_equipment_snapshot(self, snapshot, present=False):
         """Restore the visible replica from one complete canonical ledger."""

@@ -37,7 +37,7 @@ def install_server(battle_class, planner_class):
         kwargs.update(team1_size=15, team2_size=15, bot_tier_mode='elite',
                       bot_skill_mode='elite', bot_excluded_vehicles=None,
                       bot_tactics_path=None,
-                      bot_lineup=[dict(team=team, slot=slot, vehicle=vehicle)
+                      bot_lineup=[dict(team=team, slot=slot, vehicle=vehicle, skill='elite')
                                   for team in (1, 2) for slot, vehicle in enumerate(VEHICLES)])
         original_init(self, map_name='100_thepit', max_players=max_players,
                       clock=clock, team_size=15, **kwargs)
@@ -45,6 +45,9 @@ def install_server(battle_class, planner_class):
               else 'legal native fittings; stationary targets; mouse-fire acceptance'))
     def start(self, player_id, requested_map=None, requested_round_seconds=None,
               battle_mode='regular', training_bots=False):
+        # The room UI can replay its saved mixed/random settings after init.
+        self.bot_tier_mode = 'elite'
+        self.bot_skill_mode = 'elite'
         return original_start(self, player_id, requested_map='100_thepit',
                               requested_round_seconds=requested_round_seconds,
                               battle_mode=battle_mode, training_bots=training_bots)
