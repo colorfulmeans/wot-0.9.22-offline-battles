@@ -16770,13 +16770,6 @@ class BotRuntime(object):
         self._advance_probe_timing(now)
         self._advance_equipment_clock(frame_step)
         players = list(players or [])
-        from . import roof_crush_test
-        if roof_crush_test.shot_drop_enabled():
-            queue = getattr(self, '_roof_shot_drop_queue', None)
-            if queue is None or getattr(self, '_roof_shot_drop_round', None) != self.round_id:
-                queue = self._roof_shot_drop_queue = roof_crush_test.ShotDropQueue()
-                self._roof_shot_drop_round = self.round_id
-            queue.observe(players, self.states)
         if refresh_control:
             planning_now = (self._control_evaluation_time
                             if self._control_evaluation_time is not None else now)
@@ -17582,17 +17575,6 @@ class BotRuntime(object):
                     command['throttle'] = 0.0
                     command['turn'] = 0.0
                     command['movement_intent'] = False
-            from . import roof_crush_test
-            if roof_crush_test.enabled():
-                if roof_crush_test.shot_drop_enabled():
-                    command = self._roof_shot_drop_queue.command(command, state)
-                    from .native_input_diagnostics import write_json_record
-                    for event in self._roof_shot_drop_queue.drain_events():
-                        event['round'] = self.round_id
-                        write_json_record('ROOF SHOT DROP', event)
-                else:
-                    command = roof_crush_test.hold_command(command, position)
-                target = None
             if diagnostic is not None:
                 diagnostic.phase('bot.motion_plan')
             state['_motion_control_gates'] = []
@@ -18054,12 +18036,7 @@ class BotRuntime(object):
                 motion_probe.get('collision', False) and
                 not motion_probe.get('water', False) and
                 abs(_number(motion_probe.get('slope', 0.0))) <= 0.55)
-            # The drop fixture intentionally drives off a cliff. Its scripted
-            # input bypasses only the anticipatory driving veto; the exact
-            # hull sweep, support, gravity and contact response still run.
             path_clear = (True if (catchup_motion_hold or probe_deferred or
-                                   (roof_crush_test.shot_drop_enabled() and
-                                    command.get('recovery_mode') == 'roof_shot_drop') or
                                    motion_probe is None or
                                    exact_motion_owns_collision or
                                    (abs(throttle) <= 0.01 and

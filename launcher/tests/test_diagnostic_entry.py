@@ -10,7 +10,10 @@ import wot_launcher as launcher
 class DiagnosticEntryTests(unittest.TestCase):
     def test_normal_and_diagnostic_entrances_do_not_persist_a_previous_choice(self):
         with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1',
-                'WOT_OFFLINE_SPIKE_PROFILE':'0', 'WOT_OFFLINE_REPLAY_FILE':''}), mock.patch.object(
+                'WOT_OFFLINE_SPIKE_PROFILE':'1',
+                'WOT_OFFLINE_ROOF_CRUSH_TEST':'1',
+                'WOT_OFFLINE_ROOF_SHOT_DROP':'1',
+                'WOT_OFFLINE_REPLAY_FILE':''}), mock.patch.object(
                 launcher, 'LauncherWindow') as window, mock.patch.dict(sys.modules,
                 {'tkinter':types.SimpleNamespace(filedialog=None, ttk=None)}):
             self.assertEqual(0, launcher.main([]))
