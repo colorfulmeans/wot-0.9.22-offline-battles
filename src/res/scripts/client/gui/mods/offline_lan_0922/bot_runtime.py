@@ -1666,6 +1666,15 @@ class _BotAmmoState(object):
         if isinstance(raw, dict):
             self.restore(raw)
 
+        if profile.get('bot_tier'):
+            from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+            validation_event('bot_ammunition_initialized',
+                vehicle=profile.get('vehicle_name'), gun=profile.get('gun_name'),
+                tier=profile.get('bot_tier'), manual='ammo_ratios' in profile,
+                shells=[s.get('name') for s in profile.get('shells', ())],
+                remaining=list(self.remaining), loaded=self.loaded,
+                stages=sorted(self.categories), restored=isinstance(raw, dict))
+
     def _standard_fallback(self):
         candidates = [index for index in range(self.shell_count)
                       if self.remaining[index] > 0]

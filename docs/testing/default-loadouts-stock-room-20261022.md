@@ -199,3 +199,32 @@ query-count proof, not a measured claim that the live 999ms spike is eliminated.
 No further save reset, ammunition change, navigation, collision/LOS policy or
 support-rule change is included in this follow-up. Exact-client UI interaction,
 resolution changes and live worker latency remain user acceptance checks.
+
+## 2026-11-01 reviewed guns and elite premium defaults
+
+The current exception table contains 37 vehicles. Four new full-development
+choices are shared by unlocked player creation and veteran/elite Bot plans:
+M3G FT 57 mm, Pz.38(t) 47 mm, Stuart I-IV QF 2-pdr and Chi-He 57 mm. M3G
+uses its compatible first platform. Stock/intermediate modules and AT15's
+32-pdr are retained. Existing custom player fittings are not forcibly rewritten.
+
+Elite difficulty transfers silver non-HE quotas to native premium non-HE rounds,
+retaining the existing HE identities and primary order. Manual ratios win;
+guns without a premium counterpart retain their previous ammunition. Difficulty
+is propagated in tactical profiles, independently of development and crew
+overrides. Default seed revision 4 replaces the disposable default once.
+
+Validation before packaging:
+- Exact client inspected: Chinese HD 0.9.22.0.1 #1513, x86.
+- `verify_bot_fittings.py`: 576 vehicles / 9,216 records passed, including
+  elite premium-round exclusion, HE preservation, capacity and whole magazines.
+- Focused gun/ammunition, worker/server wire, late-result and save-revision
+  regressions passed locally.
+- A broader local combat-lineage run requires the matching native simulation;
+  the bundled local interpreter also lacks `imp`. This is not reported as a
+  passing native integration check. The Python 3.11 CI/native job and final
+  Windows package/runtime acceptance remain separate evidence boundaries.
+- Diagnostic `bot_ammunition_initialized` records fitted gun, shell identities,
+  tier, manual override status, counts and initial loaded index.
+
+Package, CI and live-client results are recorded below after those stages.

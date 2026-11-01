@@ -13,7 +13,46 @@ def is_he(shell):
     return str(shell.get('kind', '')).upper() == 'HIGH_EXPLOSIVE'
 
 
+def _elite_loadout(profile):
+    """Move default silver non-HE quotas to a real premium non-HE round."""
+    if profile.get('bot_tier') != 'elite' or 'ammo_ratios' in profile:
+        return None
+    base = dict(profile)
+    base.pop('bot_tier', None)
+    shells = stages(base)
+    proportions = weights(base, shells)
+    nation = str(profile.get('vehicle_name', '')).split(':')[0]
+    def premium(shell):
+        return nation + ':' + shell.get('name', '') in GOLD_SHELLS
+    candidates = [s for s in shells if not is_he(s) and premium(s)]
+    if not candidates:
+        candidates = [s for s in profile.get('shells', ())
+                      if not is_he(s) and premium(s)]
+    removed = [s for s in shells if not is_he(s) and not premium(s)]
+    if not candidates or not removed:
+        return None
+    replacement = candidates[0]
+    removed_indices = set(int(s['index']) for s in removed)
+    quotas = {}
+    result = []
+    for shell, proportion in zip(shells, proportions):
+        chosen = replacement if int(shell['index']) in removed_indices else shell
+        index = int(chosen['index'])
+        if index not in quotas:
+            result.append(chosen)
+            quotas[index] = 0
+        quotas[index] += proportion
+    return result, quotas
+
+
 def ordered(profile, remaining=None):
+    elite = _elite_loadout(profile)
+    if elite is not None:
+        shells = elite[0]
+        if remaining is not None:
+            shells = [s for s in shells if int(s['index']) < len(remaining)
+                      and remaining[int(s['index'])] > 0]
+        return shells
     shells = list(profile.get('shells') or ())
     manual = 'ammo_ratios' in profile
     roles = None if manual else profile_roles(profile)
@@ -60,6 +99,9 @@ def clip_size(profile):
 
 
 def weights(profile, shells):
+    elite = _elite_loadout(profile)
+    if elite is not None:
+        return tuple(elite[1][int(s['index'])] for s in shells)
     if 'ammo_ratios' in profile:
         raw = dict(profile)
         raw.pop('ammo_ratios')

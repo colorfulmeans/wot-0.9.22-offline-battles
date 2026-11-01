@@ -5405,6 +5405,8 @@ class BattleState:
             value = str(value or "")
             return value if (len(value) <= 96 and all(
                 char.isalnum() or char in ":_-." for char in value)) else ""
+        if raw.get('bot_tier') in ('rookie', 'regular', 'veteran', 'elite'):
+            profile['bot_tier'] = raw['bot_tier']
         profile["vehicle_name"] = descriptor_name(raw.get("vehicle_name"))
         profile["gun_name"] = descriptor_name(raw.get("gun_name"))
         for key in ("class_tag", "dominant_role"):

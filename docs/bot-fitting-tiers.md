@@ -69,6 +69,42 @@ ratios, physical shell identities/prices and shot-result switching are retained.
 | ussr:R49_SU100Y | _130mm_B-13-S2 | _130mm_B-13-S2 |
 | ussr:R77_KV2 | _107mm_ZiS-6 | _152mm_M-10 |
 
+## Reviewed full-gun additions and elite ammunition
+
+The shared full-gun override table now has 37 vehicles. The following four
+additions apply to newly generated unlocked player vehicles and to veteran and
+elite Bot full-development plans. Existing player fittings and manual installs
+remain authoritative. Stock and intermediate Bot modules are unchanged.
+
+| Vehicle identity | Reviewed full gun | Compatible full turret |
+| --- | --- | --- |
+| china:Ch31_M3G_FT | _57mm_ZiS_2 | Turret_1_Ch31_M3G_FT |
+| germany:G08_Pz38t | _47mm_PaK_38t_L43 | Pz38t_Ausf_G_turm |
+| uk:GB15_Stuart_I | _2pdr_Gun_Mk_IX | Turret_2_GB15_Stuart_I |
+| japan:J09_Chi_He | _57mm_Gun_Shin | Turret_2_Chi_He |
+
+AT15 retains its reviewed 32-pounder. This is a gun preference, not a claim
+that it dominates the 20-pounder B in every statistic.
+
+Elite difficulty transfers default silver non-HE ammunition quotas to a real
+premium non-HE round supported by the mounted gun. Existing HE-primary order,
+allowed HE identities, and ordinary/premium HE distinctions remain intact.
+A gun without a premium non-HE counterpart keeps its existing policy. The
+reviewed gold-shell identity catalogue, rather than shell position, penetration,
+or the generic standard/premium role label, identifies the actual premium round.
+This matters for SU-100Y, whose premium AP is already its logical primary.
+Manual ammunition ratios override this difficulty default, including all-zero
+ratios. Players and other Bot difficulties retain their existing allocation.
+Whole magazines and native capacity still govern rounding. The resolved Bot
+fitting tier travels in the tactical profile through the worker/server boundary,
+so initial ammunition, shot policy, replicas and authority restoration agree.
+The diagnostic entry records `bot_ammunition_initialized` with native shell
+identities, resolved tier, counts, initial shell and manual-override status.
+
+Default seed revision 4 rebuilds the default save once. New unlocked saves
+naturally use the revised full gun table; unrelated existing custom saves are
+not silently migrated or stripped of player assets.
+
 ## Native outfit exceptions
 
 These 22 identities retain native appearance and inherent concealment. They

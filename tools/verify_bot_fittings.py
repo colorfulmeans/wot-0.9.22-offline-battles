@@ -186,12 +186,22 @@ def audit(client):
                     for i,n in enumerate(shots)]
                 clip = int(float((gun.get('clip') or {}).get('count',1)))
                 capacity = int(float(gun['maxAmmo']))
-                profile = dict(vehicle_name=vehicle, gun_name=modules['gun'],class_tag=CLASSES[vehicle],
+                profile = dict(vehicle_name=vehicle, gun_name=modules['gun'],class_tag=CLASSES[vehicle],bot_tier=tier,
                                shells=shells,clip_size=clip)
                 allocation = ammo_policy.allocation(profile,capacity,len(shells))
                 assert sum(allocation) == capacity, (vehicle,tier,'full capacity')
                 assert all(n % clip == 0 for n in allocation), (vehicle,tier,'whole magazine')
                 assert all(allocation[s['index']] > 0 for s in ammo_policy.stages(profile)), (vehicle,tier,'missing shell')
+                if tier == 'elite':
+                    base = dict(profile, bot_tier='veteran')
+                    old_stages = ammo_policy.stages(base)
+                    new_stages = ammo_policy.stages(profile)
+                    assert [s['name'] for s in old_stages if ammo_policy.is_he(s)] == [
+                        s['name'] for s in new_stages if ammo_policy.is_he(s)], (vehicle,'HE policy changed')
+                    premium = [s for s in shells if s['gold'] and not ammo_policy.is_he(s)]
+                    if premium and CLASSES[vehicle] != 'SPG':
+                        assert all(allocation[s['index']] == 0 for s in shells
+                                   if not s['gold'] and not ammo_policy.is_he(s)), (vehicle,'elite silver penetration round')
                 rows.append(dict(vehicle=vehicle,tier=tier,modules=modules,weight=mass,
                     devices=list(fitting['devices']), directive=fitting['directive'],
                     max_health=float(definition['hull'].get('maxHealth',0))+float(turret.get('maxHealth',0)),
