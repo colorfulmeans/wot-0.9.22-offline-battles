@@ -199,6 +199,12 @@ class EquipmentSkillEffectsTests(unittest.TestCase):
         self.assertIsNone(data['native_health_burn_per_second'])
         self.assertEqual(1.215, data['native_decay_factor'])
 
+    def test_fire_diagnostic_missing_target_never_enters_native_player_lookup(self):
+        with mock.patch.object(critical_damage, '_device_td', side_effect=AssertionError('native lookup')), \
+                mock.patch('gui.mods.offline_lan_0922.native_input_diagnostics.validation_event') as emit:
+            critical_damage.report_fire_model(types.SimpleNamespace(), 0.57)
+        self.assertIsNone(emit.call_args.kwargs['native_health_burn_per_second'])
+
     def test_bot_skill_projection_uses_physical_roles_and_surviving_carriers(self):
         descriptor = types.SimpleNamespace(type=types.SimpleNamespace(
             crewRoles=[('commander', 'radioman'), ('loader',), ('loader',)]))

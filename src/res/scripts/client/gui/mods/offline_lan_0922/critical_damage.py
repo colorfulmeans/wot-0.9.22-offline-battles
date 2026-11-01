@@ -1796,7 +1796,9 @@ def _restore_fuel_regen_cap(vehicle):
 def report_fire_model(vehicle, native_decay_factor):
     """Expose the stripped server-law boundary, without inventing burn rates."""
     from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
-    descriptor = _device_td(vehicle)
+    # Diagnostic observation must never enter _device_td's native-player
+    # fallback when a terminal/detached target no longer owns a descriptor.
+    descriptor = getattr(vehicle, 'typeDescriptor', None)
     engine = getattr(descriptor, 'engine', None)
     raw_burn = (engine.get('healthBurnPerSec') if isinstance(engine, dict)
                 else getattr(engine, 'healthBurnPerSec', None))

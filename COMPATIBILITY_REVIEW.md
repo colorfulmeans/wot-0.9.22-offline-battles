@@ -36,7 +36,7 @@ bounded `fire_model_boundary` diagnostic explicitly reports `skill_applied=false
 the native factor, missing contract and retained legacy fixed-burn parameters.
 Neither a community approximation nor invented per-vehicle values replace them.
 
-Local validation: 17 isolated suites / 567 tests passed; all 224 client modules
+Local validation: 18 isolated suites / 576 tests passed; all 224 client modules
 compiled with CPython 2.7.18; `inspect_client.py` confirmed the pinned x86 Chinese
 HD build. Environmental law tests explicitly omit native simulation on all hosts;
 they no longer mistake an unavailable x86 Python-2 extension in a Windows Python-3

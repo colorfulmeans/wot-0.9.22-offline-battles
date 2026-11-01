@@ -21,10 +21,19 @@ injuries, native perception flags, Controlled Impact, Deadeye shot projection an
 Intuition inventory/reload/one-decision gates. Fire diagnostics are tested to
 report the native directive factor and explicitly disclose its unapplied status.
 
-`build/equipment-effects-final-local/summary.json`: 17 files, 567 tests passed.
+`build/equipment-effects-candidate2-local/summary.json`: 18 files, 576 tests passed.
 All 224 client files passed CPython 2.7 compilation. Cloud results and exact-package
 Windows observations are pending; do not reuse the earlier package's acceptance.
 Firefighting and full native fire/ram calibration are not claimed fixed.
+
+The first cloud candidate exposed an extra diagnostic dependency in the lethal
+fire lifecycle fixture: inspecting an absent target descriptor entered the native
+player fallback. Diagnostics now inspect only the target-owned descriptor and
+record absence without entering BigWorld. The regression explicitly forbids that
+fallback and the complete postmortem-fire tests pass. Historical route checks
+required fetching this shallow checkout's real baseline commits; their expected
+routes were not replaced by current output. The independent exact-resource audit
+again passed 576 vehicles / 9,216 fitting records and all 36 special gun identities.
 
 ## Scope
 
