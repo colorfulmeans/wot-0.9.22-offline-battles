@@ -228,3 +228,19 @@ Validation before packaging:
   tier, manual override status, counts and initial loaded index.
 
 Package, CI and live-client results are recorded below after those stages.
+
+Cloud/package acceptance for source `383c065`:
+- PR #119 Tests run 41286763384 passed, including the Python 2.7 compile,
+  gameplay/native regressions, full client suite and Windows editor/server jobs.
+- Build Windows launcher run 41286762316 passed. Its actual downloaded artifact
+  passed frozen-source/native-payload, extracted-root install and bundled-server
+  checks on Windows.
+- Independent local ZIP inspection passed: x64 launcher, x86 native payloads,
+  Python 2.7 client bytecode, one normal EXE and one diagnostic BAT, and exact
+  changed server-side source bytes. Build identity is
+  `colorfulmeans-41286762316-1`; semantic version remains 1.1.1 for this test build.
+- Local default seed was reset to revision 4 and a clean unlocked save with
+  slot ID `save` was created. Both have no restored garage fitting state.
+- The diagnostic launcher starts the hidden native worker and visible #1513
+  client successfully. Interactive acceptance reached the original EULA and
+  awaits the user's acceptance; no garage/battle success is claimed yet.
