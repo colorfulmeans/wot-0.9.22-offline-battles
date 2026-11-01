@@ -3,6 +3,11 @@ import importlib.util
 import io
 from pathlib import Path
 import unittest
+import os
+import tempfile
+import textwrap
+from types import SimpleNamespace
+from unittest import mock
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,6 +58,26 @@ class LaunchEntryTests(unittest.TestCase):
                 with zipfile.ZipFile(stream) as extra:
                     with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
                         verifier.verify_archive(extra)
+
+    def test_download_workflow_checks_actual_root_files_including_the_executable(self):
+        workflow = (ROOT / '.github/workflows/build-launcher.yml').read_text(encoding='utf-8')
+        start = workflow.index('          payload, fake082, fake0922 = sys.argv[1:4]')
+        end = workflow.index('          for port in core.SUPPORTED_PORTS:', start)
+        snippet = textwrap.dedent(workflow[start:end])
+        with tempfile.TemporaryDirectory() as directory:
+            app = Path(directory)
+            (app / '_internal').mkdir()
+            (app / verifier.NORMAL_ENTRY).write_bytes(b'validated launcher')
+            for name in verifier.ENTRIES:
+                (app / name).write_bytes((ROOT / 'tools' / name).read_bytes())
+            context = dict(io=io, os=os, zipfile=zipfile,
+                           sys=SimpleNamespace(argv=['check', str(app / '_internal'), 'fake082', 'fake0922']),
+                           verify_archive=verifier.verify_archive)
+            with mock.patch('builtins.print'):
+                exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
+                (app / 'unexpected-test.bat').write_bytes(b'development entry')
+                with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
+                    exec(compile(snippet, '<downloaded-root-check>', 'exec'), context)
 
     def test_each_required_entry_is_mandatory(self):
         for name in verifier.ENTRIES:
