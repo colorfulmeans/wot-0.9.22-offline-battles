@@ -278,3 +278,45 @@ Native acceptance on 2026-11-01, using the packaged source above:
   reset again. `default` (revision 4) and unlocked slot `save` each contain only
   their seed metadata; test battle progress/fittings were not retained. The
   launcher was restored to Automatic lineup and the default slot.
+
+## 2026-11-01 refined elite HE and penetration exceptions
+
+This follow-up supersedes the earlier elite-ammunition baseline. RHM B WT
+uses its native 150 mm full gun; WT auf Pz. IV remains on 128 mm L/61. The
+shared override table has 36 entries. SU-5's model 1930 122 mm gun uses only
+the native 420-damage OF420SO at every default difficulty. This does not
+change the SU-5 stock 76 mm or full 152 mm gun.
+
+Elite defaults upgrade silver penetration rounds except on HE-primary guns
+and the exact SU-100Y/B-13-S2 and ISU-130/S-26A pairs. Those keep their
+original penetration backups, proportions and shot-result switching. Ikv 103
+has no exception. Silver HE upgrades to a real premium HE on the same gun,
+with quotas merged before whole-magazine allocation. Native HE remains when
+there is no premium HE. The existing Sexton I/leFH18B2 HE-only restrictions
+remain authoritative. Manual ratios, including all-zero, still win. Default
+seed revision 5 rebuilds the disposable default once.
+
+The test baseline now distinguishes native shell price from logical primary
+and backup roles. Two silver HE rounds must not be misclassified as a
+silver/premium pair; two premium-role labels do not imply premium currency.
+The resource audit checks elite ammunition on every development/equipment
+combination, rather than only the default full-development elite preset.
+
+Pre-package validation:
+- Exact #1513 audit passed for all 576 vehicles / 9,216 fitting records,
+  including native modules, compatible turrets, legal equipment/load,
+  penetration-backup identities/quotas, premium HE substitution, full capacity
+  and whole magazines. Guns without a premium HE retain the original HE.
+- All 36 special gun identities and gun-keyed ammunition policies passed the
+  independent packed-resource identity audit.
+- Focused fitting, special-loadout, elite-ammunition, shot-policy, late-result,
+  worker-ammunition and garage suites passed. Save-slot/customization suites
+  passed. All 224 client source files compiled with CPython 2.7.
+- The dedicated CI step "Check Bot fitting presets and elite ammunition
+  switching" runs fitting, special-default and elite-ammunition regressions.
+  It covers premium-to-HE/two-shot return, HE-primary one-shot penetration
+  probes, both 130 mm silver-AP fallbacks, HE-only legacy artillery, SU-5,
+  manual overrides, clip allocation, Ikv 103 and RHM/full-development choices.
+
+Cloud, package and final native acceptance for this follow-up are pending;
+the earlier 383c065 package evidence does not validate this new runtime.

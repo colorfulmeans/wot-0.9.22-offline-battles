@@ -6,7 +6,8 @@ This module is shared by the Python 2 worker and Python 3 server. No policy
 decision consumes ammunition or restarts a reload timer.
 """
 
-from gui.mods.offline_lan_0922.default_loadouts import GOLD_SHELLS, profile_roles
+from gui.mods.offline_lan_0922.default_loadouts import (
+    GOLD_SHELLS, ELITE_PENETRATION_EXCEPTIONS, profile_roles)
 
 
 def is_he(shell):
@@ -14,7 +15,7 @@ def is_he(shell):
 
 
 def _elite_loadout(profile):
-    """Move default silver non-HE quotas to a real premium non-HE round."""
+    """Upgrade native default rounds without losing HE-primary backups."""
     if profile.get('bot_tier') != 'elite' or 'ammo_ratios' in profile:
         return None
     base = dict(profile)
@@ -24,25 +25,35 @@ def _elite_loadout(profile):
     nation = str(profile.get('vehicle_name', '')).split(':')[0]
     def premium(shell):
         return nation + ':' + shell.get('name', '') in GOLD_SHELLS
+    keep_penetration = (bool(shells and is_he(shells[0])) or
+                        (profile.get('vehicle_name'), profile.get('gun_name'))
+                        in ELITE_PENETRATION_EXCEPTIONS)
     candidates = [s for s in shells if not is_he(s) and premium(s)]
     if not candidates:
         candidates = [s for s in profile.get('shells', ())
                       if not is_he(s) and premium(s)]
-    removed = [s for s in shells if not is_he(s) and not premium(s)]
-    if not candidates or not removed:
-        return None
-    replacement = candidates[0]
-    removed_indices = set(int(s['index']) for s in removed)
+    he_candidates = [s for s in shells if is_he(s) and premium(s)]
+    if not he_candidates:
+        he_candidates = [s for s in profile.get('shells', ())
+                         if is_he(s) and premium(s)]
+    replacement = candidates[0] if candidates and not keep_penetration else None
+    he_replacement = he_candidates[0] if he_candidates else None
     quotas = {}
     result = []
+    changed = False
     for shell, proportion in zip(shells, proportions):
-        chosen = replacement if int(shell['index']) in removed_indices else shell
+        chosen = shell
+        if not premium(shell):
+            upgrade = he_replacement if is_he(shell) else replacement
+            if upgrade is not None:
+                chosen = upgrade
+                changed = True
         index = int(chosen['index'])
         if index not in quotas:
             result.append(chosen)
             quotas[index] = 0
         quotas[index] += proportion
-    return result, quotas
+    return (result, quotas) if changed else None
 
 
 def ordered(profile, remaining=None):

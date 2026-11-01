@@ -33,7 +33,7 @@ METADATA_NAME = "save.json"
 METADATA_SCHEMA = 1
 # PR115 review packages used revision 1 before their implementation was accepted.
 # A distinct seed revision must not trust that older completion marker.
-DEFAULT_REVISION = 4
+DEFAULT_REVISION = 5
 
 # How a slot was created.  ``unlocked`` is the historical offline garage: every
 # vehicle owned and every balance effectively unlimited.  ``new_account``

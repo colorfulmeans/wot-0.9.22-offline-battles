@@ -43,7 +43,7 @@ ratios, physical shell identities/prices and shot-result switching are retained.
 | germany:G81_Pz_IV_AusfH | _75mm_KwK_40_L48 | _105mm_StuH42_L28Pz |
 | germany:G83_Pz_IV_AusfA | _50mm_KwK_38_L42 | _75mm_KwK_37_L24 |
 | germany:G97_Waffentrager_IV | _150mm_Rohr_L38 | _128mm_K44_2_L61 |
-| germany:G99_RhB_Waffentrager | _150mm_Rohr_L29_5 | _128mm_K44_L55 |
+| germany:G99_RhB_Waffentrager | _150mm_Rohr_L29_5 | _150mm_Rohr_L29_5 |
 | japan:J20_Type_2605 | _140mm_50_3rd_Year_Type | _150mm_45_41st_Year_Type |
 | japan:J23_Mi_To | _75mm_Gun_Type5 | _120mm_Short_Barrel_Gun |
 | japan:J24_Mi_To_130_tons | _105mm_Cannon_Type92 | _150mm_Howitzer_Type96 |
@@ -71,7 +71,10 @@ ratios, physical shell identities/prices and shot-result switching are retained.
 
 ## Reviewed full-gun additions and elite ammunition
 
-The shared full-gun override table now has 37 vehicles. The following four
+The shared full-gun override table now has 36 vehicles. RHM B WT no longer
+overrides the native full-gun choice: stock retains the 128 mm L/55 while
+intermediate/full use the 150 mm L/29.5. WT auf Pz. IV retains its reviewed
+128 mm L/61 full gun. The following four
 additions apply to newly generated unlocked player vehicles and to veteran and
 elite Bot full-development plans. Existing player fittings and manual installs
 remain authoritative. Stock and intermediate Bot modules are unchanged.
@@ -87,21 +90,30 @@ AT15 retains its reviewed 32-pounder. This is a gun preference, not a claim
 that it dominates the 20-pounder B in every statistic.
 
 Elite difficulty transfers default silver non-HE ammunition quotas to a real
-premium non-HE round supported by the mounted gun. Existing HE-primary order,
-allowed HE identities, and ordinary/premium HE distinctions remain intact.
-A gun without a premium non-HE counterpart keeps its existing policy. The
+premium non-HE round supported by the mounted gun. HE-primary guns retain their
+existing penetration backups and switching order. Two explicit vehicle/gun
+exceptions, SU-100Y's B-13-S2 and ISU-130's S-26A, retain the higher-penetration
+silver AP behind their premium AP primary. Ikv 103 has no exception.
+All selected silver HE quotas transfer to native premium HE when available,
+including artillery, with duplicate quotas merged before magazine allocation.
+Without a corresponding premium round, the original shell remains. Existing
+HE-only restrictions, including Sexton I and leFH18B2, cannot admit AP/HEAT as
+a premium replacement for HE. The SU-5 122 mm model 1930 gun uses only the
+420-damage OF420SO at every difficulty; its 300-damage HE is excluded.
+The
 reviewed gold-shell identity catalogue, rather than shell position, penetration,
 or the generic standard/premium role label, identifies the actual premium round.
 This matters for SU-100Y, whose premium AP is already its logical primary.
 Manual ammunition ratios override this difficulty default, including all-zero
-ratios. Players and other Bot difficulties retain their existing allocation.
+ratios. Player ammunition remains native. Other Bot difficulties retain their
+existing allocation except for the shared SU-5 gun correction above.
 Whole magazines and native capacity still govern rounding. The resolved Bot
 fitting tier travels in the tactical profile through the worker/server boundary,
 so initial ammunition, shot policy, replicas and authority restoration agree.
 The diagnostic entry records `bot_ammunition_initialized` with native shell
 identities, resolved tier, counts, initial shell and manual-override status.
 
-Default seed revision 4 rebuilds the default save once. New unlocked saves
+Default seed revision 5 rebuilds the default save once. New unlocked saves
 naturally use the revised full gun table; unrelated existing custom saves are
 not silently migrated or stripped of player assets.
 
