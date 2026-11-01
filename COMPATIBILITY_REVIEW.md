@@ -12605,3 +12605,21 @@ These are retained as failed local attempts, not represented as passing native
 or Linux coverage. The Linux cloud suite must independently verify the cleaned
 battle paths; clean Windows cloud coverage and final packaged smoke must verify
 the downloadable executable. No new native battle is claimed by this cleanup.
+
+
+### Downloaded-entry verification repair before v1.1.1 publication
+
+The first full v1.1.1 publication attempt (41277621857, source 08e2d15) stopped
+before creating its tag/release. Windows launcher tests, build, executable
+versions, frozen-source/native verification and packaged editor smoke passed.
+The final fake-client install step built a synthetic ZIP from ENTRIES, which
+now contains only the diagnostic batch file; it omitted the actual normal EXE
+and the strengthened archive policy correctly refused that incomplete input.
+This was a missed validation producer update, not a missing downloaded binary.
+
+The workflow now places every actual downloaded root file in the check ZIP,
+including the normal EXE and any unexpected script. A regression executes the
+production workflow's Python snippet against an actual temporary root: the two
+supported entries pass, and an added development batch file is rejected. The
+strict two-entry archive policy is unchanged. No runtime source or English
+release-note content changes in this repair. No v1.1.1 tag was rewritten.
