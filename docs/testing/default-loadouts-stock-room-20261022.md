@@ -22,8 +22,11 @@ Intuition inventory/reload/one-decision gates. Fire diagnostics are tested to
 report the native directive factor and explicitly disclose its unapplied status.
 
 `build/equipment-effects-candidate2-local/summary.json`: 18 files, 576 tests passed.
-All 224 client files passed CPython 2.7 compilation. Cloud results and exact-package
-Windows observations are pending; do not reuse the earlier package's acceptance.
+All 224 client files passed CPython 2.7 compilation and final-package bytecode
+signature comparison. Cloud Tests run 41326363485 (f5a5828) passed all eight jobs;
+Windows build 41326069674 (runtime 0e60da5) passed all three jobs. Independent ZIP,
+x64 launcher, x86 native payload and bundled-source checks passed. Exact-package
+Windows battle observations remain pending; do not reuse older acceptance.
 Firefighting and full native fire/ram calibration are not claimed fixed.
 
 The first cloud candidate exposed an extra diagnostic dependency in the lethal
@@ -40,7 +43,11 @@ synthetic fitting intentionally has no generated native crew. They now explicitl
 donate an empty skill projection, just as they already donate empty crew and plain
 factors. Production crew decoding remains mandatory for real generated fittings.
 All six affected startup/countdown/teardown cases passed locally with the explicit
-engine-free simulation owner; final cloud coverage must still run their full files.
+engine-free simulation owner. All 1,017 startup/battle-flow tests and final cloud
+coverage of their full files passed. The wider local Bot run initially omitted
+WOT_OFFLINE_DIAGNOSTICS: 538/550 passed, with 12 log assertions failing due to
+missing detailed records. All 12 passed when rerun with diagnostics enabled;
+the cloud full-file Bot suite also passed. No navigation expectation was weakened.
 
 ## Scope
 
