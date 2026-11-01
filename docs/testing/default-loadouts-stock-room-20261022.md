@@ -318,5 +318,17 @@ Pre-package validation:
   probes, both 130 mm silver-AP fallbacks, HE-only legacy artillery, SU-5,
   manual overrides, clip allocation, Ikv 103 and RHM/full-development choices.
 
-Cloud, package and final native acceptance for this follow-up are pending;
-the earlier 383c065 package evidence does not validate this new runtime.
+Cloud/package validation for runtime `096cf610a9dd000f36bf23237e97fdc98bd94d50`:
+- [Tests run 41302257329](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41302257329): all eight jobs passed, including the dedicated fitting/ammunition step.
+- [Windows build 41302253472](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41302253472): server, client payload and launcher jobs passed.
+- Downloaded final artifact 13081704896 (`windows-561`); archive and nested
+  payload CRC checks passed. Launcher is x64, native extensions are x86,
+  Python bytecode is 2.7, and packaged server policy/fitting sources match
+  the committed runtime. Only the normal EXE and diagnostic BAT are exposed.
+- Package identity: `colorfulmeans-41302253472-1`, semantic version 1.1.1.
+  Extracted to `D:/Games/wot-mod/9.22/PR119-096cf61`.
+- The diagnostic entrance launched the actual #1513 client. Native battle
+  acceptance is pending the client's EULA decision by the user; no live
+  ammunition or battle result for this runtime is claimed yet.
+
+The earlier 383c065 package evidence does not validate this new runtime.
