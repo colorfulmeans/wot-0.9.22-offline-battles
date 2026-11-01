@@ -241,6 +241,40 @@ Cloud/package acceptance for source `383c065`:
   `colorfulmeans-41286762316-1`; semantic version remains 1.1.1 for this test build.
 - Local default seed was reset to revision 4 and a clean unlocked save with
   slot ID `save` was created. Both have no restored garage fitting state.
-- The diagnostic launcher starts the hidden native worker and visible #1513
-  client successfully. Interactive acceptance reached the original EULA and
-  awaits the user's acceptance; no garage/battle success is claimed yet.
+- The user accepted the original client EULA. The final extracted package was
+  then exercised through its diagnostic entry on the exact #1513 Windows client.
+
+Native acceptance on 2026-11-01, using the packaged source above:
+- Two standard 15-versus-15 Mittengard battles completed and returned to native
+  results/garage: a low-tier reviewed-gun lineup and a high-tier special-ammo
+  lineup. The player was idle; these are installation, Bot weapons and lifecycle
+  checks, not player gunnery-performance measurements.
+- Low-tier native fitting records confirmed all four new guns and M3G's first
+  platform. The player's Chi-He gun menu independently showed the 57 mm gun
+  installed. All 29 Bots initialized elite ammunition; the four native counts
+  were M3G [0,47,5], Pz.38(t) [0,50,6], Stuart [0,88,10], Chi-He [0,72,8].
+  The server accepted 210 Bot shot results, all using shell index 1.
+- The high-tier player's AT15 gun menu showed the retained 32-pdr installed.
+  All 29 Bots initialized successfully. Representative native inventories:
+  AT15 [0,45,5], Rhm.-B. WT 128 mm [0,27,3], T49 [0,4,18], Type 4 [0,40],
+  Centurion Mk.7/1 [14,58,0]. The Centurion intentionally retains its APCR/HESH
+  policy because this gun has no premium non-HE replacement.
+- The high-tier server accepted 151 Bot shot results (129 index 1, 17 index 2,
+  five index 0). Bot 26's actual sequence included 1,2,2,1: premium penetration
+  ammunition, two HE shots, then premium penetration ammunition again. Index 0
+  shots belong to the retained Centurion exception; shell indices alone are not
+  a price/type classification across different guns.
+- These checks preserve the previous HE policy, including artillery's normal
+  80/20 HE split (75/25 for clips). They do not claim artillery now uses only
+  premium HE. Manual-ratio and whole-magazine coverage remains automated;
+  neither was exercised through a live manual override in these two battles.
+- Reports `wot-error-report-20261101-173552-67733aad5622.zip` and
+  `wot-error-report-20261101-175713-52b6d461b3e3.zip` were generated through the
+  launcher after each battle. Both archives passed integrity checks. Their
+  hidden-worker, visible-client and server logs contained no ERROR entries or
+  Python tracebacks. This is scoped runtime evidence, not a claim that every
+  map or unrelated gameplay subsystem is defect-free.
+- After normal client/worker shutdown, the two disposable acceptance saves were
+  reset again. `default` (revision 4) and unlocked slot `save` each contain only
+  their seed metadata; test battle progress/fittings were not retained. The
+  launcher was restored to Automatic lineup and the default slot.
