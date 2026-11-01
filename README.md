@@ -9,7 +9,13 @@ and battle logic, a small LAN server and a launcher.
 
 Current release: **v1.1.0** — [release notes](docs/releases/v1.1.0.md).
 
-### Battle fix review (not a release)
+### Historical battle review notes
+
+The investigation notes below retain the original review context. For v1.1.0
+behavior, update instructions and current acceptance evidence, use the
+[release notes](docs/releases/v1.1.0.md) and
+[compatibility review](COMPATIBILITY_REVIEW.md). Historical pending statements
+below do not replace that current verification record.
 
 This review retains the verified received-source spotting assistance, integer
 sharing, 14-second designated-target lease propagation and removed-target
@@ -119,8 +125,10 @@ against the capped lifetime increment. For overlapping SPGs, record both
 hit orders, expiry and damage credits without assuming ownership is fixed.
 
 Nine independent player guides are available in [English](docs/releases/v1.0.0-guides.en/)
-and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). The release includes the Windows
-launcher and all eighteen guide files as separate downloads.
+and [Chinese](docs/releases/v1.0.0-guides.zh-CN/). These are the historical
+v1.0.0 guides and remain available with that release. The v1.1.0 release ships
+a freshly rebuilt Windows launcher; its current changes are documented in the
+v1.1.0 release notes.
 
 ### Custom lineup review
 
