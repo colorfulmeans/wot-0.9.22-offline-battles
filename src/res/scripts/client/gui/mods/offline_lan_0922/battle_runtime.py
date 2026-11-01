@@ -9809,6 +9809,11 @@ class BattleRuntime(object):
     def _crew_stat_factor(entity, stat, snapshot):
         """Combine damage penalties with the accepted crew's conditional effects."""
         value = critical_damage.stat_factor(entity, stat)
+        if stat == 'vision' and entity is not None and snapshot is not None:
+            from gui.mods.offline_lan_0922 import crew_battle
+            if 'surveyingDeviceHealth' in (getattr(entity, '_destroyed_devices', ()) or ()):
+                value *= crew_battle.for_critical(
+                    snapshot, crew_battle.critical_from_vehicle(entity))['damaged_optics_recon_ratio']
         if (stat not in ('reload', 'dispersion') or entity is None or
                 snapshot is None):
             return value
@@ -25237,7 +25242,8 @@ class BattleRuntime(object):
         context = getattr(self,'_stack_context',None)
         carrier = (context.get('impact_carrier', context.get('contact_carrier',
             context['actor'].get('_stack_carrier'))) if context else None)
-        observation = dict(impact_speed=impact_speed,module_contacts=contacts)
+        observation = dict(impact_speed=impact_speed, module_contacts=contacts,
+                           contact_normal=list(normal) if normal is not None else None)
         if carrier:
             observation['vehicle_contact'] = list(carrier)
         self._pending_landing_impacts.append(observation if contacts or carrier else impact_speed)
@@ -25300,8 +25306,14 @@ class BattleRuntime(object):
         sender = getattr(self._sender, 'send_current', None)
         publish = getattr(self.client, 'send_landing_observation', None)
         carrier = observation.get('vehicle_contact') if isinstance(observation,dict) else None
-        sent = (publish(impact_speed,contacts,vehicle_contact=carrier) if carrier else
-                publish(impact_speed,contacts) if contacts else publish(impact_speed)) if callable(publish) and callable(sender) and sender() else False
+        normal = observation.get('contact_normal') if isinstance(observation, dict) else None
+        kwargs = {}
+        if carrier:
+            kwargs['vehicle_contact'] = carrier
+        if normal is not None:
+            kwargs['contact_normal'] = normal
+        sent = ((publish(impact_speed, contacts, **kwargs) if contacts or kwargs else
+                 publish(impact_speed)) if callable(publish) and callable(sender) and sender() else False)
         if not sent:
             return False
         del self._pending_landing_impacts[0]
@@ -28459,12 +28471,14 @@ class BattleRuntime(object):
             list(origin), list(velocity), gravity, maximum,
             max_time_ms, is_he,
             combat_rules.he_radius(shot) if is_he else 0.0)
+        from gui.mods.offline_lan_0922 import bot_fittings
         kwargs = {
             'authority_epoch': getattr(
                 self.client, 'authority_epoch', None),
             'penetration_factor':
                 combat_rules.sample_penetration_factor(),
-            'source_shot': descriptor_donation.project_shot(shot),
+            'source_shot': bot_fittings.project_shot(
+                source.typeDescriptor, shot, state.get('critical')),
             'burst_group_seq': state.get('burst_group_seq'),
             'burst_index': state.get('burst_index'),
             'burst_count': state.get('burst_count'),

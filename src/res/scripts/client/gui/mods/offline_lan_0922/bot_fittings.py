@@ -103,7 +103,10 @@ def native_factors(descriptor, critical=None):
                 devices=value['wire'].get('devices'), directive=value['wire'].get('directive'),
                 crew_active=list(flags), fire=fire,
                 descriptor_misc=dict((name, misc[name]) for name in (
-                    'gunReloadTimeFactor', 'gunAimingTimeFactor') if name in misc),
+                    'gunReloadTimeFactor', 'gunAimingTimeFactor',
+                    'crewChanceToHitFactor', 'vehicleByChassisDamageFactor',
+                    'chassisHealthFactor', 'ammoBayHealthFactor',
+                    'engineHealthFactor', 'fuelTankHealthFactor') if name in misc),
                 final_modifiers=dict((name, factor) for name, factor in modifiers.items()
                                      if isinstance(factor, (int, float))),
                 base_reload_seconds=base_reload,
@@ -117,6 +120,55 @@ def native_factors(descriptor, critical=None):
 def battle_factors(descriptor, critical=None):
     from gui.mods.offline_lan_0922 import crew_battle
     return crew_battle.from_native(native_factors(descriptor, critical))
+
+
+def skill_snapshot(descriptor):
+    """Project generated native crew slots through the player's eligibility law."""
+    value = context(descriptor)
+    if value is None:
+        return None
+    if 'skill_snapshot' not in value:
+        from items import tankmen
+        from gui.mods.offline_lan_0922 import effective_params
+        members = []
+        for index, raw in enumerate(value['crew']):
+            member = tankmen.TankmanDescr(raw)
+            names = tuple(member.skills)
+            roles = list(descriptor.type.crewRoles[index])
+            skills = []
+            for order, name in enumerate(names):
+                name = str(name).lower()
+                role = effective_params.skill_required_role(name)
+                level = (float(getattr(member, 'lastSkillLevel', 100))
+                         if order == len(names) - 1 else 100.0)
+                skills.append(dict(name=name, level=level, active=True,
+                                   enabled=role is None or role in roles))
+            members.append(dict(instance=value['crew_roster'][index],
+                                roles=roles, skills=skills))
+        value['skill_snapshot'] = {'crew': {'members': members}}
+    return value['skill_snapshot']
+
+
+def skill_count(descriptor, name, critical=None):
+    from gui.mods.offline_lan_0922 import effective_params
+    snapshot = skill_snapshot(descriptor)
+    return (effective_params.living_skill_count(
+        snapshot, name, (critical or {}).get('crew_ko', ()))
+        if snapshot is not None else 0)
+
+
+def skill_level(descriptor, name, critical=None):
+    from gui.mods.offline_lan_0922 import effective_params
+    snapshot = skill_snapshot(descriptor)
+    return (effective_params.living_skill_level(
+        snapshot, name, (critical or {}).get('crew_ko', ()))
+        if snapshot is not None else 0.0)
+
+
+def project_shot(descriptor, shot, critical=None):
+    from gui.mods.offline_lan_0922 import descriptor_donation
+    return descriptor_donation.project_shot(shot, deadeye=bool(
+        skill_count(descriptor, 'gunner_sniper', critical)))
 
 
 def register(descriptor, value):

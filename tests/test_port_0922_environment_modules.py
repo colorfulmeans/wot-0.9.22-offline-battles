@@ -14,6 +14,16 @@ from gui.mods.offline_lan_0922 import player_critical_mechanics as pcm
 
 
 class EnvironmentalModulesTests(unittest.TestCase):
+    def setUp(self):
+        # These are engine-free law tests on every host. Native simulation
+        # integration has its own acceptance; a Windows Python 3 test process
+        # cannot load the shipping x86 CPython 2 extension.
+        patcher = mock.patch(
+            'gui.mods.offline_lan_0922.native_simulation.NativeSimulation.create',
+            return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def target(self, pools=None):
         td=fixtures._strict_1513_descriptor()
         return types.SimpleNamespace(id=1,health=1000,maxHealth=1000,typeDescriptor=td,

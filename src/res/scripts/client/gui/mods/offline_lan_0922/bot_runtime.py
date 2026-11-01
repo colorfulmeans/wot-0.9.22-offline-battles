@@ -618,6 +618,35 @@ def _bot_physics_params(descriptor, crew_level=None):
         factors=_bot_default_crew_factors(descriptor, crew_level))
 
 
+def _bot_ram_profile(descriptor, critical=None):
+    from gui.mods.offline_lan_0922 import bot_fittings
+    return tank_collision.descriptor_ram_profile(descriptor,
+        bot_fittings.skill_level(descriptor, 'driver_rammingmaster', critical) * 0.0015)
+
+
+def _bot_intuition(state, descriptor, gun, ammo, burst, requested):
+    """One old-perk roll per new shell decision, never per update or burst."""
+    from gui.mods.offline_lan_0922 import bot_fittings
+    if burst.active or gun.clip_size > 1 or gun.burst_count > 1 or ammo.plan_pending:
+        return False
+    selected = ammo._available(gun.shell_index(requested))
+    if selected in (ammo.loaded, ammo.next) or ammo.remaining[selected] <= 0:
+        return False
+    chances = bot_fittings.skill_count(descriptor, 'loader_intuition', state.get('critical'))
+    success = any(random.random() < loadout.INTUITION_CHANCE for unused in range(chances))
+    if success:
+        # The projectile's physical round is frozen separately. Changing the
+        # next round neither spends ammunition nor completes an active reload.
+        ammo.restore(dict(ammo_remaining=list(ammo.remaining), shell_index=selected,
+                          next_shell_index=selected, ammo_reload_pending=ammo.reload_pending))
+    if chances:
+        from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+        validation_event('bot_intuition', bot=state.get('id'), chances=chances,
+                         success=success, selected=selected,
+                         elapsed=gun.elapsed, duration=gun.reload_duration)
+    return success
+
+
 def _view_range(descriptor, still_seconds=0.0, crew_level=None):
     """Bot view range, using the same device and crew law as the player."""
     turret = _value(descriptor, 'turret', {}) or {}
@@ -974,6 +1003,8 @@ def _critical_factor(state, descriptor, stat):
         return device_damage.crew_stat_factor(crew_ko, stat) * module_factor
     base = bot_fittings.native_factors(descriptor)
     current = bot_fittings.native_factors(descriptor, state.get('critical'))
+    if stat == 'vision' and 'surveyingDeviceHealth' in destroyed:
+        module_factor *= crew_battle.from_native(current)['damaged_optics_recon_ratio']
     keys = {'reload': 'gun/reloadTime', 'aim_time': 'gun/aimingTime',
             'turret_speed': 'turret/rotationSpeed', 'vision': 'circularVisionRadius',
             'signal': 'radio/distance'}
@@ -3322,8 +3353,7 @@ class BotRuntime(object):
             state['half_width'] = half_width
             state['collision_shape'] = _collision_shape(descriptor)
             state['mass'] = self._physics_params[bot_id]['mass']
-            state['ram_profile'] = tank_collision.descriptor_ram_profile(
-                descriptor)
+            state['ram_profile'] = _bot_ram_profile(descriptor, state.get('critical'))
         motion = self._native_motion_for(bot_id)
         if motion is not None:
             motion.descriptor_patch(bot_id)
@@ -4127,8 +4157,7 @@ class BotRuntime(object):
                 'half_length': half_length, 'half_width': half_width,
                 'collision_shape': _collision_shape(descriptor),
                 'mass': self._physics_params[bot_id]['mass'],
-                'ram_profile': tank_collision.descriptor_ram_profile(
-                    descriptor),
+                'ram_profile': _bot_ram_profile(descriptor, raw.get('critical')),
                 'ram_motion': ram_motion.normalize(raw.get('ram_motion', [])),
                 '_ram_motion_seq': max([r[1] for r in raw.get('ram_motion', [])] or [0]),
                 'push_x': 0.0, 'push_z': 0.0,
@@ -4846,6 +4875,11 @@ class BotRuntime(object):
         fire_damage = 0
         fire_payload = None
         if advance_fire:
+            if was_on_fire and fire_elapsed == 0.0:
+                from gui.mods.offline_lan_0922 import bot_fittings
+                decay = (bot_fittings.battle_factors(descriptor, state.get('critical'))['fire_decay_factor']
+                         if bot_fittings.context(descriptor) is not None else 0.57)
+                critical_damage.report_fire_model(shadow, decay)
             fire_damage, fire_payload = critical_damage.tick_fire(
                 shadow, step, now=now)
             if state.get('_environment_fire') and fire_payload is not None:
@@ -8963,6 +8997,8 @@ class BotRuntime(object):
         if (witnesses or ground_observed) and callable(self.impact_contacts_resolver):
             from gui.mods.offline_lan_0922 import environment_modules
             contacts = self.impact_contacts_resolver(state, witnesses, normal, impact_speed)
+            damage = environment_modules.suspension_hull_damage(
+                damage, self._descriptors.get(state['id'], {}), contacts, normal)
             shadow = _BotCriticalVehicle(state, self._descriptors.get(state['id'], {}),
                 None, _number(state.get('combat_fire_timer')))
             terminal_damage, payload = environment_modules.apply_impact(shadow, impact_speed, contacts)
@@ -17515,6 +17551,7 @@ class BotRuntime(object):
             descriptor = self._descriptors.get(state['id'], {})
             profile = state.get('profile')
             profile = profile if isinstance(profile, dict) else {}
+            state['ram_profile'] = _bot_ram_profile(descriptor, state.get('critical'))
             gun_state = self._gun_states.get(state['id'])
             if gun_state is None:
                 gun_state = _BotGunState(
@@ -17532,6 +17569,8 @@ class BotRuntime(object):
                 self._burst_states[state['id']] = burst_state
             reload_factor = _critical_factor(
                 state, descriptor, 'reload')
+            _bot_intuition(state, descriptor, gun_state, ammo_state, burst_state,
+                           command.get('shell_index', 0))
             if self._native_simulation is not None:
                 gun_state, ammo_state, burst_state = \
                     self._native_simulation.weapons.prepare(

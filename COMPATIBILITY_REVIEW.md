@@ -1,5 +1,49 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Equipment effects and living Bot crew audit (November 2)
+
+The exact #1513 optional-device catalogue contains 49 definitions, including
+20 vehicle-specific suspension variants and six improved devices. Its directive
+catalogue contains six equipment and nine crew directives. Installation and UI
+bonuses alone are not evidence that the battle effect reaches its consumer.
+
+All four liners write `miscAttrs.crewChanceToHitFactor`; that factor now scales
+the shared direct/explosion crew saving throw, after the existing large-medkit
+protection. Final native protection factors accompany player device pools to the
+server. The same projection retains `vehicleByChassisDamageFactor`. Landing
+receipts carry a finite unit contact normal, preserved by retry/queue/dedup;
+only a positive upward support normal plus an actual track material contact
+admits suspension hull reduction. Missing contacts, wall/roof impacts and damage
+to a vehicle below are not reduced. No ram calibration constant changes.
+
+The native Recon processor still owns the ordinary vision factor. A wrapped
+processor additionally donates the destroyed/working coefficient ratio from its
+actual skill config, training increase and activity flags. Only destroyed
+observation devices receive that ratio, in both player and fitted Bot paths.
+
+Generated Bot crew compact descriptors now supply physical-slot skill affiliation
+and native final-skill level. Conscious, eligible carriers feed Controlled Impact,
+Deadeye at immutable shot creation, radio relay, Designated Target and Last Effort.
+Intuition rolls once per changed shell decision on a non-magazine/non-burst gun;
+success changes the actual next round without spending ammunition or completing
+an active reload. The native weapon owner retains its clocks and inventory.
+
+Firefighting remains **unresolved**, not fixed: #1513 donates
+`healthBurnPerSecLossFraction`, including the directive enhancement, but the
+per-vehicle initial burn/base decay are stripped by the client reader's
+server-only guard. The donation survives player crew-state projection and a
+bounded `fire_model_boundary` diagnostic explicitly reports `skill_applied=false`,
+the native factor, missing contract and retained legacy fixed-burn parameters.
+Neither a community approximation nor invented per-vehicle values replace them.
+
+Local validation: 17 isolated suites / 567 tests passed; all 224 client modules
+compiled with CPython 2.7.18; `inspect_client.py` confirmed the pinned x86 Chinese
+HD build. Environmental law tests explicitly omit native simulation on all hosts;
+they no longer mistake an unavailable x86 Python-2 extension in a Windows Python-3
+test process for a gameplay assertion. CI now has a dedicated equipment/crew/
+directive regression step. Cloud/package/native acceptance must be recorded for
+the new exact runtime; older ammunition-package evidence does not validate it.
+
 ## Clean-launch selection, editor layout and soft-plant felling (October 31)
 
 This follow-up supersedes the gold disabled appearance below. Gold retains the

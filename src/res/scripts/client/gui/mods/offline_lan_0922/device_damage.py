@@ -415,7 +415,8 @@ def clamp_vision_factor(factor):
     return value
 
 
-def module_stat_factor(devices_hp, destroyed, td, stat, critical=None):
+def module_stat_factor(devices_hp, destroyed, td, stat, critical=None,
+                       damaged_optics_recon_ratio=1.0):
     """Multiplier for a stat from MODULE state, the counterpart of
     crew_stat_factor. >1 worsens time-like stats (reload, dispersion, aim_time);
     <1 worsens capability-like stats (mobility, turret_speed, vision, signal).
@@ -432,6 +433,8 @@ def module_stat_factor(devices_hp, destroyed, td, stat, critical=None):
         if n in dead:
             if dead_f is not None:
                 f *= dead_f
+                if stat == 'vision' and n == 'surveyingDeviceHealth':
+                    f *= float(damaged_optics_recon_ratio)
             continue
         hp = hp_map.get(n)
         if hp is None:

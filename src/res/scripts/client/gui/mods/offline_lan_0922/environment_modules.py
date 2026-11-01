@@ -19,6 +19,35 @@ IMPACT_FAN_TANGENT = math.tan(math.radians(25.0))
 MAX_CONTACTS = 32
 
 
+def contact_normal(value):
+    if value is None:
+        return None
+    if (not isinstance(value, (list, tuple)) or len(value) != 3 or
+            any(isinstance(n, bool) or not isinstance(n, (int, float)) or
+                math.isnan(n) or math.isinf(n) for n in value)):
+        raise ValueError('invalid environmental contact normal')
+    length = math.sqrt(sum(float(n) ** 2 for n in value))
+    if not 0.99 <= length <= 1.01:
+        raise ValueError('environmental contact normal is not unit length')
+    return [float(n) / length for n in value]
+
+
+def suspension_hull_damage(damage, descriptor, contacts, normal=None):
+    """Reduce chassis-transmitted HP loss only with positive track contact evidence.
+
+    A wall/roof hit or a missing native contact is not proof of a suspension
+    impact. Module damage and damage to a vehicle below retain their own laws.
+    """
+    from gui.mods.offline_lan_0922 import device_damage
+    normal = contact_normal(normal)
+    track_contact = normal is not None and normal[1] > 0.0 and any(
+        row['name'] in ('leftTrackHealth', 'rightTrackHealth')
+        for row in normalize_contacts(contacts))
+    factor = (device_damage._misc_factor(descriptor, 'vehicleByChassisDamageFactor')
+              if track_contact else 1.0)
+    return int(round(float(damage) * factor))
+
+
 def normalize_contacts(rows):
     from gui.mods.offline_lan_0922 import device_damage
     if not isinstance(rows, (list, tuple)) or len(rows) > MAX_CONTACTS:

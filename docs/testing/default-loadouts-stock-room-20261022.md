@@ -1,5 +1,31 @@
 # Special defaults, sandbox crew and stock waiting-room controls
 
+## Current follow-up: equipment effects and crew consumers (2026-11-02)
+
+This section supersedes the original scope's collision/ballistics exclusion for
+the new equipment-consumer fixes only. Original fitting/ammunition decisions and
+player native ammunition are unchanged. Runtime changes are detailed in
+`COMPATIBILITY_REVIEW.md`, "Equipment effects and living Bot crew audit".
+
+Acceptance must distinguish native item availability, successful installation,
+factor donation, actual damage/perception and final-package Windows behavior.
+The 49 device / 15 directive resource definitions are the inventory baseline;
+modern Equipment 2.0 or changed crew skills are not substituted for #1513 data.
+
+New regression coverage checks all four native liner protection coefficients at
+the real crew-roll entry, direct and explosion paths, player protection handoff,
+invalid protection values, confirmed track-support suspension reduction, missing/
+roof/wall contact exclusion, server damage exactly once, reliable contact-normal
+queue handoff, Recon healthy/yellow/destroyed states, physical Bot crew roles and
+injuries, native perception flags, Controlled Impact, Deadeye shot projection and
+Intuition inventory/reload/one-decision gates. Fire diagnostics are tested to
+report the native directive factor and explicitly disclose its unapplied status.
+
+`build/equipment-effects-final-local/summary.json`: 17 files, 567 tests passed.
+All 224 client files passed CPython 2.7 compilation. Cloud results and exact-package
+Windows observations are pending; do not reuse the earlier package's acceptance.
+Firefighting and full native fire/ram calibration are not claimed fixed.
+
 ## Scope
 
 This PR candidate shares one explicit fitting policy between factory sandbox

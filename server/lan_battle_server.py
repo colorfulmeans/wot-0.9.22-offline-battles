@@ -8692,7 +8692,7 @@ class BattleState:
                     PLAYER_ENVIRONMENT_CAPABILITY not in
                     player.capabilities or
                     not isinstance(message, dict) or
-                    set(message) - {'module_contacts', 'vehicle_contact'} != {
+                    set(message) - {'module_contacts', 'vehicle_contact', 'contact_normal'} != {
                         "type", "round_id", "authority_epoch",
                         "observation_seq", "input_seq", "impact_speed"} or
                     message.get("type") != "landing_observation" or
@@ -8718,6 +8718,7 @@ class BattleState:
             from gui.mods.offline_lan_0922 import environment_modules
             try:
                 module_contacts = environment_modules.normalize_contacts(message.get('module_contacts', []))
+                contact_normal = environment_modules.contact_normal(message.get('contact_normal'))
             except (ValueError, TypeError):
                 return False
             normalized = {
@@ -8726,6 +8727,7 @@ class BattleState:
                 "input_seq": input_seq,
                 "impact_speed": impact_speed,
                 "module_contacts": module_contacts,
+                "contact_normal": contact_normal,
             }
             from gui.mods.offline_lan_0922 import vehicle_stack
             carrier = None
@@ -8792,6 +8794,8 @@ class BattleState:
                 return False
             damage = vehicle_physics.fall_damage(
                 int(player.max_health), impact_speed)
+            damage = environment_modules.suspension_hull_damage(
+                damage, player_critical_mechanics._descriptor(player), module_contacts, contact_normal)
             # Freeze the contact's identities before either side can die in
             # the same impact. Later wreck pressure has a separate counter.
             upper_alive = bool(player.alive)

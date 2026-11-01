@@ -1134,6 +1134,8 @@ def _apply_module_damage(target_mock, all_hits, start_pos, end_pos, dmg, _shell,
 				# protection. Apply the artefact value at the crew-hit roll.
 				_chance *= max(
 					0.0, 1.0 - 0.5 * _medkit_bonus_value(target_mock))
+				_chance *= _device_damage._misc_factor(
+					_device_td(target_mock), 'crewChanceToHitFactor')
 				_draw = random.random() if _crew_on else None
 				_audit_rolls.append((_name, _chance, _draw))
 				if _crew_on and _draw < _chance:
@@ -1789,6 +1791,22 @@ def _restore_fuel_regen_cap(vehicle):
         vehicle._critical_devices = critical
     critical.add(name)
     return True
+
+
+def report_fire_model(vehicle, native_decay_factor):
+    """Expose the stripped server-law boundary, without inventing burn rates."""
+    from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
+    descriptor = _device_td(vehicle)
+    engine = getattr(descriptor, 'engine', None)
+    raw_burn = (engine.get('healthBurnPerSec') if isinstance(engine, dict)
+                else getattr(engine, 'healthBurnPerSec', None))
+    validation_event('fire_model_boundary', actor=getattr(vehicle, 'actor_kind', 'bot'),
+        actor_id=getattr(vehicle, 'id', None), native_decay_factor=native_decay_factor,
+        native_health_burn_per_second=raw_burn,
+        applied_model='legacy_fixed_burn', skill_applied=False,
+        missing_contract='per_vehicle_initial_burn_and_base_decay',
+        legacy_tick_seconds=1.0, legacy_duration=_device_damage.FIRE_DURATION_SECONDS,
+        legacy_damage_fraction=_device_damage.FIRE_DAMAGE_FRACTION_PER_SEC)
 
 
 def tick_fire(vehicle, dt, now=None, module_test_mode=False):

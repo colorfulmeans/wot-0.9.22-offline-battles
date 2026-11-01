@@ -13,12 +13,17 @@ DEFAULTS = {
     'adrenaline_reload_factor': 1.0,
     'engine_fire_factor': 1.0,
     'damaged_gun_factor': 1.0,
+    'damaged_optics_recon_ratio': 1.0,
+    'fire_decay_factor': 0.57,
 }
 
 
 def from_native(factors):
-    return dict((name, float(factors.get('offline/' + name, default)))
-                for name, default in DEFAULTS.items())
+    result = dict((name, float(factors.get('offline/' + name, default)))
+                  for name, default in DEFAULTS.items())
+    result['fire_decay_factor'] = float(factors.get(
+        'healthBurnPerSecLossFraction', DEFAULTS['fire_decay_factor']))
+    return result
 
 
 def canonical(value):
@@ -30,7 +35,8 @@ def canonical(value):
         if isinstance(number, bool) or not isinstance(number, (int, float)):
             return None
         number = float(number)
-        if math.isnan(number) or math.isinf(number) or not 0.0 <= number <= 1.0:
+        maximum = 10.0 if name in ('damaged_optics_recon_ratio', 'fire_decay_factor') else 1.0
+        if math.isnan(number) or math.isinf(number) or not 0.0 <= number <= maximum:
             return None
         if name in ('adrenaline_reload_factor', 'damaged_gun_factor') and not number:
             return None

@@ -176,7 +176,7 @@ jobs:
           done
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/traffic "${arguments[@]}"
 
-      - name: Check Bot fitting presets and elite ammunition switching
+      - name: Check equipment effects, physical crew skills and elite ammunition
         if: ${{ !cancelled() }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
@@ -185,6 +185,15 @@ jobs:
           python tools/run_test_suite.py --jobs 3
           --logs build/bot-test-results/fittings-ammunition
           --pattern test_bot_fittings.py
+          --pattern test_port_0922_equipment_skill_effects.py
+          --pattern test_port_0922_conditional_crew.py
+          --pattern test_port_0922_loadout.py
+          --pattern test_port_0922_equipment_policy.py
+          --pattern test_port_0922_bonds_and_directives.py
+          --pattern test_port_0922_environment_modules.py
+          --pattern test_port_0922_critical_damage.py
+          --pattern test_port_0922_server_projectiles.py
+          --pattern test_port_0922_lan_client_projectiles.py
           --pattern test_special_default_loadouts.py
           --pattern test_elite_premium_ammo.py
 

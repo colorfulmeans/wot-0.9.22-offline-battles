@@ -17,6 +17,7 @@ TRACK_DEVICE_NAMES = frozenset(('leftTrackHealth', 'rightTrackHealth'))
 CREW_NAMES = frozenset((
     'commander', 'driver', 'gunner', 'gunner1', 'gunner2', 'loader',
     'loader1', 'loader2', 'radioman', 'radioman1', 'radioman2'))
+PROTECTION_FIELDS = ('crewChanceToHitFactor', 'vehicleByChassisDamageFactor')
 
 
 def project_profile(descriptor, factors=None):
@@ -84,6 +85,8 @@ def project_profile(descriptor, factors=None):
         'devices': devices,
         'activation_targets': activation_targets,
         'crew_roster': crew_roster,
+        'protection': dict((name, device_damage._misc_factor(descriptor, name))
+                           for name in PROTECTION_FIELDS),
     }
 
 
@@ -125,6 +128,7 @@ def descriptor_from_profile(profile):
     if not values:
         return None
     descriptor = _Projection(miscAttrs=_Projection())
+    descriptor.miscAttrs.update(profile.get('protection') or {})
     descriptor.engine = values.get('engineHealth')
     descriptor.fuelTank = values.get('fuelTankHealth')
     descriptor.radio = values.get('radioHealth')
@@ -304,6 +308,10 @@ def advance_fire(player, dt, now):
     elapsed = max(0.0, float(getattr(player, 'combat_fire_elapsed', 0.0)))
     target = _CriticalTarget(player, descriptor, now)
     step = max(0.0, float(dt))
+    if elapsed == 0.0:
+        from gui.mods.offline_lan_0922 import crew_battle
+        critical_damage.report_fire_model(target, crew_battle.for_critical(
+            getattr(player, 'effective_params', None), player.critical)['fire_decay_factor'])
     target._fire_started = float(now) - (elapsed + step)
     damage, payload = critical_damage.tick_fire(target, step, now=float(now))
     burning = bool(target.is_on_fire and damage < int(player.health))

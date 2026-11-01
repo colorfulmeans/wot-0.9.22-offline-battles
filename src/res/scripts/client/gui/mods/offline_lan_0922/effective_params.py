@@ -476,6 +476,17 @@ def _canonical_equipment(value):
 
 def _canonical_critical(value):
     """Validate final mounted module pools donated by the exact client."""
+    protection = None
+    if isinstance(value, dict) and 'protection' in value:
+        raw = value['protection']
+        keys = ('crewChanceToHitFactor', 'vehicleByChassisDamageFactor')
+        if not _mapping(raw, frozenset(keys)):
+            return None
+        protection = dict((key, _number(raw[key], 0.0, 1.0)) for key in keys)
+        if any(number is None for number in protection.values()):
+            return None
+        value = dict(value)
+        del value['protection']
     if (not isinstance(value, dict) or
             set(value) not in (
                 _CRITICAL_KEYS, _CRITICAL_KEYS_WITH_TARGETS,
@@ -518,6 +529,8 @@ def _canonical_critical(value):
         targets.append({'index': index, 'name': str(name)})
     targets.sort(key=lambda entry: entry['index'])
     canonical = {'devices': result}
+    if protection is not None:
+        canonical['protection'] = protection
     if 'activation_targets' in value:
         canonical['activation_targets'] = targets
     if 'crew_roster' in value:
