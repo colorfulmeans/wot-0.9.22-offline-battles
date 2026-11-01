@@ -244,3 +244,11 @@ selections that cannot fill the team within the quota refuse start, rather
 than admitting unchecked classes. Preflight also refuses missing classes and
 impossible shared tier windows before loading. Training without Bots ignores
 these preferences. Standard and training Bots share the same selection policy.
+
+### Player ammunition boundary
+
+The reviewed gun/module defaults also initialize unlocked player vehicles.
+Player ammunition does not use Bot shell-role whitelists, elite premium
+substitution or the SU-5 Bot-only HE restriction. Both vehicle creation and
+gun replacement obtain the native load from `vehicles.getDefaultAmmoForGun`.
+A previously saved manual player fitting/load remains authoritative.

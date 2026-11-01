@@ -327,8 +327,47 @@ Cloud/package validation for runtime `096cf610a9dd000f36bf23237e97fdc98bd94d50`:
   the committed runtime. Only the normal EXE and diagnostic BAT are exposed.
 - Package identity: `colorfulmeans-41302253472-1`, semantic version 1.1.1.
   Extracted to `D:/Games/wot-mod/9.22/PR119-096cf61`.
-- The diagnostic entrance launched the actual #1513 client. Native battle
-  acceptance is pending the client's EULA decision by the user; no live
-  ammunition or battle result for this runtime is claimed yet.
+- The user accepted the client EULA. Final native acceptance below was
+  performed on this exact package and #1513 client.
 
 The earlier 383c065 package evidence does not validate this new runtime.
+
+### Final refined-ammunition Windows acceptance
+
+Two diagnostic sessions on Mittengard completed and returned to native battle
+results. The first used the default save and `QA HE low`; the second used a
+fresh unlocked `save` slot and `QA HE exceptions`. Each initialized 29 Bots.
+The launcher's selected profile was visibly checked before starting.
+
+- Low-tier actual inventories: SU-5 regular/model-1930 122 mm `[0,18]`,
+  loaded 1 (420-damage HE); elite Sexton I `[112,0,0]`; elite leFH18B2
+  `[42,0,0]`; elite Hetzer 105 mm `[0,4,16]`, loaded HE index 2; elite
+  Ikv 103 full gun `[0,24]`, loaded premium HEAT index 1. The server accepted
+  48 Bot shot results. Hetzer's sequence included `2,1,2`, exercising its
+  one-shot penetration probe and HE return in the real client.
+- High-tier actual inventories: elite RHM `_150mm_Rohr_L29_5` `[0,27,3]`;
+  SU-100Y `[9,18,3]`; ISU-130 `[8,15,2]`; SU-14 `_203mm_B-4` `[0,16]`.
+  All loaded index 1. The two 130 mm vehicles retained their actual silver
+  AP backup identities and quotas. All 49 accepted Bot shot results used
+  index 1. This battle did **not** exercise their silver-AP fallback or an
+  ordinary-gun two-shot HE return; those transitions are covered by the
+  explicit automated shot-result tests, not claimed as native observations.
+- The player's RHM was checked before battle in the fresh unlocked save:
+  native installation menu showed a green check on `15 cm Pak L/29.5`,
+  while the rack remained native default `[18 AP,0 HEAT,12 HE]`. Reviewed
+  player module defaults therefore applied without importing Bot premium
+  ammunition. Vehicle creation and gun changes still use native
+  `getDefaultAmmoForGun`; the Bot shell restrictions are not player policies.
+- Reports `wot-error-report-20261101-203203-0f29114ea332.zip` and
+  `wot-error-report-20261101-204928-e13a4e1747cf.zip` were generated through
+  the launcher after the respective results screen. Both passed archive
+  integrity checks. Hidden-worker, visible-client and server logs contained
+  no ERROR entries or Python tracebacks.
+- The desktop host's app-data virtualization initially kept prepared QA
+  settings separate from the launcher's physical user settings. That setup
+  mismatch was resolved before either accepted battle; observations from the
+  earlier no-battle launches are not used as ammunition acceptance evidence.
+- After normal shutdown, the physical default and full-unlock test saves were
+  rebuilt again. Both contain only `save.json`; the default seed is revision 5.
+  Launcher selection is restored to Automatic lineup/default with a blank
+  player name. Reports remain available for review.
