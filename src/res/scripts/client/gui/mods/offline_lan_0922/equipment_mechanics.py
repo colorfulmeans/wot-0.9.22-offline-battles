@@ -320,6 +320,13 @@ def bot_consumable_contracts(descriptor, snapshot=None):
         raise ValueError('bot consumable contract count is invalid')
     result = tuple(_validate_contract(dict(value)) for value in raw)
     names = tuple(value['name'] for value in result)
+    if names == DEFAULT_BOT_CONSUMABLE_NAMES[:2] + ('removedRpmLimiter',):
+        from . import equipment_test
+        if (equipment_test.governor_mode() and
+                tuple(value['kind'] for value in result) ==
+                ('extinguisher', 'medkit', 'rpm_limiter') and
+                result[0]['autoactivate'] and result[1]['repairAll']):
+            return result
     if names not in (DEFAULT_BOT_CONSUMABLE_NAMES, BOT_SMALL_CONSUMABLE_NAMES):
         raise ValueError('bot consumable contract order is invalid')
     if tuple(value['kind'] for value in result) != (

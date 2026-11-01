@@ -45,6 +45,20 @@ contact/mass/wreck assertions were retained. Windows editor smoke fixtures now
 supply their language and diagnostic callback explicitly. The separate real native
 acceptance and cloud checks below still need to be completed for the final SHA.
 
+Candidate 3f26bacf cloud Tests 41348518035 passed all eight jobs; build
+41348512207 passed all three jobs. Downloaded artifact 13100886205, 124887659
+bytes, CRC/x64 launcher/x86 native/two outer entries/227 Python-2.7 module code
+signatures all passed. Its actual Windows governor launch was rejected at Bot
+startup: bot_consumable_contracts still only admitted the ordinary three kits.
+This is a failed native acceptance, not a passed round. The default save revision
+advanced 5 -> 6 and both existing unlocked saves reset to equipment revision 6.
+
+The repair adds exactly the diagnostic large-extinguisher/large-medkit/governor
+contract to the same canonical snapshot validator, gated by diagnostic governor
+mode. The regression now drives native-item projection through the real validator
+and snapshot restore, and verifies rejection when diagnostic mode is off. A fresh
+final build and native round remain required after this change.
+
 ## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for

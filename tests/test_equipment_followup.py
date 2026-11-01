@@ -8,7 +8,7 @@ from gui.mods.offline_lan_0922 import bot_fittings, bot_runtime, loadout
 from gui.mods.offline_lan_0922 import battle_runtime, equipment_mechanics as em
 from gui.mods.offline_lan_0922 import equipment_test, roof_crush_test
 from gui.mods.offline_lan_0922.bot_fitting_data import PLANS
-from test_port_0922_equipment_mechanics import _equipment
+from test_port_0922_equipment_mechanics import _equipment, _defaults
 
 
 def item(name, **kwargs):
@@ -16,6 +16,26 @@ def item(name, **kwargs):
 
 
 class FollowupTests(unittest.TestCase):
+    def test_diagnostic_native_governor_survives_the_real_contract_validator(self):
+        raw = _equipment('removedRpmLimiter', 12, 11012, tags=('trigger',),
+                         enginePowerFactor=1.1, engineHpLossPerSecond=1.5)
+        cache = types.SimpleNamespace(equipmentIDs=lambda:{raw.name:12},
+                                      equipments=lambda:{12:raw})
+        defaults = tuple(em.project_equipment(value) for value in _defaults())
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1',
+                                         equipment_test.ENV:'2'}):
+            contracts = equipment_test.consumables(cache, defaults)
+            self.assertEqual(3, len(contracts))
+            self.assertEqual('removedRpmLimiter', contracts[-1]['name'])
+            self.assertEqual(contracts, em.bot_consumable_contracts({'botConsumables':contracts}))
+            restored = [em.EquipmentState(value).snapshot(0.) for value in contracts]
+            self.assertEqual(contracts, em.bot_consumable_contracts(None, snapshot=restored))
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'0',
+                                         equipment_test.ENV:'2'}):
+            self.assertEqual(defaults, equipment_test.consumables(cache, defaults))
+            with self.assertRaises(ValueError):
+                em.bot_consumable_contracts({'botConsumables':contracts})
+
     def test_wreck_governor_stops_on_stall_and_rearms_only_after_real_motion(self):
         owner = object.__new__(bot_runtime.BotRuntime)
         owner.states = {2:dict(alive=False, x=0., z=0.)}

@@ -41,7 +41,8 @@ def install_server(battle_class, planner_class):
                                   for team in (1, 2) for slot, vehicle in enumerate(VEHICLES)])
         original_init(self, map_name='100_thepit', max_players=max_players,
                       clock=clock, team_size=15, **kwargs)
-        print('[EQUIPMENT TEST] legal native fittings; stationary targets; mouse-fire acceptance')
+        print('[EQUIPMENT TEST] ' + ('native governor driving fixture' if governor_mode()
+              else 'legal native fittings; stationary targets; mouse-fire acceptance'))
     def start(self, player_id, requested_map=None, requested_round_seconds=None,
               battle_mode='regular', training_bots=False):
         return original_start(self, player_id, requested_map='100_thepit',
