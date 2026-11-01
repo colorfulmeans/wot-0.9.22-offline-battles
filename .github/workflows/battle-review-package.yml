@@ -9,7 +9,7 @@ permissions:
   actions: read
 jobs:
   windows-server:
-    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    if: github.head_ref == 'fix/100-battle-spotting-wreck' || github.head_ref == 'fix/111-release-entry-cleanup'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -221,7 +221,7 @@ jobs:
           if-no-files-found: error
 
   test:
-    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    if: github.head_ref == 'fix/100-battle-spotting-wreck' || github.head_ref == 'fix/111-release-entry-cleanup'
     needs: windows-server
     runs-on: ubuntu-latest
     steps:
@@ -342,7 +342,7 @@ jobs:
           -w /work python:2.7.18
           sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
-        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_1.1.0.wotmod
+        run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_1.1.1.wotmod
       - name: Validate 0.9.22 wotmod package
         run: >-
           python tools/validate_wotmod.py
@@ -354,7 +354,7 @@ jobs:
           if-no-files-found: error
 
   windows-launcher:
-    if: github.head_ref == 'fix/100-battle-spotting-wreck'
+    if: github.head_ref == 'fix/100-battle-spotting-wreck' || github.head_ref == 'fix/111-release-entry-cleanup'
     runs-on: windows-latest
     needs: test
     steps:

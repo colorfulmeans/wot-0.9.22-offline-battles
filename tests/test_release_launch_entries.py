@@ -15,14 +15,15 @@ class LaunchEntryTests(unittest.TestCase):
     def archive(self, newline=b'\n', omit=None, change=None):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, 'w') as archive:
+            archive.writestr(verifier.NORMAL_ENTRY, b'launcher version checked separately')
             for name in verifier.ENTRIES:
                 if name == omit:
                     continue
                 data = (ROOT/'tools'/name).read_bytes().replace(b'\r\n', b'\n')
                 if name == change:
-                    old = b'WOT_OFFLINE_ROOF_CRUSH_TEST=1'
+                    old = b'--diagnostics'
                     self.assertIn(old, data)
-                    data = data.replace(old, b'WOT_OFFLINE_ROOF_CRUSH_TEST=0')
+                    data = data.replace(old, b'--other-mode')
                 archive.writestr(name, data.replace(b'\n', newline))
         stream.seek(0)
         return zipfile.ZipFile(stream)
@@ -36,12 +37,25 @@ class LaunchEntryTests(unittest.TestCase):
             self.assertEqual(verifier.ENTRIES, verifier.verify_archive(archive))
 
     def test_real_test_mode_change_is_rejected_even_with_crlf(self):
-        with self.archive(b'\r\n', change='START_ROOF_CRUSH_TEST.bat') as archive:
-            with self.assertRaisesRegex(ValueError, 'differs.*START_ROOF_CRUSH_TEST'):
+        with self.archive(b'\r\n', change='START_DIAGNOSTIC_TEST.bat') as archive:
+            with self.assertRaisesRegex(ValueError, 'differs.*START_DIAGNOSTIC_TEST'):
                 verifier.verify_archive(archive)
+
+    def test_additional_launch_entry_is_rejected(self):
+        for name in ('EXTRA_TEST.bat', 'EXTRA_TEST.cmd', 'EXTRA_TEST.ps1', 'other.exe'):
+            with self.subTest(name=name), self.archive() as archive:
+                stream = io.BytesIO()
+                with zipfile.ZipFile(stream, 'w') as extra:
+                    for member in archive.namelist():
+                        extra.writestr(member, archive.read(member))
+                    extra.writestr(name, b'retired development mode')
+                stream.seek(0)
+                with zipfile.ZipFile(stream) as extra:
+                    with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
+                        verifier.verify_archive(extra)
 
     def test_each_required_entry_is_mandatory(self):
         for name in verifier.ENTRIES:
             with self.subTest(name=name), self.archive(omit=name) as archive:
-                with self.assertRaisesRegex(ValueError, 'required launch entry is missing'):
+                with self.assertRaisesRegex(ValueError, 'only the normal and diagnostic'):
                     verifier.verify_archive(archive)

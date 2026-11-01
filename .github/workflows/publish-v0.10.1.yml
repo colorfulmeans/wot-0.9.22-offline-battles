@@ -62,7 +62,7 @@ jobs:
           with zipfile.ZipFile(target) as archive:
               assert archive.testzip() is None
               assert 'wot-0.9.22-offline-battles.exe' in archive.namelist()
-              assert 'START_SPIKE_PROFILE.bat' in archive.namelist()
+              assert 'START_DIAGNOSTIC_TEST.bat' in archive.namelist()
           PY
           git archive --format=zip --output=release-assets/wot-0.9.22-offline-battles-0.10.1-Source-and-validation.zip HEAD
           cp docs/bot-editor-guide-en.md release-assets/wot-0.9.22-offline-battles-0.10.1-Bot-Editor-Guide-English.md

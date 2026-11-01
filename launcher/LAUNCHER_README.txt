@@ -1,4 +1,4 @@
-wot-0.9.22-offline-battles v1.1.0
+wot-0.9.22-offline-battles v1.1.1
 
 Supported client: Chinese HD World of Tanks 0.9.22.0.1 #1513 (32-bit).
 The launcher and bundled server require 64-bit Windows.
@@ -62,18 +62,13 @@ integrity checks still apply. Compressed file size is not the replay size bound.
 
 Use the launcher's built-in vehicle editor and error-report controls. The player
 download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and START_SPIKE_PROFILE.bat for optional detailed profiling. The normal EXE
+and the normal EXE for regular play. The normal EXE
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
 and 32 MiB per client process, with explicit suppression notices. Exhausted
 budgets skip further JSON encoding; motion histories also skip construction
 until the budget reopens. Test captures split rotation catalog/native costs
 without changing collision queries. Errors and
 lifecycle messages remain enabled after the diagnostic budget is exhausted.
-
-Normal battles use wot-0.9.22-offline-battles.exe. START_ROOF_CRUSH_TEST.bat
-and START_ROOF_SHOT_DROP_TEST.bat are separate opt-in bridge-drop fixtures.
-Exit both the game and launcher before switching entrances. The fixtures do
-not change saved room presets; the contact fixes also apply in normal battles.
 
 Customize save -> Appearance inventory has My style and Preset styles pages,
 with nation/type/vehicle filters, garage-only targets and vehicle-name search.
@@ -105,7 +100,7 @@ assignments. The vehicle modifier has aligned nation/type/tier and
 vehicle/modification-category/field rows, using localized garage-order nations.
 
 English release notes:
-https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.1.0
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/releases/tag/v1.1.1
 
 This mod is free; resale is prohibited. World of Tanks game assets are not
 included. This unofficial project is not endorsed by Wargaming.

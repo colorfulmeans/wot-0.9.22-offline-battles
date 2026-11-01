@@ -12571,3 +12571,37 @@ commit's complete Tests workflow to pass, verifies the tag and main identity,
 checks the uploaded asset name and size, and only then publishes the draft.
 Actual release run identities and final asset inspection follow on GitHub;
 these local results alone are not represented as a published build.
+
+
+## v1.1.1 development-entry cleanup (November 1)
+
+The owner requested a complete source and binary cleanup after v1.1.0, with
+English release notes restricted to this cleanup delta. Only the normal
+launcher executable and START_DIAGNOSTIC_TEST.bat remain as player entries.
+The three development scripts, roof scenario module, server monkeypatches,
+fixed-spawn branches, Bot hold/release queue and scripted cliff-veto bypass
+are removed. The spike-only dense preset, environment opt-in and focus monitor
+are removed with their dedicated fixtures/tests/instructions. Normal physical
+contact/support laws and bounded diagnostic/error-report facilities remain.
+
+Archive verification now enforces exactly the two root player entries, and
+the new publisher rejects a retired roof scenario hidden in a 1.1.1 mod.
+Frozen-source inspection also rejects the deleted focus monitor. Current
+versions are aligned at 1.1.1; historical release notes retain their identities.
+The complete distribution will be rebuilt from the new main/tag commit.
+
+Local version/server/worker-diagnostic/publication contracts passed 252 tests
+in six isolated files. All 224 current client modules compiled under CPython
+2.7.18. The launcher suite exercised 46 files / 1237 tests with 14 documented
+skips, including actual GPU checks. Its initial core/window/replay failures
+were blocked by live game processes and the default-save replacement guard;
+after the owner closed the game, those three files passed all 514 tests on
+rerun. No game was force-closed by the agent.
+
+The two engine-free battle-reference files were also attempted on Windows:
+1016 battle-runtime and 550 Bot-runtime tests reported the existing missing
+native simulation boundary (17 failed/error cases and 355 errors respectively).
+These are retained as failed local attempts, not represented as passing native
+or Linux coverage. The Linux cloud suite must independently verify the cleaned
+battle paths; clean Windows cloud coverage and final packaged smoke must verify
+the downloadable executable. No new native battle is claimed by this cleanup.
