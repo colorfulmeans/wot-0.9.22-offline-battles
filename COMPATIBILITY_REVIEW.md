@@ -12531,3 +12531,15 @@ exception or OpenGL fallback. No vehicle property was saved, no save/profile
 was created or removed; existing profile 1 was reused. Chinese was restored and
 the final launcher remains open on Vehicle modifier. No new battle or donated
 interior-position accuracy acceptance is claimed for this viewer-only follow-up.
+
+
+## Default camera elevation preview (November 1)
+
+The owner requested a front-upper default rather than the previous below-hull
+view. Initial camera and Reset view now share a 20-degree positive elevation;
+the existing -0.65-radian front-three-quarter yaw and zoom are retained. Armor
+and X-ray keep one camera. Existing geometry/widget tests passed (28 tests in
+two files). The source-based real Windows T29 preview was opened and both modes
+visually checked: roof, turret top and side are visible together. This narrow
+preview follows the 56da041 package; the package identity above remains valid
+for that earlier build and is not presented as containing this later angle.

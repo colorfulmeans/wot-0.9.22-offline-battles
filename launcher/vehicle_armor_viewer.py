@@ -1040,6 +1040,9 @@ def _face_light(points, depth_scale):
     return -.10 + .22 * max(0.0, min(1.0, intensity))
 
 
+_DEFAULT_PITCH = math.radians(20)
+
+
 class ArmorViewerPanel(object):
     """Depth-buffered scene presentation with orbit, visibility and picking."""
 
@@ -1070,7 +1073,7 @@ class ArmorViewerPanel(object):
         self._scene_error_source = ""
         self._language_widgets = []
         self._yaw = -0.65
-        self._pitch = -0.22
+        self._pitch = _DEFAULT_PITCH
         self._zoom = 1.0
         self._drag_start = None
         self._drag_last = None
@@ -1426,7 +1429,7 @@ class ArmorViewerPanel(object):
 
     def reset_view(self):
         self._yaw = -0.65
-        self._pitch = -0.22
+        self._pitch = _DEFAULT_PITCH
         self._zoom = 1.0
         self._redraw()
 
