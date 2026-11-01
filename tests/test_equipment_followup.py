@@ -1,5 +1,6 @@
 """Real consumer boundaries for the November equipment follow-up."""
 import os
+import math
 import types
 import unittest
 from unittest import mock
@@ -15,6 +16,53 @@ def item(name, **kwargs):
 
 
 class FollowupTests(unittest.TestCase):
+    def test_wreck_governor_stops_on_stall_and_rearms_only_after_real_motion(self):
+        owner = object.__new__(bot_runtime.BotRuntime)
+        owner.states = {2:dict(alive=False, x=0., z=0.)}
+        state = dict(speed=0., _governor_push_evidence=dict(peer_id=2, in_contact=True))
+        owner._equipment_now = 0.
+        self.assertTrue(owner._bot_governor_request(state))
+        owner._equipment_now = 2.
+        self.assertFalse(owner._bot_governor_request(state))
+        owner._equipment_now = 10.
+        self.assertFalse(owner._bot_governor_request(state))
+        owner.states[2]['yaw'] = 1.2  # Rotation alone does not reset the stall.
+        self.assertFalse(owner._bot_governor_request(state))
+        owner.states[2]['x'] = .2
+        self.assertTrue(owner._bot_governor_request(state))
+        state['_governor_push_evidence'] = {}
+        self.assertFalse(owner._bot_governor_request(state))
+        self.assertNotIn('_governor_push_progress', state)
+
+    def test_bot_governor_waits_for_continuous_uphill_simulation_time(self):
+        owner = object.__new__(bot_runtime.BotRuntime)
+        state = dict(speed=3., terrain_pitch=-math.radians(5))
+        owner._equipment_now = 10.
+        self.assertFalse(owner._bot_governor_request(state))
+        owner._equipment_now = 11.9
+        self.assertFalse(owner._bot_governor_request(state))
+        owner._equipment_now = 12.
+        self.assertTrue(owner._bot_governor_request(state))
+        # Every interruption switches off immediately and restarts the wait.
+        for patch in (dict(speed=0.), dict(terrain_pitch=0.),
+                      dict(terrain_pitch=math.radians(5)), dict(speed=-3.),
+                      dict(airborne=True), dict(terrain_pitch=float('nan')),
+                      dict(critical={'destroyed':['engineHealth']})):
+            stopped = dict(state, **patch)
+            self.assertFalse(owner._bot_governor_request(stopped))
+            self.assertNotIn('_governor_uphill_since', stopped)
+            restarted = dict(stopped, speed=3., terrain_pitch=-.1,
+                             airborne=False, critical=None)
+            self.assertFalse(owner._bot_governor_request(restarted))
+            owner._equipment_now += 2.
+            self.assertTrue(owner._bot_governor_request(restarted))
+        self.assertTrue(owner._bot_governor_wanted(
+            dict(speed=-3., terrain_pitch=math.radians(5))))
+        self.assertFalse(owner._bot_governor_wanted(
+            dict(speed=3., pitch=-.1, suspension_pitch=-.1)))
+        owner._equipment_now = 0.
+        self.assertFalse(owner._bot_governor_request(state))
+
     def test_bot_native_crew_calculation_receives_actual_food_and_fuel(self):
         descriptor = types.SimpleNamespace()
         bot_fittings.register(descriptor, dict(wire={'crew_level':100}, crew_roster=('driver',),

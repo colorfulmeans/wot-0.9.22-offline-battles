@@ -30,6 +30,21 @@ old fixed-fire numeric expectations and a synthetic Bot factor-cache identity
 that omitted consumables; their explicit fixture contracts were updated, without
 relaxing receipt deduplication, injury eligibility or geometry validation.
 
+Additional governor baseline: ordinary Bot kits are unchanged. Diagnostic Repair
+also exposes a governor driving scene with native removedRpmLimiter installed.
+Uphill requires two uninterrupted simulation seconds; stop/level/downhill/airborne
+or engine damage cancels. Reverse travel uses signed terrain grade, not suspension
+rocking. Actual admitted wreck contact enables immediately; two seconds without
+0.1 m wreck translation cancels without immediate retry. Wreck rotation alone is
+not progress. Real displacement or a new contact can renew the attempt. No vehicle
+movement/recovery law is replaced by the governor controller.
+
+Local review caught and repaired an invalidation that removed installed Bot physics
+when its consumable ledger refreshed. The full 550-test Bot file passed afterward;
+contact/mass/wreck assertions were retained. Windows editor smoke fixtures now
+supply their language and diagnostic callback explicitly. The separate real native
+acceptance and cloud checks below still need to be completed for the final SHA.
+
 ## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for

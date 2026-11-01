@@ -3450,7 +3450,9 @@ class BotRuntime(object):
         state = self.states.get(bot_id)
         if state is not None:
             state['_factor_consumables'] = self._factor_consumables(bot_id)
-        self._physics_params.pop(bot_id, None)
+        # The installed descriptor cache excludes consumables. Live fuel and
+        # governor factors are applied to a copy by _governor_physics; changing
+        # the ledger must not discard the installed mass/contact parameters.
         return self._equipment_passives[bot_id]
 
     def _advance_equipment_clock(self, step):
@@ -4841,16 +4843,59 @@ class BotRuntime(object):
                 stun_cleared = True
         return payload is not None or stun_cleared
 
+    @staticmethod
+    def _bot_governor_wanted(state):
+        """Use the accepted terrain plane, excluding suspension rocking.
+
+        Native pitch is negative nose-up. Reverse travel reverses the grade.
+        A half-degree ground tolerance excludes sampling noise; level,
+        downhill, airborne, stopped and damaged-engine states always stop it.
+        """
+        speed = _number(state.get('speed'))
+        pitch = _number(state.get('terrain_pitch'),
+                        _number(state.get('pitch')) -
+                        _number(state.get('suspension_pitch')))
+        grade = -pitch if speed > 0.0 else pitch
+        return (abs(speed) > 0.1 and not state.get('airborne', False) and
+                grade > math.radians(0.5) and
+                equipment_mechanics.bot_device_states(
+                    state.get('critical')).get('engineHealth') not in
+                ('critical', 'destroyed'))
+
+    def _bot_governor_request(self, state):
+        """Require two continuous simulation seconds of uphill movement."""
+        push = state.get('_governor_push_evidence') or {}
+        peer = self.states.get(push.get('peer_id')) if push else None
+        if push.get('in_contact') and peer is not None and not peer.get('alive', True):
+            state.pop('_governor_uphill_since', None)
+            point = (peer['x'], peer['z'])
+            previous = state.get('_governor_push_progress')
+            now = self._equipment_now
+            if (previous is None or previous[0] != push.get('peer_id') or
+                    now < previous[2] or math.hypot(
+                        point[0]-previous[1][0], point[1]-previous[1][1]) >= 0.1):
+                previous = (push['peer_id'], point, now)
+                state['_governor_push_progress'] = previous
+            return (now-previous[2] < 2.0 and not state.get('airborne', False) and
+                    equipment_mechanics.bot_device_states(
+                        state.get('critical')).get('engineHealth') not in
+                    ('critical', 'destroyed'))
+        state.pop('_governor_push_progress', None)
+        if not self._bot_governor_wanted(state):
+            state.pop('_governor_uphill_since', None)
+            return False
+        now = self._equipment_now
+        since = state.setdefault('_governor_uphill_since', now)
+        if since > now:  # A restored simulation clock starts a fresh wait.
+            since = state['_governor_uphill_since'] = now
+        return now - since >= 2.0
+
     def _poll_bot_equipments(self, state, descriptor):
         """Run fixed bot kit policy and return replayable effect records."""
         effects = []
         for equipment in self._equipment_states.get(int(state['id']), ()):
             if equipment.contract['kind'] == 'rpm_limiter':
-                # Assist actual movement, stop at rest or with a damaged engine.
-                wanted = (abs(_number(state.get('speed'))) > 0.1 and
-                          equipment_mechanics.bot_device_states(
-                              state.get('critical')).get('engineHealth') not in
-                          ('critical', 'destroyed'))
+                wanted = self._bot_governor_request(state)
                 effect = (equipment.activate(self._equipment_now,
                           state.get('critical'), requested_active=wanted)
                           if wanted != equipment.active else None)
@@ -4871,7 +4916,13 @@ class BotRuntime(object):
             write_json_record('BOT CONSUMABLE', dict(round=self.round_id,
                 bot=state['id'], skill=self.bot_skill(state['id']), at=self._equipment_now,
                 item=equipment.contract['name'], uses_left=equipment.uses_left,
-                cooldown=equipment.contract['cooldownSeconds'], effect=effect))
+                cooldown=equipment.contract['cooldownSeconds'], effect=effect,
+                governor_context=(dict(speed=state.get('speed'),
+                    terrain_pitch=state.get('terrain_pitch'), airborne=state.get('airborne'),
+                    uphill_since=state.get('_governor_uphill_since'),
+                    push=state.get('_governor_push_evidence'),
+                    push_progress=state.get('_governor_push_progress'))
+                    if equipment.contract['kind'] == 'rpm_limiter' else None)))
         if effects:
             self._refresh_equipment_passives(state['id'])
         self._publish_equipment_state(state)
@@ -17706,6 +17757,10 @@ class BotRuntime(object):
             state['_committed_corridor'] = dict(reason='integration_not_run')
             throttle = max(-1.0, min(1.0, command['throttle']))
             turn = max(-1.0, min(1.0, command.get('turn', 0.0)))
+            state['_governor_push_evidence'] = (
+                dict(command.get('wreck_push') or {})
+                if command.get('recovery_mode') == 'wreck_push' and throttle > 0.0
+                else {})
             aim_fallback = (target.get('position') if target is not None
                             else _position(state))
             aim_position = _point(command.get('aim_position'), aim_fallback)

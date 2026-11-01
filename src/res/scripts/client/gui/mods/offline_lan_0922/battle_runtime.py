@@ -9254,8 +9254,9 @@ class BattleRuntime(object):
         if (not callable(getattr(cache, 'equipmentIDs', None)) or
                 not callable(getattr(cache, 'equipments', None))):
             return ()
-        return tuple(equipment_mechanics.default_bot_consumables(
-            cache, skill))
+        from . import equipment_test
+        return equipment_test.consumables(cache,
+            equipment_mechanics.default_bot_consumables(cache, skill))
 
     def _restore_local_equipment_snapshot(self, snapshot, present=False):
         """Restore the visible replica from one complete canonical ledger."""

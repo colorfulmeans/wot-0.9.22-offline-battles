@@ -1256,7 +1256,11 @@ class LauncherWindow(object):
                 text='开炮触发掉车测试' if zh else 'Shot-triggered drop test',
                 command=lambda: self._start_diagnostic_scene('drop')).grid(
                     row=3, column=1, sticky='ew', padx=(3,0), pady=(6,0))
-        self.repair_panel.grid_rowconfigure(4, weight=1)
+            tk.Button(self.repair_panel,
+                text='BOT 调速器行驶测试' if zh else 'Bot governor driving test',
+                command=lambda: self._start_diagnostic_scene('governor')).grid(
+                    row=4, column=0, columnspan=2, sticky='ew', pady=(6,0))
+        self.repair_panel.grid_rowconfigure(5, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
 
@@ -1418,7 +1422,8 @@ class LauncherWindow(object):
     def _start_diagnostic_scene(self, scene):
         if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
             return
-        os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = '1' if scene == 'equipment' else '0'
+        os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = (
+            '2' if scene == 'governor' else '1' if scene == 'equipment' else '0')
         os.environ['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
         os.environ['WOT_OFFLINE_ROOF_SHOT_DROP'] = '1' if scene == 'drop' else '0'
         self._replay_tab = False

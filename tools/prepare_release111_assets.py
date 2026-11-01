@@ -38,7 +38,12 @@ def prepare(launcher, output):
         with zipfile.ZipFile(io.BytesIO(client.read(mods[0]))) as mod:
             if any(name.rsplit('/', 1)[-1] in ('roof_crush_test.py', 'roof_crush_test.pyc') for name in mod.namelist()):
                 sources = [name for name in mod.namelist() if name.endswith('/roof_crush_test.py')]
-                if not sources or b"WOT_OFFLINE_DIAGNOSTICS" not in mod.read(sources[0]):
+                compiled = [name for name in mod.namelist() if name.endswith('/roof_crush_test.pyc')]
+                payload = mod.read(sources[0] if sources else compiled[0])
+                # Production client packages contain Python 2.7 bytecode only.
+                # Its constant pool must retain the diagnostic opt-in gate.
+                if (b"WOT_OFFLINE_DIAGNOSTICS" not in payload or
+                        (not sources and payload[:4] != b'\x03\xf3\x0d\x0a')):
                     raise ValueError('Ungated development scenario is embedded in the mod')
             if mod.testzip() is not None or ElementTree.fromstring(mod.read('meta.xml')).findtext('version') != VERSION:
                 raise ValueError('Incorrect mod metadata or CRC')

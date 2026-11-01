@@ -10,7 +10,22 @@ VEHICLES = ('ussr:R45_IS-7', 'usa:A11_T29', 'germany:G16_PzVIB_Tiger_II',
 
 
 def enabled():
-    return os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1' and os.environ.get(ENV) == '1'
+    return os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1' and os.environ.get(ENV) in ('1', '2')
+
+
+def governor_mode():
+    return enabled() and os.environ.get(ENV) == '2'
+
+
+def consumables(cache, defaults):
+    """Diagnostic-only three-slot governor test, using the native descriptor."""
+    if not governor_mode():
+        return tuple(defaults)
+    from .equipment_mechanics import project_equipment
+    descriptor = cache.equipments().get(cache.equipmentIDs().get('removedRpmLimiter'))
+    if descriptor is None:
+        raise ValueError('Diagnostic governor is unavailable in the native item cache')
+    return tuple(defaults[:2]) + (project_equipment(descriptor),)
 
 
 def install_server(battle_class, planner_class):
@@ -53,4 +68,5 @@ def install_server(battle_class, planner_class):
     battle_class.__init__ = initialize
     battle_class.request_start = start
     battle_class._equipment_test_installed = True
-    planner_class.build_orders = orders
+    if not governor_mode():
+        planner_class.build_orders = orders

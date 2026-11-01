@@ -60,7 +60,8 @@ def _verify_maintenance_controls(root, tk):
     reference.pack(side='bottom')
     panel = tk.Frame(window)
     panel.pack(fill='both', expand=True)
-    owner = SimpleNamespace(_tk=tk, repair_panel=panel,
+    owner = SimpleNamespace(_tk=tk, repair_panel=panel, language='en',
+        _start_diagnostic_scene=lambda scene: None,
         _repair_startup=lambda: None, _reset_offline_client_settings=lambda: None,
         _reset_all_state=lambda: None, _factory_reset=lambda: None)
     wot_launcher.LauncherWindow._build_maintenance_controls(owner)

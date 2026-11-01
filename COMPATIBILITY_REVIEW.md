@@ -21,10 +21,14 @@ completion evidence.
   together. Firefighting directives use the same native factor. First-fire
   diagnostics name the applied community model and its remaining calibration.
 * Bot live food/fuel compact descriptors reach native crew/stat factors; cache
-  identity includes them, and changing the ledger invalidates physics. Player
+  identity includes them; live power applies to a copy of installed physics. Player
   fuel remains in native base factors and is no longer multiplied a second time
   in the movement consumer. Only the switched governor adds power there.
-* Custom governor-equipped Bots enable it while moving with a functional engine,
+* Custom governor-equipped Bots enable it after two continuous simulation seconds
+  of uphill movement, or during admitted actual wreck contact. Two seconds without
+  0.1 m wreck translation switches it off until actual progress/departure; rotation
+  alone cannot renew it. Level/downhill/stopped/airborne states reset uphill waiting.
+  Both policies require a functional engine. They
   stop at rest or with a yellow/destroyed engine, apply its native +10% power
   once, and lose the native 1.5 engine-module HP/second below half their base
   forward limit. The half-speed condition is the existing user-supplied offline
@@ -46,7 +50,8 @@ completion evidence.
   and existing explicitly unlocked saves without backups as authorized. New
   unlocked saves carry the marker immediately. Zero-start saves are untouched.
 * The diagnostic launcher's Repair tab exposes legal equipment/crew target
-  scenes and the restored shot-triggered bridge drop scene. There are still only
+  scenes, a moving governor fixture (native item replaces one test kit only),
+  and the restored shot-triggered bridge drop scene. There are still only
   two outer launch entries. Both fixtures require diagnostic mode; normal single
   play clears fixture flags. Drop geometry waits for actual native upper/lower
   surfaces; it changes voluntary orders, not gravity/contact/damage laws.
