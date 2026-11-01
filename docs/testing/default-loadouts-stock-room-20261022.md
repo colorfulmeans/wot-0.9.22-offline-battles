@@ -35,6 +35,13 @@ required fetching this shallow checkout's real baseline commits; their expected
 routes were not replaced by current output. The independent exact-resource audit
 again passed 576 vehicles / 9,216 fitting records and all 36 special gun identities.
 
+The full cloud suite also exposed six presentation/startup fixtures whose
+synthetic fitting intentionally has no generated native crew. They now explicitly
+donate an empty skill projection, just as they already donate empty crew and plain
+factors. Production crew decoding remains mandatory for real generated fittings.
+All six affected startup/countdown/teardown cases passed locally with the explicit
+engine-free simulation owner; final cloud coverage must still run their full files.
+
 ## Scope
 
 This PR candidate shares one explicit fitting policy between factory sandbox

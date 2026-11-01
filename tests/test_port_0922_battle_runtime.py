@@ -55,7 +55,7 @@ class BattleRuntime(NativeBattleRuntime):
             raise ValueError('fixture fitting changed')
         bot_fittings.register(descriptor, dict(wire=wire, crew=(), directives=(),
             crew_skills=(), camouflages={}, outfits={}, crew_roster=(),
-            factors={}))
+            factors={}, skill_snapshot={'crew': {'members': []}}))
         context = bot_fittings.context(descriptor)
         plain = _plain_bot_factors(descriptor, crew_level=wire['crew_level'])
         context['factors'][(id(descriptor), (), False)] = plain
