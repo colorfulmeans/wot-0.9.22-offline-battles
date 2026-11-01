@@ -1,4 +1,4 @@
-"""Opt-in bridge-drop fixtures selected by the dedicated BAT entry points.
+"""Opt-in bridge-drop fixtures selected inside the diagnostic Repair tab.
 
 Normal launches keep the ordinary roster, spawn planner and Bot commands.
 Fixtures change placement and voluntary orders, not the shared physical laws.
@@ -109,6 +109,7 @@ class ShotDropQueue(object):
             self.sequences[identity] = max(previous, sequence)
             for shot in range(previous+1, sequence+1):
                 waiting = [s for s in states.values() if s.get('alive', True)
+                           and int(s.get('team', 2)) == 2
                            and int(s['id']) not in self.released]
                 waiting.sort(key=lambda s: int(s['id']))
                 if not waiting:
@@ -182,6 +183,12 @@ def install_server(battle_class, planner_class):
 
     def start(self, player_id, requested_map=None, requested_round_seconds=None,
               battle_mode='regular', training_bots=False):
+        if shot_drop_enabled():
+            # Saved room controls may send 15:15 after the diagnostic server
+            # was initialized. The fixture needs one human below the bridge,
+            # not fourteen friendly hulls occupying its upper drive corridor.
+            self.team_sizes = {1: 1, 2: 15}
+            self.team_size = 15
         return original_start(self, player_id, requested_map=MAP,
             requested_round_seconds=requested_round_seconds,
             battle_mode=battle_mode, training_bots=training_bots)

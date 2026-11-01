@@ -59,6 +59,14 @@ mode. The regression now drives native-item projection through the real validato
 and snapshot restore, and verifies rejection when diagnostic mode is off. A fresh
 final build and native round remain required after this change.
 
+The restored bridge fixture also exposed a saved-room interaction in the actual
+client: remembered 15:15 controls overwrote the fixture's one-player first team,
+and the old queue admitted friendly Bot IDs. Native log confirmed the first shot
+released friendly Bot 2. The fixture now reasserts 1:15 at request_start and its
+queue excludes team 1; both regression tests pass (27 total bridge tests). This
+observation is not accepted as a successful falling/contact test. Final-package
+native acceptance must be repeated after both diagnostic repairs.
+
 ## Previous package: equipment effects and crew consumers (2026-11-02)
 
 This section supersedes the original scope's collision/ballistics exclusion for

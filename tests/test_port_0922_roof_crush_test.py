@@ -184,6 +184,25 @@ class RoofCrushEntryTests(unittest.TestCase):
         obj._ground_y.assert_not_called()
 
 class ShotDropTests(unittest.TestCase):
+    def test_shot_queue_never_releases_a_friendly_hull(self):
+        states = self.states()
+        states[1] = dict(states[2], id=1, team=1)
+        states[2]['team'] = 2
+        queue = fixture.ShotDropQueue()
+        queue.observe([dict(id=1, fire_seq=1)], states)
+        self.assertEqual({2}, queue.released)
+
+    def test_saved_waiting_room_sizes_cannot_add_friendly_bots(self):
+        class Battle:
+            def __init__(self, **kwargs): pass
+            def request_start(self, player_id, **kwargs): return kwargs
+        class Planner: pass
+        fixture.install_server(Battle, Planner)
+        battle = Battle()
+        battle.team_sizes = {1:15, 2:15}
+        battle.request_start(1)
+        self.assertEqual({1:1, 2:15}, battle.team_sizes)
+
     def setUp(self):
         self.flag = mock.patch.dict(os.environ, {fixture.ENV: '1', fixture.SHOT_ENV: '1'})
         self.flag.start()
