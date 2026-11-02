@@ -94,6 +94,11 @@ method; the exact native class instead exposes isStarted/isDetached properties.
 Countdown presses no longer latch the key, including a missing countdown key-up.
 These fixes have regressions; native key/countdown and movement re-acceptance is
 still required. Earlier movement alone is not a passing automatic-driving test.
+The takeover direction seam also returned a structured engine probe receipt to
+a Boolean driver callback. Nonempty blocked receipts were therefore truthy.
+It now uses BotRuntime's existing receipt predicate, preserving collision, water
+and grade rejection. Regression cases exercise that predicate rather than
+duplicating its implementation. Decision logs include strategic/local targets.
 
 
 ## Coherent earnings model and gameplay-source re-audit (November 2, evening)

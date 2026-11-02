@@ -290,6 +290,13 @@ class PlayerControl(object):
         tolerance = math.atan2(max(0.4, shape[0] * 0.6), distance)
         return cosine >= math.cos(tolerance) and owner._tactical_ray_clear(tuple(start), aim)
 
+    def direction_clear(self, position, angle, descriptor, shape, reach=None):
+        result = self.owner._direction_probe(position, angle, self.owner._local_speed,
+                                             descriptor, reach, shape[0])
+        # The engine seam returns a receipt dictionary, not a Boolean. A
+        # nonempty blocked receipt must never be treated as a clear corridor.
+        return self.owner._bots._probe_is_clear(result)
+
     def update(self, dt, now):
         if not self.live():
             self.stop('battle_not_live')
@@ -323,8 +330,7 @@ class PlayerControl(object):
                      max_health=entity.typeDescriptor.maxHealth, contacts=contacts,
                      neighbours=neighbours, half_width=shape[0], half_length=shape[1], collision_shape=shape)
         def clear(angle, reach=None):
-            return owner._direction_probe(position, angle, owner._local_speed,
-                entity.typeDescriptor, reach, shape[0])
+            return self.direction_clear(position, angle, entity.typeDescriptor, shape, reach)
         order = self.adapter.decide(state, clear)
         if 'drive' in self.features:
             sender.forward, sender.turn = order['throttle'], order['turn']
@@ -348,7 +354,9 @@ class PlayerControl(object):
             self.next_log = now + 1.0
             self.record('decision', position=position, speed=owner._local_speed,
                         throttle=sender.forward, turn=sender.turn, target=order.get('target_id'),
-                        route=order.get('combat_mode'))
+                        route=order.get('combat_mode'),
+                        strategic_target=order.get('strategic_move_position'),
+                        local_target=order.get('local_target', order.get('move_position')))
 
 
 def attach(owner):

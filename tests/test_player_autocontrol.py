@@ -13,6 +13,17 @@ from gui.mods.offline_lan_0922 import player_autocontrol as control
 
 
 class ControlTests(unittest.TestCase):
+    def test_blocked_direction_receipts_are_not_truthy_clear_corridors(self):
+        from test_port_0922_bot_runtime import _load
+        self.owner._local_speed = 0
+        self.owner._bots = types.SimpleNamespace(_probe_is_clear=_load().BotRuntime._probe_is_clear)
+        for receipt, expected in ((dict(clear=False), False),
+                (dict(clear=True, collision=True), False),
+                (dict(clear=True, water=True), False),
+                (dict(clear=True, slope=0), True)):
+            self.owner._direction_probe = lambda *args: receipt
+            self.assertEqual(expected, self.control.direction_clear((0, 0, 0), 0, None, (1, 2)))
+
     def setUp(self):
         self.sent, self.bursts, self.messages, self.records = [], [], [], []
         sender = types.SimpleNamespace(forward=1, turn=1, handbrake=True,
@@ -184,3 +195,4 @@ class ControlTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
