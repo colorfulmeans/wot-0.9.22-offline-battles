@@ -174,6 +174,8 @@ class PlayerControl(object):
 
     def command(self, command, now):
         """Mouse and internal scripts share this bounded real-input contract."""
+        if not isinstance(command, dict):
+            raise ValueError('player control command must be an object')
         action = command.get('action')
         if not self.live():
             return False
@@ -238,18 +240,24 @@ class PlayerControl(object):
         return contacts, neighbours, records
 
     def _consumables(self, entity):
-        critical = {'fire': bool(entity.is_on_fire),
-                    'destroyed': list(getattr(entity, '_destroyed_devices', ())),
-                    'crew': list(getattr(entity, '_crew_ko', ()))}
+        from . import equipment_mechanics
+        record = self.owner._records.get('player:%s' % self.owner.client.player_id) or {}
+        # Healthy native Vehicle instances do not expose Python shadow fields.
+        # Read the existing canonical authority payload, including yellow devices.
+        critical = record.get('critical_state') or (record.get('state') or {}).get('critical') or {}
+        repair = equipment_mechanics.bot_repair_selection(critical, 'elite')
+        crew = equipment_mechanics.bot_crew_selection(critical)
         for item in self.owner._equipment_state or ():
             kind = item.contract.get('kind')
-            needed = ((kind == 'extinguisher' and critical['fire']) or
-                      (kind == 'repairkit' and critical['destroyed']) or
-                      (kind == 'medkit' and critical['crew']))
+            if item.contract.get('autoactivate'):
+                # Native automatic equipment already owns its reaction clock.
+                continue
+            needed = ((kind == 'extinguisher' and critical.get('fire')) or
+                      (kind == 'repairkit' and repair is not None) or
+                      (kind == 'medkit' and crew is not None))
             now = self.owner._clock()
             if needed and item.ready(now) and now >= self.consumable_pending.get(item.contract['id'], 0):
-                selected = (critical['destroyed'][0] if kind == 'repairkit' else
-                            critical['crew'][0] if kind == 'medkit' else None)
+                selected = repair if kind == 'repairkit' else crew if kind == 'medkit' else None
                 index = self.owner._critical_extra_index(entity.typeDescriptor, selected) if selected else 0
                 self.owner._activate_equipment(item.contract['id'] | (index << 16))
                 self.consumable_pending[item.contract['id']] = now + 2.0
@@ -341,4 +349,5 @@ def attach(owner):
     path = os.environ.get('WOT_OFFLINE_TEST_CONTROL_FILE')
     if path and os.path.isfile(path):
         _current.command_offset = os.path.getsize(path)
+    _current.record('attached', features=sorted(_current.features), command_file=path)
     return _current

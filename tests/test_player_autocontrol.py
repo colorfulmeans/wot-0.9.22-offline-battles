@@ -18,6 +18,7 @@ class ControlTests(unittest.TestCase):
         sender = types.SimpleNamespace(forward=1, turn=1, handbrake=True,
             aim_yaw=.2, gun_pitch=.1, send_current=lambda: self.sent.append(True))
         self.owner = types.SimpleNamespace(state='running', _battle_live=True,
+            client=types.SimpleNamespace(player_id=1), _start_message={'round_id': 1},
             _battle_result=None, _worker_mode=False, _replay_mode=False,
             _server=types.SimpleNamespace(vehicle_id=1), _sender=sender,
             _avatar=types.SimpleNamespace(autoAim=lambda value: None),
@@ -25,6 +26,23 @@ class ControlTests(unittest.TestCase):
             shoot=lambda *args: True)
         self.control = control.PlayerControl(self.owner, ['drive', 'fire'], self.messages.append)
         self.control.record = lambda stage, **kw: self.records.append((stage, kw))
+
+    def test_native_vehicle_without_shadow_fields_uses_canonical_consumable_state(self):
+        self.owner._clock = lambda: 10
+        calls = []
+        self.owner._activate_equipment = calls.append
+        self.owner._critical_extra_index = lambda td, name: 3
+        self.owner._equipment_state = [types.SimpleNamespace(
+            contract=dict(id=101, kind='repairkit'), ready=lambda now: True)]
+        self.owner._records = {'player:1': {'critical_state': {
+            'devices': [{'name': 'engineHealth', 'state': 'destroyed'}],
+            'destroyed': ['engineHealth'], 'crew_ko': [], 'fire': False}}}
+        entity = types.SimpleNamespace(typeDescriptor=object())
+        self.control._consumables(entity)
+        self.control._consumables(entity)
+        self.assertEqual([101 | (3 << 16)], calls)
+        self.owner._records['player:1']['critical_state'] = {}
+        self.control._consumables(entity)
 
     def test_timed_drive_replaces_automatic_writer_and_stop_clears_pending_shots(self):
         self.control.active = True

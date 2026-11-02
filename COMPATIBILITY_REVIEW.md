@@ -64,7 +64,20 @@ fixtures require the matching native extension, and the available Python 3.14
 also lacks `imp`. Cloud Linux/native builds and packaged-client acceptance are
 tracked separately below; neither is implied by those local checks.
 
-Packaged-client and exact-commit cloud acceptance: pending this candidate's build.
+Iteration 07a5ddeb: Windows build 41481999738 passed all three jobs; independent
+local verification matched 44 frozen launcher modules, 238 bundled server sources,
+231 Python 2.7 client code objects, native extension and starter, replay execution
+and packaged editor smoke. Full Tests 41481955633 passed 456/457 client files and
+48/48 launcher files; the failing old premium fixture omitted native premium tags
+and used an arbitrary Type 59 factor. It now carries Type 59's tier VIII / +10%
+native settlement fields and passes locally. This failure was not bypassed.
+Native timed driving moved the AMX 13 F3 from z=-110 to about -93.45 over three
+seconds and released inputs on its deadline. Full takeover exposed a separate
+consumer error: healthy native Vehicle has no is_on_fire shadow attribute.
+Automatic consumable selection now reads the existing canonical critical payload
+and retains the native automatic-extinguisher owner. A regression uses a native-like
+vehicle without shadow fields. This earlier package is not final acceptance;
+the corrected controller still requires a rebuilt package and native retest.
 
 
 ## Coherent earnings model and gameplay-source re-audit (November 2, evening)
