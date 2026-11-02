@@ -1,3 +1,44 @@
+# November 3 three-stock player shell and mouse-panel native review
+
+The ef602fd1 Windows package, build colorfulmeans-41530160684-1, was inspected
+against all 44 frozen launcher modules, 244 server sources and 237 Python 2.7
+client modules. CI runs 41530169613 and 41531134173 passed. Report
+wot-error-report-20261103-062051-a771aa11e04f.zip was generated through the
+launcher after three native rounds. Server, visible-client and hidden-worker
+logs contain no exception traceback or player-controller failure.
+
+The positive-stock Chieftain test carried 29 standard APCR, 29 premium APCR and
+six HESH, set only in the disposable QA garage. Round 2 shows one 260 HP primary
+penetration resetting the failure counter, then two primary failures -> premium,
+two premium failures -> HESH, two HESH rounds (139 and 22 HP) -> primary.
+All twelve automatic launches were accepted through Avatar.shoot with native
+waiting true and synchronous commit acknowledged. Native movement advanced the
+pit route from index 2 through 7. These observations do not prove audio, every
+vehicle's burst policy, all feature masks, or traffic/base/front behaviour.
+
+Actual clicks on all four timed direction buttons generated one-second commands
+and release records. The mouse Fire click produced a native muzzle event, but
+its accepted flag was false: inactive panel fire did not increment the active
+weapon's commit counter. The following candidate counts all human shot commits
+without activating automatic aiming or ammo policy; a regression covers the
+synchronous inactive-panel case. Direction command receipt alone is not marked
+as a complete pose acceptance.
+
+Traffic diagnostic receipts now retain bounded blocked-query witnesses even
+when a later detour is clear, including actor identity, team, live/wreck state
+and position. Decision logs also count presented peers/wrecks and identify the
+forward gun point. This closes an evidence gap, not a claim that a unit test
+proves native avoidance. The current automated player suite has 35 cases; all
+237 client source modules compile in the target Python 2.7 interpreter.
+
+Build 41536295055 uploaded bb4e1987 but its standalone server probe timed out:
+the probe invoked default LAN mode, which requested firewall authorization on
+a fresh runner. The same timeout reproduced locally. Selecting the existing
+WOT_0922_LOOPBACK_ONLY=1 mode answered the packaged protocol in 0.50 seconds.
+The workflow now explicitly tests loopback transport; it does not change any
+firewall/security settings or the public LAN mode. Independent inspection of
+that artifact passed all 44 launcher/244 server/237 client source checks.
+
 # November 3 player traffic, forward barrel and private strategic orders
 
 The 289a2651 package (build colorfulmeans-41523140230-1) passed all eight CI
@@ -56,6 +97,10 @@ channels are exercised in Windows. Earlier candidate sections below are history.
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
 ## Integrated test controls and reward coefficient follow-up (November 3)
+
+Historical first implementation notes below describe the withdrawn Bot-adapter
+candidate. The foreground-only replacement and acceptance boundary above and
+in the current testing baseline supersede those control details.
 
 The launcher now has one bilingual Testing tab, using the shared button polish,
 inside-border titles, margins and explanatory labels. Its scrolling content

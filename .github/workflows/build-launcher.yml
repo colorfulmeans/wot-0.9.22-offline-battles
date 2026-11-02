@@ -281,6 +281,9 @@ jobs:
               sys.argv[1], '127.0.0.1', 28782, timeout=1.0) else 1)
           '@
           foreach ($port in @("0.9.22")) {
+              # This probes bundled single-player transport, not LAN firewall
+              # authorization on a fresh ephemeral Windows runner.
+              $env:WOT_0922_LOOPBACK_ONLY = "1"
               $process = Start-Process -FilePath $launcher `
                   -ArgumentList "--serve", $port -PassThru -WindowStyle Hidden
               try {
