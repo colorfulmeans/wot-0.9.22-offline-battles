@@ -239,6 +239,20 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual([routes[1]],s.decide(9,routes,routes[0],contacts,[],{},(0,0)))
         self.assertIsNone(s.decide(10,routes,routes[1],[],[],{},(0,0)))
 
+    def test_blocked_flag_centre_can_join_supported_defence_approach(self):
+        s=Strategy()
+        routes=s.decide(0,[],None,[],[],dict(points=29,invaders=1),(0,0))
+        p=PlayerNavigation.__new__(PlayerNavigation)
+        p.routes=routes
+        p.route=None;p.index=None;p.candidates=None;p.search=None;p.pending=None;p.retry_at=0.;p.receipt={}
+        p._height=lambda point,hint:None if tuple(point)==(0,0) else 0.
+        def begin(start,goal,**kw):
+            return types.SimpleNamespace(step=lambda budget:None,done=True,result=(start,goal))
+        p.navigator=types.SimpleNamespace(grid=types.SimpleNamespace(begin_plan=begin))
+        self.assertTrue(p.join((0,0,25),1))
+        self.assertNotEqual('player_base_defence',p.route['id'])
+        self.assertEqual((0.,20.),p.route['waypoints'][0])
+
     def test_handover_preserves_admitted_burst_then_cancels_future_subshots(self):
         burst={};events=[]
         owner=types.SimpleNamespace(_local_fire_intent=dict(player_burst=burst),_local_player_burst=burst,

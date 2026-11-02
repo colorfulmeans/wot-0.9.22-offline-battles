@@ -14,6 +14,24 @@ def lane_distance(position, route):
     return min(distances) if distances else float('inf')
 
 
+def defence_routes(home, routes):
+    # A flag centre can be occupied or have no supported navigation cell.
+    # Offer nearby approach points; PlayerNavigation must still prove each
+    # candidate's actual height and connected path, including bridge layers.
+    points=[tuple(home)]
+    points.extend((home[0]+math.sin(i*math.pi/4.)*20.,
+                   home[1]+math.cos(i*math.pi/4.)*20.) for i in range(8))
+    for route in routes:
+        points.extend(tuple(p) for p in route.get('waypoints',())
+                      if math.hypot(p[0]-home[0],p[1]-home[1])<=40.)
+    unique=[]
+    for point in points:
+        if point not in unique:unique.append(point)
+    return [dict(id='player_base_defence' if i==0 else
+        'player_base_defence_approach_%s'%i,waypoints=[point])
+        for i,point in enumerate(unique)]
+
+
 class Strategy(object):
     def __init__(self):
         self.mode='route'
@@ -30,7 +48,7 @@ class Strategy(object):
             self.receipt=dict(mode='defend',points=base.get('points',0),invaders=base.get('invaders',0))
             if self.mode!='defend':
                 self.mode='defend'
-                return [dict(id='player_base_defence',waypoints=[home])]
+                return defence_routes(home,routes)
             return None
         if self.mode=='defend':
             if now<self.clear_at:return None
