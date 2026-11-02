@@ -4937,6 +4937,23 @@ class LANClient(object):
                      authority_epoch < self.authority_epoch) or
                     (ledger_required and 'server_time_ms' in message and
                      roster_server_time is None)):
+                from .native_input_diagnostics import validation_event
+                validation_event('roster_rejected', round_id=round_id,
+                    previous_round=self.round_id, phase=phase,
+                    previous_phase=self.phase, map_present=bool(map_name),
+                    players_present=players is not None,
+                    outfits=player_outfits_valid,
+                    effective_params=player_effective_params_valid,
+                    siege=player_siege_contract,
+                    gun_checkpoint=player_gun_checkpoint_contract,
+                    equipment=player_equipment_contract,
+                    assignments=player_assignments_valid,
+                    team_sizes=team_sizes is not None,
+                    host_present=host_player_id in player_ids,
+                    authority=_valid_visible_authority_message(message),
+                    authority_epoch=authority_epoch,
+                    previous_authority_epoch=self.authority_epoch,
+                    server_time=roster_server_time)
                 self.last_error = 'invalid roster message'
                 self.stop()
                 return
