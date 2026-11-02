@@ -741,3 +741,86 @@ missing numeric coefficients. See COMPATIBILITY_REVIEW.md for source conflicts,
 
 A native snapshot is evidence only for the vehicles/conditions it actually
 exercises. Formula fixtures and cloud green alone do not prove live settlement.
+
+### Final economy v2 package and Windows acceptance
+
+Runtime: `90acd88c8db879d3d08b05216dd68ed73c8bc8a3`; these acceptance notes
+are a later documentation-only change, not a different packaged runtime.
+
+- [Tests 41429763001](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429763001): all eight jobs passed with the matching native simulation build and the new earnings regression gate.
+- [Build 41429757820](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429757820): all three jobs passed. Artifact 13133604185 / `windows-574`, build identity `colorfulmeans-41429757820-1`, semantic version 1.1.1.
+- Independent inspection: ZIP integrity and paths, x64 launcher/x86 extensions,
+  236 source comparisons, 229 Python 2.7 code-object comparisons, and the full
+  43-module frozen-launcher/package verification passed. Replay execution and
+  the packaged Tk editor smoke passed. Exactly the normal EXE and diagnostic
+  BAT remain exposed.
+- Final ZIP: `C:/Users/USER/Downloads/PR119-90acd88c-Windows-x64.zip`;
+  extracted package: `D:/Games/wot-mod/9.22/PR119-90acd88c`.
+- Used separate `PR119-90acd88c-QA/Roaming` and `Local` directories. The
+  existing user's assets were not recalculated or reset. The user authorized
+  the EULA and personally drove the damage samples. English-to-Chinese
+  switching and the new Repair-tab earnings entry were visibly checked.
+
+| Native sample, Type 59 | Gross credits | Base XP | Awarded vehicle XP | Free XP | Currency services |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Stationary round 1, no damage, first win | 16,380 | 180 | 396 | 20 | 12 bonds, no credit/gold cost |
+| Stationary round 2, no damage, subsequent win | 16,380 | 180 | 198 | 10 | 12 bonds, no credit/gold cost |
+| Stationary round 3, 50 damage, one kill, 35 defence points | 17,167 | 412 | 453 | 22 | 12 bonds, no credit/gold cost |
+| Normal Mittengard, 3,480 damage, two kills, two initial spots, destroyed, team win | 71,505 | 1,711 | 1,882 | 94 | 7,410 repair credits, 50 consumable gold, 12 directive bonds |
+
+The normal battle used the ordinary start button after closing the static
+fixture. Its result was `team_eliminated`, not a synthetic reward grant.
+Both the result's details and the native system-message entry were read.
+Gross credits are independently reproducible from the admitted facts:
+`(1300*8 + 10*3480 + 100*2) * 1.575 = 71505`.
+Net battle credits were 64,095, matching wallet 100,049,927 -> 100,114,022.
+The separate completed daily mission subsequently added 60,000 credits;
+that mission money must not be reported as gross battle earnings.
+XP parts were participation 100, damage 696, kills 200, criticals 55,
+spots 40 and capped close-combat activity 50: subtotal 1,141, victory 1,711
+after integer truncation. The native 10% vehicle bonus raised that to 1,882,
+without multiplying the already vehicle-adjusted credits again. Account-premium
+columns were display previews, not proof of an activated premium account.
+
+#### Repeated consumables, stock and automatic purchase
+
+Historical reference: [official 9.18 release notes](https://worldoftanks.com/en/content/docs/release_notes/918-updatenotes/).
+The repair kit/medkit/extinguisher reusable change predates 9.22; using the same
+consumable multiple times consumes one item, not one per activation. Never use
+the modern console consumable policy as this PC client's baseline.
+
+- Two player large-kit intents were recorded at 19:56:25.064 and 19:57:55.310
+  (90.246 seconds apart), with different actual damaged-module sets.
+- Persisted large-kit compact descriptor 1019: owned 581, mounted 581, spare 0
+  before the battle. After use and automatic replenishment it was again 581.
+  The native chosen currency was gold: one 50-gold resupply, not 100 gold.
+  The actual transaction reduced gold from 1,000,250 to 1,000,200 before
+  subsequent mission awards. The result detail row also showed -50 gold.
+- Ammunition stock fell by 13 for AP descriptor 58 and 7 for HE descriptor 570,
+  matching 20 actual shots. It was replenished from stock, so zero ammunition
+  currency cost is correct and is not evidence of free ammunition.
+- Worker logs contain 28 Bot effects across 19 Bots: regular small-kit/medkit
+  one-use states, veteran reusable small kits/medkits and a manual extinguisher,
+  and elite large-kit/medkit effects. Veteran Bot 2 used its small repair kit at
+  simulation times 40.409 and 282.755 (242.346 seconds apart, cooldown 90).
+  Bots have per-round consumable state, not player-account purchases. Trigger
+  records do not by themselves prove every possible critical-state consumer;
+  the shared native-effect and authority contract tests remain required.
+
+Reports generated from the final launcher:
+`wot-error-report-20261102-193001-0edc66371b81.zip` (first two rounds) and
+`wot-error-report-20261102-201729-258b0e65c8fe.zip` (normal session, with
+earlier launcher history). Both ZIPs passed integrity. The final report's
+visible-client, hidden-worker and server logs contained no ERROR entries or
+Python tracebacks; both native exception trails had session headers only.
+All 35 physical imports were found; the static tool does not resolve API-set
+contracts. Receipt `d5af17c3012d40fab4538f4f9268fabe:1:1` ties normal-battle
+REWARD BREAKDOWN to ECONOMY SETTLED and the persisted garage transaction.
+
+Unexercised native boundaries: other-spot/assistance payouts, player successful
+capture, losing/drawing heroic resistance, an ordinary vehicle's coefficient,
+active account premium/reserves, and paid ammunition after stock exhaustion.
+Automated fixtures cover those model/transaction branches; they must not be
+labelled observed Windows outcomes from this session. Static targets can end
+the small-map fixture through capture; use normal battles for sustained combat
+samples. Mission thresholds and bond award rules remain unchanged.

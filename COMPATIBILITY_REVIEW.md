@@ -86,12 +86,62 @@ new Windows acceptance below must identify what it actually exercises. The fire
 RNG/per-vehicle-calibration gap remains recorded rather than silently declared
 fixed as part of earnings work.
 
-Validation in progress: focused reward/protocol/atomic-settlement tests pass;
-all 47 launcher test files pass locally. A broad local client run hit the absent
-matching native simulation build; those failures require the matching cloud
-native build, not removed assertions or a relaxed test baseline. Final pushed
-CI, independent package inspection and native results are recorded after the
-final files stop changing.
+Final runtime is `90acd88c8db879d3d08b05216dd68ed73c8bc8a3`.
+The focused reward/protocol/crew/equipment/fire/ram run passed 18 files / 469
+tests with no skips; the launcher run passed 47 files / 1,239 tests with 19
+recorded platform/resource skips. All eight matching-native CI jobs passed in
+[Tests 41429763001](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429763001),
+including the new coherent-earnings regression step. All three
+[Windows build 41429757820](https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41429757820)
+jobs passed. The earlier broad local native-build failures are not claimed as
+passes or resolved by deleting assertions; the matching cloud build supplies
+that native evidence.
+
+Artifact 13133604185 (`windows-574`, identity `colorfulmeans-41429757820-1`)
+passed archive integrity, x64 launcher/x86 native-extension checks, all 236
+bundled-source comparisons, all 229 Python 2.7 code-object comparisons and the
+43-module frozen-launcher/package verification, including replay execution and
+the packaged Tk editor smoke. Native acceptance used this exact artifact,
+isolated QA app-data and the supported #1513 client; the owner authorized the
+license notice and drove the normal-battle sample.
+
+Three stationary-scene rounds and one normal Mittengard battle settled through
+real result receipts. Type 59's measured 1.575 multiplier was applied once;
+the normal battle's 3,480 damage and two initial spots produced
+`(10,400 + 34,800 + 200) * 1.575 = 71,505` gross credits. Repair was 7,410,
+net battle credits 64,095, and the actual wallet increased by exactly that
+amount before the separate 60,000-credit mission reward. Base XP was 1,711;
+the native 10% premium-vehicle XP bonus gave 1,882 vehicle XP and 94 free XP.
+The earlier first-win/control pair paid 396 vs 198 XP from the same 180 base;
+the successful 50-damage/35-defence sample separately paid 17,167 credits,
+412 base XP and 453 vehicle XP. Native detail columns and system messages
+were checked against receipt-linked ECONOMY SETTLED/REWARD BREAKDOWN logs.
+
+Repeated consumables were checked against the historical official 9.18 rule:
+https://worldoftanks.com/en/content/docs/release_notes/918-updatenotes/ .
+The owner's large repair kit activations were 90.246 seconds apart. Only one
+kit was resupplied for 50 gold, not two. Before the battle the account's 581
+large kits were all mounted on 581 vehicles, leaving zero spare stock; after
+one consumption and one purchase the total was again 581. The 13 AP and 7 HE
+shots used stock (respective stock deltas -13 and -7), so no ammunition currency
+charge was expected. Twelve bonds for the installed directive were separate.
+Nineteen Bots emitted 28 consumable effects; one veteran reused its small kit
+after 242.346 seconds. Regular one-use and veteran/elite reusable policies
+were visible, including repair, crew restoration/stun clearing and manual
+extinguishing. Bots have no player wallet: their item-state/cooldown evidence
+must not be described as an independent retail-account billing test.
+
+Reports `wot-error-report-20261102-193001-0edc66371b81.zip` and
+`wot-error-report-20261102-201729-258b0e65c8fe.zip` passed archive integrity.
+The final normal-session visible-client, worker and server logs had no ERROR
+entries or Python tracebacks; both native exception trails contained only
+their session headers. The static dependency scan found no missing physical
+imports; API-set resolution is outside that scan. These live samples do not
+exercise paid ammunition after stock exhaustion, account-premium activation,
+reserve activation, an ordinary-vehicle coefficient, or losing/drawing heroic
+resistance. Those cases retain automated coverage and remain distinct from
+the specific native observations. The full acceptance recipe is in
+`docs/testing/default-loadouts-stock-room-20261022.md`.
 
 
 ## Repair workforce and directive acceptance follow-up (November 2, afternoon)
