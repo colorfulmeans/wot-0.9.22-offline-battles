@@ -1946,6 +1946,12 @@ class _LANInputSender(object):
 
     def send_avatar_input(self, vehicle_id, kind, payload):
         payload = payload if isinstance(payload, dict) else {}
+        control = getattr(self.owner, '_player_autocontrol', None)
+        if control is not None and control.active:
+            if kind in ('move', 'cruise') and 'drive' in control.features:
+                return True
+            if kind == 'shoot' and 'fire' in control.features:
+                return True
         if kind == 'move':
             flags = int(payload.get('flags', 0))
             self.forward = _movement_throttle(flags)
@@ -2401,6 +2407,7 @@ class BattleRuntime(object):
         self._round_finished_notified = False
         self._on_local_leave = None
         self._battle_live = True
+        self._player_autocontrol = None
         self._prebattle_deadline = None
         self._pending_bot_creates = {}
         self._pending_bot_create_order = []
@@ -4378,6 +4385,9 @@ class BattleRuntime(object):
         if not self._worker_mode:
             self._binding.arena_period('battle', duration)
         self._battle_live = True
+        if not self._worker_mode and not self._replay_mode:
+            from . import player_autocontrol
+            self._player_autocontrol = player_autocontrol.attach(self)
         if refresh_movement:
             # The countdown reticle already raised isOnArena, so #1513's
             # __setIsOnArena(True) skips its normal current-input refresh.
@@ -19780,6 +19790,13 @@ class BattleRuntime(object):
             if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._local_frame_stages = stages if profiling else None
                 try:
+                    control = getattr(self, '_player_autocontrol', None)
+                    if control is not None:
+                        try:
+                            control.update(dt, now)
+                        except Exception as error:
+                            control.stop('controller_error')
+                            self._warn_optional_failure('player automatic control', error)
                     self._drive_local(dt)
                     self._advance_local_player_burst()
                 finally:
@@ -32091,6 +32108,10 @@ class BattleRuntime(object):
             raise cleanup_error
 
     def _cleanup(self):
+        control = getattr(self, '_player_autocontrol', None)
+        if control is not None:
+            control.close()
+            self._player_autocontrol = None
         self._stack_pressure_params = {}
         self._stack_pressure_sample_times = {}
         self._impact_descents = {}

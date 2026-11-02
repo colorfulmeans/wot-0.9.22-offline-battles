@@ -1,5 +1,71 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Integrated test controls and reward coefficient follow-up (November 3)
+
+The launcher now has one bilingual Testing tab, using the shared button polish,
+inside-border titles, margins and explanatory labels. Its scrolling content
+keeps the ordinary window size. Logs, single-player scene selection and player
+control settings are separate. Old scene buttons on Repair have been removed;
+normal/log outer entry points are unchanged. Settings are remembered, but every
+launch replaces scene flags and uses a fresh command journal. Network/replay
+launches cannot inherit the single-player fixtures.
+
+The optional visible-player controller is an input producer only: it uses the
+current authored routes, Bot adapter/local driver, and current terrain navigator;
+it never registers another native simulation or changes the player's fitting.
+Only presented visible enemy entities enter its targeting list. The actual
+native gun ray must align before automatic fire. This is a diagnostic controller,
+not a claim of identical strategic behaviour to the worker's full room planner.
+Native player physics, reload, damage, ammo and equipment activation stay owned
+by the existing paths. Timed script driving replaces the automatic writer and
+is bounded to ten seconds. Stop clears movement and pending bursts. Death,
+results, cleanup and a new round fence input/commands; cleanup restores only
+the handler wrapper this instance still owns.
+
+Exact #1513 `AvatarInputHandler.handleKeyEvent(self,event)` was inspected in
+scripts.pkg: it calls `game.convertKeyEvent` for `(isDown,key,mods,isRepeat)`.
+The wrapper is attached to the current handler instance, including SPG control,
+not just arcade/sniper. `Keys.KEY_GRAVE` exists in scripts/client/Keys.pyc.
+Chat focus and disabled input suppress toggling. Local state messages use
+`g_settings.htmlTemplates.format('battleErrorMessage',ctx={'error':text})`
+then `MessengerEntry.g_instance.gui.addClientMessage(...,isCurrentPlayer=False)`;
+this does not send a player's chat packet or consume network chat cooldown.
+
+The ammunition-warning deadlock was a pending request retained after native
+validation cancellation. Exact PreQueueEntity.queue(ctx,callback) completion
+now clears only the matching request. The temporary dispatch wrapper is restored
+immediately; delayed old callbacks cannot complete a replacement request.
+
+Credit baking now derives native premium membership from each nation's gold
+price, as #1513 VehicleType does. Raw roster tags lacked `premium`, which had
+pooled the premium cohort with ordinary tanks. All 375 measured workbook rows
+are unchanged; 226 of 305 explicitly estimated rows change. Type 59 retains
+1.5750; Gold Type 59's estimate changes from 0.8133 to 1.5000. These estimates
+remain estimates, not retrieved per-vehicle official coefficients.
+
+Historical Chinese base-XP x2 is applied once on the authority for Gold Type 59,
+Type 62 and WZ111T before scoreboard, mission and account settlement consumers.
+Ordinary premium settlement XP is separate; the owner's IX/X policy is +5%.
+Churchill III and ordinary WZ111 remain unresolved special base coefficients:
+community numeric claims conflict, and Console/Blitz values are not PC evidence.
+REWARD BREAKDOWN labels those unresolved cases explicitly instead of asserting
+an audited 1.0. Native fire initial-burn/base-decay gaps and unsampled ignition
+RNG remain declared in FIRE_MODEL; this round does not claim a recovered fire law.
+The shared governor clock now applies whole-second low-speed wear to both human
+and Bot owners; disabling or reaching half forward speed clears the partial tick.
+
+Verification baseline: current scene and loadout selectors, current authored
+routes and current source-derived native contracts. Added independent cancellation,
+command ownership/key-repeat/chat-focus/round fences, reward coefficient ordering,
+governor split-tick tests, and real Tk bilingual scrolling/layout measurements.
+Focused tests and Python 2.7 client compilation pass locally. The broad Windows
+engine-free test run is not a valid complete green result: its native simulation
+fixtures require the matching native extension, and the available Python 3.14
+also lacks `imp`. Cloud Linux/native builds and packaged-client acceptance are
+tracked separately below; neither is implied by those local checks.
+
+Packaged-client and exact-commit cloud acceptance: pending this candidate's build.
+
 
 ## Coherent earnings model and gameplay-source re-audit (November 2, evening)
 

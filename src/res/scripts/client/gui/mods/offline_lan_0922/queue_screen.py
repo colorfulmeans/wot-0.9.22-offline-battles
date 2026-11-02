@@ -113,14 +113,41 @@ class QueueScreenUI(object):
                 return False
             # Install the pending owner before a possibly synchronous callback.
             self._pending_account = account
-            accepted = dispatcher.doAction(
-                self._runtime.prb_action_type('', mapID=0))
+            entity = dispatcher.getEntity()
+            original_queue = entity.queue
+            token = object()
+            self._pending_token = token
+
+            def tracked_queue(ctx=None, callback=None):
+                def completed(success):
+                    if (self._installed and self._pending_account is account and
+                            self._pending_token is token):
+                        self._pending_account = None
+                        self._engaged = bool(success and self._in_queue())
+                        _log('LAN queue request completed: accepted=%s' % bool(success))
+                    if callback is not None:
+                        callback(success)
+                return original_queue(ctx, callback=completed)
+
+            # Native doAction always returns True after starting validation.
+            # Only queue's completion callback reports a cancelled warning.
+            # Intercept this invocation, never retain a hook on the entity.
+            had_queue = 'queue' in getattr(entity, '__dict__', {})
+            entity.queue = tracked_queue
+            try:
+                accepted = dispatcher.doAction(
+                    self._runtime.prb_action_type('', mapID=0))
+            finally:
+                if had_queue:
+                    entity.queue = original_queue
+                else:
+                    del entity.queue
             if not accepted:
                 self._pending_account = None
                 _log('LAN queue screen unavailable: the queue action was '
                      'refused')
                 return False
-            self._engaged = True
+            self._engaged = self._pending_account is account or self._in_queue()
             return True
         except Exception as error:
             self._pending_account = None

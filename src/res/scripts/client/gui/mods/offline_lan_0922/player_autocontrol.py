@@ -1,0 +1,344 @@
+# -*- coding: utf-8 -*-
+"""Opt-in player input producer; never a second physics or damage owner."""
+from __future__ import print_function
+import json
+import math
+import os
+
+_current = None
+
+
+def native_message(text):
+    from messenger import MessengerEntry
+    from messenger import g_settings
+    message = g_settings.htmlTemplates.format('battleErrorMessage', ctx={'error': text})
+    MessengerEntry.g_instance.gui.addClientMessage(message, isCurrentPlayer=False)
+
+
+def handle_key(is_down, key, mods=0):
+    controller = _current
+    if controller is None:
+        return False
+    import Keys
+    if key != Keys.KEY_GRAVE:
+        return False
+    if not is_down:
+        controller.key_down = False
+        return True
+    if controller.key_down:
+        return True
+    controller.key_down = True
+    if mods or not controller.input_available():
+        return False
+    controller.toggle()
+    return True
+
+
+class PlayerControl(object):
+    def __init__(self, owner, features, notify=native_message):
+        self.owner, self.features, self.notify = owner, set(features), notify
+        self.active = self.key_down = False
+        self.adapter = None
+        self.next_decision = 0.0
+        self.last_decision = None
+        self.command_offset = 0
+        self.next_poll = 0.0
+        self.override = None
+        self.target_engine = None
+        self.closed = False
+        self.input_binding = None
+        self.consumable_pending = {}
+
+    def bind_input(self):
+        """Wrap the exact #1513 event seam, including strategic camera mode."""
+        handler = getattr(self.owner._avatar, 'inputHandler', None)
+        if handler is None or self.input_binding is not None:
+            return
+        original = handler.handleKeyEvent
+        owned = 'handleKeyEvent' in handler.__dict__
+        def key_event(event):
+            import game
+            down, key, mods, repeat = game.convertKeyEvent(event)
+            if not repeat and handle_key(down, key, mods):
+                return True
+            return original(event)
+        handler.handleKeyEvent = key_event
+        self.input_binding = handler, original, owned, key_event
+
+    def record(self, stage, **fields):
+        from .native_input_diagnostics import write_json_record
+        fields.update(stage=stage, player=self.owner.client.player_id,
+                      round=self.owner._start_message.get('round_id'), active=self.active)
+        write_json_record('PLAYER CONTROL', fields)
+
+    def input_available(self):
+        from messenger import MessengerEntry
+        handler = getattr(self.owner._avatar, 'inputHandler', None)
+        return bool(handler is not None and handler.isEnabled() and
+                    not MessengerEntry.g_instance.gui.isFocused())
+
+    def live(self):
+        owner = self.owner
+        return bool(not self.closed and owner.state == 'running' and owner._battle_live and
+                    owner._battle_result is None and owner._server is not None and
+                    owner._sender is not None and not owner._worker_mode and not owner._replay_mode)
+
+    def toggle(self):
+        if self.active:
+            self.stop('manual')
+            return False
+        if not self.live():
+            return False
+        owner = self.owner
+        entity = owner._server_entity(owner._server.vehicle_id)
+        if entity is None or not entity.isAlive():
+            return False
+        # This uses the same checked authored routes and short-range driver as
+        # the Bot adapter. It does not register another simulated vehicle.
+        bots = owner._bots
+        self.adapter = bots._new_adapter(owner._start_message['map'],
+                                         owner._start_message.get('round_id', 0))
+        self.adapter.register(owner.client.player_id, owner.client.team,
+                              entity.typeDescriptor, 'Player test')
+        self.adapter.navigation_target = self.navigation_target
+        self.active = True
+        self.last_decision = None
+        self.next_decision = 0.0
+        self.record('enabled', features=sorted(self.features))
+        self.notify(u'【测试】玩家自动控制已开启。')
+        return True
+
+    def stop(self, reason='manual'):
+        changed = self.active or self.override is not None
+        self.active = False
+        self.override = None
+        self.adapter = None
+        owner = self.owner
+        if owner._sender is not None and changed:
+            owner._sender.forward = owner._sender.turn = 0.0
+            owner._sender.handbrake = False
+            owner._sender.send_current()
+            owner._cancel_local_player_burst(apply_settings=True)
+        if self.target_engine is not None and owner._avatar is not None:
+            owner._avatar.autoAim(0)
+        self.target_engine = None
+        if changed:
+            self.record('disabled', reason=reason)
+            if self.live():
+                self.notify(u'【测试】玩家自动控制已关闭，恢复手动操作。')
+
+    def close(self):
+        global _current
+        if self.closed:
+            return
+        self.stop('battle_exit')
+        if self.input_binding is not None:
+            handler, original, owned, wrapper = self.input_binding
+            if handler.__dict__.get('handleKeyEvent') is wrapper:
+                if owned:
+                    handler.handleKeyEvent = original
+                else:
+                    del handler.handleKeyEvent
+            self.input_binding = None
+        navigator = getattr(getattr(self.owner, '_bots', None), 'navigator', None)
+        if navigator is not None:
+            identity = -1000000 - abs(int(self.owner.client.player_id))
+            navigator.bot_states.pop(identity, None)
+            navigator.boundary_bodies.pop(identity, None)
+        self.closed = True
+        if _current is self:
+            _current = None
+
+    def poll_commands(self, now):
+        if now < self.next_poll:
+            return
+        self.next_poll = now + 0.15
+        path = os.environ.get('WOT_OFFLINE_TEST_CONTROL_FILE')
+        if not path or not os.path.isfile(path):
+            return
+        with open(path, 'rb') as stream:
+            stream.seek(self.command_offset)
+            for unused in range(16):
+                offset = stream.tell()
+                line = stream.readline(4097)
+                if not line or not line.endswith(b'\n'):
+                    break
+                self.command_offset = stream.tell()
+                if len(line) > 4096:
+                    self.record('command_rejected', reason='oversize', offset=offset)
+                    continue
+                try:
+                    self.command(json.loads(line.decode('utf8')), now)
+                except (TypeError, ValueError, KeyError) as error:
+                    self.record('command_rejected', reason=str(error))
+
+    def command(self, command, now):
+        """Mouse and internal scripts share this bounded real-input contract."""
+        action = command.get('action')
+        if not self.live():
+            return False
+        if action == 'toggle':
+            return self.toggle()
+        if action == 'stop':
+            self.stop('mouse_or_script')
+            return True
+        if action == 'drive':
+            self.stop('script_override')
+            seconds = float(command.get('seconds', 1.0))
+            forward, turn = float(command.get('forward', 0)), float(command.get('turn', 0))
+            if not (0 < seconds <= 10 and -1 <= forward <= 1 and -1 <= turn <= 1):
+                raise ValueError('invalid timed drive')
+            self.override = (now + seconds, forward, turn)
+        elif action == 'fire':
+            self.stop('script_fire_override')
+            sender = self.owner._sender
+            accepted = self.owner.shoot(sender.aim_yaw, sender.gun_pitch)
+            self.record('script_fire', accepted=bool(accepted))
+            return bool(accepted)
+        else:
+            raise ValueError('unknown player control action')
+        self.record('command', command=command)
+        return True
+
+    def navigation_target(self, player_id, position, goal, strategic, state):
+        navigator = self.owner._bots.navigator
+        if navigator is None or goal is None:
+            # Hold when a terrain path cannot be proved.
+            return position
+        # Separate planning/cache identity; no Bot pose, loadout or physics
+        # state is installed for the human vehicle.
+        identity = -1000000 - abs(int(player_id))
+        navigator.set_boundary_body(identity, position, state['yaw'],
+                                    state['half_length'], state['half_width'])
+        target = navigator.next_target(identity, position, goal,
+            ('player_test', identity, strategic.get('route_id'), strategic.get('route_index'),
+             strategic.get('combat_mode')), state['now'], strategic.get('route_anchor'))
+        state['navigation_stop_at_target'] = navigator.target_is_terminal(identity)
+        return target
+
+    def _contacts(self, entity):
+        owner = self.owner
+        contacts, neighbours, records = [], [], {}
+        for record in owner._records.values():
+            if not record.get('ready') or record.get('tombstone'):
+                continue
+            target = owner._server_entity(record.get('engine_id'))
+            if target is None or target.id == entity.id:
+                continue
+            point = tuple(target.position)
+            row = dict(id=target.id, team=(record.get('state') or {}).get('team', 0), position=point,
+                       health=target.health, max_health=target.typeDescriptor.maxHealth,
+                       alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw))
+            neighbours.append(row)
+            # Actual presentation visibility, not the omniscient LAN roster.
+            if row['team'] != owner.client.team and row['alive'] and target.isStarted and record.get('spot_visible', False):
+                row.update(visible=True)
+                contacts.append(row)
+                records[target.id] = target
+        return contacts, neighbours, records
+
+    def _consumables(self, entity):
+        critical = {'fire': bool(entity.is_on_fire),
+                    'destroyed': list(getattr(entity, '_destroyed_devices', ())),
+                    'crew': list(getattr(entity, '_crew_ko', ()))}
+        for item in self.owner._equipment_state or ():
+            kind = item.contract.get('kind')
+            needed = ((kind == 'extinguisher' and critical['fire']) or
+                      (kind == 'repairkit' and critical['destroyed']) or
+                      (kind == 'medkit' and critical['crew']))
+            now = self.owner._clock()
+            if needed and item.ready(now) and now >= self.consumable_pending.get(item.contract['id'], 0):
+                selected = (critical['destroyed'][0] if kind == 'repairkit' else
+                            critical['crew'][0] if kind == 'medkit' else None)
+                index = self.owner._critical_extra_index(entity.typeDescriptor, selected) if selected else 0
+                self.owner._activate_equipment(item.contract['id'] | (index << 16))
+                self.consumable_pending[item.contract['id']] = now + 2.0
+
+    def aimed_at(self, target):
+        """Use the actual native muzzle direction, never a guessed gun angle."""
+        owner = self.owner
+        start, direction = owner._mutable_shot_ray()
+        point = tuple(target.position)
+        shape = owner._collision_shape(target.typeDescriptor)
+        aim = (point[0], point[1] + max(0.5, shape[3] * 0.5), point[2])
+        delta = tuple(aim[i] - start[i] for i in range(3))
+        distance = math.sqrt(sum(value * value for value in delta))
+        if distance <= 0.1:
+            return False
+        cosine = sum(delta[i] * direction[i] for i in range(3)) / distance
+        tolerance = math.atan2(max(0.4, shape[0] * 0.6), distance)
+        return cosine >= math.cos(tolerance) and owner._tactical_ray_clear(tuple(start), aim)
+
+    def update(self, dt, now):
+        if not self.live():
+            self.stop('battle_not_live')
+            return
+        owner = self.owner
+        self.bind_input()
+        self.poll_commands(now)
+        entity = owner._server_entity(owner._server.vehicle_id)
+        if entity is None or not entity.isAlive():
+            self.stop('player_dead')
+            return
+        sender = owner._sender
+        if self.override is not None:
+            until, forward, turn = self.override
+            if now >= until:
+                self.stop('script_completed')
+            else:
+                sender.forward, sender.turn, sender.handbrake = forward, turn, False
+                sender.send_current()
+            return
+        if not self.active or now < self.next_decision:
+            return
+        step = min(0.5, max(0.0, now - self.last_decision)) if self.last_decision is not None else 0.1
+        self.last_decision, self.next_decision = now, now + 0.1
+        position, yaw = owner.local_pose()
+        position = tuple(position)
+        contacts, neighbours, records = self._contacts(entity)
+        shape = owner._collision_shape(entity.typeDescriptor)
+        state = dict(id=owner.client.player_id, slot=0, position=position, yaw=yaw,
+                     speed=owner._local_speed, dt=step, now=now, health=entity.health,
+                     max_health=entity.typeDescriptor.maxHealth, contacts=contacts,
+                     neighbours=neighbours, half_width=shape[0], half_length=shape[1], collision_shape=shape)
+        def clear(angle, reach=None):
+            return owner._direction_probe(position, angle, owner._local_speed,
+                entity.typeDescriptor, reach, shape[0])
+        order = self.adapter.decide(state, clear)
+        if 'drive' in self.features:
+            sender.forward, sender.turn = order['throttle'], order['turn']
+            sender.handbrake = bool(order.get('brake'))
+            sender.send_current()
+        if 'consumables' in self.features:
+            self._consumables(entity)
+        target = records.get(order.get('target_id'))
+        if 'fire' in self.features and target is not None:
+            if self.target_engine != target.id:
+                owner._avatar.autoAim(target.id)
+                self.target_engine = target.id
+            if order.get('fire_allowed') and self.aimed_at(target):
+                accepted = owner.shoot(sender.aim_yaw, sender.gun_pitch)
+                if accepted:
+                    self.record('automatic_fire', target=target.id)
+        elif self.target_engine is not None:
+            owner._avatar.autoAim(0)
+            self.target_engine = None
+        if now >= getattr(self, 'next_log', 0.0):
+            self.next_log = now + 1.0
+            self.record('decision', position=position, speed=owner._local_speed,
+                        throttle=sender.forward, turn=sender.turn, target=order.get('target_id'),
+                        route=order.get('combat_mode'))
+
+
+def attach(owner):
+    global _current
+    raw = os.environ.get('WOT_OFFLINE_PLAYER_AUTOCONTROL', '0')
+    if raw == '0' or owner._worker_mode or owner._replay_mode:
+        return None
+    if _current is not None:
+        _current.close()
+    _current = PlayerControl(owner, raw.split(','))
+    path = os.environ.get('WOT_OFFLINE_TEST_CONTROL_FILE')
+    if path and os.path.isfile(path):
+        _current.command_offset = os.path.getsize(path)
+    return _current

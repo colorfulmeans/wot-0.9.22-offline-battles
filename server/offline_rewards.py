@@ -50,7 +50,7 @@ def compute_offline_rewards(statistics, won, participated=True,
                             vehicle_tier=1, spotted_spgs=0,
                             captured=False, reward_facts=None,
                             courageous=False, vehicle_coefficient=10000,
-                            breakdown=None):
+                            breakdown=None, vehicle_xp_factor=100):
     """Settle authoritative facts. Units are 1/100 tier-adjusted hull HP.
 
     Runtime callers always supply reward_facts, frozen on admitted events.
@@ -99,6 +99,12 @@ def compute_offline_rewards(statistics, won, participated=True,
     normal_xp = max(0, win_xp - penalty)
     courageous = bool(courageous and not won)
     achievement_xp = (normal_xp * 150 // 100 - normal_xp) if courageous else 0
+    # Apply before every base-XP consumer: scoreboard, mission counters and
+    # settlement. Account, daily and ordinary premium bonuses remain separate.
+    base_factor = max(1, int(vehicle_xp_factor))
+    normal_xp = normal_xp * base_factor // 100
+    achievement_xp = achievement_xp * base_factor // 100
+    penalty = penalty * base_factor // 100
     xp = normal_xp + achievement_xp
     participation_credits = OFFLINE_PARTICIPATION_CREDITS_PER_TIER * tier if participated else 0
     credits_parts = dict(
@@ -127,6 +133,6 @@ def compute_offline_rewards(statistics, won, participated=True,
         breakdown.update(version=ECONOMY_VERSION, credit_model='community_2015',
                          xp_model='official_categories_offline_coefficients', xp_parts=xp_parts,
                          credits_parts=credits_parts, facts=dict(facts),
-                         vehicle_coefficient=coefficient, courageous=courageous,
+                         vehicle_coefficient=coefficient, vehicle_xp_factor=base_factor, courageous=courageous,
                          won=bool(won), rewards=dict(result))
     return result

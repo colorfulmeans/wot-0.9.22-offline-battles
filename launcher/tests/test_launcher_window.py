@@ -46,6 +46,19 @@ class _Widget(object):
         return self.options.get(name)
 
 
+class _Canvas(_Widget):
+    configure = _Widget.config
+    def create_window(self, *args, **kwargs): return 1
+    def bbox(self, *args): return (0, 0, 640, 400)
+    def itemconfigure(self, *args, **kwargs): pass
+    def yview(self, *args): pass
+    def yview_scroll(self, *args): pass
+
+
+class _Scrollbar(_Widget):
+    def set(self, *args): pass
+
+
 class _Entry(_Widget):
     """The real Entry keeps its own text, which the balance panel reads."""
 
@@ -171,6 +184,7 @@ class _FakeTk(object):
     Tk = _Root
     Toplevel = _Root
     Frame = _Widget
+    Canvas = _Canvas
     LabelFrame = _Widget
     Label = _Widget
     Entry = _Entry
@@ -183,6 +197,7 @@ class _FakeTk(object):
 
 
 class _FakeTtk(object):
+    Scrollbar = _Scrollbar
     Combobox = _Widget
     Spinbox = _Widget
     Notebook = _Notebook

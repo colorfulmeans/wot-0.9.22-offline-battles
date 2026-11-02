@@ -9,6 +9,31 @@ and battle logic, a small LAN server and a launcher.
 
 Current release: **v1.1.1** — [release notes](docs/releases/v1.1.1.md).
 
+### Testing controls in the launcher
+
+The **Testing** tab beside Bot tactics combines diagnostic logs, test scenes,
+and optional player automatic control. Its three areas are independent. Use
+the regular Start button after choosing settings; the normal and diagnostic
+outer launcher entrances remain available. Dedicated scene-launch buttons are
+replaced by the scene selector. Network/replay launches never inherit a
+single-player fixture.
+
+With player control enabled, every battle still starts manually. The physical
+grave key left of `1` toggles takeover; chat/input/menu focus suppresses it.
+Native local battle messages show the state without sending a player chat
+message. Driving, aim/fire and consumables can be enabled separately. Open the
+mouse control panel for Toggle, Stop, Fire, or one-second driving commands.
+Closing that panel sends Stop. Stop also clears queued burst shots and restores
+the original input handler on battle exit. Actual player fitting and ammunition
+remain in use; this tool does not install the Bot's elite ammunition policy.
+
+The launcher creates a fresh temporary JSON-lines command file at launch and
+passes its path as `WOT_OFFLINE_TEST_CONTROL_FILE`. Local test scripts can append
+`{"action":"toggle"}`, `{"action":"stop"}`, `{"action":"fire"}` or
+`{"action":"drive","forward":1,"turn":0,"seconds":1}` followed by a newline.
+Driving is bounded to ten seconds; each new round ignores earlier commands.
+`PLAYER CONTROL` logs identify accepted commands, decisions and releases.
+
 ### Historical battle review notes
 
 The investigation notes below retain the original review context. For v1.1.0

@@ -11,6 +11,15 @@ BigWorld nor battle runtime code, so the server and desktop tests can use it.
 import math
 
 
+def governor_wear(elapsed, seconds, rate, speed, forward_limit):
+    """One-second low-speed wear, identical for human and Bot owners."""
+    if rate <= 0 or forward_limit <= 0 or abs(speed) >= forward_limit * 0.5:
+        return 0.0, 0.0
+    elapsed = max(0.0, float(elapsed)) + max(0.0, float(seconds))
+    whole = int(elapsed + 1.e-9)
+    return max(0.0, elapsed - whole), float(rate) * whole
+
+
 # The exact activation-target vocabulary shared by both wire endpoints.
 # Crew extra names retain their native numbered identity; UI labels are not
 # accepted here. Keep unrelated critical-damage compatibility aliases local.

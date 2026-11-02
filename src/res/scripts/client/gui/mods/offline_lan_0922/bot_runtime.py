@@ -4973,9 +4973,12 @@ class BotRuntime(object):
             repair_factor=self._bot_repair_factor(state['id'], descriptor))
         passives = self._equipment_passives.get(int(state['id']), {})
         wear = passives.get('engineHpLossPerSecond', 0.0)
-        if wear > 0 and abs(_number(state.get('speed'))) < _forward_speed(descriptor) * 0.5:
+        state['_governor_wear_elapsed'], wear_loss = equipment_mechanics.governor_wear(
+            state.get('_governor_wear_elapsed', 0.0), step, wear,
+            _number(state.get('speed')), _forward_speed(descriptor))
+        if wear_loss > 0:
             wear_payload = critical_damage.damage_device_over_time(
-                shadow, 'engineHealth', wear * float(step), 'equipment')
+                shadow, 'engineHealth', wear_loss, 'equipment')
             if wear_payload is not None:
                 repair_payload = wear_payload
         fire_damage = 0

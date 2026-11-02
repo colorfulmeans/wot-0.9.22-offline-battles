@@ -19,6 +19,9 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 from bake_mastery_thresholds_0922 import read_client_roster, vehicle_class
+from bake_mastery_thresholds_0922 import NATIONS, SCRIPTS_PACKAGE
+from packed_xml import read_packed_xml
+from vehicle_prices import children, element, read_price
 
 SOURCE = 'https://forum.tanki.su/topic/1660148-%D0%BE-%D0%BA%D1%80%D0%B5%D0%B4%D0%B8%D1%82%D0%B0%D1%85/'
 WORKBOOK = 'https://forum-mt-prod.lesta.ru/monthly_09_2015/post-12045944-0-61402200-1443131647.xlsx'
@@ -54,6 +57,23 @@ def measurements(path):
 
 def bake(client, workbook, indexes):
     roster = read_client_roster(client)
+    # VehicleType derives premium from list.xml's gold price. The raw tags
+    # parsed by read_client_roster do not contain that derived tag.
+    premium_ids = set()
+    package_path = Path(client) / SCRIPTS_PACKAGE if Path(client).is_dir() else Path(client)
+    with zipfile.ZipFile(package_path) as package:
+        for nation_id, nation in enumerate(NATIONS):
+            root = read_packed_xml(package.read('scripts/item_defs/vehicles/%s/list.xml' % nation))
+            for unused_name, node in children(root):
+                section = element(node)
+                if section is None:
+                    continue
+                fields = dict(children(section))
+                if 'id' not in fields:
+                    continue
+                price = read_price(section)
+                if price and price[1] > 0:
+                    premium_ids.add((int(fields['id'].value) << 8) | (nation_id << 4) | 1)
     identities = defaultdict(set)
     for index in indexes:
         body = json.loads(Path(index).read_text(encoding='utf8'))
@@ -77,7 +97,7 @@ def bake(client, workbook, indexes):
     samples = defaultdict(list)
     for intcd, (factor, unused) in measured.items():
         unused_nation, unused_name, tier, tags = roster[intcd]
-        samples[('premium' in tags, tier, vehicle_class(tags))].append(factor)
+        samples[(intcd in premium_ids, tier, vehicle_class(tags))].append(factor)
     result = {}
     for intcd, (nation, name, tier, tags) in sorted(roster.items()):
         key = '%s:%s' % (nation, name)
@@ -85,7 +105,7 @@ def bake(client, workbook, indexes):
             result[key] = measured[intcd]
             continue
         groups = [(abs(tier - level), values) for (premium, level, klass), values
-                  in samples.items() if premium == ('premium' in tags) and
+                  in samples.items() if premium == (intcd in premium_ids) and
                   klass == vehicle_class(tags)]
         if not groups:
             raise ValueError('no measured cohort: %s' % key)

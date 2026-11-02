@@ -28,7 +28,7 @@ if __package__ in (None, ""):
     import i18n
     import gold_shop
     import save_ledger
-    import save_services, reserves_ui
+    import save_services, reserves_ui, testing_ui
     import save_personal_missions
     import personal_missions_ui
     import customizations_ui
@@ -39,7 +39,7 @@ if __package__ in (None, ""):
     import vehicle_editor_ui
     import vehicle_overlays
 else:
-    from . import customizations_ui, crew_ui, nation_choices, save_services, reserves_ui
+    from . import customizations_ui, crew_ui, nation_choices, save_services, reserves_ui, testing_ui
     from . import (
         bot_lineup_profiles, bot_lineup_ui, bot_tactics_store, core, error_reports, gold_shop,
         i18n, save_ledger, save_slots, vehicle_editor_ui, vehicle_overlays,
@@ -993,11 +993,15 @@ class LauncherWindow(object):
         self.bot_tactics_button.pack(fill="x", pady=6)
         self.bot_tactics_help = tk.Label(self.bot_tactics_panel, text="", justify="left", wraplength=620)
         self.bot_tactics_help.pack(fill="x", pady=8)
+        self.testing_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
+        self.testing_editor = testing_ui.TestingPanel(self, self.testing_panel, settings.get("testing", {}))
+        self._diagnostic_entry = os.environ.get("WOT_OFFLINE_DIAGNOSTICS") == "1"
         self.repair_panel = tk.Frame(self.tools_tabs, padx=10, pady=10)
         self.tools_tabs.add(self.save_panel, text="")
         self.tools_tabs.add(self.vehicle_panel, text="")
         self.tools_tabs.add(self.bot_lineup_panel, text="")
         self.tools_tabs.add(self.bot_tactics_panel, text="")
+        self.tools_tabs.add(self.testing_panel, text="")
         self.tools_tabs.add(self.repair_panel, text="")
 
         self._save_slot_records = []
@@ -1252,23 +1256,6 @@ class LauncherWindow(object):
             justify="left", wraplength=620)
         self.maintenance_help.grid(row=2, column=0, columnspan=2,
             sticky="new", pady=(8, 0))
-        self.diagnostic_scene_buttons = []
-        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
-            scenes = (
-                ('equipment', 'Equipment and crew test', 3, 0, 1),
-                ('drop', 'Shot-triggered drop test', 3, 1, 1),
-                ('governor', 'Bot governor driving test', 4, 0, 2),
-                ('equipment_baseline', 'Equipment control: baseline', 5, 0, 1),
-                ('equipment_matrix', 'Equipment control: varied fittings', 5, 1, 1),
-                ('rewards', 'Earnings test: stationary targets', 6, 0, 2),
-            )
-            for scene, label, row, column, span in scenes:
-                button = tk.Button(self.repair_panel, text=self._t(label),
-                    command=lambda value=scene: self._start_diagnostic_scene(value))
-                button.grid(row=row, column=column, columnspan=span, sticky='ew',
-                    padx=(0,0) if span == 2 else (0,3) if column == 0 else (3,0),
-                    pady=(6,0))
-                self.diagnostic_scene_buttons.append((button, label))
         self.repair_panel.grid_rowconfigure(7, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
@@ -1280,8 +1267,8 @@ class LauncherWindow(object):
         return text
 
     def _apply_language(self, refresh=True):
-        for button, label in getattr(self, 'diagnostic_scene_buttons', ()):
-            button.config(text=self._t(label))
+        self.testing_editor.translate()
+        self.tools_tabs.tab(self.testing_panel, text="测试" if self.language == "zh" else "Testing")
         self.language_label.config(text=self._t("Language"))
         self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
@@ -1430,22 +1417,7 @@ class LauncherWindow(object):
             self.mode.set(core.MODE_SINGLE if index == 0 else core.MODE_JOIN)
         self._refresh_mode(sync_tab=False)
 
-    def _start_diagnostic_scene(self, scene):
-        if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
-            return
-        os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = (
-            {'governor':'2', 'equipment':'1', 'equipment_baseline':'3',
-             'equipment_matrix':'4', 'rewards':'3'}.get(scene, '0'))
-        os.environ['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
-        os.environ['WOT_OFFLINE_ROOF_SHOT_DROP'] = '1' if scene == 'drop' else '0'
-        self._replay_tab = False
-        self.mode.set(core.MODE_SINGLE)
-        self._refresh_mode()
-        return self._start()
-
     def _start_single(self):
-        for name in ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST', 'WOT_OFFLINE_ROOF_SHOT_DROP'):
-            os.environ[name] = '0'
         self._replay_tab = False
         self.mode.set(core.MODE_SINGLE)
         self._refresh_mode()
@@ -2751,6 +2723,7 @@ class LauncherWindow(object):
             "bot_lineup_profile": self.bot_lineup_profile.get().strip(),
             "bot_lineup_profiles": self._bot_lineup_store,
             "save_slot": self._save_slot_id,
+            "testing": self.testing_editor.settings(),
             "language": self.language_preference,
             "free_notice_seen": self._free_notice_seen,
             COLLECT_CRASH_REPORTS_SETTING:
@@ -3214,6 +3187,7 @@ class LauncherWindow(object):
         if self._busy:
             self._kill_game()
             return
+        self.testing_editor.apply(single=not replay_path and self.mode.get() == core.MODE_SINGLE)
         status = self._refresh_client()
         selected_profile = self.vehicle_profile.get().strip()
         profile_name = (

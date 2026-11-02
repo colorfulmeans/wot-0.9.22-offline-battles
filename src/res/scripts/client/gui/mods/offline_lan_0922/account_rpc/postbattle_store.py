@@ -574,10 +574,10 @@ def _premium_vehicle_xp_factor_100(type_name):
         from items import vehicles
         vehicle_type = vehicles.getVehicleType(
             _vehicle_type_compact_descr(type_name))
-        factor = float(getattr(vehicle_type, 'premiumVehicleXPFactor', 0.0))
+        from ..xp_coefficients import settlement_factor
+        return settlement_factor(vehicle_type)
     except Exception:
         return 0
-    return max(0, int(round(factor * 100)))
 
 
 def _banked_rewards(receipt):

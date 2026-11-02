@@ -28,6 +28,25 @@ class LayoutTests(unittest.TestCase):
     def edges(self, widget):
         return widget.winfo_rootx(), widget.winfo_rootx() + widget.winfo_width()
 
+    def test_testing_page_scrolls_without_enlarging_window_and_contains_translated_titles(self):
+        a = self.app
+        a.root.geometry('680x940')
+        a.tools_tabs.select(a.testing_panel)
+        a.root.update()
+        editor = a.testing_editor
+        self.assertEqual(3, len(editor.content.winfo_children()))
+        self.assertLess(editor.canvas.winfo_height(), editor.content.winfo_reqheight())
+        titles = [row[0] for row in editor.labels if row[1] in (
+            'Diagnostic logs', 'Test scene', 'Player automatic control')]
+        self.assertEqual(['日志收集', '测试场景', '玩家自动控制'], [w.cget('text') for w in titles])
+        for title in titles:
+            self.assertGreater(title.winfo_y(), 0)
+        editor.canvas.yview_moveto(1)
+        a.root.update()
+        button = next(w for w, en, zh in editor.labels if en == 'Open mouse control panel')
+        self.assertLessEqual(button.winfo_rooty()+button.winfo_height(),
+                            editor.canvas.winfo_rooty()+editor.canvas.winfo_height())
+
     def test_main_action_rows_and_internal_section_titles(self):
         a = self.app
         for width in (680, 820):

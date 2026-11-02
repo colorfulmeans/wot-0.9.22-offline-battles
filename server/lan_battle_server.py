@@ -55,6 +55,7 @@ from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import snapshot_delta
 from gui.mods.offline_lan_0922 import battle_bonds, tank_collision, credit_coefficients
+from gui.mods.offline_lan_0922 import xp_coefficients
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, lineup_slots
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
@@ -11491,12 +11492,16 @@ class BattleState:
             captured=self._completed_capture(kind, vehicle_id, team),
             reward_facts=self._reward_facts(*identity),
             courageous=bool(set(achievements).intersection(COURAGEOUS_RESISTANCE_ACHIEVEMENTS)),
-            vehicle_coefficient=coefficient, breakdown=detail)
+            vehicle_coefficient=coefficient, breakdown=detail,
+            vehicle_xp_factor=xp_coefficients.base_factor(vehicle))
         if detail is not None:
             detail.update(actor=list(identity), vehicle=vehicle, round_id=int(self.round_id),
                 receipt_id='%s:%d:%d' % (self.receipt_namespace, self.round_id, vehicle_id),
                 coefficient_source=('community_2015_row_%d' % source_row if source_row
                                     else 'offline_cohort_estimate'),
+                base_xp_source=('historical_cn_double' if vehicle in xp_coefficients.SPECIAL_BASE_XP_100
+                    else 'unresolved_special_coefficient' if vehicle in xp_coefficients.UNRESOLVED_BASE_XP
+                    else 'offline_default_1x'),
                 achievements=list(achievements))
             _server_log('REWARD BREAKDOWN ' + json.dumps(detail, sort_keys=True, separators=(',', ':')))
         return rewards
