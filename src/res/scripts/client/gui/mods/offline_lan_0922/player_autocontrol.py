@@ -120,7 +120,7 @@ class PlayerControl(object):
             owner._sender.send_current()
             owner._cancel_local_player_burst(apply_settings=True)
         if self.target_engine is not None and owner._avatar is not None:
-            owner._avatar.autoAim(0)
+            owner._avatar.autoAim(None)
         self.target_engine = None
         if changed:
             self.record('disabled', reason=reason)
@@ -288,7 +288,17 @@ class PlayerControl(object):
             return False
         cosine = sum(delta[i] * direction[i] for i in range(3)) / distance
         tolerance = math.atan2(max(0.4, shape[0] * 0.6), distance)
-        return cosine >= math.cos(tolerance) and owner._tactical_ray_clear(tuple(start), aim)
+        aligned = cosine >= math.cos(tolerance)
+        clear = bool(owner._tactical_ray_clear(tuple(start), aim))
+        self.aim_receipt = dict(aligned=aligned, world_clear=clear, distance=distance)
+        return aligned and clear
+
+    def lock_target(self, target):
+        """Avatar.autoAim takes a Vehicle; its cell mailbox takes an integer."""
+        locked = getattr(self.owner._avatar, '_PlayerAvatar__autoAimVehID', None)
+        if self.target_engine != target.id or locked != target.id:
+            self.owner._avatar.autoAim(target)
+            self.target_engine = target.id
 
     def direction_clear(self, position, angle, descriptor, shape, reach=None):
         result = self.owner._direction_probe(position, angle, self.owner._local_speed,
@@ -340,23 +350,28 @@ class PlayerControl(object):
             self._consumables(entity)
         target = records.get(order.get('target_id'))
         if 'fire' in self.features and target is not None:
-            if self.target_engine != target.id:
-                owner._avatar.autoAim(target.id)
-                self.target_engine = target.id
+            self.lock_target(target)
             if order.get('fire_allowed') and self.aimed_at(target):
                 accepted = owner.shoot(sender.aim_yaw, sender.gun_pitch)
                 if accepted:
                     self.record('automatic_fire', target=target.id)
         elif self.target_engine is not None:
-            owner._avatar.autoAim(0)
+            owner._avatar.autoAim(None)
             self.target_engine = None
         if now >= getattr(self, 'next_log', 0.0):
             self.next_log = now + 1.0
+            trace = order.get('control_trace') or {}
+            agent = self.adapter.director.agents.get(owner.client.player_id, {})
             self.record('decision', position=position, speed=owner._local_speed,
                         throttle=sender.forward, turn=sender.turn, target=order.get('target_id'),
                         route=order.get('combat_mode'),
-                        strategic_target=order.get('strategic_move_position'),
-                        local_target=order.get('local_target', order.get('move_position')))
+                        strategic_target=trace.get('strategic_move_position'),
+                        local_target=trace.get('local_target', order.get('move_position')),
+                        route_id=(agent.get('route') or {}).get('id'),
+                        route_index=agent.get('waypoint_index'),
+                        recovery=order.get('recovery_mode'),
+                        aim=getattr(self, 'aim_receipt', None),
+                        locked_target=getattr(owner._avatar, '_PlayerAvatar__autoAimVehID', None))
 
 
 def attach(owner):

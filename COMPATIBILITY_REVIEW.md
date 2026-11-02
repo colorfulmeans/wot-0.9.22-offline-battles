@@ -100,6 +100,33 @@ It now uses BotRuntime's existing receipt predicate, preserving collision, water
 and grade rejection. Regression cases exercise that predicate rather than
 duplicating its implementation. Decision logs include strategic/local targets.
 
+Candidate 24f94133: Tests 41495360675 passed all eight jobs; Windows build
+41495349470 passed all three jobs (windows-580, colorfulmeans-41495349470-1).
+Independent verification again matched 44 launcher modules, 238 server sources,
+231 Python 2.7 client modules, native extension/starter and editor/replay smoke.
+The owner confirmed the grave-key native opening hint in the rebuilt client.
+Round 2's sampled automatic advance moved from (-26,118) to (-44.39,33.87),
+86.12 m displacement, with up to 6.35 m/s in those samples. Round 1 recorded an
+accepted automatic shot. These observations replace the failed early takeover
+claim; whole-map driving and every consumable trigger are not inferred from them.
+The exact countdown-press/live-press sequence has an automated lifecycle test;
+its complete native timing sequence is not yet independently confirmed.
+Native queue acceptance on 917ef28d completed empty-ammo Cancel -> garage ->
+Join -> warning again -> confirm -> populated waiting room, without restart.
+The earlier 917ef28d report (015643-4d237a87981c) passed ZIP integrity; its only
+Python exception class/message was the now-corrected isEnabled AttributeError
+in the visible client. Worker/server logs had no Python exception lines.
+
+The owner then correctly rejected complete aim acceptance: the turret still
+followed the mouse, and accepted automatic shots followed manual crosshair aim.
+The controller passed an integer to Avatar.autoAim; the exact Avatar wrapper
+requires a Vehicle object (only the cell mailbox takes an integer). Lock now
+receives the entity, unlock receives None, and a lost native lock is reacquired.
+Native retest is required; automatic_fire logs alone are not proof of aiming.
+All eight feature combinations have channel-ownership regressions. New help text
+states hull versus turret ownership and next-launch settings. Native per-feature
+and every mouse-panel action acceptance is tracked independently, not inferred.
+
 
 ## Coherent earnings model and gameplay-source re-audit (November 2, evening)
 

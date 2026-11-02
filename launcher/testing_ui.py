@@ -104,6 +104,8 @@ class TestingPanel:
             self.labels.append((widget, en, zh))
         help_text(body, 'Each battle starts under manual control. Press ` to take over or stop; native local messages show the state. Your own loadout remains in use. Chat, menus and dialogs do not toggle control.',
                   '每局默认手动控制。按·键接管或停止，原生本地消息提示状态；保留玩家自己的配装。聊天、菜单及弹窗中不触发切换。')
+        help_text(body, 'Driving owns the hull only; aiming/fire owns target lock and shots. Unchecked features stay manual. Changes apply on the next game launch.',
+                  '自动驾驶只接管车体；自动瞄准与开火接管炮塔锁定及射击。未勾选的功能保留手动操作；更改在下次启动游戏时生效。')
         button = tk.Button(body, command=self.open_controls)
         button.pack(fill='x', pady=(ui_layout.GAP, 0))
         self.labels.append((button, 'Open mouse control panel', '打开鼠标控制面板'))

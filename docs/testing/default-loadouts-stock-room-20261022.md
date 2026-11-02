@@ -14,6 +14,8 @@ Do not validate this build against screenshots expecting those old Repair button
 | Ammo warning cancellation | Empty ammo -> Join -> Cancel -> supply ammo or retry: native validation opens again and successful confirmation reaches waiting room. No restart needed. |
 | Player control off | No input wrapper or automatic vehicle changes. |
 | Player control enabled | Each battle begins manually; grave key toggles once per physical press in arcade, sniper and strategic mode. Chat/input/menu focus does not toggle. Native local message only; no player chat packet. |
+| Countdown key | Press during countdown, release, then press after battle begins; the live toggle still works. A missed countdown release must not latch a later live press. |
+| Automatic planning | Nearby living allies participate in force balance; hidden enemies do not become contacts. A nonempty blocked probe receipt is rejected for collision/water/grade. Movement alone or repeated pivoting is not acceptance. |
 | Mouse/script | Toggle/Stop/Fire and bounded timed driving use the same controller. Driving replaces the automatic writer. Stop clears movement, target lock and pending bursts; next round ignores old journal commands. |
 | Loadout/physics ownership | Actual player modules, rounds, equipment and crew remain intact; the visible player still owns normal physics and shots. No second Bot simulated vehicle is created. |
 | Lifecycle | Death/results/cleanup stop inputs; current handler wrapper is removed without replacing a later third-party wrapper. Rejoin starts manual. |
@@ -39,7 +41,7 @@ These absolute references are authorized offline calibration, not retail data.
 Check both owner-CAS tracks and authority-side modules, healing, re-injury,
 split/slow frames, interrupted repair and no work after all crew are unconscious.
 
-The diagnostic Repair tab has two matched matrix scenes. Baseline has no devices,
+The Testing tab's scene selector has two matched matrix scenes. Baseline has no devices,
 no directive and no learned secondary skills; varied fittings use the same modules
 and crew level with one independently named item/skill case per vehicle. Compare
 the matching vehicle between scenes, not two unrelated tanks. Installed fitting

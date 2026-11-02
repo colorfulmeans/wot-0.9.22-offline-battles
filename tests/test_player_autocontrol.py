@@ -1,5 +1,6 @@
 """Input ownership, bounded script commands, and round lifecycle contracts."""
 import json
+import itertools
 import os
 from pathlib import Path
 import sys
@@ -13,6 +14,48 @@ from gui.mods.offline_lan_0922 import player_autocontrol as control
 
 
 class ControlTests(unittest.TestCase):
+    def test_each_feature_combination_claims_only_its_input_channels(self):
+        for flags in itertools.product((False, True), repeat=3):
+            with self.subTest(flags=flags):
+                self.setUp()
+                self.control.features = {name for name, enabled in zip(
+                    ('drive', 'fire', 'consumables'), flags) if enabled}
+                self.control.active = True
+                self.control._contacts = lambda unused: ([], [], {42: types.SimpleNamespace(id=42)})
+                order = dict(throttle=-1., turn=-.5, brake=False, target_id=42, fire_allowed=True)
+                self.control.adapter = types.SimpleNamespace(decide=lambda *args: order,
+                    director=types.SimpleNamespace(agents={}))
+                entity = types.SimpleNamespace(isAlive=lambda: True, health=100,
+                    typeDescriptor=types.SimpleNamespace(maxHealth=100))
+                self.owner._server_entity = lambda unused: entity
+                self.owner.local_pose = lambda: ((0, 0, 0), 0)
+                self.owner._local_speed = 0
+                self.owner._collision_shape = lambda unused: (1, 2, 0, 1)
+                locks, consumables, shots = [], [], []
+                self.control.lock_target = locks.append
+                self.control._consumables = consumables.append
+                self.control.aimed_at = lambda unused: True
+                self.owner.shoot = lambda *args: shots.append(args) or True
+                self.control.update(.1, 1)
+                self.assertEqual(-1. if flags[0] else 1, self.owner._sender.forward)
+                self.assertEqual(bool(flags[1]), bool(locks))
+                self.assertEqual(bool(flags[1]), bool(shots))
+                self.assertEqual(bool(flags[2]), bool(consumables))
+
+    def test_avatar_lock_receives_vehicle_and_stop_receives_none(self):
+        target = types.SimpleNamespace(id=42)
+        calls = []
+        def native_lock(value):
+            self.assertTrue(value is None or value is target)
+            calls.append(value)
+            self.owner._avatar._PlayerAvatar__autoAimVehID = value.id if value else 0
+        self.owner._avatar.autoAim = native_lock
+        self.control.lock_target(target)
+        self.control.lock_target(target)
+        self.assertEqual([target], calls)
+        self.control.stop()
+        self.assertEqual([target, None], calls)
+
     def test_blocked_direction_receipts_are_not_truthy_clear_corridors(self):
         from test_port_0922_bot_runtime import _load
         self.owner._local_speed = 0
