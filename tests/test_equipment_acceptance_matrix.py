@@ -93,5 +93,33 @@ class AcceptanceMatrixTests(unittest.TestCase):
         self.assertEqual((4,),crew_injuries.injured_seats(roles,facts))
         with self.assertRaises(ValueError):crew_injuries.canonical(dict(facts,wounded=['radioman1']))
 
+    def test_all_equipment_scenes_publish_valid_room_modes_after_round_reset(self):
+        from lan_battle_server import BattleState, Player, CLIENT_BUILD_0922
+        from server_bot_ai import BotPlanner
+        from effective_params_fixture import effective_params as fixture_params
+        from gui.mods.offline_lan_0922.lan_client import LANClient, BOT_TIER_MODES
+        for mode in ('1', '2', '3', '4'):
+            class SceneBattle(BattleState): pass
+            class ScenePlanner(BotPlanner): pass
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1', equipment_test.ENV:mode}):
+                equipment_test.install_server(SceneBattle, ScenePlanner)
+                battle = SceneBattle()
+                battle.client_build = CLIENT_BUILD_0922
+                battle.players[1] = Player(1, None, ('127.0.0.1', 1), team=1, slot=0,
+                    effective_params=fixture_params())
+                # Saved-room settings replay before the actual start wrapper.
+                battle.bot_skill_mode, battle.bot_tier_mode = 'mixed', 'random'
+                battle.request_start(1)
+                self.assertEqual('brutal', battle.bot_skill_mode)
+                self.assertTrue(all(row['skill']=='elite' for row in battle.bot_lineup))
+                self.assertIn(battle.bot_tier_mode, BOT_TIER_MODES)
+                client = LANClient('127.0.0.1', 28782, 'P', 'ussr:MS-1')
+                client.ready, client.phase, client.round_id = True, 'battle', battle.round_id
+                battle._reset_round()
+                client._handle_message(battle.lobby_message())
+                self.assertFalse(client.last_error)
+                self.assertTrue(client.ready)
+                self.assertEqual(('waiting', battle.round_id), (client.phase, client.round_id))
+
 
 if __name__=='__main__': unittest.main()

@@ -27,7 +27,7 @@ class FollowupTests(unittest.TestCase):
             self.assertTrue(all(row['skill']=='elite' for row in battle.initial['bot_lineup']))
             battle.bot_skill_mode, battle.bot_tier_mode = 'mixed', 'random'
             battle.request_start(1)
-            self.assertEqual(('elite','elite'), (battle.bot_skill_mode,battle.bot_tier_mode))
+            self.assertEqual(('brutal','same'), (battle.bot_skill_mode,battle.bot_tier_mode))
             values = _defaults() + (_equipment('removedRpmLimiter',12,11012,tags=('trigger',),
                 enginePowerFactor=1.1,engineHpLossPerSecond=1.5),)
             cache = types.SimpleNamespace(equipmentIDs=lambda:{v.name:v.id[1] for v in values},

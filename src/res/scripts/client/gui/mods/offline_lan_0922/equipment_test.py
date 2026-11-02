@@ -75,8 +75,8 @@ def install_server(battle_class, planner_class):
     original_init = battle_class.__init__
     original_start = battle_class.request_start
     def initialize(self, map_name=None, max_players=30, clock=None, team_size=15, **kwargs):
-        kwargs.update(team1_size=15, team2_size=15, bot_tier_mode='elite',
-                      bot_skill_mode='elite', bot_excluded_vehicles=None,
+        kwargs.update(team1_size=15, team2_size=15, bot_tier_mode='same',
+                      bot_skill_mode='brutal', bot_excluded_vehicles=None,
                       bot_tactics_path=None,
                       bot_lineup=[dict(team=team, slot=slot, vehicle=vehicle, skill='elite')
                                   for team in (1, 2) for slot, vehicle in enumerate(VEHICLES)])
@@ -89,8 +89,8 @@ def install_server(battle_class, planner_class):
     def start(self, player_id, requested_map=None, requested_round_seconds=None,
               battle_mode='regular', training_bots=False):
         # The room UI can replay its saved mixed/random settings after init.
-        self.bot_tier_mode = 'elite'
-        self.bot_skill_mode = 'elite'
+        self.bot_tier_mode = 'same'
+        self.bot_skill_mode = 'brutal'
         return original_start(self, player_id, requested_map='100_thepit',
                               requested_round_seconds=requested_round_seconds,
                               battle_mode=battle_mode, training_bots=training_bots)

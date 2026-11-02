@@ -4949,11 +4949,13 @@ class LANClient(object):
                     equipment=player_equipment_contract,
                     assignments=player_assignments_valid,
                     team_sizes=team_sizes is not None,
+                    bot_tier_mode=bot_tier_mode, bot_skill_mode=bot_skill_mode,
                     host_present=host_player_id in player_ids,
                     authority=_valid_visible_authority_message(message),
                     authority_epoch=authority_epoch,
                     previous_authority_epoch=self.authority_epoch,
-                    server_time=roster_server_time)
+                    server_time=roster_server_time,
+                    server_time_present='server_time_ms' in message)
                 self.last_error = 'invalid roster message'
                 self.stop()
                 return
