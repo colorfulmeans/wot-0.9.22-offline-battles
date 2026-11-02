@@ -90,5 +90,31 @@ class ControlTests(unittest.TestCase):
                 self.control.poll_commands(3)
             self.assertEqual(1, len([r for r in self.records if r[0]=='script_fire']))
 
+    def test_new_round_starts_manual_and_skips_old_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'commands.jsonl'
+            path.write_text('{"action":"toggle"}\n', encoding='utf8')
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_PLAYER_AUTOCONTROL': 'drive',
+                    'WOT_OFFLINE_TEST_CONTROL_FILE': str(path)}), mock.patch.object(control, '_current', None):
+                instance = control.attach(self.owner)
+                self.assertFalse(instance.active)
+                self.assertEqual(path.stat().st_size, instance.command_offset)
+
+    def test_real_input_sender_preserves_manual_input_only_for_unclaimed_features(self):
+        from test_port_0922_battle_runtime import _LANInputSender
+        self.owner._player_autocontrol = self.control
+        sender = _LANInputSender(self.owner)
+        sender.send_current = lambda: True
+        self.control.active = True
+        sender.send_avatar_input(1, 'move', {'flags': 1})
+        self.assertEqual(0, sender.forward)
+        self.control.active = False
+        self.control.override = (2, 1, 0)
+        sender.send_avatar_input(1, 'move', {'flags': 1})
+        self.assertEqual(0, sender.forward)
+        self.control.override = None
+        sender.send_avatar_input(1, 'move', {'flags': 1})
+        self.assertNotEqual(0, sender.forward)
+
 
 if __name__ == '__main__': unittest.main()

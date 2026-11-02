@@ -1947,8 +1947,8 @@ class _LANInputSender(object):
     def send_avatar_input(self, vehicle_id, kind, payload):
         payload = payload if isinstance(payload, dict) else {}
         control = getattr(self.owner, '_player_autocontrol', None)
-        if control is not None and control.active:
-            if kind in ('move', 'cruise') and 'drive' in control.features:
+        if control is not None and (control.active or control.override is not None):
+            if kind in ('move', 'cruise') and (control.override is not None or 'drive' in control.features):
                 return True
             if kind == 'shoot' and 'fire' in control.features:
                 return True

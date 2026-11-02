@@ -1,5 +1,32 @@
 # Special defaults, sandbox crew and stock waiting-room controls
 
+## November 3 integrated test-page baseline
+
+Scene entry is now **Testing -> Test scene -> regular Start**, in either normal
+or diagnostic launcher mode. The previous Repair-page scene buttons are obsolete.
+Logs, scene selection and player control are independent remembered choices.
+Do not validate this build against screenshots expecting those old Repair buttons.
+
+| Case | Required observation |
+| --- | --- |
+| Real desktop, Chinese/English | Three inside-title sections, shared margins/buttons and help text; page scrolls at the normal window height and the mouse-panel button is reachable. |
+| Fixture transitions | Equipment/drop/governor/baseline/matrix/rewards select existing current fixtures; returning to Normal clears every prior scene flag. Network/replay never loads a single-player fixture. |
+| Ammo warning cancellation | Empty ammo -> Join -> Cancel -> supply ammo or retry: native validation opens again and successful confirmation reaches waiting room. No restart needed. |
+| Player control off | No input wrapper or automatic vehicle changes. |
+| Player control enabled | Each battle begins manually; grave key toggles once per physical press in arcade, sniper and strategic mode. Chat/input/menu focus does not toggle. Native local message only; no player chat packet. |
+| Mouse/script | Toggle/Stop/Fire and bounded timed driving use the same controller. Driving replaces the automatic writer. Stop clears movement, target lock and pending bursts; next round ignores old journal commands. |
+| Loadout/physics ownership | Actual player modules, rounds, equipment and crew remain intact; the visible player still owns normal physics and shots. No second Bot simulated vehicle is created. |
+| Lifecycle | Death/results/cleanup stop inputs; current handler wrapper is removed without replacing a later third-party wrapper. Rejoin starts manual. |
+| Credits | Preserve all 375 measured workbook coefficients; derive premium estimate cohort from gold-price eligibility, not incomplete raw roster tags. Type 59 remains 1.5750. |
+| XP | Gold Type 59 / Type 62 / WZ111T base XP x2 precedes scoreboard/mission/account bonuses exactly once; ordinary premium IX/X has +5% settlement XP. Unresolved Churchill III / ordinary WZ111 base coefficients are labelled in diagnostics. |
+| Governor wear | Whole seconds below half base forward speed; split frames equal a slow frame. Disabled/half-speed periods clear the partial wear clock for both owners. |
+
+Automated evidence is in test_player_autocontrol, test_testing_panel,
+test_launcher_layout, test_governor_wear_clock and the existing queue/rewards
+consumer suites. Installation/decision logs alone are not proof of successful
+movement, damage, give-up or every consumable effect. Candidate cloud and native
+acceptance remain separately identified in COMPATIBILITY_REVIEW.md.
+
 ## November 2 repair/directive acceptance baseline
 
 Repair expectations now use physical workforce, not one time for every crew:
