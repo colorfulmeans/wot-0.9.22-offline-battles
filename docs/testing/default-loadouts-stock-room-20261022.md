@@ -37,6 +37,77 @@ All 228 client Python source modules compiled under CPython 2.7.18. Three old
 repair lifecycle assertions were updated to the explicit three-person 16 s
 reference; their regen-cap, yellow-state and second-destruction checks remain.
 
+Native iteration evidence (not final-package acceptance): runtime 40936163,
+build colorfulmeans-41398643599-1, session 20261102T065544Z-7312209835cb,
+report wot-error-report-20261102-151042-7312209835cb.zip. Both processes admitted
+all fifteen fitting cases; the worker recorded a real track-repair start with
+four conscious physical members, repairSpeed 0.6270000008493661 and calculated
+10.9090908943 seconds. The frame advanced 0 -> 0.8827056897 HP over 0.1069946 s.
+This is a real consumer start, not a completed repair or a per-vehicle retail
+calibration. One player shot intent reached both visible client and worker.
+No fire consumer was triggered. The round's waiting roster was rejected, so
+this session is a failed full-lifecycle acceptance, despite successful fitting
+and repair observations. Its explicitly requested shutdown had no crash roles.
+
+Build colorfulmeans-41404212831-1, baseline session
+20261102T072548Z-b80fe25a7137, installed no devices/directives for all fifteen
+cases and reported native repairSpeed=0.57 throughout. Its new roster-rejection
+diagnostic showed all static/equipment/assignment gates valid; source review
+identified invalid diagnostic room vocabulary (`elite` in both room-mode fields).
+The repair uses same/brutal and preserves per-slot elite skills. All four scenes
+now pass an actual server-reset -> shipping-client roster round trip. The four
+affected protocol/equipment files passed after that correction. Earlier fdb2b7e6
+cloud failure was a packaged Tk smoke adapter missing `_t`; 4006096c's failure
+was the rejection logger's relative import in the standalone test adapter.
+Both adapters were corrected; final cloud/native results must supersede these
+intermediate failures before calling the package accepted.
+
+### Final November 2 afternoon package acceptance
+
+Runtime f53ed00acc992942e378d2593bc35ef1053b132a, build identity
+colorfulmeans-41407829058-1. Cloud Tests 41407834004 passed all eight jobs;
+Windows package build 41407829058 passed all three jobs. Artifact 13124064708
+is 124,908,088 bytes; downloaded SHA-256:
+c5cae3ecf66f37d1515eae688922e079c8d316016cce951cab9e4485ca3607ce.
+Independent extraction verified CRC, path/symlink safety, x64 EXE, x86 native
+module, both outer launch entries, bundled server sources and all 228 shipping
+Python-2.7 module signatures against the final source. Package location:
+D:/Games/wot-mod/9.22/PR119-f53ed00a; download PR119-f53ed00a-Windows-x64.zip.
+The final four isolated equipment/protocol files passed 291 tests, including
+the actual room-reset round trip for all four diagnostic modes. The complete
+1930-test affected suite preceded that one added regression; final cloud runs
+cover the corrected files, rather than reusing the intermediate suite as a
+claim about the final SHA. Packaged diagnostic labels were checked in Chinese,
+switched to English and back; all five labels refreshed without clipping.
+
+Actual final Windows session: 20261102T075947Z-cd41af7e6bf2, SU-152 player,
+Mittengard 15:15 varied-fitting diagnostic scene. Visible and worker logs each
+accepted all fifteen named fitting cases. Both recorded player shot
+1:p:1:1 / input 4479 / launch_ms 157340. Two worker track-repair starts recorded
+four conscious members, native factor 0.6270000008493661 and reconstructed
+10.9090908943-second repair time. The round ended by capture, displayed the native
+victory result and restored the garage. Opening the next waiting room succeeded;
+the server retained its player connection until the explicit launcher stop.
+No roster rejection, transport failure, Python traceback, assertion, worker
+failure or fatal error was found in any of the four session logs.
+
+Report generated through the final package:
+wot-error-report-20261102-161331-cd41af7e6bf2.zip (11,275,371 bytes), under the
+isolated PR119-40936163-QA/Local/WoTOfflineBattles/reports directory. Report CRC
+passed and all four complete log members were present. The session ended at
+2026-11-02T08:12:03.184231+00:00 with no crash roles or crash dumps. Local audit
+record: build/equipment-repair-final-native-audit.json (not shipped source).
+
+Limits remain explicit: native repair observations are consumer starts, not a
+timed completed repair for every vehicle. This session did not trigger a fire
+consumer or terminal wounded-member XP case; those transitions have automated
+coverage, not new manual gameplay proof. Absolute repair/fire/module parameters
+remain documented offline reconstruction. The 790 packed vehicle/common
+definitions contain no healthRegenPerSec, healthBurnPerSec or hysteresisHealth
+fields; their absence is not replaced with a claimed native numerical table.
+Documentation-only acceptance commits after this runtime do not alter the
+validated binary identity.
+
 
 ## Current follow-up: fire, consumables, priorities and diagnostic scenes
 

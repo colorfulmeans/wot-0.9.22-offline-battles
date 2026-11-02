@@ -43,6 +43,15 @@ and `fire_consumer` record actual consumer transitions. Fire's absolute hull/mod
 rates and module hysteresis remain explicitly unverified calibrations; no new
 retail claim is made. The ordinary equipment, governor and bridge entries remain.
 
+Native acceptance found a diagnostic-only room contract defect: `elite` is a
+per-slot skill tier, neither a room vehicle-level mode nor a room difficulty
+preset. The equipment scenes now retain valid room modes `same` / `brutal` while
+every explicit Bot assignment still carries `skill=elite`. The regression uses
+the actual BattleState reset and shipping LANClient roster validator for all
+four equipment scenes; it does not relax roster admission. Rejected rosters
+now record each validation gate in diagnostic mode. A separate packaged Tk
+smoke owner was updated for live translation of the five diagnostic labels.
+
 
 ## Equipment, consumables and community-law follow-up (November 2)
 
