@@ -64,11 +64,14 @@ class PlayerNavigation(object):
         tags = descriptor.type.tags
         self.tag = next((t for t in bot_tactics.CLASSES if t in tags), 'mediumTank')
         self.routes = route_candidates(catalog, int(owner.client.team), self.tag)
+        bases = graph.get('objective_bases') or ()
+        self.home = tuple(bases[int(owner.client.team)-1][:2]) if len(bases)==2 else None
         settings = bot_tactics.map_settings(profile, name)
         for route in settings.get('routes', ()):
             if bot_tactics.matches(route, dict(team=int(owner.client.team), slot=0,
                                              profile=dict(class_tag=self.tag))):
                 self.routes.append(dict(route, id='user_'+route['id'], waypoints=route['points']))
+        self.selection = self.routes
         self.navigator = TerrainNavigator(owner._navigation_ground, owner._navigation_obstacle,
             graph.get('bounds'), 18., baked_graph=graph)
         from ..native_navigation_query import Oracle
@@ -89,6 +92,12 @@ class PlayerNavigation(object):
     def _height(self, point, hint):
         return self.navigator.grid._ground(float(point[0]), float(point[1]), hint)
 
+    def retask(self, routes):
+        self.selection = list(routes)
+        self.route = self.index = self.candidates = self.search = self.pending = None
+        self.retry_at = 0.
+        self.receipt = dict(status='player_retask')
+
     def join(self, position, now):
         """Rank all points in 3D, then require an actual connected path.
 
@@ -102,7 +111,7 @@ class PlayerNavigation(object):
         if self.candidates is None:
             self.join_origin = tuple(position)
             candidates = []
-            for route in self.routes:
+            for route in getattr(self, 'selection', self.routes):
                 for index, point in enumerate(route.get('waypoints', ())):
                     height = self._height(point, position[1])
                     if height is None:

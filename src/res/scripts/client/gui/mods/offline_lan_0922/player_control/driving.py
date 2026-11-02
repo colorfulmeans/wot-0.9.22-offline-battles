@@ -12,6 +12,7 @@ class Driver(object):
         self.anchor = None
         self.reverse_until = 0.
         self.recovery_heading = None
+        self.recovery_origin = None
         self.replan = False
         self.receipt = {}
 
@@ -39,8 +40,10 @@ class Driver(object):
             if self.recovery_heading is not None:
                 heading = self.recovery_heading
                 delta = angle(heading-yaw)
-                if abs(delta) < .18:
+                if self.recovery_origin is not None and math.hypot(
+                        position[0]-self.recovery_origin[0],position[2]-self.recovery_origin[2]) >= 3.:
                     self.recovery_heading = None
+                    self.replan = True
             # Pivot toward an objective behind the vehicle, never reverse
             # toward it. A nearby steering tip is not a parking endpoint.
             if abs(delta) > .30:
@@ -58,6 +61,7 @@ class Driver(object):
                 choices = [heading+offset for offset in (.55, -.55, 1., -1.)]
                 self.recovery_heading = next((h for h in choices if clear(h, 5.)), None)
                 if self.recovery_heading is not None:
+                    self.recovery_origin = tuple(position)
                     mode, brake = 'detour_align', False
                     turn = 1. if angle(self.recovery_heading-yaw) > 0 else -1.
             if self.anchor is None:
@@ -72,7 +76,7 @@ class Driver(object):
                 self.anchor = (tuple(position), yaw, now)
                 # Reverse only after measured nonprogress plus a proved clear
                 # rear corridor. It is bounded and cannot steer toward a hill.
-                if mode in ('blocked', 'travel') and clear(yaw+math.pi, 4.):
+                if mode in ('blocked', 'travel', 'align', 'detour_align') and clear(yaw+math.pi, 4.):
                     self.reverse_until = now+1.
                     mode, throttle, turn, brake = 'reverse_clearance', -1., 0., False
         self.receipt = dict(mode=mode, distance=distance, heading=heading,

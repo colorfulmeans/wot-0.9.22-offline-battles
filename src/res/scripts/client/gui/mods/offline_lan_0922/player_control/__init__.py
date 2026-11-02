@@ -43,6 +43,9 @@ class PlayerControl(object):
         self.owner, self.features, self.notify = owner, set(features), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
+        self.strategy = None
+        self.next_strategy = 0.
+        self.handover_burst = None
         self.aim_receipt = None
         self.next_decision = 0.0
         self.last_decision = None
@@ -107,6 +110,7 @@ class PlayerControl(object):
         from .navigation import PlayerNavigation
         from .weapon import Weapon
         from .ammunition import Ammunition
+        from .strategy import Strategy
         from ..gun_mechanics import _field
         from ..default_loadouts import descriptor_roles
         gun = owner._gun_state
@@ -116,15 +120,20 @@ class PlayerControl(object):
                   for i, shot in enumerate(gun.shots)]
         shells.sort(key=lambda row: (('standard', 'premium', 'he').index(roles[row['index']])
                     if row['index'] in roles else row['index']))
-        self.ammo_policy = Ammunition(shells, shells[0]['index'], gun.shot_index, gun.clip_size)
+        self.ammo_policy = Ammunition(shells, shells[0]['index'], gun.shot_index, gun.clip_size,
+                                     artillery='SPG' in entity.typeDescriptor.type.tags)
+        if gun.ammo[gun.shot_index] <= 0:
+            self.ammo_policy.protected = False
         self.navigation = PlayerNavigation(owner, entity.typeDescriptor) if 'drive' in self.features else None
+        self.strategy = Strategy()
+        self.next_strategy = 0.
         self.weapon = Weapon(owner)
         if 'fire' in self.features:
             self.weapon.bind()
         self.active = True
         self.last_decision = None
         self.next_decision = 0.0
-        self.record('enabled', features=sorted(self.features))
+        self.record('enabled', features=sorted(self.features), inventory=list(gun.ammo), shells=shells)
         self.notify(u'【测试】玩家自动控制已开启。')
         return True
 
@@ -136,6 +145,7 @@ class PlayerControl(object):
             self.navigation.close()
         self.navigation = None
         self.ammo_policy = None
+        self.strategy = None
         if self.weapon is not None:
             self.weapon.close()
         self.weapon = None
@@ -149,6 +159,8 @@ class PlayerControl(object):
             if not isinstance(getattr(owner, '_local_fire_intent', None), dict):
                 owner._cancel_local_player_burst(apply_settings=True)
                 owner._defer_cancel_native_shot_wait()
+            else:
+                self.handover_burst = owner._local_fire_intent.get('player_burst')
         self.target_engine = None
         if changed:
             self.record('disabled', reason=reason)
@@ -240,6 +252,7 @@ class PlayerControl(object):
             row = dict(id=target.id, team=team, position=point,
                        health=target.health, max_health=target.typeDescriptor.maxHealth,
                        alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw),
+                       pitch=float(target.matrix.pitch), roll=float(target.matrix.roll),
                        collision_shape=owner._collision_shape(target.typeDescriptor))
             neighbours.append(row)
             # Actual presentation visibility, not the omniscient LAN roster.
@@ -295,10 +308,16 @@ class PlayerControl(object):
             abs(float(row.get('slope', 0.))) <= math.tan(math.radians(25.)))
 
     def shot_committed(self, event, pending):
+        if (self.handover_burst is not None and pending.get('player_burst') is self.handover_burst):
+            if self.owner._local_player_burst is self.handover_burst:
+                self.owner._cancel_local_player_burst()
+                self.owner._rescale_current_reload(self.owner._gun_state,pending['reload_factor'])
+            self.handover_burst = None
         if self.active and 'fire' in self.features and self.ammo_policy is not None:
             self.ammo_policy.launch(str(event['projectile_id']), int(event['shell_index']),
                                     self.target_engine, self.owner._clock())
             self.weapon.fired = True
+            self.weapon.committed += 1
             self.record('shot_committed', projectile=event['projectile_id'], shell=event['shell_index'])
 
     def shot_hit(self, event):
@@ -390,33 +409,63 @@ class PlayerControl(object):
             target = next((t for t in candidates if self.firing_lane(t)), None)
         self.aim_receipt = None
         if target is not None:
+            from ..gun_mechanics import _field
+            from .weapon import barrel_aligned
             self.target_engine = target.id
             point = self.target_point(target)
             self.weapon.aim(target.id, point, now)
             start, direction = owner._mutable_shot_ray()
-            delta = tuple(point[i]-start[i] for i in range(3))
-            distance = math.sqrt(sum(v*v for v in delta))
-            tolerance = math.atan2(max(.3, owner._collision_shape(target.typeDescriptor)[0]*.5), distance)
-            aligned = (distance > .1 and sum(delta[i]*direction[i] for i in range(3))/distance >= math.cos(tolerance))
+            distance = math.sqrt(sum((point[i]-start[i])**2 for i in range(3)))
             gun = owner._gun_state
+            shot = gun.shots[gun.shot_index]
+            aligned = barrel_aligned(start,direction,float(_field(shot,'speed')),
+                float(_field(shot,'gravity')),point,max(.3,owner._collision_shape(target.typeDescriptor)[0]*.5))
             base = gun.base_dispersion*owner._local_stat_factor(entity, 'dispersion')
             factor = owner._native_dispersion_angle()/base if base > 0 else float('inf')
             self.aim_receipt = dict(target=target.id, point=point, aligned=aligned, distance=distance,
                                     client_mode=owner._avatar.gunRotator.clientMode)
             if aligned and gun.can_fire(True) and self.weapon.ready(now, factor):
                 accepted = self.weapon.trigger()
-                self.record('automatic_fire', target=target.id, accepted=accepted)
+                self.record('automatic_fire', target=target.id, accepted=accepted,
+                            native=self.weapon.trigger_receipt)
         else:
             self.target_engine = None
-            if self.weapon is not None:
-                self.weapon.target = None
+            if 'fire' in self.features and self.weapon is not None:
+                self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
         if 'drive' in self.features and self.navigation is not None:
+            from .traffic import Traffic, body
+            peers = [r for r in neighbours if r['team']==int(owner.client.team) or r.get('visible') or not r['alive']]
+            traffic = Traffic(body(entity.id,position,yaw,shape,
+                getattr(owner,'_local_pitch',0.),getattr(owner,'_local_roll',0.)),peers)
             state = dict(id=owner.client.player_id, position=position, yaw=yaw,
                          speed=owner._local_speed, now=now, half_length=shape[1], half_width=shape[0])
             def clear(angle, reach=None):
-                return self.direction_clear(position, angle, entity.typeDescriptor, shape, reach)
+                return (traffic.clear(angle, reach or 5.) and
+                        self.direction_clear(position, angle, entity.typeDescriptor, shape, reach))
             hold = bool(target is not None and self.aim_receipt['distance'] <= 150.)
+            if now>=self.next_strategy:
+                self.next_strategy=now+1.
+                base=(owner._rules_state.get('bases') or {}).get(str(owner.client.team),{})
+                redirect=self.strategy.decide(now,self.navigation.routes,self.navigation.route,
+                    contacts,[r for r in peers if r['team']==int(owner.client.team)],
+                    base,self.navigation.home,engaged=hold)
+                if redirect is not None:
+                    self.navigation.retask(redirect)
+                    self.record('player_strategy',decision=self.strategy.receipt)
+            if self.strategy.mode=='defend' and self.navigation.home is not None:
+                home=self.navigation.home
+                # A distant incidental target cannot pin the defender on the
+                # wrong side of the map. Fire may continue while returning.
+                hold=bool(target is not None and math.hypot(
+                    target.position[0]-home[0],target.position[2]-home[1])<100. and
+                    self.aim_receipt['distance']<=150.)
             order = self.navigation.decide(state, clear, hold=hold)
+            if not traffic.can_turn(order['turn']):
+                opposite=-order['turn']
+                order['turn'] = opposite if traffic.can_turn(opposite) else 0.
+                order['throttle'] = 0.
+                order['recovery_mode'] = 'vehicle_turn_clearance'
+            order['traffic'] = traffic.receipt
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()
@@ -446,4 +495,3 @@ def attach(owner):
     _current.record('attached', features=sorted(_current.features), command_file=path,
                     implementation='foreground_independent_v2')
     return _current
-

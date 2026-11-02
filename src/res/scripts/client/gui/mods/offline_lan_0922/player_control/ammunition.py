@@ -3,12 +3,13 @@ from __future__ import division
 
 
 class Ammunition(object):
-    def __init__(self, shells, main, loaded, clip_size=1):
+    def __init__(self, shells, main, loaded, clip_size=1, artillery=False):
         self.shells = shells
         self.main = main
         self.desired = loaded
         self.protected = True
         self.clip_size = max(1, clip_size)
+        self.artillery = artillery
         self.phase = loaded
         self.fired = self.failures = 0
         self.target = None
@@ -76,18 +77,18 @@ class Ammunition(object):
                 continue
             shell = next(s for s in self.shells if s['index'] == row['shell'])
             main = next(s for s in self.shells if s['index'] == self.main)
-            success = row['damage'] > 0 or row['penetrated']
+            success = row['damage'] > 0
             he_main = main['kind'] == 'HIGH_EXPLOSIVE'
-            if he_main and row['shell'] == self.main:
+            if he_main and row['shell'] == self.main and not self.artillery:
                 success = row['penetrated']
             if success:
                 self.failures = 0
-            elif row['hit']:
+            elif row['hit'] or (self.artillery and not row['vehicle_contact']):
                 self.failures += 1
             available = self.available(inventory)
             # Alternate HE returns after two fired rounds, irrespective of hits;
             # HE-primary's AP probe returns after one. A live clip is retained.
-            limit = self.clip_size if self.clip_size > 1 else (1 if he_main else 2)
+            limit = self.clip_size if self.clip_size > 1 else (1 if he_main and not self.artillery else 2)
             if (row['shell'] != self.main and self.fired >= limit and
                     (he_main or shell['kind'] == 'HIGH_EXPLOSIVE' or self.clip_size > 1)):
                 self.desired = self.main if self.main in available else self.choose(inventory)

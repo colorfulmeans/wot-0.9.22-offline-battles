@@ -1,3 +1,30 @@
+# November 3 player traffic, forward barrel and private strategic orders
+
+The 289a2651 package (build colorfulmeans-41523140230-1) passed all eight CI
+jobs and independent frozen-source/235-client-module inspection. Native report
+wot-error-report-20261103-052258-0e365b705886.zip records real automatic enemy
+damage and correctly received post-terminal penetration results, main/reserve
+rejoins and travel beyond the previously oscillating pit corner. User confirmed
+travel improvement and manual HE return. It did NOT pass vehicle/wreck avoidance;
+that gap is fixed in the following player-only candidate and requires retest.
+
+Player Traffic uses real chassis footprints, vertical separation and swept
+translation/rotation queries, including wrecks and overlap escape. It makes no
+Bot allocation or motion changes. The unengaged gun now aims forward with hull
+heading. Strategy owns only the human: canonical home-base capture points or
+invaders preempt route travel; a five-second clear interval rejoins connected
+routes. Observed-front support uses visible enemy counts minus .25 per living
+ally within 100 m of route segments, an eight-second stable proposal and a
+20-second switch cooldown. These are labelled custom player test-controller
+rules, not claimed retail AI. No unspotted enemy positions score a front.
+
+The next candidate also fixes synchronous accepted-fire diagnostics, curve-aware
+barrel alignment, SPG splash feedback, an empty selected shell on entry, and
+accepted-burst handover without changing the common burst implementation. Tests
+cover the new player geometry/strategy branches separately from native claims.
+The test loadout must include all three actual shell stocks; the normal player
+fitting and Bot ammo configuration are not rewritten.
+
 # November 3 foreground-only player-control replacement candidate
 
 Rollback commit ffa14996 removes the failed b2cf35b7 module and restores the

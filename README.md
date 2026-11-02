@@ -19,7 +19,7 @@ replaced by the scene selector. Network/replay launches never inherit a
 single-player fixture.
 
 With player control enabled, every battle still starts manually. The physical
-grave key left of `1` toggles takeover; chat/input/menu focus suppresses it.
+grave key left of `1` toggles takeover; chat/input/menu focus suppresses it. Player decisions run in the visible client in an independent module, with private route/defence, vehicle-and-wreck clearance, native aiming/trigger and ammunition-result state. They do not register a Bot or call Bot driving, gunnery or shell policies.
 Native local battle messages show the state without sending a player chat
 message. Driving, aim/fire and consumables can be enabled separately. Open the
 mouse control panel for Toggle, Stop, Fire, or one-second driving commands.

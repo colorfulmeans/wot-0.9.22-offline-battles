@@ -20,6 +20,10 @@ normal human physics/projectiles and the existing trusted-LAN authority.
 | Travel | Behind-tank targets pivot before forward travel. Near local tips are not reverse goals. Rear recovery requires measured nonprogress and a clear rear corridor, stays latched for one bounded maneuver. Reject mountain/water/cliff receipts. |
 | Rejoin | Rank main and reserve routes in 3D, then prove connected support. Overhead bridge snapping and disconnected nearest nodes cannot win. |
 | Handover | No discarded accepted shot or burst; restore manual fire/aim. Repeated toggle, countdown press, death and battle change tested separately. |
+| Player traffic | Real friendly hulls and corpses block swept travel; adjacent clear directions remain usable; an overhead hull cannot block a lower road. Record blocker identities and actual pose. |
+| Player strategy | Own-base capture preempts travel; distant incidental targets cannot pin the defender. Clearing alarm rejoins routes. Only stable observed front pressure can redirect this human; no Bot orders change. |
+| Forward barrel | With automatic fire enabled but no selected enemy, gun follows hull heading; disabling fire takeover restores manual aim. |
+| Three-shell test | Carry positive standard/premium/HE stock. Two confirmed ineffective hits switch to next available shell; positive HP damage resets failure count; HE returns on its bounded probe. |
 | Panel | Click Toggle, Stop, Fire and each timed direction; verify actual pose/ammo, not command append alone. |
 
 Automated replacement cases: test_player_control. Native acceptance must record

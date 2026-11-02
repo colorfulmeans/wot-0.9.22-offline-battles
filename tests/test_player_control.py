@@ -15,6 +15,9 @@ from gui.mods.offline_lan_0922 import player_control
 from gui.mods.offline_lan_0922.player_control.ammunition import Ammunition
 from gui.mods.offline_lan_0922.player_control.driving import Driver, angle
 from gui.mods.offline_lan_0922.player_control.weapon import Weapon
+from gui.mods.offline_lan_0922.player_control.weapon import barrel_aligned
+from gui.mods.offline_lan_0922.player_control.traffic import Traffic, body
+from gui.mods.offline_lan_0922.player_control.strategy import Strategy
 from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation, route_candidates
 
 
@@ -141,8 +144,14 @@ class PlayerRegressionTests(unittest.TestCase):
 
     def test_native_aim_source_is_restored_after_takeover(self):
         source=lambda:'manual'
-        rotator=types.SimpleNamespace(_VehicleGunRotator__shotPointSourceFunctor=source,
-                                     clientMode=False)
+        class Rotator:
+            clientMode=False
+            def __init__(self):self._VehicleGunRotator__shotPointSourceFunctor=source
+            @property
+            def shotPointSourceFunctor(self):return self._VehicleGunRotator__shotPointSourceFunctor
+            @shotPointSourceFunctor.setter
+            def shotPointSourceFunctor(self,value):self._VehicleGunRotator__shotPointSourceFunctor=value
+        rotator=Rotator()
         owner=types.SimpleNamespace(_avatar=types.SimpleNamespace(gunRotator=rotator,autoAim=lambda t:None),
              _mutable_shot_ray=lambda:((0,1,0),(0,0,1)),_vector=tuple)
         w=Weapon(owner);w.aim(42,(5,1,20),1)
@@ -151,6 +160,81 @@ class PlayerRegressionTests(unittest.TestCase):
         w.close()
         self.assertIs(source,rotator.shotPointSourceFunctor)
         self.assertFalse(rotator.clientMode)
+
+    def test_native_synchronous_commit_counts_as_accepted_without_pending_intent(self):
+        owner=types.SimpleNamespace(_local_fire_intent=None)
+        w=Weapon(owner)
+        def shoot():w.committed+=1
+        owner._avatar=types.SimpleNamespace(shoot=shoot,isWaitingForShot=True)
+        self.assertTrue(w.trigger())
+        self.assertEqual(1,w.trigger_receipt['committed_during_call'])
+
+    def test_firing_alignment_uses_gravity_not_straight_target_ray(self):
+        theta=.5*math.asin(10.*400./100.**2)
+        self.assertTrue(barrel_aligned((0,0,0),(0,math.sin(theta),math.cos(theta)),100,10,(0,0,400),.1))
+        self.assertFalse(barrel_aligned((0,0,0),(0,0,1),100,10,(0,0,400),.1))
+
+    def test_unengaged_barrel_faces_forward_in_world_yaw(self):
+        w=Weapon(types.SimpleNamespace());w.bind=lambda:None
+        w.forward((10,0,20),math.pi/2,1.)
+        self.assertAlmostEqual(110,w.point[0]);self.assertAlmostEqual(20,w.point[2])
+        self.assertIsNone(w.target)
+
+    def test_spg_splash_damage_does_not_count_as_failed_penetration(self):
+        p=Ammunition([dict(index=0,kind='HIGH_EXPLOSIVE'),dict(index=1,kind='HIGH_EXPLOSIVE')],0,0,artillery=True)
+        for i in range(3):
+            p.launch(str(i),0,42,i)
+            p.hit(dict(projectile_id=str(i),damage=100,shot_result=1))
+            p.terminal(dict(projectile_id=str(i),hit_vehicle=True),i)
+            p.settle([20,5],i)
+        self.assertEqual(0,p.desired);self.assertEqual(0,p.failures)
+
+    def traffic(self,point,alive=True):
+        return Traffic(body(1,(0,0,0),0,(1.5,3.5,-.5,2.)),
+            [dict(id=2,position=point,yaw=0,collision_shape=(1.5,3.5,-.5,2.),alive=alive)])
+
+    def test_friend_ahead_blocks_forward_but_keeps_a_side_exit(self):
+        t=self.traffic((0,0,8))
+        self.assertFalse(t.clear(0,6))
+        self.assertIn(2,t.receipt['blockers'])
+        self.assertTrue(t.clear(math.pi/2,6))
+
+    def test_wreck_uses_the_same_clearance_as_a_live_vehicle(self):
+        self.assertFalse(self.traffic((0,0,8),False).clear(0,6))
+
+    def test_vehicle_on_overhead_bridge_does_not_block_ground(self):
+        self.assertTrue(self.traffic((0,8,8)).clear(0,6))
+
+    def test_initial_overlap_can_escape_backwards(self):
+        self.assertTrue(self.traffic((0,0,5)).clear(math.pi,4))
+
+    def test_base_alarm_preempts_front_and_clearance_rejoins_routes(self):
+        s=Strategy();routes=[dict(id='main',waypoints=[(0,0),(0,100)])]
+        result=s.decide(0,routes,routes[0],[],[],dict(points=10,invaders=1),(0,0),True)
+        self.assertEqual('player_base_defence',result[0]['id'])
+        self.assertIsNone(s.decide(2,routes,None,[],[],{},(0,0)))
+        self.assertEqual(routes,s.decide(6,routes,None,[],[],{},(0,0)))
+
+    def test_front_support_requires_stable_observed_pressure_and_cooldown(self):
+        s=Strategy();routes=[dict(id='a',waypoints=[(0,0),(0,400)]),dict(id='b',waypoints=[(300,0),(300,400)])]
+        contacts=[dict(position=(300,0,100))]*3
+        self.assertIsNone(s.decide(0,routes,routes[0],contacts,[],{},(0,0)))
+        self.assertIsNone(s.decide(7,routes,routes[0],contacts,[],{},(0,0)))
+        self.assertEqual([routes[1]],s.decide(9,routes,routes[0],contacts,[],{},(0,0)))
+        self.assertIsNone(s.decide(10,routes,routes[1],[],[],{},(0,0)))
+
+    def test_handover_preserves_admitted_burst_then_cancels_future_subshots(self):
+        burst={};events=[]
+        owner=types.SimpleNamespace(_local_fire_intent=dict(player_burst=burst),_local_player_burst=burst,
+            _sender=types.SimpleNamespace(send_current=lambda:True),_gun_state=object(),
+            _cancel_local_player_burst=lambda **kw:events.append('cancel'),
+            _rescale_current_reload=lambda *a:events.append('reload'))
+        c=player_control.PlayerControl(owner,('fire',));c.active=True;c.live=lambda:False
+        c.record=lambda *a,**kw:None
+        c.stop()
+        self.assertEqual([],events)
+        c.shot_committed({},dict(player_burst=burst,reload_factor=1.))
+        self.assertEqual(['cancel','reload'],events)
 
     def test_native_trigger_owns_call_and_releases_authorization_on_error(self):
         owner=types.SimpleNamespace(_local_fire_intent=None)
