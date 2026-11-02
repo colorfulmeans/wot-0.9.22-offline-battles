@@ -1,3 +1,31 @@
+# November 3 foreground-only player-control replacement candidate
+
+Rollback commit ffa14996 removes the failed b2cf35b7 module and restores the
+pre-introduction BattleRuntime from 0e4146f7. Replacement owns decisions solely in
+player_control/{__init__,navigation,driving,ammunition,weapon}. No Bot scheduler,
+agent, driving law, firing policy or shell policy is called by that package.
+Unrelated earnings, queue and governor-wear fixes are retained. Bot gameplay
+sources are unchanged by this replacement.
+
+Exact #1513 VehicleGunRotator.__set_shotPointSourceFunctor accepts a callable;
+None restores its default. __onTick reads that callable in clientMode and runs
+the native speed-limited rotation path. The old Avatar.autoAim lock disabled
+clientMode while its offline cell did not provide equivalent barrel tracking.
+The replacement instead owns the source, uses clientMode true, and restores the
+saved source/mode on disable. Avatar.shoot calls base.vehicle_shoot before
+__startWaitingForShot; the dedicated synchronous trigger authorizes that mailbox
+without bypassing the native wait/muzzle/audio handshake.
+
+Report wot-error-report-20261103-043206-d8306b7102a5.zip confirms oscillating
+reverse_turn/avoid near fixed route tips. Server source publishes projectile
+impact before combat effects. The previous controller removed the pending shot
+on impact, so following positive damage could not update its ammo policy. New
+pending results wait for combat receipts; unknown is never counted as failure.
+
+Local component regressions and package/native acceptance are separate. This
+candidate is not accepted until actual motion, aiming, fire, handover and panel
+channels are exercised in Windows. Earlier candidate sections below are history.
+
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
 ## Integrated test controls and reward coefficient follow-up (November 3)

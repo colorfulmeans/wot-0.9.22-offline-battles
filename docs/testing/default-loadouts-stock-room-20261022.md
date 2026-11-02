@@ -1,5 +1,31 @@
 # Special defaults, sandbox crew and stock waiting-room controls
 
+## November 3 foreground-only player replacement baseline
+
+The b2cf35b7 implementation is withdrawn, not an accepted baseline. Its source
+was removed in ffa14996 and BattleRuntime restored to pre-control 0e4146f7 before
+replacement. The new player_control package owns its own driving, recovery,
+weapon/aiming, shell-result state and consumable choices in the visible client.
+It imports no BotRuntime, BotAdapter, LocalDriver, Bot gunner or Bot ammo policy.
+Shared services are immutable map/fitting data, terrain search, native geometry,
+normal human physics/projectiles and the existing trusted-LAN authority.
+
+| Case | Required observation |
+| --- | --- |
+| Foreground fence | No controller in hidden worker or replay. No Bot actor/allocation registration. Bot control sources unchanged from the rollback boundary, except unrelated earlier governor-wear correction retained. |
+| All feature masks | Each of eight drive/fire/consumables combinations claims only its channels. Overall off attaches no controller. |
+| Aim | Native shotPointSourceFunctor owns the target point with clientMode true. Mouse may move camera, never the automatic barrel. Disable restores the previous source/mode. |
+| Native shot | Trigger through Avatar.shoot, then its normal mailbox/wait/muzzle path. Actual ammo, visible muzzle and damage must settle; sound requires native observation. |
+| Results | Projectile impact is published before combat effects. Vehicle contact without effect is pending, then unknown if no receipt arrives; never synthesize a failed penetration. Repeated real penetrations cannot switch to HE. |
+| Travel | Behind-tank targets pivot before forward travel. Near local tips are not reverse goals. Rear recovery requires measured nonprogress and a clear rear corridor, stays latched for one bounded maneuver. Reject mountain/water/cliff receipts. |
+| Rejoin | Rank main and reserve routes in 3D, then prove connected support. Overhead bridge snapping and disconnected nearest nodes cannot win. |
+| Handover | No discarded accepted shot or burst; restore manual fire/aim. Repeated toggle, countdown press, death and battle change tested separately. |
+| Panel | Click Toggle, Stop, Fire and each timed direction; verify actual pose/ammo, not command append alone. |
+
+Automated replacement cases: test_player_control. Native acceptance must record
+exact package identity and individual passes/failures below COMPATIBILITY_REVIEW.
+Earlier Bot-adapter force-balance expectations are historical and superseded.
+
 ## November 3 integrated test-page baseline
 
 Scene entry is now **Testing -> Test scene -> regular Start**, in either normal
@@ -15,15 +41,15 @@ Do not validate this build against screenshots expecting those old Repair button
 | Player control off | No input wrapper or automatic vehicle changes. |
 | Player control enabled | Each battle begins manually; grave key toggles once per physical press in arcade, sniper and strategic mode. Chat/input/menu focus does not toggle. Native local message only; no player chat packet. |
 | Countdown key | Press during countdown, release, then press after battle begins; the live toggle still works. A missed countdown release must not latch a later live press. |
-| Automatic planning | Nearby living allies participate in force balance; hidden enemies do not become contacts. A nonempty blocked probe receipt is rejected for collision/water/grade. Movement alone or repeated pivoting is not acceptance. |
-| Mouse/script | Toggle/Stop/Fire and bounded timed driving use the same controller. Driving replaces the automatic writer. Stop clears movement, target lock and pending bursts; next round ignores old journal commands. |
+| Automatic planning | The player owns no Bot force-balance actor; hidden enemies do not become contacts. A nonempty blocked probe receipt is rejected for collision/water/grade. Movement alone or repeated pivoting is not acceptance. |
+| Mouse/script | Toggle/Stop/Fire and bounded timed driving use the same controller. Driving replaces the automatic writer. Stop clears movement and its aim source, while admitted shots/bursts settle; next round ignores old journal commands. |
 | Loadout/physics ownership | Actual player modules, rounds, equipment and crew remain intact; the visible player still owns normal physics and shots. No second Bot simulated vehicle is created. |
 | Lifecycle | Death/results/cleanup stop inputs; current handler wrapper is removed without replacing a later third-party wrapper. Rejoin starts manual. |
 | Credits | Preserve all 375 measured workbook coefficients; derive premium estimate cohort from gold-price eligibility, not incomplete raw roster tags. Type 59 remains 1.5750. |
 | XP | Gold Type 59 / Type 62 / WZ111T base XP x2 precedes scoreboard/mission/account bonuses exactly once; ordinary premium IX/X has +5% settlement XP. Unresolved Churchill III / ordinary WZ111 base coefficients are labelled in diagnostics. |
 | Governor wear | Whole seconds below half base forward speed; split frames equal a slow frame. Disabled/half-speed periods clear the partial wear clock for both owners. |
 
-Automated evidence is in test_player_autocontrol, test_testing_panel,
+Automated evidence is in test_player_control, test_testing_panel,
 test_launcher_layout, test_governor_wear_clock and the existing queue/rewards
 consumer suites. Installation/decision logs alone are not proof of successful
 movement, damage, give-up or every consumable effect. Candidate cloud and native
