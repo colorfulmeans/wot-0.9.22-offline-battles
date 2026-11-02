@@ -1946,15 +1946,6 @@ class _LANInputSender(object):
 
     def send_avatar_input(self, vehicle_id, kind, payload):
         payload = payload if isinstance(payload, dict) else {}
-        control = getattr(self.owner, '_player_autocontrol', None)
-        if control is not None and (control.active or control.override is not None):
-            if kind in ('move', 'cruise') and (control.override is not None or 'drive' in control.features):
-                return True
-            if kind == 'shoot' and control.active and 'fire' in control.features:
-                # No canonical launch was admitted. #1513 starts its native
-                # shot wait AFTER this mailbox returns; False schedules the
-                # existing deferred cancellation instead of stranding it.
-                return False
         if kind == 'move':
             flags = int(payload.get('flags', 0))
             self.forward = _movement_throttle(flags)
@@ -2410,7 +2401,6 @@ class BattleRuntime(object):
         self._round_finished_notified = False
         self._on_local_leave = None
         self._battle_live = True
-        self._player_autocontrol = None
         self._prebattle_deadline = None
         self._pending_bot_creates = {}
         self._pending_bot_create_order = []
@@ -4388,9 +4378,6 @@ class BattleRuntime(object):
         if not self._worker_mode:
             self._binding.arena_period('battle', duration)
         self._battle_live = True
-        if not self._worker_mode and not self._replay_mode:
-            from . import player_autocontrol
-            self._player_autocontrol = player_autocontrol.attach(self)
         if refresh_movement:
             # The countdown reticle already raised isOnArena, so #1513's
             # __setIsOnArena(True) skips its normal current-input refresh.
@@ -13130,10 +13117,6 @@ class BattleRuntime(object):
             attacker_kind = 'player'
         attacker_record = self._records.get(
             '%s:%s' % (attacker_kind, attacker))
-        control = getattr(self, '_player_autocontrol', None)
-        if (control is not None and not cosmetic and attacker_kind == 'player' and
-                attacker == self.client.player_id):
-            control.shot_hit(event)
         if attacker is not None and attacker_record is None:
             if not self._missing_projectile_attacker_allowed(event):
                 raise RuntimeError(
@@ -13971,17 +13954,6 @@ class BattleRuntime(object):
                 'cursor_logs': 0,
             })
         self._local_fire_intent = None
-        burst = pending.get('player_burst')
-        if (burst is not None and burst.get('stop_after_pending') and
-                self._local_player_burst is burst):
-            # Handover cannot revoke a launch already admitted by the server.
-            # Settle that subshot once, then cancel only future burst rounds.
-            self._cancel_local_player_burst()
-            if gun is not None:
-                self._rescale_current_reload(gun, reload_factor)
-        control = getattr(self, '_player_autocontrol', None)
-        if control is not None:
-            control.shot_committed(event, pending)
         if gun is not None:
             self._run_optional_feature(
                 'local shot ammunition', self._publish_ammo_state,
@@ -15439,9 +15411,6 @@ class BattleRuntime(object):
         return True
 
     def _apply_projectile_terminal_event(self, event):
-        control = getattr(self, '_player_autocontrol', None)
-        if control is not None:
-            control.shot_terminal(event)
         projectile_id = event.get('projectile_id')
         if projectile_id is None:
             raise RuntimeError('projectile terminal event has no id')
@@ -19811,13 +19780,6 @@ class BattleRuntime(object):
             if self._battle_live and not self._worker_mode and not self._replay_mode:
                 self._local_frame_stages = stages if profiling else None
                 try:
-                    control = getattr(self, '_player_autocontrol', None)
-                    if control is not None:
-                        try:
-                            control.update(dt, now)
-                        except Exception as error:
-                            control.stop('controller_error')
-                            self._warn_optional_failure('player automatic control', error)
                     self._drive_local(dt)
                     self._advance_local_player_burst()
                 finally:
@@ -31422,11 +31384,6 @@ class BattleRuntime(object):
 
     def _cancel_local_player_burst(self, apply_settings=False):
         burst = self._local_player_burst
-        pending = self._local_fire_intent
-        if (apply_settings and burst is not None and isinstance(pending, dict) and
-                pending.get('player_burst') is burst):
-            burst['stop_after_pending'] = True
-            return burst
         self._local_player_burst = None
         if burst is not None and self._gun_state is not None:
             gun = self._gun_state
@@ -32134,10 +32091,6 @@ class BattleRuntime(object):
             raise cleanup_error
 
     def _cleanup(self):
-        control = getattr(self, '_player_autocontrol', None)
-        if control is not None:
-            control.close()
-            self._player_autocontrol = None
         self._stack_pressure_params = {}
         self._stack_pressure_sample_times = {}
         self._impact_descents = {}

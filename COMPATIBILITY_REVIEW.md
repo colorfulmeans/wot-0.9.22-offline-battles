@@ -13109,3 +13109,12 @@ compile with Python 2.7. Native checkbox/button matrix, handover firing and
 actual enemy damage remain pending on the replacement package. No native pass
 from the failed previous candidate transfers to these changed control paths.
 
+
+## November 3 withdrawal of the first player-control implementation
+
+The b2cf35b7 candidate failed native acceptance: oscillating forward/reverse travel,
+manual aim interference, missing firing presentation, and terminal-before-combat
+ammunition feedback. The first implementation is removed before replacement.
+BattleRuntime is restored byte-for-byte to 0e4146f7 (before 18983a25 introduced
+player control). Unrelated queue, earnings and governor-wear fixes are retained.
+Bot policy, driving and navigation owners are not changed by this withdrawal.
