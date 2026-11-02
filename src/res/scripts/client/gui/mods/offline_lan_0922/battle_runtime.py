@@ -1950,8 +1950,11 @@ class _LANInputSender(object):
         if control is not None and (control.active or control.override is not None):
             if kind in ('move', 'cruise') and (control.override is not None or 'drive' in control.features):
                 return True
-            if kind == 'shoot' and 'fire' in control.features:
-                return True
+            if kind == 'shoot' and control.active and 'fire' in control.features:
+                # No canonical launch was admitted. #1513 starts its native
+                # shot wait AFTER this mailbox returns; False schedules the
+                # existing deferred cancellation instead of stranding it.
+                return False
         if kind == 'move':
             flags = int(payload.get('flags', 0))
             self.forward = _movement_throttle(flags)
@@ -13127,6 +13130,10 @@ class BattleRuntime(object):
             attacker_kind = 'player'
         attacker_record = self._records.get(
             '%s:%s' % (attacker_kind, attacker))
+        control = getattr(self, '_player_autocontrol', None)
+        if (control is not None and not cosmetic and attacker_kind == 'player' and
+                attacker == self.client.player_id):
+            control.shot_hit(event)
         if attacker is not None and attacker_record is None:
             if not self._missing_projectile_attacker_allowed(event):
                 raise RuntimeError(
@@ -13964,6 +13971,9 @@ class BattleRuntime(object):
                 'cursor_logs': 0,
             })
         self._local_fire_intent = None
+        control = getattr(self, '_player_autocontrol', None)
+        if control is not None:
+            control.shot_committed(event, pending)
         if gun is not None:
             self._run_optional_feature(
                 'local shot ammunition', self._publish_ammo_state,
@@ -15421,6 +15431,9 @@ class BattleRuntime(object):
         return True
 
     def _apply_projectile_terminal_event(self, event):
+        control = getattr(self, '_player_autocontrol', None)
+        if control is not None:
+            control.shot_terminal(event)
         projectile_id = event.get('projectile_id')
         if projectile_id is None:
             raise RuntimeError('projectile terminal event has no id')

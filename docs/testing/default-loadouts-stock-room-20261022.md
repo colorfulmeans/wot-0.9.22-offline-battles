@@ -853,3 +853,29 @@ Automated fixtures cover those model/transaction branches; they must not be
 labelled observed Windows outcomes from this session. Static targets can end
 the small-map fixture through capture; use normal battles for sustained combat
 samples. Mission thresholds and bond award rules remain unchanged.
+# Independent player control acceptance additions, November 3
+
+The previous candidate's zero-output/friendly-hit run is a failure. Replace the
+old isolated-Bot force-balance expectation with independent human control:
+
+- Player remains a human actor. No Bot agent, fitting, allocation slot or Bot
+  navigator state is created/changed by takeover. All feature masks preserve
+  unclaimed manual input channels.
+- Fire during takeover must not enter an unacknowledged stock shot wait. Test
+  left/right clicks, repeated manual/auto toggles and subsequent manual shots
+  through ammo decrease, accepted projectile and enemy damage, not sound alone.
+- With a friendly hull between player and enemy, auto fire is held; after it
+  clears, actual enemy damage is required. Static LOS alone is insufficient.
+- Occluded contacts do not cause combat parking. Main and reserve points both
+  enter 3D nearest-connected selection. Ground below a bridge cannot snap to
+  the upper support layer. Record join status/goal/path and route index.
+- Elite reaction/opening patience, actual player dispersion and reload apply.
+  Preserve the manually chosen first round; afterward use actual carried
+  stock/premium/HE rounds and the existing admitted-result switch policy.
+  Player inventory/fitting never receives the elite Bot premium-only upgrade.
+- Complete the native checkbox matrix and every mouse-panel action, including
+  timed-drive expiry, Stop, panel-close Stop and starting the next round manual.
+
+Automated player tests cover 22 cases at this candidate; native replacement
+acceptance remains pending and must be recorded separately.
+

@@ -13072,3 +13072,38 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# November 3: independent player control repair candidate
+
+The 75bff5c3 native test FAILED acceptance. Four admitted shots hit allied Bot
+12 while the lock target was enemy Bot 30; static-world LOS did not test the
+intervening friendly hull. The native target lock itself worked, but neither
+locking nor an admitted trigger proved useful automatic combat. A second round
+held an occluded target with `world_clear=false`. The user's manual-fire failure
+matches the reviewed #1513 sequence: `base.vehicle_shoot()` returns before
+`__startWaitingForShot()`, while takeover incorrectly acknowledged suppressed
+manual triggers. These are failures, not passing tests.
+
+The replacement owns player route selection, navigator/driver instances,
+engagement clock and ammunition policy separately. It does not register a Bot,
+call BotRuntime's adapter, consume lane capacity or change Bot assignments.
+Only immutable current map/route configuration and shared low-level geometry,
+native vehicle input, gun transaction and damage rules are reused. It ranks
+main and reserve route points in 3D and requires a connected path whose entry
+support agrees with the actual player's layer. Searches are bounded across
+frames; no disconnected bridge-layer snap may authorize travel.
+
+Suppressed native fire now returns False through the existing deferred native
+acknowledgement cancellation. The player-owned input wrapper consumes left and
+right mouse buttons only during automatic aiming/fire. Stopping releases lock,
+movement and stale native shot wait without cancelling an accepted transaction.
+Attack candidates require world LOS and a live-ally/wreck hull-clear lane; a
+blocked contact cannot create a stationary combat hold. Elite reaction and
+opening-aim timing use rating 1.0. Player inventory and fitting are retained;
+the currently selected round is protected through its first admitted shot,
+then the existing non-premium-forcing ShotPolicy consumes committed results.
+
+Local evidence: 22 player input/navigation tests and all 232 client modules
+compile with Python 2.7. Native checkbox/button matrix, handover firing and
+actual enemy damage remain pending on the replacement package. No native pass
+from the failed previous candidate transfers to these changed control paths.
+

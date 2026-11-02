@@ -14,6 +14,71 @@ from gui.mods.offline_lan_0922 import player_autocontrol as control
 
 
 class ControlTests(unittest.TestCase):
+    def test_suppressed_native_trigger_is_rejected_not_fake_acknowledged(self):
+        from test_port_0922_battle_runtime import _LANInputSender
+        self.owner._player_autocontrol = self.control
+        sender = _LANInputSender(self.owner)
+        self.control.active = True
+        self.assertIs(False, sender.send_avatar_input(1, 'shoot', {}))
+        self.control.stop()
+        shots = []
+        self.owner.shoot = lambda *args: shots.append(args) or True
+        self.assertTrue(sender.send_avatar_input(1, 'shoot', {}))
+        self.assertEqual(1, len(shots))
+        self.assertIn('cancel_wait', self.bursts)
+
+    def test_mouse_fire_and_lock_owned_only_during_fire_takeover(self):
+        class Handler:
+            def handleKeyEvent(self, event): return 'manual'
+        handler = Handler()
+        self.owner._avatar.inputHandler = handler
+        self.control.input_available = lambda: True
+        keys = types.SimpleNamespace(KEY_GRAVE=41, KEY_LEFTMOUSE=256, KEY_RIGHTMOUSE=257)
+        with mock.patch.dict(sys.modules, {'Keys':keys,
+                'game':types.SimpleNamespace(convertKeyEvent=lambda event:event)}):
+            self.control.bind_input()
+            self.control.active = True
+            for key in (256,257):
+                for down in (True,False):
+                    self.assertIs(True,handler.handleKeyEvent((down,key,0,False)))
+            self.control.features.remove('fire')
+            self.assertEqual('manual',handler.handleKeyEvent((True,256,0,False)))
+            self.control.features.add('fire')
+            self.control.active = False
+            self.assertEqual('manual',handler.handleKeyEvent((True,257,0,False)))
+            self.control.close()
+
+    def test_friendly_hull_blocks_fire_even_when_static_world_ray_is_clear(self):
+        self.owner.client.team = 1
+        self.owner._mutable_shot_ray = lambda: ((0,1,0),(0,0,1))
+        self.owner._collision_shape = lambda td:(1,2,0,2)
+        self.owner._tactical_ray_clear = lambda *args:True
+        blocker = (dict(kind='bot',network_id=3),object(),(0,0,5))
+        self.owner._bot_lane_rows = lambda source,accept: (blocker,)
+        self.owner._bot_lane_row_contact = lambda rows,path: blocker
+        target = types.SimpleNamespace(id=42,position=(0,0,20),typeDescriptor=object())
+        self.assertFalse(self.control.firing_lane(target))
+        self.owner._bot_lane_row_contact = lambda rows,path:None
+        self.assertTrue(self.control.firing_lane(target))
+
+    def test_manual_selected_round_is_preserved_then_normal_policy_takes_over(self):
+        from gui.mods.offline_lan_0922.ammo_policy import ShotPolicy
+        profile = dict(shells=[dict(index=0,kind='ARMOR_PIERCING'),
+                              dict(index=1,kind='HIGH_EXPLOSIVE')])
+        self.control.ammo_policy = ShotPolicy(profile)
+        self.control.ammo_policy.phase = self.control.ammo_policy.desired = 1
+        self.control.active = self.control.preserve_first = True
+        self.owner._gun_state = types.SimpleNamespace(ammo=[20,5],shot_index=1,pending_index=None)
+        self.owner.local_pose = lambda:((0,0,0),0)
+        self.control.select_ammo() # Must not require or call the switching interface.
+        self.control.shot_committed(dict(projectile_id='p1',shot_seq=1,shell_index=1),{})
+        self.assertFalse(self.control.preserve_first)
+        self.assertEqual(0,self.control.ammo_policy.desired)
+        self.control.shot_hit(dict(projectile_id='p1',damage=0,shot_result=1))
+        self.control.shot_terminal(dict(projectile_id='p1'))
+        self.control.shot_terminal(dict(projectile_id='p1'))
+        self.assertEqual({},self.control.shots)
+
     def test_each_feature_combination_claims_only_its_input_channels(self):
         for flags in itertools.product((False, True), repeat=3):
             with self.subTest(flags=flags):
@@ -21,10 +86,10 @@ class ControlTests(unittest.TestCase):
                 self.control.features = {name for name, enabled in zip(
                     ('drive', 'fire', 'consumables'), flags) if enabled}
                 self.control.active = True
-                self.control._contacts = lambda unused: ([], [], {42: types.SimpleNamespace(id=42)})
+                self.control._contacts = lambda unused: ([], [], {42: types.SimpleNamespace(id=42, position=(2,0,2))})
                 order = dict(throttle=-1., turn=-.5, brake=False, target_id=42, fire_allowed=True)
-                self.control.adapter = types.SimpleNamespace(decide=lambda *args: order,
-                    director=types.SimpleNamespace(agents={}))
+                self.control.navigation = types.SimpleNamespace(decide=lambda *args, **kw: order,
+                    receipt={})
                 entity = types.SimpleNamespace(isAlive=lambda: True, health=100,
                     typeDescriptor=types.SimpleNamespace(maxHealth=100))
                 self.owner._server_entity = lambda unused: entity
@@ -35,6 +100,12 @@ class ControlTests(unittest.TestCase):
                 self.control.lock_target = locks.append
                 self.control._consumables = consumables.append
                 self.control.aimed_at = lambda unused: True
+                self.control.firing_lane = lambda unused: True
+                self.control.select_ammo = lambda: None
+                self.control.engagement = dict(id=42, at=0, fired=False)
+                self.owner._gun_state = types.SimpleNamespace(base_dispersion=.1, can_fire=lambda live: True)
+                self.owner._native_dispersion_angle = lambda: .1
+                self.owner._local_stat_factor = lambda *args: 1
                 self.owner.shoot = lambda *args: shots.append(args) or True
                 self.control.update(.1, 1)
                 self.assertEqual(-1. if flags[0] else 1, self.owner._sender.forward)
@@ -76,6 +147,8 @@ class ControlTests(unittest.TestCase):
             _battle_result=None, _worker_mode=False, _replay_mode=False,
             _server=types.SimpleNamespace(vehicle_id=1), _sender=sender,
             _avatar=types.SimpleNamespace(autoAim=lambda value: None),
+            _local_fire_intent=None, _defer_cancel_native_shot_wait=lambda: self.bursts.append('cancel_wait'),
+            _local_physics=dict(rotSpd=.5),
             _cancel_local_player_burst=lambda **kw: self.bursts.append(kw),
             shoot=lambda *args: True)
         self.control = control.PlayerControl(self.owner, ['drive', 'fire'], self.messages.append)
@@ -107,7 +180,7 @@ class ControlTests(unittest.TestCase):
         self.assertIsNone(self.control.override)
         self.assertEqual((0, 0, False), (self.owner._sender.forward,
             self.owner._sender.turn, self.owner._sender.handbrake))
-        self.assertEqual(2, len(self.bursts))
+        self.assertEqual(4, len(self.bursts))
         self.assertEqual(2, len(self.sent))
 
     def test_invalid_drive_and_nonlive_commands_cannot_move_player(self):
@@ -135,7 +208,7 @@ class ControlTests(unittest.TestCase):
         self.control.toggle = lambda: toggles.append(True)
         control._current = self.control
         self.addCleanup(lambda: setattr(control, '_current', None))
-        with mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_GRAVE=41),
+        with mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_GRAVE=41,KEY_LEFTMOUSE=256,KEY_RIGHTMOUSE=257),
                 'game': types.SimpleNamespace(convertKeyEvent=lambda event: event)}):
             self.control.bind_input()
             self.assertTrue(handler.handleKeyEvent((True, 41, 0, False)))
@@ -173,7 +246,7 @@ class ControlTests(unittest.TestCase):
             handler.isDetached = True
             self.assertFalse(self.control.input_available())
 
-    def test_visible_allies_populate_force_balance_without_exposing_hidden_enemies(self):
+    def test_player_contacts_exclude_allies_and_hidden_enemies_without_bot_agents(self):
         td = types.SimpleNamespace(maxHealth=100)
         ally = types.SimpleNamespace(id=11, position=(1, 0, 2), health=70,
             typeDescriptor=td, matrix=types.SimpleNamespace(yaw=0), isAlive=lambda: True)
@@ -181,21 +254,16 @@ class ControlTests(unittest.TestCase):
             typeDescriptor=td, matrix=types.SimpleNamespace(yaw=0), isAlive=lambda: True,
             isStarted=True)
         self.owner.client.team = 1
+        self.owner._collision_shape = lambda unused:(1,2,0,2)
         self.owner._records = {
             'ally': dict(ready=True, engine_id=11, state=dict(team=1)),
             'enemy': dict(ready=True, engine_id=12, state=dict(team=2), spot_visible=False)}
         self.owner._server_entity = {11: ally, 12: enemy}.get
-        agents = {}
-        self.control.adapter = types.SimpleNamespace(director=types.SimpleNamespace(agents=agents),
-            register=lambda identity, team, descriptor, name: agents.update({identity: dict(team=team)}),
-            forget=lambda identity: agents.pop(identity, None))
         contacts, neighbours, records = self.control._contacts(types.SimpleNamespace(id=1))
         self.assertEqual([], contacts)
         self.assertEqual({}, records)
         self.assertEqual(2, len(neighbours))
-        self.assertEqual((1, 0, 2), agents[11]['position'])
-        self.assertEqual(.7, agents[11]['health_fraction'])
-        self.assertNotIn(12, agents)
+        self.assertFalse(hasattr(self.control, 'adapter'))
 
     def test_partial_journal_line_waits_and_complete_command_runs_once(self):
         with tempfile.TemporaryDirectory() as directory:

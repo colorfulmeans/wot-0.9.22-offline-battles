@@ -38,7 +38,13 @@ class PlayerControl(object):
     def __init__(self, owner, features, notify=native_message):
         self.owner, self.features, self.notify = owner, set(features), notify
         self.active = self.key_down = False
-        self.adapter = None
+        self.navigation = None
+        self.ammo_policy = None
+        self.shots = {}
+        self.engagement = None
+        self.aim_receipt = None
+        self.preserve_first = False
+        self.desired_range = 200.
         self.next_decision = 0.0
         self.last_decision = None
         self.command_offset = 0
@@ -59,6 +65,12 @@ class PlayerControl(object):
         def key_event(event):
             import game
             down, key, mods, repeat = game.convertKeyEvent(event)
+            import Keys
+            if (self.active and 'fire' in self.features and self.input_available() and
+                    key in (Keys.KEY_LEFTMOUSE, Keys.KEY_RIGHTMOUSE)):
+                # Consume before native shoot()/autoAim() start their own
+                # handshake or cancel the lock. Camera movement is untouched.
+                return True
             if not repeat and handle_key(down, key, mods):
                 return True
             return original(event)
@@ -95,12 +107,18 @@ class PlayerControl(object):
             return False
         # This uses the same checked authored routes and short-range driver as
         # the Bot adapter. It does not register another simulated vehicle.
-        bots = owner._bots
-        self.adapter = bots._new_adapter(owner._start_message['map'],
-                                         owner._start_message.get('round_id', 0))
-        self.adapter.register(owner.client.player_id, owner.client.team,
-                              entity.typeDescriptor, 'Player test')
-        self.adapter.navigation_target = self.navigation_target
+        from .player_navigation import PlayerNavigation
+        from .ammo_policy import ShotPolicy
+        from .ai.planner import build_vehicle_profile, _shell_profiles
+        self.navigation = PlayerNavigation(owner, entity.typeDescriptor)
+        profile = build_vehicle_profile(entity.typeDescriptor)
+        profile['shells'] = _shell_profiles(dict(gun=dict(shots=owner._gun_state.shots)))
+        profile.pop('bot_tier', None)  # Never upgrade a player's inventory.
+        self.desired_range = float(profile['desired_range'])
+        self.ammo_policy = ShotPolicy(profile)
+        self.ammo_policy.phase = self.ammo_policy.desired = owner._gun_state.shot_index
+        self.preserve_first = True
+        self.engagement = None
         self.active = True
         self.last_decision = None
         self.next_decision = 0.0
@@ -112,13 +130,20 @@ class PlayerControl(object):
         changed = self.active or self.override is not None
         self.active = False
         self.override = None
-        self.adapter = None
+        if self.navigation is not None:
+            self.navigation.close()
+        self.navigation = None
+        self.ammo_policy = None
+        self.shots.clear()
+        self.engagement = None
         owner = self.owner
         if owner._sender is not None and changed:
             owner._sender.forward = owner._sender.turn = 0.0
             owner._sender.handbrake = False
             owner._sender.send_current()
             owner._cancel_local_player_burst(apply_settings=True)
+            if not isinstance(getattr(owner, '_local_fire_intent', None), dict):
+                owner._defer_cancel_native_shot_wait()
         if self.target_engine is not None and owner._avatar is not None:
             owner._avatar.autoAim(None)
         self.target_engine = None
@@ -140,11 +165,6 @@ class PlayerControl(object):
                 else:
                     del handler.handleKeyEvent
             self.input_binding = None
-        navigator = getattr(getattr(self.owner, '_bots', None), 'navigator', None)
-        if navigator is not None:
-            identity = -1000000 - abs(int(self.owner.client.player_id))
-            navigator.bot_states.pop(identity, None)
-            navigator.boundary_bodies.pop(identity, None)
         self.closed = True
         if _current is self:
             _current = None
@@ -202,22 +222,6 @@ class PlayerControl(object):
         self.record('command', command=command)
         return True
 
-    def navigation_target(self, player_id, position, goal, strategic, state):
-        navigator = self.owner._bots.navigator
-        if navigator is None or goal is None:
-            # Hold when a terrain path cannot be proved.
-            return position
-        # Separate planning/cache identity; no Bot pose, loadout or physics
-        # state is installed for the human vehicle.
-        identity = -1000000 - abs(int(player_id))
-        navigator.set_boundary_body(identity, position, state['yaw'],
-                                    state['half_length'], state['half_width'])
-        target = navigator.next_target(identity, position, goal,
-            ('player_test', identity, strategic.get('route_id'), strategic.get('route_index'),
-             strategic.get('combat_mode')), state['now'], strategic.get('route_anchor'))
-        state['navigation_stop_at_target'] = navigator.target_is_terminal(identity)
-        return target
-
     def _contacts(self, entity):
         owner = self.owner
         contacts, neighbours, records = [], [], {}
@@ -228,29 +232,84 @@ class PlayerControl(object):
             if target is None or target.id == entity.id:
                 continue
             point = tuple(target.position)
-            row = dict(id=target.id, team=(record.get('state') or {}).get('team', 0), position=point,
+            team = int((record.get('state') or {}).get('team', 0))
+            row = dict(id=target.id, team=team, position=point,
                        health=target.health, max_health=target.typeDescriptor.maxHealth,
-                       alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw))
+                       alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw),
+                       collision_shape=owner._collision_shape(target.typeDescriptor))
             neighbours.append(row)
-            if row['team'] == owner.client.team:
-                # The isolated director must see friendly force, too. Neighbour
-                # collision rows alone do not populate its strategic roster.
-                # These are pure planning records, never simulated entities.
-                if row['alive']:
-                    agents = self.adapter.director.agents
-                    if target.id not in agents:
-                        self.adapter.register(target.id, row['team'], target.typeDescriptor,
-                                              'Observed ally')
-                    agents[target.id].update(position=point,
-                        health_fraction=float(row['health']) / max(1., row['max_health']))
-                else:
-                    self.adapter.forget(target.id)
             # Actual presentation visibility, not the omniscient LAN roster.
-            if row['team'] != owner.client.team and row['alive'] and target.isStarted and record.get('spot_visible', False):
+            if team in (1, 2) and team != int(owner.client.team) and row['alive'] and target.isStarted and record.get('spot_visible', False):
                 row.update(visible=True)
                 contacts.append(row)
                 records[target.id] = target
         return contacts, neighbours, records
+
+    def firing_lane(self, target):
+        """Check the target ray against world, live allies and dead hulls."""
+        owner = self.owner
+        start, unused = owner._mutable_shot_ray()
+        shape = owner._collision_shape(target.typeDescriptor)
+        point = tuple(target.position)
+        aim = (point[0], point[1] + max(.5, shape[3]*.5), point[2])
+        world = bool(owner._tactical_ray_clear(tuple(start), aim))
+        rows = owner._bot_lane_rows(None, lambda record, state, vehicle:
+            not record.get('local') and vehicle.id != target.id and
+            (not vehicle.isAlive() or int(state.get('team', 0)) == int(owner.client.team)))
+        contact = owner._bot_lane_row_contact(rows, (tuple(start), aim))
+        return world and contact is None
+
+    def shot_committed(self, event, pending):
+        if not self.active or 'fire' not in self.features or self.ammo_policy is None:
+            return
+        policy = self.ammo_policy
+        sequence = int(event['shot_seq'])
+        group = int(event.get('burst_group_seq', sequence))
+        count = int(event.get('burst_count', 1))
+        position, unused = self.owner.local_pose()
+        policy.launch(sequence, int(event['shell_index']), group, count,
+                      dict(x=position[0], z=position[2]), self.target_engine)
+        self.shots[str(event['projectile_id'])] = dict(sequence=sequence, hit=False,
+                                                     damage=0., penetrated=False)
+        if self.preserve_first:
+            self.preserve_first = False
+            from .ammo_policy import stages
+            choices = stages(policy.profile, self.owner._gun_state.ammo)
+            if choices:
+                policy.desired = int(choices[0]['index'])
+        if self.engagement is not None:
+            self.engagement['fired'] = True
+        self.record('shot_committed', projectile=event['projectile_id'], shell=event['shell_index'])
+
+    def shot_hit(self, event):
+        row = self.shots.get(str(event.get('projectile_id')))
+        if row is not None:
+            row['hit'] = True
+            row['damage'] += max(0., float(event.get('damage', 0)))
+            row['penetrated'] = row['penetrated'] or event.get('shot_result') == 2
+
+    def shot_terminal(self, event):
+        row = self.shots.pop(str(event.get('projectile_id')), None)
+        if row is not None and self.ammo_policy is not None:
+            row['hit'] = row['hit'] or bool(event.get('hit_vehicle'))
+            self.ammo_policy.resolve(row['sequence'], row['hit'], row['damage'], row['penetrated'])
+            self.record('shot_terminal', projectile=event['projectile_id'], **row)
+
+    def select_ammo(self):
+        from .gun_mechanics import _field
+        gun, policy = self.owner._gun_state, self.ammo_policy
+        if policy is None or self.preserve_first or self.owner._local_fire_intent is not None:
+            return
+        selected = policy.choose(dict(ammo_remaining=gun.ammo))
+        if selected != gun.shot_index and selected != gun.pending_index:
+            settings = self.owner._runtime.constants.VEHICLE_SETTING
+            # After the protected loaded round, a single-shot gun can start
+            # reloading the policy's next choice now. A live cassette queues
+            # it without throwing away its remaining rounds.
+            code = settings.CURRENT_SHELLS if gun.clip_size <= 1 or gun.clip <= 0 else settings.NEXT_SHELLS
+            self.owner.change_vehicle_setting(code,
+                                             _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
+            self.record('ammo_queued', shell=selected)
 
     def _consumables(self, entity):
         from . import equipment_mechanics
@@ -289,7 +348,7 @@ class PlayerControl(object):
         cosine = sum(delta[i] * direction[i] for i in range(3)) / distance
         tolerance = math.atan2(max(0.4, shape[0] * 0.6), distance)
         aligned = cosine >= math.cos(tolerance)
-        clear = bool(owner._tactical_ray_clear(tuple(start), aim))
+        clear = self.firing_lane(target)
         self.aim_receipt = dict(aligned=aligned, world_clear=clear, distance=distance)
         return aligned and clear
 
@@ -301,11 +360,14 @@ class PlayerControl(object):
             self.target_engine = target.id
 
     def direction_clear(self, position, angle, descriptor, shape, reach=None):
+        from .ai.driver import NAVIGATION_MAX_GRADE
         result = self.owner._direction_probe(position, angle, self.owner._local_speed,
                                              descriptor, reach, shape[0])
         # The engine seam returns a receipt dictionary, not a Boolean. A
         # nonempty blocked receipt must never be treated as a clear corridor.
-        return self.owner._bots._probe_is_clear(result)
+        return isinstance(result, dict) and bool(result.get('clear')) and not any(
+            result.get(key) for key in ('collision', 'water', 'cliff', 'blocked')) and (
+            abs(float(result.get('slope', 0.))) <= NAVIGATION_MAX_GRADE)
 
     def update(self, dt, now):
         if not self.live():
@@ -338,37 +400,52 @@ class PlayerControl(object):
         state = dict(id=owner.client.player_id, slot=0, position=position, yaw=yaw,
                      speed=owner._local_speed, dt=step, now=now, health=entity.health,
                      max_health=entity.typeDescriptor.maxHealth, contacts=contacts,
-                     neighbours=neighbours, half_width=shape[0], half_length=shape[1], collision_shape=shape)
+                     neighbours=neighbours, half_width=shape[0], half_length=shape[1], collision_shape=shape,
+                     turn_speed_limit=float((owner._local_physics or {}).get('rotSpd', 0.)))
         def clear(angle, reach=None):
             return self.direction_clear(position, angle, entity.typeDescriptor, shape, reach)
-        order = self.adapter.decide(state, clear)
+        # This planner owns only the human vehicle; no Bot agents are registered.
+        shootable = ([target for target in records.values() if self.firing_lane(target)]
+                     if 'fire' in self.features else [])
+        target = min(shootable, key=lambda item: sum((float(item.position[i])-position[i])**2
+                     for i in (0, 2))) if shootable else None
+        hold = target is not None and 'fire' in self.features and math.hypot(
+            float(target.position[0])-position[0], float(target.position[2])-position[2]) <= self.desired_range
+        order = self.navigation.decide(state, clear, hold=hold) if self.navigation else dict(
+            throttle=0., turn=0., combat_mode='manual', route_id=None, route_index=None)
         if 'drive' in self.features:
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = bool(order.get('brake'))
             sender.send_current()
         if 'consumables' in self.features:
             self._consumables(entity)
-        target = records.get(order.get('target_id'))
         if 'fire' in self.features and target is not None:
+            from . import bot_gunnery
+            if self.engagement is None or self.engagement['id'] != target.id:
+                self.engagement = dict(id=target.id, at=now, fired=False)
             self.lock_target(target)
-            if order.get('fire_allowed') and self.aimed_at(target):
+            self.select_ammo()
+            gun = owner._gun_state
+            base = gun.base_dispersion * owner._local_stat_factor(entity, 'dispersion')
+            factor = owner._native_dispersion_angle()/base if base > 0 else float('inf')
+            elapsed = max(0., now-self.engagement['at'])
+            ready = bot_gunnery.may_fire(1., elapsed, elapsed, factor,
+                                        opening_shot=not self.engagement['fired'])
+            if ready and gun.can_fire(True) and self.aimed_at(target):
                 accepted = owner.shoot(sender.aim_yaw, sender.gun_pitch)
                 if accepted:
                     self.record('automatic_fire', target=target.id)
         elif self.target_engine is not None:
             owner._avatar.autoAim(None)
             self.target_engine = None
+            self.engagement = None
         if now >= getattr(self, 'next_log', 0.0):
             self.next_log = now + 1.0
-            trace = order.get('control_trace') or {}
-            agent = self.adapter.director.agents.get(owner.client.player_id, {})
             self.record('decision', position=position, speed=owner._local_speed,
-                        throttle=sender.forward, turn=sender.turn, target=order.get('target_id'),
-                        route=order.get('combat_mode'),
-                        strategic_target=trace.get('strategic_move_position'),
-                        local_target=trace.get('local_target', order.get('move_position')),
-                        route_id=(agent.get('route') or {}).get('id'),
-                        route_index=agent.get('waypoint_index'),
+                        throttle=sender.forward, turn=sender.turn, target=target.id if target else None,
+                        route=order.get('combat_mode'), local_target=order.get('local_target'),
+                        route_id=order.get('route_id'), route_index=order.get('route_index'),
+                        entry=self.navigation.receipt if self.navigation else None,
                         recovery=order.get('recovery_mode'),
                         aim=getattr(self, 'aim_receipt', None),
                         locked_target=getattr(owner._avatar, '_PlayerAvatar__autoAimVehID', None))
