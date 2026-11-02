@@ -95,6 +95,54 @@ class ControlTests(unittest.TestCase):
         self.assertNotIn('handleKeyEvent', handler.__dict__)
         self.assertEqual('native', handler.handleKeyEvent(None))
 
+    def test_countdown_press_does_not_latch_or_block_live_toggle(self):
+        control._current = self.control
+        self.addCleanup(lambda: setattr(control, '_current', None))
+        self.control.input_available = lambda: True
+        toggles = []
+        self.control.toggle = lambda: toggles.append(True)
+        with mock.patch.dict(sys.modules, {'Keys': types.SimpleNamespace(KEY_GRAVE=41)}):
+            self.owner._battle_live = False
+            self.assertFalse(control.handle_key(True, 41))
+            self.assertFalse(self.control.key_down)
+            self.owner._battle_live = True
+            self.assertTrue(control.handle_key(True, 41))
+            self.assertEqual([True], toggles)
+
+    def test_native_input_availability_uses_properties_not_absent_method(self):
+        handler = types.SimpleNamespace(isStarted=True, isDetached=False)
+        self.owner._avatar.inputHandler = handler
+        messenger = types.SimpleNamespace(MessengerEntry=types.SimpleNamespace(
+            g_instance=types.SimpleNamespace(gui=types.SimpleNamespace(isFocused=lambda: False))))
+        with mock.patch.dict(sys.modules, {'messenger': messenger}):
+            self.assertTrue(self.control.input_available())
+            handler.isDetached = True
+            self.assertFalse(self.control.input_available())
+
+    def test_visible_allies_populate_force_balance_without_exposing_hidden_enemies(self):
+        td = types.SimpleNamespace(maxHealth=100)
+        ally = types.SimpleNamespace(id=11, position=(1, 0, 2), health=70,
+            typeDescriptor=td, matrix=types.SimpleNamespace(yaw=0), isAlive=lambda: True)
+        enemy = types.SimpleNamespace(id=12, position=(3, 0, 4), health=100,
+            typeDescriptor=td, matrix=types.SimpleNamespace(yaw=0), isAlive=lambda: True,
+            isStarted=True)
+        self.owner.client.team = 1
+        self.owner._records = {
+            'ally': dict(ready=True, engine_id=11, state=dict(team=1)),
+            'enemy': dict(ready=True, engine_id=12, state=dict(team=2), spot_visible=False)}
+        self.owner._server_entity = {11: ally, 12: enemy}.get
+        agents = {}
+        self.control.adapter = types.SimpleNamespace(director=types.SimpleNamespace(agents=agents),
+            register=lambda identity, team, descriptor, name: agents.update({identity: dict(team=team)}),
+            forget=lambda identity: agents.pop(identity, None))
+        contacts, neighbours, records = self.control._contacts(types.SimpleNamespace(id=1))
+        self.assertEqual([], contacts)
+        self.assertEqual({}, records)
+        self.assertEqual(2, len(neighbours))
+        self.assertEqual((1, 0, 2), agents[11]['position'])
+        self.assertEqual(.7, agents[11]['health_fraction'])
+        self.assertNotIn(12, agents)
+
     def test_partial_journal_line_waits_and_complete_command_runs_once(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'commands.jsonl'

@@ -27,9 +27,9 @@ def handle_key(is_down, key, mods=0):
         return True
     if controller.key_down:
         return True
-    controller.key_down = True
-    if mods or not controller.input_available():
+    if mods or not controller.live() or not controller.input_available():
         return False
+    controller.key_down = True
     controller.toggle()
     return True
 
@@ -74,7 +74,7 @@ class PlayerControl(object):
     def input_available(self):
         from messenger import MessengerEntry
         handler = getattr(self.owner._avatar, 'inputHandler', None)
-        return bool(handler is not None and handler.isEnabled() and
+        return bool(handler is not None and handler.isStarted and not handler.isDetached and
                     not MessengerEntry.g_instance.gui.isFocused())
 
     def live(self):
@@ -232,6 +232,19 @@ class PlayerControl(object):
                        health=target.health, max_health=target.typeDescriptor.maxHealth,
                        alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw))
             neighbours.append(row)
+            if row['team'] == owner.client.team:
+                # The isolated director must see friendly force, too. Neighbour
+                # collision rows alone do not populate its strategic roster.
+                # These are pure planning records, never simulated entities.
+                if row['alive']:
+                    agents = self.adapter.director.agents
+                    if target.id not in agents:
+                        self.adapter.register(target.id, row['team'], target.typeDescriptor,
+                                              'Observed ally')
+                    agents[target.id].update(position=point,
+                        health_fraction=float(row['health']) / max(1., row['max_health']))
+                else:
+                    self.adapter.forget(target.id)
             # Actual presentation visibility, not the omniscient LAN roster.
             if row['team'] != owner.client.team and row['alive'] and target.isStarted and record.get('spot_visible', False):
                 row.update(visible=True)

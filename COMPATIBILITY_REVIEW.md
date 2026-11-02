@@ -84,6 +84,17 @@ and retains the native automatic-extinguisher owner. A regression uses a native-
 vehicle without shadow fields. This earlier package is not final acceptance;
 the corrected controller still requires a rebuilt package and native retest.
 
+Native iteration e3f25e13 kept full takeover alive, moved the Sherman III, and
+accepted script fire with ammunition falling from 57 to 56. It also exposed
+unacceptable repeated withdrawal/pivoting: the isolated director omitted allied
+planning records from its force balance. Observed living allies now populate
+that pure roster without creating physics owners or revealing hidden enemies.
+The owner's grave-key test reached the hook but failed on an absent isEnabled
+method; the exact native class instead exposes isStarted/isDetached properties.
+Countdown presses no longer latch the key, including a missing countdown key-up.
+These fixes have regressions; native key/countdown and movement re-acceptance is
+still required. Earlier movement alone is not a passing automatic-driving test.
+
 
 ## Coherent earnings model and gameplay-source re-audit (November 2, evening)
 
