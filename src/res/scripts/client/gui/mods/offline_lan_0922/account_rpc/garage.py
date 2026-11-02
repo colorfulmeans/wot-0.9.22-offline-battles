@@ -1693,7 +1693,8 @@ class GarageState(object):
         return factor
 
     def award_battle_crew_xp(self, vehicle_type_compact_descr, battle_xp,
-                             xp_to_tankman_flag):
+                             xp_to_tankman_flag, crew_injuries=None,
+                             enrolled_crew=None):
         """Apply one battle's crew XP and return the durable award summary.
 
         Every crew member receives battle XP scaled by the vehicle's own
@@ -1715,6 +1716,16 @@ class GarageState(object):
             tankman_rows = {}
 
         tankmen = self._tankmen_module()
+        from gui.mods.offline_lan_0922 import crew_injuries as injury_rules
+        try:
+            injured = injury_rules.injured_seats(
+                self._crew_roles(record), crew_injuries) if crew_injuries else ()
+        except ValueError as error:
+            raise GarageError(str(error))
+        # Passport matching prevents an injury penalty from migrating to a
+        # replacement member after the participating crew was transferred.
+        enrolled = dict((row['seat'], row['passport']) for row in
+                        (enrolled_crew or {}).get('members', ()))
         descriptors = []
         for slot, tankman_id in enumerate(crew_ids):
             if tankman_id is None:
@@ -1767,11 +1778,14 @@ class GarageState(object):
                            if any(tman.role == 'commander' for tman in crew)
                            else 0.0)
             xp_by_tankman = {}
-            for unused_slot, tankman_id, unused_total, descriptor in descriptors:
+            for slot, tankman_id, unused_total, descriptor in descriptors:
                 multiplier = (1.0 if descriptor.role == 'commander'
                               else 1.0 + tutor_bonus)
                 earned = amount * (2 if accelerated and descriptor is weakest[3] else 1)
-                earned = int(earned * multiplier)
+                wounded = slot in injured
+                if wounded and enrolled:
+                    wounded = list(descriptor.getPassport()) == enrolled.get(slot)
+                earned = int(earned * multiplier * (0.9 if wounded else 1.0))
                 descriptor.addXP(earned)
                 xp_by_tankman[tankman_id] = earned
             updated_rows = dict(

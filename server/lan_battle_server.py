@@ -3592,6 +3592,7 @@ class BattleState:
                 participant = self.round_participants.get(
                     player.account_key)
                 if participant is not None and player.participating:
+                    participant['critical'] = copy.deepcopy(player.critical)
                     participant['alive'] = bool(player.alive)
                     participant['health'] = int(player.health)
                     participant['death_reason'] = int(player.death_reason)
@@ -4287,6 +4288,7 @@ class BattleState:
                 "team_killer": bool(participant.team_killer),
                 "battle_booster": int(((participant.effective_params or {}).get(
                     "battle_booster") or {}).get("compact_descr", 0)),
+                "critical": copy.deepcopy(participant.critical),
             }
             # The accepted start freezes the equipment that earned passive
             # benefits, including participants who subsequently disconnect.
@@ -4900,6 +4902,7 @@ class BattleState:
             overturned = int(overturn.get("level", 0)) in (1, 2)
             participant = self.round_participants.get(player.account_key)
             if participant is not None:
+                participant['critical'] = copy.deepcopy(player.critical)
                 # Preserve the final participant state for the result receipt
                 # before the unobserved remainder is adjudicated from bot state.
                 participant["alive"] = was_alive
@@ -11737,6 +11740,18 @@ class BattleState:
                 }
                 if participant.get("vehicle_compact_descr"):
                     receipt["vehicle_compact_descr"] = participant["vehicle_compact_descr"]
+                from gui.mods.offline_lan_0922 import crew_injuries
+                terminal_critical = (live_player.critical if live_player is not None
+                    and live_player.participating else participant.get('critical'))
+                try:
+                    injuries = crew_injuries.from_critical(terminal_critical)
+                except ValueError as error:
+                    # A bounded optional injury fact must not suppress the
+                    # whole room's durable battle result.
+                    _server_log('CREW INJURIES unavailable player=%s reason=%s' % (player_id, error))
+                    injuries = None
+                if injuries is not None:
+                    receipt['crew_injuries'] = injuries
                 # Preserve the battle's actual configured durability and
                 # active seasonal outfits, even after a garage edit/disconnect.
                 for field in ("max_health", "vehicle_outfits"):

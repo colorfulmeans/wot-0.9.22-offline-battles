@@ -1423,6 +1423,11 @@ def _valid_battle_receipt(message):
     if rewards.get('repair_cost') != 0 or rewards.get('ammo_cost') != 0:
         return False
     try:
+        from . import crew_injuries
+        crew_injuries.canonical(message.get('crew_injuries'))
+    except (TypeError, ValueError):
+        return False
+    try:
         friendly_fire.facts(message.get('friendly_fire'))
     except (TypeError, ValueError, OverflowError):
         return False

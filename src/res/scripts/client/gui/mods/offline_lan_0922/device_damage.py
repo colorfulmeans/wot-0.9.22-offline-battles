@@ -53,12 +53,12 @@ CRITICAL_HP_FRACTION = 0.5
 # shipped descriptors carry no repair rate at all, and Avatar only *receives*
 # the remaining seconds with VEHICLE_MISC_STATUS.DESTROYED_DEVICE_IS_REPAIRING.
 # Wargaming never published the base times either, so the track value is the
-# retail number this project settled on (2026-09-08) and the module value keeps
+# offline reference this project settled on and the module value keeps
 # this port's own 1.8x module/track ratio, no retail figure being retrievable.
 #
-# Retail derives the time from per-device `healthRegenPerSec`, so real repair
-# times differ per vehicle.  This port keeps one time per device class; a
-# per-vehicle law would need the stripped rates, not a guessed coefficient.
+# Retail derives time from per-device `healthRegenPerSec`. These are instead
+# four-person work references; repair_workforce documents the authorized count
+# calibration. They are not a recovered per-vehicle regeneration table.
 #
 # The crew part of the law is EXACT: repair_seconds divides by the client's own
 # 'repairSpeed' factor (CREW_FACTOR_BASE + CREW_FACTOR_SLOPE * efficiency below)
@@ -598,7 +598,22 @@ def crew_repair_factor(repair_skill_pct):
     return crew_repair_speed(repair_skill_pct) / CREW_FACTOR_BASE
 
 
-def repair_seconds(name, td, repair_skill_pct=0.0, repair_factor=None):
+def repair_workforce(td, crew_ko=()):
+    """Explicit offline person-work calibration; native skills stay separate.
+
+    Four conscious physical members reproduce the previous 12/21.6 s bases.
+    Combined qualifications never create extra workers. The native repair
+    factor already averages skill percentages over the full physical crew.
+    """
+    from gui.mods.offline_lan_0922.crew_injuries import physical_roster
+    roles = getattr(getattr(td, 'type', None), 'crewRoles', None)
+    if not roles:
+        return 4, 4
+    roster = physical_roster(roles)
+    return len(roster), sum(name not in crew_ko for name in roster)
+
+
+def repair_seconds(name, td, repair_skill_pct=0.0, repair_factor=None, crew_ko=()):
     """Seconds to auto-repair the named device from destroyed to functional,
     combining the reconstructed base (at 0% Repair skill) with the multipliers:
       crew Repair skill  (factors['repairSpeed'] = 0.57 + 0.43*efficiency)
@@ -613,6 +628,10 @@ def repair_seconds(name, td, repair_skill_pct=0.0, repair_factor=None):
     a mounted factor and the caller folds it in from the live consumable
     ledger, which is also what makes the bonus stop once the kit is spent."""
     base = BASE_TRACK_REPAIR_SECONDS if 'track' in name.lower() else BASE_MODULE_REPAIR_SECONDS
+    unused_total, active = repair_workforce(td, crew_ko)
+    if active == 0:
+        return float('inf')
+    base *= 4.0 / active
     if repair_factor is None:
         factor = crew_repair_factor(repair_skill_pct)
     else:
@@ -637,19 +656,41 @@ def damaged_hp(current_hp, hp_loss, destroyed=False):
 
 
 def repair_step_hp(current_hp, name, td, dt, repair_skill_pct=0.0,
-                   repair_factor=None):
+                   repair_factor=None, crew_ko=()):
     """Advance a device's HP one tick toward its regen cap (~50%). Returns the new
     HP (unchanged if already at/above the cap). Repair kits set HP directly and
     should not go through here."""
     cap = device_regen_hp(td, name)
     if cap is None or current_hp >= cap:
         return current_hp
-    secs = repair_seconds(name, td, repair_skill_pct, repair_factor)
+    secs = repair_seconds(name, td, repair_skill_pct, repair_factor, crew_ko)
     rate = cap / max(0.1, secs)          # HP per second
     new_hp = current_hp + rate * dt
     if new_hp > cap:
         new_hp = cap
     return new_hp
+
+
+def report_repair_step(owner, name, td, previous_hp, current_hp, dt,
+                       repair_factor, crew_ko=()):
+    """Record real consumer start/completion boundaries, not an installed item."""
+    from .native_input_diagnostics import detailed_enabled, validation_event
+    if not detailed_enabled() or current_hp <= previous_hp:
+        return
+    cap = device_regen_hp(td, name)
+    if cap is None or previous_hp > 0.0 and current_hp < cap:
+        return
+    total, active = repair_workforce(td, crew_ko)
+    validation_event('repair_consumer', actor=getattr(owner, 'actor_kind', 'player'),
+        actor_id=getattr(owner, 'player_id', getattr(owner, 'id', None)),
+        module=name, phase='complete' if current_hp >= cap else 'start',
+        previous_hp=previous_hp, current_hp=current_hp, regen_hp=cap,
+        dt=dt, total_crew=total, active_crew=active,
+        native_repair_factor=repair_factor,
+        calculated_seconds=repair_seconds(name, td, repair_factor=repair_factor, crew_ko=crew_ko),
+        calibration='offline_four_person_work_reference',
+        reference_seconds=BASE_TRACK_REPAIR_SECONDS if 'track' in name.lower() else BASE_MODULE_REPAIR_SECONDS,
+        unresolved='per_module_native_regeneration_rate_and_hysteresis')
 
 
 def device_state(current_hp, max_hp):

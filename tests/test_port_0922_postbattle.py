@@ -1236,11 +1236,13 @@ class PostBattleContractTests(unittest.TestCase):
         player = Player(1, _Socket(), ('127.0.0.1', 1), name='Alice',
                         vehicle='ussr:R11_MS-1', team=1, account_key='a' * 32)
         state.players[1] = player
+        player.critical = dict(crew_roster=['commander', 'driver'], crew_ko=['driver'])
         state._freeze_round_participants((player,))
         state._statistics_row('player', 1)['damage_dealt'] = 900
         self.assertTrue(state.leave_battle(1, {'round_id': 7}))
         receipt = _latest_receipt(state, player.account_key)
         self.assertTrue(receipt['premature_leave'])
+        self.assertEqual(dict(roster=['commander','driver'],wounded=['driver']), receipt['crew_injuries'])
         self.assertEqual(state.round_start_time,
                          receipt['arena_unique_id'] & 0xffffffff)
         self.assertFalse(state._finish_battle(1, 'duplicate'))

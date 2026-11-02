@@ -85,6 +85,7 @@ def project_profile(descriptor, factors=None):
         'devices': devices,
         'activation_targets': activation_targets,
         'crew_roster': crew_roster,
+        'repair_speed_factor': device_damage._misc_factor(descriptor, 'repairSpeedFactor'),
         'protection': dict((name, device_damage._misc_factor(descriptor, name))
                            for name in PROTECTION_FIELDS),
     }
@@ -129,6 +130,7 @@ def descriptor_from_profile(profile):
         return None
     descriptor = _Projection(miscAttrs=_Projection())
     descriptor.miscAttrs.update(profile.get('protection') or {})
+    descriptor.miscAttrs['repairSpeedFactor'] = profile.get('repair_speed_factor', 1.0)
     descriptor.engine = values.get('engineHealth')
     descriptor.fuelTank = values.get('fuelTankHealth')
     descriptor.radio = values.get('radioHealth')
@@ -231,6 +233,10 @@ def advance_critical(player, dt, now):
     params = getattr(player, 'effective_params', None) or {}
     loadout = params.get('loadout') or {}
     repair_factor = max(0.0, float(loadout.get('repair_factor', 1.0)))
+    from . import crew_battle
+    if (params.get('crew') or {}).get('dynamic_spotting'):
+        repair_factor = crew_battle.for_critical(
+            params, player.critical)['repair_speed_factor']
     passives = equipment_mechanics.passive_effects(
         getattr(player, 'equipment_states', ()) or ())
     # #1513 keeps Repairkit.bonusValue out of every mounted factor, so the
@@ -279,9 +285,13 @@ def advance_critical(player, dt, now):
                 bool(getattr(target, 'is_on_fire', False))):
             continue
         if devices[name] < cap:
+            previous_hp = devices[name]
             devices[name] = device_damage.repair_step_hp(
                 devices[name], name, descriptor, float(dt),
-                repair_factor=repair_factor)
+                repair_factor=repair_factor, crew_ko=player.critical.get('crew_ko', ()))
+            device_damage.report_repair_step(player, name, descriptor,
+                previous_hp, devices[name], dt, repair_factor,
+                player.critical.get('crew_ko', ()))
         if name in destroyed and devices[name] >= cap:
             destroyed.discard(name)
             critical.add(name)

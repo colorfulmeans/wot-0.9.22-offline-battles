@@ -1,5 +1,42 @@
 # Special defaults, sandbox crew and stock waiting-room controls
 
+## November 2 repair/directive acceptance baseline
+
+Repair expectations now use physical workforce, not one time for every crew:
+four conscious members without Repair: tracks 12 s, other modules 21.6 s;
+two members: 24/43.2 s; six: 8/14.4 s. Native full-Repair factor 1.0 multiplies
+those times by 0.57; a four-person crew with one 80% carrier uses the native
+20% average. Injuries reduce physical workforce and remove that carrier's
+skill contribution. Equipment/directive and available-kit bonuses apply once.
+These absolute references are authorized offline calibration, not retail data.
+Check both owner-CAS tracks and authority-side modules, healing, re-injury,
+split/slow frames, interrupted repair and no work after all crew are unconscious.
+
+The diagnostic Repair tab has two matched matrix scenes. Baseline has no devices,
+no directive and no learned secondary skills; varied fittings use the same modules
+and crew level with one independently named item/skill case per vehicle. Compare
+the matching vehicle between scenes, not two unrelated tanks. Installed fitting
+logs establish installation only; actual repair/fire boundaries and their factors
+must be read from consumer logs. Fire parameters still require external calibration.
+
+Crew XP acceptance requires 600 -> 540 for an injured member while their healthy
+colleague keeps 600; healed crews keep full XP. Duplicate delivery and restart
+must not pay or penalize twice. Preserve named double-loader identities and an
+early leaver's final accepted injuries. A different passport in the same seat must
+not inherit the injury penalty. Existing receipts without injury facts stay neutral.
+
+Local automated regression and native resource audit results are recorded below
+after final validation. Windows installation/consumer results must be identified
+separately; the scenes do not by themselves prove all 49 devices/25 skills/15
+directives/21 consumables independently.
+
+Pre-package local checks: 22 isolated affected test files / 1,930 tests passed;
+the two diagnostic/layout launcher files passed seven tests. Exact #1513 resource
+audit passed 576 vehicles / 9,231 fittings including all fifteen matrix cases.
+All 228 client Python source modules compiled under CPython 2.7.18. Three old
+repair lifecycle assertions were updated to the explicit three-person 16 s
+reference; their regen-cap, yellow-state and second-destruction checks remain.
+
 
 ## Current follow-up: fire, consumables, priorities and diagnostic scenes
 

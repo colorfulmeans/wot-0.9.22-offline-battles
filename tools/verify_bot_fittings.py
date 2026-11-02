@@ -126,6 +126,12 @@ def audit(client, rebuild=False):
                 return True
             fixed = isinstance(listed.get('price'),dict) and 'gold' in listed['price']
             combinations=list(tiers.items())
+            from gui.mods.offline_lan_0922 import equipment_test
+            if vehicle in equipment_test.VEHICLES:
+                devices, directive = equipment_test.MATRIX[equipment_test.VEHICLES.index(vehicle)]
+                varied = copy.deepcopy(tiers['elite'])
+                varied.update(devices=list(devices), directive=directive)
+                combinations.append(('diagnostic_matrix', varied))
             for development, d in (('stock','rookie'),('intermediate','regular'),('full','elite')):
                 for equipment, e in (('none','rookie'),('single','regular'),('standard','veteran'),('improved','elite')):
                     value=dict(tiers[e]);value['modules']=tiers[d]['modules']

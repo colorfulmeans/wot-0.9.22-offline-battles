@@ -43,7 +43,8 @@ def plan(vehicle, tier, overrides=None):
     equipment = equipment or {'rookie':'none','regular':'single','veteran':'standard','elite':'improved'}[tier]
     if development=='stock' and equipment!='none':
         raise ValueError('Stock development only allows no equipment')
-    return result
+    from . import equipment_test
+    return equipment_test.fitting(vehicle, result)
 
 
 def validate_profile(profile):
@@ -144,6 +145,19 @@ def skill_snapshot(descriptor):
                          if order == len(names) - 1 else 100.0)
                 skills.append(dict(name=name, level=level, active=True,
                                    enabled=role is None or role in roles))
+            # Discrete perks do not pass through native numerical factors.
+            # A directive must also grant its perk to an untrained Bot, just
+            # as the player's immutable skill projection does.
+            for booster in value.get('directives', ()):
+                name = str(getattr(booster, 'skillName', '')).lower()
+                if (name not in effective_params.DISCRETE_SKILL_ROLES or
+                        effective_params.skill_required_role(name) not in roles):
+                    continue
+                existing = next((row for row in skills if row['name'] == name), None)
+                if existing is None:
+                    existing = dict(name=name)
+                    skills.append(existing)
+                existing.update(level=100.0, active=True, enabled=True)
             members.append(dict(instance=value['crew_roster'][index],
                                 roles=roles, skills=skills))
         value['skill_snapshot'] = {'crew': {'members': members}}
@@ -277,6 +291,8 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None, overrides=Non
     crew_tier = {'50':'rookie','75':'regular','repair':'veteran','all':'elite'}.get(overrides.get('crew_preset'), tier)
     skills = (() if crew_tier in ('rookie', 'regular') else ('repair', 'camouflage'))
     mask = default_crew.sandbox_skill_mask() if crew_tier == 'elite' else tankmen.getSkillsMask(skills)
+    from . import equipment_test
+    mask = equipment_test.skill_mask(mask, tankmen)
     crew = tuple(tankmen.generateTankmen(descriptor.type.id[0], descriptor.type.id[1],
         descriptor.type.crewRoles, False, level, mask, False))
     if len(crew) != len(descriptor.type.crewRoles):

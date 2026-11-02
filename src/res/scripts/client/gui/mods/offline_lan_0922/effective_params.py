@@ -476,6 +476,13 @@ def _canonical_equipment(value):
 
 def _canonical_critical(value):
     """Validate final mounted module pools donated by the exact client."""
+    repair_speed = None
+    if isinstance(value, dict) and 'repair_speed_factor' in value:
+        repair_speed = _number(value['repair_speed_factor'], 0.01, 10.0)
+        if repair_speed is None:
+            return None
+        value = dict(value)
+        del value['repair_speed_factor']
     protection = None
     if isinstance(value, dict) and 'protection' in value:
         raw = value['protection']
@@ -529,6 +536,8 @@ def _canonical_critical(value):
         targets.append({'index': index, 'name': str(name)})
     targets.sort(key=lambda entry: entry['index'])
     canonical = {'devices': result}
+    if repair_speed is not None:
+        canonical['repair_speed_factor'] = repair_speed
     if protection is not None:
         canonical['protection'] = protection
     if 'activation_targets' in value:

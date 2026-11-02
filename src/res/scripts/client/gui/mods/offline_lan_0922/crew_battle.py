@@ -15,6 +15,7 @@ DEFAULTS = {
     'damaged_gun_factor': 1.0,
     'damaged_optics_recon_ratio': 1.0,
     'fire_decay_factor': 0.57,
+    'repair_speed_factor': 0.57,
 }
 
 
@@ -23,6 +24,7 @@ def from_native(factors):
                   for name, default in DEFAULTS.items())
     result['fire_decay_factor'] = float(factors.get(
         'healthBurnPerSecLossFraction', DEFAULTS['fire_decay_factor']))
+    result['repair_speed_factor'] = float(factors.get('repairSpeed', 0.57))
     return result
 
 
@@ -35,7 +37,7 @@ def canonical(value):
         if isinstance(number, bool) or not isinstance(number, (int, float)):
             return None
         number = float(number)
-        maximum = 10.0 if name in ('damaged_optics_recon_ratio', 'fire_decay_factor') else 1.0
+        maximum = 10.0 if name in ('damaged_optics_recon_ratio', 'fire_decay_factor', 'repair_speed_factor') else 1.0
         if math.isnan(number) or math.isinf(number) or not 0.0 <= number <= maximum:
             return None
         if name in ('adrenaline_reload_factor', 'damaged_gun_factor') and not number:

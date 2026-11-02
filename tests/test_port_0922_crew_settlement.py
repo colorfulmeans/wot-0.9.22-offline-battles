@@ -30,7 +30,25 @@ class CrewSettlementTests(unittest.TestCase):
         return self.garage_store.apply_battle_crew_xp(
             self.snapshot, receipt['receipt_id'], 50001,
             receipt['rewards']['xp'], 1, tankmen_module=self.tankmen,
-            vehicles_module=self.vehicles, rewards=receipt['rewards'])
+            vehicles_module=self.vehicles, rewards=receipt['rewards'],
+            crew_injuries=receipt.get('crew_injuries'))
+
+    def test_terminal_injury_penalty_is_per_member_and_receipt_retry_is_neutral(self):
+        receipt = self.receipt()
+        receipt['crew_injuries'] = dict(roster=['commander', 'driver'], wounded=['driver'])
+        self.assertTrue(self.result_store.accept(receipt))
+        self.assertEqual([(101, 600), (102, 540)],
+                         self.packed_vehicle(self.result_store, receipt)['xpByTmen'])
+        banked = copy.deepcopy(self.snapshot)
+        self.assertFalse(self.result_store.accept(receipt))
+        self.assertEqual(banked, self.snapshot)
+
+    def test_healed_terminal_roster_has_no_penalty(self):
+        receipt = self.receipt()
+        receipt['crew_injuries'] = dict(roster=['commander', 'driver'], wounded=[])
+        self.assertTrue(self.result_store.accept(receipt))
+        self.assertEqual([(101, 600), (102, 600)],
+                         self.packed_vehicle(self.result_store, receipt)['xpByTmen'])
 
     def receipt(self):
         return result_fixture._receipt(self.result_store.account_key)

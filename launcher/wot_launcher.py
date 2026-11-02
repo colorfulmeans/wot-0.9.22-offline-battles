@@ -1260,7 +1260,13 @@ class LauncherWindow(object):
                 text='BOT 调速器行驶测试' if zh else 'Bot governor driving test',
                 command=lambda: self._start_diagnostic_scene('governor')).grid(
                     row=4, column=0, columnspan=2, sticky='ew', pady=(6,0))
-        self.repair_panel.grid_rowconfigure(5, weight=1)
+            for column, scene in enumerate(('equipment_baseline', 'equipment_matrix')):
+                tk.Button(self.repair_panel,
+                    text=(('配件指令对照：无加成', '配件指令对照：分车装配')[column] if zh else
+                          ('Equipment control: baseline', 'Equipment control: varied fittings')[column]),
+                    command=lambda value=scene: self._start_diagnostic_scene(value)).grid(
+                        row=5, column=column, sticky='ew', padx=(0,3) if column == 0 else (3,0), pady=(6,0))
+        self.repair_panel.grid_rowconfigure(6, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
 
@@ -1423,7 +1429,8 @@ class LauncherWindow(object):
         if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') != '1':
             return
         os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = (
-            '2' if scene == 'governor' else '1' if scene == 'equipment' else '0')
+            {'governor':'2', 'equipment':'1', 'equipment_baseline':'3',
+             'equipment_matrix':'4'}.get(scene, '0'))
         os.environ['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
         os.environ['WOT_OFFLINE_ROOF_SHOT_DROP'] = '1' if scene == 'drop' else '0'
         self._replay_tab = False

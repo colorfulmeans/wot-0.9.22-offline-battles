@@ -1687,7 +1687,7 @@ def apply_payload(vehicle, payload):
 
 
 def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
-    """Advance copied 0.8.2 repair law; transport/presentation stay outside."""
+    """Advance the shared repair work/crew law; presentation stays outside."""
     if vehicle is None or dt is None or dt <= 0.0:
         return None
     if float(getattr(vehicle, 'health', 0.0) or 0.0) <= 0.0:
@@ -1710,9 +1710,13 @@ def tick_repair(vehicle, dt, repair_skill=100.0, repair_factor=None):
                 bool(getattr(vehicle, 'is_on_fire', False))):
             continue
         if devices[name] < cap:
+            previous_hp = devices[name]
             devices[name] = _device_damage.repair_step_hp(
                 devices[name], name, descriptor, dt, repair_skill,
-                repair_factor)
+                repair_factor, getattr(vehicle, '_crew_ko', ()))
+            _device_damage.report_repair_step(vehicle, name, descriptor,
+                previous_hp, devices[name], dt, repair_factor,
+                getattr(vehicle, '_crew_ko', ()))
         was_destroyed = name in destroyed
         if was_destroyed and devices[name] >= cap:
             destroyed.discard(name)
@@ -1794,7 +1798,7 @@ def _restore_fuel_regen_cap(vehicle):
 
 
 def report_fire_model(vehicle, native_decay_factor):
-    """Expose the stripped server-law boundary, without inventing burn rates."""
+    """Expose the applied community law and the remaining calibration."""
     from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
     # Diagnostic observation must never enter _device_td's native-player
     # fallback when a terminal/detached target no longer owns a descriptor.
@@ -1807,6 +1811,8 @@ def report_fire_model(vehicle, native_decay_factor):
         native_health_burn_per_second=raw_burn,
         applied_model='community_linear_decay', skill_applied=True,
         missing_contract='per_vehicle_initial_burn_and_base_decay',
+        module_hp_loss_per_second=10.0,
+        initial_hp_fraction_per_second=0.05, untrained_seconds=10.0,
         legacy_tick_seconds=1.0, legacy_duration=_device_damage.FIRE_DURATION_SECONDS,
         legacy_damage_fraction=_device_damage.FIRE_DAMAGE_FRACTION_PER_SEC)
 
@@ -1826,8 +1832,9 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor
         except Exception:
             now = None
     from gui.mods.offline_lan_0922 import fire_model, environment_modules
+    previous_progress = float(getattr(vehicle, '_fire_timer', 0.0) or 0.0)
     progress, damage, active_dt, burnt_out = fire_model.advance(
-        getattr(vehicle, '_fire_timer', 0.0) or 0.0,
+        previous_progress,
         float(dt), native_decay_factor,
         float(getattr(vehicle, 'maxHealth', 0.0) or 0.0))
     if module_test_mode:
@@ -1839,6 +1846,13 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor
     if module_terminal and not module_test_mode:
         damage = max(damage, module_terminal)
     vehicle._fire_timer = progress
+    if burnt_out or previous_progress == 0.0:
+        from .native_input_diagnostics import validation_event
+        validation_event('fire_consumer', actor=getattr(vehicle, 'actor_kind', 'bot'),
+            actor_id=getattr(vehicle, 'id', None), decay_factor=native_decay_factor,
+            progress=progress, dt=dt, active_seconds=active_dt,
+            hull_damage=damage, completed=burnt_out,
+            module_calibration='offline_fixed_module_hp_per_second')
     if burnt_out:
         # The interval may complete the final burn tick before the fire-out
         # transition. Only time after this exact boundary is excluded.

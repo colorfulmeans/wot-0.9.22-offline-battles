@@ -1,5 +1,48 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+## Repair workforce and directive acceptance follow-up (November 2, afternoon)
+
+This section supersedes the uniform repair-time boundary below. Exact #1513
+`VehicleDescrCrew._computeSummSkillLevel` excludes unconscious carriers; the
+common Repair skill is averaged over physical crew seats, not qualifications.
+The community description gives the concrete 80%/four-seat = 20% example:
+https://worldoftanks.fandom.com/wiki/Crew . No exact per-module regeneration
+rates were found in the pinned packed vehicle/common definitions. Under the
+user-authorized offline calibration, 12 s tracks / 21.6 s other modules are
+now four-conscious-person reference work: time scales by 4 / conscious members,
+then by the separately donated native Repair/equipment factor. Combined roles
+do not create extra workers. Zero conscious members perform no repair work.
+This is a declared reconstruction, not a recovered retail vehicle table.
+
+The player now carries native `repairSpeed` in each casualty/fire-dependent
+crew row. Both authority-side non-track repair and visible owner-CAS track
+repair consume that current row, rather than the healthy garage factor.
+The player's native descriptor `miscAttrs.repairSpeedFactor` also survives the
+authority handoff, keeping normal/improved toolbox effects independent of the
+crew/directive dictionary rather than losing them for non-track repair. Bot
+discrete-skill readers also include directive-granted perks for eligible physical
+carriers, matching the player's projection; unconscious carriers cannot use them.
+
+Terminal crew injury facts survive server exit/disconnect, persistence, client
+validation and the atomic XP transaction. A still-injured member receives 90%
+of their normal crew award. A healed member has no penalty; there is no extra
+penalty based merely on vehicle HP. The enrolled passport prevents the penalty
+from being reassigned to a replacement in the same seat. Legacy receipts without
+injury facts remain neutral. Source: WG support article 15085,
+https://wargaming.net/support/en/products/wot/article/15085/?redirect_lang=en .
+WG's 1.20.1 common-test article explicitly describes removing the injured-member
+XP penalty in a later rework, supporting the historical distinction:
+https://worldoftanks.com/en/news/general-news/1-20-1-CT-1/ .
+
+Diagnostic Repair adds baseline and varied-fitting scenes, keeping identical
+modules, 100% main qualifications and untrained secondary skills. Fifteen legal
+vehicle/item cases include a liner, toolbox+directive, wet rack, CO2 fuel tank,
+net+binoculars, GLD+directive and all nine skill directives. Native admission is
+still mandatory; nothing is mass-installed into normal battles. `repair_consumer`
+and `fire_consumer` record actual consumer transitions. Fire's absolute hull/module
+rates and module hysteresis remain explicitly unverified calibrations; no new
+retail claim is made. The ordinary equipment, governor and bridge entries remain.
+
 
 ## Equipment, consumables and community-law follow-up (November 2)
 

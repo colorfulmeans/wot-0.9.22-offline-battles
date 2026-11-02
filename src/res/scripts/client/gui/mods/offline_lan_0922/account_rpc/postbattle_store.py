@@ -435,6 +435,9 @@ def _receipt(value):
         result['stun_capable'] = value['stun_capable']
     if mounted is not None:
         result['vehicle_compact_descr'] = mounted
+    if 'crew_injuries' in value:
+        from gui.mods.offline_lan_0922 import crew_injuries
+        result['crew_injuries'] = crew_injuries.canonical(value['crew_injuries'])
     if battle_max_health is not None:
         result['max_health'] = battle_max_health
     if outfits is not None:

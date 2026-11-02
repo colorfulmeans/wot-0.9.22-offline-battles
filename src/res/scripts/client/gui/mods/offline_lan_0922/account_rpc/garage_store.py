@@ -862,7 +862,7 @@ class GarageStore(object):
                              auto_settings=None, friendly_fire_facts=None,
                              vehicle_type_name=None, battle_start=0,
                              daily_facts=None, training=False,
-                             campaign_receipt=None):
+                             campaign_receipt=None, crew_injuries=None):
         """Apply and persist one battle's whole settlement exactly once.
 
         The compact crew descriptors, the earnings, the damage the battle did
@@ -987,7 +987,8 @@ class GarageStore(object):
                 refused, 'crew experience',
                 lambda: state.award_battle_crew_xp(
                     vehicle_type_compact_descr, battle_xp,
-                    xp_to_tankman_flag),
+                    xp_to_tankman_flag, crew_injuries=crew_injuries,
+                    enrolled_crew=self._crew_service_rosters.get(receipt_id)),
                 GarageError)
         if crew is not None:
             result.update(crew)

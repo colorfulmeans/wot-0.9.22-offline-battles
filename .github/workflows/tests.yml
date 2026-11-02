@@ -188,6 +188,8 @@ jobs:
           --pattern test_port_0922_equipment_skill_effects.py
           --pattern test_fire_decay_model.py
           --pattern test_equipment_followup.py
+          --pattern test_equipment_acceptance_matrix.py
+          --pattern test_port_0922_crew_settlement.py
           --pattern test_port_0922_roof_crush_test.py
           --pattern test_port_0922_equipment_mechanics.py
           --pattern test_port_0922_consumable_audit.py

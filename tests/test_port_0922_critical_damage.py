@@ -1523,7 +1523,7 @@ class CriticalDamageTests(unittest.TestCase):
             _crew_ko=set(), is_on_fire=False)
 
         payload = critical_damage.tick_repair(
-            vehicle, device_damage.BASE_TRACK_REPAIR_SECONDS,
+            vehicle, 16.0,  # Three physical crew: 48 person-seconds / 3.
             repair_skill=0.0)
 
         self.assertEqual(50.0, vehicle.devices_hp['leftTrackHealth'])
@@ -1558,7 +1558,7 @@ class CriticalDamageTests(unittest.TestCase):
             position=object(), matrix=object(), getComponents=lambda: ())
 
         payload = critical_damage.tick_repair(
-            vehicle, device_damage.BASE_TRACK_REPAIR_SECONDS,
+            vehicle, 16.0,  # Three physical crew: 48 person-seconds / 3.
             repair_skill=0.0)
         shadow = critical_damage._CriticalProposalVehicle(vehicle)
 
@@ -1669,7 +1669,7 @@ class CriticalDamageTests(unittest.TestCase):
         shell = {'damage': (100.0, 120.0)}
 
         repaired = critical_damage.tick_repair(
-            vehicle, device_damage.BASE_TRACK_REPAIR_SECONDS,
+            vehicle, 16.0,  # Three physical crew: 48 person-seconds / 3.
             repair_skill=0.0)
         with mock.patch.dict(
                 sys.modules, {'BigWorld': self.bigworld, 'Math': self.math}), \

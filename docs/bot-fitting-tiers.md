@@ -21,8 +21,10 @@ retain the available endpoint. Select the gun first, then prefer the native
 stock turret when compatible. Otherwise use a compatible turret. Premium
 vehicles retain their fixed module configuration at all four tiers.
 
-Device family priority is stabilizer, rammer, laying drive, ventilation,
-coated optics, toolbox. Skip a family rejected by the native vehicle filters;
+Device families follow `equipment_policy.PRIORITIES`: LT optics/rammer/
+stabilizer/ventilation/GLD; MT rammer/stabilizer/optics/ventilation/GLD;
+HT liner/rammer/stabilizer/ventilation/GLD; TD and SPG rammer/ventilation/
+GLD/camouflage net/binoculars. Skip a family rejected by native vehicle filters;
 use the correct legal regular variant and never repeat a family. Installation
 also checks native admission tuples and the resulting serialized descriptor.
 
