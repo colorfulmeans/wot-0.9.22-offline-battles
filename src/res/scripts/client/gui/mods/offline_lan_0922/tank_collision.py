@@ -1575,12 +1575,13 @@ def ram_damage(relative_speed, mass_self, mass_other,
                spall_self=1.0, spall_other=1.0,
                bonus_self=0.0, bonus_other=0.0,
                moving_self=True, moving_other=True):
-    """Return the documented 9.22 ``(damage_to_other, damage_to_self)``.
+    """Return the custom-calibrated ``(damage_to_other, damage_to_self)``.
 
     Wargaming's 9.22-era Battle Mechanics first creates an HE-like explosion
     from the pair's kinetic potential, distributes it by inverse mass share,
-    then applies the contemporaneous non-penetrating HE law at zero impact
-    distance.  There is no empirical threshold, ratio clamp, or damage cap.
+    then this user-selected custom model applies quarter-energy/full-armour
+    calibration. It is not the unchanged retail/wiki formula. There is no
+    extra empirical threshold, ratio clamp, or damage cap.
     """
     relative_speed = abs(float(relative_speed))
     self_tonnes = max(0.0, float(mass_self)) * WEIGHT_SCALE

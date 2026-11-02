@@ -76,6 +76,7 @@ _CHINESE = {
     'Bot governor driving test': 'BOT 调速器行驶测试',
     'Equipment control: baseline': '配件指令对照：无配件技能',
     'Equipment control: varied fittings': '配件指令对照：分车装配',
+    'Earnings test: stationary targets': '收益结算测试：静止靶车',
     'Premium account days': '高级账号天数',
     'Premium days must be a non-negative whole number.': '高级账号天数必须为非负整数。',
     'Premium days are outside the supported range.': '高级账号天数超出客户端支持范围。',
@@ -1259,6 +1260,7 @@ class LauncherWindow(object):
                 ('governor', 'Bot governor driving test', 4, 0, 2),
                 ('equipment_baseline', 'Equipment control: baseline', 5, 0, 1),
                 ('equipment_matrix', 'Equipment control: varied fittings', 5, 1, 1),
+                ('rewards', 'Earnings test: stationary targets', 6, 0, 2),
             )
             for scene, label, row, column, span in scenes:
                 button = tk.Button(self.repair_panel, text=self._t(label),
@@ -1267,7 +1269,7 @@ class LauncherWindow(object):
                     padx=(0,0) if span == 2 else (0,3) if column == 0 else (3,0),
                     pady=(6,0))
                 self.diagnostic_scene_buttons.append((button, label))
-        self.repair_panel.grid_rowconfigure(6, weight=1)
+        self.repair_panel.grid_rowconfigure(7, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
 
@@ -1433,7 +1435,7 @@ class LauncherWindow(object):
             return
         os.environ['WOT_OFFLINE_EQUIPMENT_TEST'] = (
             {'governor':'2', 'equipment':'1', 'equipment_baseline':'3',
-             'equipment_matrix':'4'}.get(scene, '0'))
+             'equipment_matrix':'4', 'rewards':'3'}.get(scene, '0'))
         os.environ['WOT_OFFLINE_ROOF_CRUSH_TEST'] = '1' if scene == 'drop' else '0'
         os.environ['WOT_OFFLINE_ROOF_SHOT_DROP'] = '1' if scene == 'drop' else '0'
         self._replay_tab = False

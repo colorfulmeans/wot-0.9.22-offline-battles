@@ -1414,6 +1414,14 @@ def _valid_battle_receipt(message):
     if any(_exact_int(rewards.get(name)) is None or
            _exact_int(rewards.get(name)) < 0 for name in reward_names):
         return False
+    if 'economy_version' in rewards:
+        if type(rewards['economy_version']) not in integer_types or rewards['economy_version'] not in (1, 2):
+            return False
+        for field, total in (('achievement_credits', 'credits'),
+                             ('achievement_xp', 'xp'), ('achievement_free_xp', 'free_xp')):
+            if (_exact_int(rewards.get(field, 0)) is None or
+                    not 0 <= rewards.get(field, 0) <= rewards[total]):
+                return False
     if (_exact_int(rewards.get('crystal', 0)) is None or
             rewards.get('crystal', 0) < 0):
         return False

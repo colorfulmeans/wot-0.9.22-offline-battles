@@ -713,3 +713,31 @@ The launcher's selected profile was visibly checked before starting.
   rebuilt again. Both contain only `save.json`; the default seed is revision 5.
   Launcher selection is restored to Automatic lineup/default with a blank
   player name. Reports remain available for review.
+
+
+## Economy v2 acceptance baseline (November 2, 2026)
+
+The old own-tier Ace/mark XP curve and 2-credit/HP, zero-credit-assist checks
+are invalid baselines and have been replaced. Keep task thresholds unchanged
+while validating this new income model. Credits use the owner-selected 2015
+community model as a whole; XP uses official categories with explicitly custom
+missing numeric coefficients. See COMPATIBILITY_REVIEW.md for source conflicts,
+375 measured vs 305 estimated vehicle coefficients, and the combat-model audit.
+
+1. Diagnostic launcher -> Repair -> Earnings test: stationary targets. The
+   scene reuses legal baseline fittings and real native targets, not a synthetic
+   reward grant. Select Type 59; then test a normal vehicle for coefficient parity.
+2. Finish a real battle. Capture both native detail columns, result-team base XP,
+   first-win/carousel state, system-message rewards and actual wallet deltas.
+3. Match REWARD BREAKDOWN to ECONOMY SETTLED by receipt ID. Compare model parts,
+   measured/estimated vehicle coefficient, native account premium/reserve/save
+   steps, and separate repair/ammunition/consumable costs. Capture/defence and
+   assistance must be actual admitted events. Do not infer visibility at hit time
+   from a final scoreboard.
+4. Verify losing/drawing Battle Hero/Epic resistance once, native bonus rows,
+   and no bonus for ordinary badges; a replayed receipt must pay nothing again.
+5. Keep training zero and old pending receipts unchanged. Do not recalculate
+   historical wallet balances or chase the owner's old task progress.
+
+A native snapshot is evidence only for the vehicles/conditions it actually
+exercises. Formula fixtures and cloud green alone do not prove live settlement.

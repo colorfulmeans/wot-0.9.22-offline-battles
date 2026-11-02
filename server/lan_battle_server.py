@@ -44,7 +44,7 @@ if _CLIENT_SCRIPT_ROOT not in sys.path:
     sys.path.insert(0, _CLIENT_SCRIPT_ROOT)
 
 from server_bot_ai import BotPlanner
-from offline_rewards import compute_offline_rewards
+from offline_rewards import compute_offline_rewards, tier_weight
 from vehicle_overlay_store import (
     MAX_OVERLAY_MEMBER_BYTES,
     VehicleOverlayStore,
@@ -54,12 +54,12 @@ from gui.mods.offline_lan_0922 import native_input_diagnostics as battle_review_
 from gui.mods.offline_lan_0922 import ram_history, ram_motion
 from gui.mods.offline_lan_0922 import state_transfer
 from gui.mods.offline_lan_0922 import snapshot_delta
-from gui.mods.offline_lan_0922 import battle_bonds, tank_collision
+from gui.mods.offline_lan_0922 import battle_bonds, tank_collision, credit_coefficients
 from gui.mods.offline_lan_0922 import spg_positions, bot_tactics, lineup_slots
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
 from gui.mods.offline_lan_0922.battle_achievements import (
     ACHIEVEMENT_CONDITIONS, AWARDABLE_ACHIEVEMENTS, RECEIPT_STAT_NAMES,
-    award_battle_achievements)
+    award_battle_achievements, COURAGEOUS_RESISTANCE_ACHIEVEMENTS)
 from gui.mods.offline_lan_0922 import bot_gunnery
 from gui.mods.offline_lan_0922 import bot_state_codec, tank_contact_ledger, turret_contact_ledger
 from gui.mods.offline_lan_0922 import burst_mechanics
@@ -2541,6 +2541,7 @@ class BattleState:
         self.human_ram_probe_requests = {}
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
+        self._reward_tier_cache = {}
         self.vehicle_statistics = {}
         self._piercing_series_runs = {}
         self.vehicle_end_ticks = {}
@@ -3850,6 +3851,7 @@ class BattleState:
         self.human_ram_probe_requests = {}
         self.human_ram_retired_probe_pairs = OrderedDict()
         self.human_ram_probe_fingerprints = OrderedDict()
+        self._reward_tier_cache = {}
         self.vehicle_statistics = {}
         self._piercing_series_runs = {}
         self.vehicle_end_ticks = {}
@@ -11435,45 +11437,69 @@ class BattleState:
                 count += 1
         return count
 
-    def _killed_durability(self, kind, vehicle_id):
-        """Return the total durability of the vehicles one actor destroyed.
+    def _reward_tier(self, identity):
+        name = self._actor_vehicle_name(*identity)
+        if identity[0] == 'player':
+            participant = self._frozen_player_participant(identity[1])
+            if participant is not None and participant.get('vehicle_tier'):
+                return int(participant['vehicle_tier'])
+        if name in credit_coefficients.VEHICLE_TIERS:
+            return credit_coefficients.VEHICLE_TIERS[name]
+        cache = self.__dict__.setdefault('_reward_tier_cache', {})
+        if name not in cache:
+            tier = self._result_vehicle_tier(name)
+            # A catalogue can arrive after a room is created; do not cache an
+            # unknown type as tier I before a donor has published its identity.
+            if tier != 1:
+                cache[name] = tier
+            return tier
+        return cache[name]
 
-        The offline reward policy uses victim durability as a balance proxy,
-        not as an exact measurement of the retail tier-difference rule. The kill
-        ledger already writes ``target_kills`` on the per-target row, so this
-        stays a reward-time question and never becomes a persisted statistic.
-        """
-        interactions = self.vehicle_interactions.get(
-            (str(kind), int(vehicle_id)), {})
-        total = 0
-        for row in interactions.values():
-            killed = max(0, int(row.get("target_kills", 0) or 0))
-            if not killed:
-                continue
-            identity = (str(row.get("target_kind", "")),
-                        int(row.get("target_id", 0) or 0))
-            total += killed * self._vehicle_max_health(identity)
-        return total
+    def _reward_weight(self, actor, target):
+        return tier_weight(self._reward_tier(actor), self._reward_tier(target))
 
-    def _capture_participants(self, kind, vehicle_id, team):
-        """Return the split for a completed capture, or zero.
+    def _reward_facts(self, kind, vehicle_id):
+        identity = (str(kind), int(vehicle_id))
+        row = self._statistics_row(*identity)
+        facts = dict((name, int(row.get('_reward_' + name, 0))) for name in (
+            'damage_units', 'assist_units', 'critical_units', 'active_events',
+            'credit_damage_units', 'credit_assist_damage'))
+        facts['kill_units'] = sum(
+            int(interaction.get('target_kills', 0)) * 10 * self._reward_weight(
+                identity, (interaction['target_kind'], interaction['target_id']))
+            for interaction in self.vehicle_interactions.get(identity, {}).values())
+        state = self._vehicle_stun_state(identity)
+        facts['survived'] = bool(state and state['alive'] and
+            identity not in self.vehicle_end_ticks)
+        return facts
 
-        Retail pays Credits only for a capture that actually completed, and
-        splits one payment equally between the vehicles that took part.
-        """
-        try:
-            team = int(team)
-        except (TypeError, ValueError):
-            return 0
-        if int(self.base_captured_team or 0) != team or not team:
-            return 0
-        own = self._statistics_row(kind, vehicle_id)
-        if int(own.get("capture_points", 0) or 0) <= 0:
-            return 0
-        return sum(
-            1 for row in self.vehicle_statistics.values()
-            if int(row.get("team", 0) or 0) == team and
-            int(row.get("capture_points", 0) or 0) > 0)
+    def _completed_capture(self, kind, vehicle_id, team):
+        # A historical contribution is not enough: the actor must still be in
+        # the capturing circle when that team's capture actually completes.
+        return (team in (1, 2) and self.base_captured_team == team and
+                (str(kind), int(vehicle_id)) in self.capture_invaders.get(3 - team, ()))
+
+    def _actor_rewards(self, kind, vehicle_id, winner, achievements=(), trace=False):
+        identity = (str(kind), int(vehicle_id))
+        vehicle = self._actor_vehicle_name(*identity)
+        team = self._vehicle_team(*identity)
+        coefficient, source_row = credit_coefficients.COEFFICIENTS.get(vehicle, (10000, 0))
+        detail = {} if trace else None
+        rewards = compute_offline_rewards(
+            self._statistics_row(*identity), winner == team, vehicle_tier=self._reward_tier(identity),
+            spotted_spgs=self._spotted_spg_count(*identity),
+            captured=self._completed_capture(kind, vehicle_id, team),
+            reward_facts=self._reward_facts(*identity),
+            courageous=bool(set(achievements).intersection(COURAGEOUS_RESISTANCE_ACHIEVEMENTS)),
+            vehicle_coefficient=coefficient, breakdown=detail)
+        if detail is not None:
+            detail.update(actor=list(identity), vehicle=vehicle, round_id=int(self.round_id),
+                receipt_id='%s:%d:%d' % (self.receipt_namespace, self.round_id, vehicle_id),
+                coefficient_source=('community_2015_row_%d' % source_row if source_row
+                                    else 'offline_cohort_estimate'),
+                achievements=list(achievements))
+            _server_log('REWARD BREAKDOWN ' + json.dumps(detail, sort_keys=True, separators=(',', ':')))
+        return rewards
 
     def _public_result_roster(self, winner, participants):
         """Freeze complete human and bot team rows from authoritative state."""
@@ -11486,33 +11512,7 @@ class BattleState:
                          participant.get("alive", True))
             statistics = self._receipt_statistics(
                 self._statistics_row("player", player_id))
-            tier = participant.get("vehicle_tier")
-            if tier is None:
-                tier = self._result_vehicle_tier(
-                    participant["vehicle"], player_id)
-            xp = compute_offline_rewards(
-                {
-                    "damage_dealt": statistics["damage"],
-                    "team_damage_penalized": self._statistics_row(
-                        "player", player_id)["team_damage_penalized"],
-                    "team_killed_durability": self._statistics_row(
-                        "player", player_id)["team_killed_durability"],
-                    "damage_assisted_track": statistics["assist_track"],
-                    "damage_assisted_radio": statistics["assist_radio"],
-                    "damage_assisted_stun": statistics["assist_stun"],
-                    "kills": statistics["kills"],
-                    "spotted": statistics["spotted"],
-                    "capture_points": statistics["capture_points"],
-                    "dropped_capture_points":
-                        statistics["dropped_capture_points"],
-                },
-                int(winner) == int(participant["team"]),
-                participated=True, vehicle_tier=tier,
-                spotted_spgs=self._spotted_spg_count("player", player_id),
-                capture_participants=self._capture_participants(
-                    "player", player_id, participant["team"]),
-                killed_durability=self._killed_durability(
-                    "player", player_id))["xp"]
+            xp = self._actor_rewards('player', player_id, winner)['xp']
             rows.append({
                 "actor_kind": "player", "actor_id": player_id,
                 "name": participant["name"],
@@ -11543,28 +11543,7 @@ class BattleState:
             alive = bool(state.get("alive", int(state.get("health", 0)) > 0))
             statistics = self._receipt_statistics(
                 self._statistics_row("bot", bot_id))
-            xp = compute_offline_rewards(
-                {
-                    "damage_dealt": statistics["damage"],
-                    "team_damage_penalized": self._statistics_row(
-                        "bot", bot_id)["team_damage_penalized"],
-                    "team_killed_durability": self._statistics_row(
-                        "bot", bot_id)["team_killed_durability"],
-                    "damage_assisted_track": statistics["assist_track"],
-                    "damage_assisted_radio": statistics["assist_radio"],
-                    "damage_assisted_stun": statistics["assist_stun"],
-                    "kills": statistics["kills"],
-                    "spotted": statistics["spotted"],
-                    "capture_points": statistics["capture_points"],
-                    "dropped_capture_points":
-                        statistics["dropped_capture_points"],
-                }, int(winner) == int(identity["team"]), participated=True,
-                spotted_spgs=self._spotted_spg_count("bot", bot_id),
-                capture_participants=self._capture_participants(
-                    "bot", bot_id, identity["team"]),
-                killed_durability=self._killed_durability("bot", bot_id),
-                vehicle_tier=self._result_vehicle_tier(
-                    identity["vehicle"]))["xp"]
+            xp = self._actor_rewards('bot', bot_id, winner)['xp']
             rows.append({
                 "actor_kind": "bot", "actor_id": bot_id,
                 "name": identity["name"], "vehicle": identity["vehicle"],
@@ -11637,6 +11616,8 @@ class BattleState:
             for row in public_results:
                 row["achievements"] = sorted(awards.get(
                     (row["actor_kind"], row["actor_id"]), ()))
+                row['xp'] = self._actor_rewards(row['actor_kind'], row['actor_id'],
+                    winner, row['achievements'])['xp']
             if self.battle_mode == "training":
                 for row in public_results:
                     row["xp"] = 0
@@ -11666,18 +11647,8 @@ class BattleState:
                 player_id = int(participant["player_id"])
                 live_player = self.players.get(player_id)
                 public_row = public_by_player[player_id]
-                rewards = compute_offline_rewards(
-                    self._statistics_row("player", player_id),
-                    winner == int(participant["team"]), participated=True,
-                    vehicle_tier=participant.get(
-                        "vehicle_tier", self._result_vehicle_tier(
-                            participant["vehicle"], player_id)),
-                    spotted_spgs=self._spotted_spg_count(
-                        "player", player_id),
-                    capture_participants=self._capture_participants(
-                        "player", player_id, participant["team"]),
-                    killed_durability=self._killed_durability(
-                        "player", player_id))
+                rewards = self._actor_rewards('player', player_id, winner,
+                    public_row['achievements'], trace=True)
                 crystal_rewards = battle_bonds.medal_rewards(
                     public_row["achievements"], participant.get("vehicle_tier", 1))
                 rewards["crystal"] = (sum(crystal_rewards.values()) +
@@ -11685,7 +11656,8 @@ class BattleState:
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
                 if self.battle_mode == "training":
-                    rewards = dict((key, 0) for key in rewards)
+                    rewards = dict((key, 0) for key in (
+                        'credits', 'xp', 'free_xp', 'crystal', 'repair_cost', 'ammo_cost'))
                     crystal_rewards = {}
                     friendly = {"victims": [], "received_damage": 0,
                                 "xp_penalty": 0}
@@ -14561,7 +14533,8 @@ class BattleState:
         # live statistic. Keep the existing public protocol shape stable.
         return [dict((name, value) for name, value in
                      self.vehicle_statistics[key].items()
-                     if name not in ("team_damage_penalized", "team_killed_durability"))
+                     if not name.startswith("_reward_") and
+                     name not in ("team_damage_penalized", "team_killed_durability"))
                 for key in sorted(self.vehicle_statistics)]
 
     def _is_blue_target(self, target):
@@ -14606,6 +14579,8 @@ class BattleState:
             row["team_crits"] += _popcount(mask) * repetitions
             return
         row["critical_hits"] += _popcount(mask) * repetitions
+        row['_reward_critical_units'] = int(row.get('_reward_critical_units', 0)) + (
+            _popcount(mask) * repetitions * self._reward_weight(attacker, target) * 10)
         self._statistics_row(*target)["crits_received_mask"] |= mask
         self._or_interaction(attacker, target, "crits", mask)
         for unused in range(repetitions):
@@ -14735,6 +14710,16 @@ class BattleState:
         # every observer lighting the target, so each of them is paid its
         # share of this damage rather than the whole of it.
         assisters = self._radio_assisters(attacker, target, target_team)
+        # Snapshot spotting at the admitted damage event, before a later spot
+        # or death can rewrite its payment. Blind/self-memory hits have no
+        # eligible external source and keep the full own-spot payment.
+        units = damage * self._reward_weight(attacker, target) * (5 if assisters else 10)
+        attacker_row['_reward_damage_units'] = int(attacker_row.get('_reward_damage_units', 0)) + units
+        attacker_row['_reward_credit_damage_units'] = int(attacker_row.get(
+            '_reward_credit_damage_units', 0)) + damage * (75 if assisters else 100)
+        distance = self._mission_distance(attacker, target)
+        if distance is not None and 0 <= distance <= 200:
+            attacker_row['_reward_active_events'] = int(attacker_row.get('_reward_active_events', 0)) + 1
         credits.extend(
             ("radio", assister, share) for assister, share in
             zip(assisters, _even_shares(damage, len(assisters))))
@@ -14772,6 +14757,16 @@ class BattleState:
                              for category, holder, amount in credits if category == "radio"])
             battle_review_diagnostics.battle_review_record(self, 'server_radio_credit',
                 'damage', review_now, review_assist, interval=0.0, limit=512, priority=True)
+        # A single hull-HP loss can appear in several public assist counters.
+        # Pay each holder its largest share of this event once, not the sum.
+        unique_assistance = {}
+        for category, holder, amount in credits:
+            unique_assistance[holder] = max(unique_assistance.get(holder, 0), amount)
+        for holder, amount in unique_assistance.items():
+            row = self._statistics_row(*holder)
+            row['_reward_assist_units'] = int(row.get('_reward_assist_units', 0)) + (
+                amount * self._reward_weight(holder, target) * 10)
+            row['_reward_credit_assist_damage'] = int(row.get('_reward_credit_assist_damage', 0)) + amount
         for category, assister, amount in credits:
             if amount <= 0:
                 continue
@@ -14860,6 +14855,8 @@ class BattleState:
                 self.team_kills.get(actor_identity, 0)) + 1
             self._statistics_row(*actor_identity)["team_kills"] += 1
             if not self._is_blue_target((str(victim_kind), int(victim_id))):
+                row = self._statistics_row(*actor_identity)
+                row['_reward_team_kills_penalized'] = int(row.get('_reward_team_kills_penalized', 0)) + 1
                 self._statistics_row(*actor_identity)["team_killed_durability"] += (
                     self._vehicle_max_health((str(victim_kind), int(victim_id))))
             self._record_lucky_devils(

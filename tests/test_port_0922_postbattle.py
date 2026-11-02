@@ -449,19 +449,15 @@ class PostBattleContractTests(unittest.TestCase):
         self.assertEqual(0, win['repair_cost'])
         self.assertEqual(0, win['ammo_cost'])
 
-        # A kill is paid by the durability of what was killed, so the frag
-        # count alone moves neither payment.
+        # Kill credit is not a separate income category; XP uses target tier.
         kills = compute_offline_rewards({'kills': 3}, False, True)
-        self.assertEqual(base['xp'], kills['xp'])
+        self.assertGreater(kills['xp'], base['xp'])
         self.assertEqual(base['credits'], kills['credits'])
-        killed = compute_offline_rewards(
-            {'kills': 3}, False, True, killed_durability=1200)
-        self.assertGreater(killed['xp'], base['xp'])
-        self.assertEqual(base['credits'], killed['credits'])
+
         tier_three_loss = compute_offline_rewards({}, False, True, 3)
         tier_three_win = compute_offline_rewards({}, True, True, 3)
-        self.assertEqual(3000, tier_three_loss['credits'])
-        self.assertEqual(3000 * 185 // 100,
+        self.assertEqual(2100, tier_three_loss['credits'])
+        self.assertEqual(3900,
                          tier_three_win['credits'])
 
     def test_an_unreadable_record_says_why_and_is_kept_beside_the_new_one(self):

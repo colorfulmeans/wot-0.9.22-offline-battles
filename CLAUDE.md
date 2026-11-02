@@ -79,14 +79,35 @@ committed; remove only exact generated targets after verifying what they are.
 
 ### Gameplay reconstruction source priority
 
-Use official documentation and exact client data first. When these do not
-provide a gameplay law or server-only parameter, continue with community
-research, controlled measurements and historical footage. Record source dates,
-version differences and confidence. Official-first does not mean official-only.
-If both are insufficient, explicitly labelled offline reconstruction and
-calibration are preferable to silently retaining a known broken law. Leaving
-an effect unimplemented is the last resort: state what was investigated and
-what remains missing. User instructions take precedence over this document.
+Select the base rule set in this order: official, community, then explicitly
+custom. Prefer a coherent model over selecting favourable pieces from several
+models. The source of a missing parameter and the source of a conflicting rule
+are different questions:
+
+- With an official base, official rules resolve every conflict. For genuine
+  gaps, consult community research as a reference, but adopt a supplement only
+  when it is reasonable and compatible with the official base. If it is missing
+  or incompatible, use explicitly labelled custom reconstruction that preserves
+  the base model's rules.
+- With a community base, that community model resolves every conflict, including
+  conflicts with official descriptions. For genuine gaps, consult official data
+  as a reference, but adopt a supplement only when it is reasonable and compatible
+  with that community base. If it is missing or incompatible, use explicitly
+  labelled custom reconstruction that preserves the base model's rules.
+- A custom base may deliberately combine rules, but must be identified as custom.
+
+Compatibility with the selected base and internal rule consistency take
+precedence over mechanically importing a supplement from another source.
+A rule already specified by the selected base is not a gap merely because a
+different source disagrees or appears more convenient. Do not replace it with
+that source's rule. State the selected base, each genuine gap filled, and the
+source/confidence of the supplement. Record source dates, version differences
+and controlled measurements. User instructions take precedence over this
+source priority, including an explicitly selected base for a particular model.
+Leaving a known broken effect unimplemented is the last resort: investigate the
+allowed supplements and labelled reconstruction first, and state what is still
+missing. Apply this consistently to earnings, collision, fire, crew skills,
+equipment, consumables, directives and other gameplay calculations.
 Do not treat successful installation, factor donation, diagnostics or passing
 synthetic tests as proof that the battle consumer actually applies an effect.
 

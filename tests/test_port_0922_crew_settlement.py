@@ -142,3 +142,46 @@ class CrewSettlementTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_v2_vehicle_coefficient_is_not_applied_twice_and_retry_is_neutral(self):
+        economy = fixture._load('economy')
+        receipt = self.receipt()
+        receipt['rewards'].update(economy_version=2,
+            achievement_credits=0, achievement_xp=0, achievement_free_xp=0)
+        with mock.patch.object(economy, 'is_premium_vehicle', return_value=True):
+            self.assertTrue(self.result_store.accept(receipt))
+        accepted = self.result_store._pending[str(receipt['arena_unique_id'])]
+        self.assertEqual(4200, accepted['awarded']['credits'])
+        self.assertEqual(2, accepted['rewards']['economy_version'])
+        self.assertEqual(4200, self.packed_vehicle(self.result_store, receipt)['credits'])
+        saved = copy.deepcopy(self.snapshot)
+        self.assertFalse(self.result_store.accept(receipt))
+        self.assertEqual(saved, self.snapshot)
+
+    def test_legacy_pending_receipt_retains_its_original_premium_vehicle_payment(self):
+        economy = fixture._load('economy')
+        receipt = self.receipt()
+        with mock.patch.object(economy, 'is_premium_vehicle', return_value=True):
+            self.assertTrue(self.result_store.accept(receipt))
+        accepted = self.result_store._pending[str(receipt['arena_unique_id'])]
+        self.assertEqual(6300, accepted['awarded']['credits'])
+
+    def test_resistance_is_packed_for_native_detail_rows_without_repaying_it(self):
+        receipt = self.receipt()
+        receipt['winner'] = 2
+        receipt['rewards'].update(economy_version=2,
+            achievement_credits=1000, achievement_xp=200, achievement_free_xp=10)
+        self.assertTrue(self.result_store.accept(receipt))
+        vehicle = self.packed_vehicle(self.result_store, receipt)
+        self.assertEqual((1000,200,10), tuple(vehicle[key] for key in (
+            'achievementCredits','achievementXP','achievementFreeXP')))
+        self.assertEqual((4200,600,30), tuple(vehicle[key] for key in (
+            'credits','xp','freeXP')))
+
+    def test_version_and_resistance_bounds_survive_canonicalization(self):
+        for fields in (dict(economy_version=0),dict(economy_version=99),
+                       dict(economy_version=2,achievement_xp=601),
+                       dict(economy_version=2,achievement_credits=-1)):
+            with self.subTest(fields=fields):
+                receipt=self.receipt();receipt['rewards'].update(fields)
+                with self.assertRaises(ValueError):self.results._receipt(receipt)

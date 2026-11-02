@@ -1,5 +1,99 @@
 # Compatibility review: World of Tanks 0.9.22.0.1 #1513
 
+
+## Coherent earnings model and gameplay-source re-audit (November 2, evening)
+
+This section supersedes earlier claims that the old offline rewards followed the
+published payment structure. The owner explicitly selected the complete 2015
+community credit model after reviewing its disagreements with WG's article.
+Do not splice WG's 0.5 other-spot factor, 1.85 participation multiplier or
+credit tier bonus into this selected model. XP is a separate calculation with
+an official categorical base and explicitly reconstructed missing coefficients.
+The revised source-selection rule in CLAUDE.md applies to both.
+
+Credit base: HellQwer, September 24, 2015, mostly 0.9.9 replay measurements:
+https://forum.tanki.su/topic/1660148-%D0%BE-%D0%BA%D1%80%D0%B5%D0%B4%D0%B8%D1%82%D0%B0%D1%85/
+Original experiment: https://world-of-tanks.livejournal.com/3801962.html
+Workbook: https://forum-mt-prod.lesta.ru/monthly_09_2015/post-12045944-0-61402200-1443131647.xlsx
+
+Before the vehicle coefficient, credits are 700*tier participation on a loss/draw,
+1300*tier on a win, 10 per own/blind damage HP, 7.5 per other-spot damage HP,
+5 per assisted HP, 100 per first spot (200 for artillery) and 500 for each actor
+still in a successfully captured circle. Resistance adds 600*tier participation
+on a loss/draw, once regardless of medal count. Capture is not divided among
+historical contributors. There is no target-tier credit term in this model.
+The three assist categories remain separate public statistics, but the largest
+share credited to one holder per admitted damage event is paid only once.
+Stun assistance did not exist in the 2015 workbook: its missing credit treatment
+is the explicitly compatible extension of that model's assistance payment,
+not a claim that the 2015 author measured stun.
+
+The reproducible coefficient baker joins the original workbook to exact #1513
+vehicle identities using English/Russian names, compact IDs, tiers and classes.
+No fuzzy matching or modern prices/profitability are imported. Of 680 packed
+vehicle definitions, 375 have matching historical measurements; 305 have labelled
+same-premium-status/tier/class cohort estimates (nearest tier only when that
+cohort is empty). These are not 680 measured coefficients. Type 59 is workbook
+row 6: 1.575. Data from vehicles with changed tiers/classes is not reused as a
+measurement. Runtime logs name the measurement row or the estimate. Later
+vehicles, special regional variants and estimates need further retail evidence.
+
+XP base: WG support 18960 and the 0.8.8 manual:
+https://www.wargaming.net/support/en/products/wot/article/18960/?lang=en&redirect_lang=en
+https://worldoftanks.com/dcont/fb/wot_guide/world_of_tanks_game_manual_en_com_web_8_8.pdf
+
+Removed the modern Ace/mark-percentile ratio as an alleged XP coefficient and
+the victim-max-HP kill proxy. The server now freezes damage visibility, actual
+target tiers, admitted critical transitions, per-target kills, distinct assist
+shares and close positive-damage events. Capture/defence, first spots, survival
+and active combat have separate entries. Exact XP magnitudes and tier scaling
+are not published: the constants in offline_rewards.py are an explicit offline
+reconstruction of those missing quantities, not a recovered WG XP formula.
+Victories add 50%; losing/drawing Battle Hero/Epic recipients receive the same
+bonus once. Ordinary badges/mastery/marks do not qualify. Training remains zero.
+Bond formula/schedule and mission thresholds have not been retuned.
+
+Economy v2 credits already include vehicle profitability on the authority.
+The client must not multiply them by its historical generic premium-vehicle
+1.5 again. Legacy pending receipts retain that older settlement path. Account
+premium, first-win XP, reserves, save multiplier, service costs and the durable
+receipt marker still share the existing single transaction. Native #1513
+VEH_FULL_RESULTS has achievementCredits/achievementXP/achievementFreeXP; its
+reusable income chains insert these display-only resistance records and subtract
+them from the base row themselves. They must not be added to ValueReplay totals
+again. Exact bytecode readers and consumers were inspected locally before use.
+Server REWARD BREAKDOWN and client ECONOMY SETTLED record the raw model parts,
+coefficient provenance, account steps, services and wallet boundaries. The
+launcher diagnostic Repair tab adds a stationary-target earnings-test button;
+normal launching retains the two supported outer entry points.
+
+### Re-audit of earlier combat changes under the clarified model rule
+
+| Area | Actual base and gap handling | Audit conclusion / remaining boundary |
+| --- | --- | --- |
+| Ram HP damage | User-selected custom calibration based on the historical Battle Mechanics HE-like model and supplied collision note: quarter energy with full armour absorption; native mounted mass/armour/liner inputs | Custom, not unmodified WG/wiki law. The old ram_damage docstring incorrectly called it the documented 9.22 formula; corrected without changing the authorized tuning. No friendly ram HP remains an explicit product rule. |
+| Hull fire | Community linear-decay study (Jak_Atackka, 2020); native crew decay factor; missing initial rate and baseline decay use declared 5% HP/s and 10 s calibration | Partial reconstruction. The study's initial +/-20% RNG and per-vehicle burn values are not implemented by the current deterministic fire model. Do not call this complete retail/community parity. 2020-to-9.22 evidence and canonical ignition ownership still need verification before changing live fire randomness. |
+| Internal fire and module recovery | Custom 10 module HP/s, 50% orange threshold, 12/21.6 s reference repair work and the owner's physical-crew-count rule; native HP pools and skill/equipment factors fill compatible data | Explicit custom base; not an official or community per-vehicle repair table. These reconstruction constants cannot be passed off as native effects or measurements. |
+| Crew skills | Exact #1513 VehicleDescrCrew/configuration and physical seat/casualty eligibility, plus offline consumers for omitted cell-side effects | No second conflicting skill-percentage table found in the audited active native factor path. Repair work and fire duration belong to the custom/partial bases above, even though their skill multipliers are native. Conditional effects still require the existing live consumer tests. |
+| Devices | Native descriptor installation/updateVehicleAttrFactors/miscAttrs, including compatible liners, toolbox, rack/tank HP, reload/aim/bloom, optics/net/binocular state | No new conflicting device percentages introduced by this round. The owner's installation priorities are configuration policy, not a change to device-effect formulas. An item appearing in inventory is not acceptance of its battle consumer. |
+| Directives | Native BattleBooster eligibility/processors; six device and nine crew directives, active physical carriers and separate device-vs-crew factors | No alternate directive magnitudes substituted in the reviewed native path. Their repair/fire consumers inherit the explicitly declared bases above, not a separate directive formula. |
+| Consumables | Native item fields, reuse/cooldown, fire chance, food/fuel/power and kit effects; bot selection/reaction/governor use are explicit custom control policy | Do not describe Bot trigger delays, uphill/wreck decisions or the authorized half-speed governor engine-wear condition as recovered WG rules. No conflicting native item coefficient was replaced in the audited projection/state consumers. |
+
+The audit is not a blanket claim that all 25 skills, 49 devices, 15 directives
+and 21 consumables have been independently demonstrated in this new package.
+Existing exact-contract, matrix and engine-free consumer checks are rerun; the
+new Windows acceptance below must identify what it actually exercises. The fire
+RNG/per-vehicle-calibration gap remains recorded rather than silently declared
+fixed as part of earnings work.
+
+Validation in progress: focused reward/protocol/atomic-settlement tests pass;
+all 47 launcher test files pass locally. A broad local client run hit the absent
+matching native simulation build; those failures require the matching cloud
+native build, not removed assertions or a relaxed test baseline. Final pushed
+CI, independent package inspection and native results are recorded after the
+final files stop changing.
+
+
 ## Repair workforce and directive acceptance follow-up (November 2, afternoon)
 
 This section supersedes the uniform repair-time boundary below. Exact #1513

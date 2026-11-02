@@ -176,6 +176,23 @@ jobs:
           done
           python tools/run_test_suite.py --jobs 4 --logs build/bot-test-results/traffic "${arguments[@]}"
 
+      - name: Check coherent 2015 earnings and atomic native settlement
+        if: ${{ !cancelled() }}
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: tests:server:src/res/scripts/client
+        run: >-
+          python tools/run_test_suite.py --jobs 3
+          --logs build/bot-test-results/earnings
+          --pattern test_port_0922_offline_rewards.py
+          --pattern test_port_0922_postbattle.py
+          --pattern test_port_0922_lan_protocol.py
+          --pattern test_port_0922_crew_settlement.py
+          --pattern test_port_0922_friendly_fire.py
+          --pattern test_port_0922_economy.py
+          --pattern test_port_0922_economy_payloads.py
+          --pattern test_port_0922_economy_regressions.py
+
       - name: Check equipment effects, physical crew skills and elite ammunition
         if: ${{ !cancelled() }}
         env:
