@@ -71,6 +71,11 @@ _MAINTENANCE_HELP = (
 )
 
 _CHINESE = {
+    'Equipment and crew test': '配件与技能测试',
+    'Shot-triggered drop test': '开炮触发掉车测试',
+    'Bot governor driving test': 'BOT 调速器行驶测试',
+    'Equipment control: baseline': '配件指令对照：无配件技能',
+    'Equipment control: varied fittings': '配件指令对照：分车装配',
     'Premium account days': '高级账号天数',
     'Premium days must be a non-negative whole number.': '高级账号天数必须为非负整数。',
     'Premium days are outside the supported range.': '高级账号天数超出客户端支持范围。',
@@ -1246,26 +1251,22 @@ class LauncherWindow(object):
             justify="left", wraplength=620)
         self.maintenance_help.grid(row=2, column=0, columnspan=2,
             sticky="new", pady=(8, 0))
+        self.diagnostic_scene_buttons = []
         if os.environ.get('WOT_OFFLINE_DIAGNOSTICS') == '1':
-            zh = self.language == i18n.LANGUAGE_CHINESE
-            tk.Button(self.repair_panel,
-                text='配件与技能测试' if zh else 'Equipment and crew test',
-                command=lambda: self._start_diagnostic_scene('equipment')).grid(
-                    row=3, column=0, sticky='ew', padx=(0,3), pady=(6,0))
-            tk.Button(self.repair_panel,
-                text='开炮触发掉车测试' if zh else 'Shot-triggered drop test',
-                command=lambda: self._start_diagnostic_scene('drop')).grid(
-                    row=3, column=1, sticky='ew', padx=(3,0), pady=(6,0))
-            tk.Button(self.repair_panel,
-                text='BOT 调速器行驶测试' if zh else 'Bot governor driving test',
-                command=lambda: self._start_diagnostic_scene('governor')).grid(
-                    row=4, column=0, columnspan=2, sticky='ew', pady=(6,0))
-            for column, scene in enumerate(('equipment_baseline', 'equipment_matrix')):
-                tk.Button(self.repair_panel,
-                    text=(('配件指令对照：无加成', '配件指令对照：分车装配')[column] if zh else
-                          ('Equipment control: baseline', 'Equipment control: varied fittings')[column]),
-                    command=lambda value=scene: self._start_diagnostic_scene(value)).grid(
-                        row=5, column=column, sticky='ew', padx=(0,3) if column == 0 else (3,0), pady=(6,0))
+            scenes = (
+                ('equipment', 'Equipment and crew test', 3, 0, 1),
+                ('drop', 'Shot-triggered drop test', 3, 1, 1),
+                ('governor', 'Bot governor driving test', 4, 0, 2),
+                ('equipment_baseline', 'Equipment control: baseline', 5, 0, 1),
+                ('equipment_matrix', 'Equipment control: varied fittings', 5, 1, 1),
+            )
+            for scene, label, row, column, span in scenes:
+                button = tk.Button(self.repair_panel, text=self._t(label),
+                    command=lambda value=scene: self._start_diagnostic_scene(value))
+                button.grid(row=row, column=column, columnspan=span, sticky='ew',
+                    padx=(0,0) if span == 2 else (0,3) if column == 0 else (3,0),
+                    pady=(6,0))
+                self.diagnostic_scene_buttons.append((button, label))
         self.repair_panel.grid_rowconfigure(6, weight=1)
         self.repair_panel.bind('<Configure>', lambda event:
             self.maintenance_help.config(wraplength=max(1, event.width - 26)))
@@ -1277,6 +1278,8 @@ class LauncherWindow(object):
         return text
 
     def _apply_language(self, refresh=True):
+        for button, label in getattr(self, 'diagnostic_scene_buttons', ()):
+            button.config(text=self._t(label))
         self.language_label.config(text=self._t("Language"))
         self.game_title.config(text=self._t("Game client"))
         self.game_folder_label.config(text=self._t("Game folder"))
