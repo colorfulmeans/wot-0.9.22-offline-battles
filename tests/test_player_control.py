@@ -46,6 +46,17 @@ class PlayerRegressionTests(unittest.TestCase):
             p.settle([20,5],i+.1)
             self.assertEqual(1 if i==3 else 0,p.desired)
 
+    def test_full_standard_premium_he_cycle_uses_actual_available_stocks(self):
+        p=Ammunition([dict(index=0,kind='ARMOR_PIERCING'),
+                      dict(index=1,kind='ARMOR_PIERCING_CR'),
+                      dict(index=2,kind='HIGH_EXPLOSIVE')],0,0)
+        for i,shell in enumerate((0,0,1,1,2,2)):
+            p.launch(str(i),shell,42,i)
+            p.hit(dict(projectile_id=str(i),damage=50 if shell==2 else 0,shot_result=2))
+            p.terminal(dict(projectile_id=str(i),hit_vehicle=True),i)
+            p.settle([20,20,6],i)
+            if i in (1,3,5):self.assertEqual({1:1,3:2,5:0}[i],p.choose([20,20,6]))
+
     def test_missing_effect_is_unknown_never_a_failure(self):
         p=self.policy()
         for i in range(3):
