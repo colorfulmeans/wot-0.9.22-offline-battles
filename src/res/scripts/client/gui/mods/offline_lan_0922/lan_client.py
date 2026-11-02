@@ -4937,7 +4937,7 @@ class LANClient(object):
                      authority_epoch < self.authority_epoch) or
                     (ledger_required and 'server_time_ms' in message and
                      roster_server_time is None)):
-                from .native_input_diagnostics import validation_event
+                from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
                 validation_event('roster_rejected', round_id=round_id,
                     previous_round=self.round_id, phase=phase,
                     previous_phase=self.phase, map_present=bool(map_name),
