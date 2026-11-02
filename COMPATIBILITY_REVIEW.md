@@ -13102,7 +13102,9 @@ opening-aim timing use rating 1.0. Player inventory and fitting are retained;
 the currently selected round is protected through its first admitted shot,
 then the existing non-premium-forcing ShotPolicy consumes committed results.
 
-Local evidence: 22 player input/navigation tests and all 232 client modules
+Handover also preserves an already admitted burst subshot until its commit,
+then cancels future burst rounds; clearing the burst before acknowledgement
+would break the normal gun transaction. Local evidence: 23 player input/navigation tests and all 232 client modules
 compile with Python 2.7. Native checkbox/button matrix, handover firing and
 actual enemy damage remain pending on the replacement package. No native pass
 from the failed previous candidate transfers to these changed control paths.

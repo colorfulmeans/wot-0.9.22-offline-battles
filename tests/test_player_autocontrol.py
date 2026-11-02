@@ -14,6 +14,19 @@ from gui.mods.offline_lan_0922 import player_autocontrol as control
 
 
 class ControlTests(unittest.TestCase):
+    def test_handover_keeps_an_admitted_burst_round_until_its_commit(self):
+        from test_port_0922_battle_runtime import NativeBattleRuntime
+        burst = dict(committed=0)
+        owner = types.SimpleNamespace(_local_player_burst=burst,
+                                      _local_fire_intent=dict(player_burst=burst))
+        self.assertIs(burst, NativeBattleRuntime._cancel_local_player_burst(owner,apply_settings=True))
+        self.assertIs(burst,owner._local_player_burst)
+        self.assertTrue(burst['stop_after_pending'])
+        owner._local_fire_intent = None
+        owner._gun_state = None
+        NativeBattleRuntime._cancel_local_player_burst(owner)
+        self.assertIsNone(owner._local_player_burst)
+
     def test_suppressed_native_trigger_is_rejected_not_fake_acknowledged(self):
         from test_port_0922_battle_runtime import _LANInputSender
         self.owner._player_autocontrol = self.control

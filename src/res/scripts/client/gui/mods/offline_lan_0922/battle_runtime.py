@@ -13971,6 +13971,14 @@ class BattleRuntime(object):
                 'cursor_logs': 0,
             })
         self._local_fire_intent = None
+        burst = pending.get('player_burst')
+        if (burst is not None and burst.get('stop_after_pending') and
+                self._local_player_burst is burst):
+            # Handover cannot revoke a launch already admitted by the server.
+            # Settle that subshot once, then cancel only future burst rounds.
+            self._cancel_local_player_burst()
+            if gun is not None:
+                self._rescale_current_reload(gun, reload_factor)
         control = getattr(self, '_player_autocontrol', None)
         if control is not None:
             control.shot_committed(event, pending)
@@ -31414,6 +31422,11 @@ class BattleRuntime(object):
 
     def _cancel_local_player_burst(self, apply_settings=False):
         burst = self._local_player_burst
+        pending = self._local_fire_intent
+        if (apply_settings and burst is not None and isinstance(pending, dict) and
+                pending.get('player_burst') is burst):
+            burst['stop_after_pending'] = True
+            return burst
         self._local_player_burst = None
         if burst is not None and self._gun_state is not None:
             gun = self._gun_state

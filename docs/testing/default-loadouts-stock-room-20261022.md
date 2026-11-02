@@ -876,6 +876,8 @@ old isolated-Bot force-balance expectation with independent human control:
 - Complete the native checkbox matrix and every mouse-panel action, including
   timed-drive expiry, Stop, panel-close Stop and starting the next round manual.
 
-Automated player tests cover 22 cases at this candidate; native replacement
+Include stopping while a burst subshot awaits acknowledgement: the admitted
+round must settle once and only future subshots are cancelled.
+Automated player tests cover 23 cases at this candidate; native replacement
 acceptance remains pending and must be recorded separately.
 
