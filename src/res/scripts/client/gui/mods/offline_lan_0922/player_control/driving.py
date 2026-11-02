@@ -52,8 +52,12 @@ class Driver(object):
                     brake = True
                 else:
                     turn = max(-1., min(1., delta/.5))
-            elif clear(yaw, max(3., min(8., distance))):
-                throttle = 1. if distance > 5. else .45
+            elif clear(yaw, min(4.,max(3.,distance)) if self.recovery_heading is not None
+                       else max(3., min(8., distance))):
+                # A detour was proved over five metres, not the ordinary
+                # eight-metre cruise horizon. Move cautiously within that
+                # proof instead of rejecting it and alternating fan headings.
+                throttle = .45 if self.recovery_heading is not None else 1. if distance > 5. else .45
                 turn = max(-.6, min(.6, delta))
             else:
                 mode, brake = 'blocked', True

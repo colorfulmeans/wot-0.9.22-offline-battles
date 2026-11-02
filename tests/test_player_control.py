@@ -123,6 +123,19 @@ class PlayerRegressionTests(unittest.TestCase):
             position[2]+=math.cos(yaw)*order['throttle']*.6
         self.assertLess(position[2],-25)
 
+    def test_short_proved_detour_is_not_rejected_by_long_cruise_horizon(self):
+        d=Driver();position=[0.,0.,0.];yaw=0.
+        # The real traffic trace found a clear five-metre fan beside a friend
+        # but the eight-metre forward sweep still touched the next hull.
+        def clear(heading,reach):
+            return reach<=5. or abs(angle(heading))>.4
+        for i in range(100):
+            command=d.drive(position,yaw,0.,(0,0,100),i*.1,clear)
+            yaw=angle(yaw+command['turn']*.08)
+            position[0]+=math.sin(yaw)*command['throttle']*.5
+            position[2]+=math.cos(yaw)*command['throttle']*.5
+        self.assertGreater(math.hypot(position[0],position[2]),3.)
+
     def test_captured_near_tip_does_not_alternate_forward_reverse(self):
         d=Driver();position=[-9.2,.258,33.65];yaw=0.
         target=(-14,.258,30.)
