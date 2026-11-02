@@ -56,6 +56,7 @@ class PlayerControl(object):
         self.closed = False
         self.input_binding = None
         self.consumable_pending = {}
+        self.shot_commits = 0
 
     def bind_input(self):
         """Wrap the exact #1513 event seam, including strategic camera mode."""
@@ -308,6 +309,7 @@ class PlayerControl(object):
             abs(float(row.get('slope', 0.))) <= math.tan(math.radians(25.)))
 
     def shot_committed(self, event, pending):
+        self.shot_commits += 1
         if (self.handover_burst is not None and pending.get('player_burst') is self.handover_burst):
             if self.owner._local_player_burst is self.handover_burst:
                 self.owner._cancel_local_player_burst()
@@ -432,6 +434,8 @@ class PlayerControl(object):
             self.target_engine = None
             if 'fire' in self.features and self.weapon is not None:
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
+                self.aim_receipt = dict(mode='forward',point=self.weapon.point,
+                    client_mode=owner._avatar.gunRotator.clientMode)
         if 'drive' in self.features and self.navigation is not None:
             from .traffic import Traffic, body
             peers = [r for r in neighbours if r['team']==int(owner.client.team) or r.get('visible') or not r['alive']]
@@ -465,7 +469,9 @@ class PlayerControl(object):
                 order['turn'] = opposite if traffic.can_turn(opposite) else 0.
                 order['throttle'] = 0.
                 order['recovery_mode'] = 'vehicle_turn_clearance'
-            order['traffic'] = traffic.receipt
+            order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
+                wreck_count=sum(not r['alive'] for r in peers),
+                blocked_queries=traffic.blocked_queries)
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()

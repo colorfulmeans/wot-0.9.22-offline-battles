@@ -15,6 +15,8 @@ class Traffic(object):
         self.neighbours = [body(r['id'],r['position'],r['yaw'],r['collision_shape'],
                                r.get('pitch',0.),r.get('roll',0.)) for r in neighbours]
         self.receipt = {}
+        self.blocked_queries = []
+        self.peers = dict((r['id'], r) for r in neighbours)
 
     def clear(self, heading, reach):
         moving = dict(self.current, yaw=heading)
@@ -23,6 +25,12 @@ class Traffic(object):
             (math.sin(heading)*reach,math.cos(heading)*reach),self.neighbours,contacts=hits)
         self.receipt = dict(fraction=fraction, blockers=[r[0] for r in hits],
                             heading=heading, reach=reach)
+        if fraction < .999 and len(self.blocked_queries) < 12:
+            self.blocked_queries.append(dict(self.receipt,
+                actors=[dict(id=identity, alive=self.peers[identity]['alive'],
+                    team=self.peers[identity].get('team'),
+                    position=self.peers[identity]['position']) for identity, at in hits]))
+        self.receipt['blocked_queries'] = self.blocked_queries
         return fraction >= .999
 
     def can_turn(self, turn):

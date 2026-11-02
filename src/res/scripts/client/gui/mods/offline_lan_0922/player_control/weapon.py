@@ -65,14 +65,18 @@ class Weapon(object):
         # handshake. The player's mailbox admits only this bounded call.
         self.triggering = True
         committed = self.committed
+        controller = getattr(self.owner, '_player_control', None)
+        player_committed = getattr(controller, 'shot_commits', 0)
         try:
             self.owner._avatar.shoot()
         finally:
             self.triggering = False
-        self.trigger_receipt = dict(committed_during_call=self.committed-committed,
+        committed_delta = max(self.committed-committed,
+            getattr(controller, 'shot_commits', 0)-player_committed)
+        self.trigger_receipt = dict(committed_during_call=committed_delta,
             pending=isinstance(self.owner._local_fire_intent, dict),
             waiting=bool(getattr(self.owner._avatar, 'isWaitingForShot', False)))
-        return self.committed != committed or isinstance(self.owner._local_fire_intent, dict)
+        return bool(committed_delta) or isinstance(self.owner._local_fire_intent, dict)
 
     def forward(self, position, yaw, height):
         self.bind()

@@ -209,9 +209,14 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertFalse(t.clear(0,6))
         self.assertIn(2,t.receipt['blockers'])
         self.assertTrue(t.clear(math.pi/2,6))
+        self.assertEqual([],t.receipt['blockers'])
+        self.assertEqual(2,t.receipt['blocked_queries'][0]['actors'][0]['id'])
+        self.assertTrue(t.receipt['blocked_queries'][0]['actors'][0]['alive'])
 
     def test_wreck_uses_the_same_clearance_as_a_live_vehicle(self):
-        self.assertFalse(self.traffic((0,0,8),False).clear(0,6))
+        t=self.traffic((0,0,8),False)
+        self.assertFalse(t.clear(0,6))
+        self.assertFalse(t.receipt['blocked_queries'][0]['actors'][0]['alive'])
 
     def test_vehicle_on_overhead_bridge_does_not_block_ground(self):
         self.assertTrue(self.traffic((0,8,8)).clear(0,6))
@@ -258,6 +263,18 @@ class PlayerRegressionTests(unittest.TestCase):
         owner._avatar.shoot=mock.Mock(side_effect=RuntimeError('native'))
         with self.assertRaises(RuntimeError):w.trigger()
         self.assertFalse(w.triggering)
+
+    def test_inactive_panel_fire_records_synchronous_native_commit(self):
+        owner=types.SimpleNamespace(_sender=object(),_local_fire_intent=None)
+        c=player_control.PlayerControl(owner,())
+        owner._player_control=c
+        c.live=lambda:True
+        c.record=lambda *a,**kw:None
+        owner._avatar=types.SimpleNamespace(shoot=lambda:c.shot_committed({},{}))
+        self.assertTrue(c.command(dict(action='fire'),0))
+        self.assertFalse(c.active)
+        self.assertIsNone(c.ammo_policy)
+        self.assertEqual(1,c.shot_commits)
 
     def test_no_runtime_bot_policy_or_driver_dependencies(self):
         denied=('bot_runtime','bot_tactics_runtime','ammo_policy','ai.driver','ai.planner','bot_gunnery')
