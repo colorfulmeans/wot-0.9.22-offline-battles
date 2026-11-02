@@ -157,6 +157,7 @@ class QueueScreenTests(unittest.TestCase):
         self.assertNotIn('queue', self.entity.__dict__)
         self.pump()
         self.assertFalse(self.screen.is_ready())
+        self.assertEqual([True], self.exits)
         self.entity.cancel_warning = False
         self.assertTrue(self.screen.open())
         self.pump()

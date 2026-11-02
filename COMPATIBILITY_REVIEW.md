@@ -35,6 +35,11 @@ The ammunition-warning deadlock was a pending request retained after native
 validation cancellation. Exact PreQueueEntity.queue(ctx,callback) completion
 now clears only the matching request. The temporary dispatch wrapper is restored
 immediately; delayed old callbacks cannot complete a replacement request.
+Native cancellation retest also exposed the waiting-room tick reopening the
+warning immediately. A cancelled validation now exits the LAN room intent via
+the existing queue-exit callback, as well as releasing the pending request.
+The callback regression passes; rebuilt native cancellation acceptance remains
+required.
 
 Credit baking now derives native premium membership from each nation's gold
 price, as #1513 VehicleType does. Raw roster tags lacked `premium`, which had

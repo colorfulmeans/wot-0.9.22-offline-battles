@@ -120,13 +120,20 @@ class QueueScreenUI(object):
 
             def tracked_queue(ctx=None, callback=None):
                 def completed(success):
+                    cancelled = False
                     if (self._installed and self._pending_account is account and
                             self._pending_token is token):
                         self._pending_account = None
                         self._engaged = bool(success and self._in_queue())
+                        cancelled = not success
                         _log('LAN queue request completed: accepted=%s' % bool(success))
                     if callback is not None:
                         callback(success)
+                    # The LAN waiting-state tick retries an absent background.
+                    # Cancel the room intent too, or it immediately opens the
+                    # same native warning again after the user dismisses it.
+                    if cancelled and callable(self._on_exit):
+                        self._on_exit()
                 return original_queue(ctx, callback=completed)
 
             # Native doAction always returns True after starting validation.
