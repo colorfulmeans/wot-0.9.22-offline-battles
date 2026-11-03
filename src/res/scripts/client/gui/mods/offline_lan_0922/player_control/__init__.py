@@ -373,10 +373,20 @@ class PlayerControl(object):
             selected = repair if kind == 'repairkit' else crew if kind == 'medkit' else None
             needed = selected is not None or (kind == 'extinguisher' and critical.get('fire'))
             if needed and item.ready(now) and now >= self.consumable_pending.get(item.contract['id'], 0):
-                index = owner._critical_extra_index(entity.typeDescriptor, selected) if selected else 0
-                owner._activate_equipment(item.contract['id'] | (index << 16))
+                # #1513 all-target kits and extinguishers use high word 1.
+                # Only single-target kits encode a descriptor extra index.
+                # Encoding the damaged track's index for a large kit is
+                # rejected by the canonical equipment owner, not a cooldown.
+                all_targets = bool(item.contract.get('repairAll'))
+                index = (1 if all_targets or kind == 'extinguisher' else
+                         owner._critical_extra_index(entity.typeDescriptor, selected))
+                activation_code = item.contract['id'] | (index << 16)
+                requested = bool(owner._activate_equipment(activation_code))
                 self.consumable_pending[item.contract['id']] = now+2.
-                self.record('consumable', equipment=item.contract['id'], selected=selected)
+                self.record('consumable', equipment=item.contract['id'],
+                            selected=None if all_targets else selected,
+                            needed_target=selected, activation_code=activation_code,
+                            requested=requested)
 
     def update(self, dt, now):
         if not self.live():
@@ -405,6 +415,7 @@ class PlayerControl(object):
         position = tuple(position)
         contacts, neighbours, records = self._contacts(entity)
         shape = owner._collision_shape(entity.typeDescriptor)
+        previous_target = self.target_engine
         target = None
         if 'fire' in self.features:
             self.select_ammo(now)
@@ -440,6 +451,13 @@ class PlayerControl(object):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
                 self.aim_receipt = dict(mode='forward',point=self.weapon.point,
                     client_mode=owner._avatar.gunRotator.clientMode)
+        if previous_target != self.target_engine:
+            self.record('aim_transition', previous=previous_target,
+                        target=self.target_engine,
+                        reason=('clear_lane_selected' if self.target_engine is not None else
+                                'previous_not_visible_alive' if previous_target not in records else
+                                'no_clear_firing_lane'),
+                        position=position, yaw=yaw, aim=self.aim_receipt)
         if 'drive' in self.features and self.navigation is not None:
             from .traffic import Traffic, body
             peers = [r for r in neighbours if r['team']==int(owner.client.team) or r.get('visible') or not r['alive']]

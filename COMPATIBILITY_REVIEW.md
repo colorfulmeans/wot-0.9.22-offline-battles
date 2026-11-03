@@ -13508,6 +13508,31 @@ strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
 # November 3: independent player control repair candidate
 
+### Follow-up: automatic kit encoding rejected by the authority
+
+Independent c2ff1f11 native acceptance exposed a confirmed failure, reported in
+`wot-error-report-20261103-200218-1714d7315197.zip`: ten automatic large-repair
+requests used descriptor extra indexes 82/78 and received
+`invalid_activation_code`. Damage detection worked; the kit never activated.
+The foreground policy now uses the reviewed #1513 high word 1 for all-target
+repair/medical kits and manual extinguishers. Single-target kits retain the
+exact descriptor index. Automatic extinguishers remain under their existing
+canonical owner. The diagnostic's `requested` field means local submission,
+not server acceptance.
+
+The regression passes each real foreground decision through BattleRuntime's
+encoder, LANClient's wire producer and the actual server validator/effect owner;
+it verifies repaired devices/restored crew/extinguished fire and cooldown for
+large/small repair, large/small medical and manual extinguisher requests.
+Local results: 29 consumable-audit tests, 48 player-control tests and CPython
+2.7 compilation pass. Native activation on the replacement build remains
+pending; these engine-free checks do not prove native inventory presentation.
+
+The user's late turret oscillation observation remains under investigation.
+Target-to-forward transitions now log their exact reason and pose, including
+loss of live visible contact versus an obstructed firing lane. No speculative
+targeting hysteresis or Bot behavior change is included in this diagnosis.
+
 The 75bff5c3 native test FAILED acceptance. Four admitted shots hit allied Bot
 12 while the lock target was enemy Bot 30; static-world LOS did not test the
 intervening friendly hull. The native target lock itself worked, but neither

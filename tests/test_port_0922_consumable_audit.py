@@ -314,6 +314,71 @@ class ConsumableSettlementTests(unittest.TestCase):
                 self.assertEqual(before, snapshot)
 
 
+class PlayerAutomaticConsumableTests(unittest.TestCase):
+    def test_automatic_requests_reach_canonical_effect_and_cooldown(self):
+        from gui.mods.offline_lan_0922.player_control import PlayerControl
+        from gui.mods.offline_lan_0922.battle_runtime import BattleRuntime
+        cases = (
+            ('largeRepairkit', 5, 'repairkit', True, 'engineHealth', 82),
+            ('largeMedkit', 6, 'medkit', True, 'loader1', 78),
+            ('handExtinguishers', 3, 'extinguisher', False, None, 0),
+            ('smallRepairkit', 4, 'repairkit', False, 'engineHealth', 82),
+            ('smallMedkit', 2, 'medkit', False, 'loader1', 78),
+        )
+        for name, item_id, kind, all_targets, target, index in cases:
+            with self.subTest(name=name):
+                mounted = item(name, item_id, tags=(kind,), repairAll=all_targets,
+                               reuseCount=-1, cooldownSeconds=90)
+                battle, player = battle_state([mounted])
+                player.effective_params['critical']['activation_targets'] = [
+                    {'index': 82, 'name': 'engineHealth'},
+                    {'index': 78, 'name': 'loader1'}]
+                player.critical = {
+                    'devices': [{'name': 'engineHealth', 'hp': 0,
+                                 'state': 'destroyed'}] if kind == 'repairkit' else [],
+                    'destroyed': ['engineHealth'] if kind == 'repairkit' else [],
+                    'crew_ko': ['loader1'] if kind == 'medkit' else [],
+                    'fire': kind == 'extinguisher'}
+                descriptor = types.SimpleNamespace(extras={
+                    82: types.SimpleNamespace(name='engineHealth'),
+                    78: types.SimpleNamespace(name='loader1Health')})
+                entity = types.SimpleNamespace(typeDescriptor=descriptor)
+                client = lan_client.LANClient('127.0.0.1', 28782, 'Audit', player.vehicle)
+                client.ready, client.phase, client.player_id, client.round_id = True, 'battle', 1, 1
+                client.is_bot_authority = lambda: False
+                sent = []
+                def send(message):
+                    sent.append(copy.deepcopy(message))
+                    return battle.submit_equipment_intent(1, message)
+                client._send = send
+                owner = types.SimpleNamespace(
+                    client=client, _server=types.SimpleNamespace(vehicle_id=10),
+                    _records={'player:1': {'critical_state': copy.deepcopy(player.critical)}},
+                    _equipment_state=[mounted], _clock=lambda: float(battle.tick)/server.TICK_HZ,
+                    _server_entity=lambda vehicle_id: entity,
+                    _critical_extra_index=BattleRuntime._critical_extra_index,
+                    _critical_name_from_extra_index=BattleRuntime._critical_name_from_extra_index,
+                    _report_critical_presentation=mock.Mock())
+                owner._activate_equipment = lambda code: BattleRuntime._activate_equipment(owner, code)
+                controller = PlayerControl(owner, ('consumables',), notify=lambda text: None)
+                controller.record = mock.Mock()
+                controller.consumables(entity)
+                self.assertEqual(1, len(sent))
+                self.assertEqual((1 if all_targets or kind == 'extinguisher' else index),
+                                 sent[0]['activation_code'] >> 16)
+                self.assertEqual(None if all_targets else target, sent[0]['selected'])
+                self.assertTrue(player.equipment_intent_result['accepted'],
+                                player.equipment_intent_result)
+                self.assertFalse(player.critical.get('fire'))
+                self.assertFalse(player.critical.get('crew_ko'))
+                self.assertFalse(player.critical.get('destroyed'))
+                self.assertFalse(mounted.ready(owner._clock()))
+                # Even a stale damage snapshot must not consume another use in cooldown.
+                battle.tick += int(3 * server.TICK_HZ)
+                controller.consumables(entity)
+                self.assertEqual(1, len(sent))
+
+
 class GovernorWearTests(unittest.TestCase):
     def setUp(self):
         self.battle, self.player = battle_state()
