@@ -13506,6 +13506,21 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Windows retest of the fixture room
+
+Runtime 1163bb3e passed all eight CI jobs and all three Windows build jobs.
+Artifact 13260826343 (colorfulmeans-41693069097-1) passed CRC, committed
+source comparison and the single-launch-entry check. On the installed
+Chinese #1513 client, the equipment fixture displayed Mittenhard, 15:15,
+same tier and elite difficulty. The capacity, map, tier, difficulty and
+class controls were disabled. Clicking the previously live Team 1
+capacity arrow did not open a menu. Start remained available and the
+same package entered a live battle. The player test command journal
+enabled foreground control, and native logs showed route movement,
+combat hull turning and a committed automatic shot. This test does not
+exercise the physical shortcut, indirect artillery, native siege,
+withdrawal or an active wreck-push handover.
+
 # Native diagnostic room lock correction
 
 Runtime 9bf5e5e0 passed all eight CI jobs and the single-entry package
