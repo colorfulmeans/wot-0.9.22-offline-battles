@@ -13506,6 +13506,17 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Native diagnostic room lock correction
+
+Runtime 9bf5e5e0 passed all eight CI jobs and the single-entry package
+inspection. Its actual equipment fixture opened the Mittenhard room
+with grey map controls, but the Team 1 capacity menu could still open.
+The fixture now locks roster controls even before the protocol advertises
+a fixed lineup, and skips restoring saved difficulty and capacities
+during fixture startup. The stock-room regression supplies an unlocked
+lineup and otherwise available setters. Stock room, sparse lineup and
+LAN session tests pass locally. Replacement-package acceptance is pending.
+
 # Foreground cover withdrawal
 
 A low-health or empty-clip player may reverse into nearby proved rear

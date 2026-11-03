@@ -73,9 +73,11 @@ class StockRoomTests(unittest.TestCase):
         session._map_pool = ['01_karelia', '02_malinovka']
         session._room_preferences = {'team': 2}
         session.client = types.SimpleNamespace(
-            lineup_locked=True, team_sizes={1: 1, 2: 15},
+            lineup_locked=False, team_sizes={1: 1, 2: 15},
             has_team_selection=lambda: True,
             has_team_size_selection=lambda: True,
+            set_team_class=mock.Mock(), set_bot_tier_mode=mock.Mock(),
+            set_bot_skill_mode=mock.Mock(),
             bot_tier_mode='same', bot_skill_mode='brutal')
         room._map_pool = session._map_pool_value
         room._random_supported = session._server_supports_random_map

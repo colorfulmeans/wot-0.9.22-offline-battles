@@ -1410,6 +1410,9 @@ class LANSession(object):
         supported = getattr(self.client, 'has_team_size_selection', None)
         return bool(callable(supported) and supported())
 
+    def _room_roster_locked(self):
+        return self._fixture_map() is not None or bool(getattr(self.client, 'lineup_locked', False))
+
     def _team_status(self):
         sizes = dict(getattr(self.client, 'team_sizes', {}) or {})
         counts = {1: 0, 2: 0}
@@ -1431,24 +1434,24 @@ class LANSession(object):
                           self._room_preferences.get('team', 0)),
             'sizes': sizes,
             'classes': getattr(self.client, 'team_classes', {}),
-            'class_supported': callable(getattr(self.client,'set_team_class',None)) and not getattr(self.client,'lineup_locked',False),
+            'class_supported': callable(getattr(self.client,'set_team_class',None)) and not self._room_roster_locked(),
             'counts': counts,
             'supported': self._server_supports_team_selection(),
-            'size_supported': self._server_supports_team_size_selection() and not getattr(self.client,'lineup_locked',False),
+            'size_supported': self._server_supports_team_size_selection() and not self._room_roster_locked(),
         }
 
     def _bot_tier_status(self):
         return {
             'mode': getattr(self.client, 'bot_tier_mode', 'random'),
             'supported': callable(getattr(
-                self.client, 'set_bot_tier_mode', None)) and not getattr(self.client,'lineup_locked',False),
+                self.client, 'set_bot_tier_mode', None)) and not self._room_roster_locked(),
         }
 
     def _bot_skill_status(self):
         return {
             'mode': getattr(self.client, 'bot_skill_mode', 'mixed'),
             'supported': callable(getattr(
-                self.client, 'set_bot_skill_mode', None)) and not getattr(self.client,'lineup_locked',False),
+                self.client, 'set_bot_skill_mode', None)) and not self._room_roster_locked(),
         }
 
     def select_team(self, team):
@@ -1600,7 +1603,8 @@ class LANSession(object):
     def _restore_waiting_preferences(self):
         """Apply saved difficulty, capacities and team once per connection."""
         generation = self._client_generation
-        if getattr(self.client, 'lineup_locked', False):
+        if (LANSession._fixture_map() is not None or
+                getattr(self.client, 'lineup_locked', False)):
             # A custom roster owns these controls. Keep the next Automatic
             # room's capacities at 15 rather than replaying a sparse size.
             self._restored_skill_generation = generation
