@@ -57,6 +57,8 @@ class PlayerControl(object):
         self.input_binding = None
         self.consumable_pending = {}
         self.shot_commits = 0
+        from .wrecks import WreckPush
+        self.wreck_push = WreckPush()
 
     def bind_input(self):
         """Wrap the exact #1513 event seam, including strategic camera mode."""
@@ -167,6 +169,8 @@ class PlayerControl(object):
             else:
                 self.handover_burst = owner._local_fire_intent.get('player_burst')
         self.target_engine = None
+        from .wrecks import WreckPush
+        self.wreck_push = WreckPush()
         if changed:
             self.record('disabled', reason=reason)
             if self.live():
@@ -495,7 +499,11 @@ class PlayerControl(object):
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             order = self.navigation.decide(state, clear, hold=hold)
-            self.turn_clearance.apply(order,yaw,traffic,position,clear)
+            pushing = self.wreck_push.apply(order,state,traffic,
+                lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach))
+            if not pushing:
+                self.turn_clearance.apply(order,yaw,traffic,position,clear)
+            order['wreck_push'] = self.wreck_push.receipt
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)

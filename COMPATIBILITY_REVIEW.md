@@ -13534,6 +13534,44 @@ Another verifies a clear alternative wins and contact loss restores forward aim.
 Replacement package/native acceptance is pending; these checks alone do not
 prove the user-visible oscillation has stopped on #1513.
 
+### Follow-up: independent player wreck motor and progress ownership
+
+Runtime ec5c72e1 passed all three build jobs (41646898020), all eight Tests
+jobs (41646847003), archive/source and frozen-launcher inspection. In its second
+native Mittenhard round it admitted eleven automatic shots and recorded thirteen
+one-second aiming decisions with `fire_clear=false` while retaining the target.
+No lane-blocked target-to-forward transition occurred. First-round zero-shot
+travel is inconclusive for aiming acceptance, not a successful combat test.
+Report `wot-error-report-20261103-223823-dcad2347c37f.zip` preserves both rounds.
+
+The user then identified a separate hull oscillation at the T110E3 wreck.
+From 22:29:39 through 22:29:56 the player remained around (-183.5, .38, -34.3),
+repeatedly alternating turn-clearance signs and short reverse attempts beside
+wreck 2130706512. Enemy acquisition at 22:29:57 interrupted this, and the player
+finally translated away at 22:30:03. Death occurred at 22:30:54. This is a
+confirmed failed native movement gate even though the hull eventually escaped.
+
+Comparison found two missing player-side behaviors: dead hulls were always
+avoidance obstacles, with no continuous motor attempt; and any .2-radian yaw
+change renewed the driver's progress clock, even when merely undoing its last
+turn. The independent player package now admits straight wreck motor attempts
+only after alignment and current static-ground/world and living-hull checks.
+Native mass/contact physics still owns every resulting movement. Half a metre
+of own forward progress renews a fourteen-second motor budget; yaw, route-tip
+changes and wreck-only motion do not. A spent encounter returns to ordinary
+checked recovery, rather than a permanent stop; leaving the encounter or actual
+wreck displacement can permit another attempt. Rotation only renews the driver
+clock when it improves the best heading error, not for repeated left/right sway.
+
+These decisions and encounter history are player-owned. No BotAdapter,
+BotRuntime, Bot driver, target policy or route allocation is imported or changed.
+The Bot comparison is a behavior audit, not runtime delegation. Bot wall-blocked
+tracking already retains the selected target and gates fire separately; its
+motor-attempt policy also exists separately. The user's second observation of
+an enemy rocking then leaving still needs exact actor/time matching; it is not
+being labelled the same defect solely from the visual similarity.
+Replacement package/native acceptance of the new player motor path is pending.
+
 ### Follow-up: automatic kit encoding rejected by the authority
 
 Independent c2ff1f11 native acceptance exposed a confirmed failure, reported in

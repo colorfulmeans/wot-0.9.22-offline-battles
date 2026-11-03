@@ -76,14 +76,27 @@ class Traffic(object):
         self.blocked_queries = []
         self.peers = dict((r['id'], r) for r in neighbours)
 
-    def clear(self, heading, reach):
+    def sweep(self, heading, reach, living_only=False):
         # A rear translation does not rotate the physical hull by 180 degrees.
         # Preserve front/rear offsets of asymmetric collision footprints.
         hull_heading = heading if math.cos(heading-self.current['yaw']) >= 0 else heading+math.pi
         moving = dict(self.current, yaw=hull_heading)
         hits = []
+        peers = [b for b in self.neighbours if not living_only or self.peers[b['id']]['alive']]
         fraction = tank_collision.translation_fraction(moving,
-            (math.sin(heading)*reach,math.cos(heading)*reach),self.neighbours,contacts=hits)
+            (math.sin(heading)*reach,math.cos(heading)*reach),peers,contacts=hits)
+        return fraction, hits
+
+    def wreck_ahead(self, heading, reach):
+        unused, hits = self.sweep(heading, reach)
+        if not hits:
+            return None
+        identity, unused = min(hits, key=lambda item:item[1])
+        peer = self.peers[identity]
+        return peer if not peer['alive'] else None
+
+    def clear(self, heading, reach):
+        fraction, hits = self.sweep(heading, reach)
         self.receipt = dict(fraction=fraction, blockers=[r[0] for r in hits],
                             heading=heading, reach=reach)
         if fraction < .999 and len(self.blocked_queries) < 12:

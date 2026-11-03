@@ -18,10 +18,65 @@ from gui.mods.offline_lan_0922.player_control.weapon import Weapon
 from gui.mods.offline_lan_0922.player_control.weapon import barrel_aligned
 from gui.mods.offline_lan_0922.player_control.traffic import Traffic, TurnClearance, body
 from gui.mods.offline_lan_0922.player_control.strategy import Strategy
+from gui.mods.offline_lan_0922.player_control.wrecks import WreckPush
 from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation, route_candidates
 
 
 class PlayerRegressionTests(unittest.TestCase):
+    def test_wreck_push_is_continuous_and_own_stall_budget_survives_yaw_changes(self):
+        push=WreckPush()
+        peer=dict(id=4,position=(0.,0.,5.),alive=False,team=1,yaw=0.,collision_shape=(1.,2.,0.,2.))
+        state=dict(position=(0.,0.,0.),yaw=0.,now=0.,half_length=2.,half_width=1.)
+        def apply(now, yaw=0., live=False, world=True):
+            state.update(now=now,yaw=yaw)
+            peer['alive']=live
+            traffic=Traffic(body(1,state['position'],yaw,(1.,2.,0.,2.)),[peer])
+            order=dict(combat_mode='route',recovery_mode='travel',local_target=(0.,0.,30.),
+                       throttle=0.,turn=.5,brake=True)
+            result=push.apply(order,state,traffic,lambda *args:world)
+            return result,order
+        for now in range(14):
+            active,order=apply(now,.05 if now%2 else -.05)
+            self.assertTrue(active)
+            self.assertEqual((1.,0.,False),(order['throttle'],order['turn'],order['brake']))
+        self.assertFalse(apply(14)[0]);self.assertEqual('own_stalled',push.receipt['phase'])
+        # Replanning and rotating near the same stationary wreck cannot reset it.
+        self.assertFalse(apply(15,.1)[0])
+        state['position']=(0.,0.,-12.)
+        apply(16)
+        state['position']=(0.,0.,0.)
+        self.assertTrue(apply(17)[0])
+
+    def test_push_preserves_world_living_hull_and_combat_holds(self):
+        state=dict(position=(0.,0.,0.),yaw=0.,now=0.,half_length=2.,half_width=1.)
+        wreck=dict(id=4,position=(0.,0.,5.),alive=False,team=1,yaw=0.,collision_shape=(1.,2.,0.,2.))
+        live=dict(wreck,id=5,position=(0.,0.,8.),alive=True)
+        for mode,world,peers in (('route',False,[wreck]),('route',True,[wreck,live]),
+                                 ('engage',True,[wreck]),('route',True,[live])):
+            push=WreckPush();order=dict(combat_mode=mode,recovery_mode='travel',local_target=(0.,0.,30.))
+            traffic=Traffic(body(1,state['position'],0.,(1.,2.,0.,2.)),peers)
+            self.assertFalse(push.apply(order,state,traffic,lambda *args:world))
+            self.assertNotIn('throttle',order)
+
+    def test_real_forward_progress_renews_wreck_motor_attempt(self):
+        push=WreckPush()
+        peer=dict(id=4,position=(0.,0.,5.),alive=False,team=1,yaw=0.,collision_shape=(1.,2.,0.,2.))
+        for now,z in ((0,0.),(13,0.),(13.5,.6),(26,.6)):
+            state=dict(position=(0.,0.,z),yaw=0.,now=now,half_length=2.,half_width=1.)
+            order=dict(combat_mode='route',recovery_mode='travel',local_target=(0.,0.,30.))
+            traffic=Traffic(body(1,state['position'],0.,(1.,2.,0.,2.)),[peer])
+            self.assertTrue(push.apply(order,state,traffic,lambda *args:True))
+        self.assertLess(push.receipt['elapsed'],14.)
+
+    def test_left_right_sway_cannot_keep_resetting_player_stall_clock(self):
+        driver=Driver()
+        modes=[]
+        for i in range(40):
+            command=driver.drive((0.,0.,0.),.25 if i%2 else -.25,0.,(0.,0.,30.),
+                                 i*.1,lambda *args:True)
+            modes.append(command['recovery_mode'])
+        self.assertIn('reverse_clearance',modes)
+
     def aim_controller(self):
         target = types.SimpleNamespace(id=2130706445,
             position=(-137.9715, 1.3475, -102.), typeDescriptor=object())

@@ -10,6 +10,7 @@ def angle(value):
 class Driver(object):
     def __init__(self):
         self.anchor = None
+        self.alignment_best = None
         self.reverse_until = 0.
         self.forward_until = 0.
         self.forward_origin = None
@@ -29,6 +30,7 @@ class Driver(object):
         if hold or distance < 2.:
             mode, brake = 'hold', True
             self.anchor = None
+            self.alignment_best = None
             self.reverse_until = 0.
             self.forward_until = 0.
             self.forward_origin = None
@@ -94,11 +96,15 @@ class Driver(object):
                     turn = 1. if angle(self.recovery_heading-yaw) > 0 else -1.
             if self.anchor is None:
                 self.anchor = (tuple(position), yaw, now)
+                self.alignment_best = abs(delta)
             p, old_yaw, at = self.anchor
             moved = math.hypot(position[0]-p[0], position[2]-p[2])
             rotated = abs(angle(yaw-old_yaw))
-            if moved > 1. or rotated > .20:
+            aligned_better = (rotated > .20 and self.alignment_best is not None and
+                              abs(delta) < self.alignment_best-.20)
+            if moved > 1. or aligned_better:
                 self.anchor = (tuple(position), yaw, now)
+                self.alignment_best = abs(delta)
             elif now-at >= 3.:
                 self.replan = True
                 self.anchor = (tuple(position), yaw, now)
