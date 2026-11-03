@@ -13525,13 +13525,57 @@ encoder, LANClient's wire producer and the actual server validator/effect owner;
 it verifies repaired devices/restored crew/extinguished fire and cooldown for
 large/small repair, large/small medical and manual extinguisher requests.
 Local results: 29 consumable-audit tests, 48 player-control tests and CPython
-2.7 compilation pass. Native activation on the replacement build remains
-pending; these engine-free checks do not prove native inventory presentation.
+2.7 compilation pass. Engine-free checks alone do not prove native inventory
+presentation; replacement-build acceptance is recorded below.
 
 The user's late turret oscillation observation remains under investigation.
 Target-to-forward transitions now log their exact reason and pose, including
 loss of live visible contact versus an obstructed firing lane. No speculative
 targeting hysteresis or Bot behavior change is included in this diagnosis.
+
+Replacement runtime f7999a2f, identity `colorfulmeans-41632514292-1`, passed all
+three Windows build jobs and all eight Tests jobs (41632522754). Downloaded
+archive 13229657292 has exactly the normal EXE and diagnostic BAT entries;
+245 server sources / 238 client modules match the checkout, and 44 frozen
+launcher modules, native stamps, recorder execution and packaged editor smoke
+pass independent inspection. Delivered ZIP: `PR119-f7999a2f-Windows-x64.zip`.
+
+Two independent native Mittenhard rounds used the actual mounted player fitting.
+T-44-100M committed seven automatic shots / 788 damage; 113 committed eighteen
+shots / 4,050 damage. Both handed back at death/end without another trigger loop.
+At 20:41:00.464 the 113's left track was destroyed. At .517 the controller sent
+65541 (extra 1); at .558 canonical repair restored it to 250 HP and cleared
+the destroyed state. A later gunner injury was restored by automatic large
+medkit 65539 at 20:41:50.696. The large repair was reused at 20:42:30.541,
+90.024 seconds after its first request, restoring track/rotator/ammo rack to
+250/170/270 HP. No requests bypassed its cooldown and no equipment rejection
+was logged in either round. The native HUD displayed their running cooldowns.
+
+Report `wot-error-report-20261103-204530-d96509929695.zip` contains both rounds.
+The turret kept one target continuously for about 106 seconds in the 113 round;
+the reported persistent late oscillation did not reproduce. The observed
+short target/forward changes had lane-loss or live-contact-loss reasons.
+This does not prove that every oscillation case is fixed: the added transition
+diagnostics remain, without a speculative targeting-policy change. Manual
+extinguisher and small-kit activation retain contract/integration coverage,
+not a new native activation claim. The earlier static-building pivot correction
+did not encounter its exact captured site in these rounds; full physical-key,
+eight-checkbox-combination and dual-HE-exhaustion native coverage is not claimed.
+
+The same report also exposed one visible-client stock model assertion at
+20:28:55.748; the hidden worker had no traceback and the native exception files
+contained session headers only. This is not a clean-report claim. Vehicle
+2130706445 (Lowe) requested destroyed and exploded models 9 ms apart; the
+destroyed completion arrived 16 ms later while current state was exploded.
+Exact installed #1513 `CompoundAppearance.pyc` confirms line 838 asserts state
+equality before accessing/replacing the compound model. The follow-up discards
+only a destroyed completion superseded by exploded on the same current dead
+entity/appearance during this battle. It neither catches arbitrary assertions
+nor changes resources/native gun synchronization. The exploded completion still
+uses stock setup. Both completion orders, rebound appearance/reused entity ID,
+living entity, nonbattle and unknown states have focused regressions. The
+existing assertion diagnostics remain for other failures. Replacement native
+acceptance after this additional correction is pending.
 
 The 75bff5c3 native test FAILED acceptance. Four admitted shots hit allied Bot
 12 while the lock target was enemy Bot 30; static-world LOS did not test the

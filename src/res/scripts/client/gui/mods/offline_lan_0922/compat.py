@@ -236,6 +236,24 @@ def _observe_model_refresh_callback(compatibility, appearance, model_state):
 
 def _run_model_refresh_callback(compatibility, appearance, model_state, resources):
     row = _observe_model_refresh_callback(compatibility, appearance, model_state)
+    # #1513 __requestModelsRefresh captures the damage state before BG loading.
+    # A later ammo-rack explosion can supersede a destroyed-model request.
+    # __onModelsRefresh asserts state equality BEFORE it installs any resources.
+    # Discard only that proved obsolete completion on the current dead entity;
+    # leave the exploded completion, resource ownership and other failures stock.
+    damage = getattr(appearance, '_CompoundAppearance__currentDamageState', None)
+    vehicle = getattr(appearance, '_CompoundAppearance__vehicle', None)
+    if (getattr(compatibility, '_battle_active', False) and
+            model_state == 'destroyed' and
+            getattr(damage, 'modelState', None) == 'exploded' and
+            vehicle is not None and getattr(vehicle, 'health', 1) <= 0 and
+            getattr(vehicle, 'appearance', None) is appearance and
+            compatibility._runtime.bigworld.entity(vehicle.id) is vehicle):
+        if row is not None:
+            row['result'] = 'superseded'
+        _observe_model_lifecycle(compatibility, appearance, 'callback_superseded',
+                                 'exploded', str(model_state))
+        return None
     _observe_battle_model_pose(compatibility, appearance, 'refresh_before')
     try:
         result = compatibility._original_compound_models_refresh(appearance, model_state, resources)
