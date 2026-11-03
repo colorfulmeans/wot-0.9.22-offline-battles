@@ -60,12 +60,9 @@ Replay preflight uses the same 8-GiB cumulative decompressed bound as recording
 and playback. Data is streamed; the 2-MiB record limit, footer/count and gzip
 integrity checks still apply. Compressed file size is not the replay size bound.
 
-Use the launcher's built-in vehicle editor and error-report controls. The player
-download includes START_DIAGNOSTIC_TEST.bat for detailed gameplay diagnostics,
-and the normal EXE for regular play. In diagnostic mode the Repair tab also
-provides Equipment and crew test and Shot-triggered drop test buttons. These
-are temporary scenes, not extra launch files; normal single play clears them.
-The normal EXE
+Use the launcher’s Testing tab to enable detailed diagnostics or select a
+single-player test scene before starting a battle. The ordinary launcher is
+the package’s only entry. With diagnostics off, it
 uses small key-event logs. Detailed geometry logs are limited to 2 MiB/minute
 and 32 MiB per client process, with explicit suppression notices. Exhausted
 budgets skip further JSON encoding; motion histories also skip construction

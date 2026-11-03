@@ -13506,6 +13506,29 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Independent player migration follow-up
+
+The player-only front selector checks every 180 seconds and uses friendly
+health lost near visible enemies over the preceding 45 seconds. Capture
+alarms still preempt the schedule. The player navigation prefers reachable
+authored artillery attack routes and applies SPG-specific default route
+edits. During a stationary engagement the player controller checks the
+installed gun's yaw limits before requesting a clearance-checked hull
+turn. A mounted large medical kit can clear an active stun without a
+knocked-out crew member.
+
+The launcher Testing tab uses three equal-width columns. Current Windows
+packages admit only the launcher executable at the archive root. Detailed
+logs and fixtures are enabled through the Testing tab. Historical release
+verification still recognizes its original diagnostic script.
+
+Local checks covered player control (58 tests), consumable audit, launcher
+testing panel, launch entries, and Python 2.7 compilation of the player
+modules. These checks do not establish native acceptance. Artillery
+deployment and firing-position recovery, indirect fire, direct-fire
+repositioning, cover and withdrawal, and special-mode parity are still
+open. This checkpoint is not a complete player migration.
+
 # November 3: independent player control repair candidate
 
 During a stationary combat hold, the independent player driver turns

@@ -96,11 +96,16 @@ class TestingPanel:
         body = section('Player automatic control', '玩家自动控制')
         row = tk.Frame(body)
         row.pack(fill='x')
-        for key, en, zh in (('drive', 'Automatic driving', '自动驾驶'),
-                            ('fire', 'Automatic aiming and fire', '自动瞄准与开火'),
-                            ('consumables', 'Automatic consumables', '自动使用给养')):
-            widget = tk.Checkbutton(row, variable=self.vars[key], command=app._save_settings)
-            widget.pack(side='left', fill='x', expand=True)
+        features = (
+            ('drive', 'Automatic driving', '自动驾驶'),
+            ('fire', 'Automatic aiming and fire', '自动瞄准与开火'),
+            ('consumables', 'Automatic consumables', '自动使用给养'),
+        )
+        for column, (key, en, zh) in enumerate(features):
+            row.grid_columnconfigure(column, weight=1, uniform='features')
+            widget = tk.Checkbutton(row, variable=self.vars[key], anchor='w',
+                                    command=app._save_settings)
+            widget.grid(row=0, column=column, sticky='ew')
             self.labels.append((widget, en, zh))
         check(body, 'control', 'Enable the ` key and mouse control panel', '启用·键与鼠标控制面板')
         help_text(body, 'Each battle starts under manual control. Press ` to take over or stop; native local messages show the state. Your own loadout remains in use. Chat, menus and dialogs do not toggle control.',

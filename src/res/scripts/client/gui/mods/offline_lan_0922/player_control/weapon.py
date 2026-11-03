@@ -22,6 +22,31 @@ def barrel_aligned(start, direction, speed, gravity, point, radius):
     return sum((projected[i]-point[i])**2 for i in range(3)) <= radius*radius
 
 
+def hull_traverse_error(owner, descriptor, point, world_error):
+    """Return the extra hull rotation needed by the mounted gun."""
+    from ..gun_mechanics import _field
+    from .driving import angle
+    limits = _field(_field(descriptor, 'gun'), 'turretYawLimits')
+    if limits is None:
+        return None
+    minimum, maximum = map(float, limits)
+    body = owner._local_stabilised_pose()
+    runtime = owner._runtime
+    get_angles = getattr(runtime, 'get_shot_angles', None)
+    relative = world_error
+    if body is not None and callable(get_angles):
+        rotator = owner._avatar.gunRotator
+        relative, unused = get_angles(descriptor, runtime.math.Matrix(body),
+            (float(rotator.turretYaw), float(rotator.gunPitch)), owner._vector(point))
+    relative = angle(relative)
+    # Lay the gun slightly inside its stop so that a small position
+    # change does not toggle between the gun and hull every frame.
+    if minimum <= relative <= maximum:
+        return 0.
+    margin = min(.08, (maximum - minimum) * .5)
+    return relative - (minimum + margin if relative < minimum else maximum - margin)
+
+
 class Weapon(object):
     def __init__(self, owner):
         self.owner = owner

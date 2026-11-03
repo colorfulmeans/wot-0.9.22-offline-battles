@@ -370,18 +370,22 @@ class PlayerControl(object):
         crew = next((n for n in ('loader1', 'loader2', 'gunner1', 'gunner2', 'driver',
                     'commander', 'radioman1', 'radioman2') if n in critical.get('crew_ko', ())), None)
         now = owner._clock()
+        stun_end = (record.get('state') or {}).get('stun_end_server_time_ms', 0)
+        estimated_time = owner._projectile_estimated_server_time(now) if stun_end else None
+        stunned = estimated_time is not None and stun_end > estimated_time
         for item in owner._equipment_state or ():
             kind = item.contract.get('kind')
             if item.contract.get('autoactivate'):
                 continue
             selected = repair if kind == 'repairkit' else crew if kind == 'medkit' else None
-            needed = selected is not None or (kind == 'extinguisher' and critical.get('fire'))
+            all_targets = bool(item.contract.get('repairAll'))
+            needed = (selected is not None or (kind == 'extinguisher' and critical.get('fire')) or
+                      (kind == 'medkit' and all_targets and stunned))
             if needed and item.ready(now) and now >= self.consumable_pending.get(item.contract['id'], 0):
                 # #1513 all-target kits and extinguishers use high word 1.
                 # Only single-target kits encode a descriptor extra index.
                 # Encoding the damaged track's index for a large kit is
                 # rejected by the canonical equipment owner, not a cooldown.
-                all_targets = bool(item.contract.get('repairAll'))
                 index = (1 if all_targets or kind == 'extinguisher' else
                          owner._critical_extra_index(entity.typeDescriptor, selected))
                 activation_code = item.contract['id'] | (index << 16)
@@ -508,8 +512,13 @@ class PlayerControl(object):
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
                 delta = angle(math.atan2(dx, dz) - yaw) if math.hypot(dx, dz) > .1 else 0.
-                order['combat_facing'] = dict(target=target.id, error=delta, state='aligned')
-                if abs(delta) > .20:
+                from .weapon import hull_traverse_error
+                traverse = hull_traverse_error(owner, entity.typeDescriptor, point, delta)
+                if traverse is not None:
+                    delta = traverse
+                order['combat_facing'] = dict(target=target.id, error=delta, state='aligned',
+                                              limited_traverse=traverse is not None)
+                if abs(delta) > (.02 if traverse is not None else .20):
                     facing = order['combat_facing']
                     facing['state'] = 'braking'
                     if abs(state['speed']) <= 1.5:

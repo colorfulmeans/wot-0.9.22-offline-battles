@@ -156,6 +156,16 @@ class PlayerRegressionTests(unittest.TestCase):
             self.assertEqual(0., c.owner._sender.turn)
             self.assertTrue(c.owner._sender.handbrake)
 
+    def test_limited_gun_uses_installed_arc_instead_of_full_hull_alignment(self):
+        from gui.mods.offline_lan_0922.player_control.weapon import hull_traverse_error
+        descriptor = dict(gun=dict(turretYawLimits=(-.2, .4)))
+        owner = types.SimpleNamespace(_local_stabilised_pose=lambda: None,
+                                      _runtime=types.SimpleNamespace())
+        self.assertEqual(0., hull_traverse_error(owner, descriptor, None, .35))
+        self.assertAlmostEqual(.18, hull_traverse_error(owner, descriptor, None, .5))
+        self.assertAlmostEqual(-.18, hull_traverse_error(owner, descriptor, None, -.3))
+        self.assertIsNone(hull_traverse_error(owner, dict(gun={}), None, .5))
+
     def test_occluded_target_yields_to_clear_enemy_and_lost_enemy_releases_aim(self):
         c,target=self.aim_controller()
         other=types.SimpleNamespace(id=2,position=(-130.,1.,-100.),typeDescriptor=object())
@@ -545,13 +555,19 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertIsNone(s.decide(2,routes,None,[],[],{},(0,0)))
         self.assertEqual(routes,s.decide(6,routes,None,[],[],{},(0,0)))
 
-    def test_front_support_requires_stable_observed_pressure_and_cooldown(self):
-        s=Strategy();routes=[dict(id='a',waypoints=[(0,0),(0,400)]),dict(id='b',waypoints=[(300,0),(300,400)])]
-        contacts=[dict(position=(300,0,100))]*3
-        self.assertIsNone(s.decide(0,routes,routes[0],contacts,[],{},(0,0)))
-        self.assertIsNone(s.decide(7,routes,routes[0],contacts,[],{},(0,0)))
-        self.assertEqual([routes[1]],s.decide(9,routes,routes[0],contacts,[],{},(0,0)))
-        self.assertIsNone(s.decide(10,routes,routes[1],[],[],{},(0,0)))
+    def test_front_support_uses_recent_losses_on_a_three_minute_schedule(self):
+        s = Strategy()
+        routes = [dict(id='a', waypoints=[(0, 0), (0, 400)]),
+                  dict(id='b', waypoints=[(300, 0), (300, 400)])]
+        contacts = [dict(position=(300, 0, 100))]
+        ally = dict(id=7, position=(300, 0, 110), health=1000, max_health=1000)
+        self.assertIsNone(s.decide(0, routes, routes[0], contacts, [ally], {}, None))
+        ally['health'] = 450
+        self.assertIsNone(s.decide(179, routes, routes[0], contacts, [ally], {}, None))
+        self.assertEqual([routes[1]], s.decide(180, routes, routes[0], contacts, [ally], {}, None))
+        self.assertEqual(360., s.next_front)
+        self.assertIsNone(s.decide(181, routes, routes[0], contacts, [ally], {}, None))
+        self.assertIsNone(s.decide(360, routes, routes[0], contacts, [ally], {}, None))
 
     def test_blocked_flag_centre_can_join_supported_defence_approach(self):
         s=Strategy()

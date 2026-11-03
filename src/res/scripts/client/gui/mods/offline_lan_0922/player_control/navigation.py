@@ -12,8 +12,6 @@ def authored_routes(profile, name, graph):
     result = copy.deepcopy(graph.get('routes') or {})
     edits = bot_tactics.map_settings(profile, name).get('default_routes', ())
     for edit in edits:
-        if edit.get('class_tag') == 'SPG':
-            continue
         rows = result.get(str(edit['team']), [])
         base = next((r for r in rows if r['id'] == edit['id']), None)
         if base is None:
@@ -68,8 +66,14 @@ class PlayerNavigation(object):
         self.home = tuple(bases[int(owner.client.team)-1][:2]) if len(bases)==2 else None
         settings = bot_tactics.map_settings(profile, name)
         for route in settings.get('routes', ()):
-            if bot_tactics.matches(route, dict(team=int(owner.client.team), slot=0,
-                                             profile=dict(class_tag=self.tag))):
+            if route.get('disabled') or route['team'] != int(owner.client.team):
+                continue
+            if route.get('purpose') == 'spg_attack':
+                if self.tag == 'SPG':
+                    self.routes.append(dict(route, id='user_'+route['id'],
+                                            waypoints=route['points'], player_spg_attack=True))
+            elif bot_tactics.matches(route, dict(team=int(owner.client.team), slot=0,
+                                               profile=dict(class_tag=self.tag))):
                 self.routes.append(dict(route, id='user_'+route['id'], waypoints=route['points']))
         self.selection = self.routes
         self.navigator = TerrainNavigator(owner._navigation_ground, owner._navigation_obstacle,
@@ -119,7 +123,7 @@ class PlayerNavigation(object):
                     goal = (float(point[0]), height, float(point[1]))
                     distance = math.sqrt(sum((a-b)**2 for a,b in zip(position,goal)))
                     candidates.append((distance, str(route['id']), index, route, goal))
-            self.candidates = sorted(candidates, key=lambda r:r[:3])
+            self.candidates = sorted(candidates, key=lambda r: (not r[3].get('player_spg_attack'),) + r[:3])
         if self.search is None:
             if not self.candidates:
                 self.receipt = dict(status='no_connected_entry')

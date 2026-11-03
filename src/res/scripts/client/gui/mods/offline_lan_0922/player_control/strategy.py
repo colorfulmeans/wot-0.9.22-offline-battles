@@ -32,46 +32,72 @@ def defence_routes(home, routes):
         for i,point in enumerate(unique)]
 
 
+FRONT_INTERVAL = 180.
+PRESSURE_WINDOW = 45.
+
+
 class Strategy(object):
     def __init__(self):
         self.mode='route'
         self.clear_at=0.
-        self.cooldown=0.
-        self.proposal=None
-        self.proposed_at=0.
+        self.next_front = None
+        self.ally_health = {}
+        self.recent_losses = []
         self.receipt={}
 
     def decide(self, now, routes, current, contacts, allies, base, home, engaged=False):
-        alarm=bool(base.get('points',0)>0 or base.get('invaders',0)>0)
+        # Damage is observed from the player's friendly roster. A route with
+        # many idle hulls has no more pressure than an empty route.
+        health = {}
+        for ally in allies:
+            identity = ally['id']
+            current_health = max(0., ally['health'])
+            health[identity] = current_health
+            previous = self.ally_health.get(identity, current_health)
+            if current_health < previous and ally['max_health'] > 0:
+                self.recent_losses.append((now, ally['position'],
+                    (previous - current_health) / ally['max_health']))
+        self.ally_health = health
+        self.recent_losses = [loss for loss in self.recent_losses
+                              if now - loss[0] <= PRESSURE_WINDOW]
+        if self.next_front is None:
+            self.next_front = now + FRONT_INTERVAL
+        check_front = now >= self.next_front
+        if check_front:
+            self.next_front = now + FRONT_INTERVAL
+
+        alarm = bool(base.get('points', 0) > 0 or base.get('invaders', 0) > 0)
         if alarm and home is not None:
-            self.clear_at=now+5.
-            self.receipt=dict(mode='defend',points=base.get('points',0),invaders=base.get('invaders',0))
-            if self.mode!='defend':
-                self.mode='defend'
-                return defence_routes(home,routes)
+            self.clear_at = now + 5.
+            self.receipt = dict(mode='defend', points=base.get('points', 0),
+                                invaders=base.get('invaders', 0))
+            if self.mode != 'defend':
+                self.mode = 'defend'
+                return defence_routes(home, routes)
             return None
-        if self.mode=='defend':
-            if now<self.clear_at:return None
-            self.mode='route';self.cooldown=now+20.
-            self.receipt=dict(mode='rejoin_after_defence')
+        if self.mode == 'defend':
+            if now < self.clear_at:
+                return None
+            self.mode = 'route'
+            self.receipt = dict(mode='rejoin_after_defence')
             return list(routes)
-        if engaged or now<self.cooldown or current is None or not contacts:
-            self.proposal=None
+        if not check_front or engaged or current is None or not contacts:
             return None
-        scores={}
-        for route in routes:
-            enemies=sum(1 for r in contacts if lane_distance(r['position'],route)<100.)
-            support=sum(1 for r in allies if r['alive'] and lane_distance(r['position'],route)<100.)
-            scores[route['id']]=enemies-.25*support if enemies else 0.
-        if not scores:return None
-        best=max(routes,key=lambda r:(scores[r['id']],r['id']))
-        if best['id']==current['id'] or scores[best['id']]<=scores.get(current['id'],0.)+1.:
-            self.proposal=None
+        scores = dict((route['id'], 0.) for route in routes)
+        for unused, position, loss in self.recent_losses:
+            if not any(math.hypot(position[0] - enemy['position'][0],
+                                  position[2] - enemy['position'][2]) < 150.
+                       for enemy in contacts):
+                continue
+            nearest = min(routes, key=lambda route: lane_distance(position, route)) if routes else None
+            if nearest is not None and lane_distance(position, nearest) < 100.:
+                scores[nearest['id']] += loss
+        if not scores:
             return None
-        if self.proposal!=best['id']:
-            self.proposal,self.proposed_at=best['id'],now
+        best = max(routes, key=lambda route: (scores[route['id']], route['id']))
+        if (best['id'] == current['id'] or
+                scores[best['id']] <= scores.get(current['id'], 0.)):
             return None
-        if now-self.proposed_at<8.:return None
-        self.cooldown=now+20.;self.proposal=None
-        self.receipt=dict(mode='support_observed_front',route=best['id'],scores=scores)
+        self.receipt = dict(mode='support_observed_front', route=best['id'],
+                            scores=scores, next_front=self.next_front)
         return [best]
