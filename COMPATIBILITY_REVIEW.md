@@ -1,3 +1,98 @@
+# November 3 final player-only traffic candidate and remaining boundaries
+
+Runtime 9dcac1f6, Windows build colorfulmeans-41552662203-1, passes 41 focused
+player regressions and all 237 Python 2.7 source compiles. Independent final
+ZIP inspection verifies 44 frozen launcher modules, 244 bundled server sources,
+237 client bytecode modules, native source stamps, recorder execution and a
+real packaged editor smoke. The bundled loopback protocol answers in 0.51 s.
+Exact-runtime CI 41552670522 passes all eight jobs; Windows build 41552662203
+also passes. No tag, release or merge is made for this candidate.
+
+Native preflight report wot-error-report-20261103-083918-143b6e3e18ad.zip uses
+that cloud-built client payload staged through the normal launcher. The final
+downloaded package's client members are individually byte-equal to that staged
+payload. No direct mod copy into the game directory was used. All four report
+logs have zero exception tracebacks. The native player acknowledges the bounded
+test interface and drives pit from route index 2 to 8. It creates forward turn
+space, maintains the admitted pivot, and translates out of the previous friend
+stalls. Real wreck 2130706469 at (-5.3551,0.26,41.0932), alive=false, appears as
+a swept-query blocker; later player poses move away from it. This proves real
+friend/wreck recognition and the exercised avoidance/recovery sequence, not
+arbitrary dense-queue escape.
+
+One later stop near (-4.2865,0.312,49.4258) has a native planning_collision
+receipt against static map geometry (material 111/item 204/chunk 32383). The
+player issues a pivot but measured yaw does not advance. The report retains
+pose, target, probe rays and native surface fields; this static-geometry stop
+is unresolved and must not be represented as a complete-route pass. Audio,
+all eight native feature combinations and a real observed-front redirect also
+remain unproved. Earlier real base-alarm movement and three-stock shell-cycle
+evidence below remain applicable; their source modules are unchanged.
+
+# November 3 native traffic witnesses and supported base approaches
+
+Report wot-error-report-20261103-070650-cae5c9da5bbd.zip captures bb4e1987
+through normal launcher installation (build colorfulmeans-41536295055-1).
+All three runtime logs are free of exception tracebacks/controller failures.
+At 06:52:59 native player decisions identify living team-2 blockers 2130706460
+and 2130706458, detour, advance to route index 4, then brake against 2130706460
+and 2130706464 when every tested exit is blocked. Logs count 29 presented peers
+including one wreck. This proves friend recognition and non-ramming; it does
+not prove arbitrary dense-queue escape or native traversal around a wreck.
+Unengaged native aim-source points follow the actual hull yaw, rather than the
+camera cursor. At 06:59:55 the panel Fire click acknowledges its native commit
+and the muzzle event; no active automatic ammo policy is needed.
+
+At 07:00:40 one invader/29 own-base points activates human-only defence, but
+the only centre target fails with no_connected_entry. Current Mittelang graph
+team-2 centre (-34.6800,100.7085) has routing height None; all eight 20 m ring
+approaches have supported heights. f2522a7b offers the centre, those approaches,
+and existing authored points within 40 m as independent goals. Every choice
+still passes the same height/connected-path check; it does not steer directly
+through an invalid cell or snap to a bridge. The 36-case player regression
+includes an unsupported centre with a connected approach. Native defence
+movement was exercised in report
+wot-error-report-20261103-073717-433a593abea1.zip, build
+colorfulmeans-41542626022-1 (f2522a7b). At 07:31:10 a real 22-point/one-invader
+alarm joins approach 2; the player moves about 4.96 m toward it. After the alarm
+clears, the independent controller rejoins pit. This does not attribute the
+alarm clearance to the player: another defender may have cleared it. All four
+report logs have zero exception tracebacks or player-controller failures.
+
+That same round exposes a separate traffic defect: a fan direction proved over
+5 m is rejected by the next update's ordinary 8 m cruise probe. The player
+alternates headings near (-9.21,111.66) without useful translation. ff14165d
+keeps detour travel at reduced throttle within a 3-4 m current-heading probe;
+ordinary cruise retains its longer horizon. The 37-case regression reproduces
+the inconsistent horizon and requires translation rather than accepting
+repeated steering. Its CI 41546582095 passed all eight jobs; build 41546574240
+and independent 44-launcher/244-server/237-client inspection passed.
+
+Native ff14165d report wot-error-report-20261103-080115-a3729744dc21.zip
+records translation out of the former stop, but exposes another independent
+failure: at 07:58:47-48, a blocked short-way pivot is replaced by an opposite
+pivot for one update, then the shortest-angle command undoes that pivot next
+update. The player stalls near (-17.07,106.28). No exception tracebacks occur
+in any of the four logs. 5d35e039 keeps the admitted long-way pivot until it
+aligns, a materially changed goal cancels it, or measured nonprogress requests
+the existing proved rear recovery. It cannot override hold or reverse orders.
+The 39-case suite includes the captured alternating-direction failure and the
+rear-recovery escape. Native retest remains required; ff14165d is not an
+accepted final traffic build.
+
+5d35e039 native report wot-error-report-20261103-082604-16bbc6862955.zip
+(build colorfulmeans-41549698356-1) has no exception tracebacks in the four
+logs. Its CI 41549703875 and build passed, as did independent source inspection.
+The player fires a damaging native shot, responds to a real base alarm and
+rejoins pit. The opposite-pivot oscillation is gone, but the admitted pivot
+later hits another hull near (-18.54,121.94); its proved rear corridor is also
+blocked by friend 2130706442. It remains stationary instead of creating forward
+turn space. 88c5fa56/9dcac1f6 allow at most 3 m of cautious forward turn-space
+creation, only while each update proves both static and dynamic clearance.
+This also applies when both initial pivot directions are blocked. The 41-case
+suite covers immediate loss of the proved corridor and release after 3 m;
+neither a successful build nor a stopped collision is complete escape evidence.
+
 # November 3 three-stock player shell and mouse-panel native review
 
 The ef602fd1 Windows package, build colorfulmeans-41530160684-1, was inspected

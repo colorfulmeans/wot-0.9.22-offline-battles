@@ -2,6 +2,16 @@
 
 ## November 3 foreground-only player replacement baseline
 
+Latest native candidate: 9dcac1f6 / colorfulmeans-41552662203-1. Report
+20261103-083918-143b6e3e18ad exercises the same byte-equal client payload as
+the final Windows ZIP, installed through the launcher. Pit indices 2-8,
+bounded forward turn-space creation, retained pivot and real wreck blocker
+2130706469 are observed. Four logs have zero exception tracebacks. A later
+static-map planning_collision stop near (-4.2865,49.4258) remains unresolved;
+complete-route escape is not accepted. Native audio, all feature masks and
+observed-front redirection remain separate cases. See COMPATIBILITY_REVIEW
+for exact package inspection, earlier base movement and AP/premium/HE receipts.
+
 The b2cf35b7 implementation is withdrawn, not an accepted baseline. Its source
 was removed in ffa14996 and BattleRuntime restored to pre-control 0e4146f7 before
 replacement. The new player_control package owns its own driving, recovery,
@@ -21,7 +31,11 @@ normal human physics/projectiles and the existing trusted-LAN authority.
 | Rejoin | Rank main and reserve routes in 3D, then prove connected support. Overhead bridge snapping and disconnected nearest nodes cannot win. |
 | Handover | No discarded accepted shot or burst; restore manual fire/aim. Repeated toggle, countdown press, death and battle change tested separately. |
 | Player traffic | Real friendly hulls and corpses block swept travel; adjacent clear directions remain usable; an overhead hull cannot block a lower road. Record blocker identities and actual pose. |
+| Detour horizon | A direction proved clear over 5 m must not be rejected solely by the next tick's ordinary 8 m cruise horizon. Advance cautiously within a 3-4 m current-heading proof and require actual translation; alternating stationary fan headings is a failure. |
+| Turn clearance | A blocked short-way pivot may use a clear long-way pivot, but must retain that direction until aligned instead of undoing it next update. A changed goal, hold, or proved bounded reverse recovery cancels the latch. Verify real translation after the pivot; no unlimited dense-queue escape claim. |
+| Forward turn space | If pivoting is blocked, allow at most 3 m of low-throttle forward translation only through a current proved static/dynamic corridor. A new blocker stops it immediately; after 3 m reconsider the pivot. Both initially blocked pivots must use the same rule. |
 | Player strategy | Own-base capture preempts travel; distant incidental targets cannot pin the defender. Clearing alarm rejoins routes. Only stable observed front pressure can redirect this human; no Bot orders change. |
+| Unsupported flag centre | Current Mittelang team-2 flag centre (-34.6800, 100.7085) has no supported baked routing cell. A real alarm must choose a connected approach around the base, not remain at no_connected_entry. The 20 m approach ring and authored route points within 40 m still require normal height/path proof; no direct steering bypass is permitted. |
 | Forward barrel | With automatic fire enabled but no selected enemy, gun follows hull heading; disabling fire takeover restores manual aim. |
 | Three-shell test | Carry positive standard/premium/HE stock. Two confirmed ineffective hits switch to next available shell; positive HP damage resets failure count; HE returns on its bounded probe. |
 | Panel | Click Toggle, Stop, Fire and each timed direction; verify actual pose/ammo, not command append alone. |
@@ -29,6 +43,35 @@ normal human physics/projectiles and the existing trusted-LAN authority.
 Automated replacement cases: test_player_control. Native acceptance must record
 exact package identity and individual passes/failures below COMPATIBILITY_REVIEW.
 Earlier Bot-adapter force-balance expectations are historical and superseded.
+
+Native review 20261103-070650-cae5c9da5bbd: bb4e1987 observes 29 presented
+neighbours including a wreck. Friend IDs 2130706460/2130706464 on team 2 block
+the forward sweeps; the car detours, then brakes when all tested exits are
+blocked. This proves identification and bounded non-ramming, not unlimited
+multi-vehicle route escape. A panel Fire click at 06:59:55 records accepted true
+and a native muzzle event. Base alarm at 07:00:40 (29 points, one invader) enters
+human-only defend but exposes unsupported-centre entry; f2522a7b fixes this
+failure. Wreck traversal, audio and the full native feature-mask matrix remain
+separate required cases rather than inferred passes.
+
+Native review 20261103-073717-433a593abea1: f2522a7b joins a supported
+approach under a real 22-point/one-invader alarm, moves about 4.96 m, and
+rejoins pit after the alarm clears. Do not attribute alarm clearance to this
+player. This round fails the detour-horizon case above; ff14165d fixes that
+5 m/8 m mismatch and adds a translation regression. Its native retest must be
+recorded before calling the traffic case passed.
+
+Native review 20261103-080115-a3729744dc21: ff14165d moves out of the former
+stop but fails the separate turn-clearance case near (-17.07,106.28). The
+one-update opposite pivot is undone by the next shortest-angle command.
+5d35e039 adds persistent player-only pivot ownership (39 regression cases).
+This failure and its final native retest must remain visible in acceptance.
+
+Native review 20261103-082604-16bbc6862955: 5d35e039 removes pivot reversal
+but remains blocked near (-18.54,121.94) when another hull stops its admitted
+pivot and friend 2130706442 blocks rear recovery. Forward turn-space creation
+is added in 88c5fa56/9dcac1f6 (41 cases). This report is an intermediate failure,
+not final acceptance.
 
 ## November 3 integrated test-page baseline
 
