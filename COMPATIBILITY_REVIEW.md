@@ -104,6 +104,48 @@ Computer Use stopped the current turn when it could not confidently identify
 the Edge URL. No further UI input is issued in this turn, and native new-package
 acceptance is not claimed. Cloud builds and non-UI package verification continue.
 
+## Final cloud and downloaded-package verification
+
+Runtime/test commit: 2b2342bf31e51a71ae78701e8d356cb8bea09441, on
+fix/elite-premium-ammo-reviewed-guns (not origin/main). Exact-commit CI
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41598032854
+passed all eight jobs. The separate Windows build
+https://github.com/colorfulmeans/wot-0.9.22-offline-battles/actions/runs/41598198207
+also passed all three jobs. Earlier 82614fd2/a046a6fc failures are retained as
+failed intermediate evidence, not acceptance baselines.
+
+Downloaded CI unit-test artifacts record 458 client files / 9,494 cases with
+zero failed files and nine explicit skips; Linux launcher results record 48
+files / 1,236 cases, zero failed files and 168 skips for unavailable desktop,
+GPU or exact-client resources. The independent Windows editor job records 48
+files / 1,242 cases, zero failed files and nine skips (GPU/exact resources);
+its service-contract gate records five files / 35 cases, zero failed files and
+two exact-client skips. Skips do not constitute native-game passes. Additional
+local CPython 2.7 sampling over 100,000 shots yielded central fraction .09941,
+all within the aiming cone. Executing the installed stock BattleAward formatter
+with the real Chinese menu.mo produces the ordinary congratulations at ten
+battles and no PvE warning.
+
+Delivered artifact: C:/Users/USER/Downloads/PR119-2b2342bf-Windows-x64.zip,
+extracted at D:/Games/wot-mod/9.22/PR119-2b2342bf-QA. Identity is
+colorfulmeans-41598032854-1, semantic version 1.1.1. Independent ZIP inspection
+verifies exactly the normal EXE and START_DIAGNOSTIC_TEST.bat entry points;
+the launcher PE is x64. All 238 embedded Python 2.7 bytecode modules match this
+checkout, 44 frozen launcher modules match, and 245 bundled server sources
+match. Native source stamps and worker starter match; the bundled recorder
+runtime executes, and the downloaded executable's isolated editor smoke passes.
+The actual bundled launcher --serve 0.9.22 answers the reviewed loopback
+protocol in .78 seconds using an isolated temporary profile, with no game
+process or firewall change. These checks do not prove native battle behavior.
+
+No new client battle, takeover/mouse matrix, on-screen ten-battle popup or
+gameplay error report is claimed for this artifact: Computer Use remains
+stopped for this turn. These are required follow-up acceptance items. The
+remaining per-vehicle fire constants and documented economy-history gaps are
+not marked fixed. This final verification update changes documentation only;
+the delivered runtime remains the exact verified 2b2342bf build. No merge, tag
+or public release was performed.
+
 # November 3 source-policy alignment (documentation only)
 
 The gameplay reconstruction policy in CLAUDE.md governs every section below.
