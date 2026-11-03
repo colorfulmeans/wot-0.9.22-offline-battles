@@ -41,6 +41,10 @@ class WreckPush(object):
             row = dict(origin=tuple(position), wreck_origin=tuple(where),
                 heading=yaw, elapsed=0., best=0., last=now, exhausted=False)
             self.history[key] = row
+        elif wreck_moved:
+            # Consume this geometry change now. Movement during the old motor
+            # attempt cannot masquerade as a new opportunity after exhaustion.
+            row['wreck_origin'] = tuple(where)
         progress = ((position[0]-row['origin'][0])*math.sin(row['heading']) +
                     (position[2]-row['origin'][2])*math.cos(row['heading']))
         self.receipt = dict(peer=key, phase='exhausted' if row['exhausted'] else 'checking',

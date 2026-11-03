@@ -68,6 +68,21 @@ class PlayerRegressionTests(unittest.TestCase):
             self.assertTrue(push.apply(order,state,traffic,lambda *args:True))
         self.assertLess(push.receipt['elapsed'],14.)
 
+    def test_wreck_only_motion_during_attempt_cannot_resurrect_its_spent_budget(self):
+        push=WreckPush()
+        peer=dict(id=4,position=(0.,0.,5.),alive=False,team=1,yaw=0.,collision_shape=(1.,2.,0.,2.))
+        def apply(now,z):
+            peer['position']=(0.,0.,z)
+            state=dict(position=(0.,0.,0.),yaw=0.,now=now,half_length=2.,half_width=1.)
+            order=dict(combat_mode='route',recovery_mode='travel',local_target=(0.,0.,30.))
+            traffic=Traffic(body(1,state['position'],0.,(1.,2.,0.,2.)),[peer])
+            return push.apply(order,state,traffic,lambda *args:True)
+        self.assertTrue(apply(0,5.))
+        self.assertTrue(apply(7,6.1))
+        self.assertFalse(apply(14,6.1))
+        self.assertFalse(apply(15,6.1))
+        self.assertTrue(apply(16,7.2))
+
     def test_left_right_sway_cannot_keep_resetting_player_stall_clock(self):
         driver=Driver()
         modes=[]
