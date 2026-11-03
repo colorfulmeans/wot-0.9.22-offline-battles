@@ -57,6 +57,8 @@ class PlayerControl(object):
         self.input_binding = None
         self.consumable_pending = {}
         self.shot_commits = 0
+        self.siege_intent = None
+        self.siege_brake = None
         from .wrecks import WreckPush
         self.wreck_push = WreckPush()
 
@@ -169,6 +171,9 @@ class PlayerControl(object):
             else:
                 self.handover_burst = owner._local_fire_intent.get('player_burst')
         self.target_engine = None
+        if self.siege_brake is not None and owner._local_siege_braking == self.siege_brake:
+            owner._local_siege_braking = None
+        self.siege_intent = self.siege_brake = None
         from .wrecks import WreckPush
         self.wreck_push = WreckPush()
         if changed:
@@ -408,6 +413,30 @@ class PlayerControl(object):
                             needed_target=selected, activation_code=activation_code,
                             requested=requested)
 
+    def update_siege(self, entity, order, fire_clear, now):
+        """Debounce the player's native travel/siege setting independently."""
+        owner = self.owner
+        if not getattr(entity.typeDescriptor, 'hasSiegeMode', False):
+            return
+        if getattr(owner, '_local_player_burst', None) or owner._local_siege_pending is not None:
+            return
+        states = owner._runtime.constants.VEHICLE_SIEGE_STATE
+        current = getattr(entity, 'siegeState', states.DISABLED)
+        if current in (states.SWITCHING_ON, states.SWITCHING_OFF):
+            return
+        desired = bool(fire_clear and order.get('combat_mode') == 'engage')
+        if self.siege_intent is None or self.siege_intent[0] != desired:
+            self.siege_intent = (desired, now)
+        since = self.siege_intent[1]
+        if now - since < (.30 if desired else .80):
+            return
+        if (current == states.ENABLED) == desired or owner._local_siege_braking is not None:
+            return
+        setting = owner._runtime.constants.VEHICLE_SETTING.SIEGE_MODE_ENABLED
+        if owner.change_vehicle_setting(setting, int(desired)):
+            self.siege_brake = owner._local_siege_braking
+            self.record('siege_request', enabled=desired, previous=current)
+
     def update(self, dt, now):
         if not self.live():
             self.stop('battle_not_live')
@@ -564,6 +593,7 @@ class PlayerControl(object):
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()
+            self.update_siege(entity, order, fire_clear, now)
         else:
             order = {}
         if 'consumables' in self.features:

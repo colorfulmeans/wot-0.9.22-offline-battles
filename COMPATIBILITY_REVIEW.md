@@ -13506,6 +13506,20 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Foreground siege request checkpoint
+
+The foreground controller uses the player's native siege setting when
+automatic driving is active. It debounces entry to stationary combat
+and return to travel, respects pending native requests and transitions,
+and avoids changing the descriptor during a player burst. Manual
+handover clears a still-pending brake owned by the player controller.
+Bot siege logic is unchanged.
+
+The player-control and sparse-lineup suites passed locally, and the
+player controller compiled under Python 2.7. The siege test covers
+debounce and the pending-request gate. Live siege and the outstanding
+cover, withdrawal and artillery position recovery checks are pending.
+
 # Windows launcher checkpoint
 
 Windows artifact 13253300738 for b310f831 passed archive integrity,

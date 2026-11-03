@@ -166,6 +166,31 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertAlmostEqual(-.18, hull_traverse_error(owner, descriptor, None, -.3))
         self.assertIsNone(hull_traverse_error(owner, dict(gun={}), None, .5))
 
+    def test_player_siege_debounces_and_waits_for_pending_request(self):
+        c, entity = self.aim_controller()
+        entity.typeDescriptor = types.SimpleNamespace(hasSiegeMode=True)
+        entity.siegeState = 0
+        c.owner._local_siege_pending = c.owner._local_siege_braking = None
+        c.owner._runtime = types.SimpleNamespace(constants=types.SimpleNamespace(
+            VEHICLE_SIEGE_STATE=types.SimpleNamespace(DISABLED=0, ENABLED=1,
+                                                     SWITCHING_ON=2, SWITCHING_OFF=3),
+            VEHICLE_SETTING=types.SimpleNamespace(SIEGE_MODE_ENABLED=10)))
+        c.owner.change_vehicle_setting = mock.Mock(return_value=True)
+        engage = dict(combat_mode='engage')
+        c.update_siege(entity, engage, True, 0.)
+        c.update_siege(entity, engage, True, .2)
+        c.owner.change_vehicle_setting.assert_not_called()
+        c.update_siege(entity, engage, True, .4)
+        c.owner.change_vehicle_setting.assert_called_once_with(10, 1)
+        c.owner._local_siege_pending = (True, 3)
+        c.update_siege(entity, engage, True, 1.)
+        c.owner.change_vehicle_setting.assert_called_once()
+        c.owner._local_siege_pending = None
+        entity.siegeState = 1
+        c.update_siege(entity, dict(combat_mode='route'), False, 2.)
+        c.update_siege(entity, dict(combat_mode='route'), False, 3.)
+        self.assertEqual(mock.call(10, 0), c.owner.change_vehicle_setting.call_args)
+
     def test_occluded_target_yields_to_clear_enemy_and_lost_enemy_releases_aim(self):
         c,target=self.aim_controller()
         other=types.SimpleNamespace(id=2,position=(-130.,1.,-100.),typeDescriptor=object())
