@@ -417,6 +417,7 @@ class PlayerControl(object):
         shape = owner._collision_shape(entity.typeDescriptor)
         previous_target = self.target_engine
         target = None
+        fire_clear = False
         if 'fire' in self.features:
             self.select_ammo(now)
             # Keep a valid current target instead of resetting aim every tick.
@@ -424,6 +425,13 @@ class PlayerControl(object):
                 item.id != self.target_engine,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
             target = next((t for t in candidates if self.firing_lane(t)), None)
+            fire_clear = target is not None
+            if target is None:
+                # Clearance is measured from the moving muzzle. Dropping aim
+                # on a blocked ray can move it clear, reacquire the same enemy,
+                # then block again beside a wreck. Keep a visible live target
+                # for aiming only; blocked fire must not pin navigation either.
+                target = records.get(previous_target)
         self.aim_receipt = None
         if target is not None:
             from ..gun_mechanics import _field
@@ -440,8 +448,9 @@ class PlayerControl(object):
             base = gun.base_dispersion*owner._local_stat_factor(entity, 'dispersion')
             factor = owner._native_dispersion_angle()/base if base > 0 else float('inf')
             self.aim_receipt = dict(target=target.id, point=point, aligned=aligned, distance=distance,
+                                    fire_clear=fire_clear,
                                     client_mode=owner._avatar.gunRotator.clientMode)
-            if aligned and gun.can_fire(True) and self.weapon.ready(now, factor):
+            if fire_clear and aligned and gun.can_fire(True) and self.weapon.ready(now, factor):
                 accepted = self.weapon.trigger()
                 self.record('automatic_fire', target=target.id, accepted=accepted,
                             native=self.weapon.trigger_receipt)
@@ -468,7 +477,7 @@ class PlayerControl(object):
             def clear(angle, reach=None):
                 return (traffic.clear(angle, reach or 5.) and
                         self.direction_clear(position, angle, entity.typeDescriptor, shape, reach))
-            hold = bool(target is not None and self.aim_receipt['distance'] <= 150.)
+            hold = bool(fire_clear and target is not None and self.aim_receipt['distance'] <= 150.)
             if now>=self.next_strategy:
                 self.next_strategy=now+1.
                 base=(owner._rules_state.get('bases') or {}).get(str(owner.client.team),{})
@@ -482,7 +491,7 @@ class PlayerControl(object):
                 home=self.navigation.home
                 # A distant incidental target cannot pin the defender on the
                 # wrong side of the map. Fire may continue while returning.
-                hold=bool(target is not None and math.hypot(
+                hold=bool(fire_clear and target is not None and math.hypot(
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             order = self.navigation.decide(state, clear, hold=hold)

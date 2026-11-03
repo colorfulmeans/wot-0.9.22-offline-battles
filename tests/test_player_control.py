@@ -22,6 +22,78 @@ from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation
 
 
 class PlayerRegressionTests(unittest.TestCase):
+    def aim_controller(self):
+        target = types.SimpleNamespace(id=2130706445,
+            position=(-137.9715, 1.3475, -102.), typeDescriptor=object())
+        entity = types.SimpleNamespace(id=1, isAlive=lambda:True, typeDescriptor=object())
+        sender = types.SimpleNamespace(forward=0., turn=0., handbrake=False,
+                                       send_current=mock.Mock())
+        owner = types.SimpleNamespace(_server=types.SimpleNamespace(vehicle_id=1),
+            _server_entity=lambda unused:entity, _sender=sender,
+            local_pose=lambda:((-198.5,.89,-9.4),-2.375),
+            _collision_shape=lambda unused:(1.,3.,1.,2.),
+            _mutable_shot_ray=lambda:((-198.5,2.,-9.4),(0.,0.,1.)),
+            _gun_state=types.SimpleNamespace(shots=[dict(speed=1000.,gravity=0.)],
+                shot_index=0,base_dispersion=.1,can_fire=lambda unused:True),
+            _local_stat_factor=lambda *args:1., _native_dispersion_angle=lambda:.1,
+            _avatar=types.SimpleNamespace(gunRotator=types.SimpleNamespace(clientMode=True)),
+            _local_speed=0.,_rules_state={},client=types.SimpleNamespace(team=1,player_id=1))
+        c=player_control.PlayerControl(owner,('fire','drive'))
+        c.active=True;c.live=lambda:True;c.bind_input=lambda:None;c.poll_commands=lambda now:None
+        c.select_ammo=lambda now:None;c.record=mock.Mock()
+        c._contacts=lambda unused:([],[],{target.id:target})
+        c.weapon=types.SimpleNamespace(aim=mock.Mock(),forward=mock.Mock(),
+            ready=lambda *args:True,trigger=mock.Mock(return_value=True),trigger_receipt={},point=(0,0,0))
+        c.navigation=types.SimpleNamespace(routes=[],route=None,home=None,receipt={},
+            decide=mock.Mock(return_value=dict(throttle=1.,turn=0.,brake=False)))
+        c.strategy=types.SimpleNamespace(mode='front',decide=lambda *a,**kw:None)
+        c.turn_clearance=types.SimpleNamespace(apply=lambda *a:None)
+        return c,target
+
+    def test_wreck_lane_feedback_keeps_aim_but_blocks_fire_and_releases_hold(self):
+        c,target=self.aim_controller()
+        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',return_value=True):
+            for i in range(150):
+                clear=i%2==0
+                c.firing_lane=lambda unused:clear
+                c.update(.1,i*.2)
+                self.assertEqual(target.id,c.target_engine)
+                self.assertEqual(clear,c.aim_receipt['fire_clear'])
+                self.assertEqual(clear,c.navigation.decide.call_args.kwargs['hold'])
+        self.assertEqual(150,c.weapon.aim.call_count)
+        c.weapon.forward.assert_not_called()
+        self.assertEqual(75,c.weapon.trigger.call_count)
+        transitions=[call for call in c.record.call_args_list if call.args[0]=='aim_transition']
+        self.assertEqual(1,len(transitions))
+
+    def test_occluded_target_yields_to_clear_enemy_and_lost_enemy_releases_aim(self):
+        c,target=self.aim_controller()
+        other=types.SimpleNamespace(id=2,position=(-130.,1.,-100.),typeDescriptor=object())
+        c.target_engine=target.id
+        c._contacts=lambda unused:([],[],{target.id:target,other.id:other})
+        c.firing_lane=lambda item:item.id==other.id
+        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',return_value=True):
+            c.update(.1,1.)
+            self.assertEqual(other.id,c.target_engine)
+            c._contacts=lambda unused:([],[],{})
+            c.update(.1,2.)
+        self.assertIsNone(c.target_engine)
+        c.weapon.forward.assert_called_once()
+        self.assertEqual(1,c.weapon.trigger.call_count)
+
+    def test_blocked_defence_target_does_not_pin_return_to_base(self):
+        c,target=self.aim_controller()
+        c.target_engine=target.id
+        c.strategy.mode='defend'
+        c.navigation.home=(-138.,-102.)
+        c.firing_lane=lambda unused:False
+        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',return_value=True):
+            c.update(.1,1.)
+        self.assertEqual(target.id,c.target_engine)
+        self.assertFalse(c.navigation.decide.call_args.kwargs['hold'])
+        c.weapon.trigger.assert_not_called()
+        c.weapon.forward.assert_not_called()
+
     def test_reverse_sweep_preserves_asymmetric_hull_orientation(self):
         t=Traffic(body(1,(0,0,0),0,(1,3,1,2)),[])
         with mock.patch('gui.mods.offline_lan_0922.tank_collision.translation_fraction',return_value=1.) as sweep:

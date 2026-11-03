@@ -13508,6 +13508,32 @@ strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
 # November 3: independent player control repair candidate
 
+### Follow-up: confirmed muzzle-clearance / target-forward feedback
+
+Native runtime 74fec0a1 reproduced the user's late oscillation beside a left
+wreck. Report `wot-error-report-20261103-213750-54648d3803e4.zip` preserves the
+session. Between 21:27:03 and 21:27:20, a nearly stationary player around
+(-198.5, 0.89, -9.4), yaw -2.375, repeatedly switched between live enemy
+2130706445 and forward aim. Each loss reported `no_clear_firing_lane`, followed
+by `clear_lane_selected`; the whole round logged 147 aim transitions. This
+supersedes the earlier non-reproduction observation, not the verified kit fix.
+
+The firing lane originates at the current moving muzzle. Using its clearance
+to relinquish target ownership can move that muzzle clear again, reacquire the
+same target and repeat. A live visible previous target now remains the aiming
+target when no clear alternative exists. Blocked aim never authorizes a shot
+or stationary engagement hold, including base defence; navigation can continue.
+A clear alternative still wins, and disappearing/dead contacts still release
+native aim. Diagnostics expose `aim.fire_clear` alongside target and point.
+No Bot targeting, route allocation or native rotation owner changes.
+
+A regression executes the actual foreground update across 150 alternating
+clear/blocked muzzle observations at the captured pose: one target acquisition,
+no forward resets, firing only on clear ticks and no blocked combat holds.
+Another verifies a clear alternative wins and contact loss restores forward aim.
+Replacement package/native acceptance is pending; these checks alone do not
+prove the user-visible oscillation has stopped on #1513.
+
 ### Follow-up: automatic kit encoding rejected by the authority
 
 Independent c2ff1f11 native acceptance exposed a confirmed failure, reported in
