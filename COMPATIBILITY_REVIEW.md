@@ -1,3 +1,23 @@
+# November 3 source-policy alignment (documentation only)
+
+The gameplay reconstruction policy in CLAUDE.md governs every section below.
+Choose the base in official/community/custom priority order; resolve conflicts
+within that base and fill genuine gaps only with reasonable, compatible
+supplements. Missing official data requires evaluation of community evidence
+and, when necessary, labelled custom reconstruction before leaving a known
+broken behavior unchanged. An old "unresolved", "not reconstructed" or "no
+guessed values" entry records an implementation/evidence boundary, not a source
+restriction or permission to defer the work indefinitely. Conflicting estimates
+require an explicit choice and validation, not automatic retention of a default.
+
+Historical test results below remain limited to the version and behavior they
+exercised. In particular, the old Firefighting boundary entry is superseded for
+current implementation status by the community-decay and coherent-model reviews.
+Unimplemented special XP and later dispersion weighting remain actual gaps;
+this policy edit does not implement or validate them. Preserve user scope
+exclusions: bond rewards remain unchanged. No gameplay values, algorithms or
+packaged artifacts change in this documentation-only alignment.
+
 # November 3 final player-only traffic candidate and remaining boundaries
 
 Runtime 9dcac1f6, Windows build colorfulmeans-41552662203-1, passes 41 focused
@@ -246,10 +266,13 @@ remain estimates, not retrieved per-vehicle official coefficients.
 Historical Chinese base-XP x2 is applied once on the authority for Gold Type 59,
 Type 62 and WZ111T before scoreboard, mission and account settlement consumers.
 Ordinary premium settlement XP is separate; the owner's IX/X policy is +5%.
-Churchill III and ordinary WZ111 remain unresolved special base coefficients:
-community numeric claims conflict, and Console/Blitz values are not PC evidence.
-REWARD BREAKDOWN labels those unresolved cases explicitly instead of asserting
-an audited 1.0. Native fire initial-burn/base-decay gaps and unsampled ignition
+Churchill III and ordinary WZ111 special base coefficients were not implemented
+in this candidate; the active fallback remains 1.0 and REWARD BREAKDOWN identifies
+it as unresolved, not a verified original value. Conflicting PC community claims
+must be evaluated under CLAUDE.md and supplemented by reasonable compatible
+reconstruction if needed; official confirmation is not a prerequisite for that
+work. Console/Blitz values require an explicit PC compatibility justification,
+not automatic transplantation. Native fire initial-burn/base-decay gaps and unsampled ignition
 RNG remain declared in FIRE_MODEL; this round does not claim a recovered fire law.
 The shared governor clock now applies whole-second low-speed wear to both human
 and Bot owners; disabling or reaching half forward speed clears the partial tick.
@@ -614,7 +637,9 @@ Intuition rolls once per changed shell decision on a non-magazine/non-burst gun;
 success changes the actual next round without spending ammunition or completing
 an active reload. The native weapon owner retains its clocks and inventory.
 
-Firefighting remains **unresolved**, not fixed: #1513 donates
+Historical status of the earlier package (superseded by the later community
+fire-decay implementation and coherent-model review): Firefighting was
+**unresolved**, not fixed. #1513 donates
 `healthBurnPerSecLossFraction`, including the directive enhancement, but the
 per-vehicle initial burn/base decay are stripped by the client reader's
 server-only guard. The donation survives player crew-state projection and a
@@ -2814,7 +2839,10 @@ states the historical change from 16% to 10%. The official 3,000-shot diagrams
 do not publish a complete sampling law. The 9.6 reweighting is not implemented;
 the current scatter model must not be described as verified #1513 accuracy.
 Matching the client-owned cone angle and armour preview cannot establish
-matching weak-spot hit probabilities. No guessed ring weights have been added.
+matching weak-spot hit probabilities. This is an open implementation gap, not
+a requirement to wait for the proprietary law: evaluate compatible community
+sampling studies and, if necessary, labelled reconstruction under CLAUDE.md.
+Do not transplant conflicting weights or describe calibrated values as native.
 
 One accepted penetration factor remains frozen across range, obstacles,
 ordered vehicle layers and a ricochet continuation. AP/APCR continuations
@@ -5976,8 +6004,11 @@ currency correction, not a claim of rebaking the entire #1513 client. The
 baker now preserves `<crystal/>` when run again. The medal schedule comes from
 WG's [9.20.1 announcement](https://worldoftanks.eu/en/news/general-news/920-1-bonds-and-medals/)
 and its [reward table](https://eu-wotp.wgcdn.co/dcont/fb/image/medals_en.jpg).
-The all-Tier-X base-XP bond conversion is not reconstructed. No guessed
-XP-to-bonds formula or later weekly-cap system is introduced.
+The all-Tier-X base-XP bond conversion is not implemented. Bond rewards remain
+unchanged under the owner's explicit scope exclusion, not because community
+evidence or labelled reconstruction is prohibited. Reopening this feature would
+require following CLAUDE.md and respecting the selected historical rule base;
+a later weekly-cap system must not silently replace it.
 
 Grand Battles remain unavailable. The current 15-slot team layout, bot identity
 ranges, 30-row result validators and baked map data need a coordinated change.

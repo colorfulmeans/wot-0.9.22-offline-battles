@@ -8,8 +8,12 @@ WZ111T: 2016-12-20 original version FAQ republished by Sina:
 https://games.sina.com.cn/o/z/wot/2016-12-20/fxytqaw0011401.shtml
 The historical review identifies its bonus as base XP. This is explicitly
 the old Chinese rule; modern global vehicles are not evidence for removing it.
-Churchill III and ordinary WZ111 are unresolved, not silently assigned guessed
-bonuses. All ordinary base coefficients remain this reconstruction's 1.0.
+Churchill III and ordinary WZ111 special base bonuses are not implemented here;
+the current fallback is 1.0, not a verified original coefficient. Their unresolved
+status must not block evaluation of PC community evidence or reasonable labelled
+reconstruction compatible with the selected base under CLAUDE.md. Missing official
+confirmation is not a requirement to retain this fallback. This comment changes
+policy documentation only; the values below have not been changed or validated.
 """
 
 SPECIAL_BASE_XP_100 = {

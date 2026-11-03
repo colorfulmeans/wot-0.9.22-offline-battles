@@ -586,7 +586,10 @@ rows and lifetime totals use the same rounded award, applied only once even
 after a retry or restart.
 The launcher's Saves tab can also edit the bond balance. Older saves start
 with zero bonds. The historical additional base-XP bond payout for all-Tier-X
-battles is not implemented: its exact conversion table is still unavailable.
+battles is not implemented. Bond rewards are currently held unchanged at the
+owner's request; missing original data does not prohibit compatible community
+evidence or explicitly labelled reconstruction under CLAUDE.md if that scope is
+reopened.
 Ranked-season and clan-event rewards are outside the offline modes.
 
 Ammunition and consumables are stock now, not scenery. A battle spends the

@@ -108,6 +108,19 @@ Leaving a known broken effect unimplemented is the last resort: investigate the
 allowed supplements and labelled reconstruction first, and state what is still
 missing. Apply this consistently to earnings, collision, fire, crew skills,
 equipment, consumables, directives and other gameplay calculations.
+An absent official number, unavailable original server, conflicting community
+estimates or a previously recorded "unresolved" status is not permission to
+stop at the existing value. Evaluate the applicable community evidence and,
+where needed, a reasonable, explicitly labelled reconstruction compatible with
+the selected base. Document the choice, alternatives, confidence and validation.
+Keep a genuine implementation gap visible until that work is completed; neither
+an unchanged default nor diagnostic logging constitutes a fix.
+
+These rules govern current work even when older compatibility notes, source
+comments or release records describe an official-data-only stopping point.
+Historical records describe what that version did, not a prohibition on future
+community supplementation or custom reconstruction. Preserve explicit user scope
+exclusions, including instructions to leave an existing reward unchanged.
 Do not treat successful installation, factor donation, diagnostics or passing
 synthetic tests as proof that the battle consumer actually applies an effect.
 
@@ -241,9 +254,13 @@ temporary output and diff it before replacing tracked catalogs.
   permits immediate refiring is a bug.
 - Use exact client descriptors and client-owned input for the vehicle, gun,
   shell, crew, equipment, muzzle, pose, and control state the client already
-  knows. Do not invent undocumented coefficients, clamps or fallback parameters
-  to make a result look plausible. For unavailable gameplay laws, follow the
-  source priority above and label any reconstruction and calibration explicitly.
+  knows. Do not silently fabricate coefficients, clamps or fallback parameters,
+  or present reconstruction as retrieved native data. Missing gameplay laws and
+  parameters must follow the source-selection and compatible-gap process above;
+  explicitly labelled community supplementation, custom reconstruction and
+  calibration are permitted and must be evaluated before leaving a known defect
+  unchanged. This does not authorize fabricating native interface contracts,
+  collision receipts or historical events that were never observed.
 
 ## Runtime lessons from Windows playtesting
 
