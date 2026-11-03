@@ -16,7 +16,7 @@ from gui.mods.offline_lan_0922.player_control.ammunition import Ammunition
 from gui.mods.offline_lan_0922.player_control.driving import Driver, angle
 from gui.mods.offline_lan_0922.player_control.weapon import Weapon
 from gui.mods.offline_lan_0922.player_control.weapon import barrel_aligned
-from gui.mods.offline_lan_0922.player_control.traffic import Traffic, body
+from gui.mods.offline_lan_0922.player_control.traffic import Traffic, TurnClearance, body
 from gui.mods.offline_lan_0922.player_control.strategy import Strategy
 from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation, route_candidates
 
@@ -236,6 +236,26 @@ class PlayerRegressionTests(unittest.TestCase):
 
     def test_initial_overlap_can_escape_backwards(self):
         self.assertTrue(self.traffic((0,0,5)).clear(math.pi,4))
+
+    def test_blocked_short_pivot_keeps_clear_long_pivot_until_aligned(self):
+        clearance=TurnClearance()
+        traffic=types.SimpleNamespace(can_turn=lambda turn:turn>0)
+        yaw=2.74
+        for unused in range(100):
+            error=angle(1.41-yaw)
+            order=dict(turn=max(-1.,min(1.,error/.5)),throttle=0.,brake=False,
+                       recovery_mode='align',driving=dict(heading=1.41))
+            clearance.apply(order,yaw,traffic)
+            if abs(angle(1.41-yaw))<.25:break
+            self.assertGreater(order['turn'],0)
+            yaw=angle(yaw+order['turn']*.1)
+        self.assertLess(abs(angle(1.41-yaw)),.25)
+
+    def test_turn_clearance_does_not_cancel_proved_reverse_recovery(self):
+        clearance=TurnClearance();clearance.sign=1.;clearance.heading=1.4
+        order=dict(turn=0.,throttle=-1.,brake=False,recovery_mode='reverse_clearance')
+        clearance.apply(order,2.7,types.SimpleNamespace(can_turn=lambda turn:True))
+        self.assertEqual(-1.,order['throttle']);self.assertIsNone(clearance.heading)
 
     def test_base_alarm_preempts_front_and_clearance_rejoins_routes(self):
         s=Strategy();routes=[dict(id='main',waypoints=[(0,0),(0,100)])]

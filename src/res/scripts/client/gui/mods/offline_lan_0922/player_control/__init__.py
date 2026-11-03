@@ -112,6 +112,7 @@ class PlayerControl(object):
         from .weapon import Weapon
         from .ammunition import Ammunition
         from .strategy import Strategy
+        from .traffic import TurnClearance
         from ..gun_mechanics import _field
         from ..default_loadouts import descriptor_roles
         gun = owner._gun_state
@@ -127,6 +128,7 @@ class PlayerControl(object):
             self.ammo_policy.protected = False
         self.navigation = PlayerNavigation(owner, entity.typeDescriptor) if 'drive' in self.features else None
         self.strategy = Strategy()
+        self.turn_clearance = TurnClearance()
         self.next_strategy = 0.
         self.weapon = Weapon(owner)
         if 'fire' in self.features:
@@ -464,11 +466,7 @@ class PlayerControl(object):
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             order = self.navigation.decide(state, clear, hold=hold)
-            if not traffic.can_turn(order['turn']):
-                opposite=-order['turn']
-                order['turn'] = opposite if traffic.can_turn(opposite) else 0.
-                order['throttle'] = 0.
-                order['recovery_mode'] = 'vehicle_turn_clearance'
+            self.turn_clearance.apply(order,yaw,traffic)
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
