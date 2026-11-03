@@ -258,7 +258,7 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual(-1.,order['throttle']);self.assertIsNone(clearance.heading)
 
     def test_blocked_pivot_creates_space_only_in_proved_forward_corridor(self):
-        clearance=TurnClearance();clearance.sign=1.;clearance.heading=1.4
+        clearance=TurnClearance()
         order=dict(turn=1.,throttle=0.,brake=False,recovery_mode='align',driving=dict(heading=1.4))
         traffic=types.SimpleNamespace(can_turn=lambda turn:False)
         clearance.apply(order,0.,traffic,(0,0,0),lambda heading,reach:True)

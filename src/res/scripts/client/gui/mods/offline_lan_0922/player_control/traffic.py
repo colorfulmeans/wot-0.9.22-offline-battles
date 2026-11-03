@@ -31,9 +31,7 @@ class TurnClearance(object):
             if traffic.can_turn(opposite):
                 self.sign,self.heading=opposite,goal
             else:
-                order.update(turn=0.,throttle=0.,brake=True,
-                             recovery_mode='vehicle_turn_blocked')
-                return
+                self.sign,self.heading=(1. if turn>0 else -1.),goal
         # Continue the same pivot across the shortest-angle boundary. Normal
         # measured nonprogress recovery can still request a proved rear exit.
         allowed=traffic.can_turn(self.sign)
