@@ -13506,6 +13506,21 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Windows launcher checkpoint
+
+Windows artifact 13253300738 for b310f831 passed archive integrity,
+build identity, committed source comparison, and the single-entry
+check. The actual launcher showed the three evenly spaced feature
+columns and the separately aligned control checkbox. Unchecking it
+destroyed the open control window, disabled Open, and retained all
+three feature selections. Bot behavior regressions passed in CI.
+
+Full CI caught the fixed-lineup preference regression in the test
+session adapter. The fixture-map check now uses the session class's
+static helper, and both the sparse-lineup and stock waiting-room
+suites pass locally. The rebuilt artifact and live fixture-room and
+battle checks remain pending.
+
 # Player firing position and artillery path checkpoint
 
 The foreground controller can choose a short, same-height firing position

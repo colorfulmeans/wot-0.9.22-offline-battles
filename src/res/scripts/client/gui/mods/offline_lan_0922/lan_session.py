@@ -1605,7 +1605,7 @@ class LANSession(object):
             # room's capacities at 15 rather than replaying a sparse size.
             self._restored_skill_generation = generation
             self._restored_team_sizes_generation = generation
-            if (self._fixture_map() is None and
+            if (LANSession._fixture_map() is None and
                     self._room_preferences.get('team_sizes') != {1: 15, 2: 15}):
                 self._room_preferences['team_sizes'] = {1: 15, 2: 15}
                 self._save_room_preferences()
