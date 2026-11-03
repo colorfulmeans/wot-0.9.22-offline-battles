@@ -16,6 +16,20 @@ def item(name, **kwargs):
 
 
 class FollowupTests(unittest.TestCase):
+    def test_stationary_fixtures_keep_spg_orders_before_worker_task_selection(self):
+        from gui.mods.offline_lan_0922 import spg_route_travel
+        state = dict(profile=dict(class_tag='SPG'))
+        order = dict(combat_mode='hold', fire_allowed=False,
+                     throttle_override=0., move_position=dict(x=0., y=0., z=0.))
+        for mode in ('1', '3', '4'):
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1', equipment_test.ENV:mode}):
+                with mock.patch.object(spg_route_travel.spg_modes, 'update') as update:
+                    self.assertIs(order, spg_route_travel.apply(object(), state, order, 1.))
+                    update.assert_not_called()
+        for diagnostics, mode in (('0','1'), ('1','0'), ('1','2')):
+            with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':diagnostics, equipment_test.ENV:mode}):
+                self.assertFalse(equipment_test.stationary_mode())
+
     def test_saved_mixed_difficulty_cannot_override_diagnostic_skill_and_loadout(self):
         class Battle:
             def __init__(self, **kwargs): self.initial = kwargs

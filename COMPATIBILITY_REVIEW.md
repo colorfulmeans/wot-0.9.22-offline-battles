@@ -1,5 +1,24 @@
 # November 3 coherent-rule and player-control follow-up
 
+## Native acceptance follow-up: stationary fixture defect
+
+The user-assisted first session on runtime `2b2342bf` is observation only,
+not independent acceptance. A restarted session independently exercised the
+mouse panel. Forward and reverse commands reached the foreground consumer,
+produced signed native drive inputs, and ended after approximately one second.
+The left-turn command also completed. The later right-turn/fire commands were
+written by the panel after the battle had ended and therefore cannot count as
+successful execution.
+
+Native evidence exposed a fixture defect: the server issued stationary/no-fire
+orders, but worker-owned artillery travel replaced the leFH18B2 orders. Bots 15
+and 30 entered opposing bases, ending the static-target fixture at 17:15:28 on
+November 3 with `reason=base captured`. The diagnostic fixture now retains its
+orders before worker artillery task selection. Normal battles and the governor
+driving fixture retain their existing artillery travel. Three focused test files
+passed (37 cases, zero skips). A rebuilt package and fresh native acceptance
+are still required; this correction alone is not an acceptance pass.
+
 This section supersedes the earlier documentation-only implementation status,
 not its source-selection policy. Runtime acceptance on the new artifact is
 recorded separately below; earlier native passes do not transfer automatically.

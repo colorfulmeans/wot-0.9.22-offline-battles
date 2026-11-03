@@ -58,6 +58,11 @@ def governor_mode():
     return enabled() and os.environ.get(ENV) == '2'
 
 
+def stationary_mode():
+    """Only stationary fixtures suppress worker-owned artillery travel."""
+    return enabled() and not governor_mode()
+
+
 def consumables(cache, defaults):
     """Diagnostic-only three-slot governor test, using the native descriptor."""
     if not governor_mode():
