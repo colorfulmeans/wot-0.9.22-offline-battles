@@ -257,6 +257,24 @@ class PlayerRegressionTests(unittest.TestCase):
         clearance.apply(order,2.7,types.SimpleNamespace(can_turn=lambda turn:True))
         self.assertEqual(-1.,order['throttle']);self.assertIsNone(clearance.heading)
 
+    def test_blocked_pivot_creates_space_only_in_proved_forward_corridor(self):
+        clearance=TurnClearance();clearance.sign=1.;clearance.heading=1.4
+        order=dict(turn=1.,throttle=0.,brake=False,recovery_mode='align',driving=dict(heading=1.4))
+        traffic=types.SimpleNamespace(can_turn=lambda turn:False)
+        clearance.apply(order,0.,traffic,(0,0,0),lambda heading,reach:True)
+        self.assertEqual('vehicle_turn_forward_clearance',order['recovery_mode'])
+        self.assertEqual(.45,order['throttle']);self.assertEqual(0.,order['turn'])
+        clearance.apply(order,0.,traffic,(0,0,1),lambda heading,reach:False)
+        self.assertEqual(0.,order['throttle']);self.assertTrue(order['brake'])
+
+    def test_forward_turn_space_is_released_after_three_metres(self):
+        clearance=TurnClearance();clearance.sign=1.;clearance.heading=1.4
+        clearance.advance_origin=(0,0,0)
+        order=dict(turn=-1.,throttle=0.,brake=False,recovery_mode='align',driving=dict(heading=1.4))
+        clearance.apply(order,0.,types.SimpleNamespace(can_turn=lambda turn:True),
+                        (0,0,3.1),lambda heading,reach:True)
+        self.assertIsNone(clearance.heading);self.assertIsNone(clearance.advance_origin)
+
     def test_base_alarm_preempts_front_and_clearance_rejoins_routes(self):
         s=Strategy();routes=[dict(id='main',waypoints=[(0,0),(0,100)])]
         result=s.decide(0,routes,routes[0],[],[],dict(points=10,invaders=1),(0,0),True)

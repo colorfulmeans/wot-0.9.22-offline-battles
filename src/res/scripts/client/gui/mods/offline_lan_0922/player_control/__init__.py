@@ -466,7 +466,7 @@ class PlayerControl(object):
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             order = self.navigation.decide(state, clear, hold=hold)
-            self.turn_clearance.apply(order,yaw,traffic)
+            self.turn_clearance.apply(order,yaw,traffic,position,clear)
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
