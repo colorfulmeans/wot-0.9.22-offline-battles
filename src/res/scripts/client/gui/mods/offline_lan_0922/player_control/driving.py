@@ -11,6 +11,9 @@ class Driver(object):
     def __init__(self):
         self.anchor = None
         self.reverse_until = 0.
+        self.forward_until = 0.
+        self.forward_origin = None
+        self.clearance_checks = None
         self.recovery_heading = None
         self.recovery_origin = None
         self.replan = False
@@ -27,12 +30,33 @@ class Driver(object):
             mode, brake = 'hold', True
             self.anchor = None
             self.reverse_until = 0.
+            self.forward_until = 0.
+            self.forward_origin = None
+        elif now < self.forward_until:
+            # A static wall may block pivoting and the rear corridor while
+            # leaving room ahead. Keep this admitted translation straight and
+            # bounded; it must never inherit the objective's steering angle.
+            mode = 'forward_clearance'
+            advanced = math.hypot(position[0]-self.forward_origin[0],
+                                  position[2]-self.forward_origin[2])
+            if advanced < 3. and clear(yaw, 4.):
+                throttle = .45
+            else:
+                self.forward_until = 0.
+                self.anchor = None
+                self.replan = True
+                brake = True
         elif now < self.reverse_until:
             # A recovery owns one fixed direction until its deadline. Turning
             # or an updated path tip cannot reverse the pedal every frame.
             mode = 'reverse_clearance'
             throttle = -1. if clear(yaw+math.pi, 4.) else 0.
         else:
+            if self.forward_until:
+                self.forward_until = 0.
+                self.forward_origin = None
+                self.anchor = None
+                self.replan = True
             if self.reverse_until:
                 self.reverse_until = 0.
                 self.anchor = None
@@ -80,9 +104,20 @@ class Driver(object):
                 self.anchor = (tuple(position), yaw, now)
                 # Reverse only after measured nonprogress plus a proved clear
                 # rear corridor. It is bounded and cannot steer toward a hill.
-                if mode in ('blocked', 'travel', 'align', 'detour_align') and clear(yaw+math.pi, 4.):
-                    self.reverse_until = now+1.
-                    mode, throttle, turn, brake = 'reverse_clearance', -1., 0., False
+                if mode in ('blocked', 'travel', 'align', 'detour_align'):
+                    rear = clear(yaw+math.pi, 4.)
+                    front = not rear and mode in ('align', 'detour_align') and clear(yaw, 4.)
+                    self.clearance_checks = dict(at=now, origin=tuple(position),
+                        yaw=yaw, rear=rear, front=front, stalled_mode=mode)
+                    if rear:
+                        self.reverse_until = now+1.
+                        mode, throttle, turn, brake = 'reverse_clearance', -1., 0., False
+                    elif front:
+                        self.forward_until = now+1.
+                        self.forward_origin = tuple(position)
+                        mode, throttle, turn, brake = 'forward_clearance', .45, 0., False
         self.receipt = dict(mode=mode, distance=distance, heading=heading,
-                            yaw=yaw, delta=delta, reverse_until=self.reverse_until)
+                            yaw=yaw, delta=delta, reverse_until=self.reverse_until,
+                            forward_until=self.forward_until,
+                            clearance_checks=self.clearance_checks)
         return dict(throttle=throttle, turn=turn, brake=brake, recovery_mode=mode)

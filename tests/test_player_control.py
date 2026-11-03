@@ -207,6 +207,53 @@ class PlayerRegressionTests(unittest.TestCase):
             order=d.drive((0,0,0),0,0,(0,0,40),i*.1,lambda *a:False)
             self.assertEqual(0,order['throttle'])
 
+    def test_static_pivot_stall_can_make_proved_forward_turn_space(self):
+        # Native T-44-100M capture: the rear ray hits the building at
+        # (-8.3719, .96, 26.9881), while a vehicle-only turn sweep is clear.
+        position=(-11.36555,.26,27.96018)
+        yaw=-1.77334154
+        d=Driver()
+        def clear(heading, reach):
+            self.assertEqual(4.,reach)
+            return abs(angle(heading-yaw))<.01
+        for tick in range(30):
+            order=d.drive(position,yaw,0.,(-14,.26,6),tick*.1,clear)
+            self.assertEqual(0.,order['throttle'])
+        order=d.drive(position,yaw,0.,(-14,.26,6),3.,clear)
+        self.assertEqual('forward_clearance',order['recovery_mode'])
+        self.assertEqual(.45,order['throttle'])
+        self.assertEqual(0.,order['turn'])
+        self.assertFalse(d.clearance_checks['rear'])
+        self.assertTrue(d.clearance_checks['front'])
+        for tick in range(31,40):
+            order=d.drive(position,yaw,0.,(40,.26,80),tick*.1,clear)
+            self.assertEqual(.45,order['throttle'])
+            self.assertEqual(0.,order['turn'])
+        # A changed obstacle immediately withdraws admission, even before the
+        # deadline. A stale recovery receipt never authorizes crossing a hull.
+        order=d.drive(position,yaw,0.,(-14,.26,6),3.95,lambda *a:False)
+        self.assertEqual(0.,order['throttle'])
+        self.assertTrue(order['brake'])
+
+    def test_forward_turn_space_is_bounded_and_cancelled_by_hold(self):
+        d=Driver();d.forward_until=10.;d.forward_origin=(0,0,0)
+        order=d.drive((0,0,3),0,0,(0,0,40),1,lambda *a:True)
+        self.assertEqual(0,order['throttle'])
+        self.assertEqual(0,d.forward_until)
+        d.forward_until=10.;d.forward_origin=(0,0,0)
+        order=d.drive((0,0,0),0,0,(0,0,40),2,lambda *a:True,hold=True)
+        self.assertEqual(0,order['throttle'])
+        self.assertEqual(0,d.forward_until)
+        self.assertIsNone(d.forward_origin)
+
+    def test_vehicle_turn_latch_preserves_static_forward_escape(self):
+        clearance=TurnClearance();clearance.sign=1.;clearance.heading=1.4
+        order=dict(turn=0.,throttle=.45,brake=False,recovery_mode='forward_clearance')
+        clearance.apply(order,2.7,types.SimpleNamespace(can_turn=lambda turn:False))
+        self.assertEqual(.45,order['throttle'])
+        self.assertEqual(0.,order['turn'])
+        self.assertIsNone(clearance.heading)
+
     def test_recovery_direction_is_latched_not_frame_alternation(self):
         d=Driver();d.reverse_until=1.
         for i in range(9):

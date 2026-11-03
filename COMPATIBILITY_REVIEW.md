@@ -1,5 +1,46 @@
 # November 3 coherent-rule and player-control follow-up
 
+## Independent native follow-up: static-building pivot stall
+
+Runtime `24516ea8`, package `colorfulmeans-41610793002-1`, was exercised
+independently on the exact Chinese HD client. Its stationary fixture held both
+leFH18B2 hulls at their initial XZ positions over 231 server samples spanning
+690 seconds. The earlier artillery capture defect did not recur. The mouse
+panel's right-turn command completed after 1.009 seconds; panel fire launched
+a native projectile and reduced carried AP from 24 to 23. Full takeover then
+committed 14 shots, including 277 penetrating damage and 24 HE splash damage.
+The observed AP/APCR/HE sequence respected penetration receipts and the two-HE
+return. Stop at 18:08:01 cancelled takeover; a manual mouse shot at 18:09:00
+launched normally. These are independent passes, not the assisted first run.
+
+The drive-only launch published exactly `features=[drive]`, moved from
+(-26, .2867, 118) through its route, left aim ownership unset and generated no
+automatic-fire events. A manual mouse shot during that takeover succeeded.
+The fire-only launch published exactly `features=[fire]` and left the hull
+stationary; manual left-click did not launch a shot while fire was owned.
+Its spawn firing lane remained obstructed, so that launch alone is not positive
+automatic-fire acceptance. Actual automatic shots were proved by full takeover.
+These runs did not exercise all eight feature combinations, a physical grave-key
+toggle, automatic kit activation, or dual-HE depletion; those remain separate
+native boundaries rather than inferred passes.
+
+The subsequent ordinary mixed-roster battle committed six automatic shots,
+five penetrations, 1,263 damage and two kills, and released takeover on battle
+end at 18:54:18. It also exposed another player-only nonprogress case: T-44-100M
+remained at (-11.36555, .26, 27.96018), yaw -1.77334154, while requesting a
+left pivot. The rear planning ray hit the building at (-8.3719, .96, 26.9881).
+Vehicle turn sweeps were clear, so the vehicle-only latch did not own this
+static-world failure. The Driver's measured-nonprogress branch tried only the
+rear corridor and could repeat the same blocked pivot indefinitely.
+
+The follow-up adds a straight, one-second, at-most-three-metre forward clearance
+attempt only after measured nonprogress, rejected rear clearance and a proved
+four-metre forward corridor. Every update rechecks static and dynamic clearance;
+holds, new obstructions and the distance/deadline bounds cancel admission. Its
+direction and check results are logged. Bot drivers and authored route points
+are unchanged. The 48-case player-control suite and CPython 2.7 compilation pass.
+A rebuilt artifact and native recheck of this additional correction are pending.
+
 ## Native acceptance follow-up: stationary fixture defect
 
 The user-assisted first session on runtime `2b2342bf` is observation only,

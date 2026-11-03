@@ -16,7 +16,7 @@ class TurnClearance(object):
         def delta(a,b):
             return (a-b+math.pi) % (2*math.pi)-math.pi
         goal=order.get('driving',{}).get('heading',yaw)
-        if (order['recovery_mode'] in ('hold','reverse_clearance') or
+        if (order['recovery_mode'] in ('hold','reverse_clearance','forward_clearance') or
                 self.heading is not None and abs(delta(goal,self.heading))>.35):
             self.sign,self.heading,self.advance_origin=0.,None,None
         if self.heading is not None and abs(delta(self.heading,yaw))<.25:
