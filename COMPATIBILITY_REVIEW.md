@@ -13506,6 +13506,18 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Foreground cover withdrawal
+
+A low-health or empty-clip player may reverse into nearby proved rear
+cover. The path must pass world and vehicle clearance and the destination
+must block the incoming terrain ray. Arrival holds cover while the
+withdrawal condition is active, including briefly losing sight of the
+enemy. The attempt is bounded, and base defence preempts it.
+
+The focused player suite passed 62 tests, including rejected clearance,
+clip withdrawal, lost contact at cover, and return to normal travel after
+reloading. Native cover behaviour is still pending.
+
 # Foreground siege request checkpoint
 
 The foreground controller uses the player's native siege setting when

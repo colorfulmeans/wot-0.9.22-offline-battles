@@ -548,14 +548,24 @@ class PlayerControl(object):
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             position_goal = None
-            if ('fire' in self.features and not fire_clear and candidates and
-                    self.strategy.mode != 'defend' and
-                    isinstance(self.navigation, PlayerNavigation)):
-                position_goal = self.navigation.firing_position(
-                    state, candidates[0], clear, self.lane_from, owner._mutable_shot_ray()[0])
-            if position_goal is None:
-                if isinstance(self.navigation, PlayerNavigation):
+            withdrawal = None
+            if isinstance(self.navigation, PlayerNavigation):
+                if ('fire' in self.features and self.strategy.mode != 'defend' and
+                        (target is not None or self.navigation.cover_move is not None)):
+                    withdrawal = self.navigation.withdrawal(
+                        state, target, entity, owner._gun_state, clear, owner._tactical_ray_clear)
+                else:
+                    self.navigation.cover_move = None
+                if ('fire' in self.features and not fire_clear and candidates and
+                        self.strategy.mode != 'defend' and withdrawal is None):
+                    position_goal = self.navigation.firing_position(
+                        state, candidates[0], clear, self.lane_from, owner._mutable_shot_ray()[0])
+                if position_goal is None:
                     self.navigation.firing_move = None
+            if withdrawal is not None:
+                hold = False
+                order = dict(withdrawal, recovery_mode=withdrawal['combat_mode'])
+            elif position_goal is None:
                 order = self.navigation.decide(state, clear, hold=hold)
             else:
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)

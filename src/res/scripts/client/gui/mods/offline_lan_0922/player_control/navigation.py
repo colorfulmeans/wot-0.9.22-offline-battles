@@ -76,6 +76,8 @@ class PlayerNavigation(object):
                                                profile=dict(class_tag=self.tag))):
                 self.routes.append(dict(route, id='user_'+route['id'], waypoints=route['points']))
         self.firing_move = None
+        self.cover_move = None
+        self.cover_retry_at = 0.
         self.firing_retry_at = 0.
         self.selection = self.routes
         self.navigator = TerrainNavigator(owner._navigation_ground, owner._navigation_obstacle,
@@ -153,6 +155,45 @@ class PlayerNavigation(object):
         self.route, self.index = self.pending[3], self.pending[2]
         self.receipt.update(status='joined', path_length=len(path))
         return True
+
+    def withdrawal(self, state, target, entity, gun, clear, terrain_ray):
+        """Use nearby proved rear cover while vulnerable or reloading a clip."""
+        position, now = state['position'], state['now']
+        if self.tag == 'SPG':
+            return None
+        maximum = getattr(entity.typeDescriptor, 'maxHealth', 0)
+        critical = maximum > 0 and entity.health <= maximum * .25
+        reloading = (getattr(gun, 'clip_size', 1) > 1 and
+                     getattr(gun, 'clip', 0) <= 0 and getattr(gun, 'reload_time', 0.) > 2.)
+        if not (critical or reloading):
+            self.cover_move = None
+            return None
+        rear = state['yaw'] + math.pi
+        if self.cover_move is not None:
+            identity, goal, deadline = self.cover_move
+            if (target is None or target.id == identity) and now < deadline:
+                distance = math.hypot(goal[0] - position[0], goal[2] - position[2])
+                if distance <= 1.5:
+                    return dict(throttle=0., turn=0., brake=True, combat_mode='cover_hold')
+                if clear(rear, min(distance, 5.)):
+                    return dict(throttle=-.65, turn=0., brake=False, combat_mode='withdraw')
+            self.cover_move = None
+        if target is None or now < self.cover_retry_at:
+            return None
+        self.cover_retry_at = now + 10.
+        threat = tuple(target.position)
+        source = (threat[0], threat[1] + 1.5, threat[2])
+        for distance in (5., 8., 12.):
+            x = position[0] + math.sin(rear) * distance
+            z = position[2] + math.cos(rear) * distance
+            height = self._height((x, z), position[1])
+            if height is None or abs(height - position[1]) > 1. or not clear(rear, distance):
+                continue
+            if terrain_ray(source, (x, height + 1.5, z)):
+                continue
+            self.cover_move = (target.id, (x, height, z), now + 8.)
+            return dict(throttle=-.65, turn=0., brake=False, combat_mode='withdraw')
+        return None
 
     def firing_position(self, state, target, clear, lane_from, muzzle):
         """Find a short clear approach that opens a direct firing lane."""

@@ -741,6 +741,28 @@ class FiringPositionTests(unittest.TestCase):
         self.assertIsNone(nav.firing_position(state, target, lambda *a: True,
                                               lambda *a: True, (0., 2., 0.)))
 
+    def test_clip_withdrawal_holds_cover_after_losing_contact_until_reloaded(self):
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        nav.tag = 'heavyTank'
+        nav.cover_move = None
+        nav.cover_retry_at = 0.
+        nav._height = lambda point, hint: 0.
+        entity = types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(maxHealth=1000),
+                                       health=1000)
+        gun = types.SimpleNamespace(clip_size=3, clip=0, reload_time=10.)
+        target = types.SimpleNamespace(id=1, position=(0., 0., 30.))
+        state = dict(position=(0., 0., 0.), now=1., yaw=0.)
+        blocked = nav.withdrawal(state, target, entity, gun, lambda *a: False, lambda *a: False)
+        self.assertIsNone(blocked)
+        state['now'] = 11.
+        move = nav.withdrawal(state, target, entity, gun, lambda *a: True, lambda *a: False)
+        self.assertLess(move['throttle'], 0.)
+        state.update(now=12., position=(0., 0., -5.))
+        hold = nav.withdrawal(state, None, entity, gun, lambda *a: True, lambda *a: True)
+        self.assertEqual('cover_hold', hold['combat_mode'])
+        gun.reload_time = 0.
+        self.assertIsNone(nav.withdrawal(state, None, entity, gun, lambda *a: True, lambda *a: True))
+
     def test_artillery_path_checks_overhead_clearance_and_real_barrel(self):
         from gui.mods.offline_lan_0922.player_control.weapon import artillery_path
         shot = dict(speed=50., gravity=10., maxDistance=500.)
