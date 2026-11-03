@@ -47,6 +47,7 @@ class TestingPanel:
     def __init__(self, app, parent, settings):
         self.app = app
         self.command_path = None
+        self.control_window = None
         tk = app._tk
         canvas = tk.Canvas(parent, height=220, highlightthickness=0)
         scrollbar = app._ttk.Scrollbar(parent, orient='vertical', command=canvas.yview)
@@ -74,7 +75,7 @@ class TestingPanel:
             return body
         def check(body, key, en, zh):
             widget = tk.Checkbutton(body, variable=self.vars[key], anchor='w',
-                                    command=app._save_settings)
+                                    command=self._control_changed if key == 'control' else app._save_settings)
             widget.pack(fill='x')
             self.labels.append((widget, en, zh))
         def help_text(body, en, zh):
@@ -93,7 +94,6 @@ class TestingPanel:
         help_text(body, 'Use the normal Start button. Fixtures select their own map and Bot roster in single player; network play uses a normal battle.',
                   '选择后使用正常启动按钮。专用场景在单人模式指定地图及BOT阵容；联网模式仍为正常对局。')
         body = section('Player automatic control', '玩家自动控制')
-        check(body, 'control', 'Enable the ` key and mouse control panel', '启用·键与鼠标控制面板')
         row = tk.Frame(body)
         row.pack(fill='x')
         for key, en, zh in (('drive', 'Automatic driving', '自动驾驶'),
@@ -102,6 +102,7 @@ class TestingPanel:
             widget = tk.Checkbutton(row, variable=self.vars[key], command=app._save_settings)
             widget.pack(side='left', fill='x', expand=True)
             self.labels.append((widget, en, zh))
+        check(body, 'control', 'Enable the ` key and mouse control panel', '启用·键与鼠标控制面板')
         help_text(body, 'Each battle starts under manual control. Press ` to take over or stop; native local messages show the state. Your own loadout remains in use. Chat, menus and dialogs do not toggle control.',
                   '每局默认手动控制。按·键接管或停止，原生本地消息提示状态；保留玩家自己的配装。聊天、菜单及弹窗中不触发切换。')
         help_text(body, 'Driving owns the hull only; aiming/fire owns target lock and shots. Unchecked features stay manual. Changes apply on the next game launch.',
@@ -109,6 +110,8 @@ class TestingPanel:
         button = tk.Button(body, command=self.open_controls)
         button.pack(fill='x', pady=(ui_layout.GAP, 0))
         self.labels.append((button, 'Open mouse control panel', '打开鼠标控制面板'))
+        self.control_button = button
+        self._refresh_controls()
         self.translate()
         def wheel(event):
             canvas.yview_scroll(-int(event.delta / 120), 'units')
@@ -149,9 +152,33 @@ class TestingPanel:
             stream.write(json.dumps(dict(action=action, **fields)) + '\n')
         return True
 
+    def _refresh_controls(self):
+        enabled = self.vars['control'].get()
+        self.control_button.config(state='normal' if enabled else 'disabled')
+        if not enabled:
+            self._close_controls()
+
+    def _control_changed(self):
+        self._refresh_controls()
+        self.app._save_settings()
+
+    def _close_controls(self):
+        window, self.control_window = self.control_window, None
+        if window is not None:
+            try:
+                if self.command_path:
+                    self.send('stop')
+            finally:
+                window.destroy()
+
     def open_controls(self):
+        if not self.vars['control'].get():
+            return
+        if self.control_window is not None:
+            self.control_window.lift()
+            return
         tk = self.app._tk
-        window = tk.Toplevel(self.app.root)
+        window = self.control_window = tk.Toplevel(self.app.root)
         window.title('玩家测试控制' if self.app.language == 'zh' else 'Player test control')
         window.geometry('500x240')
         body = tk.Frame(window, padx=ui_layout.MARGIN, pady=ui_layout.MARGIN)
@@ -173,5 +200,5 @@ class TestingPanel:
             row.pack(fill='x', pady=(0, ui_layout.GAP))
             for chinese, english, command in buttons:
                 tk.Button(row, text=chinese if zh else english, command=command).pack(side='left', fill='x', expand=True)
-        window.protocol('WM_DELETE_WINDOW', lambda: (self.send('stop'), window.destroy()))
+        window.protocol('WM_DELETE_WINDOW', self._close_controls)
         ui_layout.polish(window)

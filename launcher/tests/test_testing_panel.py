@@ -18,6 +18,21 @@ class TestingPanelTests(unittest.TestCase):
         self.assertEqual('0', network['WOT_OFFLINE_EQUIPMENT_TEST'])
         self.assertEqual('0', testing_ui.environment({})['WOT_OFFLINE_PLAYER_AUTOCONTROL'])
 
+    def test_disabling_control_closes_panel_and_sends_stop(self):
+        app = mock.Mock(_tk=_FakeTk, _ttk=_FakeTtk, language='en')
+        panel = testing_ui.TestingPanel(app, _Widget(), dict(control=True))
+        window = panel.control_window = mock.Mock()
+        panel.command_path = 'active.jsonl'
+        panel.send = mock.Mock()
+        panel.vars['control'].set(False)
+        panel._control_changed()
+        self.assertIsNone(panel.control_window)
+        window.destroy.assert_called_once()
+        panel.send.assert_called_once_with('stop')
+        self.assertEqual('disabled', panel.control_button.options['state'])
+        panel.open_controls()
+        self.assertIsNone(panel.control_window)
+
     def test_choices_survive_language_switch_and_each_launch_has_a_fresh_journal(self):
         class App:
             _tk, _ttk, language = _FakeTk, _FakeTtk, 'zh'

@@ -219,7 +219,7 @@ def model(room):
         button('class_%d_random'%team,tr('RANDOM'),enabled,selected=row['random'])
         for tag in bot_tactics.CLASSES:
             button('class_%d_%s'%(team,tag),'',enabled and not row['random'],selected=row['random'] or row[tag])
-    button('map', tr('MAP: %s') % friendly_map_name(room._selected_map), host and bool(options))
+    button('map', tr('MAP: %s') % friendly_map_name(room._selected_map), host and bool(options) and not teams.get('map_locked'))
     button('random', tr('RANDOM MAP'), host and room._random_supported())
     preferred = teams.get('preferred', 0)
     for key, team in [('team1', 1), ('team2', 2), ('team_random', 0)]:

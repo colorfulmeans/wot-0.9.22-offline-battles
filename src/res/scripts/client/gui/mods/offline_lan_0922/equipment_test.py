@@ -2,6 +2,7 @@
 import os
 
 ENV = 'WOT_OFFLINE_EQUIPMENT_TEST'
+MAP = '100_thepit'
 VEHICLES = ('ussr:R45_IS-7', 'usa:A11_T29', 'germany:G16_PzVIB_Tiger_II',
             'germany:G67_VK4502A', 'uk:GB72_AT15', 'uk:GB23_Centurion',
             'france:F17_AMX_13_90', 'usa:A21_T14', 'germany:G25_PzII_Luchs',
@@ -85,7 +86,7 @@ def install_server(battle_class, planner_class):
                       bot_tactics_path=None,
                       bot_lineup=[dict(team=team, slot=slot, vehicle=vehicle, skill='elite')
                                   for team in (1, 2) for slot, vehicle in enumerate(VEHICLES)])
-        original_init(self, map_name='100_thepit', max_players=max_players,
+        original_init(self, map_name=MAP, max_players=max_players,
                       clock=clock, team_size=15, **kwargs)
         print('[EQUIPMENT TEST] ' + ('native governor driving fixture' if governor_mode()
               else 'legal native fittings; stationary targets; mouse-fire acceptance'))
@@ -96,7 +97,7 @@ def install_server(battle_class, planner_class):
         # The room UI can replay its saved mixed/random settings after init.
         self.bot_tier_mode = 'same'
         self.bot_skill_mode = 'brutal'
-        return original_start(self, player_id, requested_map='100_thepit',
+        return original_start(self, player_id, requested_map=MAP,
                               requested_round_seconds=requested_round_seconds,
                               battle_mode=battle_mode, training_bots=training_bots)
     def orders(self, manifest, bot_states, players, now, defense=None, team_orders=None):

@@ -1376,16 +1376,33 @@ class LANSession(object):
             return True
         return False
 
+    @staticmethod
+    def _fixture_map():
+        from . import equipment_test, roof_crush_test
+        if roof_crush_test.enabled():
+            return roof_crush_test.MAP
+        if equipment_test.enabled():
+            return equipment_test.MAP
+        return None
+
     def _map_pool_value(self):
+        fixture_map = self._fixture_map()
+        if fixture_map is not None:
+            return [fixture_map]
         if self._map_pool is None:
             return None
         return list(self._map_pool)
 
     def _server_supports_random_map(self):
+        if self._fixture_map() is not None:
+            return False
         supported = getattr(self.client, 'has_random_map', None)
         return bool(callable(supported) and supported())
 
     def _server_supports_team_selection(self):
+        from . import roof_crush_test
+        if roof_crush_test.enabled():
+            return False
         supported = getattr(self.client, 'has_team_selection', None)
         return bool(callable(supported) and supported())
 
@@ -1408,7 +1425,10 @@ class LANSession(object):
             current_team = None
         return {
             'team': current_team,
-            'preferred': self._room_preferences.get('team', 0),
+            'map_locked': self._fixture_map() is not None,
+            'preferred': (1 if self._fixture_map() is not None and
+                          not self._server_supports_team_selection() else
+                          self._room_preferences.get('team', 0)),
             'sizes': sizes,
             'classes': getattr(self.client, 'team_classes', {}),
             'class_supported': callable(getattr(self.client,'set_team_class',None)) and not getattr(self.client,'lineup_locked',False),
@@ -1509,7 +1529,7 @@ class LANSession(object):
         return False
 
     def _remember_map(self, map_name):
-        if not map_name:
+        if not map_name or self._fixture_map() is not None:
             return False
         if self._room_preferences.get('map') == map_name:
             return True
@@ -1585,7 +1605,8 @@ class LANSession(object):
             # room's capacities at 15 rather than replaying a sparse size.
             self._restored_skill_generation = generation
             self._restored_team_sizes_generation = generation
-            if self._room_preferences.get('team_sizes') != {1: 15, 2: 15}:
+            if (self._fixture_map() is None and
+                    self._room_preferences.get('team_sizes') != {1: 15, 2: 15}):
                 self._room_preferences['team_sizes'] = {1: 15, 2: 15}
                 self._save_room_preferences()
         saved_skill = self._room_preferences.get('bot_skill_mode')

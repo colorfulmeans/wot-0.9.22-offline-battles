@@ -13508,6 +13508,23 @@ strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
 # November 3: independent player control repair candidate
 
+The launcher closes its mouse control window and queues Stop when the
+control entry is unchecked. A second Open action reuses the existing
+window. The automatic driving, aiming/fire and consumable choices keep
+their values and apply at the next launch. Single-player diagnostic
+fixtures show their fixed map in the stock waiting room and disable map
+and random-map selection. The fixed lineup continues to own the
+capacities, class filters, tier and difficulty. The bridge fixture also
+locks the player to Team 1. Fixture map/capacity values are not saved as
+ordinary room preferences.
+
+Local verification passed the launcher testing panel tests and the stock
+room, waiting room UI/skin, and LAN session suites. The previous
+caf4142c live round recorded repeated manual handovers with a fresh route
+entry from the actual vehicle position each time. That round did not
+record an active wreck push at the handover, so it verifies route
+re-entry but not the full wreck-push interruption.
+
 ### Follow-up: confirmed muzzle-clearance / target-forward feedback
 
 Native runtime 74fec0a1 reproduced the user's late oscillation beside a left
