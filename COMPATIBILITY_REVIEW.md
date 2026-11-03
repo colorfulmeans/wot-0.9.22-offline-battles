@@ -80,7 +80,7 @@ per ignition, slow-frame integration and canonical publication/echo continuity.
 The UI contract uses the stock ordinary milestone translation only and restores
 the old callable on adapter removal.
 
-Local initial gate: 26 selected test files / 725 assertions passed with no
+Local initial gate: 26 selected test files / 725 test cases passed with no
 skips before the extra reverse-hull and Bot ignition-lifecycle cases; those
 added focused cases also passed. All 238 client sources compile with CPython
 2.7.18. Exact installed Chinese x86 #1513 inspection passed. A broad Windows
@@ -89,6 +89,20 @@ fire fixtures; the latter now freeze ignition RNG and have explicit random
 ignition coverage. A clean pre-change worktree comparison and final cloud CI
 must distinguish existing host failures from regressions. This paragraph does
 not claim full-suite or native-client acceptance.
+
+Broad Windows comparison: clean 59eb9163 ran 457 files, 402 passed / 55 failed;
+the first complete candidate ran 458 files, 403 passed / 55 failed. Comparing
+the complete failing assertion identities (not just counts) found no additions
+or removals. These host-native failures remain visible, not waived as passes.
+All five special-XP compact descriptors were joined against the installed
+#1513 packed vehicle roster successfully. A cloud native geometry check then
+caught a retained Bot Python scatter owner still using the old sampler. That
+runtime path now uses the same 9.6 sampler as the native adapter; its centre
+acceptance draw is also included in the strict RNG-consumption fixture.
+
+Computer Use stopped the current turn when it could not confidently identify
+the Edge URL. No further UI input is issued in this turn, and native new-package
+acceptance is not claimed. Cloud builds and non-UI package verification continue.
 
 # November 3 source-policy alignment (documentation only)
 

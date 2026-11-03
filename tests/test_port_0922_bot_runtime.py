@@ -12486,7 +12486,7 @@ class BotRuntimeTests(unittest.TestCase):
             self.assertEqual(0.0, mean)
             self.assertAlmostEqual(
                 effective_base * device_damage.CREW_KO_TIME_FACTOR, sigma)
-        self.assertEqual([(0.0, 2.0 * math.pi)], uniform_calls)
+        self.assertEqual([(0.0, 1.0), (0.0, 2.0 * math.pi)], uniform_calls)
         self.assertAlmostEqual(0.4, state['shot_yaw'])
         self.assertAlmostEqual(0.1, state['shot_pitch'])
 
