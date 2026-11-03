@@ -22,6 +22,35 @@ def barrel_aligned(start, direction, speed, gravity, point, radius):
     return sum((projected[i]-point[i])**2 for i in range(3)) <= radius*radius
 
 
+def artillery_path(start, point, shot, direction=None):
+    """Sample a candidate artillery arc, or the actual laid barrel's arc."""
+    from .. import ballistics
+    from ..gun_mechanics import _field
+    speed = float(_field(shot, 'speed'))
+    gravity = abs(float(_field(shot, 'gravity')))
+    maximum = float(_field(shot, 'maxDistance', float('inf')))
+    if speed <= 0. or gravity <= 0.:
+        return ()
+    dx, dz = point[0] - start[0], point[2] - start[2]
+    if direction is None:
+        solutions = ballistics.ballistic_solutions(start, point, speed, gravity)
+        if not solutions:
+            return ()
+        pitch, flight = solutions[0]
+        yaw = math.atan2(dx, dz)
+    else:
+        x, y, z = direction
+        horizontal = x*x + z*z
+        if horizontal <= 1.e-8:
+            return ()
+        flight = (dx*x + dz*z) / (speed * horizontal)
+        yaw = math.atan2(x, z)
+        pitch = math.atan2(-y, math.sqrt(horizontal))
+    if not 0. < flight <= ballistics.PROJECTILE_MAX_FLIGHT_SECONDS or speed*flight > maximum:
+        return ()
+    return ballistics.ballistic_path(start, yaw, pitch, speed, gravity, flight)
+
+
 def hull_traverse_error(owner, descriptor, point, world_error):
     """Return the extra hull rotation needed by the mounted gun."""
     from ..gun_mechanics import _field

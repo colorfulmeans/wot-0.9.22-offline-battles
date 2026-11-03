@@ -75,6 +75,8 @@ class PlayerNavigation(object):
             elif bot_tactics.matches(route, dict(team=int(owner.client.team), slot=0,
                                                profile=dict(class_tag=self.tag))):
                 self.routes.append(dict(route, id='user_'+route['id'], waypoints=route['points']))
+        self.firing_move = None
+        self.firing_retry_at = 0.
         self.selection = self.routes
         self.navigator = TerrainNavigator(owner._navigation_ground, owner._navigation_obstacle,
             graph.get('bounds'), 18., baked_graph=graph)
@@ -151,6 +153,48 @@ class PlayerNavigation(object):
         self.route, self.index = self.pending[3], self.pending[2]
         self.receipt.update(status='joined', path_length=len(path))
         return True
+
+    def firing_position(self, state, target, clear, lane_from, muzzle):
+        """Find a short clear approach that opens a direct firing lane."""
+        position, now = state['position'], state['now']
+        if self.tag == 'SPG':
+            return None
+        if self.firing_move is not None:
+            identity, goal, deadline = self.firing_move
+            if identity == target.id and now < deadline and math.hypot(
+                    goal[0] - position[0], goal[2] - position[2]) > 2.:
+                return goal
+            self.firing_move = None
+        if now < self.firing_retry_at:
+            return None
+        self.firing_retry_at = now + 8.
+        dx = target.position[0] - position[0]
+        dz = target.position[2] - position[2]
+        if not 3. < math.hypot(dx, dz) <= 150.:
+            return None
+        bearing = math.atan2(dx, dz)
+        for offset in (math.pi / 2., -math.pi / 2., math.pi / 3., -math.pi / 3.):
+            heading = bearing + offset
+            reach = 6.
+            point = (position[0] + math.sin(heading) * reach,
+                     position[2] + math.cos(heading) * reach)
+            height = self._height(point, position[1])
+            if height is None or abs(height - position[1]) > 1. or not clear(heading, reach):
+                continue
+            goal = (point[0], height, point[1])
+            predicted = tuple(muzzle[i] + goal[i] - position[i] for i in range(3))
+            if lane_from(target, predicted):
+                self.firing_move = (target.id, goal, now + 6.)
+                return goal
+        return None
+
+    def drive_to_firing_position(self, state, clear, goal):
+        command = self.driver.drive(state['position'], state['yaw'], state['speed'],
+                                    goal, state['now'], clear)
+        command.update(combat_mode='firing_position', local_target=goal,
+                       route_id=self.route['id'] if self.route else None,
+                       route_index=self.index, driving=self.driver.receipt)
+        return command
 
     def decide(self, state, direction_clear, hold=False):
         position, now = state['position'], state['now']

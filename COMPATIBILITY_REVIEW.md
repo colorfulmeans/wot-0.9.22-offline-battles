@@ -13506,6 +13506,22 @@ production workflow's Python snippet against an actual temporary root: the two
 supported entries pass, and an added development batch file is rejected. The
 strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
+# Player firing position and artillery path checkpoint
+
+The foreground controller can choose a short, same-height firing position
+when a nearby visible target is blocked. It checks the approach and the
+predicted lane, limits the attempt in time, and resumes route movement
+when the attempt ends or a current lane opens. Artillery candidate checks
+sample the shell parabola against terrain and intervening vehicles. The
+laid barrel's actual arc must also pass before the native trigger is
+called. The existing Bot decision and execution code is unchanged.
+
+The player suite passed 60 tests and all eight player modules compiled
+under Python 2.7. The new tests cover bounded position selection and
+artillery path geometry. Native indirect fire and relocation are pending.
+Artillery firing-position recovery, cover and withdrawal, and special
+vehicle modes still require parity work.
+
 # Independent player migration follow-up
 
 The player-only front selector checks every 180 seconds and uses friendly

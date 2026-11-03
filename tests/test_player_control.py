@@ -697,4 +697,35 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual('ground',p.route['id'])
 
 
+class FiringPositionTests(unittest.TestCase):
+    def test_reposition_requires_clear_approach_and_new_firing_lane(self):
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        nav.tag = 'heavyTank'
+        nav.firing_move = None
+        nav.firing_retry_at = 0.
+        nav._height = lambda point, hint: 0.
+        state = dict(position=(0., 0., 0.), now=1.)
+        target = types.SimpleNamespace(id=5, position=(0., 0., 40.))
+        goal = nav.firing_position(state, target, lambda heading, reach: heading < 0.,
+                                   lambda enemy, origin: origin[0] < -5., (0., 2., 0.))
+        self.assertAlmostEqual(-6., goal[0])
+        state['now'] = 2.
+        self.assertEqual(goal, nav.firing_position(state, target, lambda *a: False,
+                                                   lambda *a: False, (0., 2., 0.)))
+        state['now'] = 7.
+        self.assertIsNone(nav.firing_position(state, target, lambda *a: True,
+                                              lambda *a: True, (0., 2., 0.)))
+
+    def test_artillery_path_checks_overhead_clearance_and_real_barrel(self):
+        from gui.mods.offline_lan_0922.player_control.weapon import artillery_path
+        shot = dict(speed=50., gravity=10., maxDistance=500.)
+        path = artillery_path((0., 1., 0.), (0., 1., 200.), shot)
+        self.assertGreater(max(point[1] for point in path), 20.)
+        self.assertAlmostEqual(200., path[-1][2])
+        self.assertAlmostEqual(1., path[-1][1])
+        actual = artillery_path((0., 1., 0.), (0., 1., 200.), shot, (0., 0., 1.))
+        self.assertLess(actual[-1][1], 0.)
+        self.assertFalse(artillery_path((0., 1., 0.), (0., 1., 200.), dict(shot, maxDistance=50.)))
+
+
 if __name__=='__main__':unittest.main()

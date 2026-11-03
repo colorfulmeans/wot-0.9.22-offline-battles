@@ -277,11 +277,14 @@ class PlayerControl(object):
         return (point[0], point[1]+max(.5, (shape[2]+shape[3])*.5), point[2])
 
     def firing_lane(self, target):
+        start, unused = self.owner._mutable_shot_ray()
+        return self.lane_from(target, tuple(start))
+
+    def lane_from(self, target, start, end=None):
         from ..entities.remote_vehicle import collide_vehicle_at_matrix
         from ..projectile_runtime import point_segment_distance_sq
         owner = self.owner
-        start, unused = owner._mutable_shot_ray()
-        start, end = tuple(start), self.target_point(target)
+        end = self.target_point(target) if end is None else end
         if not owner._tactical_ray_clear(start, end):
             return False
         for record in owner._records.values():
@@ -307,6 +310,15 @@ class PlayerControl(object):
             if hits:
                 return False
         return True
+
+    def artillery_lane(self, target, direction=None):
+        from .weapon import artillery_path
+        gun = self.owner._gun_state
+        start, unused = self.owner._mutable_shot_ray()
+        path = artillery_path(tuple(start), self.target_point(target),
+                              gun.shots[gun.shot_index], direction)
+        return bool(path) and all(self.lane_from(target, a, b)
+                                  for a, b in zip(path, path[1:]))
 
     def direction_clear(self, position, yaw, descriptor, shape, reach=None):
         row = self.owner._direction_probe(position, yaw, self.owner._local_speed,
@@ -426,13 +438,15 @@ class PlayerControl(object):
         previous_target = self.target_engine
         target = None
         fire_clear = False
+        artillery = 'SPG' in getattr(getattr(entity.typeDescriptor, 'type', None), 'tags', ())
         if 'fire' in self.features:
             self.select_ammo(now)
             # Keep a valid current target instead of resetting aim every tick.
             candidates = sorted(records.values(), key=lambda item: (
                 item.id != self.target_engine,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
-            target = next((t for t in candidates if self.firing_lane(t)), None)
+            lane = self.artillery_lane if artillery else self.firing_lane
+            target = next((t for t in candidates if lane(t)), None)
             fire_clear = target is not None
             if target is None:
                 # Clearance is measured from the moving muzzle. Dropping aim
@@ -458,7 +472,8 @@ class PlayerControl(object):
             self.aim_receipt = dict(target=target.id, point=point, aligned=aligned, distance=distance,
                                     fire_clear=fire_clear,
                                     client_mode=owner._avatar.gunRotator.clientMode)
-            if fire_clear and aligned and gun.can_fire(True) and self.weapon.ready(now, factor):
+            if (fire_clear and aligned and gun.can_fire(True) and self.weapon.ready(now, factor)
+                    and (not artillery or self.artillery_lane(target, direction))):
                 accepted = self.weapon.trigger()
                 self.record('automatic_fire', target=target.id, accepted=accepted,
                             native=self.weapon.trigger_receipt)
@@ -477,6 +492,7 @@ class PlayerControl(object):
                         position=position, yaw=yaw, aim=self.aim_receipt)
         if 'drive' in self.features and self.navigation is not None:
             from .traffic import Traffic, body
+            from .navigation import PlayerNavigation
             peers = [r for r in neighbours if r['team']==int(owner.client.team) or r.get('visible') or not r['alive']]
             traffic = Traffic(body(entity.id,position,yaw,shape,
                 getattr(owner,'_local_pitch',0.),getattr(owner,'_local_roll',0.)),peers)
@@ -485,7 +501,7 @@ class PlayerControl(object):
             def clear(angle, reach=None):
                 return (traffic.clear(angle, reach or 5.) and
                         self.direction_clear(position, angle, entity.typeDescriptor, shape, reach))
-            hold = bool(fire_clear and target is not None and self.aim_receipt['distance'] <= 150.)
+            hold = bool(fire_clear and target is not None and (artillery or self.aim_receipt['distance'] <= 150.))
             if now>=self.next_strategy:
                 self.next_strategy=now+1.
                 base=(owner._rules_state.get('bases') or {}).get(str(owner.client.team),{})
@@ -502,7 +518,18 @@ class PlayerControl(object):
                 hold=bool(fire_clear and target is not None and math.hypot(
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
-            order = self.navigation.decide(state, clear, hold=hold)
+            position_goal = None
+            if ('fire' in self.features and not fire_clear and candidates and
+                    self.strategy.mode != 'defend' and
+                    isinstance(self.navigation, PlayerNavigation)):
+                position_goal = self.navigation.firing_position(
+                    state, candidates[0], clear, self.lane_from, owner._mutable_shot_ray()[0])
+            if position_goal is None:
+                if isinstance(self.navigation, PlayerNavigation):
+                    self.navigation.firing_move = None
+                order = self.navigation.decide(state, clear, hold=hold)
+            else:
+                order = self.navigation.drive_to_firing_position(state, clear, position_goal)
             pushing = self.wreck_push.apply(order,state,traffic,
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach))
             if not pushing:
