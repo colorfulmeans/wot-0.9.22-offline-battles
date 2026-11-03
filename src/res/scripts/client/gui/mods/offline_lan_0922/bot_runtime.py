@@ -1873,10 +1873,8 @@ def _dispersed_barrel_angles(bot_id, round_id, fire_seq, yaw, pitch,
     # #1513's aiming circle is a hard two-sigma angular boundary.  The former
     # three independent world-axis Gaussians were unbounded and could publish
     # a bot shell outside the circle used by the player gun and marker.
-    sigma = dispersion_angle / 2.0
-    radius = abs(generator.gauss(0.0, sigma))
-    if radius > dispersion_angle:
-        radius = dispersion_angle * generator.uniform(0.0, 1.0)
+    from gui.mods.offline_lan_0922 import shot_dispersion
+    radius = shot_dispersion.radius(dispersion_angle, generator.gauss, generator.uniform)
     azimuth = generator.uniform(0.0, 2.0 * math.pi)
 
     dx, dy, dz = direction
