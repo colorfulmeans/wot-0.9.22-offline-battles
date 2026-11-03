@@ -111,6 +111,7 @@ class PlayerRegressionTests(unittest.TestCase):
         c=player_control.PlayerControl(owner,('fire','drive'))
         c.active=True;c.live=lambda:True;c.bind_input=lambda:None;c.poll_commands=lambda now:None
         c.select_ammo=lambda now:None;c.record=mock.Mock()
+        c.direction_clear=lambda *args:True
         c._contacts=lambda unused:([],[],{target.id:target})
         c.weapon=types.SimpleNamespace(aim=mock.Mock(),forward=mock.Mock(),
             ready=lambda *args:True,trigger=mock.Mock(return_value=True),trigger_receipt={},point=(0,0,0))
@@ -135,6 +136,25 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual(75,c.weapon.trigger.call_count)
         transitions=[call for call in c.record.call_args_list if call.args[0]=='aim_transition']
         self.assertEqual(1,len(transitions))
+
+    def test_combat_hold_turns_hull_only_when_clear_and_slow(self):
+        c, target = self.aim_controller()
+        c.firing_lane = lambda unused: True
+        c.navigation.decide.side_effect = lambda *a, **kw: dict(throttle=0., turn=0., brake=True)
+        with mock.patch('gui.mods.offline_lan_0922.player_control.traffic.Traffic.can_turn',
+                        return_value=True) as can_turn:
+            c.update(.1, 0.)
+            self.assertLess(c.owner._sender.turn, 0.)
+            self.assertEqual(0., c.owner._sender.forward)
+            can_turn.return_value = False
+            c.update(.1, .2)
+            self.assertEqual(0., c.owner._sender.turn)
+            self.assertTrue(c.owner._sender.handbrake)
+            can_turn.return_value = True
+            c.owner._local_speed = 4.
+            c.update(.1, .4)
+            self.assertEqual(0., c.owner._sender.turn)
+            self.assertTrue(c.owner._sender.handbrake)
 
     def test_occluded_target_yields_to_clear_enemy_and_lost_enemy_releases_aim(self):
         c,target=self.aim_controller()

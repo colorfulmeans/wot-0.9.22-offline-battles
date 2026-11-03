@@ -503,6 +503,24 @@ class PlayerControl(object):
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach))
             if not pushing:
                 self.turn_clearance.apply(order,yaw,traffic,position,clear)
+            if hold:
+                from .driving import angle
+                dx = target.position[0] - position[0]
+                dz = target.position[2] - position[2]
+                delta = angle(math.atan2(dx, dz) - yaw) if math.hypot(dx, dz) > .1 else 0.
+                order['combat_facing'] = dict(target=target.id, error=delta, state='aligned')
+                if abs(delta) > .20:
+                    facing = order['combat_facing']
+                    facing['state'] = 'braking'
+                    if abs(state['speed']) <= 1.5:
+                        turn = max(-1., min(1., delta / .5))
+                        if (traffic.can_turn(turn) and self.direction_clear(
+                                position, yaw + turn * .15, entity.typeDescriptor, shape, shape[1])):
+                            order.update(turn=turn, throttle=0., brake=False,
+                                         recovery_mode='combat_facing')
+                            facing['state'] = 'turning'
+                        else:
+                            facing['state'] = 'blocked'
             order['wreck_push'] = self.wreck_push.receipt
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),

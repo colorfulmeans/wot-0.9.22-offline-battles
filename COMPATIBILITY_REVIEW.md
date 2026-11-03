@@ -13508,6 +13508,13 @@ strict two-entry archive policy is unchanged. No runtime source or English
 release-note content changes in this repair. No v1.1.1 tag was rewritten.
 # November 3: independent player control repair candidate
 
+During a stationary combat hold, the independent player driver turns
+the hull toward its current target. It brakes before pivoting and holds
+position when the next turn fails vehicle or terrain clearance. This
+does not use the route recovery movement while fighting. The focused
+player control suite passed 57 tests, including a clear turn, blocked
+turn and braking at speed. Native verification of the new turn is pending.
+
 The launcher closes its mouse control window and queues Stop when the
 control entry is unchecked. A second Open action reuses the existing
 window. The automatic driving, aiming/fire and consumable choices keep
