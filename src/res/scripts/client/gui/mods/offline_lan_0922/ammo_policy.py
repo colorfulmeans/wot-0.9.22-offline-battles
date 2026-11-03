@@ -102,6 +102,17 @@ def stages(profile, remaining=None):
     if remaining is not None:
         shells = [s for s in shells if int(s['index']) < len(remaining)
                   and remaining[int(s['index'])] > 0]
+        # Runtime stocks, including explicitly mounted/custom HE, are distinct
+        # from default allocation. Do not alter any loadout or quota here.
+        nation = str(profile.get('vehicle_name', '')).split(':')[0]
+        he = [s for s in profile.get('shells', ()) if is_he(s)
+              and int(s['index']) < len(remaining) and remaining[int(s['index'])] > 0]
+        if he:
+            preferred = max(he, key=lambda s: (
+                nation+':'+s.get('name', '') in GOLD_SHELLS, -int(s['index'])))
+            he_primary = bool(ordered(profile) and is_he(ordered(profile)[0]))
+            shells = [s for s in shells if not is_he(s)]
+            shells = [preferred]+shells if he_primary else shells+[preferred]
     return shells
 
 
@@ -196,6 +207,12 @@ class ShotPolicy(object):
         if target is not None:
             self.target = target
 
+    def _same_phase(self, left, right):
+        if left == right:
+            return True
+        rows = dict((int(s['index']), s) for s in self.profile.get('shells', ()))
+        return left in rows and right in rows and is_he(rows[left]) and is_he(rows[right])
+
     def _close_group(self, group, count):
         if count <= 0:
             return
@@ -213,8 +230,7 @@ class ShotPolicy(object):
         if not available:
             return self.phase
         indices = [int(s['index']) for s in available]
-        if self.desired not in indices:
-            self.desired = indices[0]
+        self.desired = next((i for i in indices if self._same_phase(i, self.desired)), indices[0])
         main = indices[0]
         if self.desired != self.phase:
             return self.desired
@@ -224,7 +240,7 @@ class ShotPolicy(object):
         actual = next(s for s in available if int(s['index']) == loaded)
         first_he = is_he(available[0])
         arty = self.profile.get('class_tag') == 'SPG'
-        automatic = loaded != main and (arty or first_he or is_he(actual) or clip_size(self.profile) > 1)
+        automatic = not self._same_phase(loaded, main) and (arty or first_he or is_he(actual) or clip_size(self.profile) > 1)
         if automatic:
             size = clip_size(self.profile)
             if size > 1:
@@ -248,12 +264,13 @@ class ShotPolicy(object):
         if shell != self.phase:
             old = self.phase
             self.phase = shell
-            self.phase_id += 1
-            self.failures.clear()
+            if not self._same_phase(old, shell):
+                self.phase_id += 1
+                self.failures.clear()
+                self.phase_fired = 0
+                self.used = 0
             if self.desired in (old, shell):
                 self.desired = shell
-            self.phase_fired = 0
-            self.used = 0
         if self.used == 0 or self.used >= clip_size(self.profile):
             self.magazine += 1
             self.used = 0
@@ -293,13 +310,13 @@ class ShotPolicy(object):
         if not known:
             self.failures.clear()
             return
-        if row['epoch'] != self.epoch or row['shell'] != self.phase or row['phase_id'] != self.phase_id:
+        if row['epoch'] != self.epoch or not self._same_phase(row['shell'], self.phase) or row['phase_id'] != self.phase_id:
             return
         if self.desired != self.phase:
             return  # An admitted upgrade remains latched.
         if not self.shells:
             return
-        shell = next((s for s in self.shells if int(s['index']) == row['shell']), None)
+        shell = next((s for s in self.profile.get('shells', ()) if int(s['index']) == row['shell']), None)
         arty = self.profile.get('class_tag') == 'SPG'
         active = stages(self.profile, self.inventory)
         first_he = bool(active and is_he(active[0])) and not arty
@@ -319,8 +336,9 @@ class ShotPolicy(object):
         threshold = 1 if row['count'] > 1 else 2
         if self.failures.get(key, 0) >= threshold:
             indices = [int(s['index']) for s in stages(self.profile, self.inventory)]
-            if row['shell'] not in indices or len(indices) < 2:
+            current = next((i for i in indices if self._same_phase(i, row['shell'])), None)
+            if current is None or len(indices) < 2:
                 return
-            offset = indices.index(row['shell'])
+            offset = indices.index(current)
             self.desired = indices[(offset + 1) % len(indices)]
             self.failures.clear()

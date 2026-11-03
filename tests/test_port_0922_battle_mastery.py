@@ -35,6 +35,21 @@ TYPE_59_MARKS = (1449, 2118, 2659)
 MARKS_DB_ID = 295
 
 
+class RegionalMasteryTests(unittest.TestCase):
+    def test_regional_base_xp_factors_scale_every_class_not_marks(self):
+        from gui.mods.offline_lan_0922 import xp_coefficients
+        for cd in (305,561,65073,817):
+            base = mastery_catalog.MASTERY_XP[cd]
+            factor,reference = xp_coefficients.mastery_scale(cd)
+            self.assertEqual(tuple((v*factor+reference-1)//reference for v in base),
+                             battle_mastery.mastery_thresholds(cd))
+            self.assertEqual(mastery_catalog.MARKS_DAMAGE[cd],battle_mastery.marks_curve(cd))
+
+    def test_churchill_reference_already_contains_special_bonus(self):
+        self.assertEqual(mastery_catalog.MASTERY_XP[51713],
+                         battle_mastery.mastery_thresholds(51713))
+
+
 class _Packer(object):
     def __init__(self, name, calls):
         self.name = name

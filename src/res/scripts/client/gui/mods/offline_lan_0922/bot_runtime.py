@@ -4984,14 +4984,16 @@ class BotRuntime(object):
         fire_damage = 0
         fire_payload = None
         if advance_fire:
-            from gui.mods.offline_lan_0922 import bot_fittings
+            from gui.mods.offline_lan_0922 import bot_fittings, fire_model
             decay = (bot_fittings.battle_factors(descriptor, state.get('critical'),
                          equipments=self._factor_consumables(state['id']))['fire_decay_factor']
                      if bot_fittings.context(descriptor) is not None else 0.57)
             if was_on_fire and fire_elapsed == 0.0:
+                state['_fire_initial_scale'] = fire_model.ignition_scale()
                 critical_damage.report_fire_model(shadow, decay)
             fire_damage, fire_payload = critical_damage.tick_fire(
-                shadow, step, now=now, native_decay_factor=decay)
+                shadow, step, now=now, native_decay_factor=decay,
+                initial_scale=state.get('_fire_initial_scale', 1.0))
             if state.get('_environment_fire') and fire_payload is not None:
                 critical_statistics.accumulate(self._environment_critical_totals,
                     state['id'], 'fire', repair_payload or state.get('critical'), fire_payload)

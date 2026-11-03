@@ -8,20 +8,39 @@ WZ111T: 2016-12-20 original version FAQ republished by Sina:
 https://games.sina.com.cn/o/z/wot/2016-12-20/fxytqaw0011401.shtml
 The historical review identifies its bonus as base XP. This is explicitly
 the old Chinese rule; modern global vehicles are not evidence for removing it.
-Churchill III and ordinary WZ111 special base bonuses are not implemented here;
-the current fallback is 1.0, not a verified original coefficient. Their unresolved
-status must not block evaluation of PC community evidence or reasonable labelled
-reconstruction compatible with the selected base under CLAUDE.md. Missing official
-confirmation is not a requirement to retain this fallback. This comment changes
-policy documentation only; the values below have not been changed or validated.
+Churchill III: PC community base-XP reports support a special bonus. Adopt 1.5
+as an explicit reconstruction, not an extracted #1513 server constant:
+https://steamcommunity.com/app/1407200/discussions/0/4130430927307016968/
+Ordinary WZ111: historical Chinese PC accounts identify an extra base-XP bonus:
+https://xvm.garphy.com/?page_id=4552
+https://games.sina.cn/yxbk/wy/2016-05-18/detail-ifxsktkp8939460.d.html
+Adopt 1.5 for that historical regional vehicle (community reconstruction).
+Neither factor is the native 1.5 CREW factor shared by premium vehicles.
 """
 
 SPECIAL_BASE_XP_100 = {
     'china:Ch01_Type59_Gold': 200,
     'china:Ch02_Type62': 200,
     'china:Ch03_WZ_111_A': 200,
+    'ussr:R33_Churchill_LL': 150,
+    'china:Ch03_WZ-111': 150,
 }
-UNRESOLVED_BASE_XP = ('ussr:R33_Churchill_LL', 'china:Ch03_WZ-111')
+UNRESOLVED_BASE_XP = ()
+
+# Exact #1513 type compact descriptors; only these base-XP exceptions differ
+# from the captured EU award population. Churchill's own EU row already
+# incorporates its special bonus; Chinese regional bonuses do not.
+SPECIAL_VEHICLES_BY_CD = {
+    561: 'china:Ch01_Type59_Gold', 305: 'china:Ch02_Type62',
+    65073: 'china:Ch03_WZ_111_A', 51713: 'ussr:R33_Churchill_LL',
+    817: 'china:Ch03_WZ-111',
+}
+
+
+def mastery_scale(vehicle_cd, has_reference_row=True):
+    vehicle = SPECIAL_VEHICLES_BY_CD.get(int(vehicle_cd), '')
+    reference = 150 if has_reference_row and vehicle == 'ussr:R33_Churchill_LL' else 100
+    return base_factor(vehicle), reference
 
 
 def base_factor(vehicle):

@@ -309,13 +309,15 @@ def advance_fire(player, dt, now):
     elapsed = max(0.0, float(getattr(player, 'combat_fire_elapsed', 0.0)))
     target = _CriticalTarget(player, descriptor, now)
     step = max(0.0, float(dt))
-    from gui.mods.offline_lan_0922 import crew_battle
+    from gui.mods.offline_lan_0922 import crew_battle, fire_model
     decay = crew_battle.for_critical(
         getattr(player, 'effective_params', None), player.critical)['fire_decay_factor']
     if elapsed == 0.0:
+        player._fire_initial_scale = fire_model.ignition_scale()
         critical_damage.report_fire_model(target, decay)
     target._fire_started = float(now) - (elapsed + step)
-    damage, payload = critical_damage.tick_fire(target, step, now=float(now), native_decay_factor=decay)
+    damage, payload = critical_damage.tick_fire(target, step, now=float(now), native_decay_factor=decay,
+        initial_scale=getattr(player, '_fire_initial_scale', 1.0))
     burning = bool(target.is_on_fire and damage < int(player.health))
     if damage >= int(player.health) and target.is_on_fire:
         # Publish the terminal fire edge in the same canonical HP commit.

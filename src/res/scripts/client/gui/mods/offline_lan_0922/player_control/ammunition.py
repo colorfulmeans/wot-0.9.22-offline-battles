@@ -17,19 +17,39 @@ class Ammunition(object):
         self.rows = {}
 
     def available(self, inventory):
-        return [s['index'] for s in self.shells if inventory[s['index']] > 0]
+        rows = [s for s in self.shells if inventory[s['index']] > 0]
+        he = [s for s in rows if s['kind'] == 'HIGH_EXPLOSIVE']
+        preferred = max(he, key=lambda s: (bool(s.get('premium')), -self.shells.index(s))) if he else None
+        # Both HE stocks occupy one policy stage; silver is an exhaustion
+        # fallback, never a downgrade after an unsuccessful premium HE hit.
+        return [s['index'] for s in rows if s['kind'] != 'HIGH_EXPLOSIVE' or s is preferred]
+
+    def same_phase(self, left, right):
+        if left == right:
+            return True
+        kinds = dict((s['index'], s['kind']) for s in self.shells)
+        return kinds.get(left) == kinds.get(right) == 'HIGH_EXPLOSIVE'
+
+    def effective_main(self, available):
+        if self.main in available:
+            return self.main
+        return next((i for i in available if self.same_phase(i, self.main)),
+                    available[0] if available else self.main)
 
     def choose(self, inventory):
         available = self.available(inventory)
-        if self.desired not in available and available:
-            self.desired = available[0]
+        if available and not self.protected:
+            self.desired = next((i for i in available if self.same_phase(i, self.desired)),
+                                available[0])
         return self.desired
 
     def launch(self, projectile, shell, target, now):
         if projectile in self.rows:
             return
-        if shell != self.phase:
+        if not self.same_phase(shell, self.phase):
             self.phase, self.fired, self.failures = shell, 0, 0
+        else:
+            self.phase = shell
         if target != self.target:
             self.target, self.failures = target, 0
         self.fired += 1
@@ -70,7 +90,7 @@ class Ammunition(object):
             self.rows.pop(row['id'], None)
             row['known'] = not unknown
             results.append(row)
-            if row['target'] != self.target or row['shell'] != self.phase:
+            if row['target'] != self.target or not self.same_phase(row['shell'], self.phase):
                 continue
             if unknown:
                 self.failures = 0
@@ -79,7 +99,7 @@ class Ammunition(object):
             main = next(s for s in self.shells if s['index'] == self.main)
             success = row['damage'] > 0
             he_main = main['kind'] == 'HIGH_EXPLOSIVE'
-            if he_main and row['shell'] == self.main and not self.artillery:
+            if he_main and self.same_phase(row['shell'], self.main) and not self.artillery:
                 success = row['penetrated']
             if success:
                 self.failures = 0
@@ -88,11 +108,14 @@ class Ammunition(object):
             available = self.available(inventory)
             # Alternate HE returns after two fired rounds, irrespective of hits;
             # HE-primary's AP probe returns after one. A live clip is retained.
-            limit = self.clip_size if self.clip_size > 1 else (1 if he_main and not self.artillery else 2)
-            if (row['shell'] != self.main and self.fired >= limit and
+            limit = self.clip_size if self.clip_size > 1 else (1 if he_main and shell['kind'] != 'HIGH_EXPLOSIVE' and not self.artillery else 2)
+            if (not self.same_phase(row['shell'], self.main) and self.fired >= limit and
                     (he_main or shell['kind'] == 'HIGH_EXPLOSIVE' or self.clip_size > 1)):
-                self.desired = self.main if self.main in available else self.choose(inventory)
-            elif self.failures >= 2 and row['shell'] in available and len(available) > 1:
-                self.desired = available[(available.index(row['shell'])+1) % len(available)]
+                self.desired = self.effective_main(available)
+            elif self.failures >= 2 and len(available) > 1:
+                current = next((i for i in available if self.same_phase(i,row['shell'])),None)
+                if current is None:
+                    continue
+                self.desired = available[(available.index(current)+1) % len(available)]
                 self.failures = 0
         return results

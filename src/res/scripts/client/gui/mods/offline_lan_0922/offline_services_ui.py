@@ -940,11 +940,28 @@ def _install_unavailable_entries():
     _patch(LobbyMenu, 'logoffClick', lambda view: None)
 
 
+def _install_battle_milestone_text():
+    from gui.awards.special_achievement_awards import PvEBattleAward
+    from gui.shared.formatters import text_styles
+    from helpers import i18n
+    import BigWorld
+
+    def description(award):
+        # Reuse the stock ordinary milestone translation and formatter. Keep
+        # the native trigger, image, buttons and all later milestones intact.
+        return text_styles.main(i18n.makeString(
+            '#menu:awardWindow/specialAchievement/battle/description2',
+            battlesCount=BigWorld.wg_getIntegralFormat(award.battlesCount)))
+
+    _patch(PvEBattleAward, 'getDescription', description)
+
+
 def install():
     if _patches:
         return
     try:
         _install_unavailable_entries()
+        _install_battle_milestone_text()
         _install_item_comparisons()
         _install_directive_fitting()
         _install_store_filters()

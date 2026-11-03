@@ -11499,7 +11499,8 @@ class BattleState:
                 receipt_id='%s:%d:%d' % (self.receipt_namespace, self.round_id, vehicle_id),
                 coefficient_source=('community_2015_row_%d' % source_row if source_row
                                     else 'offline_cohort_estimate'),
-                base_xp_source=('historical_cn_double' if vehicle in xp_coefficients.SPECIAL_BASE_XP_100
+                base_xp_source=('community_pc_reconstruction' if vehicle in ('ussr:R33_Churchill_LL','china:Ch03_WZ-111')
+                    else 'historical_cn_double' if vehicle in xp_coefficients.SPECIAL_BASE_XP_100
                     else 'unresolved_special_coefficient' if vehicle in xp_coefficients.UNRESOLVED_BASE_XP
                     else 'offline_default_1x'),
                 achievements=list(achievements))
@@ -11660,6 +11661,17 @@ class BattleState:
                     battle_bonds.battle_reward(rewards['xp'], eligible_for_crystal))
                 friendly = self._friendly_fire_receipt(
                     ("player", player_id), rewards.pop("xp_penalty", 0))
+                battle_review_diagnostics.validation_event('economy_rule_boundary',
+                    round_id=self.round_id, player=player_id,
+                    vehicle=participant['vehicle'], credit_base='community_2015_complete',
+                    special_base_xp_factor=xp_coefficients.base_factor(participant['vehicle']),
+                    health=getattr(live_player, 'health', None),
+                    critical=getattr(live_player, 'critical', None), friendly_fire=friendly,
+                    premature_leave=bool(participant.get('premature_leave', False)),
+                    known_gaps=['module_repair_history_and_prices',
+                                'multiple_environment_push_contributors',
+                                'repeat_desertion_history'],
+                    participation_included_in_gross=True)
                 if self.battle_mode == "training":
                     rewards = dict((key, 0) for key in (
                         'credits', 'xp', 'free_xp', 'crystal', 'repair_cost', 'ammo_cost'))

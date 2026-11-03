@@ -10,6 +10,7 @@ class TurnClearance(object):
         self.sign = 0.
         self.heading = None
         self.advance_origin = None
+        self.advance_sign = 1.
 
     def apply(self, order, yaw, traffic, position=None, clear=None):
         def delta(a,b):
@@ -20,7 +21,7 @@ class TurnClearance(object):
             self.sign,self.heading,self.advance_origin=0.,None,None
         if self.heading is not None and abs(delta(self.heading,yaw))<.25:
             self.sign,self.heading,self.advance_origin=0.,None,None
-        if self.advance_origin is not None and math.hypot(
+        if self.advance_origin is not None and position is not None and math.hypot(
                 position[0]-self.advance_origin[0],position[2]-self.advance_origin[2])>=3.:
             self.sign,self.heading,self.advance_origin=0.,None,None
         if self.heading is None:
@@ -35,14 +36,28 @@ class TurnClearance(object):
         # Continue the same pivot across the shortest-angle boundary. Normal
         # measured nonprogress recovery can still request a proved rear exit.
         allowed=traffic.can_turn(self.sign)
-        if not allowed and position is not None and clear is not None and clear(yaw,4.):
+        if not allowed and traffic.can_turn(-self.sign):
+            # A moving neighbour may release the other side first. A latched
+            # preference is not authority to ignore newly proved clearance.
+            self.sign = -self.sign
+            allowed = True
+        if not allowed and position is not None and clear is not None:
             # A parked hull can obstruct pivoting even when the forward swept
             # corridor is open. Create at most three metres of turn space,
             # proving ordinary static and dynamic clearance on every update.
-            if self.advance_origin is None:self.advance_origin=tuple(position)
-            order.update(turn=0.,throttle=.45,brake=False,
-                         recovery_mode='vehicle_turn_forward_clearance')
-            return
+            # Keep a proved escape direction across updates, including a rear
+            # exit when the captured Type 62's forward corridor is occupied.
+            # Recheck both native world and vehicle sweeps every update.
+            directions = (self.advance_sign, -self.advance_sign)
+            for sign in directions:
+                if clear(yaw if sign > 0 else yaw+math.pi, 4.):
+                    if self.advance_origin is None or sign != self.advance_sign:
+                        self.advance_origin = tuple(position)
+                    self.advance_sign = sign
+                    order.update(turn=0., throttle=.45*sign, brake=False,
+                        recovery_mode=('vehicle_turn_forward_clearance' if sign > 0
+                                       else 'vehicle_turn_reverse_clearance'))
+                    return
         order.update(turn=self.sign if allowed else 0.,throttle=0.,brake=not allowed,
                      recovery_mode='vehicle_turn_clearance_latched')
 
@@ -62,7 +77,10 @@ class Traffic(object):
         self.peers = dict((r['id'], r) for r in neighbours)
 
     def clear(self, heading, reach):
-        moving = dict(self.current, yaw=heading)
+        # A rear translation does not rotate the physical hull by 180 degrees.
+        # Preserve front/rear offsets of asymmetric collision footprints.
+        hull_heading = heading if math.cos(heading-self.current['yaw']) >= 0 else heading+math.pi
+        moving = dict(self.current, yaw=hull_heading)
         hits = []
         fraction = tank_collision.translation_fraction(moving,
             (math.sin(heading)*reach,math.cos(heading)*reach),self.neighbours,contacts=hits)

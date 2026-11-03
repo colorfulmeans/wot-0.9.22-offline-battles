@@ -4,6 +4,23 @@ from gui.mods.offline_lan_0922 import fire_model
 
 
 class FireDecayTests(unittest.TestCase):
+    def test_initial_rng_changes_duration_without_randomizing_decay(self):
+        for scale in (.8,1.,1.2):
+            progress, damage, seconds, ended = fire_model.advance(0,20,.57,10000,scale)
+            self.assertTrue(ended)
+            self.assertAlmostEqual(10*scale,seconds)
+            self.assertEqual(round(2500*scale*scale),damage)
+            progress=total=0
+            while progress<10-1.e-7:
+                progress,loss,active,ended=fire_model.advance(progress,1./30,.57,10000,scale)
+                total+=loss
+            self.assertEqual(damage,total)
+
+    def test_ignition_draw_range_is_per_fire_not_per_tick(self):
+        draws=[]
+        self.assertEqual(1.2,fire_model.ignition_scale(lambda a,b:draws.append((a,b)) or b))
+        self.assertEqual([(.8,1.2)],draws)
+
     def run_fire(self, factor, step):
         progress = damage = seconds = 0
         while progress < 10 - 1.e-7:

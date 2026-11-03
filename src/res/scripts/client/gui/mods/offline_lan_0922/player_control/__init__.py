@@ -114,10 +114,12 @@ class PlayerControl(object):
         from .strategy import Strategy
         from .traffic import TurnClearance
         from ..gun_mechanics import _field
-        from ..default_loadouts import descriptor_roles
+        from ..default_loadouts import descriptor_roles, GOLD_SHELLS
         gun = owner._gun_state
         roles = descriptor_roles(entity.typeDescriptor) or {}
+        nation = entity.typeDescriptor.type.name.split(':')[0]
         shells = [dict(index=i, kind=str(_field(_field(shot, 'shell'), 'kind')),
+                       premium=nation+':'+str(_field(_field(shot, 'shell'), 'name', '')) in GOLD_SHELLS,
                        name=str(_field(_field(shot, 'shell'), 'name', '')))
                   for i, shot in enumerate(gun.shots)]
         shells.sort(key=lambda row: (('standard', 'premium', 'he').index(roles[row['index']])

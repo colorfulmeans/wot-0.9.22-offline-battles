@@ -26,6 +26,12 @@ class RewardModelTests(unittest.TestCase):
             self.assertEqual(normal['credits'], special['credits'])
             self.assertEqual(special['xp'] * 5 // 100, special['free_xp'])
         self.assertEqual(100, xp_coefficients.base_factor('china:Ch01_Type59'))
+        for vehicle in ('ussr:R33_Churchill_LL','china:Ch03_WZ-111'):
+            ordinary=compute_offline_rewards({'damage_dealt':1000}, True)
+            special=compute_offline_rewards({'damage_dealt':1000}, True,
+                vehicle_xp_factor=xp_coefficients.base_factor(vehicle))
+            self.assertEqual(ordinary['xp']*150//100,special['xp'])
+            self.assertEqual(ordinary['credits'],special['credits'])
         for level in (9, 10):
             self.assertEqual(5, xp_coefficients.settlement_factor(SimpleNamespace(
                 tags=['premium'], level=level, premiumVehicleXPFactor=0)))

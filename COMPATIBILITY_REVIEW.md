@@ -1,3 +1,95 @@
+# November 3 coherent-rule and player-control follow-up
+
+This section supersedes the earlier documentation-only implementation status,
+not its source-selection policy. Runtime acceptance on the new artifact is
+recorded separately below; earlier native passes do not transfer automatically.
+
+## Changes and evidence boundaries
+
+- Player-only turn clearance rechecks the alternative pivot and both straight
+  escape directions. The captured Type 62 pose (-18.4613, .2698, 112.8345), yaw
+  -2.7509, heading .5712 no longer has an unconditional brake-only latch when
+  the forward corridor is occupied but a rear exit is proved. Each update still
+  requires dynamic and static clearance; asymmetric hulls retain their physical
+  orientation while reversing. An actually trapped hull must wait rather than
+  move through another vehicle. Normal holds, waypoint radii, authored routes
+  and Bot driver/navigation owners are unchanged.
+- Both independent player and Bot ammunition policies treat premium/silver HE
+  as one phase, prefer the premium stock, then use carried silver HE only after
+  exhaustion. The alternate-HE two-shot count survives substitution. HE-primary
+  non-HE probes still return after one round; magazines retain their policy.
+  Default allocations, special HE-only guns and player-mounted quotas are not
+  rewritten. Runtime candidates read actual remaining stocks.
+- Historical CN double-base-XP vehicles retain 2.0. Churchill III and ordinary
+  WZ111 gain explicit 1.5 community-based reconstruction, not native extracted
+  constants. Sources: the PC player report at
+  https://steamcommunity.com/app/1407200/discussions/0/4130430927307016968/ ,
+  the historical Chinese PC rating discussion at
+  https://xvm.garphy.com/?page_id=4552 and the 2016 crew-training account at
+  https://games.sina.cn/yxbk/wy/2016-05-18/detail-ifxsktkp8939460.d.html .
+  Reports disagree on exact Churchill magnitude; 1.5 is the selected labelled
+  reconstruction. The shared native premium crew factor of 1.5 is NOT evidence
+  for this base-XP number. Premium settlement XP remains separate.
+- All four mastery classes scale by local special base XP / reference special
+  base XP. The existing Churchill III EU row already incorporates its bonus and
+  remains unchanged. The CN-specific factors scale their EU reference rows;
+  unknown/fallback rows are not assumed to incorporate a special bonus.
+  The captured 2026 EU population remains a documented substitute for unavailable
+  9.22 server distributions. Gun-mark damage curves are unchanged.
+- Dispersion base: official 9.6 centre-zone reduction, about 16% to 10%, with the
+  removed mass moved next to the centre. Sources:
+  https://worldoftanks.com/en/news/general-news/9-6-accuracy-changes/ and
+  https://lesta.ru/support/ru/products/mt/article/35718/ . The missing within-zone
+  law is explicitly reconstructed: retain the bounded 8.6 radial base elsewhere,
+  move rejected inner-10%-radius samples uniformly into the 10%-20% band.
+  Human and seeded Bot native-angle adapters use the same pure sampler; the
+  native cone and muzzle ray are retained. This is not a recovered server CDF.
+- Fire retains the Jak_Atackka 2020 community linear-decay base at
+  https://www.reddit.com/r/WorldofTanks/comments/hw7wph/ . One +/-20% initial-rate
+  draw is frozen per ignition, with no RNG on the base decay, so duration scales
+  linearly and integrated damage quadratically with that draw. Player authority
+  and worker-owned Bots retain their ignition draw across detached per-tick
+  adapters. Per-vehicle initial/decay rates remain missing; the declared
+  HP-based calibration is not relabelled as native data. Diagnostics identify
+  the actual initial draw, skill factor and remaining parameter gap.
+- The ten-battle native award now reuses the ordinary milestone description2
+  localization and stock text formatter. Exact #1513 bytecode establishes
+  PvEBattleAward.getDescription, battlesCount and wg_getIntegralFormat. Native
+  triggers/buttons and 50/100/250/later awards are unchanged; there is no new
+  income restriction or mod-created popup.
+- Credits keep the selected complete 2015 community base. Participation income
+  is already inside gross Credits and is not added again. Receipt-boundary
+  diagnostics now expose ending critical state, friendly-fire facts, special
+  base XP and premature-leave status. Module repair history/prices, multi-pusher
+  attribution and repeat-desertion history are still explicit implementation
+  gaps, not fixes or reasons to claim original parity. No speculative fee is
+  deducted and no missing historical event is fabricated. Bond rewards remain
+  unchanged under the user's explicit scope exclusion.
+
+## Updated validation baseline
+
+Reproduce the captured blocked-pivot case including rear-only clearance,
+changing neighbours, reverse-hull geometry, fully blocked holds and normal
+combat holds. Exercise AP/premium/HE, HE-primary AP probe, dual HE exhaustion
+across a two-shot phase, protected manual round, delayed terminal effects,
+magazine boundaries and unchanged default ammunition allocation. Check all
+four mastery boundaries, Churchill reference non-duplication, base/final XP and
+task counter separation. Check the 9.6 centre mass with 100,000 seeded samples,
+cone bounds and human/Bot consumer parity; fire low/high RNG bounds, one draw
+per ignition, slow-frame integration and canonical publication/echo continuity.
+The UI contract uses the stock ordinary milestone translation only and restores
+the old callable on adapter removal.
+
+Local initial gate: 26 selected test files / 725 assertions passed with no
+skips before the extra reverse-hull and Bot ignition-lifecycle cases; those
+added focused cases also passed. All 238 client sources compile with CPython
+2.7.18. Exact installed Chinese x86 #1513 inspection passed. A broad Windows
+host run exposed missing-host-native failures as well as old deterministic
+fire fixtures; the latter now freeze ignition RNG and have explicit random
+ignition coverage. A clean pre-change worktree comparison and final cloud CI
+must distinguish existing host failures from regressions. This paragraph does
+not claim full-suite or native-client acceptance.
+
 # November 3 source-policy alignment (documentation only)
 
 The gameplay reconstruction policy in CLAUDE.md governs every section below.

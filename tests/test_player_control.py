@@ -22,6 +22,60 @@ from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation
 
 
 class PlayerRegressionTests(unittest.TestCase):
+    def test_reverse_sweep_preserves_asymmetric_hull_orientation(self):
+        t=Traffic(body(1,(0,0,0),0,(1,3,1,2)),[])
+        with mock.patch('gui.mods.offline_lan_0922.tank_collision.translation_fraction',return_value=1.) as sweep:
+            self.assertTrue(t.clear(math.pi,4.))
+        moving,translation,unused=sweep.call_args.args
+        self.assertAlmostEqual(0.,angle(moving['yaw']))
+        self.assertAlmostEqual(-4.,translation[1])
+
+    def test_captured_pivot_lock_uses_proved_rear_and_retries_both_sides(self):
+        clearance = TurnClearance()
+        def order():
+            return dict(turn=1., throttle=0., brake=False, recovery_mode='align',
+                        driving=dict(heading=.5712))
+        yaw = -2.7509
+        blocked = types.SimpleNamespace(can_turn=lambda sign: False)
+        current = order()
+        clearance.apply(current, yaw, blocked, (-18.4613,.2698,112.8345),
+                        lambda heading, reach: abs(angle(heading-yaw-math.pi)) < .01)
+        self.assertEqual('vehicle_turn_reverse_clearance', current['recovery_mode'])
+        self.assertLess(current['throttle'], 0)
+        old_sign = clearance.sign
+        released = types.SimpleNamespace(can_turn=lambda sign: sign == -old_sign)
+        current = order()
+        clearance.apply(current, yaw, released, (-18.4613,.2698,112.8345), lambda h,r: False)
+        self.assertEqual(-old_sign, current['turn'])
+        self.assertFalse(current['brake'])
+
+    def test_two_he_stocks_share_two_shot_phase_and_premium_has_priority(self):
+        p = Ammunition([dict(index=0,kind='ARMOR_PIERCING'),
+                        dict(index=1,kind='HIGH_EXPLOSIVE'),
+                        dict(index=2,kind='HIGH_EXPLOSIVE',premium=True)],0,0)
+        p.protected = False
+        p.desired = 1
+        self.assertEqual(2, p.choose([10,10,1]))
+        for i, shell in enumerate((2,1)):
+            p.launch(str(i),shell,42,i)
+            p.hit(dict(projectile_id=str(i),damage=20,shot_result=1))
+            p.terminal(dict(projectile_id=str(i),hit_vehicle=True),i)
+            p.settle([10,10,0],i)
+            self.assertEqual(1 if i==0 else 0,p.choose([10,10,0]))
+        self.assertEqual(2,p.fired)
+
+    def test_he_primary_exhaustion_is_not_a_one_round_ap_probe(self):
+        p = Ammunition([dict(index=0,kind='HIGH_EXPLOSIVE',premium=True),
+                        dict(index=1,kind='ARMOR_PIERCING'),
+                        dict(index=2,kind='HIGH_EXPLOSIVE')],0,0)
+        p.protected = False
+        for i,shell in enumerate((0,2)):
+            p.launch(str(i),shell,42,i)
+            p.hit(dict(projectile_id=str(i),damage=20,shot_result=1))
+            p.terminal(dict(projectile_id=str(i),hit_vehicle=True),i)
+            p.settle([0,10,10],i)
+            self.assertEqual(2 if i==0 else 1,p.choose([0,10,10]))
+
     def policy(self, main=0, loaded=0):
         return Ammunition([dict(index=0,kind='ARMOR_PIERCING'),
                            dict(index=1,kind='HIGH_EXPLOSIVE')],main,loaded)

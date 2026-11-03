@@ -1813,11 +1813,13 @@ def report_fire_model(vehicle, native_decay_factor):
         missing_contract='per_vehicle_initial_burn_and_base_decay',
         module_hp_loss_per_second=10.0,
         initial_hp_fraction_per_second=0.05, untrained_seconds=10.0,
+        initial_rng_range=(0.8, 1.2), initial_rng_scope='one_draw_per_ignition',
         legacy_tick_seconds=1.0, legacy_duration=_device_damage.FIRE_DURATION_SECONDS,
         legacy_damage_fraction=_device_damage.FIRE_DAMAGE_FRACTION_PER_SEC)
 
 
-def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor=0.57):
+def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor=0.57,
+              initial_scale=1.0):
     """Advance every elapsed fire second without losing slow-frame time."""
     if vehicle is None or dt is None or dt <= 0.0:
         return 0, None
@@ -1836,7 +1838,7 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor
     progress, damage, active_dt, burnt_out = fire_model.advance(
         previous_progress,
         float(dt), native_decay_factor,
-        float(getattr(vehicle, 'maxHealth', 0.0) or 0.0))
+        float(getattr(vehicle, 'maxHealth', 0.0) or 0.0), initial_scale=initial_scale)
     if module_test_mode:
         damage = 0
     module_terminal, unused_payload = environment_modules.apply_losses(vehicle,
@@ -1852,6 +1854,7 @@ def tick_fire(vehicle, dt, now=None, module_test_mode=False, native_decay_factor
             actor_id=getattr(vehicle, 'id', None), decay_factor=native_decay_factor,
             progress=progress, dt=dt, active_seconds=active_dt,
             hull_damage=damage, completed=burnt_out,
+            initial_scale=initial_scale,
             module_calibration='offline_fixed_module_hp_per_second')
     if burnt_out:
         # The interval may complete the final burn tick before the fire-out

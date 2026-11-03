@@ -394,7 +394,8 @@ class EnvironmentalModulesTests(unittest.TestCase):
         player.combat_fire_elapsed=0.;player.combat_fire_timer=0.
         state=dict(id=16,health=player.health,max_health=player.max_health,critical=player.critical)
         shadow=bot_runtime._BotCriticalVehicle(state,descriptor,0.,0.)
-        with contextlib.redirect_stdout(io.StringIO()):
+        with contextlib.redirect_stdout(io.StringIO()), mock.patch(
+                'gui.mods.offline_lan_0922.fire_model.ignition_scale', return_value=1.):
             result=pcm.advance_fire(player,1.,1.)
             damage,payload=cd.tick_fire(shadow,1.,now=1.)
         self.assertEqual(damage,result['damage'])
