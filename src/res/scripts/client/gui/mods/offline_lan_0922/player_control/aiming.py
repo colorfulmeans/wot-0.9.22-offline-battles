@@ -140,6 +140,8 @@ class Aiming(object):
         self.observations = {}
         self.entries = {}
         self.direct_entries = {}
+        self.comparison_jobs = {}
+        self.comparison_deferrals = {}
         self._tick = None
         self._next_final_at = float('-inf')
         self._final_segments = self._final_attempts = self._dynamic_checks = 0
@@ -187,6 +189,10 @@ class Aiming(object):
         for key in list(self.direct_entries):
             if key[0] not in targets:
                 self.direct_entries.pop(key)
+        for store in (self.comparison_jobs, self.comparison_deferrals):
+            for key in list(store):
+                if key[0] not in targets:
+                    del store[key]
         if now == self._tick:
             return
         self._tick = now
@@ -318,7 +324,7 @@ class Aiming(object):
             source = tuple(own['origin'][i] + world[i]*distance for i in range(3))
         return None
 
-    def _armor_score(self, target, own, sample_point, direction, flight, threshold=None):
+    def _armor_score(self, target, own, sample_point, direction, flight, threshold=None, nominal_only=False):
         """Nominal damage against observed native plates, without shot RNG."""
         from .. import combat_rules
         from ..entities.remote_vehicle import collide_vehicle_at_matrix
@@ -337,6 +343,8 @@ class Aiming(object):
                 self.owner._vector(sample_point), self.owner._runtime.math)
             if not collisions:
                 return None
+            if nominal_only:
+                return combat_rules.he_nominal_armor(collisions, target.typeDescriptor)
             distance = math.sqrt(_distance_sq(own['origin'], sample_point))
             contact = combat_rules.resolve_armor_contact(
                 own['shot'], distance, collisions,
@@ -600,6 +608,9 @@ class Aiming(object):
             if not hits:
                 return 'miss'
             if threshold is None:
+                if solution.get('nominal_required') and combat_rules.he_nominal_armor(
+                        hits, target.typeDescriptor) is None:
+                    return 'miss'
                 return 'ready'
             contact = combat_rules.resolve_armor_contact(
                 own['shot'], flight*speed, hits, penetration_factor=threshold)
@@ -613,6 +624,8 @@ class Aiming(object):
     def defer_ordered_point(self, target, index, solution, now):
         """Try the remaining samples when the final lane repeatedly rejects one."""
         key = solution.get('key')
+        if key is not None:
+            self.comparison_deferrals[(target.id, index, key[0])] = now + 1.5
         identity = (target.id, index, solution.get('penetration_threshold'), True)
         entry = self.direct_entries.get(identity)
         if entry is not None and key is not None and entry['locked'] == key:
@@ -720,6 +733,81 @@ class Aiming(object):
         entry.update(cursor=0, retry=now + .7, blocked_armor=False,
                      unknown=False, mechanical=None)
         return status, mechanical
+
+    def direct_pose(self, target):
+        pose = self._pose(target)
+        position, yaw = self.owner.local_pose()
+        return (tuple(position), yaw, tuple(pose['position']), pose['yaw'],
+                pose.get('turret_yaw', 0.), pose['pitch'], pose['roll'])
+
+    def direct_samples(self, target):
+        return len(shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor))
+
+    def compare_direct(self, target, index, sample, now, lane, threshold,
+                       physical=False, current_barrel=False, nominal=False):
+        """Compare one shell and one ordered point within the shared aim budget."""
+        if target.id not in self.targets or self._candidates <= 0:
+            return 'pending', None
+        if now < self.comparison_deferrals.get((target.id, index, sample), 0.):
+            return 'unavailable', None
+        try:
+            own = self._own(index)
+            samples = shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor)
+            if sample >= len(samples):
+                return 'unknown', None
+            key = (sample, 'low')
+            result = self._candidate(target, own, dict(samples=samples), key, now,
+                                     True, None if physical or current_barrel else threshold)
+            if current_barrel:
+                from .weapon import artillery_path
+                unused, direction = self.owner._mutable_shot_ray()
+                result['path'] = artillery_path(own['origin'], result['point'], own['shot'], direction)
+                if not result['path']:
+                    return 'unavailable', None
+                contact = self.actual_contact(target, result, own, direction, threshold)
+                if contact != 'ready':
+                    return ('unknown' if contact == 'unknown' else contact), None
+            identity = (target.id, index, sample, current_barrel)
+            job = self.comparison_jobs.get(identity)
+            if (job is None or not self._valid(job['solution'], own, self.observations[target.id], now)
+                    or now - job['solution']['created'] > 1.
+                    or current_barrel and job['solution']['path'] != result['path']):
+                job = dict(solution=result, next=0, done=False, clear=False, completed=None)
+                self.comparison_jobs[identity] = job
+            self._advance(job, lane, min(self._segments, 8), now)
+            if not job['done']:
+                return 'pending', None
+            result = self._result(result, job)
+            result.update(ordered=True, physical=True, penetration_threshold=threshold)
+            if not result['geometry_clear'] or not result['reachable']:
+                return 'unavailable', result
+            if not result['source_verified']:
+                return 'unknown', None
+            if nominal:
+                thickness = self._armor_score(target, own,
+                    shot_geometry.vehicle_aim_point(samples[sample], self._pose(target)),
+                    result['direction'], result['flight_time'], nominal_only=True)
+                if thickness is None:
+                    return 'unknown', None
+                result['nominal_armor'] = thickness
+                result['nominal_required'] = True
+            if current_barrel:
+                return 'ready', result
+            if physical:
+                if result.get('needs_hydraulic'):
+                    return 'laying', dict(result, laying=True)
+                unused, direction = self.owner._mutable_shot_ray()
+                verdict = self.actual_contact(target, result, own, direction, threshold)
+                if verdict in ('laying', 'miss', 'unknown'):
+                    return 'laying', dict(result, laying=True)
+                return verdict, result
+            if threshold is None:
+                return 'ready', result
+            proof = result.get('penetration_ok')
+            return ('ready' if proof is True else 'armor' if proof is False else 'unknown'), result
+        except (AttributeError, TypeError, ValueError, KeyError, IndexError,
+                RuntimeError, OverflowError, ZeroDivisionError):
+            return 'unknown', None
 
     def fire_preflight(self, target, solution, raw_ray, shot, now):
         """Fresh pre-dispersion gate for a first shot or any automatic tail.

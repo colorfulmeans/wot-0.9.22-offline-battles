@@ -14,65 +14,81 @@ from gui.mods.offline_lan_0922.player_control.direct_engagement import (
 
 class DirectEngagementTests(unittest.TestCase):
     def setUp(self):
-        self.state = DirectEngagement(dict(type=dict(name='uk:GB80_Charioteer'),
-                                           gun=dict(name='_105mm_AT_Gun_L7')))
-        self.gun = SimpleNamespace(ammo=[8, 8], shot_index=0, reload_time=0.)
+        self.state = DirectEngagement(None)
+        self.gun = SimpleNamespace(ammo=[8, 8, 8], shots=[
+            dict(piercingPower=(200., 180.)), dict(piercingPower=(250., 220.)),
+            dict(piercingPower=(100., 100.))], shot_index=0, reload_time=0.,
+            clip_size=1, clip=1)
         self.rounds = SimpleNamespace(main=0, shells=[
-            dict(index=0, kind='HIGH_EXPLOSIVE', name='_105mm_HESH_L7', premium=True),
-            dict(index=1, kind='ARMOR_PIERCING_CR', name='_105mm_APCR_L7', premium=False)])
+            dict(index=0, kind='ARMOR_PIERCING', premium=False),
+            dict(index=1, kind='ARMOR_PIERCING_CR', premium=True),
+            dict(index=2, kind='HIGH_EXPLOSIVE', premium=False)])
         self.calls = []
         self.verdicts = {}
         self.control = SimpleNamespace(owner=SimpleNamespace(_gun_state=self.gun),
-            ammo_policy=self.rounds, aiming=SimpleNamespace(ordered=self.scan),
+            ammo_policy=self.rounds, aiming=SimpleNamespace(compare_direct=self.probe,
+                direct_samples=lambda target: 2, direct_pose=lambda target:
+                    ((0, 0, 0), 0., (0, 0, 10), 0., 0., 0., 0.)),
             queue_automatic_shell=self.calls.append, lane_from=lambda *args: True,
-            record=lambda *args, **kwargs: None)
+            queue_next_automatic_clip=mock.Mock(), reload_automatic_clip=mock.Mock(return_value=True))
         self.first = SimpleNamespace(id=21)
         self.second = SimpleNamespace(id=22)
-        self.hesh = (0, PENETRATION_FACTOR_65)
-        self.apcr = (1, PENETRATION_FACTOR_65)
-        self.fallback = (0, None)
 
-    def scan(self, target, index, threshold, now, lane, physical=False):
-        status = self.verdicts.get((target.id, (index, threshold)), 'pending')
-        return status, dict(created=now, key=(0, 'low'), geometry_clear=True) if status == 'ready' else None
+    def probe(self, target, index, point, now, lane, threshold, **kwargs):
+        status = self.verdicts.get((target.id, index, point), 'armor')
+        solution = dict(created=now, key=(point, 'low'), geometry_clear=True,
+                        nominal_armor=70 if point == 0 else 25)
+        return ('ready', solution) if kwargs.get('nominal') else (status, solution)
 
-    def test_hesh_apcr_and_same_shell_fallback(self):
-        self.assertEqual([self.hesh, self.apcr, self.fallback],
-                         self.state.stages(self.rounds, self.gun.ammo))
-        self.verdicts[(21, self.hesh)] = 'armor'
-        self.assertFalse(self.state.update(self.control, [self.first], 0.)[2])
-        self.assertEqual(self.apcr, self.state.stage)
-        self.verdicts[(21, self.apcr)] = 'armor'
-        self.assertFalse(self.state.update(self.control, [self.first], .1)[2])
-        self.assertEqual(self.apcr, self.state.stage)
-        self.gun.shot_index = 1
-        self.assertFalse(self.state.update(self.control, [self.first], .2)[2])
-        self.assertEqual(self.fallback, self.state.stage)
-        self.gun.shot_index = 0
-        self.verdicts[(21, self.fallback)] = 'ready'
-        self.assertTrue(self.state.update(self.control, [self.first], .3)[2])
+    def test_checks_every_point_and_chooses_he_before_premium(self):
+        self.verdicts[(21, 1, 0)] = 'ready'
+        self.verdicts[(21, 2, 1)] = 'ready'
+        for tick in range(3):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertEqual([2], self.calls)
+        self.assertEqual(1, self.state.sample)
 
-    def test_he_fallback_yields_but_penetration_lock_does_not(self):
-        self.state.adopt(21, self.fallback)
-        self.verdicts[(21, self.fallback)] = 'ready'
-        self.verdicts[(22, self.hesh)] = 'ready'
-        self.state.update(self.control, [self.first, self.second], 0.)
-        self.assertFalse(self.state.update(self.control, [self.first, self.second], .1)[2])
-        self.assertEqual((22, self.hesh), (self.state.target, self.state.stage))
-        self.verdicts[(21, self.hesh)] = 'ready'
-        self.assertEqual(self.second,
-                         self.state.update(self.control, [self.first, self.second], .2)[0])
+    def test_he_main_prefers_lowest_piercing_alternative_and_skips_empty(self):
+        self.rounds.main = 2
+        self.gun.shots[0]['piercingPower'] = (300., 250.)
+        self.assertEqual([2, 1, 0], [row['index'] for row in self.state.shells(self.rounds, self.gun)])
+        self.gun.ammo[1] = 0
+        self.assertEqual([2, 0], [row['index'] for row in self.state.shells(self.rounds, self.gun)])
 
-    def test_obstruction_does_not_trigger_shell_change(self):
-        self.verdicts[(21, self.hesh)] = 'unavailable'
-        self.state.update(self.control, [self.first], 0.)
+    def test_search_expires_before_nominal_he_fallback(self):
+        for tick in range(3):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertEqual(.2, self.state.search_since)
         self.assertEqual([], self.calls)
-        self.assertEqual(self.hesh, self.state.stage)
+        self.state.update(self.control, [self.first], 8.21)
+        self.assertEqual([2], self.calls)
+        self.assertEqual(1, self.state.sample)
+        self.assertTrue(self.state.fallback)
 
-    def test_ordinary_he_main_has_no_penetration_gate(self):
-        self.state.vehicle = 'uk:GB70_FV4202_105'
-        self.assertEqual([self.fallback, self.apcr],
-                         self.state.stages(self.rounds, self.gun.ammo))
+    def test_obstruction_does_not_start_the_armor_search_clock(self):
+        self.control.aiming.compare_direct = mock.Mock(return_value=('unavailable', None))
+        for tick in range(3):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertIsNone(self.state.search_since)
+        self.assertEqual([], self.calls)
+
+
+    def test_no_he_retreats_only_after_search_expires(self):
+        self.gun.ammo[2] = 0
+        for now in (0., .1, 7., 7.1, 8., 8.2):
+            self.state.update(self.control, [self.first], now)
+        self.assertTrue(self.state.retreat)
+        self.assertEqual([], self.calls)
+
+    def test_partial_cassette_uses_next_shell_only_after_timeout(self):
+        self.gun.clip_size, self.gun.clip = 3, 2
+        self.verdicts[(21, 2, 0)] = 'ready'
+        self.state.update(self.control, [self.first], 0.)
+        self.control.reload_automatic_clip.assert_not_called()
+        for now in (8.1, 8.2, 8.3):
+            self.state.update(self.control, [self.first], now)
+        self.control.reload_automatic_clip.assert_called_once_with(2)
+        self.assertEqual([], self.calls)
 
 
 class OrderedPointTests(unittest.TestCase):
@@ -156,6 +172,20 @@ class OrderedPointTests(unittest.TestCase):
             self.assertEqual(('ready', (1, 'low')), (verdict, solution['key']))
             verdict, solution = aim.ordered(target, 0, threshold, 1.1, None)
             self.assertEqual(('ready', (0, 'low')), (verdict, solution['key']))
+
+
+    def test_ammo_retreat_only_reverses_and_stops_on_stall(self):
+        from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        nav._height = lambda *a, **k: 0.
+        state = dict(now=10., position=(0., 0., 0.), yaw=0., stopping_distance=0.)
+        order = nav.ammo_withdrawal(state, lambda *a: True, [], lambda *a: False)
+        self.assertTrue(order['reverse_only'])
+        self.assertLess(order['throttle'], 0.)
+        self.assertEqual(0., order['turn'])
+        state['now'] = 18.
+        order = nav.ammo_withdrawal(state, lambda *a: True, [], lambda *a: False)
+        self.assertEqual((0., 0., True), (order['throttle'], order['turn'], order['brake']))
 
 
 class PlayerTrafficRecoveryTests(unittest.TestCase):

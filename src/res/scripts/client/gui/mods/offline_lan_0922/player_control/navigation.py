@@ -131,6 +131,7 @@ class PlayerNavigation(object):
         self.local_routes = LocalRoutes(self.navigator, self.support, self.team)
         self.route_history = []
         self.reload_route = None
+        self.ammo_retreat = None
         self.driver = Driver()
         self.route = None
         self.index = None
@@ -155,6 +156,7 @@ class PlayerNavigation(object):
         self.cover_search.close()
         self.search = self.pending = self.candidates = None
         self.cover_move = self.firing_move = self.reload_route = None
+        self.ammo_retreat = None
         self.route_history = []
         self.context = {}
 
@@ -706,6 +708,50 @@ class PlayerNavigation(object):
                     reason='empty_magazine_known_route')
                 return self._reload_route_order(state, clear)
         return None
+
+    def ammo_withdrawal(self, state, clear, contacts, terrain_ray, reason='no_he'):
+        """Reverse only, with a separate clock for loss of travel progress."""
+        now, position, yaw = state['now'], state['position'], state['yaw']
+        if getattr(self, 'ammo_retreat', None) is None or self.ammo_retreat['reason'] != reason:
+            self.ammo_retreat = dict(reason=reason, progress_at=now, goal=None,
+                best_distance=None, finished=False)
+        retreat = self.ammo_retreat
+        rear = yaw + math.pi
+        goal = retreat['goal']
+        if not retreat['finished'] and goal is None:
+            choices = []
+            for reach in (12., 8., 5., 3.):
+                point = (position[0] + math.sin(rear)*reach, position[2] + math.cos(rear)*reach)
+                height = self._height(point, position[1], strict=True)
+                if height is None or not clear(rear, reach):
+                    continue
+                candidate = (point[0], height, point[1])
+                visible = sum(bool(terrain_ray((point[0], height + 1., point[1]),
+                    (row['position'][0], row['position'][1] + 1., row['position'][2])))
+                    for row in contacts[:3])
+                choices.append((visible, -reach, candidate))
+            if choices:
+                unused, reach, goal = min(choices)
+                retreat.update(goal=goal, best_distance=-reach)
+        if goal is not None and not retreat['finished']:
+            remaining = distance(position, goal)
+            if remaining < retreat['best_distance'] - .5:
+                retreat.update(best_distance=remaining, progress_at=now)
+            if remaining <= 1.5:
+                retreat['finished'] = True
+        if now - retreat['progress_at'] >= 8.:
+            retreat['finished'] = True
+        order = self._cover_order('ammo_retreat_hold' if retreat['finished'] else
+                                  'ammo_retreat', goal)
+        order.update(reverse_only=True, suppress_fire=reason == 'magazine_reload',
+                     retreat=dict(retreat))
+        if goal is not None and not retreat['finished']:
+            heading = math.atan2(goal[0] - position[0], goal[2] - position[2])
+            stopping = state.get('stopping_distance', 0.)
+            if (abs(angle(heading-rear)) <= .25 and remaining > 1.5 + stopping and
+                    clear(rear, min(remaining, max(3., stopping + 1.)))):
+                order.update(throttle=-.65, brake=False, holding=False)
+        return order
 
     def _reload_route_order(self, state, clear):
         retreat = self.reload_route

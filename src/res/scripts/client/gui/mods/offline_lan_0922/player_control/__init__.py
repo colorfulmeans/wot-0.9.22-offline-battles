@@ -1267,8 +1267,6 @@ class PlayerControl(object):
             return
         for row in policy.settle(gun.ammo, now):
             self.record('shot_result', result=row, failures=policy.failures, desired=policy.desired)
-            if self.direct_engagement is not None:
-                self.direct_engagement.result(row)
         if self.direct_engagement is None:
             selected = policy.choose(gun.ammo)
             if not policy.protected:
@@ -1296,6 +1294,32 @@ class PlayerControl(object):
                 self.last_shell_request = (gun, now)
             owner.change_vehicle_setting(code, _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
             self.record('ammo_queued', shell=selected)
+
+    def queue_next_automatic_clip(self, selected):
+        from ..gun_mechanics import _field
+        owner, gun = self.owner, self.owner._gun_state
+        if (gun.clip_size <= 1 or gun.clip <= 0 or gun.ammo[selected] <= 0 or
+                getattr(owner, '_local_fire_intent', None) or
+                getattr(owner, '_local_player_burst', None)):
+            return
+        queued = gun.pending_index if gun.pending_index is not None else gun.shot_index
+        if queued != selected:
+            settings = owner._runtime.constants.VEHICLE_SETTING
+            owner.change_vehicle_setting(settings.NEXT_SHELLS,
+                _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
+
+    def reload_automatic_clip(self, selected):
+        owner, gun = self.owner, self.owner._gun_state
+        generation = self.control_generation
+        if gun.ammo[selected] <= 0:
+            return False
+        self.queue_next_automatic_clip(selected)
+        if (not self.active or self.control_generation != generation or owner._gun_state is not gun or
+                gun.clip <= 0 or getattr(owner, '_local_player_burst', None) or
+                getattr(owner, '_local_fire_intent', None)):
+            return False
+        settings = owner._runtime.constants.VEHICLE_SETTING
+        return owner.change_vehicle_setting(settings.RELOAD_PARTIAL_CLIP, 0)
 
     def consumables(self, entity):
         # Player-owned activation decisions, actual mounted kits/cooldowns.
@@ -1613,9 +1637,8 @@ class PlayerControl(object):
             if (preempt and candidates and self.direct_engagement is not None and
                     not getattr(owner, '_local_player_burst', None) and
                     not getattr(owner, '_local_fire_intent', None)):
-                stages = self.direct_engagement.stages(self.ammo_policy, owner._gun_state.ammo)
-                if stages:
-                    self.direct_engagement.adopt(candidates[0].id, stages[0])
+                if self.direct_engagement.search_since is None:
+                    self.direct_engagement.adopt(candidates[0].id)
             self.aiming.begin(list(records.values()), now)
             if not decision_current():
                 return
@@ -1764,12 +1787,13 @@ class PlayerControl(object):
                     self.direct_engagement.target != self.blocked_fire_target):
                 blocked_target = None
             final_blocked = blocked_target is not None
+            seeking = bool(getattr(self.direct_engagement, 'seek', False))
             context = dict(empty_ammo=self.ammo_state['empty'],
                 target=target, contacts=contacts, allies=roster, neighbours=peers,
                 base=base, enemy_base=enemy_base,
                 allies_complete=roster_complete, turret_hulls=turret_hulls,
                 burst_active=state['burst_active'],
-                fire_clear=tactical_clear and not final_blocked,
+                fire_clear=tactical_clear and not (final_blocked or seeking),
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
@@ -1782,7 +1806,7 @@ class PlayerControl(object):
             if not decision_current():
                 return
             hold = bool(not self.ammo_state['empty'] and not movement.get('force_move') and
-                target is not None and tactical_clear and not final_blocked and
+                target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
             if now >= self.next_strategy and movement.get('allow_strategy'):
@@ -1804,19 +1828,29 @@ class PlayerControl(object):
                 # A distant incidental target cannot pin the defender on the
                 # wrong side of the map. Fire may continue while returning.
                 hold=bool(not self.ammo_state['empty'] and not movement.get('force_move') and
-                    tactical_clear and not final_blocked and target is not None and math.hypot(
+                    tactical_clear and not (final_blocked or seeking) and target is not None and math.hypot(
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             position_goal = None
             withdrawal = None
             manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
-                if ('fire' in self.features and not self.ammo_state['empty'] and
+                gun = owner._gun_state
+                direct_reload = (self.direct_engagement is not None and gun.clip_size > 1 and
+                                 gun.clip <= 0 and gun.reload_time > 0.)
+                if (self.direct_engagement is not None and movement.get('allow_withdrawal') and
+                        (self.direct_engagement.retreat or direct_reload)):
+                    reason = 'magazine_reload' if direct_reload else 'no_he'
+                    withdrawal = self.navigation.ammo_withdrawal(
+                        state, clear, contacts, owner._tactical_ray_clear, reason)
+                    if not decision_current():
+                        return
+                elif ('fire' in self.features and not self.ammo_state['empty'] and
                         movement.get('allow_withdrawal') and not automatic_defence and
                         (target is not None or self.navigation.cover_move is not None or
                          self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
-                        state, target, entity, owner._gun_state, clear, owner._tactical_ray_clear)
+                        state, target or (candidates[0] if candidates else None), entity, owner._gun_state, clear, owner._tactical_ray_clear)
                     if not decision_current():
                         return
                 else:
@@ -1825,15 +1859,18 @@ class PlayerControl(object):
                     cover_search = getattr(self.navigation, 'cover_search', None)
                     if cover_search is not None:
                         cover_search.reset()
+                if self.direct_engagement is not None and not (self.direct_engagement.retreat or direct_reload):
+                    self.navigation.ammo_retreat = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked)
+                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked or seeking)
                         and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
                     def firing_lane_from(candidate, start):
                         end = point if final_blocked and target is not None else self.target_point(candidate)
                         return (self.lane_from(candidate, start, end) and
                                 (not final_blocked or self.dynamic_path_clear(candidate, (start, end))))
                     position_goal = self.navigation.firing_position(
-                        state, blocked_target if final_blocked else candidates[0], clear,
+                        state, blocked_target if final_blocked else records.get(
+                            getattr(self.direct_engagement, 'target', None), candidates[0]), clear,
                         firing_lane_from, owner._mutable_shot_ray()[0])
                     if not decision_current():
                         return
@@ -1860,13 +1897,15 @@ class PlayerControl(object):
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)
             if not decision_current():
                 return
-            pushing = self.wreck_push.apply(order,state,traffic,
+            reverse_only = bool(order.get('reverse_only'))
+            pushing = not reverse_only and self.wreck_push.apply(order,state,traffic,
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach),
                 pose_clear=lambda end_yaw:self.rotation_clear(entity,position,yaw,end_yaw))
             if not decision_current():
                 return
             if not pushing:
-                self.turn_clearance.apply(order,yaw,traffic,position,clear)
+                if not reverse_only:
+                    self.turn_clearance.apply(order,yaw,traffic,position,clear)
                 if not decision_current():
                     return
             mission_order = order.get('mission') or {}
@@ -1919,7 +1958,8 @@ class PlayerControl(object):
                             return
                     self.player_traffic.apply(order, state, traffic, int(owner.client.team),
                         clear, lambda:stopping_distance(order['turn']), 1. / 30.,
-                        self.navigation.driver.replan or failure is not None, failure, contact=contact)
+                        not reverse_only and (self.navigation.driver.replan or failure is not None),
+                        failure if not reverse_only else None, contact=contact if not reverse_only else None)
                     if not decision_current():
                         return
                 if (order['throttle'] and order['turn'] and
@@ -1927,6 +1967,8 @@ class PlayerControl(object):
                     order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
             else:
                 self.drive_failure = None
+            if reverse_only and (order['throttle'] > 0. or order['turn']):
+                order.update(throttle=0., turn=0., brake=True)
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
                     getattr(entity.typeDescriptor, 'hasSiegeMode', False) and
                     entity.siegeState == owner._runtime.constants.VEHICLE_SIEGE_STATE.ENABLED):
@@ -1996,6 +2038,10 @@ class PlayerControl(object):
         if self.aiming is not None and self.aim_receipt is not None:
             self.aim_receipt['budget'] = dict(getattr(self.aiming, 'receipt', {}))
             self.aim_receipt['admission'] = dict(self.fire_admission.receipt)
+            if isinstance(getattr(self.direct_engagement, 'stage', None), tuple):
+                self.aim_receipt['engagement'] = dict(stage=self.direct_engagement.stage,
+                    search_since=self.direct_engagement.search_since,
+                    fallback=self.direct_engagement.fallback, retreat=self.direct_engagement.retreat)
         if 'consumables' in self.features:
             self.consumables(entity)
         if now >= getattr(self, 'next_log', 0.):

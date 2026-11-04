@@ -744,19 +744,21 @@ class EngagementBurstLockTests(unittest.TestCase):
         fixture = engagement_tests.DirectEngagementTests()
         fixture.setUp()
         state, control = fixture.state, fixture.control
-        state.adopt(21, fixture.hesh)
+        stage = (0, engagement_tests.PENETRATION_FACTOR_65)
+        state.adopt(21, stage)
+        state.sample = 0
         control.owner._local_player_burst = dict(committed=1)
-        fixture.verdicts[(21, fixture.hesh)] = 'armor'
-        fixture.verdicts[(22, fixture.hesh)] = 'ready'
+        fixture.verdicts[(21, 0, 0)] = 'armor'
+        fixture.verdicts[(22, 0, 0)] = 'ready'
         for now in (0., 1., 2.):
             state.update(control, [fixture.first, fixture.second], now)
-        self.assertEqual((21, fixture.hesh), (state.target, state.stage))
+        self.assertEqual((21, stage), (state.target, state.stage))
         self.assertEqual([], fixture.calls)
-        fixture.verdicts[(21, fixture.hesh)] = 'laying'
+        fixture.verdicts[(21, 0, 0)] = 'laying'
         state.update(control, [fixture.first, fixture.second], 3.)
-        self.assertEqual((21, fixture.hesh), (state.target, state.stage))
+        self.assertEqual((21, stage), (state.target, state.stage))
         state.update(control, [fixture.second], 4.)
-        self.assertEqual((21, fixture.hesh), (state.target, state.stage))
+        self.assertEqual((21, stage), (state.target, state.stage))
         self.assertEqual([], fixture.calls)
 
 
