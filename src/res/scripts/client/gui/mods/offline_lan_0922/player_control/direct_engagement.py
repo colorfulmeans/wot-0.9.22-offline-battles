@@ -30,6 +30,7 @@ class DirectEngagement(object):
         self.checking = False
         self.last_full_at = None
         self.laying_error = None
+        self.facing_pause_at = None
 
     def shells(self, policy, gun):
         main = next((row for row in policy.shells if row['index'] == policy.main), None)
@@ -54,6 +55,7 @@ class DirectEngagement(object):
         self.fallback = False
         self.laying_until = self.next_clip_scan = self.last_full_at = self.laying_error = None
         self.checking = False
+        self.facing_pause_at = None
 
     def _motion_changes(self, aiming, target):
         try:
@@ -175,7 +177,20 @@ class DirectEngagement(object):
         if self.target not in by_id:
             self.adopt(candidates[0].id)
         target = by_id[self.target]
+        facing = getattr(control, 'combat_facing', None)
+        facing_active = facing is not None and facing.active_for(target.id)
+        paused = self.facing_pause_at
+        if paused is not None and self.laying_until is not None:
+            self.laying_until += max(0., now-paused)
+        self.facing_pause_at = now if facing_active else None
+        if facing_active and self.last_solution is not None and self.stage is not None and (
+                self.stage[0] == gun.shot_index and gun.ammo[gun.shot_index] > 0):
+            self.checking = True
+            return target, dict(self.last_solution, laying=True), False
         target_moved, own_moved, pose = self._motion_changes(aiming, target)
+        after_facing = paused is not None and not facing_active and own_moved
+        if after_facing:
+            self.scan = None
         own_due = own_moved and (self.last_full_at is None or
                                  now - self.last_full_at >= OWN_RESCAN_SECONDS)
         magazine = gun.clip_size > 1
@@ -188,12 +203,14 @@ class DirectEngagement(object):
         if self.stage is not None and not any(row['index'] == self.stage[0] for row in eligible):
             self.sample = self.last_solution = None
             self.fallback = False
-        if self.sample is not None and self.stage is not None and (
+        if not after_facing and self.sample is not None and self.stage is not None and (
                 self.last_solution is None or self.laying_until is not None or
                 self.next_clip_scan is not None and keep_clip and gun.clip == 1):
             return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
         expired = self.search_since is not None and now - self.search_since >= SEARCH_SECONDS
-        if self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
+        if after_facing:
+            mode = 'full'
+        elif self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
             mode = 'next'
         elif expired and self.sample is None and self.scan is None and not self.retreat:
             mode = 'next' if keep_clip and not he else 'splash' if he else 'full'

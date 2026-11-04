@@ -374,5 +374,43 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual(front.id, engagement.target)
 
 
+    def test_combat_facing_brakes_then_turns_and_waits_for_rotation_to_stop(self):
+        from gui.mods.offline_lan_0922.player_control.tactics import CombatFacing
+        facing = CombatFacing()
+        clear = mock.Mock(return_value=True)
+        state = dict(position=(0., 0., 0.), now=1., speed=2.)
+        order = {}
+        self.assertTrue(facing.apply(order, state, 8, 1., .2, 0., clear, lambda: ()))
+        self.assertTrue(order['brake'])
+        clear.assert_not_called()
+        state.update(now=1.5, speed=0.)
+        self.assertTrue(facing.apply(order, state, 8, 1., .2, 0., clear, lambda: ()))
+        self.assertEqual((0., 1., False), (order['throttle'], order['turn'], order['brake']))
+        state['now'] = 2.
+        self.assertTrue(facing.apply(order, state, 8, .1, .2, .25, clear, lambda: ()))
+        self.assertEqual('settling', order['combat_facing']['state'])
+        state['now'] = 2.2
+        self.assertFalse(facing.apply(order, state, 8, .1, .2, 0., clear, lambda: ()))
+        self.assertEqual('aligned', order['combat_facing']['state'])
+
+    def test_blocked_combat_facing_releases_fire_and_does_not_keep_pivoting(self):
+        from gui.mods.offline_lan_0922.player_control.tactics import CombatFacing
+        facing = CombatFacing()
+        clear = mock.Mock(return_value=False)
+        state = dict(position=(0., 0., 0.), now=1., speed=0.)
+        obstacles = ['ally']
+        order = {}
+        self.assertFalse(facing.apply(order, state, 8, .8, .2, 0., clear, lambda: tuple(obstacles)))
+        self.assertEqual('blocked', order['combat_facing']['state'])
+        self.assertEqual((0., 0., True), (order['throttle'], order['turn'], order['brake']))
+        state['now'] = 3.
+        self.assertFalse(facing.apply(order, state, 8, .8, .2, 0., clear, lambda: tuple(obstacles)))
+        clear.assert_called_once()
+        obstacles[:] = []
+        clear.return_value = True
+        self.assertTrue(facing.apply(order, state, 8, .8, .2, 0., clear, lambda: tuple(obstacles)))
+        self.assertEqual('turning', order['combat_facing']['state'])
+
+
 if __name__ == '__main__':
     unittest.main()

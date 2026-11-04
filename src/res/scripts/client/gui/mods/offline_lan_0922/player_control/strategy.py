@@ -129,12 +129,19 @@ class CombatPolicy(object):
                 return False
             self.reset()
         sequence = context.get('fire_seq')
+        record = self.record
+        if context.get('facing_in_progress') and hold:
+            if record is not None and record['target'] == identity and record['sequence'] == sequence:
+                record.setdefault('paused_at', now)
+            self.receipt['reason'] = 'hull_facing'
+            return True
+        if record is not None and 'paused_at' in record:
+            record['since'] += max(0., now - record.pop('paused_at'))
         if (not hold or not context.get('gun_ready') or sequence is None or
                 (not context.get('aligned') and context.get('aim_progress'))):
             self.record = None
             self.receipt['phase'] = phase
             return hold
-        record = self.record
         moved = record is not None and math.hypot(position[0] - record['position'][0],
                                                   position[2] - record['position'][2]) >= 2.
         if record is None or record['target'] != identity or record['sequence'] != sequence or moved:
