@@ -154,8 +154,11 @@ class PlayerControl(object):
             row['shot_snapshot_omitted'] += 1
         self.emit_result(row)
 
+    def owns_automatic_drive(self):
+        return self.active and 'drive' in self.features
+
     def owns_drive(self):
-        return self.halted or self.override is not None or (self.active and 'drive' in self.features)
+        return self.halted or self.override is not None or self.owns_automatic_drive()
 
     def bind_input(self):
         """Wrap the exact #1513 event seam, including strategic camera mode."""
@@ -1123,8 +1126,6 @@ class PlayerControl(object):
             self.emit_result(dict(self.identity(), **receipt))
 
     def shot_hit(self, event):
-        if event.get('cosmetic_only'):
-            return
         known = self.shot_receipts.get(event.get('projectile_id')) is not None
         receipt = self.shot_receipts.hit(event, self.owner._clock())
         if known and receipt is None:
@@ -1266,8 +1267,7 @@ class PlayerControl(object):
             return
         if (current == states.ENABLED) == desired or owner._local_siege_braking is not None:
             return
-        setting = owner._runtime.constants.VEHICLE_SETTING.SIEGE_MODE_ENABLED
-        if owner.change_vehicle_setting(setting, int(desired)):
+        if owner._change_local_siege(desired):
             self.siege_brake = owner._local_siege_braking
             self.record('siege_request', enabled=desired, previous=current)
 
@@ -1548,6 +1548,14 @@ class PlayerControl(object):
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
+            if (not order.get('holding') and (order['throttle'] or order['turn']) and
+                    getattr(entity.typeDescriptor, 'hasSiegeMode', False) and
+                    entity.siegeState == owner._runtime.constants.VEHICLE_SIEGE_STATE.ENABLED):
+                # A brief loss of the firing lane can select the route while
+                # siege exit is still being debounced. Keep the tracks still
+                # until travel mode owns movement.
+                order.update(throttle=0., turn=0., brake=True,
+                             recovery_mode='siege_wait_travel')
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()

@@ -206,7 +206,8 @@ class RejectionCompletionTests(unittest.TestCase):
                 for index in range(2):
                     identity = 'later-%s' % index
                     policy.launch(identity, 2, 42, 11.+index, position=(0., 0., 0.))
-                    control.shot_hit(dict(projectile_id=identity, damage=0., shot_result=1))
+                    control.shot_hit(dict(projectile_id=identity, damage=0.,
+                                          shot_result=1, cosmetic_only=True))
                     control.shot_terminal(dict(projectile_id=identity, hit_vehicle=True))
                 rows = policy.settle(battle._gun_state.ammo, 100.)
                 self.assertEqual(3, len(rows))

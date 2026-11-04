@@ -10443,6 +10443,9 @@ class BattleRuntime(object):
     def change_vehicle_setting(self, code, value):
         settings = self._runtime.constants.VEHICLE_SETTING
         if code == getattr(settings, 'SIEGE_MODE_ENABLED', None):
+            control = getattr(self, '_player_control', None)
+            if control is not None and control.owns_automatic_drive():
+                return False
             return self._change_local_siege(value)
         if code == getattr(settings, 'ACTIVATE_EQUIPMENT', None):
             return self._activate_equipment(value)

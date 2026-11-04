@@ -663,8 +663,10 @@ class PlayerNavigation(object):
                 target = position
         command = self.driver.drive(position, state['yaw'], state['speed'], target,
                                     now, direction_clear, hold=hold or goal is None)
-        if self.driver.replan:
-            self.navigator.bot_states.pop(identity, None)
+        if self.driver.replan and distance(position, target) >= 2.:
+            # Preserve the path cursor and progress history across local
+            # recovery. Retire a cached corridor only on obstruction evidence.
+            self.navigator.report_blocked_plan(position, target)
         command.update(route_id=self.route['id'] if self.route else None,
                        route_index=self.index, local_target=target, combat_mode=mode,
                        driving=self.driver.receipt, holding=bool(hold),

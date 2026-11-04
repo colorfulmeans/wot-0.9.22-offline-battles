@@ -71,7 +71,10 @@ class ShotReceipts(object):
 
     def hit(self, event, now):
         row = self.get(event.get('projectile_id'))
-        if row is None or row['flight_status'] == 'rejected' or event.get('cosmetic_only'):
+        if row is None or row['flight_status'] == 'rejected':
+            return None
+        if event.get('cosmetic_only') and (
+                event.get('shot_result') not in (0, 1) or event.get('damage') != 0):
             return None
         event_id = event.get('event_id')
         if event_id is not None:

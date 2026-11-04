@@ -516,11 +516,11 @@ class ControllerMigrationTests(unittest.TestCase):
             c.owner._runtime=types.SimpleNamespace(constants=types.SimpleNamespace(
                 VEHICLE_SIEGE_STATE=types.SimpleNamespace(DISABLED=0,ENABLED=1,SWITCHING_ON=2,SWITCHING_OFF=3),
                 VEHICLE_SETTING=types.SimpleNamespace(SIEGE_MODE_ENABLED=10)))
-            c.owner.change_vehicle_setting=mock.Mock(return_value=True)
+            c.owner._change_local_siege=mock.Mock(return_value=True)
             order=dict(combat_mode='mission_hold',holding=True,mission=dict(status=status))
             c.update_siege(entity,order,True,0.)
             c.update_siege(entity,order,True,1.)
-            self.assertEqual(status in ('running','completed'),c.owner.change_vehicle_setting.called)
+            self.assertEqual(status in ('running','completed'),c.owner._change_local_siege.called)
 
     def test_final_barrel_proof_follows_mode_changes_and_skips_forbidden_fire(self):
         for mode in ('permitted','failed_mission','deploying'):

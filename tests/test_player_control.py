@@ -188,21 +188,41 @@ class PlayerRegressionTests(unittest.TestCase):
             VEHICLE_SIEGE_STATE=types.SimpleNamespace(DISABLED=0, ENABLED=1,
                                                      SWITCHING_ON=2, SWITCHING_OFF=3),
             VEHICLE_SETTING=types.SimpleNamespace(SIEGE_MODE_ENABLED=10)))
-        c.owner.change_vehicle_setting = mock.Mock(return_value=True)
+        c.owner._change_local_siege = mock.Mock(return_value=True)
         engage = dict(combat_mode='engage')
         c.update_siege(entity, engage, True, 0.)
         c.update_siege(entity, engage, True, .2)
-        c.owner.change_vehicle_setting.assert_not_called()
+        c.owner._change_local_siege.assert_not_called()
         c.update_siege(entity, engage, True, .4)
-        c.owner.change_vehicle_setting.assert_called_once_with(10, 1)
+        c.owner._change_local_siege.assert_called_once_with(True)
         c.owner._local_siege_pending = (True, 3)
         c.update_siege(entity, engage, True, 1.)
-        c.owner.change_vehicle_setting.assert_called_once()
+        c.owner._change_local_siege.assert_called_once()
         c.owner._local_siege_pending = None
         entity.siegeState = 1
         c.update_siege(entity, dict(combat_mode='route'), False, 2.)
         c.update_siege(entity, dict(combat_mode='route'), False, 3.)
-        self.assertEqual(mock.call(10, 0), c.owner.change_vehicle_setting.call_args)
+        self.assertEqual(mock.call(False), c.owner._change_local_siege.call_args)
+
+    def test_route_cannot_reverse_combat_facing_while_siege_is_enabled(self):
+        c, _ = self.aim_controller()
+        entity = c.owner._server_entity(1)
+        entity.typeDescriptor.hasSiegeMode = True
+        entity.siegeState = 2
+        c.owner._runtime = types.SimpleNamespace(constants=types.SimpleNamespace(
+            VEHICLE_SIEGE_STATE=types.SimpleNamespace(ENABLED=2)))
+        c.update_siege = mock.Mock()
+        c.firing_lane = lambda unused: False
+        c.navigation.decide.side_effect = lambda *a, **kw: dict(
+            throttle=0., turn=-1., brake=False, combat_mode='route')
+        c.update(.1, 1.)
+        self.assertEqual(0., c.owner._sender.turn)
+        self.assertTrue(c.owner._sender.handbrake)
+        self.assertEqual('route', c.update_siege.call_args.args[1]['combat_mode'])
+        entity.siegeState = 0
+        c.update(.1, 2.)
+        self.assertEqual(-1., c.owner._sender.turn)
+        self.assertFalse(c.owner._sender.handbrake)
 
     def test_occluded_target_yields_to_clear_enemy_and_lost_enemy_releases_aim(self):
         c,target=self.aim_controller()

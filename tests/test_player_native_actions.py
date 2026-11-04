@@ -33,6 +33,7 @@ class NativeActionHarness(unittest.TestCase):
             override=None, features=frozenset(), halted=False, record=mock.Mock(),
             release_pending=[], next_release=0.,
             identity=lambda: dict(self.identity), live=lambda: self.alive[0])
+        self.control.owns_automatic_drive = lambda: self.control.active and 'drive' in self.control.features
         self.actions = NativeActions(self.control)
         self.control.native_actions = self.actions
         self.control.gateway = CommandGateway(self.control.identity,
@@ -689,6 +690,17 @@ class SiegeCommandTests(NativeActionHarness):
                 receipt = self.submit('set_siege', {'enabled': True})
                 self.assertEqual(('rejected', 'siege_native_busy'), (receipt['status'], receipt['reason']))
                 self.assertEqual([], self.sent)
+
+    def test_manual_siege_is_blocked_only_while_automatic_drive_owns_it(self):
+        self.siege()
+        setting = self.owner._runtime.constants.VEHICLE_SETTING.SIEGE_MODE_ENABLED
+        self.control.features = frozenset(('drive',))
+        self.control.active = True
+        self.assertFalse(self.owner.change_vehicle_setting(setting, 1))
+        self.assertEqual([], self.sent)
+        self.control.active = False
+        self.assertTrue(self.owner.change_vehicle_setting(setting, 1))
+        self.assertEqual(1, len(self.sent))
 
     def test_manual_replacement_cancels_previous_observer_without_cancelling_new_brake(self):
         self.siege(speed=8.)
