@@ -43,7 +43,7 @@ class LayoutTests(unittest.TestCase):
             self.assertGreater(title.winfo_y(), 0)
         editor.canvas.yview_moveto(1)
         a.root.update()
-        button = next(w for w, en, zh in editor.labels if en == 'Open mouse control panel')
+        button = next(w for w, en, zh in editor.labels if en == 'Open player control panel')
         self.assertLessEqual(button.winfo_rooty()+button.winfo_height(),
                             editor.canvas.winfo_rooty()+editor.canvas.winfo_height())
 
