@@ -151,6 +151,7 @@ class PlayerNavigation(object):
 
     def _reset_travel(self, routes):
         self.opening_origin = None
+        self.forward_rejoin = None
         self.policy_cache = None
         self.mission_goal_key = None
         self.selection = list(routes)
@@ -403,7 +404,7 @@ class PlayerNavigation(object):
         self.policy_cache = sample, policy
         return dict(policy)
 
-    def join(self, position, now):
+    def join(self, position, now, yaw=None):
         """Rank all points in 3D, then require an actual connected path.
 
         Resumable searches stay bounded; an overhead baked layer cannot prove
@@ -426,6 +427,8 @@ class PlayerNavigation(object):
                        distance(position, opening_origin) <= 3. and
                        math.hypot(position[0] - home['point'][0],
                                   position[2] - home['point'][1]) <= home['radius'])
+            forward_rejoin = yaw is not None and not opening
+            self.forward_rejoin = (tuple(position), now) if forward_rejoin else None
             for route in getattr(self, 'selection', self.routes):
                 points = route.get('waypoints', ())
                 second_only = False
@@ -446,6 +449,10 @@ class PlayerNavigation(object):
                         continue
                     goal = (float(point[0]), height, float(point[1]))
                     entry_distance = math.sqrt(sum((a-b)**2 for a,b in zip(position,goal)))
+                    if forward_rejoin and self._ahead(position, goal, yaw) < -2.:
+                        # A point behind an already aligned handoff remains a
+                        # candidate, but a nearby forward entry is preferred.
+                        entry_distance += 20.
                     candidates.append((entry_distance, str(route['id']), index, route, goal))
             self.candidates = sorted(candidates, key=lambda r: r[:3])
         if self.search is None:
@@ -659,6 +666,37 @@ class PlayerNavigation(object):
                        route_index=self.index, driving=self.driver.receipt)
         return command
 
+    @staticmethod
+    def _ahead(position, point, yaw):
+        return ((point[0]-position[0])*math.sin(yaw) +
+                (point[2]-position[2])*math.cos(yaw))
+
+    def _forward_rejoin_target(self, state, goal, target, clear):
+        rejoin = getattr(self, 'forward_rejoin', None)
+        if rejoin is None:
+            return target
+        origin, at = rejoin
+        position, yaw = state['position'], state['yaw']
+        remaining = 5. - distance(position, origin)
+        if remaining < 2. or state['now'] - at > 5.:
+            self.forward_rejoin = None
+            return target
+        goal_distance = distance(position, goal)
+        if (goal_distance < 3. or self._ahead(position, goal, yaw) < .7*goal_distance or
+                self._ahead(position, target, yaw) >= -1.):
+            return target
+        step = min(3., remaining, goal_distance)
+        if not clear(yaw, step):
+            return target
+        sample = (position[0]+math.sin(yaw)*step, position[1],
+                  position[2]+math.cos(yaw)*step)
+        status, resolved = self.support.inspect(sample, authored=False)
+        segment = getattr(self.navigator.grid, 'segment_clear', None)
+        if (status == 'connected' and distance(resolved, goal) < goal_distance and
+                callable(segment) and segment(position, resolved)):
+            return resolved
+        return target
+
     def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route'):
         position, now = state['position'], state['now']
         self.support.begin(position, now)
@@ -681,6 +719,8 @@ class PlayerNavigation(object):
                 # An incomplete local column cannot authorize an apparent
                 # jump onto a baked overhead layer.
                 target = position
+        if mode == 'route' and not hold and goal is not None:
+            target = self._forward_rejoin_target(state, goal, target, direction_clear)
         command = self.driver.drive(position, state['yaw'], state['speed'], target,
                                     now, direction_clear, hold=hold or goal is None)
         if self.driver.replan and distance(position, target) >= 2.:
@@ -781,7 +821,8 @@ class PlayerNavigation(object):
 
     def _route_order(self, state, direction_clear, hold=False):
         position, now = state['position'], state['now']
-        joined = self.join(position, now)
+        joined = self.join(position, now, None if self.automatic_defence or
+                           self.mission is not None or self.tag == 'SPG' else state['yaw'])
         goal = None
         key = ('player_joining', int(state['id']))
         if joined:

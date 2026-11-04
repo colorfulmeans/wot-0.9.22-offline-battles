@@ -771,6 +771,37 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual(1, nav.index)
         self.assertEqual((-34., .25, -110.), nav.receipt['goal'])
 
+    def test_manual_handoff_prefers_nearby_route_point_ahead(self):
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        nav.routes = [dict(id='pit', waypoints=[(-30., -74.), (-34., -50.)])]
+        nav.route = nav.index = nav.candidates = nav.search = nav.pending = nav.join_origin = None
+        nav.retry_at = 0.
+        nav._height = lambda point, hint, strict=False: .25
+        nav.support = types.SimpleNamespace(begin=lambda *args: None,
+            inspect=lambda point, authored=False: ('connected', point))
+        nav.navigator = types.SimpleNamespace(grid=types.SimpleNamespace(
+            segment_clear=lambda *args: True))
+        self.assertTrue(nav.join((-32.36, .21, -66.37), 1., -.15))
+        self.assertEqual((-34., .25, -50.), nav.receipt['goal'])
+
+    def test_manual_handoff_can_use_proved_forward_tip_instead_of_backward_detour(self):
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        position = (-34.38, .24, -57.55)
+        state = dict(position=position, now=1., yaw=.10)
+        nav.forward_rejoin = (position, 0.)
+        nav.support = types.SimpleNamespace(inspect=lambda point, authored=False: ('connected', point))
+        nav.navigator = types.SimpleNamespace(grid=types.SimpleNamespace(
+            segment_clear=lambda *args: True))
+        goal = (-18., .26, -34.)
+        backward_tip = (-34., .259, -70.)
+        forward_tip = nav._forward_rejoin_target(state, goal, backward_tip, lambda *args: True)
+        self.assertGreater(forward_tip[2], position[2])
+        self.assertEqual(backward_tip, nav._forward_rejoin_target(
+            state, goal, backward_tip, lambda *args: False))
+        state['now'] = 6.
+        self.assertEqual(backward_tip, nav._forward_rejoin_target(
+            state, goal, backward_tip, lambda *args: True))
+
     def test_layer_disconnected_entry_is_rejected_before_ground_route(self):
         from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         p=PlayerNavigation.__new__(PlayerNavigation)
