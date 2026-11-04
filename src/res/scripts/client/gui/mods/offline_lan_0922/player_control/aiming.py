@@ -16,6 +16,8 @@ CANDIDATES_PER_TICK = 2
 SEGMENTS_PER_TICK = 12
 NATIVE_ANGLES_PER_TICK = 12
 NATIVE_ANGLE_TOLERANCE = .00001
+# Freshness of a completed advisory result, not a deadline for sliced work.
+# Pending paths retain their bounded cursor while their geometry is valid.
 PLAN_SECONDS = 3.
 PLAN_MOVE_METRES = 1.
 # The final real-barrel gate is synchronous: 20 s / .12 s gives 167
@@ -355,16 +357,22 @@ class Aiming(object):
 
     @staticmethod
     def _valid(result, own, observation, now):
+        """Check geometry independently of the scheduler's service latency.
+
+        The frozen path is an advisory arc-family proof. A moving target may
+        keep the same measured trajectory; fresh candidates still supply the
+        current intercept and confirm always checks the current entire barrel
+        path. Elapsed time alone must not repeatedly erase unfinished chords.
+        """
         expected = tuple(result['observed'][i] + result['velocity'][i] *
                          max(0., now-result['created']) for i in range(3))
         return (result.get('shell_key') == own['key'] and
-                now-result.get('created', -100.) <= PLAN_SECONDS and
                 _distance_sq(result['origin'], own['origin']) <= .5*.5 and
                 _distance_sq(expected, observation['position']) <= PLAN_MOVE_METRES**2 and
                 max(abs(_angle(result['body'][i]-own['body'][i]))
                     for i in range(3)) <= .03)
 
-    def _advance(self, job, lane, limit):
+    def _advance(self, job, lane, limit, now):
         path = job['solution'].get('path', ())
         while (job['next'] < len(path)-1 and self._segments > 0 and limit > 0):
             index = job['next']
@@ -373,11 +381,14 @@ class Aiming(object):
             job['next'] += 1
             if not lane(path[index], path[index+1]):
                 job['done'], job['clear'] = True, False
+                job['completed'] = now
                 return
         if path and job['next'] == len(path)-1:
             job['done'], job['clear'] = True, True
         elif not path:
             job['done'], job['clear'] = True, False
+        if job['done']:
+            job['completed'] = now
 
     @staticmethod
     def _rank(result, preferred):
@@ -417,7 +428,8 @@ class Aiming(object):
         if not entry['samples']:
             return self._fallback(target, 'target_geometry_unavailable')
         for key, job in list(entry['jobs'].items()):
-            if not self._valid(job['solution'], own, self.observations[target.id], now):
+            if (not self._valid(job['solution'], own, self.observations[target.id], now) or
+                    (job['done'] and now-job['completed'] > PLAN_SECONDS)):
                 entry['jobs'].pop(key, None)
         choices = [(index, arc) for index in range(len(entry['samples']))
                    for arc in (('low', 'high') if artillery else ('low',))]
@@ -452,7 +464,7 @@ class Aiming(object):
                         entry['cursor'] += 1
                         existing = entry['jobs'].get(probe)
                         if existing is None or (existing['done'] and
-                                not existing['clear'] and now-existing['solution']['created'] >= .5):
+                                not existing['clear'] and now-existing['completed'] >= .5):
                             key = probe
                             break
                     if key is None:
@@ -460,7 +472,8 @@ class Aiming(object):
                     candidate = self._candidate(target, own, entry, key, now)
                     if candidate is None:
                         break
-                    job = dict(solution=candidate, next=0, done=False, clear=False)
+                    job = dict(solution=candidate, next=0, done=False, clear=False,
+                               completed=None)
                     entry['jobs'][key] = job
                 work.append((job, candidate))
                 count -= 1
@@ -470,7 +483,7 @@ class Aiming(object):
             for index, (job, candidate) in enumerate(work):
                 share = max(1, allowance // (len(work)-index))
                 before = self._segments
-                self._advance(job, lane, share)
+                self._advance(job, lane, share, now)
                 allowance -= before-self._segments
                 results.append(self._result(candidate, job))
         # Unworked entities may expose their latest finite point for laying,
@@ -553,8 +566,7 @@ class Aiming(object):
                 if entry is not None:
                     failed = entry['jobs'].get(solution.get('key'))
                     if failed is not None:
-                        failed.update(done=True, clear=False)
-                        failed['solution']['created'] = now
+                        failed.update(done=True, clear=False, completed=now)
                     if entry['selected'] == solution.get('key'):
                         entry['selected'] = None
                 return self._final_verdict('static_blocked')

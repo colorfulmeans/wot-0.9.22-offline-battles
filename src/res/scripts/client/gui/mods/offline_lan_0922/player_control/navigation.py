@@ -8,6 +8,8 @@ from .driving import Driver, angle
 from .missions import Mission, base_areas, distance, legal_support, TERMINAL
 from .artillery import Artillery
 from .strategy import CombatPolicy, target_value
+from .navigation_support import PlayerHeightSupport
+from .parking import RouteParking
 
 
 def authored_routes(profile, name, graph):
@@ -94,6 +96,11 @@ class PlayerNavigation(object):
         self.mission = None
         self.previous_mission = None
         self.mission_sequence = 0
+        self.automatic_recovery = None
+        self.capture_retry_at = 0.
+        self.capture_failures = 0
+        self.parking = RouteParking(self.team)
+        self.parking_order = None
         self.combat = CombatPolicy(self.tag)
         self.artillery = None
         if self.tag == 'SPG':
@@ -115,6 +122,9 @@ class PlayerNavigation(object):
             graph.get('bounds'), 18., baked_graph=graph)
         from ..native_navigation_query import Oracle
         self.navigator.grid.native_query_oracle = Oracle.create(owner)
+        self.support = PlayerHeightSupport(self.navigator.grid,
+            getattr(owner, '_navigation_ground', None),
+            getattr(owner, '_navigation_height_columns', None))
         self.driver = Driver()
         self.route = None
         self.index = None
@@ -128,10 +138,12 @@ class PlayerNavigation(object):
     def close(self):
         if self.mission is not None and self.mission.status not in TERMINAL:
             self.mission.finish('cancelled', 'controller_stopped', self.mission._last_now)
+        self.support.close()
+        self.parking.release()
         self.navigator.close()
 
-    def _height(self, point, hint):
-        return self.navigator.grid._ground(float(point[0]), float(point[1]), hint)
+    def _height(self, point, hint, strict=False):
+        return self.support.height(point, hint, strict)
 
     def _reset_travel(self, routes):
         self.policy_cache = None
@@ -141,16 +153,32 @@ class PlayerNavigation(object):
         self.retry_at = 0.
         self.driver = Driver()
         self.navigator.bot_states.clear()
+        self.parking.release()
+        self.parking_order = None
 
     def retask(self, routes, reason=None):
         """Automatic suggestions cannot replace an accepted player command."""
-        if self.mission is not None:
-            self.receipt = dict(status='mission_owns_movement', mission=self.mission.identity)
+        mission = self.mission
+        if (mission is not None and (mission.protected or
+                (mission.capturing and mission.status not in ('failed', 'cancelled') and
+                 mission.wants_hold()))) or self.context.get('empty_ammo'):
+            self.receipt = dict(status='mission_owns_movement',
+                                mission=mission.identity if mission is not None else None)
             return False
         routes = list(routes)
         defending = reason == 'defend' or any(
             str(route['id']).startswith('player_base_defence') for route in routes)
         now = self.context.get('now', 0.)
+        if (self.artillery is not None and not defending and not self.automatic_defence and
+                self.artillery.mode not in ('sortie', 'fallback')):
+            # Validate the replacement owner before retiring a live automatic
+            # task; a rejected suggestion must not change mission identity.
+            self.receipt = dict(status='artillery_owns_deployment')
+            return False
+        if mission is not None:
+            mission.finish('cancelled', 'automatic_retask_%s' % (reason or 'strategy'), now)
+            self.previous_mission = mission.snapshot()
+            self.mission = None
         if self.artillery is not None:
             if defending and not self.automatic_defence:
                 self.resume_route = (list(self.selection), self.route, self.index)
@@ -165,9 +193,6 @@ class PlayerNavigation(object):
                     self.automatic_defence = False
                     self.receipt = dict(status='resumed_after_defence')
                     return True
-            elif not defending and self.artillery.mode not in ('sortie', 'fallback'):
-                self.receipt = dict(status='artillery_owns_deployment')
-                return False
         self.automatic_defence = defending
         self._reset_travel(routes)
         self.cover_move = self.firing_move = None
@@ -181,9 +206,12 @@ class PlayerNavigation(object):
         self.policy_cache = None
 
     def mission_status(self):
-        return self.mission.snapshot() if self.mission is not None else dict(
+        result = self.mission.snapshot() if self.mission is not None else dict(
             id=None, action=None, explicit=False, status='idle', phase='idle',
             progress=0., reason=None, result=None, holding=False)
+        if self.automatic_recovery is not None:
+            result['automatic_recovery'] = copy.deepcopy(self.automatic_recovery)
+        return result
 
     def _prepare_mission(self, action, args, state):
         args = dict(args or {})
@@ -212,6 +240,9 @@ class PlayerNavigation(object):
                 self.mission.finish('cancelled', 'replaced_by_command', state['now'])
             self.previous_mission = self.mission.snapshot()
         self.mission = mission
+        self.automatic_recovery = None
+        self.capture_retry_at = 0.
+        self.capture_failures = 0
         self.cover_move = self.firing_move = None
         self.combat.reset()
         self.automatic_defence = False
@@ -259,6 +290,8 @@ class PlayerNavigation(object):
         return self.mission_status()
 
     def _automatic_capture(self, state, reason):
+        if state['now'] < self.capture_retry_at:
+            return False
         self.mission_sequence += 1
         self.mission = Mission('auto-capture-%d' % self.mission_sequence,
             'capture_base', {}, state, self.home_area, self.enemy_area, explicit=False)
@@ -267,6 +300,38 @@ class PlayerNavigation(object):
         self.cover_move = self.firing_move = None
         self.combat.reset()
         self._reset_travel(self.travel_routes or self.routes)
+        return True
+
+    def _retire_failed_automatic(self, state):
+        mission = self.mission
+        if mission is None or mission.explicit or mission.status not in ('failed', 'cancelled'):
+            return False
+        self.previous_mission = mission.snapshot()
+        self.capture_failures += 1
+        # Retry admission is bounded and does not retain a failed movement or
+        # fire owner. An armed hull can defend/fight immediately; an empty hull
+        # retains capture intent and retries after this finite backoff.
+        self.capture_retry_at = state['now'] + min(30., 5. * self.capture_failures)
+        self.automatic_recovery = dict(reason='automatic_mission_retired',
+            previous=self.previous_mission, retry_at=self.capture_retry_at,
+            failures=self.capture_failures, empty_ammo=bool(self.context.get('empty_ammo')))
+        self.mission = None
+        self.cover_move = self.firing_move = None
+        self.combat.reset()
+        self._reset_travel(self.travel_routes or self.routes)
+        self.receipt = dict(status='automatic_mission_recovery',
+                            recovery=copy.deepcopy(self.automatic_recovery))
+        return True
+
+    def _update_parking(self, state):
+        mission = self.mission
+        if (self.route is None or self.index is None or self.automatic_defence or
+                (mission is not None and (not mission.route_attack or mission.status in TERMINAL))):
+            self.parking_order = None
+        else:
+            self.parking_order = self.parking.update(self.route, self.index,
+                state, self.context, self._height, self.support.snapshot)
+        return self.parking_order
 
     def movement_policy(self, state):
         """Resolve one movement owner before combat or automatic retasking."""
@@ -275,6 +340,7 @@ class PlayerNavigation(object):
             return dict(self.policy_cache[1])
         context = self.context
         context['now'] = state['now']
+        self.support.begin(state['position'], state['now'])
         empty = bool(context.get('empty_ammo'))
         if empty:
             if self.mission is None:
@@ -290,17 +356,25 @@ class PlayerNavigation(object):
         if mission is not None:
             position = state['position']
             mission.observe(state, context, self._height((position[0], position[2]), position[1]))
+            if self._retire_failed_automatic(state):
+                mission = None
+        parking = self._update_parking(state)
+        parked_route = bool(parking is not None and not parking['complete'])
         parked_artillery = False
         if self.artillery is not None and mission is None and not self.automatic_defence:
             self.artillery.update(state, context, self._height)
             parked_artillery = self.artillery.mode not in ('sortie', 'fallback')
-        ordinary_combat = (not empty and not parked_artillery and
+        ordinary_combat = (not empty and not parked_artillery and not parked_route and
                            (mission is None or (mission.route_attack and mission.status not in TERMINAL)))
         combat_hold = self.combat.update(state, context, allowed=ordinary_combat)
         holding = mission.wants_hold() if mission is not None else False
         force_move = False
         if mission is not None and not mission.route_attack:
             force_move = not holding
+        if parked_route:
+            holding = parking['holding']
+            force_move = not holding
+            combat_hold = bool(holding and context.get('target') is not None and context.get('fire_clear'))
         if self.artillery is not None and mission is None and not self.automatic_defence:
             if parked_artillery:
                 holding = self.artillery.holding(state, context, self._height)
@@ -312,13 +386,15 @@ class PlayerNavigation(object):
         fixed_mission = mission is not None and (not mission.route_attack or terminal)
         engage_range = self.combat.fire_range if self.tag == 'SPG' else self.combat.desired_range * 1.15
         policy = dict(force_move=force_move, holding=holding,
-                    allow_withdrawal=not (fixed_mission or parked_artillery or empty),
-                    allow_firing_position=not (fixed_mission or parked_artillery or empty or recovering),
-                    allow_strategy=mission is None and not empty,
+                    allow_withdrawal=not (fixed_mission or parked_artillery or parked_route or empty),
+                    allow_firing_position=not (fixed_mission or parked_artillery or parked_route or empty or recovering),
+                    allow_strategy=not empty and (mission is None or
+                        (not mission.explicit and mission.status not in TERMINAL and not mission.wants_hold())),
                     capture_active=bool(mission is not None and mission.capturing),
                     combat_hold=combat_hold, engage_range=engage_range,
                     desired_range=self.combat.desired_range, fire_range=self.combat.fire_range,
-                    recovery=recovering)
+                    recovery=recovering, parking=self.parking.snapshot(),
+                    automatic_recovery=copy.deepcopy(self.automatic_recovery))
         self.policy_cache = sample, policy
         return dict(policy)
 
@@ -328,10 +404,14 @@ class PlayerNavigation(object):
         Resumable searches stay bounded; an overhead baked layer cannot prove
         an entry from a lower road by snapping the search's first point.
         """
+        self.support.begin(position, now)
         if self.route is not None:
             return True
         if now < self.retry_at:
             return False
+        if self.join_origin is not None and math.sqrt(sum(
+                (a-b)**2 for a, b in zip(position, self.join_origin))) > 1.:
+            self.candidates = self.search = self.pending = None
         if self.candidates is None:
             self.join_origin = tuple(position)
             candidates = []
@@ -340,7 +420,8 @@ class PlayerNavigation(object):
                     if route.get('player_start_at_first') and index:
                         continue
                     hint = route.get('player_goal_height')
-                    height = self._height(point, position[1] if hint is None else hint)
+                    height = self._height(point, position[1] if hint is None else hint,
+                                          strict=hint is not None)
                     if height is None or (hint is not None and abs(height - hint) > 1.):
                         continue
                     goal = (float(point[0]), height, float(point[1]))
@@ -354,6 +435,15 @@ class PlayerNavigation(object):
                 self.candidates = None
                 return False
             self.pending = self.candidates.pop(0)
+            goal = self.pending[4]
+            status, resolved = self.support.inspect(goal, authored=False)
+            segment = getattr(self.navigator.grid, 'segment_clear', None)
+            if (status == 'connected' and callable(segment) and
+                    abs(resolved[1] - goal[1]) <= 1. and segment(position, resolved)):
+                self.route, self.index = self.pending[3], self.pending[2]
+                self.receipt = dict(status='joined_native_floor', route=self.pending[1],
+                    index=self.pending[2], start=tuple(position), goal=resolved, path_length=2)
+                return True
             self.search = self.navigator.grid.begin_plan(self.join_origin, self.pending[4],
                                                         now=now, max_expansions=4096)
         self.search.step(32)
@@ -551,6 +641,7 @@ class PlayerNavigation(object):
 
     def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route'):
         position, now = state['position'], state['now']
+        self.support.begin(position, now)
         identity = int(state['id'])
         self.navigator.set_boundary_body(identity, position, state['yaw'],
                                          state['half_length'], state['half_width'])
@@ -558,6 +649,18 @@ class PlayerNavigation(object):
             identity, position, goal, key, now)
         if target is None:
             target = position
+        if not hold and goal is not None:
+            status, resolved = self.support.inspect(target)
+            if status in ('connected', 'other_surface'):
+                target = resolved
+            elif status in ('disconnected', 'water'):
+                fallback = getattr(self.navigator.grid, 'safe_local_target', None)
+                target = fallback(position, goal, now) if callable(fallback) else None
+                target = position if target is None else target
+            elif status == 'unknown' and abs(target[1] - position[1]) > 1.:
+                # An incomplete local column cannot authorize an apparent
+                # jump onto a baked overhead layer.
+                target = position
         command = self.driver.drive(position, state['yaw'], state['speed'], target,
                                     now, direction_clear, hold=hold or goal is None)
         if self.driver.replan:
@@ -567,12 +670,17 @@ class PlayerNavigation(object):
                        driving=self.driver.receipt, holding=bool(hold),
                        travel_intent=bool(not hold and goal is not None and mode in (
                            'route', 'return_base', 'base_capture', 'base_defence',
-                           'attack', 'hold_position', 'artillery_deploy')))
+                           'attack', 'hold_position', 'artillery_deploy', 'parking_approach')))
         if self.mission is not None:
             command['mission'] = self.mission_status()
         if self.artillery is not None:
             command['artillery'] = self.artillery.snapshot()
         command['combat'] = dict(self.combat.receipt)
+        command['height_support'] = self.support.snapshot()
+        if self.parking.receipt.get('phase') != 'idle' or self.parking.last_completion is not None:
+            command['parking'] = self.parking.snapshot()
+        if self.automatic_recovery is not None:
+            command['automatic_recovery'] = copy.deepcopy(self.automatic_recovery)
         return command
 
     def _mission_order(self, state, clear):
@@ -601,7 +709,8 @@ class PlayerNavigation(object):
             if self.join(state['position'], state['now']):
                 point = self.route['waypoints'][self.index]
                 hint = mission.goal_height
-                height = self._height(point, state['position'][1] if hint is None else hint)
+                height = self._height(point, state['position'][1] if hint is None else hint,
+                                      strict=hint is not None)
                 if height is not None:
                     goal = (point[0], height, point[1])
         mode = ('base_capture' if mission.capturing else
@@ -638,7 +747,8 @@ class PlayerNavigation(object):
         if self.automatic_defence or self.enemy_area is None:
             return False
         if self.mission is None:
-            self._automatic_capture(state, 'route_terminal_capture')
+            if not self._automatic_capture(state, 'route_terminal_capture'):
+                return False
         elif self.mission.route_attack:
             self.mission.enter_capture(self.enemy_area, state, 'route_terminal_capture')
         else:
@@ -654,21 +764,36 @@ class PlayerNavigation(object):
         key = ('player_joining', int(state['id']))
         if joined:
             points = self.route['waypoints']
-            while self.index+1 < len(points):
+            parking = None
+            finished_parking = False
+            while True:
+                parking = self.parking.update(self.route, self.index, state, self.context,
+                                              self._height, self.support.snapshot)
+                self.parking_order = parking
+                finished_parking = bool(bot_tactics.waiting_positions(points[self.index]) and
+                    parking['complete'] and not parking.get('skipped'))
+                if not parking['complete'] or self.index + 1 >= len(points):
+                    break
                 point = points[self.index]
                 height = self._height(point, position[1])
-                if height is None or abs(height-position[1]) > 1. or math.hypot(
-                        point[0]-position[0], point[1]-position[2]) > 6.:
+                if not finished_parking and (height is None or abs(height-position[1]) > 1. or math.hypot(
+                        point[0]-position[0], point[1]-position[2]) > 6.):
                     break
                 self.index += 1
+            if parking is not None and not parking['complete']:
+                order = self._drive_goal(state, direction_clear, parking.get('goal'),
+                    ('player_parking', self.route['id'], self.index,
+                     self.parking.receipt.get('slot')), hold=parking['holding'],
+                    mode='parking_hold' if parking['holding'] else 'parking_approach')
+                return order
             point = points[self.index]
             height = self._height(point, position[1])
             goal = (point[0], height, point[1]) if height is not None else None
             key = ('route', int(state['id']), self.route['id'], self.index)
             supported = legal_support(state, self.context,
                 self._height((position[0], position[2]), position[1]))
-            terminal = (self.index == len(points) - 1 and goal is not None and
-                        distance(position, goal) <= 6. and abs(position[1] - height) <= 1. and supported)
+            terminal = (self.index == len(points) - 1 and supported and (finished_parking or
+                        (goal is not None and distance(position, goal) <= 6. and abs(position[1] - height) <= 1.)))
             inside_flag = (self.enemy_area is not None and supported and
                            distance(position, self.enemy_area['point']) <= self.enemy_area['radius'])
             if not self.automatic_defence and (terminal or inside_flag) and self._capture_handoff(state):

@@ -62,6 +62,12 @@ class PlayerControl(object):
         self.trigger_context = None
         self.retired_policies = []
         self.halted = False
+        from .settling import HaltObservation
+        from .shot_receipts import ShotReceipts
+        self.halt_observation = HaltObservation()
+        self.shot_receipts = ShotReceipts()
+        self.control_generation = 0
+        self.trigger_sequence = 0
         self.mission_command = self.drive_command = self.fire_command = self.halt_command = None
         self.last_fire_failure = None
         self.ammo_state = dict(state='unknown', empty=False, available=False)
@@ -70,6 +76,7 @@ class PlayerControl(object):
         from .capabilities import Governor
         self.governor = Governor()
         self.owned_governor = None
+        self.governor_request = None
         self.last_order = {}
         self.release_pending = []
         self.next_release = 0.
@@ -81,6 +88,8 @@ class PlayerControl(object):
         self.command_reader = JournalReader()
         self.gateway = CommandGateway(self.identity, self.emit_result,
             self.execute_command, self.command_preflight, self.cancel_command)
+        from .test_actions import TestActions
+        self.test_actions = TestActions(self)
 
     def identity(self):
         return dict(session_id=os.environ.get('WOT_OFFLINE_TEST_CONTROL_SESSION'),
@@ -97,6 +106,9 @@ class PlayerControl(object):
             return False
 
     def publish_status(self, now, force=False, reason=None):
+        # Read-only tests observe every controller update, including halted and
+        # released states; their cadence is not the one-second UI heartbeat.
+        self.test_actions.update(now)
         if not force and now < self.next_status:
             return
         self.next_status = now + 1.
@@ -106,13 +118,34 @@ class PlayerControl(object):
         if self.live():
             position, yaw = self.owner.local_pose()
             pose = dict(position=tuple(position), yaw=yaw, speed=self.owner._local_speed)
-        self.emit_result(dict(self.identity(), type='status', time=now, live=self.live(),
+        row = dict(self.identity(), type='status', time=now, live=self.live(),
             reason=reason, active=self.active, halted=self.halted,
             features=sorted(self.features), mission=mission, ammo=self.ammo_state,
             pose=pose, aim=self.aim_receipt, last_command=self.gateway.last,
+            halt=self.halt_observation.receipt if self.halted else None,
+            testing=self.test_actions.snapshot(),
+            shot_results=self.shot_receipts.snapshot(),
             release_pending=[stage for stage, unused in self.release_pending],
             navigation=(dict(entry=navigation.receipt, artillery=self.last_order.get('artillery'),
-                             combat=self.last_order.get('combat')) if navigation is not None else None)))
+                             combat=self.last_order.get('combat')) if navigation is not None else None))
+        # Match the receiver's bounded line contract. Long legal command IDs
+        # and multi-effect shots must not make every heartbeat unreadable.
+        # Direct one-shot events remain intact; this is a repair window only.
+        import json
+        row['shot_snapshot_omitted'] = 0
+        while row['shot_results']:
+            try:
+                size = len(json.dumps(row, ensure_ascii=True, allow_nan=False,
+                                      separators=(',', ':')).encode('ascii'))
+            except (TypeError, ValueError):
+                # The ordinary result writer owns/report serialization errors;
+                # diagnostics cannot terminate physical player control.
+                break
+            if size <= 15000:
+                break
+            row['shot_results'].pop(0)
+            row['shot_snapshot_omitted'] += 1
+        self.emit_result(row)
 
     def owns_drive(self):
         return self.halted or self.override is not None or (self.active and 'drive' in self.features)
@@ -163,7 +196,8 @@ class PlayerControl(object):
         if self.active:
             self.stop('manual')
             return False
-        if not self.live() or self.release_pending or not self.features:
+        if (not self.live() or self.release_pending or not self.features or
+                self.test_actions.gun_pending and 'fire' in self.features):
             return False
         owner = self.owner
         entity = owner._server_entity(owner._server.vehicle_id)
@@ -193,6 +227,7 @@ class PlayerControl(object):
         if 'fire' in self.features:
             self.weapon.bind()
         self.active = True
+        self.control_generation += 1
         self.halted = False
         self.last_fire_failure = None
         from .aiming import Aiming
@@ -213,8 +248,12 @@ class PlayerControl(object):
                 self.gateway.finish(command_id, 'cancelled', reason, now)
         self.mission_command = self.drive_command = self.fire_command = self.halt_command = None
         self.active = False
+        self.control_generation += 1
         self.override = None
         self.halted = False
+        self.test_actions.stop(reason, now)
+        from .settling import HaltObservation
+        self.halt_observation = HaltObservation()
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
         callbacks = list(self.release_pending)
@@ -248,19 +287,30 @@ class PlayerControl(object):
         self.wreck_push = WreckPush()
         if not any(stage == 'governor_release' for stage, unused in callbacks):
             callbacks.append(('governor_release', self.release_governor))
-        for stage, callback in callbacks:
-            try:
-                callback()
-            except Exception as error:
-                self.release_pending.append((stage, callback))
-                self.record('release_failed', resource=stage, reason=str(error))
-        self.next_release = now + 1.
+        self._run_releases(callbacks, now)
         if changed:
             self.record('disabled', reason=reason,
                         pending_release=[stage for stage, unused in self.release_pending])
             if self.live() and not self.release_pending:
                 self.notify(u'【测试】玩家自动控制已关闭，恢复手动操作。')
         return not self.release_pending
+
+    def _run_releases(self, callbacks, now):
+        """Retry retired resources without cancelling the current brake owner."""
+        for stage, callback in callbacks:
+            try:
+                result = callback()
+                if stage == 'input_release' and result is False:
+                    raise RuntimeError('input_release_not_submitted')
+            except Exception as error:
+                self.release_pending.append((stage, callback))
+                self.record('release_failed', resource=stage, reason=str(error))
+        self.next_release = now + 1.
+
+    def retry_releases(self, now):
+        if self.release_pending and now >= self.next_release:
+            callbacks, self.release_pending = self.release_pending, []
+            self._run_releases(callbacks, now)
 
     def close(self):
         global _current
@@ -314,6 +364,8 @@ class PlayerControl(object):
         action = command['action']
         if action in ('status', 'stop'):
             return None
+        if action in ('wait_state', 'assert_state'):
+            return self.test_actions.preflight(command)
         if self.release_pending and action != 'halt':
             return 'release_pending'
         if not self.live():
@@ -322,12 +374,18 @@ class PlayerControl(object):
         entity = owner._server_entity(owner._server.vehicle_id)
         if entity is None or not entity.isAlive():
             return 'player_dead'
+        if (self.test_actions.gun_pending and
+                (action == 'fire' or (action == 'start' or action in MISSIONS) and
+                 'fire' in self.features)):
+            return 'gun_operation_busy'
+        if action in ('select_shell', 'reload'):
+            return self.test_actions.preflight(command)
         if action in MISSIONS and 'drive' not in self.features:
             return 'drive_disabled'
         if action == 'start' and not self.features:
             return 'no_enabled_features'
         if (action in MISSIONS or action == 'drive') and not command['replace']:
-            if self.mission_command is not None or self.override is not None or self.halted:
+            if self.owns_drive() or self.mission_command is not None:
                 return 'movement_busy'
         if action == 'fire':
             from .capabilities import ammunition_state
@@ -345,6 +403,8 @@ class PlayerControl(object):
         from .commands import MISSIONS
         action, args, command_id = command['action'], command['args'], command['id']
         self.record('command', command=command)
+        if action in ('wait_state', 'assert_state', 'select_shell', 'reload'):
+            return self.test_actions.execute(command, now)
         if action == 'status':
             self.publish_status(now, force=True)
             return dict(reason='status_published')
@@ -371,7 +431,8 @@ class PlayerControl(object):
                         reason='active' if enabled else 'start_failed')
         if action == 'drive':
             # Validation and admission happened before this ownership change.
-            self.stop('replaced_by_drive')
+            if not self.stop('replaced_by_drive'):
+                return dict(status='failed', reason='release_pending')
             self.override = (now + args['seconds'], args['forward'], args['turn'])
             self.drive_command = command_id
             return None
@@ -426,6 +487,9 @@ class PlayerControl(object):
         raise ValueError('unknown_action')
 
     def cancel_command(self, command, reason):
+        if command['action'] in ('wait_state', 'assert_state', 'select_shell', 'reload'):
+            self.test_actions.cancel(command, reason)
+            return
         if command['id'] in (self.mission_command, self.drive_command, self.halt_command):
             self.stop(reason)
         elif command['id'] == self.fire_command:
@@ -449,6 +513,9 @@ class PlayerControl(object):
         if self.navigation is not None:
             self.navigation.finish_battle(result, now)
             self.finish_mission(now)
+            # Capture completion is an observed mission transition. Preserve
+            # it for matching watchers before releasing the navigation owner.
+            self.test_actions.update(now)
         self.stop('battle_finished')
         self.publish_status(now, force=True, reason='battle_finished')
 
@@ -459,8 +526,11 @@ class PlayerControl(object):
             self.last_fire_failure = 'gun_busy'
             return False
         self.last_fire_failure = None
+        self.trigger_sequence += 1
         self.trigger_context = dict(command=command_id, target=self.target_engine,
-                                    policy=self.ammo_policy, time=now, projectiles=[])
+                                    policy=self.ammo_policy, time=now, projectiles=[],
+                                    generation=self.control_generation,
+                                    trigger_sequence=self.trigger_sequence)
         try:
             accepted = weapon.trigger()
             pending = getattr(owner, '_local_fire_intent', None)
@@ -472,20 +542,28 @@ class PlayerControl(object):
             self.trigger_context = None
 
     def fire_rejected(self, reason, projectile_id=None):
-        self.last_fire_failure = str(reason)
         now = self.owner._clock()
+        shot = self.shot_receipts.get(projectile_id)
         context = self.trigger_context
         if context is None and self.owned_burst is not None:
             context = self.owned_burst.get('player_control')
         if (projectile_id is not None and context is not None and
                 projectile_id not in context.get('projectiles', ())):
             context = None
-        if context and context['command'] is not None:
-            self.gateway.finish(context['command'], 'failed', str(reason), now)
-            self.fire_command = None
+        if (projectile_id is None or
+                shot is not None and shot['generation'] == self.control_generation and
+                shot['trigger_sequence'] == self.trigger_sequence):
+            self.last_fire_failure = str(reason)
+        command_id = shot['command_id'] if shot is not None else (context or {}).get('command')
+        if command_id is not None:
+            self.gateway.finish(command_id, 'failed', str(reason), now)
+            if self.fire_command == command_id:
+                self.fire_command = None
         if projectile_id is not None:
-            self.emit_result(dict(self.identity(), type='shot', projectile_id=projectile_id,
-                status='rejected', reason=str(reason), time=now))
+            policies = self.retired_policies + ([self.ammo_policy] if self.ammo_policy is not None else [])
+            for policy in policies:
+                policy.reject(projectile_id, now, reason)
+            self.emit_shot(self.shot_receipts.rejected(projectile_id, reason, now))
 
     def release_burst(self, burst):
         owner = self.owner
@@ -519,11 +597,13 @@ class PlayerControl(object):
             self.owned_burst = None
 
     def release_governor(self):
-        item = self.owned_governor
-        if item is not None:
+        identity = self.owned_governor
+        if identity is not None:
             # This also cancels our on-intent if its server echo is pending.
-            self.owner._activate_equipment(item.contract['id'])
+            if not self.owner._activate_equipment(identity[0]):
+                raise RuntimeError('governor_release_not_submitted')
         self.owned_governor = None
+        self.governor_request = None
         from .capabilities import Governor
         self.governor = Governor()
 
@@ -683,6 +763,8 @@ class PlayerControl(object):
             abs(float(row.get('slope', 0.))) <= math.tan(math.radians(25.)))
 
     def shot_committed(self, event, pending):
+        if self.shot_receipts.get(event.get('projectile_id')) is not None:
+            return
         self.shot_commits += 1
         handed_over = False
         if (self.handover_burst is not None and pending.get('player_burst') is self.handover_burst):
@@ -696,6 +778,8 @@ class PlayerControl(object):
         if context is None and burst is not None:
             context = burst.get('player_control')
         if context is not None:
+            self.emit_shot(self.shot_receipts.committed(event, pending, context,
+                self.owner._clock(), self.control_generation))
             self.automatic_commits += 1
             context.setdefault('projectiles', []).append(event.get('projectile_id'))
             if burst is not None:
@@ -725,22 +809,30 @@ class PlayerControl(object):
                     stage='local_committed'))
                 self.fire_command = None
 
+    def emit_shot(self, receipt):
+        if receipt is not None:
+            self.emit_result(dict(self.identity(), **receipt))
+
     def shot_hit(self, event):
+        if event.get('cosmetic_only'):
+            return
+        known = self.shot_receipts.get(event.get('projectile_id')) is not None
+        receipt = self.shot_receipts.hit(event, self.owner._clock())
+        if known and receipt is None:
+            return
         policies = self.retired_policies + ([self.ammo_policy] if self.ammo_policy is not None else [])
         for policy in policies:
             policy.hit(event)
         if policies:
             self.record('combat_receipt', projectile=event.get('projectile_id'),
                         damage=event.get('damage'), penetrated=event.get('shot_result') == 2)
+        self.emit_shot(receipt)
 
     def shot_terminal(self, event):
         policies = self.retired_policies + ([self.ammo_policy] if self.ammo_policy is not None else [])
         for policy in policies:
             policy.terminal(event, self.owner._clock())
-        if policies:
-            self.emit_result(dict(self.identity(), type='shot',
-                projectile_id=event.get('projectile_id'), status='terminal',
-                hit_vehicle=event.get('hit_vehicle'), time=self.owner._clock()))
+        self.emit_shot(self.shot_receipts.terminal(event, self.owner._clock()))
 
     def select_ammo(self, now):
         from ..gun_mechanics import _field
@@ -762,17 +854,17 @@ class PlayerControl(object):
 
     def consumables(self, entity):
         # Player-owned activation decisions, actual mounted kits/cooldowns.
+        from ..equipment_mechanics import BOT_REPAIR_PRIORITY, BOT_CREW_PRIORITY
         owner = self.owner
         record = owner._records.get('player:%s' % owner.client.player_id) or {}
         critical = record.get('critical_state') or (record.get('state') or {}).get('critical') or {}
         states = dict((r['name'], r['state']) for r in critical.get('devices', ()))
         states.update((name, 'destroyed') for name in critical.get('destroyed', ()))
-        priorities = ('gunHealth', 'engineHealth', 'turretRotatorHealth', 'ammoBayHealth',
-                      'leftTrackHealth', 'rightTrackHealth', 'surveyingDeviceHealth',
-                      'fuelTankHealth', 'radioHealth')
-        repair = next((n for n in priorities if states.get(n) in ('destroyed', 'critical')), None)
-        crew = next((n for n in ('loader1', 'loader2', 'gunner1', 'gunner2', 'driver',
-                    'commander', 'radioman1', 'radioman2') if n in critical.get('crew_ko', ())), None)
+        # Share the immutable reviewed priorities, never a Bot policy instance.
+        repair = next((name for name, severity in BOT_REPAIR_PRIORITY
+                       if states.get(name) == severity), None)
+        crew = next((name for name in BOT_CREW_PRIORITY
+                     if name in critical.get('crew_ko', ())), None)
         now = owner._clock()
         stun_end = (record.get('state') or {}).get('stun_end_server_time_ms', 0)
         estimated_time = owner._projectile_estimated_server_time(now) if stun_end else None
@@ -789,15 +881,19 @@ class PlayerControl(object):
                     not owner._local_airborne and not owner._local_support_rise_blocked,
                     states.get('engineHealth') in ('critical', 'destroyed'),
                     self.last_order.get('wreck_push'))
-                # A governor enabled manually before handover is not ours to
-                # disable. Only the instance that sent on may send off.
-                owned = self.owned_governor is item
-                if (wanted != item.active and (owned or wanted) and
-                        now >= self.consumable_pending.get(item.contract['id'], 0)):
+                # Snapshot restoration replaces EquipmentState instances. The
+                # controller's round-scoped token follows the mounted item.
+                identity = (item.contract['id'], item.contract.get('compactDescr'))
+                owned = self.owned_governor == identity
+                changed_intent = (owned and self.governor_request is not None and
+                                  self.governor_request[1] != wanted)
+                if ((wanted != item.active or changed_intent) and (owned or wanted) and
+                        (changed_intent or now >= self.consumable_pending.get(item.contract['id'], 0))):
                     code = item.contract['id'] | (int(wanted) << 16)
                     requested = bool(owner._activate_equipment(code))
                     if requested:
-                        self.owned_governor = item if wanted else None
+                        self.owned_governor = identity if wanted else None
+                    self.governor_request = (identity, wanted)
                     self.consumable_pending[item.contract['id']] = now + 2.
                     self.record('governor', wanted=wanted, requested=requested,
                                 pitch=pitch, uphill_since=self.governor.uphill_since)
@@ -805,14 +901,32 @@ class PlayerControl(object):
             selected = repair if kind == 'repairkit' else crew if kind == 'medkit' else None
             all_targets = bool(item.contract.get('repairAll'))
             needed = (selected is not None or (kind == 'extinguisher' and critical.get('fire')) or
-                      (kind == 'medkit' and all_targets and stunned))
+                      (kind == 'medkit' and stunned))
             if needed and item.ready(now) and now >= self.consumable_pending.get(item.contract['id'], 0):
                 # #1513 all-target kits and extinguishers use high word 1.
                 # Only single-target kits encode a descriptor extra index.
                 # Encoding the damaged track's index for a large kit is
                 # rejected by the canonical equipment owner, not a cooldown.
-                index = (1 if all_targets or kind == 'extinguisher' else
-                         owner._critical_extra_index(entity.typeDescriptor, selected))
+                if all_targets or kind == 'extinguisher':
+                    index = 1
+                elif selected is not None:
+                    index = owner._critical_extra_index(entity.typeDescriptor, selected)
+                else:
+                    # A small kit can clear stun with a healthy, real crew
+                    # target. Its high word still needs an installed extra.
+                    index = None
+                    for name in ('commander',) + tuple(BOT_CREW_PRIORITY):
+                        try:
+                            index = owner._critical_extra_index(entity.typeDescriptor, name)
+                            selected = name
+                            break
+                        except RuntimeError:
+                            pass
+                    if index is None:
+                        self.record('consumable_unavailable', equipment=item.contract['id'],
+                                    reason='crew_activation_target_unavailable')
+                        self.consumable_pending[item.contract['id']] = now + 2.
+                        continue
                 activation_code = item.contract['id'] | (index << 16)
                 requested = bool(owner._activate_equipment(activation_code))
                 self.consumable_pending[item.contract['id']] = now+2.
@@ -849,11 +963,17 @@ class PlayerControl(object):
             self.record('siege_request', enabled=desired, previous=current)
 
     def update(self, dt, now):
+        if self.closed:
+            return
         if not self.live():
             self.stop('battle_not_live')
+            # Lifecycle acknowledgements remain available after death/result.
+            # Admission rejects gameplay actions before any native mutation.
+            self.poll_commands(now)
             self.publish_status(now, reason='battle_not_live')
             return
         self.bind_input()
+        self.test_actions.update(now)
         self.poll_commands(now)
         owner = self.owner
         entity = owner._server_entity(owner._server.vehicle_id)
@@ -862,8 +982,7 @@ class PlayerControl(object):
             self.publish_status(now, reason='player_dead')
             return
         sender = owner._sender
-        if self.release_pending and not self.owns_drive() and now >= self.next_release:
-            self.stop('release_retry')
+        self.retry_releases(now)
         from .capabilities import ammunition_state
         previous_ammo = self.ammo_state
         self.ammo_state = ammunition_state(owner._gun_state)
@@ -884,8 +1003,10 @@ class PlayerControl(object):
             sender.forward = sender.turn = 0.
             sender.handbrake = True
             sender.send_current()
-            if self.halt_command is not None and abs(owner._local_speed) <= .2:
-                self.gateway.finish(self.halt_command, 'completed', 'halted', now)
+            settled = self.halt_observation.observe(owner, now, bool(self.release_pending))
+            if self.halt_command is not None and settled:
+                self.gateway.finish(self.halt_command, 'completed', 'halted', now,
+                                    dict(self.halt_observation.receipt))
                 self.halt_command = None
             self.publish_status(now)
             return

@@ -607,15 +607,18 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertIsNone(s.decide(360, routes, routes[0], contacts, [ally], {}, None))
 
     def test_blocked_flag_centre_can_join_supported_defence_approach(self):
+        from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         s=Strategy()
         routes=s.decide(0,[],None,[],[],dict(points=29,invaders=1),(0,0))
         p=PlayerNavigation.__new__(PlayerNavigation)
         p.routes=routes
         p.route=None;p.index=None;p.candidates=None;p.search=None;p.pending=None;p.retry_at=0.;p.receipt={}
-        p._height=lambda point,hint:None if tuple(point)==(0,0) else 0.
+        p.join_origin=None
         def begin(start,goal,**kw):
             return types.SimpleNamespace(step=lambda budget:None,done=True,result=(start,goal))
-        p.navigator=types.SimpleNamespace(grid=types.SimpleNamespace(begin_plan=begin))
+        p.navigator=types.SimpleNamespace(grid=types.SimpleNamespace(begin_plan=begin,
+            _ground=lambda x,z,hint:None if (x,z)==(0,0) else 0.))
+        p.support=PlayerHeightSupport(p.navigator.grid,None,None)
         self.assertTrue(p.join((0,0,25),1))
         self.assertNotEqual('player_base_defence',p.route['id'])
         self.assertEqual((0.,20.),p.route['waypoints'][0])
@@ -648,6 +651,7 @@ class PlayerRegressionTests(unittest.TestCase):
 
     def test_inactive_panel_fire_records_synchronous_native_commit(self):
         owner=types.SimpleNamespace(_sender=object(),_local_fire_intent=None,
+            client=types.SimpleNamespace(player_id=1),_start_message={'round_id':1},
             _server=types.SimpleNamespace(vehicle_id=1),
             _server_entity=lambda unused:types.SimpleNamespace(isAlive=lambda:True),
             _gun_state=types.SimpleNamespace(ammo=[10],shots=[{}],shot_index=0,
@@ -728,14 +732,17 @@ class PlayerRegressionTests(unittest.TestCase):
             self.assertEqual(2,c.toggle.call_count)
 
     def test_layer_disconnected_entry_is_rejected_before_ground_route(self):
+        from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         p=PlayerNavigation.__new__(PlayerNavigation)
         p.routes=[dict(id='bridge',waypoints=[(0,0)]),dict(id='ground',waypoints=[(20,0)])]
         p.route=None;p.index=None;p.candidates=None;p.search=None;p.pending=None;p.retry_at=0.;p.receipt={}
-        p._height=lambda point,hint:8 if point[0]==0 else 0
+        p.join_origin=None
         def begin(start,goal,**kw):
             path=((0,8,0),goal) if goal[1] else (start,goal)
             return types.SimpleNamespace(step=lambda budget:None,done=True,result=path)
-        p.navigator=types.SimpleNamespace(grid=types.SimpleNamespace(begin_plan=begin))
+        p.navigator=types.SimpleNamespace(grid=types.SimpleNamespace(begin_plan=begin,
+            _ground=lambda x,z,hint:8 if x==0 else 0))
+        p.support=PlayerHeightSupport(p.navigator.grid,None,None)
         self.assertFalse(p.join((0,0,0),1));self.assertTrue(p.join((0,0,0),2))
         self.assertEqual('ground',p.route['id'])
 

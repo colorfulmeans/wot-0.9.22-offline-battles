@@ -52,12 +52,13 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         controller.record = mock.Mock()
         controller.emit_result = lambda row: self.rows.append(dict(row)) or True
         controller.gateway.emit = controller.emit_result
+        controller.gateway.wall_clock = lambda:1000.
         return controller
 
     @staticmethod
     def request(controller, action, command_id='one', **overrides):
         request = dict(controller.identity(), id=command_id, action=action,
-                       args={}, timeout_seconds=15., replace=True)
+                       args={}, timeout_seconds=15., replace=True, expires_at=1005.)
         request.update(overrides)
         return request
 

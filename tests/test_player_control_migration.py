@@ -33,7 +33,12 @@ class ControllerMigrationTests(unittest.TestCase):
             _clock=lambda:1., _local_fire_intent=None, _local_player_burst=None,
             _cancel_local_player_burst=mock.Mock(), _defer_cancel_native_shot_wait=mock.Mock(),
             _start_message=dict(round_id='r'), client=types.SimpleNamespace(player_id=1,team=1),
-            _local_speed=0., local_pose=lambda:((0.,0.,0.),0.),
+            _local_speed=0., _local_turn_speed=0., _local_vertical_speed=0.,
+            _local_pitch=0., _local_roll=0., _local_suspension_pitch_velocity=0.,
+            _local_suspension_roll_velocity=0.,
+            _local_air_lateral=(0.,0.), _local_airborne=False,
+            _local_support_rise_blocked=False, _overturn_level=0,
+            local_pose=lambda:((0.,0.,0.),0.),
             _collision_shape=lambda unused:(1.,3.,0.,2.))
         control = PlayerControl(owner, features, notify=lambda text:None)
         control.active = True
@@ -41,11 +46,13 @@ class ControllerMigrationTests(unittest.TestCase):
         control.record = mock.Mock()
         control.bind_input = lambda:None
         control.poll_commands = lambda now:None
+        control.gateway.wall_clock = lambda:1000.
         owner._player_control = control
         return control
 
     def request(self, control, action, **kwargs):
-        return dict(control.identity(), id=action, action=action, args={}, **kwargs)
+        return dict(control.identity(), id=action, action=action, args={},
+                    expires_at=1005., **kwargs)
 
     def test_all_feature_masks_release_only_owned_channels_and_never_manual_burst(self):
         for enabled in itertools.product((False, True), repeat=3):
@@ -209,6 +216,8 @@ class ControllerMigrationTests(unittest.TestCase):
             self.assertEqual('accepted', c.gateway.requests['halt']['receipt']['status'])
             c.owner._local_speed = 0.
             c.update(.1,1.)
+            self.assertEqual('accepted', c.gateway.requests['halt']['receipt']['status'])
+            c.update(.1,1.6)
             self.assertEqual('completed', c.gateway.requests['halt']['receipt']['status'])
             self.assertTrue(c.halted)
             self.assertTrue(c.owner._sender.handbrake)

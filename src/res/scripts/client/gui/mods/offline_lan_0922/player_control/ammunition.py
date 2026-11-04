@@ -238,7 +238,7 @@ class Ammunition(object):
 
     def hit(self, event):
         row = self.rows.get(str(event.get('projectile_id')))
-        if row is not None:
+        if row is not None and not row.get('rejected'):
             row['hit'] = True
             row['damage'] += max(0., float(event.get('damage', 0)))
             row['penetrated'] |= int(event.get('shot_result', -1)) == 2
@@ -249,20 +249,40 @@ class Ammunition(object):
             row['terminal'] = now
             row['vehicle_contact'] = bool(event.get('hit_vehicle'))
 
+    def reject(self, projectile_id, now, reason=None):
+        """Terminate a committed but rejected launch without a combat result.
+
+        The local shot already spent ammunition and advanced its magazine;
+        rejection cannot undo that commitment or reduce the burst's actual
+        count. It only unblocks ordered feedback. Both active and retired
+        policies may receive this exact projectile identity safely.
+        """
+        row = self.rows.get(str(projectile_id))
+        if row is None or row.get('rejected'):
+            return False
+        row.update(rejected=True, rejection_reason=reason, terminal=now,
+                   vehicle_contact=False)
+        return True
+
     def _finish_group(self, group):
         entry = self._groups.get(group)
         if entry is None or len(entry['results']) < entry['expected']:
             return
         self._groups.pop(group, None)
-        rows = entry['results']
+        # Rejected launches remain in the committed count, but are neither
+        # misses nor unknown contacts. In a mixed group only real projectiles
+        # decide success/failure; an all-rejected group leaves the streak alone.
+        rows = [r for r in entry['results'] if not r.get('rejected')]
+        if not rows:
+            return
         row = dict(rows[-1])
         row['actual_count'] = entry['expected']
         row['hit'] = any(r['hit'] for r in rows)
         row['damage'] = sum(r['damage'] for r in rows)
         row['penetrated'] = any(r['penetrated'] for r in rows)
         row['known'] = all(r['known'] for r in rows)
-        if any((r['epoch'], r['phase_id'], r['shell']) !=
-               (row['epoch'], row['phase_id'], row['shell']) for r in rows):
+        if any((r['epoch'], r['phase_id'], r['shell'], r['target']) !=
+               (row['epoch'], row['phase_id'], row['shell'], row['target']) for r in rows):
             return
         self._result(row)
 

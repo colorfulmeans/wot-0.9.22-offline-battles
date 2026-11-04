@@ -7,6 +7,7 @@ from __future__ import division
 import json
 import math
 import os
+import time
 
 try:
     STRING_TYPES = (basestring,)
@@ -18,7 +19,14 @@ except NameError:
 TERMINAL = frozenset(('completed', 'rejected', 'failed', 'cancelled'))
 MISSIONS = frozenset(('attack', 'return_base', 'defend_base',
                       'hold_position', 'capture_base'))
-ACTIONS = MISSIONS | frozenset(('start', 'stop', 'halt', 'drive', 'fire', 'status'))
+READ_ONLY_ACTIONS = frozenset(('status', 'wait_state', 'assert_state'))
+ACTIONS = MISSIONS | READ_ONLY_ACTIONS | frozenset((
+    'start', 'stop', 'halt', 'drive', 'fire', 'select_shell', 'reload'))
+STATE_CONDITIONS = frozenset(('ammo_ready', 'ammo_empty', 'halted', 'active',
+    'mission_status', 'mission_phase', 'shot_terminal', 'shot_effect'))
+MISSION_STATUS_VALUES = frozenset(('idle', 'pending', 'running', 'completed', 'failed', 'cancelled'))
+MISSION_PHASE_VALUES = frozenset(('idle', 'attacking', 'travelling', 'capture_travel',
+    'arriving', 'capturing', 'defending', 'holding', 'captured', 'failed', 'cancelled'))
 
 
 def number(value, name, minimum, maximum):
@@ -54,6 +62,44 @@ def validate_action(action, arguments):
             args['position'] = tuple(number(v, 'position', -100000., 100000.) for v in value)
         if 'radius' in args:
             args['radius'] = number(args['radius'], 'radius', 2., 150.)
+    elif action == 'select_shell':
+        allowed = set(('compact_descr',))
+        value = args.get('compact_descr')
+        if isinstance(value, bool) or not isinstance(value, INTEGER_TYPES) or not 1 <= value <= 2147483647:
+            raise ValueError('invalid_compact_descr')
+    elif action in ('wait_state', 'assert_state'):
+        condition = args.get('condition')
+        if not isinstance(condition, STRING_TYPES) or condition not in STATE_CONDITIONS:
+            raise ValueError('invalid_condition')
+        allowed = set(('condition',))
+        if condition == 'active':
+            allowed.add('value')
+            if not isinstance(args.get('value'), bool):
+                raise ValueError('invalid_value')
+        elif condition in ('mission_status', 'mission_phase'):
+            allowed.add('value')
+            values = MISSION_STATUS_VALUES if condition == 'mission_status' else MISSION_PHASE_VALUES
+            if not isinstance(args.get('value'), STRING_TYPES) or args['value'] not in values:
+                raise ValueError('invalid_value')
+            if 'command_id' in args:
+                allowed.add('command_id')
+                if not isinstance(args['command_id'], STRING_TYPES) or not 1 <= len(args['command_id']) <= 128:
+                    raise ValueError('invalid_command_id')
+        elif condition in ('shot_terminal', 'shot_effect'):
+            references = [key for key in ('projectile_id', 'command_id') if key in args]
+            if len(references) != 1:
+                raise ValueError('invalid_shot_reference')
+            key = references[0]
+            allowed.add(key)
+            value = args[key]
+            if not isinstance(value, STRING_TYPES) or not 1 <= len(value) <= (256 if key == 'projectile_id' else 128):
+                raise ValueError('invalid_' + key)
+            if condition == 'shot_effect':
+                allowed.add('damage_min')
+                value = args.get('damage_min', 0.)
+                if isinstance(value, bool) or not isinstance(value, INTEGER_TYPES + (float,)):
+                    raise ValueError('invalid_damage_min')
+                args['damage_min'] = number(value, 'damage_min', 0., float('inf'))
     if set(arguments) - allowed:
         raise ValueError('unknown_argument')
     return args
@@ -123,10 +169,11 @@ def append_result(path, row):
 
 
 class CommandGateway(object):
-    def __init__(self, identity, emit, execute, preflight, cancel):
+    def __init__(self, identity, emit, execute, preflight, cancel, wall_clock=None):
         self.identity = identity
         self.emit, self.execute = emit, execute
         self.preflight, self.cancel = preflight, cancel
+        self.wall_clock = wall_clock or time.time
         self.requests = {}
         self.last = None
 
@@ -187,8 +234,24 @@ class CommandGateway(object):
             cacheable = True
             action = request.get('action')
             args = validate_action(action, request.get('args', {}))
+            expires_at = None
+            # Producer and consumer are separate processes. Admission uses
+            # shared Unix wall time, never the client's battle clock. A retry
+            # already in the ID ledger returned above keeps its original
+            # outcome even after expiry. Stop deliberately has no admission
+            # deadline: a stalled client must still release the same identity.
+            if 'expires_at' in request or action != 'stop':
+                expires_at = request.get('expires_at')
+                if (isinstance(expires_at, bool) or not isinstance(
+                        expires_at, INTEGER_TYPES + (float,))):
+                    raise ValueError('invalid_expires_at')
+                expires_at = number(expires_at, 'expires_at', 0., 1e12)
+                if action != 'stop' and number(self.wall_clock(), 'admission_clock', 0., 1e12) >= expires_at:
+                    raise ValueError('request_expired')
             default_timeout = (args['seconds'] + 2. if action == 'drive' else
-                               600. if action in MISSIONS else 10.)
+                               600. if action in MISSIONS else
+                               180. if action in ('select_shell', 'reload') else
+                               30. if action == 'wait_state' else 10.)
             timeout = number(request.get('timeout_seconds', default_timeout),
                              'timeout', .1, 3600.)
             replace = request.get('replace', True)
@@ -199,6 +262,8 @@ class CommandGateway(object):
             reason = self.preflight(command)
             if reason:
                 raise ValueError(reason)
+            if action != 'stop' and number(self.wall_clock(), 'admission_clock', 0., 1e12) >= expires_at:
+                raise ValueError('request_expired')
         except (TypeError, ValueError, OverflowError) as error:
             row = self.rejection(request, str(error), now)
             if cacheable:

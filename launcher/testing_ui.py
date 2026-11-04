@@ -52,6 +52,8 @@ ACTION_LABELS = {
     'hold_position': ('Hold position', '原地驻守'), 'capture_base': ('Capture base', '占领基地'),
     'drive': ('Timed driving', '定时行驶'), 'fire': ('Fire once', '开火一次'),
     'status': ('Refresh status', '刷新状态'),
+    'select_shell': ('Load selected shell', '装填指定弹种'), 'reload': ('Reload', '重新装填'),
+    'wait_state': ('Wait for state', '等待状态'), 'assert_state': ('Assert state', '断言状态'),
 }
 
 
@@ -206,8 +208,10 @@ class TestingPanel:
             self._update_control_view(poll=False)
             return False
         timeout = (600.0 if action in ('attack', 'capture_base') else
-                   180.0 if action in ('return_base', 'defend_base', 'hold_position') else 15.0)
-        command_id = self.transport.send(action, args=fields, timeout_seconds=timeout, replace=True)
+                   180.0 if action in ('return_base', 'defend_base', 'hold_position', 'select_shell', 'reload') else
+                   30.0 if action == 'wait_state' else 15.0)
+        command_id = self.transport.send(action, args=fields, timeout_seconds=timeout,
+                                        replace=action not in player_control_transport.READ_ONLY_ACTIONS)
         self.last_command_id = command_id
         self.notice = self.transport.error if command_id is None else None
         if command_id is None:
@@ -262,7 +266,13 @@ class TestingPanel:
             'result_read_failed': ('Cannot read client responses.', '无法读取客户端回执。'),
             'command_write_failed': ('Cannot send the command.', '命令发送失败。'),
             'response_timeout': ('No terminal receipt received; completion is unconfirmed.', '尚未收到结束回执，不能确认命令是否完成。'),
+            'request_expired': ('The client received the request after its admission deadline; it was not executed.', '请求到达客户端时已超过接收期限，未执行。'),
+            'invalid_expires_at': ('The request has no valid admission deadline.', '请求没有有效的接收期限。'),
             'invalid_duration': ('Duration must be from 0.1 to 10 seconds.', '持续时间必须为0.1至10秒。'),
+            'invalid_position': ('Enter finite X, Y and Z coordinates from -100000 to 100000.', '请输入-100000至100000之间的有效X、Y、Z坐标。'),
+            'invalid_radius': ('Radius must be from 2 to 150 metres, or left blank.', '半径须为2至150米，或留空使用默认值。'),
+            'invalid_compact_descr': ('Shell compactDescr must be an integer from 1 to 2147483647.', '弹种compactDescr须为1至2147483647之间的整数。'),
+            'position_unavailable': ('A current client position is not available.', '尚不能取得客户端当前位置。'),
             'dead': ('The player vehicle is destroyed.', '玩家战车已被击毁。'),
             'destroyed': ('The player vehicle is destroyed.', '玩家战车已被击毁。'),
             'spectator': ('Spectator mode.', '当前为观战状态。'),
@@ -297,6 +307,24 @@ class TestingPanel:
             'mission_timeout': ('The task timed out.', '任务超时。'),
             'no_navigation_progress': ('The vehicle made no navigation progress.', '战车未能取得行驶进展。'),
             'inside_flag_circle': ('Inside the capture circle.', '已进入占领圈。'),
+            'shot_committed': ('Projectiles were committed locally; flight and combat observations are separate.', '弹体已在本地提交；飞行与战斗结果另行显示。'),
+            'projectile_launch_rejected': ('The projectile launch was later rejected.', '弹体发射随后被拒绝。'),
+            'condition_observed': ('The requested condition was observed.', '已观察到指定条件成立。'),
+            'assertion_failed': ('The observed state does not satisfy the assertion.', '实际状态不满足断言。'),
+            'observation_unavailable': ('The required state has not been observed.', '尚未观察到所需状态。'),
+            'observation_limit': ('The client already has 32 pending state checks.', '客户端已有32个待完成的状态检查。'),
+            'automatic_fire_active': ('Restore manual control before changing ammunition.', '请先恢复手动控制，再调整弹药。'),
+            'gun_operation_busy': ('Another ammunition operation is still pending.', '另一个弹药操作尚未结束。'),
+            'shell_not_mounted': ('That shell compactDescr is not mounted on this vehicle.', '当前战车未配备该compactDescr弹种。'),
+            'ambiguous_mounted_shell': ('That shell identifier matches more than one slot.', '该弹种标识对应多个弹种槽位。'),
+            'shell_empty': ('The selected ammunition is exhausted.', '所选弹种已耗尽。'),
+            'reload_not_supported': ('Partial-clip reload is not supported by this gun.', '此火炮不支持主动弹夹装填。'),
+            'gun_settings_unavailable': ('Native ammunition controls are unavailable.', '原生弹药控制接口不可用。'),
+            'gun_setting_rejected': ('The native client rejected the ammunition change.', '原生客户端拒绝了弹药调整。'),
+            'shell_ready': ('The selected shell is confirmed ready by the client.', '客户端已确认指定弹种就绪。'),
+            'reload_completed': ('The client confirmed reload completion.', '客户端已确认装填完成。'),
+            'gun_changed': ('The gun changed before the operation completed.', '操作完成前火炮状态已更换。'),
+            'shell_changed': ('The selected shell changed before confirmation.', '确认前所选弹种发生改变。'),
         }
         if not reason:
             return ''
@@ -330,6 +358,14 @@ class TestingPanel:
             'dispersion': ('Dispersion', '散布'), 'speed': ('Speed', '速度'), 'yaw': ('Yaw', '朝向'),
             'reachable': ('Ballistic solution', '弹道可达'), 'arc': ('Trajectory', '弹道'),
             'velocity': ('Target velocity', '目标速度'), 'client_mode': ('Client aiming', '客户端瞄准'),
+            'condition': ('Condition', '条件'), 'matched': ('Matched', '符合条件'),
+            'observed': ('Observed', '实际观察'), 'value': ('Observed value', '观察值'),
+            'compact_descr': ('Shell compactDescr', '弹种compactDescr'),
+            'known': ('Observation available', '观察可用'), 'stock': ('Mounted shells', '配备弹种'),
+            'stock_truncated': ('Shell list truncated', '弹种列表已截断'),
+            'index': ('Shell index', '弹种索引'), 'ammo': ('Ammunition', '弹药'),
+            'pending_index': ('Pending shell index', '待装填弹种索引'),
+            'gun_pending': ('Gun transaction', '装填操作'),
         }
         if value is None:
             return self._text('Unavailable', '暂无')
@@ -341,7 +377,7 @@ class TestingPanel:
             return ' · '.join('%s: %s' % (
                 self._text(*names.get(key, (str(key), str(key)))),
                 self._reason_text(item) if key == 'reason' else self._state_text(item)
-                if key in ('action', 'objective', 'kind', 'phase', 'state', 'status') else self._describe(item))
+                if key in ('action', 'objective', 'kind', 'phase', 'state', 'status', 'condition') else self._describe(item))
                 for key, item in value.items()) or self._text('Unavailable', '暂无')
         if isinstance(value, (list, tuple)):
             return ', '.join(self._describe(item) for item in value)
@@ -359,6 +395,11 @@ class TestingPanel:
             'capture_travel': ('Travelling to capture', '前往占领'), 'capturing': ('Capturing', '占领中'),
             'aiming': ('Aiming', '瞄准中'), 'arriving': ('Arriving', '正在抵达'),
             'defending': ('Defending', '守卫中'), 'captured': ('Captured', '已占领'),
+            'ammo_ready': ('Ammunition ready', '弹药就绪'), 'ammo_empty': ('Ammunition empty', '弹药耗尽'),
+            'halted': ('Hull stopped', '车体已停车'), 'active': ('Takeover active', '接管状态'),
+            'mission_status': ('Mission status', '任务状态'), 'mission_phase': ('Mission phase', '任务阶段'),
+            'shot_terminal': ('Projectile flight terminal', '弹体飞行终结'),
+            'shot_effect': ('Projectile combat effect observed', '已观察到弹体战斗效果'),
         }
         if isinstance(value, str):
             pair = ACTION_LABELS.get(value) or states.get(value)
@@ -366,13 +407,53 @@ class TestingPanel:
                 return self._text(*pair)
         return self._describe(value)
 
+    def _projectile_text(self):
+        items = self.transport.projectile_results() if self.transport else []
+        if not items:
+            return self._text('No projectile observations yet.', '尚无弹体观察回执。')
+        lines = [self._text('Recent shots and the latest shot command:', '近期弹体及最新射击命令：')]
+        omitted = (self.transport.status or {}).get('shot_snapshot_omitted', 0)
+        if isinstance(omitted, int) and not isinstance(omitted, bool) and omitted > 0:
+            lines.append(self._text('The latest repair snapshot omitted %s older shots.',
+                                    '最新补充快照省略了%s条较早弹体记录。') % omitted)
+        for item in items:
+            if item['command_id']:
+                source = self._text('Command [%s]', '命令[%s]') % item['command_id'][:8]
+            elif item['claimed_command_id']:
+                source = self._text('Command reference [%s]; receipt not observed', '命令引用[%s]；尚未观察到回执') % item['claimed_command_id'][:8]
+            else:
+                source = self._text('Automatic / unlinked', '自动射击／未关联命令')
+            local = self._text('Local commit observed', '已观察到本地提交') if item['local_committed'] else self._text(
+                'Local commit not observed', '尚未观察到本地提交')
+            if item['flight_status'] == 'rejected':
+                flight = self._text('Launch rejected', '发射已拒绝')
+                reason = item['events'].get('rejected', {}).get('reason')
+                if reason:
+                    flight += ': ' + self._reason_text(reason)
+            elif item['terminal_observed']:
+                flight = self._text('Flight terminal observed', '已观察到飞行终结')
+            else:
+                flight = self._text('Awaiting flight terminal', '等待飞行终结')
+            if item['combat_observed']:
+                combat = self._text('Combat effects %s · Damage %s · Penetration %s',
+                                    '战斗效果%s次 · 伤害%s · 击穿%s') % (
+                    item['hit_count'], self._describe(item['damage_total']),
+                    self._text('yes', '是') if item['penetrated'] else self._text('not observed', '未观察到'))
+            else:
+                # Native terminal contact and later canonical effects are
+                # independent observations. Silence never proves a miss.
+                combat = self._text('No combat effect observed yet', '尚未观察到战斗效果')
+            lines.append('%s · %s — %s; %s; %s' % (item['projectile_id'], source, local, flight, combat))
+        return '\n'.join(lines)
+
     def _update_control_view(self, poll=True):
         if self.transport and poll:
             self.transport.poll()
         available = bool(self.transport and self.transport.live and self.vars['control'].get())
         for button in self.action_buttons:
             can_submit = bool(self.transport and self.vars['control'].get() and
-                              self.transport.can_submit(button._control_action))
+                              self.transport.can_submit(button._control_action) and
+                              (not getattr(button, '_requires_live', False) or self.transport.live))
             button.config(state='normal' if can_submit else 'disabled')
         if not self.status_labels:
             return
@@ -411,19 +492,34 @@ class TestingPanel:
                       'completed': ('Completed', '已完成'), 'rejected': ('Rejected', '已拒绝'),
                       'failed': ('Failed', '执行失败'), 'cancelled': ('Cancelled', '已取消'),
                       'unconfirmed': ('Completion unconfirmed', '完成情况未确认')}
+            if (result.get('action') == 'fire' and result.get('status') == 'completed' and
+                    result.get('reason') == 'shot_committed'):
+                states['completed'] = ('Local commit confirmed', '本地提交已确认')
             action = ACTION_LABELS.get(result.get('action'), (str(result.get('action', '?')), str(result.get('action', '?'))))
             result_text = '%s — %s [%s]' % (self._text(*action),
                 self._text(*states.get(result.get('status'), (str(result.get('status')), str(result.get('status'))))),
                 str(result.get('id', ''))[:8])
             if result.get('reason'):
                 result_text += ': ' + self._reason_text(result['reason'])
+            if (result.get('action') in ('wait_state', 'assert_state', 'select_shell', 'reload') and
+                    isinstance(result.get('result'), dict)):
+                result_text += '\n' + self._describe(result['result'])
         if self.notice:
             result_text += '\n' + self._reason_text(self.notice)
+        ammo = status.get('ammo')
+        testing = status.get('testing')
+        if isinstance(testing, dict) and isinstance(testing.get('gun'), dict):
+            ammo = dict(ammo) if isinstance(ammo, dict) else {}
+            for key in ('stock', 'stock_truncated', 'pending_index'):
+                if key in testing['gun']:
+                    ammo[key] = testing['gun'][key]
+            if testing.get('gun_pending') is not None:
+                ammo['gun_pending'] = testing['gun_pending']
         values = {'connection': connection,
                   'control': mode + ' · ' + (channels or self._text('No automatic channels', '没有自动控制通道')),
                   'mission': self._describe(mission), 'target': target_text,
-                  'ammo': self._describe(status.get('ammo')), 'pose': self._describe(status.get('pose')),
-                  'aim': self._describe(aim), 'result': result_text}
+                  'ammo': self._describe(ammo), 'pose': self._describe(status.get('pose')),
+                  'aim': self._describe(aim), 'result': result_text, 'projectiles': self._projectile_text()}
         for key, widget in self.status_labels.items():
             widget.config(text=values[key])
 
@@ -444,6 +540,59 @@ class TestingPanel:
             self._update_control_view(poll=False)
             return False
         return self.send('drive', seconds=seconds, **axes)
+
+    def _refresh_point_fields(self):
+        for entry in self.mission_entries:
+            entry.config(state='normal' if self.mission_custom_point.get() else 'disabled')
+
+    def _use_current_pose(self):
+        if self.transport:
+            self.transport.poll()
+        if not self.transport or not self.transport.live:
+            self.notice = self.transport.unavailable_reason() if self.transport else 'control_not_started'
+            self._update_control_view(poll=False)
+            return False
+        pose = self.transport.status.get('pose')
+        try:
+            position = player_control_transport.validate_arguments('hold_position',
+                {'position': pose.get('position') if isinstance(pose, dict) else None})['position']
+        except (TypeError, ValueError):
+            self.notice = 'position_unavailable'
+            self._update_control_view(poll=False)
+            return False
+        for axis, value in zip(('x', 'y', 'z'), position):
+            self.mission_position[axis].set(str(value))
+        self.mission_custom_point.set(True)
+        self._refresh_point_fields()
+        self.notice = None
+        self._update_control_view(poll=False)
+        return True
+
+    def _send_point_mission(self, action):
+        args = {}
+        if self.mission_custom_point.get():
+            args['position'] = [self.mission_position[axis].get() for axis in ('x', 'y', 'z')]
+        if self.mission_radius.get().strip():
+            args['radius'] = self.mission_radius.get()
+        try:
+            args = player_control_transport.validate_arguments(action, args)
+        except (TypeError, ValueError) as error:
+            self.notice = str(error)
+            self._update_control_view(poll=False)
+            return False
+        return self.send(action, **args)
+
+    def _send_shell_selection(self):
+        try:
+            value = self.shell_compact_descr.get()
+            if not isinstance(value, str) or not value.strip().isdigit():
+                raise ValueError('invalid_compact_descr')
+            args = player_control_transport.validate_arguments('select_shell', {'compact_descr': int(value, 10)})
+        except (TypeError, ValueError, OverflowError):
+            self.notice = 'invalid_compact_descr'
+            self._update_control_view(poll=False)
+            return False
+        return self.send('select_shell', **args)
 
     def open_controls(self):
         if not self.vars['control'].get():
@@ -489,14 +638,15 @@ class TestingPanel:
                 self.control_labels.append((button, en, zh))
                 self.action_buttons.append(button)
 
-        label(body, 'Commands replace the current task. A sent command is not complete until the client confirms it. Closing this panel requests manual control.',
-              '新命令替换当前任务；发送后需等待客户端执行回执。关闭面板会请求恢复手动。')
+        label(body, 'Commands require client receipts and admission within two seconds. Execution has a separate timeout. State checks only observe. Closing this panel requests manual control; release requests do not expire.',
+              '命令须在两秒内被客户端接收并以客户端回执确认；执行超时另行计算。状态检查只做观察。关闭面板请求恢复手动，释放请求不会因延迟过期。')
         state_body = section('Current client state', '客户端实际状态')
         for key, en, zh in (('connection', 'Connection', '连接'), ('control', 'Mode / enabled channels', '模式/已启用通道'),
                             ('mission', 'Task / phase', '任务/阶段'), ('target', 'Target / destination', '目标/目的地'),
                             ('ammo', 'Ammunition / clip / reload', '弹药/弹夹/装填'),
                             ('aim', 'Aiming / firing', '瞄准/射击'), ('pose', 'Position / movement', '位置/运动'),
-                            ('result', 'Latest command receipt', '最新命令回执')):
+                            ('result', 'Latest command receipt', '最新命令回执'),
+                            ('projectiles', 'Projectile observations', '弹体后续观察')):
             frame = tk.Frame(state_body)
             frame.pack(fill='x')
             heading = tk.Label(frame, width=23, anchor='nw', justify='left')
@@ -506,10 +656,41 @@ class TestingPanel:
             value.pack(side='left', fill='x', expand=True)
             self.status_labels[key] = value
         control_body = section('Takeover and battle tasks', '接管与战斗任务')
+        self.mission_custom_point = tk.BooleanVar(value=False)
+        custom = tk.Checkbutton(control_body, variable=self.mission_custom_point,
+                                command=self._refresh_point_fields, anchor='w')
+        custom.pack(fill='x')
+        self.control_labels.append((custom, 'Use X/Y/Z destination for Attack and Hold', '进攻与驻守使用指定X/Y/Z目的地'))
+        point_row = tk.Frame(control_body)
+        point_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        self.mission_position, self.mission_entries = {}, []
+        for axis in ('x', 'y', 'z'):
+            tk.Label(point_row, text=axis.upper() + ':').pack(side='left')
+            value = self.mission_position[axis] = tk.StringVar(value='0')
+            entry = tk.Entry(point_row, width=10, textvariable=value)
+            entry.pack(side='left', fill='x', expand=True)
+            self.mission_entries.append(entry)
+        current = tk.Button(point_row, command=self._use_current_pose, state='disabled')
+        current._control_action = 'status'
+        current._requires_live = True
+        current.pack(side='left')
+        self.control_labels.append((current, 'Use current pose', '使用当前位置'))
+        self.action_buttons.append(current)
+        radius_row = tk.Frame(control_body)
+        radius_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        radius_label = tk.Label(radius_row, anchor='w')
+        radius_label.pack(side='left')
+        self.control_labels.append((radius_label, 'Radius (2–150 m; blank = default): ', '半径（2至150米；留空为默认值）：'))
+        self.mission_radius = tk.StringVar(value='')
+        tk.Entry(radius_row, width=8, textvariable=self.mission_radius).pack(side='left')
+        label(control_body, 'Without a specified point, Hold uses the client position at admission and Attack seeks enemies. Other tasks use the current battle base geometry.',
+              '未指定目的地时，驻守使用客户端接收命令时的位置，进攻主动寻找敌人；其他任务使用当前对局的基地范围。')
+        self._refresh_point_fields()
         for actions in (('start', 'stop', 'halt'), ('attack', 'return_base', 'defend_base'),
                         ('hold_position', 'capture_base', 'status')):
             row(control_body, [(action, ACTION_LABELS[action][0], ACTION_LABELS[action][1],
-                                lambda action=action: self.send(action)) for action in actions])
+                                lambda action=action: self._send_point_mission(action) if action in
+                                ('attack', 'hold_position') else self.send(action)) for action in actions])
         input_body = section('Timed input and one shot', '定时输入与单次开火')
         duration_row = tk.Frame(input_body)
         duration_row.pack(fill='x', pady=(0, ui_layout.GAP))
@@ -524,6 +705,22 @@ class TestingPanel:
                          ('drive', 'Left', '左转', lambda: self._send_drive(turn=-1)),
                          ('drive', 'Right', '右转', lambda: self._send_drive(turn=1))])
         row(input_body, [('fire', ACTION_LABELS['fire'][0], ACTION_LABELS['fire'][1], lambda: self.send('fire'))])
+        weapon_body = section('Ammunition and state checks', '弹药与状态检查')
+        shell_row = tk.Frame(weapon_body)
+        shell_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        shell_label = tk.Label(shell_row, anchor='w')
+        shell_label.pack(side='left')
+        self.control_labels.append((shell_label, 'Shell compactDescr: ', '弹种compactDescr：'))
+        self.shell_compact_descr = tk.StringVar(value='')
+        tk.Entry(shell_row, width=14, textvariable=self.shell_compact_descr).pack(side='left')
+        row(weapon_body, [('select_shell', 'Load selected shell', '装填指定弹种', self._send_shell_selection),
+                          ('reload', 'Reload', '重新装填', lambda: self.send('reload'))])
+        row(weapon_body, [('wait_state', 'Wait for ammunition ready', '等待弹药就绪',
+                           lambda: self.send('wait_state', condition='ammo_ready')),
+                          ('assert_state', 'Assert ammunition empty', '断言弹药耗尽',
+                           lambda: self.send('assert_state', condition='ammo_empty'))])
+        label(weapon_body, 'Use a shell compactDescr configured on the current vehicle. Loading/reloading waits for native confirmation (up to 180 seconds); the ready check waits up to 30 seconds. A failed assertion does not change control.',
+              '请输入当前战车配备弹种的compactDescr。装填/重新装填等待原生状态确认，最长180秒；就绪检查最长30秒。断言失败不会改变控制权。')
         window.protocol('WM_DELETE_WINDOW', self._close_controls)
         self.translate()
         ui_layout.polish(window)

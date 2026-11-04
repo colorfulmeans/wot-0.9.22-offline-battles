@@ -1,3 +1,89 @@
+# November 4 adversarial foreground-completion follow-up
+
+The second audit of PR #119 at `0f92a1317843ced2bab2fb6bbb9812e45d922210`
+reproduced defects that the previous 205-case player suite did not cover. This
+section supersedes claims of completeness for the affected boundaries below;
+the earlier tests and native observations retain only their original scope.
+The interrupted implementation was resumed from its dirty tree, completed and
+retested as one final tree. No player decision or command is delegated to the
+room worker, and no Bot actor or mutable policy instance is reused.
+
+## Corrected boundaries and evidence
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Real baked navigation on a lower floor | A private local-height owner uses the visible hull's realised pose and native columns, not the baked upper deck, for local support/connectivity. Tests retain the actual Caucasus bake and captured lower-floor coordinates. Missing/budget-limited evidence cannot fabricate support or authorize an upper-floor jump. Native query work is bounded per observation. |
+| Implicit capture versus defence | Explicit tasks, implicit approach, actual capture and failed tasks have separate ownership. An armed implicit approach can yield to a base alarm; a failed implicit mission retires its veto and replans with bounded backoff. No-ammunition intent remains capture, while explicit return/defend/hold is preserved. |
+| Authored TD parking | Private parking execution consumes actual authored positions/durations, checks occupancy and support, approaches and stops before waiting, and skips firing waits when empty. No Bot reservation or Bot timing state is shared. |
+| Rejected committed ammunition | `Ammunition.reject` closes the exact active or retired row as a neutral result so FIFO settlement continues. Local debit, reload and actual burst count remain committed. All-rejected groups neither add misses nor erase an existing failure streak. Mixed groups evaluate real projectile feedback only. |
+| High-arc scheduling starvation | Three-second freshness applies to completed advisory scans, not unfinished valid work. Pending jobs keep their cursor while shell, muzzle, body and observed target trajectory remain valid. The current whole-barrel-path final check and all budgets remain in force. Recorded FV3805 parameters with 12 flat/8 lower targets now finish instead of repeatedly resetting at three seconds. |
+| Governor identity after snapshots | Ownership follows the mounted equipment identity, not an `EquipmentState` object replaced by canonical snapshot restoration. Flat/downhill/airborne/damaged-engine transitions and cancelling an unacknowledged on-intent issue off. Manually enabled equipment is not adopted. Failed release submission retains its retry obligation. |
+| Small medical kit and repair choice | A small kit clears pure stun using a real descriptor crew activation target. Missing crew extras are contained, not invented. Repair selection respects severity as well as component priority, so a destroyed engine precedes a merely critical gun. Tests execute actual client encoding, server application and canonical snapshot restoration. |
+| Movement replacement | `replace: false` covers normal automatic driving and retained completed parking anchors, not only a currently pending command ID. Fire-only ownership does not falsely occupy driving. Failed cleanup cannot install a replacement timed drive. |
+| Halt cleanup and full rest | Retired callbacks retry while a new brake owner is active without cancelling that owner. A failed input submission also remains pending. Halt completion waits for supported linear/angular/vertical/lateral rest, including suspension pitch/roll velocities and full pose stability, plus half a second of settling, with no cleanup obligations remaining. Unknown motion, falling, turning or rocking cannot claim success. |
+| Nonlive command drainage | Death/result stops gameplay but the running visible controller still consumes stop/status requests and rejects gameplay requests. The launcher no longer leaves an allowed stop permanently unread. Closed/teardown controllers do not resurrect execution. |
+| Independent shot observations | A controller-owned bounded ledger survives stop and does not depend on an active ammunition policy. Native trigger, terminal and canonical combat consumers publish linked observations, deduplicate effect IDs, retain late multi-target effects and fence old rejection feedback from a newer takeover/trigger. Foreign/manual projectile events do not enter this ledger. |
+| Launcher outcome readback | Local command completion is separate from per-projectile flight/rejection/combat observations. Identity fencing, burst linking, duplicate/reordered events and bounded snapshot repair preserve cumulative damage without double counting. No combat observation is not labelled a proved miss. |
+| Request admission expiry | All non-stop journal requests need a Unix wall-clock `expires_at`; expiry is checked before execution and independently of the admitted operation's timeout. Identical retries remain idempotent. Stop has no admission expiry. Script/UI response timeout is unconfirmed, never a false terminal result. |
+
+The launcher also exposes the previously protocol-only Attack/Hold destination
+and radius, with a current-pose copy action. The normal no-point actions retain
+their documented behavior. The command channel is still a local test entrance,
+not an alternate simulator or a hidden-worker controller.
+
+## Continued test-command work
+
+The verified follow-on subset adds `wait_state`, `assert_state`, `select_shell`
+and `reload` to the same gateway. Fixed predicates read current native-owner
+observations rather than the previous UI heartbeat. Waiters have bounded count,
+identity/deadline fencing and no movement ownership; stopping the controller can
+satisfy an active=false waiter without cancelling it. Captured mission outcomes
+are observed before navigation teardown. A named mission's identity-matched
+terminal command receipt remains status evidence after stop, timeout or
+replacement clears navigation; a rejected request is not an admitted mission.
+An unavailable final phase is reported explicitly, never inferred from status.
+Shot predicates use the actual committed
+IDs and keep missing combat evidence distinct from a miss or zero damage.
+Python 2.7 Unicode projectile lookups preserve text identities; an unknown
+non-ASCII query cannot raise an implicit ASCII-encoding error and stop a drive.
+
+Shell selection resolves the mounted compact descriptor and delegates to
+`CURRENT_SHELLS`; partial-magazine reload delegates to `RELOAD_PARTIAL_CLIP`.
+Neither command writes gun counters or simulates reload. Completion waits for
+the real matching shell/clip readiness, with automatic-fire and pending-trigger
+competition excluded. Cancelling observation does not rewind a native setting.
+The synchronous native return path rechecks the actual execution clock and
+identity before reporting completion; a setting that took effect after the
+deadline is not rolled back or labelled a timely success.
+The status stock list exposes the actual descriptors needed by a script.
+
+Explicit held aiming, equipment activation and siege commands remain separate
+open work. A held aim source must survive command completion until release;
+equipment requires exact intent-sequence correlation, not a guessed revision or
+cooldown; siege requires the matching stable canonical echo, not a successful
+braking request. Their existing automatic player paths are not removed or moved
+to a worker, and these additional manual commands are not claimed implemented.
+
+## Verification boundary
+
+The added completion regressions include real baked route integration, actual
+native-wrapper shot rejection and terminal consumers, launcher/client journal
+round trips, canonical equipment effects/snapshot reconstruction, and adversarial
+ownership and observation ordering. The independent full-suite runner keeps
+each test module in its own process so one module's engine fake cannot become
+another module's unintentional dependency. The packaging gate also executes the
+Unicode observation and full-body halt contract tests in real CPython 2.7.18,
+not only the Python 3 runner or a syntax compiler. The final commit/PR handoff records
+the final-tree test and exact-head CI results; intermediate green results do not
+certify the later tree.
+
+No new exact Windows #1513 gameplay run is claimed for this follow-up. Native
+lower-road driving, long/high-arc frame cost, TD parking, pure-stun kit HUD,
+equipment switch timing and complete physical input handover still need their
+own observed client run. Linux CPython 2.7.18 compilation verifies source/PYC
+compatibility, not embedded Windows x86 CPython 2.7.7 native behavior. Earlier
+Windows evidence below is not transferred to this changed runtime.
+
 # November 4 foreground player-control completion
 
 This follow-up is based on PR #119 at `21301607cf61fc77a57ea8b7da5f9128f73f0eaa`.

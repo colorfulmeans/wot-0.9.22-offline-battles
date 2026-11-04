@@ -88,10 +88,7 @@ jobs:
         run: |
           set -euo pipefail
           patterns=(
-            'test_player_control*.py'
-            'test_player_command_protocol.py'
-            'test_player_weapon_migration.py'
-            'test_player_navigation_migration.py'
+            'test_player*.py'
             'test_port_0922_ai.py'
             'test_port_0922_house_corner_feedback.py'
             'test_diagnostic_log_modes.py'
@@ -422,7 +419,7 @@ jobs:
           -e WOT_OFFLINE_DEPOT_STYLE_SWF=/work/build/depot/lobby.swf
           -e WOT_OFFLINE_BUILD_IDENTITY="colorfulmeans-${{ github.run_id }}-${{ github.run_attempt }}"
           -w /work python:2.7.18
-          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python build_wotmod.py'
+          sh -c 'python tests/test_port_0922_barracks_sorting.py -v && python tests/test_player_embedded_contract.py -v && python build_wotmod.py'
       - name: Verify all current client bytecode
         run: docker run --rm -v "$PWD:/work" -w /work python:2.7.18 python tools/verify_release0100_code.py dist/org.colorfulmeans.offline_lan_0922_1.1.1.wotmod
       - name: Validate 0.9.22 wotmod package

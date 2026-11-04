@@ -29,8 +29,11 @@ execute player commands or player decisions.
 Driving, aim/fire and consumables can be enabled separately. The mouse panel
 offers **Start**, **Release to manual**, **Halt**, **Attack**, **Return to base**,
 **Defend base**, **Hold position**, **Capture base**, **Fire once**, bounded
-driving and **Refresh status**. Halt brakes to an observed stop and retains
-parking control. Release only clears the channels owned by this controller;
+driving, shell loading/reloading, ammunition checks and **Refresh status**.
+Halt brakes to an observed stop and retains
+parking control. Completion requires supported full-body rest (including turn,
+vertical and lateral motion) for half a second and successful owned-resource
+cleanup; zero forward speed alone is insufficient. Release only clears the channels owned by this controller;
 manual driving and a pre-existing manual burst retain their owners. Admitted
 projectiles still settle. Closing the panel or disabling its master switch
 requests release. Battle exit restores the original native input binding.
@@ -43,6 +46,14 @@ state distinguishes total exhaustion, empty current stock, clip reload and
 unavailable data. Total exhaustion clears combat holds and makes an automatic
 or attacking player proceed to capture; explicit return, defend and hold
 commands retain their meaning. Mounted shell order and inventory are preserved.
+The panel can copy the current client position into an optional X/Y/Z destination
+and radius for Attack/Hold; leaving the destination disabled preserves their
+default semantics. Default TD routes execute their authored parking waits,
+including occupancy checks. Empty-ammunition travel skips those firing waits.
+An implicit capture approach can yield to emergency base defence before actual
+capture begins. Failed implicit tasks retire their movement/fire ownership and
+retry with bounded backoff; explicit mission outcomes remain visible until the
+user replaces or releases them.
 
 ### Player command protocol for local tests
 
@@ -56,15 +67,22 @@ Each launch creates a new session and two JSON-lines journals:
 
 Read a current `type: "status"` record with `live: true`, then copy its
 `session_id`, `round_id` and `player_id` into each request. Use a fresh string
-`id` for each operation. For example, append this object followed by a newline,
-substituting the observed identities:
+`id` for each operation. Every action except `stop` also requires `expires_at`,
+a Unix wall-clock admission deadline. For example, with the current status in
+`status`, append this request from a local Python script:
 
-```json
-{"id":"test-return-1","session_id":"OBSERVED_SESSION","round_id":"OBSERVED_ROUND","player_id":1,"action":"return_base","args":{},"timeout_seconds":180,"replace":true}
+```python
+import json, os, time, uuid
+request = {key: status[key] for key in ('session_id', 'round_id', 'player_id')}
+request.update(id=uuid.uuid4().hex, action='return_base', args={},
+               expires_at=time.time() + 2.0, timeout_seconds=180, replace=True)
+with open(os.environ['WOT_OFFLINE_TEST_CONTROL_FILE'], 'a') as journal:
+    journal.write(json.dumps(request) + '\n')
 ```
 
 Actions are `start`, `stop`, `halt`, `attack`, `return_base`, `defend_base`,
-`hold_position`, `capture_base`, `drive`, `fire` and `status`. `drive` accepts
+`hold_position`, `capture_base`, `drive`, `fire`, `status`, `select_shell`,
+`reload`, `wait_state` and `assert_state`. `drive` accepts
 `seconds` (0.01–10), `forward` and `turn` (both -1–1). Attack/hold arguments may
 include `position: [x,y,z]` and `radius` (2–150 metres); a hold defaults to the current pose,
 and base commands use the active match's flag geometry. Attack with a position
@@ -85,13 +103,69 @@ identity and also carry `current_identity`, so an old-round producer can observe
 the rejection. A rejected ID remains rejected on retry; use a new ID for a new
 attempt after conditions change.
 
+Admission expiry and execution timeout are separate. The launcher normally gives
+the client two seconds to admit a request; a delayed unread drive/fire/mission
+is rejected after that deadline instead of executing unexpectedly. Once admitted,
+`timeout_seconds` runs on the client's execution clock. An identical retry keeps
+its original receipt even after admission expiry. Same-identity `stop` deliberately
+has no admission expiry and remains readable after death or battle result while
+the visible controller is running. Launcher response timeout means **unconfirmed**,
+not completed or cancelled.
+
 `fire` completes when its native trigger's physical rounds have committed and
 returns their projectile IDs (including a multi-round burst); this does not
 assert a hit or damage. Cancelling a burst tail retains the already committed
-rounds. Later `type: "shot"`
-receipts describe terminal events or rejected launches. Status snapshots expose
+rounds. Separate `type: "shot"` receipts carry `command_id`, `projectile_id`, an
+increasing `event_seq`, local commit, flight terminal/rejection and canonical
+combat observations. `damage_total`, `hit_count` and `penetrated` are cumulative
+observed effects, not per-message values to add together. Flight termination
+does not by itself prove a hit, miss or final damage; combat effects may follow
+it, including several HE targets. The launcher displays these observations
+separately from the trigger's completed receipt, even after control is released.
+Rejected committed shots drain ammunition feedback without refunding ammunition,
+rewinding reload or counting the rejection as a combat miss. Status snapshots expose
 mission progress, ammunition capability, current target/aim, pose and the latest
-command receipt. `PLAYER CONTROL` diagnostics retain the corresponding decisions.
+command receipt, plus up to 32 recent projectile observations for readback repair
+within the bounded result-line size (`shot_snapshot_omitted` reports trimming).
+`PLAYER CONTROL` diagnostics retain the corresponding decisions.
+
+### Observed-state and gun test commands
+
+| Action | Arguments and completion |
+| --- | --- |
+| `select_shell` | `compact_descr` is a positive integer from `status.testing.gun.stock`, not a guessed AP/HE slot. Complete only after that mounted shell is loaded and the actual gun is ready. Existing reload of the same selection is not restarted. |
+| `reload` | No arguments. Request the existing native partial-clip reload for a magazine gun, or wait for its already running reload. Complete when the actual available clip is loaded and ready; single-shot guns return `reload_not_supported`. |
+| `wait_state` | Observe a whitelisted `condition` until matched or execution timeout. Completion includes the actual observation and time. It owns no driving/fire channel. |
+| `assert_state` | The same predicates, checked immediately. Known mismatch fails; missing observation fails as unavailable rather than inventing a value. |
+
+State predicates are `ammo_ready`, `ammo_empty` and `halted` (no extra fields),
+`active` (`value: true/false`), `mission_status` or `mission_phase` (`value` from
+the published mission states, optionally bound to its `command_id`), and
+`shot_terminal` or `shot_effect` (exactly one `projectile_id` or `command_id`).
+`shot_effect` may also specify `damage_min`; even a zero threshold needs a real
+combat effect. A terminal launch rejection cannot satisfy a hit/effect assertion.
+An entire fire-command predicate uses its actual committed projectile IDs, never
+the planned number of burst rounds. Command-scoped checks require its completed
+fire receipt and final ID list; after cancellation/timeout, use the retained
+individual projectile IDs. There are at most 32 pending state watchers;
+no arbitrary expressions, Python code or object-property paths are accepted.
+
+Gun-setting commands cannot compete with automatic aim/fire or an outstanding
+trigger/burst. Release automatic firing before issuing one. While a gun command
+is pending, another fire or automatic-fire takeover is rejected. Stop cancels
+the gun command's observation but cannot rewind the already requested native
+reload/selection. Read-only watchers survive a same-round stop, do not cancel an
+unrelated drive on timeout, and cancel on identity change or final teardown.
+Use a distinct operation ID for each step. A test can load a shell, wait for its
+completed receipt, fire, then wait for `shot_terminal` or assert a received
+`shot_effect`; fixed sleeps are not execution evidence.
+
+Independent held `aim_target`/`aim_point`, explicit `use_equipment` and
+`set_siege` commands are not exposed yet. Automatic targeting, consumables and
+siege behavior already have their existing player-owned paths; adding these
+manual test commands still requires held aim ownership or exact equipment/siege
+request-to-acknowledgement correlation. Merely calling their native setters
+would not establish completion.
 The precise native Windows acceptance boundary is recorded in
 [COMPATIBILITY_REVIEW.md](COMPATIBILITY_REVIEW.md).
 
