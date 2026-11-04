@@ -324,6 +324,34 @@ class Aiming(object):
             source = tuple(own['origin'][i] + world[i]*distance for i in range(3))
         return None
 
+    def _direct_he_armor(self, target, shot, first, last, hits, retained, distance):
+        """Return nominal armour on a structure the live HE law can damage."""
+        from .. import combat_rules
+        contact = combat_rules.resolve_armor_contact(shot, distance, retained)
+        if contact is not None and contact['layer'] == 'structural' and contact['result'] == 2:
+            return combat_rules.he_nominal_armor(retained, target.typeDescriptor)
+        owner = self.owner
+        record = next((row for row in owner._records.values()
+                       if row.get('engine_id') == target.id), None)
+        if record is None:
+            return None
+        delta = last - first
+        length = float(delta.length)
+        if length <= .000001:
+            return None
+        at = (float(contact['distance']) if contact is not None else
+              min(float(hit.dist) for hit in hits))
+        direction = tuple(float(delta[i]) / length for i in range(3))
+        burst = tuple(float(first[i]) + direction[i] * max(0., min(length, at))
+                      for i in range(3))
+        result = owner._projectile_he_blast_contact(
+            dict(shooter_kind='player'), record, target, shot, burst,
+            combat_rules.shell_nominal_damage(shot),
+            state=dict(velocity=direction, gravity=(0., 0., 0.), elapsed=0.),
+            seed=(first, last, hits))
+        return (result['nominal_armor'] if result is not None and result['damage'] > 0
+                else None)
+
     def _armor_score(self, target, own, sample_point, direction, flight, threshold=None, nominal_only=False):
         """Nominal damage against observed native plates, without shot RNG."""
         from .. import combat_rules
@@ -337,20 +365,31 @@ class Aiming(object):
             length = math.sqrt(sum(v*v for v in arrival))
             shape = self.owner._collision_shape(target.typeDescriptor)
             reach = max(10., 4.*max(abs(v) for v in shape))
-            start = tuple(sample_point[i]-arrival[i]*reach/length for i in range(3))
+            distance = math.sqrt(_distance_sq(own['origin'], sample_point))
+            direct = threshold is not None or nominal_only
+            before = min(reach, distance) if direct else reach
+            after = combat_rules.vehicle_material_trace_end(own['shot'], 0.) if direct else 0.
+            first = self.owner._vector(tuple(sample_point[i]-arrival[i]*before/length for i in range(3)))
+            last = self.owner._vector(tuple(sample_point[i]+arrival[i]*after/length for i in range(3)))
             collisions = collide_vehicle_at_matrix(
-                target, target.matrix, self.owner._vector(start),
-                self.owner._vector(sample_point), self.owner._runtime.math)
+                target, target.matrix, first, last, self.owner._runtime.math)
             if not collisions:
                 return None
+            retained = collisions
+            if direct:
+                first_hit = min(float(hit.dist) for hit in collisions)
+                trace_end = combat_rules.vehicle_material_trace_end(own['shot'], first_hit)
+                retained = combat_rules.vehicle_material_hits(collisions, trace_end)
+                entry = tuple(float(first[i]) + arrival[i]*first_hit/length for i in range(3))
+                distance = math.sqrt(_distance_sq(own['origin'], entry))
             if nominal_only:
-                return combat_rules.he_nominal_armor(collisions, target.typeDescriptor)
-            distance = math.sqrt(_distance_sq(own['origin'], sample_point))
+                return self._direct_he_armor(target, own['shot'], first, last,
+                                             collisions, retained, distance)
             contact = combat_rules.resolve_armor_contact(
-                own['shot'], distance, collisions,
+                own['shot'], distance, retained,
                 penetration_factor=1. if threshold is None else threshold)
             if contact is None:
-                return None
+                return False if direct else None
             if threshold is not None:
                 return contact['layer'] == 'structural' and contact['result'] == 2
             if contact['layer'] != 'structural' and not combat_rules.is_he(own['shot']):
@@ -603,22 +642,28 @@ class Aiming(object):
             return self.owner._vector(projected)
 
         try:
-            hits = collide_vehicle_at_matrix(target, target.matrix,
-                observed_chord(first), observed_chord(last), self.owner._runtime.math)
+            start, end = observed_chord(first), observed_chord(last)
+            hits = collide_vehicle_at_matrix(target, target.matrix, start, end,
+                                             self.owner._runtime.math)
             if not hits:
                 return 'miss'
+            first_hit = min(float(hit.dist) for hit in hits)
+            trace_end = combat_rules.vehicle_material_trace_end(own['shot'], first_hit)
+            retained = combat_rules.vehicle_material_hits(hits, trace_end)
+            distance = first*speed + (last-first)*speed * min(1., first_hit / float((end-start).length))
             if threshold is None:
-                if solution.get('nominal_required') and combat_rules.he_nominal_armor(
-                        hits, target.typeDescriptor) is None:
-                    return 'miss'
+                if solution.get('nominal_required') and self._direct_he_armor(
+                        target, own['shot'], start, end, hits, retained, distance) is None:
+                    return 'armor'
                 return 'ready'
             contact = combat_rules.resolve_armor_contact(
-                own['shot'], flight*speed, hits, penetration_factor=threshold)
+                own['shot'], distance, retained, penetration_factor=threshold)
             if contact is None:
-                return 'unknown'
+                return 'armor'
             return ('ready' if contact['layer'] == 'structural' and
                     contact['result'] == 2 else 'armor')
-        except (AttributeError, TypeError, ValueError, IndexError, KeyError, RuntimeError):
+        except (AttributeError, TypeError, ValueError, IndexError, KeyError, RuntimeError,
+                ZeroDivisionError, OverflowError):
             return 'unknown'
 
     def defer_ordered_point(self, target, index, solution, now):
@@ -784,13 +829,14 @@ class Aiming(object):
             if not result['source_verified']:
                 return 'unknown', None
             if nominal:
+                result['nominal_required'] = True
+            if nominal and not physical:
                 thickness = self._armor_score(target, own,
                     shot_geometry.vehicle_aim_point(samples[sample], self._pose(target)),
                     result['direction'], result['flight_time'], nominal_only=True)
                 if thickness is None:
                     return 'unknown', None
                 result['nominal_armor'] = thickness
-                result['nominal_required'] = True
             if current_barrel:
                 return 'ready', result
             if physical:

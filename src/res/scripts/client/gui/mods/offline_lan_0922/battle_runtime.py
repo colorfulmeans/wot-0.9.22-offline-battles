@@ -17154,12 +17154,8 @@ class BattleRuntime(object):
         except (AttributeError, TypeError, ValueError):
             raise TypeError('#1513 collision contains an invalid distance')
         first = max(0.0, min(length, first))
-        legacy = combat_rules.legacy_shot(shot)
-        caliber = _number((legacy.get('shell') or {}).get('caliber'), 0.0)
-        trace_distance = first + max(0.0, caliber) / 100.0
-        limited = tuple(
-            collision for collision in collisions
-            if float(collision.dist) <= trace_distance + 0.000001)
+        trace_distance = combat_rules.vehicle_material_trace_end(shot, first)
+        limited = combat_rules.vehicle_material_hits(collisions, trace_distance)
         direction = delta
         direction.normalise()
         return (limited, query_start,

@@ -285,11 +285,41 @@ class FireAdmission(object):
                 chassis_matrix=row['chassis'])
             if not hits:
                 continue
-            entry_fraction = float(hits[0].dist)/length
+            entry_distance = min(float(hit.dist) for hit in hits)
+            entry_fraction = entry_distance/length
             entry_point = tuple(first[i]+entry_fraction*(last[i]-first[i]) for i in range(3))
-            contact = combat_rules.resolve_armor_contact(proof['shot'],
+            shot = proof['shot']
+            material_trace = proof.get('material_trace')
+            if material_trace:
+                trace_end = combat_rules.vehicle_material_trace_end(shot, entry_distance)
+                if trace_end > length + .000001 and not combat_rules.is_he(shot):
+                    extended_end = tuple(start[i] + (end[i]-start[i])*trace_end/length
+                                         for i in range(3))
+                    proof['target_queries'] += 1
+                    extended = collide_vehicle_at_matrix(row['target'], row['body'],
+                        owner._vector(start), owner._vector(extended_end), owner._runtime.math,
+                        chassis_matrix=row['chassis'])
+                    if extended:
+                        hits = extended
+                        trace_end = combat_rules.vehicle_material_trace_end(
+                            shot, min(float(hit.dist) for hit in hits))
+                hits = combat_rules.vehicle_material_hits(hits, trace_end)
+            contact = combat_rules.resolve_armor_contact(shot,
                 math.sqrt(_distance_sq(proof['range_origin'], entry_point)), hits,
                 penetration_factor=proof['penetration_factor'])
+            if material_trace:
+                if not 0. <= entry_fraction <= 1.:
+                    raise ValueError('native target entry outside its queried chord')
+                # The simulated round reaches this actor at the first plate.
+                # Its damage trace may find another plate, or only externals.
+                impact = entry_point
+                if contact is not None and combat_rules.is_he(shot):
+                    fraction = min(1., max(0., float(contact['distance'])/length))
+                    impact = tuple(first[i]+fraction*(last[i]-first[i]) for i in range(3))
+                if best is None or entry_fraction < best[0]:
+                    best = (entry_fraction, entry_point, row['target'].id, impact,
+                            (contact or {}).get('layer'), (contact or {}).get('result', 1))
+                continue
             if contact is None:
                 # Penetrated screens/tracks alone do not stop the shell.
                 continue
@@ -348,7 +378,9 @@ class FireAdmission(object):
                     break
             if target_hit is not None and (hit is None or target_hit[0] <= fraction):
                 proof['path'] = tuple(path[:cursor+1]) + (target_hit[1],)
-                proof['terminal_impact'] = target_hit[1]
+                proof['terminal_impact'] = target_hit[3] if len(target_hit) > 3 else target_hit[1]
+                if len(target_hit) > 3:
+                    proof['terminal_layer'], proof['terminal_result'] = target_hit[4:6]
                 proof['terminal_kind'] = 'vehicle'
                 proof['terminal_vehicle'] = target_hit[2]
                 proof['done'] = True
@@ -467,6 +499,7 @@ class FireAdmission(object):
                     target_velocity=target_velocity, collision_roster=collision_roster,
                     roster_signature=roster_signature,
                     target_queries=0, shot=source_shot, range_origin=range_origin,
+                    material_trace=getattr(self.control, 'direct_engagement', None) is not None,
                     penetration_factor=candidate['penetration_factor'])
                 candidate['proof'] = proof
             splash = (combat_rules.he_radius(source_shot)
@@ -523,6 +556,8 @@ class FireAdmission(object):
                 terminal_kind=proof.get('terminal_kind'), proof_mode=proof.get('mode'),
                 target_queries=proof['target_queries']-queries_before,
                 terminal_vehicle=proof.get('terminal_vehicle'),
+                terminal_layer=proof.get('terminal_layer'),
+                terminal_result=proof.get('terminal_result'),
                 collision_vehicles=len(collision_roster))
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
                 RuntimeError, OverflowError, ZeroDivisionError):

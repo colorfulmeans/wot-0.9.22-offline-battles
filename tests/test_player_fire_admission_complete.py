@@ -321,6 +321,52 @@ class AutomaticFireAdmissionTests(unittest.TestCase):
         self.assertEqual(20, self.battle._gun_state.ammo[0])
         self.assertFalse(self.battle._projectile_meta)
 
+    def test_player_material_trace_uses_each_shell_calibre_and_stops_on_external_only_hit(self):
+        module = 'gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix'
+        track = SimpleNamespace(dist=2., matInfo=SimpleNamespace(
+            armor=15., vehicleDamageFactor=0., kind=0), hitAngleCos=1., compName='chassis')
+        hull = SimpleNamespace(dist=3.36, matInfo=SimpleNamespace(
+            armor=20., vehicleDamageFactor=1., kind=0), hitAngleCos=1., compName='hull')
+        proof = dict(collision_roster=[dict(target=self.target, body=self.target.matrix,
+            chassis=None, velocity=(0., 0., 0.), bounds=((-2., 0., 91.), (2., 4., 100.)))],
+            range_origin=(0., 2., 0.), penetration_factor=1., target_queries=0,
+            material_trace=True)
+        own = dict(origin=(0., 2., 0.), speed=1000., gravity=0., maximum=400.)
+        aim = self.control.aiming
+        solution = dict(point=(0., 2., 96.))
+        with mock.patch(module, return_value=(track, hull)):
+            for caliber, verdict, layer in ((90., 'armor', None), (150., 'ready', 'structural')):
+                shot = dict(shell=dict(kind='ARMOR_PIERCING', caliber=caliber),
+                            piercingPower=(300., 300.), maxDistance=400.)
+                own['shot'] = proof['shot'] = shot
+                self.assertEqual(verdict, aim.actual_contact(self.target, solution,
+                    own, (0., 0., 1.), 1., velocity=(0., 0., 0.)))
+                point_ok = aim._armor_score(self.target, own, solution['point'],
+                                             (0., 0., 1.), .096, threshold=1.)
+                self.assertIs(point_ok, verdict == 'ready')
+                hit = self.control.fire_admission._target_contact(proof,
+                    (0., 2., 90.), (0., 2., 100.), .09, .1)
+                self.assertEqual((self.target.id, layer), (hit[2], hit[4]))
+                self.assertAlmostEqual(.2, hit[0])
+
+    def test_he_fallback_uses_blast_surface_after_spaced_contact(self):
+        module = 'gui.mods.offline_lan_0922.entities.remote_vehicle.collide_vehicle_at_matrix'
+        track = SimpleNamespace(dist=2., matInfo=SimpleNamespace(
+            armor=400., vehicleDamageFactor=0., kind=0), hitAngleCos=1., compName='chassis')
+        hull = SimpleNamespace(dist=3.36, matInfo=SimpleNamespace(
+            armor=10., vehicleDamageFactor=1., kind=0), hitAngleCos=1., compName='hull')
+        shot = dict(shell=dict(kind='HIGH_EXPLOSIVE', caliber=90., damage=(300, 0)),
+                    piercingPower=(30., 30.), maxDistance=400.)
+        own = dict(origin=(0., 2., 0.), speed=1000., gravity=0., maximum=400., shot=shot)
+        aim = self.control.aiming
+        with mock.patch(module, return_value=(track, hull)), mock.patch.object(
+                self.battle, '_projectile_he_blast_contact', side_effect=(
+                    None, dict(nominal_armor=40., damage=65))) as blast:
+            scores = [aim._armor_score(self.target, own, (0., 2., 96.),
+                       (0., 0., 1.), .096, nominal_only=True) for unused in range(2)]
+        self.assertEqual([None, 40.], scores)
+        self.assertEqual(2, blast.call_count)
+
     def test_real_native_target_contact_stops_the_proof_before_rear_ally(self):
         self.vehicle(43, (0., 0., 150.), 1)
         seen = []
