@@ -142,6 +142,7 @@ class Aiming(object):
         self.direct_entries = {}
         self.comparison_jobs = {}
         self.comparison_deferrals = {}
+        self.front_points = {}
         self._tick = None
         self._next_final_at = float('-inf')
         self._final_segments = self._final_attempts = self._dynamic_checks = 0
@@ -189,7 +190,7 @@ class Aiming(object):
         for key in list(self.direct_entries):
             if key[0] not in targets:
                 self.direct_entries.pop(key)
-        for store in (self.comparison_jobs, self.comparison_deferrals):
+        for store in (self.comparison_jobs, self.comparison_deferrals, self.front_points):
             for key in list(store):
                 if key[0] not in targets:
                     del store[key]
@@ -788,6 +789,31 @@ class Aiming(object):
     def direct_samples(self, target):
         return len(shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor))
 
+    def defer_front_point(self, target, front, solution):
+        sample = solution.get('sample')
+        if sample is not None:
+            try:
+                self.front_points[(target.id, sample)] = (
+                    front.id, self.direct_pose(target), self.direct_pose(front))
+            except (AttributeError, TypeError, ValueError, IndexError, RuntimeError):
+                pass
+
+    def _front_point_blocked(self, target, sample):
+        key = (target.id, sample)
+        recorded = self.front_points.get(key)
+        if recorded is None:
+            return False
+        identity, rear_pose, front_pose = recorded
+        front = self.targets.get(identity)
+        if front is not None:
+            def unchanged(previous, current):
+                return (all(_distance_sq(previous[i], current[i]) <= .15**2 for i in (0, 2)) and
+                        all(abs(_angle(previous[i]-current[i])) <= .02 for i in (1, 3, 4, 5, 6)))
+            if unchanged(rear_pose, self.direct_pose(target)) and unchanged(front_pose, self.direct_pose(front)):
+                return True
+        self.front_points.pop(key, None)
+        return False
+
     def compare_direct(self, target, index, sample, now, lane, threshold,
                        physical=False, current_barrel=False, nominal=False):
         """Compare one shell and one ordered point within the shared aim budget."""
@@ -796,6 +822,8 @@ class Aiming(object):
         if now < self.comparison_deferrals.get((target.id, index, sample), 0.):
             return 'unavailable', None
         try:
+            if self._front_point_blocked(target, sample):
+                return 'unavailable', None
             own = self._own(index)
             samples = shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor)
             if sample >= len(samples):

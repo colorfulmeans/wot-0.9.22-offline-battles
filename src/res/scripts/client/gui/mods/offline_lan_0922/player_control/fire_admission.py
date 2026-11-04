@@ -68,7 +68,7 @@ class FireAdmission(object):
         self.reset()
 
     def reset(self):
-        self.pending = None
+        self.pending = self.front_contact = None
         self.lane = FiringLane()
         self.receipt = dict(status='idle', reason='idle', world_chords=0)
         self._next_probe = float('-inf')
@@ -187,7 +187,8 @@ class FireAdmission(object):
 
     def _dynamic_reason(self, target, proof, splash):
         for name in ('raw_path', 'path'):
-            reason, blocker = self._check_lane(target, proof[name], name)
+            path = proof.get('centre_path', proof[name]) if name == 'raw_path' else proof[name]
+            reason, blocker = self._check_lane(target, path, name)
             if reason is not None:
                 return reason, blocker
         # Range/time expiry is not an explosion. HE safety is tied to the
@@ -258,7 +259,7 @@ class FireAdmission(object):
         rows.sort(key=lambda row: row['target'].id)
         return rows
 
-    def _target_contact(self, proof, first, last, first_time, last_time):
+    def _target_contact(self, proof, first, last, first_time, last_time, first_only=False):
         """Find a real terminal plate, not an approximate target-box entry.
 
         A moving target is queried in its currently observed frame. The same
@@ -288,6 +289,12 @@ class FireAdmission(object):
             entry_distance = min(float(hit.dist) for hit in hits)
             entry_fraction = entry_distance/length
             entry_point = tuple(first[i]+entry_fraction*(last[i]-first[i]) for i in range(3))
+            if first_only:
+                if not 0. <= entry_fraction <= 1.:
+                    raise ValueError('native target entry outside its queried chord')
+                if best is None or entry_fraction < best[0]:
+                    best = (entry_fraction, entry_point, row['target'].id)
+                continue
             shot = proof['shot']
             material_trace = proof.get('material_trace')
             if material_trace:
@@ -361,9 +368,14 @@ class FireAdmission(object):
             first, last = path[cursor], path[cursor+1]
             hit = self._probe(first, last)
             used += 1
-            target_hit = (self._target_contact(proof, first, last,
-                proof['times'][cursor], proof['times'][cursor+1])
-                if proof['stage'] == 1 else None)
+            target_hit = None
+            if proof['stage'] == 1:
+                target_hit = self._target_contact(proof, first, last,
+                    proof['times'][cursor], proof['times'][cursor+1])
+            elif proof.get('material_trace'):
+                step = proof['raw_step']
+                target_hit = self._target_contact(proof, first, last,
+                    cursor*step, (cursor+1)*step, first_only=True)
             fraction = None
             if hit is not None:
                 delta = tuple(last[i]-first[i] for i in range(3))
@@ -377,6 +389,14 @@ class FireAdmission(object):
                     proof['blocked'] = True
                     break
             if target_hit is not None and (hit is None or target_hit[0] <= fraction):
+                if proof['stage'] == 0:
+                    if target_hit[2] != proof['target'].id:
+                        proof['front_vehicle'] = target_hit[2]
+                        proof['centre_path'] = tuple(path[:cursor+1]) + (target_hit[1],)
+                        break
+                    proof['centre_path'] = tuple(path[:cursor+1]) + (target_hit[1],)
+                    proof['stage'], proof['cursor'] = 1, 0
+                    continue
                 proof['path'] = tuple(path[:cursor+1]) + (target_hit[1],)
                 proof['terminal_impact'] = target_hit[3] if len(target_hit) > 3 else target_hit[1]
                 if len(target_hit) > 3:
@@ -427,6 +447,12 @@ class FireAdmission(object):
                 break
         return tuple(path), tuple(times)
 
+    def _reject_front(self, proof, solution, now, used, target_queries=0):
+        front = proof['front_vehicle']
+        self.front_contact = (proof['target'], front, solution, now)
+        return self._result('rejected', 'auto_front_vehicle',
+            front_vehicle=front, world_chords=used, target_queries=target_queries)
+
     def prepare(self, context, entity, gun, raw_ray, dispersion, source_shot,
                 now, burst=None, range_origin=None):
         """Return ready/pending/rejected without sending or debiting ammunition."""
@@ -476,6 +502,12 @@ class FireAdmission(object):
                     # forever at cursor zero. Retain the same random draw.
                     self._restart(candidate, proof)
                 raw_path = artillery_path(raw_ray[0], solution['point'], source_shot, raw_ray[1])
+                raw_step = 0.
+                if len(raw_path) >= 2 and getattr(self.control, 'direct_engagement', None) is not None:
+                    horizontal = sum(raw_ray[1][i]**2 for i in (0, 2))
+                    flight = sum((solution['point'][i]-raw_ray[0][i])*raw_ray[1][i]
+                                 for i in (0, 2))/(source_shot['speed']*horizontal)
+                    raw_step = flight/(len(raw_path)-1)
                 origin = tuple(canonical(value) for value in raw_ray[0])
                 velocity = tuple(canonical(value*source_shot['speed']) for value in direction)
                 gravity = canonical(source_shot['gravity'])
@@ -490,7 +522,7 @@ class FireAdmission(object):
                         owner._runtime.math, chassis_matrix=row['chassis'])
                     if row['bounds'] is None:
                         return self._result('pending', 'auto_geometry_unavailable', world_chords=0)
-                proof = dict(geometry=geometry, raw_ray=raw_ray, raw_path=raw_path,
+                proof = dict(geometry=geometry, raw_ray=raw_ray, raw_path=raw_path, raw_step=raw_step,
                     path=path, direction=direction, origin=origin, velocity=velocity,
                     gravity=gravity, maximum=maximum, stage=0,
                     cursor=0, done=False, blocked=False, created=now, scene=scene,
@@ -507,12 +539,16 @@ class FireAdmission(object):
             # Check the full current centre lane before native work. A random
             # ray can terminate on scenery earlier than its nominal endpoint,
             # so its friendly/splash check follows that exact terminal proof.
-            reason, blocker = self._check_lane(target, proof['raw_path'], 'raw_path')
-            if reason is not None:
-                return self._result('pending', reason, candidate, world_chords=0, blocker=blocker)
+            if not proof.get('material_trace') or proof.get('front_vehicle') is not None:
+                reason, blocker = self._check_lane(target, proof.get('centre_path', proof['raw_path']), 'raw_path')
+                if reason is not None:
+                    return self._result('pending', reason, candidate, world_chords=0, blocker=blocker)
+            if proof.get('front_vehicle') is not None:
+                return self._reject_front(proof, solution, now, 0)
             if proof['blocked']:
                 # Scenery may be destroyed. Re-prove this same random shot,
                 # not a newly sampled one, on the next bounded attempt.
+                proof.pop('centre_path', None)
                 proof.update(stage=0, cursor=0, blocked=False, done=False)
             queries_before = proof['target_queries']
             if not proof['done']:
@@ -531,6 +567,14 @@ class FireAdmission(object):
                     candidate['proof'] = None
                     return self._result('pending', 'auto_world_changed', candidate, world_chords=used,
                         target_queries=proof['target_queries']-queries_before)
+                if proof.get('front_vehicle') is not None:
+                    reason, blocker = self._check_lane(target, proof.get('centre_path', proof['raw_path']), 'raw_path')
+                    if reason is not None:
+                        return self._result('pending', reason, candidate, world_chords=used,
+                                            blocker=blocker,
+                                            target_queries=proof['target_queries']-queries_before)
+                    return self._reject_front(proof, solution, now, used,
+                        proof['target_queries']-queries_before)
                 if proof['blocked']:
                     return self._result('pending', 'auto_world_blocked', candidate,
                         world_chords=used, proof_mode=mode,

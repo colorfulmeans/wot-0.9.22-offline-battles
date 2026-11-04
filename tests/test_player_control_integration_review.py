@@ -333,5 +333,46 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
             (control.last_order['throttle'], control.last_order['turn'], control.last_order['brake']))
 
 
+    def test_established_engagement_stays_parked_through_scan_gap_then_expires(self):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        from types import SimpleNamespace
+        control, target = PlayerRegressionTests().aim_controller()
+        control.navigation = navigation_controller()
+        control.navigation.firing_position = mock.Mock(return_value=None)
+        control.navigation.decide = mock.Mock(side_effect=lambda *a, **kw:
+            dict(throttle=0. if kw['hold'] else 1., turn=0., brake=kw['hold'],
+                 holding=kw['hold'], recovery_mode='hold' if kw['hold'] else 'travel',
+                 combat_mode='engage' if kw['hold'] else 'route'))
+        control.combat_tactics.movement = mock.Mock(return_value=None)
+        control.direct_engagement = SimpleNamespace(target=target.id, checking=True,
+            retreat=False, seek=False, update=lambda *args: (None, None, False))
+        control.engagement_hold = (target, 5.)
+        control.update(.1, 2.)
+        self.assertTrue(control.navigation.decide.call_args.kwargs['hold'])
+        self.assertEqual((0., True), (control.last_order['throttle'], control.last_order['brake']))
+        control.update(.1, 5.1)
+        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
+        self.assertIsNone(control.engagement_hold)
+
+    def test_front_contact_adopts_front_vehicle_and_defers_rear_sample(self):
+        from test_player_control import PlayerRegressionTests
+        from types import SimpleNamespace
+        control, rear = PlayerRegressionTests().aim_controller()
+        front = SimpleNamespace(id=rear.id + 1, position=rear.position)
+        records = {rear.id: rear, front.id: front}
+        control._contacts = lambda unused: ([], [], records)
+        engagement = SimpleNamespace(target=rear.id, seek=False, retreat=False,
+            update=lambda *args: (None, None, False))
+        engagement.adopt = lambda identity: setattr(engagement, 'target', identity)
+        control.direct_engagement = engagement
+        control.aiming.defer_front_point = mock.Mock()
+        solution = dict(sample=2)
+        control.fire_admission.front_contact = (rear, front.id, solution, 1.)
+        control.update(.1, 1.1)
+        control.aiming.defer_front_point.assert_called_once_with(rear, front, solution)
+        self.assertEqual(front.id, engagement.target)
+
+
 if __name__ == '__main__':
     unittest.main()

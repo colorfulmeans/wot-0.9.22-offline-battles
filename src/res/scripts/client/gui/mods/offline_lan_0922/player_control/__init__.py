@@ -44,6 +44,8 @@ class PlayerControl(object):
         self.drive_failure = None
         self.drive_contact_receipt = None
         self.blocked_fire_target = None
+        self.engagement_hold = None
+        self.front_priority = None
         self.blocked_fire_sample = None
         self.no_aim_since = None
         self.last_shell_request = None
@@ -293,6 +295,8 @@ class PlayerControl(object):
         self.combat_tactics.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
+        self.engagement_hold = None
+        self.front_priority = None
         self.blocked_fire_sample = None
         self.no_aim_since = None
         self.last_shell_request = None
@@ -410,6 +414,7 @@ class PlayerControl(object):
         self.halt_observation = HaltObservation()
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
+        self.engagement_hold = self.front_priority = None
         callbacks = list(self.release_pending)
         self.release_pending = []
         if not preserve_explicit:
@@ -1629,14 +1634,29 @@ class PlayerControl(object):
             base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
             mission = self.navigation.mission_status() if self.navigation is not None else None
             home = self.navigation.home if self.navigation is not None else None
-            locked = self.direct_engagement.target if self.direct_engagement is not None else self.target_engine
+            direct = self.direct_engagement
+            if (direct is not None and self.fire_admission.front_contact is not None and
+                    not getattr(owner, '_local_player_burst', None) and
+                    not getattr(owner, '_local_fire_intent', None)):
+                rear, front_id, rejected, at = self.fire_admission.front_contact
+                self.fire_admission.front_contact = None
+                front = records.get(front_id)
+                if (direct.target == rear.id and records.get(rear.id) is rear
+                        and front is not None and 0. <= now-at <= 1.):
+                    self.engagement_hold = None
+                    self.aiming.defer_front_point(rear, front, rejected)
+                    direct.adopt(front_id)
+                    self.front_priority = front_id
+            locked = direct.target if direct is not None else self.target_engine
+            if self.front_priority != locked or locked not in records:
+                self.front_priority = None
             ranked, preempt = self.target_selection.rank(contacts, position, locked,
                 now, home=home, base=base, mission=mission)
             priorities = dict((identity, index) for index, identity in enumerate(ranked))
             candidates = sorted(records.values(), key=lambda item: (
                 priorities.get(item.id, len(priorities)), item.id != locked,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
-            if (preempt and candidates and self.direct_engagement is not None and
+            if (preempt and self.front_priority is None and candidates and self.direct_engagement is not None and
                     not getattr(owner, '_local_player_burst', None) and
                     not getattr(owner, '_local_fire_intent', None)):
                 if self.direct_engagement.search_since is None:
@@ -1798,6 +1818,11 @@ class PlayerControl(object):
                 blocked_target = None
             final_blocked = blocked_target is not None
             seeking = bool(getattr(self.direct_engagement, 'seek', False))
+            established = self.engagement_hold
+            retain_hold = bool(established is not None and engagement is not None and
+                records.get(engagement.target) is established[0] and
+                (target is None or target is established[0]) and now < established[1] and
+                settling_aim and not final_blocked and not self.ammo_state['empty'])
             context = dict(empty_ammo=self.ammo_state['empty'],
                 target=target, contacts=contacts, allies=roster, neighbours=peers,
                 base=base, enemy_base=enemy_base,
@@ -1819,6 +1844,9 @@ class PlayerControl(object):
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
+            retain_hold = bool(retain_hold and not movement.get('force_move') and
+                               movement.get('allow_firing_position', True))
+            hold = hold or retain_hold
             if now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
@@ -1834,6 +1862,7 @@ class PlayerControl(object):
                     self.record('player_strategy',decision=self.strategy.receipt)
             automatic_defence = self.strategy.mode == 'defend' and movement.get('allow_strategy')
             if automatic_defence and self.navigation.home is not None:
+                retain_hold = False
                 home=self.navigation.home
                 # A distant incidental target cannot pin the defender on the
                 # wrong side of the map. Fire may continue while returning.
@@ -1856,7 +1885,7 @@ class PlayerControl(object):
                     if not decision_current():
                         return
                 elif ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_withdrawal') and not automatic_defence and
+                        movement.get('allow_withdrawal') and not automatic_defence and not retain_hold and
                         (target is not None or self.navigation.cover_move is not None or
                          self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
@@ -1873,7 +1902,8 @@ class PlayerControl(object):
                     self.navigation.ammo_retreat = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
                         movement.get('allow_firing_position') and (not tactical_clear or final_blocked or seeking)
-                        and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
+                        and (final_blocked or candidates) and not automatic_defence and not retain_hold
+                        and withdrawal is None):
                     def firing_lane_from(candidate, start):
                         end = point if final_blocked and target is not None else self.target_point(candidate)
                         return (self.lane_from(candidate, start, end) and
@@ -1889,7 +1919,7 @@ class PlayerControl(object):
                     self.navigation.firing_move = None
                 manoeuvre = self.combat_tactics.movement(state, context, entity.typeDescriptor,
                     allowed=bool(movement.get('allow_firing_position') and not automatic_defence and
-                        withdrawal is None and position_goal is None),
+                        not retain_hold and withdrawal is None and position_goal is None),
                     height=self.navigation._height, clear=clear)
                 if not decision_current():
                     return
@@ -1902,6 +1932,8 @@ class PlayerControl(object):
                 order = self.navigation.drive_combat_goal(state, clear, manoeuvre['goal'],
                     mode=manoeuvre['phase'], key=('player_flank', manoeuvre['target']))
             elif position_goal is None:
+                if retain_hold and isinstance(self.navigation, PlayerNavigation):
+                    self.navigation.context['retain_engagement_hold'] = True
                 order = self.navigation.decide(state, clear, hold=hold)
             else:
                 hold = False
@@ -2005,6 +2037,14 @@ class PlayerControl(object):
             order = {}
         if settling_aim and self.aim_receipt is not None:
             self.aim_receipt['settling'] = True
+        if engagement is not None and order.get('holding') and order.get('combat_mode') in (
+                'engage', 'support_hold'):
+            if target is not None and fire_clear:
+                self.engagement_hold = (target, now + 4.)
+            elif not retain_hold:
+                self.engagement_hold = None
+        else:
+            self.engagement_hold = None
         self.last_order = order
         self.finish_mission(now)
         if not decision_current():

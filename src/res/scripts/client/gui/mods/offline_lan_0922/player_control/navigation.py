@@ -1092,6 +1092,6 @@ class PlayerNavigation(object):
                 hold=goal is None, mode='combat_recovery')
         if policy['force_move']:
             hold = False
-        elif self.context.get('target') is not None:
+        elif self.context.get('target') is not None and not self.context.get('retain_engagement_hold'):
             hold = bool(hold and policy['combat_hold'])
         return self._route_order(state, direction_clear, hold=hold)

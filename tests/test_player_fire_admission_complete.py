@@ -172,6 +172,17 @@ class AutomaticFireAdmissionTests(unittest.TestCase):
     def fire(self):
         return self.control.trigger(self.control.weapon, self.now)
 
+    def test_centre_ray_reports_visible_front_enemy_without_debit(self):
+        front = self.vehicle(43, (0., 0., 25.), 2)
+        self.control.direct_engagement = SimpleNamespace()
+        self.control.aiming.begin([self.target, front], self.now)
+        self.control.fire_admission.lane.begin(self.now)
+        self.assertFalse(self.fire())
+        self.assertEqual('auto_front_vehicle', self.control.fire_admission.receipt['reason'])
+        self.assertEqual(front.id, self.control.fire_admission.receipt['front_vehicle'])
+        self.assertEqual(20, self.battle._gun_state.ammo[0])
+        self.assertFalse(self.battle._projectile_meta)
+
     def test_every_automatic_round_has_fresh_proof_and_one_ammo_debit(self):
         before = sum(self.battle._gun_state.ammo)
         self.world_queries[:] = []
