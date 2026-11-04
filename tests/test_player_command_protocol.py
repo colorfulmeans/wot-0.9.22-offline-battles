@@ -10,10 +10,77 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922.player_control.commands import (
     CommandGateway, JournalReader, append_result, validate_action,
-    MISSION_PHASE_VALUES, MISSION_STATUS_VALUES, STATE_CONDITIONS)
+    EQUIPMENT_TARGETS, MISSION_PHASE_VALUES, MISSION_STATUS_VALUES, STATE_CONDITIONS)
+from gui.mods.offline_lan_0922.equipment_mechanics import (
+    ACTIVATION_DEVICE_NAMES, ACTIVATION_CREW_NAMES)
 
 
 class ActionSchemaTests(unittest.TestCase):
+    def test_explicit_aim_has_fixed_ids_finite_points_and_bounded_tolerance(self):
+        for target_id in (1, 202, 2147483647):
+            self.assertEqual(dict(target_id=target_id, tolerance_deg=.5),
+                validate_action('aim_target', {'target_id': target_id}))
+        for target_id in (None, False, True, 0, -1, 2147483648, '202', 202., [], {}):
+            with self.subTest(target_id=target_id), self.assertRaises(ValueError):
+                validate_action('aim_target', {'target_id': target_id})
+        for position in ([0, 1, 2], (-100000., 0., 100000.)):
+            self.assertEqual(dict(position=tuple(float(v) for v in position), tolerance_deg=.5),
+                validate_action('aim_point', {'position': position}))
+        for position in (None, {}, '0,0,0', [0, 1], [0, 1, 2, 3],
+                         [False, 0, 0], [float('nan'), 0, 0], [0, float('inf'), 0], [0, 0, 100001]):
+            with self.subTest(position=position), self.assertRaises(ValueError):
+                validate_action('aim_point', {'position': position})
+        for action, args in (('aim_target', {'target_id': 202}), ('aim_point', {'position': [0, 1, 2]})):
+            for tolerance in (.05, .5, 5.):
+                self.assertEqual(tolerance, validate_action(action, dict(args, tolerance_deg=tolerance))['tolerance_deg'])
+            for tolerance in (None, True, .049, 5.01, float('nan'), float('inf'), 10 ** 1000):
+                with self.subTest(action=action, tolerance=tolerance), self.assertRaises(ValueError):
+                    validate_action(action, dict(args, tolerance_deg=tolerance))
+            with self.assertRaises(ValueError):
+                validate_action(action, dict(args, fire=True))
+
+    def test_release_aim_can_guard_one_bounded_command_id_without_arbitrary_fields(self):
+        self.assertEqual({}, validate_action('release_aim', {}))
+        for value in ('aim-one', 'x' * 128):
+            self.assertEqual({'command_id': value}, validate_action('release_aim', {'command_id': value}))
+        for value in (None, '', 'x' * 129, 1, True, {}):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_action('release_aim', {'command_id': value})
+        with self.assertRaises(ValueError):
+            validate_action('release_aim', {'target_id': 202})
+
+    def test_equipment_schema_matches_native_target_vocabulary_without_encoded_extras(self):
+        self.assertEqual(ACTIVATION_DEVICE_NAMES | ACTIVATION_CREW_NAMES, EQUIPMENT_TARGETS)
+        for equipment_id in (0, 3, 65535):
+            self.assertEqual({'equipment_id': equipment_id},
+                validate_action('use_equipment', {'equipment_id': equipment_id}))
+        for value in (None, True, False, -1, 65536, '1', 1., {}, []):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_action('use_equipment', {'equipment_id': value})
+        for target in EQUIPMENT_TARGETS:
+            args = dict(equipment_id=3, target=target)
+            self.assertEqual(args, validate_action('use_equipment', args))
+        for target in (None, '', 'engine', 'loader', 'gunner3', 'x' * 65, True, [], '__import__'):
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                validate_action('use_equipment', {'equipment_id': 3, 'target': target})
+        for active in (True, False):
+            args = dict(equipment_id=3, active=active)
+            self.assertEqual(args, validate_action('use_equipment', args))
+        for active in (None, 0, 1, 'true', [], {}):
+            with self.subTest(active=active), self.assertRaises(ValueError):
+                validate_action('use_equipment', dict(equipment_id=3, active=active))
+        for field in ('activation_code', 'extra', 'compact_descr', 'force'):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                validate_action('use_equipment', dict(equipment_id=3, **{field: 1}))
+
+    def test_siege_is_an_explicit_boolean_not_a_toggle_or_raw_input(self):
+        for enabled in (True, False):
+            self.assertEqual({'enabled': enabled}, validate_action('set_siege', {'enabled': enabled}))
+        for args in ({}, {'enabled': 1}, {'enabled': 0}, {'enabled': 'true'}, {'enabled': None},
+                     {'enabled': True, 'toggle': True}, {'input_seq': 7}, {'flags': 64}):
+            with self.subTest(args=args), self.assertRaises(ValueError):
+                validate_action('set_siege', args)
+
     def test_selected_shell_requires_exact_positive_integer_descriptor(self):
         for value in (1, 65537, 2147483647):
             self.assertEqual({'compact_descr': value}, validate_action('select_shell', {'compact_descr': value}))
@@ -193,6 +260,39 @@ class GatewayTests(unittest.TestCase):
         self.execute.assert_called_once()
         self.cancel.assert_not_called()
 
+    def test_native_preflight_identity_change_cannot_admit_an_old_request(self):
+        for field, replacement in (('round_id', 'next-round'), ('player_id', 4.),
+                                   ('player_id', True), ('session_id', 'new-launch')):
+            with self.subTest(field=field, replacement=replacement):
+                self.setUp()
+                request = self.request()
+                self.preflight.side_effect = lambda command: self.identity.update({field: replacement})
+                receipt = self.gateway.submit(request, 0.)
+                self.assertEqual(('rejected', 'identity_changed'),
+                                 (receipt['status'], receipt['reason']))
+                self.execute.assert_not_called()
+
+    def test_accepted_receipt_callback_identity_change_does_not_execute(self):
+        request = self.request()
+        def emit(receipt):
+            self.rows.append(dict(receipt))
+            if receipt['status'] == 'accepted':
+                self.identity['round_id'] = 'next-round'
+            return True
+        self.gateway.emit = emit
+        receipt = self.gateway.submit(request, 0.)
+        self.assertEqual(['accepted', 'cancelled'], [row['status'] for row in self.rows])
+        self.assertEqual('round-B', receipt['round_id'])
+        self.assertEqual('identity_changed', receipt['reason'])
+        self.execute.assert_not_called()
+
+    def test_executor_receives_an_independent_admitted_identity(self):
+        self.gateway.submit(self.request(), 0.)
+        command = self.execute.call_args[0][0]
+        self.assertEqual(self.identity, command['identity'])
+        self.identity['round_id'] = 'next-round'
+        self.assertEqual('round-B', command['identity']['round_id'])
+
     def test_identical_retry_is_not_reexecuted_and_returns_final_receipt(self):
         request = self.request(action='fire', args={})
         self.gateway.submit(request, 0.)
@@ -327,7 +427,12 @@ class GatewayTests(unittest.TestCase):
     def test_new_action_execution_deadlines_are_separate_from_admission(self):
         for action, args, timeout in (('select_shell', {'compact_descr': 7}, 180.),
                                      ('reload', {}, 180.),
-                                     ('wait_state', {'condition': 'ammo_ready'}, 30.)):
+                                     ('wait_state', {'condition': 'ammo_ready'}, 30.),
+                                     ('aim_target', {'target_id': 202}, 30.),
+                                     ('aim_point', {'position': [0, 1, 2]}, 30.),
+                                     ('release_aim', {}, 10.),
+                                     ('use_equipment', {'equipment_id': 0, 'target': 'gunHealth'}, 30.),
+                                     ('set_siege', {'enabled': True}, 30.)):
             row = self.gateway.submit(self.request(id=action, action=action, args=args), 100.)
             self.assertEqual('accepted', row['status'])
             self.assertEqual(100. + timeout, self.gateway.requests[action]['deadline'])
@@ -344,6 +449,35 @@ class GatewayTests(unittest.TestCase):
             self.assertEqual('rejected', row['status'])
         self.execute.assert_not_called()
         self.preflight.assert_not_called()
+        self.cancel.assert_not_called()
+
+    def test_invalid_aim_or_native_actions_never_preempt_an_accepted_owner(self):
+        self.gateway.submit(self.request(), 0.)
+        invalid = [('aim_target', {'target_id': True}), ('aim_point', {'position': [0, 1]}),
+                   ('aim_target', {'target_id': 202, 'tolerance_deg': 9}),
+                   ('release_aim', {'command_id': ''}),
+                   ('use_equipment', {'equipment_id': False}),
+                   ('use_equipment', {'equipment_id': 3, 'target': 'engine'}),
+                   ('set_siege', {'enabled': 1})]
+        for index, (action, args) in enumerate(invalid):
+            row = self.gateway.submit(self.request(id='bad-' + str(index), action=action, args=args), .1)
+            self.assertEqual('rejected', row['status'])
+        self.assertEqual('accepted', self.gateway.requests['one']['receipt']['status'])
+        self.execute.assert_called_once()
+        self.preflight.assert_called_once()
+        self.cancel.assert_not_called()
+
+    def test_explicit_release_is_not_the_expiry_free_emergency_stop(self):
+        for action, args in (('release_aim', {}), ('aim_target', {'target_id': 202}),
+                             ('use_equipment', {'equipment_id': 0}), ('set_siege', {'enabled': False})):
+            request = self.request(id=action, action=action, args=args)
+            del request['expires_at']
+            self.assertEqual('invalid_expires_at', self.gateway.submit(request, 1.)['reason'])
+            request['id'] = 'expired-' + action
+            request['expires_at'] = self.wall_now
+            self.assertEqual('request_expired', self.gateway.submit(request, 1.)['reason'])
+        self.preflight.assert_not_called()
+        self.execute.assert_not_called()
         self.cancel.assert_not_called()
 
 

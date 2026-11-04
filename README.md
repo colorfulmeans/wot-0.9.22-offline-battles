@@ -29,11 +29,14 @@ execute player commands or player decisions.
 Driving, aim/fire and consumables can be enabled separately. The mouse panel
 offers **Start**, **Release to manual**, **Halt**, **Attack**, **Return to base**,
 **Defend base**, **Hold position**, **Capture base**, **Fire once**, bounded
-driving, shell loading/reloading, ammunition checks and **Refresh status**.
+driving, shell loading/reloading, held target/point aiming, explicit equipment
+and siege settings, ammunition checks and **Refresh status**.
 Halt brakes to an observed stop and retains
 parking control. Completion requires supported full-body rest (including turn,
 vertical and lateral motion) for half a second and successful owned-resource
-cleanup; zero forward speed alone is insufficient. Release only clears the channels owned by this controller;
+cleanup; zero forward speed alone is insufficient. Halt and completion/timeout
+of a timed drive preserve independent explicit aim and setting observations.
+**Release to manual / Stop** clears all channels owned by this controller;
 manual driving and a pre-existing manual burst retain their owners. Admitted
 projectiles still settle. Closing the panel or disabling its master switch
 requests release. Battle exit restores the original native input binding.
@@ -82,7 +85,8 @@ with open(os.environ['WOT_OFFLINE_TEST_CONTROL_FILE'], 'a') as journal:
 
 Actions are `start`, `stop`, `halt`, `attack`, `return_base`, `defend_base`,
 `hold_position`, `capture_base`, `drive`, `fire`, `status`, `select_shell`,
-`reload`, `wait_state` and `assert_state`. `drive` accepts
+`reload`, `wait_state`, `assert_state`, `aim_target`, `aim_point`, `release_aim`,
+`use_equipment` and `set_siege`. `drive` accepts
 `seconds` (0.01–10), `forward` and `turn` (both -1–1). Attack/hold arguments may
 include `position: [x,y,z]` and `radius` (2–150 metres); a hold defaults to the current pose,
 and base commands use the active match's flag geometry. Attack with a position
@@ -160,12 +164,50 @@ Use a distinct operation ID for each step. A test can load a shell, wait for its
 completed receipt, fire, then wait for `shot_terminal` or assert a received
 `shot_effect`; fixed sleeps are not execution evidence.
 
-Independent held `aim_target`/`aim_point`, explicit `use_equipment` and
-`set_siege` commands are not exposed yet. Automatic targeting, consumables and
-siege behavior already have their existing player-owned paths; adding these
-manual test commands still requires held aim ownership or exact equipment/siege
-request-to-acknowledgement correlation. Merely calling their native setters
-would not establish completion.
+### Explicit aim, equipment and siege commands
+
+These commands use the same foreground gateway, not the Bot or worker paths.
+Their command receipts and current ownership are deliberately separate:
+
+| Action | Arguments and completion |
+| --- | --- |
+| `aim_target` | `target_id` is an actual visible enemy **engine entity ID** from `status.manual_aim.visible_targets`, not a Bot/network player ID. Optional `tolerance_deg` defaults to 0.5 (0.05–5). Complete only when current native angles and muzzle direction agree with the requested point. |
+| `aim_point` | Finite `position: [x,y,z]`, each coordinate within ±100000; the same optional tolerance. Select a mechanically reachable low/high arc only if the existing native angle getter can represent it. |
+| `release_aim` | No arguments releases the currently owned source. Optional `command_id` must match the holder; a mismatch cannot release somebody else's command. Completion means the owned source/mode was restored or already yielded to a newer owner. |
+| `use_equipment` | `equipment_id` comes from `status.native_actions.equipment.stock` (not `compact_descr`). A small repair/medical kit requires a descriptor-backed `target` from that row's `targets`, such as `engineHealth` or `loader1`. All-target kits/extinguishers omit `target`; an RPM limiter requires `active: true/false` instead. Complete only on the exact accepted canonical equipment intent sequence. |
+| `set_siege` | `enabled: true/false`. Real braking may precede submission. Complete only after the exact submitted input frontier is acknowledged in a stable requested mode and the local native descriptor, gun and physics application has finished. |
+
+Aim completion **retains** the native source until explicit release, replacement,
+Stop, target loss, or identity/entity change. The acquisition deadline does not
+expire a completed hold. `status.manual_aim.held`, `aligned`, `command_id` and
+`reason` describe the current hold; an earlier completed receipt does not prove
+current alignment. A subsequent `fire` checks alignment again and still returns
+its own actual projectile commitments. Explicit aim proves neither an unobstructed
+shot nor a hit, and never rotates the hull or fires by itself. The previous manual
+source/mode is restored only while this command still owns it.
+
+Release automatic fire before explicit aiming or gun-setting commands. Release
+held aim before enabling automatic fire or changing siege mode. A pending mode
+change excludes driving, new aiming, shell changes and firing; automatic driving
+or firing must be stopped before requesting it. An equipment command cannot
+compete with automatic consumables, and automatic consumable takeover waits for
+its pending command. These conflicts are rejected before replacing an owner.
+Independent explicit aim survives timed driving, its timeout, and Halt.
+
+Equipment readiness or a changed cooldown is not an acknowledgement. If a later
+native equipment request overwrites the only available exact receipt, the older
+test command reports `equipment_receipt_superseded`, not guessed success.
+RPM-limiter and mode commands already at their requested state return a no-op only
+from current stable canonical observations. Stop cancels their observation and
+any still-unsent owned siege brake; it does not refund an item, switch off a
+manually commanded limiter, or undo a submitted native transition. Failed native
+cleanup retains a bounded retry obligation and blocks competing commands.
+
+The default execution timeout is 30 seconds for aim/equipment/siege and 10 seconds
+for `release_aim`; admission still expires independently. A useful test sequence is
+Stop → load shell → aim at an observed target → wait for aim completion → Fire →
+wait for the actual shot result → release the matching aim holder. Use the
+individual command receipts for every transition, not fixed sleeps.
 The precise native Windows acceptance boundary is recorded in
 [COMPATIBILITY_REVIEW.md](COMPATIBILITY_REVIEW.md).
 

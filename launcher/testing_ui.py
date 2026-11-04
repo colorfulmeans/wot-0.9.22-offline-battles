@@ -54,6 +54,11 @@ ACTION_LABELS = {
     'status': ('Refresh status', '刷新状态'),
     'select_shell': ('Load selected shell', '装填指定弹种'), 'reload': ('Reload', '重新装填'),
     'wait_state': ('Wait for state', '等待状态'), 'assert_state': ('Assert state', '断言状态'),
+    'aim_target': ('Hold aim on target', '持续瞄准目标'),
+    'aim_point': ('Hold aim at point', '持续瞄准坐标'),
+    'release_aim': ('Release held aim', '释放持续瞄准'),
+    'use_equipment': ('Use selected equipment', '使用指定给养'),
+    'set_siege': ('Set requested siege mode', '设置指定攻城模式'),
 }
 
 
@@ -209,7 +214,9 @@ class TestingPanel:
             return False
         timeout = (600.0 if action in ('attack', 'capture_base') else
                    180.0 if action in ('return_base', 'defend_base', 'hold_position', 'select_shell', 'reload') else
-                   30.0 if action == 'wait_state' else 15.0)
+                   30.0 if action == 'wait_state' or action in
+                       player_control_transport.AIM_ACTIONS | player_control_transport.NATIVE_ACTIONS else
+                   10.0 if action == 'release_aim' else 15.0)
         command_id = self.transport.send(action, args=fields, timeout_seconds=timeout,
                                         replace=action not in player_control_transport.READ_ONLY_ACTIONS)
         self.last_command_id = command_id
@@ -272,6 +279,67 @@ class TestingPanel:
             'invalid_position': ('Enter finite X, Y and Z coordinates from -100000 to 100000.', '请输入-100000至100000之间的有效X、Y、Z坐标。'),
             'invalid_radius': ('Radius must be from 2 to 150 metres, or left blank.', '半径须为2至150米，或留空使用默认值。'),
             'invalid_compact_descr': ('Shell compactDescr must be an integer from 1 to 2147483647.', '弹种compactDescr须为1至2147483647之间的整数。'),
+            'invalid_target_id': ('Target ID must be an integer from 1 to 2147483647.', '目标ID须为1至2147483647之间的整数。'),
+            'invalid_tolerance_deg': ('Aim tolerance must be from 0.05 to 5 degrees.', '瞄准容差须为0.05至5度。'),
+            'invalid_command_id': ('An explicit command ID must contain 1 to 128 characters.', '指定命令ID须为1至128个字符。'),
+            'invalid_equipment_id': ('Equipment ID must be an integer from 0 to 65535.', '给养ID须为0至65535之间的整数。'),
+            'invalid_equipment_target': ('Choose a native device or crew target from the fixed list.', '请从固定列表中选择原生模块或成员目标。'),
+            'invalid_active': ('RPM limiter active state must be a boolean.', '调速器启用状态须为布尔值。'),
+            'invalid_enabled': ('Requested siege mode must be enabled or disabled.', '攻城模式须明确指定启用或关闭。'),
+            'aim_busy': ('Another explicit aim owns the gun channel.', '另一条指定瞄准命令正持有火炮控制权。'),
+            'aim_owner_mismatch': ('The release ID does not match the current aim holder.', '释放ID与当前瞄准持有者不一致。'),
+            'aim_release_pending': ('The native aim source has not yet confirmed release.', '原生瞄准源尚未确认释放。'),
+            'aim_not_aligned': ('The held aim is not currently aligned.', '当前持续瞄准尚未对准。'),
+            'aim_target_unavailable': ('The requested target is no longer observable.', '请求的目标当前不可观察。'),
+            'aim_unreachable': ('The requested aim cannot be reached by the current gun.', '当前火炮无法对准请求的位置。'),
+            'aim_source_lost': ('The owned native aim source was replaced or lost.', '持有的原生瞄准源已被替换或丢失。'),
+            'aim_acquiring': ('Waiting for the real gun direction to align.', '正在等待实际火炮方向对准。'),
+            'aim_tracking': ('The held aim is tracking a changed position or gun state.', '持续瞄准正在跟随位置或火炮状态变化。'),
+            'aim_aligned': ('The actual gun direction aligned with the requested aim.', '实际火炮方向已对准请求目标。'),
+            'aim_released': ('The owned aim source was released.', '已释放持有的瞄准源。'),
+            'aim_native_unavailable': ('The required native aiming interface is not available.', '所需原生瞄准接口不可用。'),
+            'aim_observation_unavailable': ('A reliable current aiming observation is not available.', '当前无法取得可靠的瞄准观察结果。'),
+            'aim_observation_changed': ('The target or loaded-shell observation changed during alignment checks.', '对准检查期间目标或装填炮弹状态发生改变。'),
+            'aim_source_error': ('The native aiming source could not be installed.', '无法安装原生瞄准源。'),
+            'aim_owner_changed': ('The aiming owner changed during admission.', '接收命令期间瞄准持有者发生改变。'),
+            'entity_changed': ('The physical player vehicle entity changed.', '玩家的实际战车实体已更换。'),
+            'vehicle_changed': ('The physical player vehicle entity changed.', '玩家的实际战车实体已更换。'),
+            'gun_owner_changed': ('Gun control was stopped or replaced while selecting the operation.', '选择装填操作期间火炮控制已被停止或替换。'),
+            'control_changed': ('Control ownership changed.', '控制权已变化。'),
+            'equipment_state_unavailable': ('The canonical equipment state is not available.', '尚未取得权威给养状态。'),
+            'equipment_native_busy': ('Another native equipment request is awaiting confirmation.', '另一条原生给养请求正在等待确认。'),
+            'equipment_operation_busy': ('An equipment command is still pending.', '另一条给养命令尚未完成。'),
+            'equipment_not_mounted': ('That equipment ID is not mounted on the player vehicle.', '玩家战车未装配该ID的给养。'),
+            'ambiguous_mounted_equipment': ('The equipment ID matches more than one mounted item.', '该给养ID对应多个装配项。'),
+            'equipment_not_activatable': ('This equipment has no explicit activation action.', '该给养不支持主动使用。'),
+            'automatic_equipment_only': ('This extinguisher is automatically activated by the native state.', '该灭火器仅由原生状态自动触发。'),
+            'unexpected_equipment_active': ('Only an RPM limiter accepts an explicit active state.', '仅调速器接受显式启用状态。'),
+            'equipment_target_required': ('Choose a device or crew target for this small kit.', '请为小型修理箱/急救包选择模块或成员目标。'),
+            'equipment_target_unavailable': ('That target is not supported by this equipment or vehicle.', '该给养或战车不支持所选目标。'),
+            'unexpected_equipment_target': ('Clear the target for all-target equipment, extinguishers or RPM limiters.', '全目标给养、灭火器或调速器不接受指定目标，请留空。'),
+            'equipment_active_required': ('Specify the requested RPM limiter enabled/disabled state.', '请明确指定调速器的启用/关闭状态。'),
+            'equipment_not_ready': ('The equipment is cooling down or has no uses left.', '给养正在冷却或已无可用次数。'),
+            'equipment_settings_unavailable': ('The native equipment input interface is not available.', '原生给养输入接口不可用。'),
+            'automatic_consumables_active': ('Automatic consumables own this channel. Restore manual control first.', '自动给养正占用此通道，请先恢复手动控制。'),
+            'equipment_submission_failed': ('The native equipment input did not confirm submission.', '原生给养输入未确认提交。'),
+            'equipment_receipt_superseded': ('A newer equipment result superseded this command sequence.', '更晚的给养结果已覆盖该命令序号。'),
+            'equipment_changed': ('The mounted equipment changed before confirmation.', '确认前已装配给养发生改变。'),
+            'equipment_rejected': ('The authoritative state rejected this equipment request.', '权威状态拒绝了该给养请求。'),
+            'equipment_already_set': ('The requested equipment state was already confirmed.', '已确认给养处于所请求的状态。'),
+            'equipment_applied': ('The matching native equipment result was applied.', '对应序号的原生给养结果已生效。'),
+            'siege_not_supported': ('This vehicle does not support siege mode.', '该战车不支持攻城模式。'),
+            'siege_native_busy': ('The native siege controller is already braking or switching.', '原生攻城模式控制器正在刹车或切换。'),
+            'siege_operation_busy': ('A siege mode command is still pending.', '另一条攻城模式命令尚未完成。'),
+            'siege_state_unavailable': ('The canonical mode and native presentation are not synchronized.', '权威模式状态与原生显示尚未同步。'),
+            'siege_settings_unavailable': ('The native siege input interface is not available.', '原生攻城模式输入接口不可用。'),
+            'automatic_drive_active': ('Automatic driving owns this channel. Restore manual control first.', '自动驾驶正占用此通道，请先恢复手动控制。'),
+            'siege_submission_failed': ('The native siege input did not confirm submission.', '原生攻城模式输入未确认提交。'),
+            'siege_request_sequence_invalid': ('The mode acknowledgement does not match this request sequence.', '模式确认与该请求序号不匹配。'),
+            'siege_rejected': ('The authoritative mode did not accept the requested state.', '权威模式未接受所请求的状态。'),
+            'siege_already_set': ('The requested siege mode was already confirmed.', '已确认攻城模式处于所请求的状态。'),
+            'siege_stable': ('The requested mode is stable and the matching native state is confirmed.', '所请求模式已稳定，对应的原生状态已确认。'),
+            'siege_replaced': ('A newer native mode request replaced this command.', '更新的原生模式请求已替换该命令。'),
+            'siege_not_submitted': ('The mode request was not submitted to the native input stream.', '该模式请求未提交到原生输入流。'),
             'position_unavailable': ('A current client position is not available.', '尚不能取得客户端当前位置。'),
             'dead': ('The player vehicle is destroyed.', '玩家战车已被击毁。'),
             'destroyed': ('The player vehicle is destroyed.', '玩家战车已被击毁。'),
@@ -313,7 +381,7 @@ class TestingPanel:
             'assertion_failed': ('The observed state does not satisfy the assertion.', '实际状态不满足断言。'),
             'observation_unavailable': ('The required state has not been observed.', '尚未观察到所需状态。'),
             'observation_limit': ('The client already has 32 pending state checks.', '客户端已有32个待完成的状态检查。'),
-            'automatic_fire_active': ('Restore manual control before changing ammunition.', '请先恢复手动控制，再调整弹药。'),
+            'automatic_fire_active': ('Automatic aiming/fire owns this channel. Restore manual control first.', '自动瞄准/射击正占用此通道，请先恢复手动控制。'),
             'gun_operation_busy': ('Another ammunition operation is still pending.', '另一个弹药操作尚未结束。'),
             'shell_not_mounted': ('That shell compactDescr is not mounted on this vehicle.', '当前战车未配备该compactDescr弹种。'),
             'ambiguous_mounted_shell': ('That shell identifier matches more than one slot.', '该弹种标识对应多个弹种槽位。'),
@@ -360,12 +428,30 @@ class TestingPanel:
             'velocity': ('Target velocity', '目标速度'), 'client_mode': ('Client aiming', '客户端瞄准'),
             'condition': ('Condition', '条件'), 'matched': ('Matched', '符合条件'),
             'observed': ('Observed', '实际观察'), 'value': ('Observed value', '观察值'),
-            'compact_descr': ('Shell compactDescr', '弹种compactDescr'),
-            'known': ('Observation available', '观察可用'), 'stock': ('Mounted shells', '配备弹种'),
+            'compact_descr': ('compactDescr', 'compactDescr'),
+            'known': ('Observation available', '观察可用'), 'stock': ('Mounted items', '已装配项目'),
             'stock_truncated': ('Shell list truncated', '弹种列表已截断'),
             'index': ('Shell index', '弹种索引'), 'ammo': ('Ammunition', '弹药'),
             'pending_index': ('Pending shell index', '待装填弹种索引'),
             'gun_pending': ('Gun transaction', '装填操作'),
+            'held': ('Aim source held', '持有瞄准源'),
+            'command_id': ('Command ID', '命令ID'),
+            'tolerance_deg': ('Tolerance (degrees)', '容差（度）'),
+            'error_deg': ('Direction error (degrees)', '方向误差（度）'),
+            'targets': ('Valid targets', '有效目标'),
+            'target_ids': ('Observed target IDs', '已观察目标ID'),
+            'visible_targets': ('Visible targets', '可见目标'),
+            'equipment_id': ('Equipment ID', '给养ID'), 'id': ('ID', 'ID'),
+            'repair_all': ('All-target effect', '全目标效果'),
+            'ready': ('Ready', '就绪'), 'uses_left': ('Uses left', '剩余使用次数'),
+            'pending': ('Pending operation', '待确认操作'), 'last': ('Latest observation', '最近观察'),
+            'intent_seq': ('Equipment intent sequence', '给养意图序号'),
+            'request_seq': ('Request sequence', '请求序号'),
+            'input_seq': ('Observed input sequence', '已观察输入序号'),
+            'enabled': ('Siege enabled', '攻城模式启用'),
+            'time_left_ms': ('Transition milliseconds', '切换剩余毫秒'),
+            'revision': ('Canonical revision', '权威状态版本'),
+            'presented': ('Native mode presentation', '原生模式显示'),
         }
         if value is None:
             return self._text('Unavailable', '暂无')
@@ -391,6 +477,13 @@ class TestingPanel:
             'pending': ('Pending', '待执行'), 'accepted': ('Accepted', '已接受'),
             'completed': ('Completed', '已完成'), 'failed': ('Failed', '失败'),
             'cancelled': ('Cancelled', '已取消'), 'holding': ('Holding', '驻守中'),
+            'acquiring': ('Acquiring aim source', '正在取得瞄准源'),
+            'releasing': ('Releasing owned control', '正在释放持有的控制权'),
+            'observing': ('Awaiting native observation', '等待原生状态观察'),
+            'submitting': ('Submitting native input', '正在提交原生输入'),
+            'braking': ('Braking before mode change', '模式切换前刹车'),
+            'repairkit': ('Repair kit', '修理箱'), 'medkit': ('First aid kit', '急救包'),
+            'extinguisher': ('Extinguisher', '灭火器'), 'rpm_limiter': ('RPM limiter', '调速器'),
             'travelling': ('Travelling', '行进中'), 'attacking': ('Attacking', '进攻中'),
             'capture_travel': ('Travelling to capture', '前往占领'), 'capturing': ('Capturing', '占领中'),
             'aiming': ('Aiming', '瞄准中'), 'arriving': ('Arriving', '正在抵达'),
@@ -405,6 +498,23 @@ class TestingPanel:
             pair = ACTION_LABELS.get(value) or states.get(value)
             if pair:
                 return self._text(*pair)
+        return self._describe(value)
+
+    def _manual_aim_text(self, value):
+        if isinstance(value, dict) and value.get('phase') == 'holding':
+            value = dict(value, phase=self._text('Holding aim', '持续瞄准'))
+        return self._describe(value)
+
+    def _siege_text(self, value):
+        if isinstance(value, dict):
+            state = value.get('state')
+            # Preserve the pinned #1513 enum alongside the localized caption.
+            if isinstance(state, int) and not isinstance(state, bool) and 0 <= state <= 3:
+                labels = (('Travel mode (0)', '行驶模式（0）'),
+                          ('Switching to siege (1)', '正在进入攻城模式（1）'),
+                          ('Siege mode (2)', '攻城模式（2）'),
+                          ('Switching to travel (3)', '正在退出攻城模式（3）'))
+                value = dict(value, state=self._text(*labels[state]))
         return self._describe(value)
 
     def _projectile_text(self):
@@ -476,8 +586,10 @@ class TestingPanel:
                 self._text('Automatic takeover', '自动接管') if status.get('active') else
                 self._text('Automatic takeover off', '自动接管未启用'))
         mission, aim = status.get('mission'), status.get('aim')
-        target = next((item[key] for item in (aim, mission) if isinstance(item, dict)
-                       for key in ('target_id', 'target', 'target_position') if item.get(key) is not None), None)
+        manual_aim = status.get('manual_aim')
+        held_aim = manual_aim if isinstance(manual_aim, dict) and manual_aim.get('held') is True else {}
+        target = next((item[key] for item in (held_aim, aim, mission) if isinstance(item, dict)
+                       for key in ('target_id', 'target', 'target_position', 'point') if item.get(key) is not None), None)
         target_text = self._describe(target)
         if isinstance(mission, dict) and mission.get('goal') is not None:
             target_text += self._text(' · Destination: ', ' · 目的地：') + self._describe(mission['goal'])
@@ -495,15 +607,28 @@ class TestingPanel:
             if (result.get('action') == 'fire' and result.get('status') == 'completed' and
                     result.get('reason') == 'shot_committed'):
                 states['completed'] = ('Local commit confirmed', '本地提交已确认')
+            if (result.get('action') in player_control_transport.AIM_ACTIONS and
+                    result.get('status') == 'completed'):
+                states['completed'] = ('Alignment observed; current ownership is shown separately',
+                                       '已观察到对准；当前控制权另行显示')
+            if result.get('action') in player_control_transport.NATIVE_ACTIONS:
+                states['accepted'] = ('Accepted; awaiting correlated native confirmation',
+                                      '已接受；等待关联的原生状态确认')
+                states['completed'] = ('Canonical state confirmed', '权威状态已确认')
             action = ACTION_LABELS.get(result.get('action'), (str(result.get('action', '?')), str(result.get('action', '?'))))
             result_text = '%s — %s [%s]' % (self._text(*action),
                 self._text(*states.get(result.get('status'), (str(result.get('status')), str(result.get('status'))))),
                 str(result.get('id', ''))[:8])
             if result.get('reason'):
                 result_text += ': ' + self._reason_text(result['reason'])
-            if (result.get('action') in ('wait_state', 'assert_state', 'select_shell', 'reload') and
+            if (result.get('action') in ('wait_state', 'assert_state', 'select_shell', 'reload',
+                                        'aim_target', 'aim_point', 'release_aim',
+                                        'use_equipment', 'set_siege') and
                     isinstance(result.get('result'), dict)):
-                result_text += '\n' + self._describe(result['result'])
+                describe_result = (self._manual_aim_text if result.get('action') in
+                    player_control_transport.AIM_ACTIONS | {'release_aim'} else
+                    self._siege_text if result.get('action') == 'set_siege' else self._describe)
+                result_text += '\n' + describe_result(result['result'])
         if self.notice:
             result_text += '\n' + self._reason_text(self.notice)
         ammo = status.get('ammo')
@@ -515,11 +640,19 @@ class TestingPanel:
                     ammo[key] = testing['gun'][key]
             if testing.get('gun_pending') is not None:
                 ammo['gun_pending'] = testing['gun_pending']
+        aim_ownership = self._manual_aim_text(manual_aim)
+        if isinstance(manual_aim, dict) and manual_aim.get('held') is False:
+            aim_ownership = self._text('No owned aim source. ', '当前未持有瞄准源。') + aim_ownership
+        native_actions = status.get('native_actions')
+        native_actions = native_actions if isinstance(native_actions, dict) else {}
         values = {'connection': connection,
                   'control': mode + ' · ' + (channels or self._text('No automatic channels', '没有自动控制通道')),
                   'mission': self._describe(mission), 'target': target_text,
                   'ammo': self._describe(ammo), 'pose': self._describe(status.get('pose')),
-                  'aim': self._describe(aim), 'result': result_text, 'projectiles': self._projectile_text()}
+                  'aim': self._describe(aim), 'manual_aim': aim_ownership,
+                  'equipment': self._describe(native_actions.get('equipment')),
+                  'siege': self._siege_text(native_actions.get('siege')),
+                  'result': result_text, 'projectiles': self._projectile_text()}
         for key, widget in self.status_labels.items():
             widget.config(text=values[key])
 
@@ -594,6 +727,66 @@ class TestingPanel:
             return False
         return self.send('select_shell', **args)
 
+    def _send_aim(self, action):
+        args = {'tolerance_deg': self.aim_tolerance.get()}
+        try:
+            if action == 'aim_target':
+                value = self.aim_target_id.get()
+                if not isinstance(value, str) or not value.strip().isdigit():
+                    raise ValueError('invalid_target_id')
+                args['target_id'] = int(value, 10)
+            else:
+                args['position'] = [self.aim_position[axis].get() for axis in ('x', 'y', 'z')]
+            args = player_control_transport.validate_arguments(action, args)
+        except (TypeError, ValueError, OverflowError) as error:
+            self.notice = str(error)
+            self._update_control_view(poll=False)
+            return False
+        return self.send(action, **args)
+
+    def _release_aim(self):
+        value = self.aim_release_id.get()
+        try:
+            if not isinstance(value, str):
+                raise ValueError('invalid_command_id')
+            args = {'command_id': value.strip()} if value.strip() else {}
+            args = player_control_transport.validate_arguments('release_aim', args)
+        except (TypeError, ValueError) as error:
+            self.notice = str(error)
+            self._update_control_view(poll=False)
+            return False
+        return self.send('release_aim', **args)
+
+    def _send_equipment(self):
+        try:
+            value = self.equipment_id.get()
+            if not isinstance(value, str) or not value.strip().isdigit():
+                raise ValueError('invalid_equipment_id')
+            args = {'equipment_id': int(value, 10)}
+            target = self.equipment_target.get()
+            if not isinstance(target, str):
+                raise ValueError('invalid_equipment_target')
+            if target.strip():
+                args['target'] = target.strip()
+            if self.equipment_use_active.get():
+                args['active'] = self.equipment_active.get()
+            args = player_control_transport.validate_arguments('use_equipment', args)
+        except (TypeError, ValueError, OverflowError) as error:
+            self.notice = str(error)
+            self._update_control_view(poll=False)
+            return False
+        return self.send('use_equipment', **args)
+
+    def _send_siege(self):
+        try:
+            args = player_control_transport.validate_arguments('set_siege',
+                {'enabled': self.siege_enabled.get()})
+        except (TypeError, ValueError) as error:
+            self.notice = str(error)
+            self._update_control_view(poll=False)
+            return False
+        return self.send('set_siege', **args)
+
     def open_controls(self):
         if not self.vars['control'].get():
             return
@@ -638,18 +831,21 @@ class TestingPanel:
                 self.control_labels.append((button, en, zh))
                 self.action_buttons.append(button)
 
-        label(body, 'Commands require client receipts and admission within two seconds. Execution has a separate timeout. State checks only observe. Closing this panel requests manual control; release requests do not expire.',
-              '命令须在两秒内被客户端接收并以客户端回执确认；执行超时另行计算。状态检查只做观察。关闭面板请求恢复手动，释放请求不会因延迟过期。')
+        label(body, 'Commands require client receipts and admission within two seconds. Execution has a separate timeout. State checks only observe. Closing this panel requests Restore manual control (Stop); only Stop has no admission expiry.',
+              '命令须在两秒内被客户端接收并以客户端回执确认；执行超时另行计算。状态检查只做观察。关闭面板请求恢复手动（Stop），仅Stop不因接收延迟过期。')
         state_body = section('Current client state', '客户端实际状态')
         for key, en, zh in (('connection', 'Connection', '连接'), ('control', 'Mode / enabled channels', '模式/已启用通道'),
                             ('mission', 'Task / phase', '任务/阶段'), ('target', 'Target / destination', '目标/目的地'),
                             ('ammo', 'Ammunition / clip / reload', '弹药/弹夹/装填'),
                             ('aim', 'Aiming / firing', '瞄准/射击'), ('pose', 'Position / movement', '位置/运动'),
+                            ('manual_aim', 'Held aim / current alignment', '持续瞄准/当前对准状态'),
+                            ('equipment', 'Equipment / native confirmation', '给养/原生确认'),
+                            ('siege', 'Observed siege mode / transition', '攻城模式/切换实际状态'),
                             ('result', 'Latest command receipt', '最新命令回执'),
                             ('projectiles', 'Projectile observations', '弹体后续观察')):
             frame = tk.Frame(state_body)
             frame.pack(fill='x')
-            heading = tk.Label(frame, width=23, anchor='nw', justify='left')
+            heading = tk.Label(frame, width=23, anchor='nw', justify='left', wraplength=160)
             heading.pack(side='left', anchor='n')
             self.control_labels.append((heading, en, zh))
             value = tk.Label(frame, anchor='w', justify='left', wraplength=410)
@@ -705,6 +901,39 @@ class TestingPanel:
                          ('drive', 'Left', '左转', lambda: self._send_drive(turn=-1)),
                          ('drive', 'Right', '右转', lambda: self._send_drive(turn=1))])
         row(input_body, [('fire', ACTION_LABELS['fire'][0], ACTION_LABELS['fire'][1], lambda: self.send('fire'))])
+        aim_body = section('Explicit held aiming', '指定持续瞄准')
+        target_row = tk.Frame(aim_body)
+        target_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        target_label = tk.Label(target_row, anchor='w')
+        target_label.pack(side='left')
+        self.control_labels.append((target_label, 'Target ID: ', '目标ID：'))
+        self.aim_target_id = tk.StringVar(value='')
+        tk.Entry(target_row, width=12, textvariable=self.aim_target_id).pack(side='left')
+        tolerance_label = tk.Label(target_row, anchor='w')
+        tolerance_label.pack(side='left', padx=(ui_layout.GAP, 0))
+        self.control_labels.append((tolerance_label, 'Tolerance (0.05–5 degrees): ', '容差（0.05至5度）：'))
+        self.aim_tolerance = tk.StringVar(value='0.5')
+        tk.Entry(target_row, width=7, textvariable=self.aim_tolerance).pack(side='left')
+        aim_point_row = tk.Frame(aim_body)
+        aim_point_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        self.aim_position = {}
+        for axis in ('x', 'y', 'z'):
+            tk.Label(aim_point_row, text=axis.upper() + ':').pack(side='left')
+            value = self.aim_position[axis] = tk.StringVar(value='')
+            tk.Entry(aim_point_row, width=10, textvariable=value).pack(side='left', fill='x', expand=True)
+        row(aim_body, [(action, ACTION_LABELS[action][0], ACTION_LABELS[action][1],
+                        lambda action=action: self._send_aim(action))
+                       for action in ('aim_target', 'aim_point')])
+        release_row = tk.Frame(aim_body)
+        release_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        release_label = tk.Label(release_row, anchor='w')
+        release_label.pack(side='left')
+        self.control_labels.append((release_label, 'Aim command ID (optional): ', '瞄准命令ID（可选）：'))
+        self.aim_release_id = tk.StringVar(value='')
+        tk.Entry(release_row, width=28, textvariable=self.aim_release_id).pack(side='left', fill='x', expand=True)
+        row(aim_body, [('release_aim', ACTION_LABELS['release_aim'][0], ACTION_LABELS['release_aim'][1], self._release_aim)])
+        label(aim_body, 'Alignment is observed for up to 30 seconds; a completed aim stays held until released or replaced. It does not confirm a clear firing lane or a hit. A blank release ID releases the current owned aim; an ID only releases that exact holder.',
+              '最长等待30秒确认对准；瞄准完成后仍持续持有，直到释放或替换。对准不代表射界畅通或命中。释放ID留空时释放当前持有的瞄准，指定ID时只释放该命令。')
         weapon_body = section('Ammunition and state checks', '弹药与状态检查')
         shell_row = tk.Frame(weapon_body)
         shell_row.pack(fill='x', pady=(0, ui_layout.GAP))
@@ -721,6 +950,41 @@ class TestingPanel:
                            lambda: self.send('assert_state', condition='ammo_empty'))])
         label(weapon_body, 'Use a shell compactDescr configured on the current vehicle. Loading/reloading waits for native confirmation (up to 180 seconds); the ready check waits up to 30 seconds. A failed assertion does not change control.',
               '请输入当前战车配备弹种的compactDescr。装填/重新装填等待原生状态确认，最长180秒；就绪检查最长30秒。断言失败不会改变控制权。')
+        native_body = section('Equipment and siege mode', '给养与攻城模式')
+        equipment_row = tk.Frame(native_body)
+        equipment_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        equipment_label = tk.Label(equipment_row, anchor='w')
+        equipment_label.pack(side='left')
+        self.control_labels.append((equipment_label, 'Mounted equipment ID (not compactDescr): ', '已装配给养ID（非compactDescr）：'))
+        self.equipment_id = tk.StringVar(value='')
+        tk.Entry(equipment_row, width=10, textvariable=self.equipment_id).pack(side='left')
+        equipment_target_row = tk.Frame(native_body)
+        equipment_target_row.pack(fill='x', pady=(0, ui_layout.GAP))
+        equipment_target_label = tk.Label(equipment_target_row, anchor='w')
+        equipment_target_label.pack(side='left')
+        self.control_labels.append((equipment_target_label, 'Repair / crew target (blank for all-target): ', '修理/成员目标（全目标时留空）：'))
+        self.equipment_target = tk.StringVar(value='')
+        self.app._ttk.Combobox(equipment_target_row, state='readonly', width=24,
+            textvariable=self.equipment_target,
+            values=[''] + sorted(player_control_transport.EQUIPMENT_TARGETS)).pack(side='left', fill='x', expand=True)
+        self.equipment_use_active = tk.BooleanVar(value=False)
+        use_active = tk.Checkbutton(native_body, variable=self.equipment_use_active, anchor='w')
+        use_active.pack(fill='x')
+        self.control_labels.append((use_active, 'Specify RPM limiter state (RPM limiter only)', '指定调速器状态（仅限调速器给养）'))
+        self.equipment_active = tk.BooleanVar(value=True)
+        active = tk.Checkbutton(native_body, variable=self.equipment_active, anchor='w')
+        active.pack(fill='x')
+        self.control_labels.append((active, 'Requested RPM limiter enabled', '请求启用调速器'))
+        row(native_body, [('use_equipment', ACTION_LABELS['use_equipment'][0],
+                          ACTION_LABELS['use_equipment'][1], self._send_equipment)])
+        self.siege_enabled = tk.BooleanVar(value=True)
+        enabled = tk.Checkbutton(native_body, variable=self.siege_enabled, anchor='w')
+        enabled.pack(fill='x')
+        self.control_labels.append((enabled, 'Requested siege mode enabled', '请求启用攻城模式'))
+        row(native_body, [('set_siege', ACTION_LABELS['set_siege'][0],
+                          ACTION_LABELS['set_siege'][1], self._send_siege)])
+        label(native_body, 'IDs, availability and valid repair/crew targets come from the client state above. Small kits require a target; all-target kits and extinguishers use a blank target. RPM limiter requests require an explicit enabled/disabled state. Accepted is not completed: equipment and mode changes wait up to 30 seconds for correlated native confirmation.',
+              'ID、可用性及有效修理/成员目标以顶部客户端状态为准。小修理箱/急救包须选目标，大型全目标给养及灭火器须留空。调速器须明确指定启用/关闭。已接受不代表已完成；给养和模式切换最长等待30秒，确认关联的原生结果。')
         window.protocol('WM_DELETE_WINDOW', self._close_controls)
         self.translate()
         ui_layout.polish(window)

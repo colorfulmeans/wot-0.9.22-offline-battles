@@ -2227,6 +2227,12 @@ class LANClient(object):
             'voluntary': bool(voluntary),
         })
 
+    def send_input_sequence(self, *args, **kwargs):
+        """Return this input's ordered identity, never a later callback's one."""
+        kwargs['_return_sequence'] = True
+        sequence = self.send_input(*args, **kwargs)
+        return None if sequence is False else sequence
+
     def send_input(self, forward, turn, aim_yaw=0.0, gun_pitch=0.0,
                    position=None, yaw=None, fire_seq=0,
                    speed=None,
@@ -2238,8 +2244,16 @@ class LANClient(object):
                    destructible_contacts=None,
                    siege_enabled=None,
                    pitch=None, roll=None,
-                   gun_checkpoint=None, up_cosine=None, wreck_pose=False):
+                   gun_checkpoint=None, up_cosine=None, wreck_pose=False,
+                   _return_sequence=False):
         if not self.ready or self.phase != 'battle':
+            return False
+        timeline_enabled = bool(
+            HUMAN_RAM_TIMELINE_CAPABILITY in self.capabilities and
+            HUMAN_RAM_TIMELINE_CAPABILITY in self.server_capabilities)
+        if _return_sequence and not timeline_enabled:
+            # A local counter without its canonical wire echo cannot prove
+            # that a particular native setting was acknowledged.
             return False
         if self._input_seq_round != self.round_id:
             self._input_seq_round = self.round_id
@@ -2276,9 +2290,6 @@ class LANClient(object):
                 min(MAX_PLAYER_GUN_PITCH, _finite_float(gun_pitch))),
             'fire_seq': parsed_fire_seq,
         }
-        timeline_enabled = bool(
-            HUMAN_RAM_TIMELINE_CAPABILITY in self.capabilities and
-            HUMAN_RAM_TIMELINE_CAPABILITY in self.server_capabilities)
         if timeline_enabled:
             message['input_seq'] = next_input_seq
         if position is not None and len(position) >= 3:
@@ -2379,7 +2390,7 @@ class LANClient(object):
                 pending_landing['input_seq'] = int(self._input_seq)
                 pending_landing.pop('wire', None)
             self._send_pending_landing_observation(rebind=True)
-        return True
+        return next_input_seq if _return_sequence else True
 
     def send_track_repair(self, tracks, base_revision, repair_seq):
         """Publish one versioned, track-only repair checkpoint.

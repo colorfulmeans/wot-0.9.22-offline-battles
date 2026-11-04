@@ -113,6 +113,7 @@ class PlayerRegressionTests(unittest.TestCase):
             _tactical_ray_clear=lambda *a:True,
             client=types.SimpleNamespace(team=1,player_id=1))
         c=player_control.PlayerControl(owner,('fire','drive'))
+        owner._player_control=c
         c.active=True;c.live=lambda:True;c.bind_input=lambda:None;c.poll_commands=lambda now:None
         c.select_ammo=lambda now:None;c.record=mock.Mock()
         c.direction_clear=lambda *args:True
@@ -650,10 +651,11 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertFalse(w.triggering)
 
     def test_inactive_panel_fire_records_synchronous_native_commit(self):
+        entity=types.SimpleNamespace(isAlive=lambda:True)
         owner=types.SimpleNamespace(_sender=object(),_local_fire_intent=None,
             client=types.SimpleNamespace(player_id=1),_start_message={'round_id':1},
             _server=types.SimpleNamespace(vehicle_id=1),
-            _server_entity=lambda unused:types.SimpleNamespace(isAlive=lambda:True),
+            _server_entity=lambda unused:entity,
             _gun_state=types.SimpleNamespace(ammo=[10],shots=[{}],shot_index=0,
                 clip=1,reload_time=0.,can_fire=lambda unused:True),_clock=lambda:0.)
         c=player_control.PlayerControl(owner,())

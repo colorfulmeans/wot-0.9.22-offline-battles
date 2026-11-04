@@ -433,6 +433,228 @@ class NativeGunActionTests(ActionHarness, unittest.TestCase):
         self.finish_reload()
         self.assertEqual('completed', self.receipt('select')['status'])
 
+    def test_same_id_entity_replacement_fails_old_reload_without_rewriting_its_result(self):
+        self.submit('select_shell', dict(compact_descr=102), 'old-select')
+        entity = self.owner._server_entity(self.owner._server.vehicle_id)
+        replacement = copy.copy(entity)
+        self.assertIsNot(replacement, entity)
+        self.owner._server_entity = lambda unused: replacement
+        self.finish_reload()
+        receipt = self.receipt('old-select')
+        self.assertEqual(('failed', 'vehicle_changed'), (receipt['status'], receipt['reason']))
+        self.assertFalse(self.actions.busy)
+        # The physical reload may still have completed, but only a new
+        # explicit observation belongs to the replacement vehicle.
+        self.assertEqual('completed', self.submit('select_shell', dict(compact_descr=102), 'new-select')['status'])
+        self.observe(self.fixture.now[0] + .1)
+        self.assertEqual(receipt, self.receipt('old-select'))
+
+    def test_entity_change_inside_native_setter_cannot_complete_the_old_vehicle_command(self):
+        self.install_gun(clip_size=1, clip=1)
+        self.owner._roll_loader_intuition = lambda: True
+        native = self.owner.change_vehicle_setting
+        entity = self.owner._server_entity(self.owner._server.vehicle_id)
+        replacement = copy.copy(entity)
+        def replaced_vehicle(code, value):
+            accepted = native(code, value)
+            self.owner._server_entity = lambda unused: replacement
+            return accepted
+        self.owner.change_vehicle_setting = replaced_vehicle
+        receipt = self.submit('select_shell', dict(compact_descr=102), 'select')
+        self.assertEqual(('failed', 'vehicle_changed'), (receipt['status'], receipt['reason']))
+        self.assertEqual((1, 1, 0.), (self.gun.shot_index, self.gun.clip, self.gun.reload_time))
+        native.assert_called_once_with(self.settings.CURRENT_SHELLS, 102)
+        self.assertFalse(self.actions.busy)
+        self.owner._server_entity = lambda unused: entity
+        self.observe(1.)
+        self.assertEqual(receipt, self.receipt('select'))
+
+    def test_entity_is_rechecked_before_calling_the_native_setter(self):
+        select = self.actions._selection
+        calls = []
+        entity = self.owner._server_entity(self.owner._server.vehicle_id)
+        replacement = copy.copy(entity)
+        def replace_after_selection(command):
+            result = select(command)
+            calls.append(command['id'])
+            if len(calls) == 2:  # Admission first, execution selection second.
+                self.owner._server_entity = lambda unused: replacement
+            return result
+        self.actions._selection = replace_after_selection
+        receipt = self.submit('select_shell', dict(compact_descr=102), 'select')
+        self.assertEqual(('failed', 'vehicle_changed'), (receipt['status'], receipt['reason']))
+        self.owner.change_vehicle_setting.assert_not_called()
+        self.assertEqual(0, self.gun.shot_index)
+
+    def test_selection_native_getter_cannot_hide_stop_identity_change_or_timeout(self):
+        for selection_phase in (1, 2):
+            for change in ('stop', 'identity', 'deadline'):
+                with self.subTest(selection_phase=selection_phase, change=change):
+                    self.install_gun()
+                    self.fixture.now[0] = 0.
+                    selecting, triggered, calls = [False], [False], [0]
+                    select, resolve = self.actions._selection, self.owner._server_entity
+                    def selection(command):
+                        calls[0] += 1
+                        selecting[0] = True
+                        try:
+                            return select(command)
+                        finally:
+                            selecting[0] = False
+                    def entity_getter(identity):
+                        if selecting[0] and calls[0] == selection_phase and not triggered[0]:
+                            triggered[0] = True
+                            if change == 'stop':
+                                self.actions.stop('selection_stop', self.fixture.now[0])
+                            elif change == 'identity':
+                                self.owner._start_message['round_id'] = 'new-round'
+                            else:
+                                self.fixture.now[0] = 1.
+                        return resolve(identity)
+                    self.actions._selection = selection
+                    self.owner._server_entity = entity_getter
+                    receipt = self.submit('select_shell', dict(compact_descr=102), 'select', timeout=1.)
+                    expected = 'gun_owner_changed' if change == 'stop' else (
+                        'identity_changed' if change == 'identity' else 'command_timeout')
+                    self.assertTrue(triggered[0])
+                    self.assertEqual(expected, receipt['reason'])
+                    self.assertIn(receipt['status'], ('rejected', 'cancelled', 'failed'))
+                    self.owner.change_vehicle_setting.assert_not_called()
+                    self.assertEqual(0, self.gun.shot_index)
+                    self.assertFalse(self.actions.busy)
+
+    def test_final_pre_native_entity_read_rechecks_stop_identity_and_elapsed_deadline(self):
+        for change in ('stop', 'identity', 'deadline'):
+            with self.subTest(change=change):
+                self.install_gun()
+                self.fixture.now[0] = 0.
+                resolve, triggered = self.owner._server_entity, [False]
+                def entity_getter(identity):
+                    if self.actions.gun_pending is not None and not triggered[0]:
+                        triggered[0] = True
+                        if change == 'stop':
+                            self.actions.stop('native_read_stop', self.fixture.now[0])
+                        elif change == 'identity':
+                            self.owner._start_message['round_id'] = 'native-read-round'
+                        else:
+                            self.fixture.now[0] = 1.
+                    return resolve(identity)
+                self.owner._server_entity = entity_getter
+                receipt = self.submit('select_shell', dict(compact_descr=102), 'select', timeout=1.)
+                expected = 'native_read_stop' if change == 'stop' else (
+                    'identity_changed' if change == 'identity' else 'command_timeout')
+                self.assertTrue(triggered[0])
+                self.assertEqual(expected, receipt['reason'])
+                self.owner.change_vehicle_setting.assert_not_called()
+                self.assertFalse(self.actions.busy)
+
+    def test_live_query_during_selection_fence_cannot_rebase_stop_generation(self):
+        select = self.actions._selection
+        calls, selecting, triggered = [0], [False], [False]
+        resolve = self.owner._server_entity
+        def selection(command):
+            calls[0] += 1
+            selecting[0] = True
+            try:
+                return select(command)
+            finally:
+                selecting[0] = False
+        def entity_getter(identity):
+            if calls[0] == 2 and not selecting[0] and not triggered[0]:
+                triggered[0] = True
+                self.actions.stop('selection_fence_stop', self.fixture.now[0])
+            return resolve(identity)
+        self.actions._selection = selection
+        self.owner._server_entity = entity_getter
+        receipt = self.submit('select_shell', dict(compact_descr=102), 'select')
+        self.assertTrue(triggered[0])
+        self.assertEqual(('cancelled', 'gun_owner_changed'), (receipt['status'], receipt['reason']))
+        self.owner.change_vehicle_setting.assert_not_called()
+        self.assertFalse(self.actions.busy)
+
+    def test_accepted_receipt_reentry_cannot_rebind_stop_round_entity_or_gun(self):
+        for change in ('stop', 'identity', 'entity', 'gun'):
+            with self.subTest(change=change):
+                self.install_gun(clip_size=1, clip=1)
+                self.owner._roll_loader_intuition = lambda: True
+                entity = self.owner._server_entity(self.owner._server.vehicle_id)
+                emit = self.control.gateway.emit
+                def replaced_at_accept(row):
+                    if row.get('id') == 'select' and row.get('status') == 'accepted':
+                        if change == 'stop':
+                            self.actions.stop('accepted_stop', self.fixture.now[0])
+                        elif change == 'identity':
+                            self.owner._start_message['round_id'] = 'accepted-new-round'
+                        elif change == 'entity':
+                            replacement = copy.copy(entity)
+                            self.owner._server_entity = lambda unused: replacement
+                        else:
+                            self.owner._gun_state = copy.copy(self.gun)
+                    return emit(row)
+                self.control.gateway.emit = replaced_at_accept
+                row = self.submit('select_shell', dict(compact_descr=102), 'select')
+                reasons = dict(stop='gun_owner_changed', identity='identity_changed',
+                               entity='vehicle_changed', gun='gun_changed')
+                self.assertEqual(reasons[change], row['reason'])
+                self.assertIn(row['status'], ('failed', 'cancelled'))
+                self.owner.change_vehicle_setting.assert_not_called()
+                self.assertEqual(0, self.gun.shot_index)
+                self.assertFalse(self.actions.busy)
+
+    def test_final_snapshot_reentry_cannot_complete_a_same_id_replacement_entity(self):
+        self.submit('select_shell', dict(compact_descr=102), 'select')
+        snapshot = self.actions._gun_snapshot
+        entity = self.owner._server_entity(self.owner._server.vehicle_id)
+        replacement = copy.copy(entity)
+        def replaced_during_snapshot():
+            result = snapshot()
+            self.owner._server_entity = lambda unused: replacement
+            return result
+        self.actions._gun_snapshot = replaced_during_snapshot
+        self.finish_reload()
+        receipt = self.receipt('select')
+        self.assertEqual(('failed', 'vehicle_changed'), (receipt['status'], receipt['reason']))
+        self.assertFalse(self.actions.busy)
+
+    def test_final_snapshot_reentry_preserves_the_gun_object_fence(self):
+        self.submit('select_shell', dict(compact_descr=102), 'select')
+        snapshot = self.actions._gun_snapshot
+        def replaced_gun():
+            result = snapshot()
+            self.owner._gun_state = copy.copy(self.gun)
+            return result
+        self.actions._gun_snapshot = replaced_gun
+        self.finish_reload()
+        receipt = self.receipt('select')
+        self.assertEqual(('failed', 'gun_changed'), (receipt['status'], receipt['reason']))
+        self.assertFalse(self.actions.busy)
+
+    def test_final_snapshot_reentry_cannot_report_an_unloaded_shell_as_ready(self):
+        self.submit('select_shell', dict(compact_descr=102), 'select')
+        snapshot = self.actions._gun_snapshot
+        def changed_loaded_shell():
+            result = snapshot()
+            self.gun.shot_index = 0
+            return result
+        self.actions._gun_snapshot = changed_loaded_shell
+        self.finish_reload()
+        receipt = self.receipt('select')
+        self.assertEqual(('failed', 'shell_changed'), (receipt['status'], receipt['reason']))
+        self.assertFalse(self.actions.busy)
+
+    def test_read_only_wait_and_assert_follow_current_state_without_entity_ownership(self):
+        receipt = self.submit('wait_state', dict(condition='ammo_empty'), 'empty-wait')
+        self.assertEqual('accepted', receipt['status'])
+        entity = self.owner._server_entity(self.owner._server.vehicle_id)
+        replacement = copy.copy(entity)
+        self.owner._server_entity = lambda unused: replacement
+        self.gun.ammo[:] = [0] * len(self.gun.ammo)
+        self.gun.clip = 0
+        self.observe(.1)
+        self.assertEqual('completed', self.receipt('empty-wait')['status'])
+        self.assertEqual('completed', self.submit('assert_state', dict(condition='ammo_empty'))['status'])
+        self.owner.change_vehicle_setting.assert_not_called()
+
     def test_already_selected_loaded_or_reloading_round_never_restarts_cycle(self):
         self.assertEqual('completed', self.submit('select_shell', dict(compact_descr=101))['status'])
         self.owner.change_vehicle_setting.assert_not_called()
@@ -628,6 +850,14 @@ class NativeGunActionTests(ActionHarness, unittest.TestCase):
         self.assertFalse(self.actions.busy)
         self.assertEqual(0, self.gun.shot_index)
         self.control.stop.assert_not_called()
+
+    def test_unicode_native_exception_is_bounded_and_remains_a_failure_receipt(self):
+        self.owner.change_vehicle_setting = mock.Mock(side_effect=RuntimeError('\u539f\u751f\u88c5\u586b\u5931\u8d25' * 100))
+        row = self.submit('select_shell', dict(compact_descr=102), 'select')
+        self.assertEqual(('failed', 'gun_setting_error'), (row['status'], row['reason']))
+        self.assertLessEqual(len(row['result']['error']), 160)
+        json.dumps(row, ensure_ascii=True, allow_nan=False)
+        self.assertFalse(self.actions.busy)
 
 
 if __name__ == '__main__':

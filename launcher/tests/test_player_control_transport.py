@@ -643,7 +643,8 @@ class PlayerControlTransportTests(unittest.TestCase):
 
     def test_weapon_and_observation_schema_matches_the_actual_client(self):
         client = self.client_module('commands')
-        for name in ('ACTIONS', 'READ_ONLY_ACTIONS', 'STATE_CONDITIONS', 'MISSION_STATUS_VALUES', 'MISSION_PHASE_VALUES'):
+        for name in ('ACTIONS', 'READ_ONLY_ACTIONS', 'AIM_ACTIONS', 'NATIVE_ACTIONS', 'EQUIPMENT_TARGETS',
+                     'STATE_CONDITIONS', 'MISSION_STATUS_VALUES', 'MISSION_PHASE_VALUES'):
             self.assertEqual(getattr(client, name), getattr(transport_schema, name))
         cases = [('select_shell', {'compact_descr': 2147483647}), ('reload', {})]
         predicates = [{'condition': condition} for condition in ('ammo_ready', 'ammo_empty', 'halted')]
@@ -659,6 +660,49 @@ class PlayerControlTransportTests(unittest.TestCase):
         for action, args in cases:
             with self.subTest(action=action, args=args):
                 self.assertEqual(client.validate_action(action, args), transport_schema.validate_arguments(action, args))
+
+    def test_aim_and_native_schema_parity_is_bounded_and_uses_native_target_names(self):
+        client = self.client_module('commands')
+        cases = [('aim_target', {'target_id': 2147483647}),
+                 ('aim_target', {'target_id': 202, 'tolerance_deg': .05}),
+                 ('aim_point', {'position': [-100000, 0, 100000]}),
+                 ('aim_point', {'position': [1, 2, 3], 'tolerance_deg': 5}),
+                 ('release_aim', {}), ('release_aim', {'command_id': 'c' * 128}),
+                 ('use_equipment', {'equipment_id': 0}),
+                 ('use_equipment', {'equipment_id': 65535, 'active': False}),
+                 ('set_siege', {'enabled': True}), ('set_siege', {'enabled': False})]
+        cases += [('use_equipment', {'equipment_id': 3, 'target': target})
+                  for target in client.EQUIPMENT_TARGETS]
+        for action, args in cases:
+            with self.subTest(action=action, args=args):
+                actual = json.loads(json.dumps(client.validate_action(action, args)))
+                self.assertEqual(actual, transport_schema.validate_arguments(action, args))
+
+    def test_invalid_aim_and_native_args_are_rejected_without_any_journal_write(self):
+        self.append(self.status())
+        client = self.client_module('commands')
+        invalid = [('aim_target', {'target_id': value})
+                   for value in (True, False, '202', 202., 0, -1, 2147483648, {})]
+        invalid += [('aim_point', {'position': value})
+                    for value in (None, [0, 1], [True, 0, 0], [float('nan'), 0, 0], [100001, 0, 0])]
+        invalid += [('aim_target', {'target_id': 202, 'tolerance_deg': value})
+                    for value in (True, None, .049, 5.1, float('inf'), 10 ** 1000)]
+        invalid += [('release_aim', {'command_id': value}) for value in ('', None, True, 1, 'x' * 129)]
+        invalid += [('use_equipment', {'equipment_id': value}) for value in (True, -1, 65536, '3', 3.)]
+        invalid += [('use_equipment', {'equipment_id': 3, 'target': value})
+                    for value in ('', 'engine', 'loader', 'gunner3', 'x' * 65, [], True)]
+        invalid += [('use_equipment', {'equipment_id': 3, 'active': value}) for value in (None, 1, 'true')]
+        invalid += [('set_siege', {'enabled': value}) for value in (None, 0, 1, 'false', [])]
+        invalid += [('aim_target', {'target_id': 202, 'fire': True}),
+                    ('aim_point', {'position': [0, 0, 0], 'expression': 'True'}),
+                    ('release_aim', {'force': True}), ('use_equipment', {'equipment_id': 0, 'extra': 1}),
+                    ('set_siege', {'enabled': True, 'toggle': True})]
+        for action, args in invalid:
+            with self.subTest(action=action, args=args):
+                with self.assertRaises(ValueError):
+                    client.validate_action(action, args)
+                self.assertIsNone(self.transport.send(action, args))
+        self.assertEqual([], self.commands())
 
     def test_invalid_weapon_or_observation_args_never_reach_the_request_journal(self):
         self.append(self.status())
@@ -690,7 +734,8 @@ class PlayerControlTransportTests(unittest.TestCase):
                              ('assert_state', {'condition': 'ammo_empty'})):
             self.assertTrue(self.transport.can_submit(action))
             self.assertIsNotNone(self.transport.send(action, args))
-        for action in ('fire', 'start', 'drive', 'reload', 'select_shell'):
+        for action in ('fire', 'start', 'drive', 'reload', 'select_shell', 'aim_target',
+                       'aim_point', 'release_aim', 'use_equipment', 'set_siege'):
             self.assertFalse(self.transport.can_submit(action))
             self.assertIsNone(self.transport.send(action))
         self.assertEqual(3, len(self.commands()))
@@ -725,6 +770,66 @@ class PlayerControlTransportTests(unittest.TestCase):
         self.assertEqual(['select_shell', 'reload', 'wait_state'], [command['action'] for command in executed])
         self.assertEqual([{'compact_descr': 7}, {}, {'condition': 'ammo_ready'}], [command['args'] for command in executed])
         self.assertTrue(all(self.transport.results[command['id']]['status'] == 'completed' for command in self.commands()))
+
+    def test_aim_and_native_actions_round_trip_with_admission_and_execution_separated(self):
+        client = self.client_module('commands')
+        identity = dict(session_id='session-a', round_id='round-a', player_id=101)
+        executed = []
+        gateway = client.CommandGateway(lambda: identity,
+            lambda row: client.append_result(self.result_path, row),
+            lambda command, now: executed.append(command),
+            lambda command: None, lambda command, reason: None, wall_clock=lambda: self.wall_now)
+        self.append(self.status())
+        cases = [('aim_target', {'target_id': 202}, 30.),
+                 ('aim_point', {'position': [1, 2, 3], 'tolerance_deg': 1.25}, 30.),
+                 ('release_aim', {'command_id': 'prior-holder'}, 10.),
+                 ('use_equipment', {'equipment_id': 3, 'target': 'gunHealth'}, 30.),
+                 ('use_equipment', {'equipment_id': 0, 'active': False}, 30.),
+                 ('set_siege', {'enabled': False}, 30.)]
+        for action, args, timeout in cases:
+            command_id = self.transport.send(action, args)
+            self.assertIsNotNone(command_id)
+            command = self.commands()[-1]
+            self.assertEqual(timeout, command['timeout_seconds'])
+            self.assertEqual(self.wall_now + 2., command['expires_at'])
+            self.assertEqual('submitted', self.transport.results[command_id]['status'])
+        client.JournalReader().poll(self.command_path,
+            lambda command: gateway.submit(command, self.now), lambda reason, offset: self.fail(reason))
+        self.transport.poll()
+        self.assertEqual([case[0] for case in cases], [command['action'] for command in executed])
+        self.assertTrue(all(self.transport.results[command['id']]['status'] == 'accepted' for command in self.commands()))
+        for command in executed:
+            gateway.finish(command['id'], 'completed', 'observed', self.now + 1., {'verified': True})
+        self.transport.poll()
+        self.assertTrue(all(self.transport.results[command['id']]['status'] == 'completed' for command in self.commands()))
+
+    def test_aim_completion_is_historical_and_does_not_reacquire_released_ownership(self):
+        self.append(self.status())
+        command_id = self.transport.send('aim_target', {'target_id': 202})
+        command = self.commands()[-1]
+        self.append(self.receipt(command, 'completed', reason='aligned', result={'held': True, 'aligned': True}),
+                    self.status(manual_aim={'held': False, 'aligned': False, 'command_id': None, 'reason': 'released'}))
+        self.transport.poll()
+        self.assertEqual('completed', self.transport.results[command_id]['status'])
+        self.assertFalse(self.transport.status['manual_aim']['held'])
+        self.assertEqual([], self.transport.projectile_results())
+
+    def test_equipment_readiness_and_siege_state_do_not_manufacture_a_completion_receipt(self):
+        self.append(self.status())
+        command_id = self.transport.send('use_equipment', {'equipment_id': 3, 'target': 'gunHealth'})
+        command = self.commands()[-1]
+        self.append(self.receipt(command, 'accepted', reason='validated'),
+            self.status(native_actions={'equipment': {'available': True, 'revision': 7,
+                'stock': [{'equipment_id': 3, 'ready': True, 'targets': ['gunHealth']}],
+                'last': {'id': 'another-command', 'status': 'completed'}},
+                'siege': {'available': True, 'enabled': True, 'state': 'enabled', 'input_seq': 99}}))
+        self.transport.poll()
+        self.assertEqual('accepted', self.transport.results[command_id]['status'])
+        self.append(self.receipt(command, 'completed', reason='equipment_confirmed',
+            result={'equipment_id': 3, 'intent_seq': 12}))
+        self.transport.poll()
+        self.assertEqual('completed', self.transport.results[command_id]['status'])
+        self.assertEqual(12, self.transport.results[command_id]['result']['intent_seq'])
 
 
 if __name__ == '__main__':

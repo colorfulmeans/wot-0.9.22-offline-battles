@@ -2175,6 +2175,10 @@ class _Client(object):
         self.sent.append(('input', values, kwargs))
         return True
 
+    def send_input_sequence(self, *values, **kwargs):
+        self.send_input(*values, **kwargs)
+        return self._input_seq
+
     def send_track_repair(self, tracks, base_revision, repair_seq):
         self.sent.append((
             'track_repair', tracks, base_revision, repair_seq))
@@ -11577,7 +11581,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         battle.client = types.SimpleNamespace(_input_seq=17)
         battle._server = types.SimpleNamespace(vehicle_id=10)
         battle._sender = types.SimpleNamespace(
-            send_current=mock.Mock(return_value=True))
+            send_current=mock.Mock(return_value=17))
         vehicle = types.SimpleNamespace(
             typeDescriptor=types.SimpleNamespace(hasSiegeMode=True))
         battle._server_entity = lambda unused_id: vehicle
@@ -11587,7 +11591,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
         self.assertFalse(battle.change_vehicle_setting(setting, 2))
 
         battle._sender.send_current.assert_called_once_with(
-            siege_enabled=True)
+            siege_enabled=True, sequence_result=True)
         self.assertEqual((True, 17), battle._local_siege_pending)
 
     def test_siege_edge_diagnostic_is_bounded_and_reads_current_controls(self):
@@ -11634,7 +11638,7 @@ class BattleRuntimeContractTests(unittest.TestCase):
 
         def send_current(**unused_kwargs):
             battle.client._input_seq += 1
-            return True
+            return battle.client._input_seq
 
         battle._sender = types.SimpleNamespace(
             forward=1.0, turn=1.0, aim_yaw=0.0, gun_pitch=0.0,

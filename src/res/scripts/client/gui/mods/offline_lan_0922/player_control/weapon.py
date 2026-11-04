@@ -106,6 +106,7 @@ class Weapon(object):
         self.triggering = False
         self.committed = 0
         self.bound_source = None
+        self.release_state = None
 
     def bind(self):
         rotator = self.owner._avatar.gunRotator
@@ -179,8 +180,39 @@ class Weapon(object):
     def close(self):
         if self.saved is not None:
             rotator, source, mode = self.saved
-            if rotator._VehicleGunRotator__shotPointSourceFunctor is self.bound_source:
-                rotator.shotPointSourceFunctor = source
-                rotator.clientMode = mode
+            if self.release_state is None:
+                self.release_state = dict(source_done=False, mode_done=False, writing=False)
+            state = self.release_state
+            if state['writing']:
+                raise RuntimeError('automatic_aim_release_pending')
+            state['writing'] = True
+            try:
+                current = rotator._VehicleGunRotator__shotPointSourceFunctor
+                if not state['source_done']:
+                    if current is self.bound_source:
+                        try:
+                            rotator.shotPointSourceFunctor = source
+                        finally:
+                            current = rotator._VehicleGunRotator__shotPointSourceFunctor
+                            if current is not self.bound_source:
+                                state['source_done'] = True
+                                # None selects a native default functor. A
+                                # later retry may restore only that exact
+                                # observed source, never a newer owner.
+                                if source is not None and current is not source:
+                                    state['mode_done'] = True
+                                else:
+                                    state['restored_source'] = current
+                    else:
+                        state['source_done'] = state['mode_done'] = True
+                if not state['mode_done']:
+                    current = rotator._VehicleGunRotator__shotPointSourceFunctor
+                    if (current is state.get('restored_source') and
+                            rotator.clientMode is True and mode is not True):
+                        rotator.clientMode = mode
+                    state['mode_done'] = True
+            finally:
+                state['writing'] = False
             self.saved = None
+        self.release_state = None
         self.target = self.point = self.source_point = self.solution = None

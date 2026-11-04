@@ -2,6 +2,7 @@
 
 Deterministic fixtures exercise Python decisions, not Windows playability.
 """
+import copy
 import itertools
 import json
 import math
@@ -53,6 +54,234 @@ class ControllerMigrationTests(unittest.TestCase):
     def request(self, control, action, **kwargs):
         return dict(control.identity(), id=action, action=action, args={},
                     expires_at=1005., **kwargs)
+
+    def start_fixture(self, features=('drive', 'fire')):
+        from test_player_manual_aim import ObservedRotator
+        control = self.control(features)
+        control.active = False
+        control.notify = mock.Mock()
+        control.owner._server_entity(1).typeDescriptor.type = types.SimpleNamespace(tags=())
+        source = lambda: (91., 92., 93.)
+        rotator = ObservedRotator(source)
+        control.owner._avatar = types.SimpleNamespace(gunRotator=rotator,
+            autoAim=mock.Mock(), isWaitingForShot=False)
+        control.owner._mutable_shot_ray = lambda: ((0., 1., 0.), (0., 0., 1.))
+        control.owner._vector = tuple
+        patcher = mock.patch('gui.mods.offline_lan_0922.player_control.ammunition.mounted_shells',
+                             return_value=[dict(index=0, kind='ARMOR_PIERCING')])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return control, rotator, source, mock.Mock()
+
+    def test_start_all_feature_masks_claim_only_enabled_native_channels(self):
+        for enabled in itertools.product((False, True), repeat=3):
+            names = {name for name, on in zip(('drive', 'fire', 'consumables'), enabled) if on}
+            with self.subTest(features=names):
+                c, rotator, source, navigation = self.start_fixture(names)
+                c.owner._local_player_burst = {'manual': True}
+                self.assertEqual(bool(names), c.toggle(navigation))
+                self.assertEqual(bool(names), c.active)
+                self.assertEqual('drive' in names, c.owns_drive())
+                if 'fire' in names:
+                    c.owner._avatar.autoAim.assert_called_once_with(None)
+                    self.assertIs(c.weapon.bound_source, rotator.shotPointSourceFunctor)
+                    self.assertTrue(rotator.clientMode)
+                else:
+                    c.owner._avatar.autoAim.assert_not_called()
+                    self.assertIs(source, rotator.shotPointSourceFunctor)
+                    self.assertFalse(rotator.clientMode)
+                c.stop()
+                self.assertIs(source, rotator.shotPointSourceFunctor)
+                self.assertFalse(rotator.clientMode)
+                self.assertEqual((0., 0., False) if 'drive' in names else (1., .3, True),
+                    (c.owner._sender.forward, c.owner._sender.turn, c.owner._sender.handbrake))
+                c.owner._cancel_local_player_burst.assert_not_called()
+
+    def test_native_bind_stop_cannot_revive_start_or_accept_a_nested_start(self):
+        for boundary in ('auto_aim', 'source_before', 'source_after', 'mode_before'):
+            with self.subTest(boundary=boundary):
+                c, rotator, source, navigation = self.start_fixture()
+                observed = []
+                def stop_once(unused):
+                    if boundary == 'auto_aim':
+                        c.owner._avatar.autoAim.side_effect = None
+                    else:
+                        setattr(rotator, boundary, None)
+                    observed.append((c.active, c.weapon is not None, c.aiming is not None))
+                    c.stop('native_setter_stop')
+                    observed.append(c.toggle(navigation))
+                if boundary == 'auto_aim':
+                    c.owner._avatar.autoAim.side_effect = stop_once
+                else:
+                    setattr(rotator, boundary, stop_once)
+                self.assertFalse(c.toggle(navigation))
+                self.assertEqual([(True, True, True), False], observed)
+                self.assertFalse(c.active)
+                self.assertIsNone(c.weapon)
+                self.assertIsNone(c.navigation)
+                self.assertIsNone(c.aiming)
+                self.assertFalse(c.release_pending)
+                self.assertIs(source, rotator.shotPointSourceFunctor)
+                self.assertFalse(rotator.clientMode)
+                navigation.close.assert_called_once_with()
+                self.assertNotIn('enabled', [call.args[0] for call in c.record.call_args_list])
+
+    def test_bind_entity_gun_or_round_replacement_cannot_complete_start(self):
+        for changed in ('entity', 'gun', 'rotator', 'round'):
+            for boundary in ('source_before', 'source_after', 'mode_before'):
+                with self.subTest(changed=changed, boundary=boundary):
+                    c, rotator, source, navigation = self.start_fixture()
+                    def replace_once(unused):
+                        setattr(rotator, boundary, None)
+                        if changed == 'entity':
+                            replacement = copy.copy(c.owner._server_entity(1))
+                            c.owner._server_entity = lambda unused: replacement
+                        elif changed == 'gun':
+                            c.owner._gun_state = copy.copy(c.owner._gun_state)
+                        elif changed == 'rotator':
+                            c.owner._avatar.gunRotator = copy.copy(rotator)
+                        else:
+                            c.owner._start_message = dict(round_id='next-round')
+                    setattr(rotator, boundary, replace_once)
+                    self.assertFalse(c.toggle(navigation))
+                    self.assertFalse(c.active)
+                    self.assertIsNone(c.weapon)
+                    self.assertIsNone(c.navigation)
+                    self.assertIs(source, rotator.shotPointSourceFunctor)
+                    self.assertFalse(rotator.clientMode)
+                    self.assertFalse(c.release_pending)
+
+    def test_native_bind_failure_cleans_partial_source_and_mode(self):
+        for boundary in ('auto_aim', 'source_before', 'source_after', 'mode_before'):
+            with self.subTest(boundary=boundary):
+                c, rotator, source, navigation = self.start_fixture()
+                def fail_once(unused):
+                    if boundary == 'auto_aim':
+                        c.owner._avatar.autoAim.side_effect = None
+                    else:
+                        setattr(rotator, boundary, None)
+                    raise RuntimeError('native binding failed')
+                if boundary == 'auto_aim':
+                    c.owner._avatar.autoAim.side_effect = fail_once
+                else:
+                    setattr(rotator, boundary, fail_once)
+                self.assertFalse(c.toggle(navigation))
+                self.assertFalse(c.active)
+                self.assertIsNone(c.weapon)
+                self.assertIs(source, rotator.shotPointSourceFunctor)
+                self.assertFalse(rotator.clientMode)
+                self.assertFalse(c.release_pending)
+                navigation.close.assert_called_once_with()
+
+    def test_cancelled_navigation_constructor_closes_only_its_late_resource(self):
+        c, rotator, source, navigation = self.start_fixture()
+        def create(*unused):
+            c.stop('native_constructor_stop')
+            self.assertFalse(c.toggle(navigation))
+            return navigation
+        with mock.patch('gui.mods.offline_lan_0922.player_control.navigation.PlayerNavigation',
+                        side_effect=create):
+            self.assertFalse(c.toggle())
+        self.assertFalse(c.active)
+        self.assertIsNone(c.navigation)
+        navigation.close.assert_called_once_with()
+        self.assertIs(source, rotator.shotPointSourceFunctor)
+        self.assertFalse(rotator.clientMode)
+        self.assertFalse(c.release_pending)
+
+    def test_start_cleanup_failure_remains_retryable_without_reviving_owner(self):
+        c, rotator, source, navigation = self.start_fixture()
+        def stop_once(unused):
+            rotator.source_after = None
+            c.stop('native_setter_stop')
+            def fail_restore_once(value):
+                if value is source:
+                    rotator.source_after = None
+                    raise RuntimeError('restore failed after source write')
+            rotator.source_after = fail_restore_once
+        rotator.source_after = stop_once
+        self.assertFalse(c.toggle(navigation))
+        self.assertFalse(c.active)
+        self.assertIsNone(c.weapon)
+        self.assertIs(source, rotator.shotPointSourceFunctor)
+        self.assertTrue(rotator.clientMode)
+        self.assertEqual(['aim_release'], [stage for stage, unused in c.release_pending])
+        c.retry_releases(2.)
+        self.assertFalse(c.release_pending)
+        self.assertFalse(rotator.clientMode)
+        self.assertFalse(c.active)
+
+    def test_ordinary_stop_retries_mode_after_source_was_already_restored(self):
+        for third_party in (False, True):
+            with self.subTest(third_party=third_party):
+                c, rotator, source, navigation = self.start_fixture()
+                self.assertTrue(c.toggle(navigation))
+                def fail_mode_once(value):
+                    if value is False:
+                        rotator.mode_before = None
+                        raise RuntimeError('native mode restore failed')
+                rotator.mode_before = fail_mode_once
+                self.assertFalse(c.stop())
+                self.assertIs(source, rotator.shotPointSourceFunctor)
+                self.assertTrue(rotator.clientMode)
+                self.assertEqual(['aim_release'], [stage for stage, unused in c.release_pending])
+                replacement = lambda: (1., 2., 3.)
+                if third_party:
+                    rotator.shotPointSourceFunctor = replacement
+                c.retry_releases(2.)
+                self.assertFalse(c.release_pending)
+                self.assertIs(replacement if third_party else source, rotator.shotPointSourceFunctor)
+                self.assertEqual(third_party, rotator.clientMode)
+
+    def test_start_cleanup_reentry_does_not_overwrite_new_control(self):
+        c, rotator, source, navigation = self.start_fixture()
+        attempts = []
+        def stop_once(unused):
+            rotator.mode_before = None
+            c.stop('native_setter_stop')
+            def during_restore(value):
+                if value is source:
+                    rotator.source_after = None
+                    attempts.append(c.toggle(navigation))
+            rotator.source_after = during_restore
+        rotator.mode_before = stop_once
+        self.assertFalse(c.toggle(navigation))
+        self.assertEqual([False], attempts)
+        self.assertFalse(c.release_pending)
+        replacement = mock.Mock()
+        self.assertTrue(c.toggle(replacement))
+        current_weapon = c.weapon
+        c.retry_releases(10.)
+        self.assertTrue(c.active)
+        self.assertIs(current_weapon, c.weapon)
+        self.assertIs(replacement, c.navigation)
+        self.assertIs(current_weapon.bound_source, rotator.shotPointSourceFunctor)
+        self.assertTrue(rotator.clientMode)
+        replacement.close.assert_not_called()
+
+    def test_start_barrier_precedes_native_input_and_navigation_release(self):
+        for boundary in ('input', 'navigation'):
+            with self.subTest(boundary=boundary):
+                c, rotator, source, navigation = self.start_fixture()
+                attempts = []
+                def stop_once(unused):
+                    rotator.source_before = None
+                    c.stop('native_setter_stop')
+                def attempt_start():
+                    attempts.append(c.toggle(mock.Mock()))
+                    return True
+                rotator.source_before = stop_once
+                if boundary == 'input':
+                    c.owner._sender.send_current.side_effect = attempt_start
+                else:
+                    navigation.close.side_effect = attempt_start
+                self.assertFalse(c.toggle(navigation))
+                self.assertEqual([False], attempts)
+                self.assertFalse(c.active)
+                self.assertIsNone(c.weapon)
+                self.assertIs(source, rotator.shotPointSourceFunctor)
+                self.assertFalse(rotator.clientMode)
+                self.assertFalse(c.release_pending)
 
     def test_all_feature_masks_release_only_owned_channels_and_never_manual_burst(self):
         for enabled in itertools.product((False, True), repeat=3):

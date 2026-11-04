@@ -360,6 +360,7 @@ class PlayerAutomaticConsumableTests(unittest.TestCase):
                     _critical_name_from_extra_index=BattleRuntime._critical_name_from_extra_index,
                     _report_critical_presentation=mock.Mock())
                 owner._activate_equipment = lambda code: BattleRuntime._activate_equipment(owner, code)
+                owner._activate_equipment_intent = lambda code: BattleRuntime._activate_equipment_intent(owner, code)
                 controller = PlayerControl(owner, ('consumables',), notify=lambda text: None)
                 controller.record = mock.Mock()
                 controller.consumables(entity)

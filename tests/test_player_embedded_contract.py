@@ -28,6 +28,76 @@ settling = load_helper('settling')
 
 
 class EmbeddedForegroundContractTests(unittest.TestCase):
+    def test_explicit_native_command_schema_and_unicode_holder_on_python27(self):
+        self.assertEqual(42, commands.validate_action('aim_target',
+            dict(target_id=42))['target_id'])
+        point = commands.validate_action('aim_point',
+            dict(position=[20., 1., 100.], tolerance_deg=.5))
+        self.assertEqual([20., 1., 100.], list(point['position']))
+        holder = commands.validate_action('release_aim', dict(command_id=u'\u6301\u6709'))
+        self.assertEqual(u'\u6301\u6709', holder['command_id'])
+        self.assertEqual('engineHealth', commands.validate_action('use_equipment',
+            dict(equipment_id=4, target='engineHealth'))['target'])
+        self.assertIs(True, commands.validate_action('set_siege', dict(enabled=True))['enabled'])
+        for action, args in (
+                ('aim_target', dict(target_id=True)),
+                ('aim_point', dict(position=[float('nan'), 1., 2.])),
+                ('use_equipment', dict(equipment_id=False)),
+                ('use_equipment', dict(equipment_id=4, target='unknown')),
+                ('set_siege', dict(enabled=1))):
+            with self.assertRaises(ValueError):
+                commands.validate_action(action, args)
+
+    def test_explicit_command_default_deadlines_are_not_admission_deadlines(self):
+        identity = dict(session_id='s', round_id=1, player_id=1)
+        for action, args, timeout in (
+                ('aim_target', dict(target_id=42), 30.),
+                ('aim_point', dict(position=[20., 1., 100.]), 30.),
+                ('release_aim', {}, 10.),
+                ('use_equipment', dict(equipment_id=12, active=True), 30.),
+                ('set_siege', dict(enabled=False), 30.)):
+            gateway = commands.CommandGateway(lambda: identity, lambda row: True,
+                lambda command, now: None, lambda command: None,
+                lambda command, reason: None, wall_clock=lambda: 1000.)
+            request = dict(identity, id=action, action=action, args=args, expires_at=1002.)
+            result = gateway.submit(request, 3.)
+            self.assertEqual('accepted', result['status'])
+            self.assertEqual(3. + timeout, gateway.requests[action]['deadline'])
+            gateway.tick(3. + timeout)
+            self.assertEqual('command_timeout', gateway.requests[action]['receipt']['reason'])
+
+    def test_identity_is_rechecked_after_native_preflight_on_python27(self):
+        identity = dict(session_id='s', round_id=1, player_id=1)
+        executed = []
+        def preflight(command):
+            identity['round_id'] = 2
+        gateway = commands.CommandGateway(lambda: identity, lambda row: True,
+            lambda command, now: executed.append(command), preflight,
+            lambda command, reason: None, wall_clock=lambda: 1000.)
+        request = dict(identity, id='mode', action='set_siege',
+                       args=dict(enabled=True), expires_at=1002.)
+        result = gateway.submit(request, 0.)
+        self.assertEqual(('rejected', 'identity_changed'), (result['status'], result['reason']))
+        self.assertEqual([], executed)
+        self.assertFalse(commands.same_identity(dict(player_id=1), dict(player_id=True)))
+        self.assertFalse(commands.same_identity(dict(player_id=1), dict(player_id=1.)))
+
+    def test_unicode_native_failure_keeps_the_original_error_and_terminal_cleanup(self):
+        identity = dict(session_id='s', round_id=1, player_id=1)
+        cancelled = []
+        failure = RuntimeError(u'\u539f\u751f\u9519\u8bef')
+        def execute(command, now):
+            raise failure
+        gateway = commands.CommandGateway(lambda: identity, lambda row: True,
+            execute, lambda command: None,
+            lambda command, reason: cancelled.append(reason), wall_clock=lambda: 1000.)
+        request = dict(identity, id='fire', action='fire', args={}, expires_at=1002.)
+        with self.assertRaises(RuntimeError) as raised:
+            gateway.submit(request, 0.)
+        self.assertIs(failure, raised.exception)
+        self.assertEqual('execution_error', gateway.requests['fire']['receipt']['reason'])
+        self.assertEqual(['execution_error'], cancelled)
+
     def test_unicode_lookup_and_effect_ids_are_not_ascii_coerced(self):
         args = commands.validate_action('assert_state',
             dict(condition='shot_terminal', projectile_id=u'\u4e2d'))

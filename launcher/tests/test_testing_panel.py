@@ -1,4 +1,4 @@
-"""Launcher settings and observable player-control UI boundaries; no native GUI proof."""
+"""Launcher control wiring, receipts and optional real-Tk layout; no game-engine proof."""
 import json
 import os
 from pathlib import Path
@@ -6,6 +6,8 @@ import sys
 import types
 import unittest
 from unittest import mock
+import tkinter as tk
+from tkinter import ttk
 
 import testing_ui
 from test_launcher_window import _FakeTk, _FakeTtk, _Widget
@@ -538,6 +540,255 @@ class TestingPanelTests(unittest.TestCase):
         self.assertIn('4 older shots', text)
         self.assertNotIn('Command [unconfir]', text)
         self.assertIsNone(panel.transport.projectile_results()[0]['command_id'])
+
+    def test_explicit_aim_buttons_send_bounded_args_and_translation_preserves_fields(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel, manual_aim={'held': False, 'aligned': False,
+            'visible_targets': [{'target_id': 202, 'position': [1, 2, 3]}]})
+        panel.aim_target_id.set('202')
+        panel.aim_tolerance.set('1.25')
+        for axis, value in zip(('x', 'y', 'z'), ('-10.5', '3', '42')):
+            panel.aim_position[axis].set(value)
+        panel.aim_release_id.set('aim-holder')
+        for action in ('aim_target', 'aim_point', 'release_aim'):
+            button = next(button for button in panel.action_buttons if button._control_action == action)
+            self.assertTrue(button.options['command']())
+        commands = self.commands(panel)
+        self.assertEqual([{'target_id': 202, 'tolerance_deg': 1.25},
+                          {'position': [-10.5, 3., 42.], 'tolerance_deg': 1.25},
+                          {'command_id': 'aim-holder'}], [row['args'] for row in commands])
+        self.assertEqual([30., 30., 10.], [row['timeout_seconds'] for row in commands])
+        self.assertTrue(all(row['expires_at'] > 0 for row in commands))
+        panel.aim_release_id.set('')
+        self.assertTrue(panel._release_aim())
+        self.assertEqual({}, self.commands(panel)[-1]['args'])
+        self.app.language = 'zh'
+        panel.translate()
+        self.assertEqual('202', panel.aim_target_id.get())
+        self.assertEqual('1.25', panel.aim_tolerance.get())
+        self.assertEqual(['-10.5', '3', '42'], [panel.aim_position[axis].get() for axis in ('x', 'y', 'z')])
+        self.assertIn('可见目标', panel.status_labels['manual_aim'].options['text'])
+
+    def test_invalid_aim_input_never_writes_or_claims_ownership(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel, manual_aim={'held': False, 'aligned': False})
+        for value in ('', '0', '-1', '1.5', '1e3', 'True', '2147483648', True):
+            panel.aim_target_id.set(value)
+            self.assertFalse(panel._send_aim('aim_target'))
+        panel.aim_target_id.set('202')
+        for value in ('nan', 'inf', '0.049', '5.1', True):
+            panel.aim_tolerance.set(value)
+            self.assertFalse(panel._send_aim('aim_target'))
+        panel.aim_tolerance.set('0.5')
+        for axis in ('x', 'y', 'z'):
+            panel.aim_position[axis].set('0')
+        for value in ('', 'nan', 'inf', '100001', True):
+            panel.aim_position['x'].set(value)
+            self.assertFalse(panel._send_aim('aim_point'))
+        for value in ('x' * 129, True):
+            panel.aim_release_id.set(value)
+            self.assertFalse(panel._release_aim())
+        self.assertEqual([], self.commands(panel))
+        self.assertFalse(panel.transport.status['manual_aim']['held'])
+
+    def test_completed_alignment_is_not_presented_as_current_ownership_or_a_hit(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel)
+        panel.send('aim_target', target_id=202)
+        command = self.commands(panel)[0]
+        self.receipt(panel, command, 'completed', 'aligned', result={'held': True, 'aligned': True})
+        self.status(panel, manual_aim={'held': True, 'aligned': True, 'command_id': command['id'],
+            'phase': 'holding', 'target_id': 202})
+        self.assertIn('Aim source held: Yes', panel.status_labels['manual_aim'].options['text'])
+        self.assertIn('Holding aim', panel.status_labels['manual_aim'].options['text'])
+        self.status(panel, manual_aim={'held': False, 'aligned': False, 'command_id': None, 'reason': 'released'})
+        self.assertIn('Alignment observed; current ownership is shown separately', panel.status_labels['result'].options['text'])
+        self.assertIn('No owned aim source', panel.status_labels['manual_aim'].options['text'])
+        self.assertEqual([], panel.transport.projectile_results())
+        self.assertEqual('completed', panel.transport.results[command['id']]['status'])
+        self.app.language = 'zh'
+        panel.translate()
+        self.assertIn('当前控制权另行显示', panel.status_labels['result'].options['text'])
+        self.assertIn('当前未持有瞄准源', panel.status_labels['manual_aim'].options['text'])
+
+    def test_equipment_and_siege_buttons_use_requested_values_not_toggle_or_wire_flags(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel)
+        panel.equipment_id.set('3')
+        panel.equipment_target.set('gunHealth')
+        use = next(button for button in panel.action_buttons if button._control_action == 'use_equipment')
+        self.assertTrue(use.options['command']())
+        panel.equipment_id.set('0')
+        panel.equipment_target.set('')
+        panel.equipment_use_active.set(True)
+        panel.equipment_active.set(False)
+        self.assertTrue(use.options['command']())
+        siege = next(button for button in panel.action_buttons if button._control_action == 'set_siege')
+        for value in (True, False):
+            panel.siege_enabled.set(value)
+            self.assertTrue(siege.options['command']())
+        commands = self.commands(panel)
+        self.assertEqual([{'equipment_id': 3, 'target': 'gunHealth'}, {'equipment_id': 0, 'active': False},
+                          {'enabled': True}, {'enabled': False}], [row['args'] for row in commands])
+        self.assertTrue(all(row['timeout_seconds'] == 30. and row['expires_at'] > 0 for row in commands))
+        self.app.language = 'zh'
+        panel.translate()
+        self.assertEqual('0', panel.equipment_id.get())
+        self.assertTrue(panel.equipment_use_active.get())
+        self.assertFalse(panel.equipment_active.get())
+        self.assertFalse(panel.siege_enabled.get())
+
+    def test_invalid_equipment_and_mode_inputs_never_write(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel)
+        for value in ('', '-1', '65536', '3.5', '1e3', 'True', True):
+            panel.equipment_id.set(value)
+            self.assertFalse(panel._send_equipment())
+        panel.equipment_id.set('3')
+        for value in ('engine', 'loader', 'gunner3', '__import__', True):
+            panel.equipment_target.set(value)
+            self.assertFalse(panel._send_equipment())
+        panel.equipment_target.set('')
+        panel.equipment_use_active.set(True)
+        panel.equipment_active.set(1)
+        self.assertFalse(panel._send_equipment())
+        panel.siege_enabled.set('true')
+        self.assertFalse(panel._send_siege())
+        self.assertEqual([], self.commands(panel))
+
+    def test_native_readiness_pending_sequence_and_terminal_receipts_remain_distinct(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        native = {'equipment': {'available': True, 'revision': 7, 'intent_seq': 0,
+                    'stock': [{'equipment_id': 3, 'kind': 'repair', 'ready': True,
+                        'repair_all': False, 'uses_left': 1, 'targets': ['gunHealth']}]},
+                  'siege': {'available': True, 'enabled': False, 'state': 'disabled',
+                    'time_left_ms': 0, 'input_seq': 5, 'presented': False}}
+        self.status(panel, native_actions=native)
+        self.assertIn('Equipment ID: 3', panel.status_labels['equipment'].options['text'])
+        self.assertIn('Ready: Yes', panel.status_labels['equipment'].options['text'])
+        self.assertIn('gunHealth', panel.status_labels['equipment'].options['text'])
+        self.assertIn('Siege enabled: No', panel.status_labels['siege'].options['text'])
+        for action, args, pending_key, sequence in (
+                ('use_equipment', {'equipment_id': 3, 'target': 'gunHealth'}, 'equipment', {'intent_seq': 8}),
+                ('set_siege', {'enabled': True}, 'siege', {'request_seq': 6})):
+            self.assertTrue(panel.send(action, **args))
+            command = self.commands(panel)[-1]
+            self.receipt(panel, command, 'accepted')
+            native[pending_key]['pending'] = dict(id=command['id'], phase='waiting', **sequence)
+            self.status(panel, native_actions=native)
+            text = panel.status_labels['result'].options['text']
+            self.assertIn('awaiting correlated native confirmation', text)
+            self.assertNotIn('Canonical state confirmed', text)
+            self.receipt(panel, command, 'completed', 'confirmed', result=dict(args, **sequence))
+            text = panel.status_labels['result'].options['text']
+            self.assertIn('Canonical state confirmed', text)
+            self.assertIn(str(next(iter(sequence.values()))), text)
+        self.app.language = 'zh'
+        panel.translate()
+        self.assertIn('权威状态已确认', panel.status_labels['result'].options['text'])
+        self.assertIn('给养ID: 3', panel.status_labels['equipment'].options['text'])
+
+    def test_siege_numeric_states_show_transition_names_without_altering_observed_status(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        english = ('Travel mode (0)', 'Switching to siege (1)', 'Siege mode (2)', 'Switching to travel (3)')
+        chinese = ('行驶模式（0）', '正在进入攻城模式（1）', '攻城模式（2）', '正在退出攻城模式（3）')
+        for state in range(4):
+            self.app.language = 'en'
+            self.status(panel, native_actions={'siege': {'available': True, 'enabled': state == 2,
+                'state': state, 'time_left_ms': 0 if state in (0, 2) else 1000, 'input_seq': 10}})
+            self.assertIn(english[state], panel.status_labels['siege'].options['text'])
+            self.app.language = 'zh'
+            panel.translate()
+            self.assertIn(chinese[state], panel.status_labels['siege'].options['text'])
+            self.assertEqual(state, panel.transport.status['native_actions']['siege']['state'])
+
+    def test_pending_native_cleanup_is_not_labelled_as_an_aim_release(self):
+        panel = self.panel()
+        self.launch(panel)
+        panel.open_controls()
+        self.status(panel, native_actions={'siege': {'available': True, 'enabled': False,
+            'state': 0, 'pending': {'id': 'siege-one', 'request_seq': None, 'phase': 'releasing'}}})
+        self.assertIn('Releasing owned control', panel.status_labels['siege'].options['text'])
+        self.assertNotIn('aim source', panel.status_labels['siege'].options['text'])
+        self.app.language = 'zh'
+        panel.translate()
+        self.assertIn('正在释放持有的控制权', panel.status_labels['siege'].options['text'])
+
+
+@unittest.skipUnless(os.name == 'nt' or os.environ.get('DISPLAY'), 'requires Tk display')
+class TestingPanelTkLayoutTests(unittest.TestCase):
+    """Exercise actual widget allocation without implying native game acceptance."""
+    def setUp(self):
+        self.root = tk.Tk()
+        self.addCleanup(self.root.destroy)
+        self.app = types.SimpleNamespace(_tk=tk, _ttk=ttk, root=self.root,
+            language='en', _diagnostic_entry=False, _save_settings=lambda: None)
+        self.panel = testing_ui.TestingPanel(self.app, self.root, {'control': True})
+        self.panel.open_controls()
+        self.addCleanup(lambda: self.panel._close_controls(send_stop=False))
+        self.root.update()
+
+    def test_controls_scroll_in_fixed_window_and_both_languages_have_readable_buttons(self):
+        panel, window = self.panel, self.panel.control_window
+        canvas = next(widget for widget in window.winfo_children() if isinstance(widget, tk.Canvas))
+        content = canvas.winfo_children()[0]
+        for language in ('en', 'zh'):
+            self.app.language = language
+            panel.translate()
+            self.root.update()
+            self.assertEqual((660, 680), (window.winfo_width(), window.winfo_height()))
+            self.assertGreater(content.winfo_reqheight(), canvas.winfo_height())
+            for button in panel.action_buttons:
+                if button._control_action not in ('aim_target', 'aim_point', 'release_aim', 'use_equipment', 'set_siege'):
+                    continue
+                text_width = int(button.tk.call('font', 'measure', button.cget('font'), button.cget('text')))
+                self.assertGreaterEqual(button.winfo_width(), text_width + 12)
+                self.assertGreaterEqual(button.winfo_height(), 20)
+            canvas.yview_moveto(1)
+            self.root.update()
+            button = next(button for button in panel.action_buttons if button._control_action == 'set_siege')
+            self.assertGreaterEqual(button.winfo_rooty(), canvas.winfo_rooty())
+            self.assertLessEqual(button.winfo_rooty() + button.winfo_height(),
+                                 canvas.winfo_rooty() + canvas.winfo_height())
+
+    def test_real_entries_and_checkboxes_keep_request_values_during_translation(self):
+        panel = self.panel
+        panel.aim_target_id.set('202')
+        panel.aim_tolerance.set('0.25')
+        panel.aim_release_id.set('holder-one')
+        for axis, value in zip(('x', 'y', 'z'), ('-12', '5.5', '36')):
+            panel.aim_position[axis].set(value)
+        panel.equipment_id.set('3')
+        panel.equipment_target.set('loader1')
+        panel.equipment_use_active.set(True)
+        panel.equipment_active.set(False)
+        panel.siege_enabled.set(False)
+        for language in ('zh', 'en'):
+            self.app.language = language
+            panel.translate()
+            self.root.update()
+            self.assertEqual('202', panel.aim_target_id.get())
+            self.assertEqual('0.25', panel.aim_tolerance.get())
+            self.assertEqual('holder-one', panel.aim_release_id.get())
+            self.assertEqual(['-12', '5.5', '36'], [panel.aim_position[axis].get() for axis in ('x', 'y', 'z')])
+            self.assertEqual('loader1', panel.equipment_target.get())
+            self.assertTrue(panel.equipment_use_active.get())
+            self.assertFalse(panel.equipment_active.get())
+            self.assertFalse(panel.siege_enabled.get())
 
 
 if __name__ == '__main__':

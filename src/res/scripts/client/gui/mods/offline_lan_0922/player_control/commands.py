@@ -20,8 +20,18 @@ TERMINAL = frozenset(('completed', 'rejected', 'failed', 'cancelled'))
 MISSIONS = frozenset(('attack', 'return_base', 'defend_base',
                       'hold_position', 'capture_base'))
 READ_ONLY_ACTIONS = frozenset(('status', 'wait_state', 'assert_state'))
-ACTIONS = MISSIONS | READ_ONLY_ACTIONS | frozenset((
-    'start', 'stop', 'halt', 'drive', 'fire', 'select_shell', 'reload'))
+AIM_ACTIONS = frozenset(('aim_target', 'aim_point'))
+NATIVE_ACTIONS = frozenset(('use_equipment', 'set_siege'))
+ACTIONS = MISSIONS | READ_ONLY_ACTIONS | AIM_ACTIONS | NATIVE_ACTIONS | frozenset((
+    'start', 'stop', 'halt', 'drive', 'fire', 'select_shell', 'reload', 'release_aim'))
+# A fixed protocol vocabulary, parity-tested against equipment_mechanics.
+# Keep this module independently importable by desktop journal tools.
+EQUIPMENT_TARGETS = frozenset((
+    'engineHealth', 'ammoBayHealth', 'fuelTankHealth', 'radioHealth',
+    'leftTrackHealth', 'rightTrackHealth', 'gunHealth',
+    'turretRotatorHealth', 'surveyingDeviceHealth',
+    'commander', 'driver', 'gunner1', 'gunner2', 'loader1',
+    'loader2', 'radioman1', 'radioman2'))
 STATE_CONDITIONS = frozenset(('ammo_ready', 'ammo_empty', 'halted', 'active',
     'mission_status', 'mission_phase', 'shot_terminal', 'shot_effect'))
 MISSION_STATUS_VALUES = frozenset(('idle', 'pending', 'running', 'completed', 'failed', 'cancelled'))
@@ -67,6 +77,42 @@ def validate_action(action, arguments):
         value = args.get('compact_descr')
         if isinstance(value, bool) or not isinstance(value, INTEGER_TYPES) or not 1 <= value <= 2147483647:
             raise ValueError('invalid_compact_descr')
+    elif action in AIM_ACTIONS:
+        allowed = set(('tolerance_deg',))
+        args['tolerance_deg'] = number(args.get('tolerance_deg', .5), 'tolerance_deg', .05, 5.)
+        if action == 'aim_target':
+            allowed.add('target_id')
+            value = args.get('target_id')
+            if isinstance(value, bool) or not isinstance(value, INTEGER_TYPES) or not 1 <= value <= 2147483647:
+                raise ValueError('invalid_target_id')
+        else:
+            allowed.add('position')
+            value = args.get('position')
+            if not isinstance(value, (list, tuple)) or len(value) != 3:
+                raise ValueError('invalid_position')
+            args['position'] = tuple(number(v, 'position', -100000., 100000.) for v in value)
+    elif action == 'release_aim':
+        allowed = set(('command_id',))
+        if 'command_id' in args:
+            value = args['command_id']
+            if not isinstance(value, STRING_TYPES) or not 1 <= len(value) <= 128:
+                raise ValueError('invalid_command_id')
+    elif action == 'use_equipment':
+        allowed = set(('equipment_id', 'target', 'active'))
+        value = args.get('equipment_id')
+        if isinstance(value, bool) or not isinstance(value, INTEGER_TYPES) or not 0 <= value <= 65535:
+            raise ValueError('invalid_equipment_id')
+        if 'target' in args:
+            value = args['target']
+            if (not isinstance(value, STRING_TYPES) or not 1 <= len(value) <= 64 or
+                    value not in EQUIPMENT_TARGETS):
+                raise ValueError('invalid_equipment_target')
+        if 'active' in args and not isinstance(args['active'], bool):
+            raise ValueError('invalid_active')
+    elif action == 'set_siege':
+        allowed = set(('enabled',))
+        if not isinstance(args.get('enabled'), bool):
+            raise ValueError('invalid_enabled')
     elif action in ('wait_state', 'assert_state'):
         condition = args.get('condition')
         if not isinstance(condition, STRING_TYPES) or condition not in STATE_CONDITIONS:
@@ -168,6 +214,15 @@ def append_result(path, row):
     return True
 
 
+def same_identity(left, right):
+    """JSON identity includes type; Python's bool/int equality is not enough."""
+    def kind(value):
+        return (bool if isinstance(value, bool) else int if isinstance(value, INTEGER_TYPES)
+                else str if isinstance(value, STRING_TYPES) else type(value))
+    return all(left.get(key) == right.get(key) and kind(left.get(key)) == kind(right.get(key))
+               for key in ('session_id', 'round_id', 'player_id'))
+
+
 class CommandGateway(object):
     def __init__(self, identity, emit, execute, preflight, cancel, wall_clock=None):
         self.identity = identity
@@ -203,7 +258,7 @@ class CommandGateway(object):
         try:
             if not isinstance(request, dict):
                 raise ValueError('invalid_request')
-            identity = self.identity()
+            identity = dict(self.identity())
             if not identity.get('session_id'):
                 raise ValueError('session_unavailable')
             for field in ('session_id', 'round_id', 'player_id'):
@@ -251,17 +306,19 @@ class CommandGateway(object):
             default_timeout = (args['seconds'] + 2. if action == 'drive' else
                                600. if action in MISSIONS else
                                180. if action in ('select_shell', 'reload') else
-                               30. if action == 'wait_state' else 10.)
+                               30. if action == 'wait_state' or action in AIM_ACTIONS | NATIVE_ACTIONS else 10.)
             timeout = number(request.get('timeout_seconds', default_timeout),
                              'timeout', .1, 3600.)
             replace = request.get('replace', True)
             if not isinstance(replace, bool):
                 raise ValueError('invalid_replace')
             command = dict(id=request_id, action=action, args=args,
-                           timeout_seconds=timeout, replace=replace)
+                           timeout_seconds=timeout, replace=replace, identity=dict(identity))
             reason = self.preflight(command)
             if reason:
                 raise ValueError(reason)
+            if not same_identity(identity, self.identity()):
+                raise ValueError('identity_changed')
             if action != 'stop' and number(self.wall_clock(), 'admission_clock', 0., 1e12) >= expires_at:
                 raise ValueError('request_expired')
         except (TypeError, ValueError, OverflowError) as error:
@@ -280,11 +337,14 @@ class CommandGateway(object):
         self.requests[request_id] = dict(fingerprint=fingerprint, receipt=receipt,
                                         command=command, deadline=now + timeout)
         self.last = receipt
+        if not same_identity(identity, self.identity()):
+            self.finish(request_id, 'cancelled', 'identity_changed', now)
+            return self.requests[request_id]['receipt']
         try:
             outcome = self.execute(command, now)
         except Exception as error:
             self.finish(request_id, 'failed', 'execution_error', now,
-                        dict(error=str(error)))
+                        dict(error=repr(error)[:160]))
             self.cancel(command, 'execution_error')
             raise
         if outcome is not None:

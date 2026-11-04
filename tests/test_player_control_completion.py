@@ -409,6 +409,7 @@ class CanonicalConsumableCompletionTests(unittest.TestCase):
             local_pose=lambda: ((0., 0., 0.), 0.),
             _projectile_estimated_server_time=lambda now: battle._server_time_ms())
         owner._activate_equipment = lambda code: BattleRuntime._activate_equipment(owner, code)
+        owner._activate_equipment_intent = lambda code: BattleRuntime._activate_equipment_intent(owner, code)
         def restore():
             local = dict(id=1, equipment_revision=player.equipment_revision,
                 equipment_intent_result=player.equipment_intent_result,

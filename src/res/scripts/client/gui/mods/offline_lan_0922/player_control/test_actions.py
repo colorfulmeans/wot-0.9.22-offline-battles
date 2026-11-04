@@ -52,6 +52,7 @@ class TestActions(object):
         self.gun_pending = None
         self.last_observation = None
         self.closed = False
+        self.generation = 0
 
     @property
     def busy(self):
@@ -96,9 +97,40 @@ class TestActions(object):
         return (getattr(owner, '_local_fire_intent', None) is not None or
                 getattr(owner, '_local_player_burst', None) is not None)
 
+    def _entity(self):
+        owner = self.control.owner
+        try:
+            return owner._server_entity(owner._server.vehicle_id)
+        except (AttributeError, TypeError, ValueError, RuntimeError, OverflowError):
+            return None
+
+    def _selection_fence(self, identity, generation, owner_id=None):
+        """Selection may call native getters before an operation exists."""
+        live = self.control.live()
+        if owner_id is not None and id(self.control.owner) != owner_id:
+            return 'identity_changed'
+        if self.closed or self.control.closed:
+            return 'controller_closed'
+        if not _same_identity(identity, self.control.identity()):
+            return 'identity_changed'
+        if generation != self.generation:
+            return 'gun_owner_changed'
+        if self.gun_pending is not None:
+            return 'gun_operation_busy'
+        if not live:
+            return 'battle_not_live'
+        if self.control.active and 'fire' in self.control.features:
+            return 'automatic_fire_active'
+        if self._fire_pending():
+            return 'gun_not_ready'
+        return None
+
     def _selection(self, command):
         """Return the mounted target and whether an actual setting is needed."""
         owner = self.control.owner
+        entity = self._entity()
+        if entity is None:
+            return None, 'battle_not_live'
         gun = getattr(owner, '_gun_state', None)
         ammo = self._ammo()
         if not ammo['available']:
@@ -142,7 +174,9 @@ class TestActions(object):
                        else settings.RELOAD_PARTIAL_CLIP)
         except AttributeError:
             return None, 'gun_settings_unavailable'
-        return dict(gun=gun, index=index, compact_descr=compact, needed=needed,
+        if self._entity() is not entity:
+            return None, 'vehicle_changed'
+        return dict(entity=entity, gun=gun, index=index, compact_descr=compact, needed=needed,
                     setting=setting), None
 
     def preflight(self, command):
@@ -156,6 +190,8 @@ class TestActions(object):
                     len(self.watchers) >= MAX_WATCHERS):
                 return 'observation_limit'
             return None
+        owner_id = id(self.control.owner)
+        identity, generation = dict(self.control.identity()), self.generation
         if not self.control.live():
             return 'battle_not_live'
         if self.gun_pending is not None:
@@ -165,15 +201,22 @@ class TestActions(object):
         if self._fire_pending():
             return 'gun_not_ready'
         selection, reason = self._selection(command)
+        reason = self._selection_fence(identity, generation, owner_id) or reason
         if reason:
             return reason
         if command.get('id') is None and (selection['needed'] or not self._ready(selection, command['action'])):
             return 'command_id_required'
+        # JSON-only internal metadata survives an accepted-receipt callback;
+        # execute must not rebase a stopped or replaced preflight owner.
+        command['_gun_guard'] = dict(identity=identity, generation=generation,
+            owner_id=owner_id, entity_id=id(selection['entity']), gun_id=id(selection['gun']))
         return None
 
     def _operation(self, command, now):
         return dict(command=dict(command, args=dict(command['args'])),
                     identity=dict(self.control.identity()),
+                    generation=self.generation,
+                    owner_id=id(self.control.owner),
                     deadline=now + command.get('timeout_seconds', 10.))
 
     def execute(self, command, now):
@@ -191,14 +234,37 @@ class TestActions(object):
                 return dict(status='failed', reason='command_id_required', result=observation)
             self.watchers[command['id']] = self._operation(command, now)
             return None
+        guard = command.get('_gun_guard') or {}
+        entry = self.control.gateway.requests.get(command.get('id'))
+        identity = (dict((key, entry['receipt'].get(key)) for key in
+                    ('session_id', 'round_id', 'player_id')) if entry else
+                    dict(guard.get('identity') or self.control.identity()))
+        generation = guard.get('generation', self.generation)
+        owner_id = guard.get('owner_id', id(self.control.owner))
+        fence = self._selection_fence(identity, generation, owner_id)
+        if fence is not None:
+            return dict(status='cancelled', reason=fence)
         selection, reason = self._selection(command)
+        fence = self._selection_fence(identity, generation, owner_id)
+        if fence is not None:
+            return dict(status='cancelled', reason=fence)
         if reason:
             return dict(status='failed', reason=reason)
+        if guard.get('entity_id', id(selection['entity'])) != id(selection['entity']):
+            return dict(status='failed', reason='vehicle_changed')
+        if guard.get('gun_id', id(selection['gun'])) != id(selection['gun']):
+            return dict(status='failed', reason='gun_changed')
         operation = self._operation(command, now)
         operation.update(selection)
+        operation.update(identity=identity, generation=generation, owner_id=owner_id)
         operation['phase'] = 'submitting' if selection['needed'] else 'observing'
         # Install ownership before native setting/HUD code can re-enter us.
         self.gun_pending = operation
+        # A same-ID replacement is a new physical vehicle even when the
+        # round and the GunState object have not caught up with it yet.
+        now = self.control.owner._clock()
+        if not self._current(operation, now):
+            return None
         outcome = None
         if selection['needed']:
             value = selection['compact_descr'] if action == 'select_shell' else 0
@@ -209,7 +275,7 @@ class TestActions(object):
                                    result=self._gun_snapshot())
             except Exception as error:
                 outcome = dict(status='failed', reason='gun_setting_error',
-                               result=dict(error=str(error)[:160], gun=self._gun_snapshot()))
+                               result=dict(error=repr(error)[:160], gun=self._gun_snapshot()))
             # Native work may consume the execution deadline or change the
             # owner without re-entering update. Keep its physical effect, but
             # never report it as this operation's success after that boundary.
@@ -219,6 +285,10 @@ class TestActions(object):
             operation['phase'] = 'observing'
         if outcome is None:
             outcome = self._gun_outcome(operation)
+        now = self.control.owner._clock()
+        if not self._current(operation, now, check_shell=bool(outcome is not None and
+                outcome.get('status', 'completed') == 'completed')):
+            return None
         if outcome is not None:
             if selection['needed'] and command.get('id') is not None:
                 # Gateway.submit still holds the pre-native admission time.
@@ -241,6 +311,8 @@ class TestActions(object):
     def _gun_outcome(self, operation):
         if not self.control.live():
             return dict(status='failed', reason='battle_not_live')
+        if self._entity() is not operation['entity']:
+            return dict(status='failed', reason='vehicle_changed')
         if self.control.active and 'fire' in self.control.features:
             return dict(status='cancelled', reason='automatic_fire_active')
         gun = getattr(self.control.owner, '_gun_state', None)
@@ -412,14 +484,42 @@ class TestActions(object):
         self._remove(operation)
         self.control.gateway.finish(operation['command']['id'], status, reason, now, result)
 
-    def _current(self, operation, now, identity=None):
+    def _current(self, operation, now, check_shell=False):
         if (operation is not self.gun_pending and
                 self.watchers.get(operation['command']['id']) is not operation):
             return False
-        identity = self.control.identity() if identity is None else identity
+        # Resolve native identity before reading the cancellation token and
+        # current identity. Entity resolution itself may re-enter Stop or
+        # consume the remaining execution budget.
+        entity = self._entity() if operation is self.gun_pending else None
+        now = max(now, self.control.owner._clock())
+        if (operation is not self.gun_pending and
+                self.watchers.get(operation['command']['id']) is not operation):
+            return False
+        identity = self.control.identity()
         if self.closed or self.control.closed or not _same_identity(identity, operation['identity']):
             self._finish(operation, 'cancelled', 'controller_closed' if self.closed or self.control.closed else 'identity_changed', now)
             return False
+        if operation is self.gun_pending:
+            if id(self.control.owner) != operation['owner_id']:
+                self._finish(operation, 'cancelled', 'identity_changed', now)
+                return False
+            if operation['generation'] != self.generation:
+                self._finish(operation, 'cancelled', 'gun_owner_changed', now)
+                return False
+            gun = getattr(self.control.owner, '_gun_state', None)
+            reason = ('vehicle_changed' if entity is not operation['entity'] else
+                      'gun_changed' if gun is not operation['gun'] else None)
+            if reason is None and check_shell:
+                try:
+                    compact = _field(_field(gun.shots[operation['index']], 'shell', {}), 'compactDescr')
+                    if gun.shot_index != operation['index'] or compact != operation['compact_descr']:
+                        reason = 'shell_changed'
+                except (AttributeError, TypeError, ValueError, IndexError, KeyError):
+                    reason = 'shell_changed'
+            if reason is not None:
+                self._finish(operation, 'failed', reason, now)
+                return False
         entry = self.control.gateway.requests.get(operation['command']['id'])
         if entry is not None and entry.get('receipt', {}).get('status') in TERMINAL:
             self._remove(operation)
@@ -434,9 +534,8 @@ class TestActions(object):
         operations = list(self.watchers.values()) + ([self.gun_pending] if self.gun_pending is not None else [])
         if not operations:
             return
-        identity = self.control.identity()
         for operation in operations:
-            if not self._current(operation, now, identity):
+            if not self._current(operation, now):
                 continue
             if operation is self.gun_pending:
                 if operation['phase'] == 'submitting':
@@ -448,8 +547,15 @@ class TestActions(object):
                 outcome = (dict(reason='condition_observed', result=observation) if observation['matched'] else
                            dict(status='failed', reason=observation['reason'], result=observation)
                            if observation.get('impossible') else None)
+            # Read-only observers still follow the current entity, but both
+            # readers and native transactions recheck identity/deadline after
+            # observations which can re-enter foreground presentation code.
+            observed_at = self.control.owner._clock()
+            if not self._current(operation, observed_at, check_shell=bool(outcome is not None and
+                    outcome.get('status', 'completed') == 'completed')):
+                continue
             if outcome is not None:
-                self._finish(operation, outcome.get('status', 'completed'), outcome['reason'], now, outcome.get('result'))
+                self._finish(operation, outcome.get('status', 'completed'), outcome['reason'], observed_at, outcome.get('result'))
 
     def cancel(self, command, reason):
         if command.get('action') not in ACTIONS:
@@ -462,6 +568,7 @@ class TestActions(object):
         return True
 
     def stop(self, reason, now):
+        self.generation += 1
         if self.gun_pending is not None:
             self._finish(self.gun_pending, 'cancelled', reason, now)
         if reason == 'battle_exit' or self.control.closed:

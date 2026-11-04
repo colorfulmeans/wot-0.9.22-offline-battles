@@ -2021,7 +2021,7 @@ class _LANInputSender(object):
         self.gun_pitch = -math.atan2(dy, max(horizontal, 0.001))
         self.aim_pitch = self.gun_pitch
 
-    def send_current(self, siege_enabled=None):
+    def send_current(self, siege_enabled=None, sequence_result=False):
         position, yaw = self.owner.local_pose()
         ram_contacts_getter = getattr(
             self.owner, 'local_ram_contacts', None)
@@ -2091,7 +2091,9 @@ class _LANInputSender(object):
         forward, turn = self.forward, self.turn
         if braking_for_siege or siege_enabled is not None:
             forward, turn = 0.0, 0.0
-        result = self.owner.client.send_input(
+        send = (self.owner.client.send_input_sequence if sequence_result
+                else self.owner.client.send_input)
+        result = send(
             forward, turn, self.aim_yaw, self.gun_pitch,
             position, yaw, **keyword_args)
         if result:
@@ -2259,6 +2261,9 @@ class BattleRuntime(object):
         self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
+        self._local_siege_request_token = None
+        self._player_control_siege_observer = None
+        self._local_siege_applying = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
         self._local_push_z = 0.0
@@ -2639,6 +2644,9 @@ class BattleRuntime(object):
         self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
+        self._local_siege_request_token = None
+        self._player_control_siege_observer = None
+        self._local_siege_applying = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
         self._local_push_z = 0.0
@@ -9832,21 +9840,25 @@ class BattleRuntime(object):
         return None
 
     def _activate_equipment(self, activation_code):
+        return self._activate_equipment_intent(activation_code) is not None
+
+    def _activate_equipment_intent(self, activation_code):
+        """Submit the native activation code and retain its exact receipt ID."""
         try:
             activation_code = int(activation_code)
         except (TypeError, ValueError):
-            return False
+            return None
         if self._equipment_state is None:
-            return False
+            return None
         equipment_id = activation_code & 65535
         extra_index = max(0, activation_code >> 16)
         equipment = next((value for value in self._equipment_state
                           if value.contract['id'] == equipment_id), None)
         if equipment is None:
-            return False
+            return None
         record = self._records.get('player:%s' % self.client.player_id)
         if record is None or self._server is None:
-            return False
+            return None
         equipment_kind = equipment.contract['kind']
         repair_all = bool(equipment.contract.get('repairAll', False))
         selected = None
@@ -9854,7 +9866,7 @@ class BattleRuntime(object):
                 equipment_kind in ('repairkit', 'medkit')):
             entity = self._server_entity(self._server.vehicle_id)
             if entity is None or entity.typeDescriptor is None:
-                return False
+                return None
             selected = self._critical_name_from_extra_index(
                 entity.typeDescriptor, extra_index)
         if (equipment_kind == 'medkit' and selected is not None and
@@ -9862,7 +9874,7 @@ class BattleRuntime(object):
             selected = selected[:-6]
         sender = getattr(self.client, 'send_equipment_intent', None)
         if not callable(sender):
-            return False
+            return None
         sequence = sender(
             equipment_id,
             activation_code=activation_code,
@@ -9873,7 +9885,7 @@ class BattleRuntime(object):
             'phase': 'equipment_intent', 'sequence': sequence,
             'equipment_id': equipment_id, 'kind': equipment_kind,
             'selected': selected, 'extra_index': extra_index})
-        return sequence is not None
+        return sequence
 
     def _active_engine_power_factor(self):
         return max(0.0, _number(
@@ -10431,32 +10443,7 @@ class BattleRuntime(object):
     def change_vehicle_setting(self, code, value):
         settings = self._runtime.constants.VEHICLE_SETTING
         if code == getattr(settings, 'SIEGE_MODE_ENABLED', None):
-            if (not isinstance(value, _INTEGER_TYPES) or
-                    int(value) not in (0, 1)):
-                return False
-            if self._server is None:
-                return False
-            entity = self._server_entity(self._server.vehicle_id)
-            descriptor = getattr(entity, 'typeDescriptor', None)
-            if not bool(getattr(descriptor, 'hasSiegeMode', False)):
-                return False
-            if bool(getattr(entity, 'is_engine_dead', False)):
-                return False
-            enabled = bool(value)
-            states = self._runtime.constants.VEHICLE_SIEGE_STATE
-            desired = states.ENABLED if enabled else states.DISABLED
-            if (self._local_siege_braking is not None and
-                    self._local_siege_pending is None and
-                    getattr(entity, 'siegeState', states.DISABLED) == desired):
-                self._local_siege_braking = None
-                self._report_local_siege_edge('cancel_brake', desired)
-                return True
-            if self._local_speed != 0.0 or self._local_turn_speed != 0.0:
-                self._local_siege_braking = enabled
-                self._report_local_siege_edge(
-                    'brake', getattr(entity, 'siegeState', None))
-                return True
-            return self._send_local_siege_request(entity, enabled)
+            return self._change_local_siege(value)
         if code == getattr(settings, 'ACTIVATE_EQUIPMENT', None):
             return self._activate_equipment(value)
         partial_clip = getattr(settings, 'RELOAD_PARTIAL_CLIP', None)
@@ -26330,21 +26317,113 @@ class BattleRuntime(object):
         return getattr(entity, 'siegeState', states.DISABLED) in (
             states.SWITCHING_ON, states.SWITCHING_OFF)
 
+    def _request_player_control_siege(self, enabled, on_submitted):
+        """Share the native mode path, with an independently owned observer."""
+        if not isinstance(enabled, bool) or not callable(on_submitted):
+            return False
+        return self._change_local_siege(enabled, on_submitted)
+
+    def _cancel_player_control_siege(self, on_submitted):
+        observer = getattr(self, '_player_control_siege_observer', None)
+        if observer is None or observer['callback'] is not on_submitted:
+            return False
+        self._player_control_siege_observer = None
+        # Cancelling observation is not rolling back an accepted native mode
+        # transition. Only a still-unsent brake owned by this token is ours.
+        if (self._local_siege_pending is None and
+                getattr(self, '_local_siege_request_token', None) is
+                observer['token']):
+            self._local_siege_braking = None
+        return True
+
+    @staticmethod
+    def _notify_player_control_siege(observer, sequence, reason=None):
+        if observer is None:
+            return
+        try:
+            observer['callback'](sequence, observer['enabled'], reason)
+        except Exception as error:
+            # The native request already exists independently of the test
+            # observer. Never undo its drive lock because receipt delivery
+            # failed; the command retains its ordinary terminal deadline.
+            native_input_diagnostics.write_json_record(
+                'PLAYER SIEGE OBSERVER', dict(
+                    input_seq=sequence, reason=reason,
+                    error=BattleRuntime._bounded_failure_reason(error, 160)))
+
+    def _change_local_siege(self, value, on_submitted=None):
+        if (not isinstance(value, _INTEGER_TYPES) or int(value) not in (0, 1)
+                or self._server is None):
+            return False
+        entity = self._server_entity(self._server.vehicle_id)
+        descriptor = getattr(entity, 'typeDescriptor', None)
+        if (not bool(getattr(descriptor, 'hasSiegeMode', False)) or
+                bool(getattr(entity, 'is_engine_dead', False))):
+            return False
+        enabled = bool(value)
+        token = object()
+        previous = getattr(self, '_player_control_siege_observer', None)
+        observer = (dict(callback=on_submitted, enabled=enabled, token=token)
+                    if on_submitted is not None else None)
+        # Publish the new owner before notifying the previous one. The
+        # notification may synchronously cancel or replace this request.
+        self._local_siege_request_token = token
+        self._player_control_siege_observer = observer
+        self._notify_player_control_siege(previous, None, 'siege_replaced')
+        if (self._local_siege_request_token is not token or
+                (observer is not None and
+                 self._player_control_siege_observer is not observer)):
+            return False
+        states = self._runtime.constants.VEHICLE_SIEGE_STATE
+        desired = states.ENABLED if enabled else states.DISABLED
+        if (self._local_siege_braking is not None and
+                self._local_siege_pending is None and
+                getattr(entity, 'siegeState', states.DISABLED) == desired):
+            self._local_siege_braking = None
+            self._report_local_siege_edge('cancel_brake', desired)
+            self._notify_player_control_siege(
+                observer, None, 'siege_not_submitted')
+            return True
+        if self._local_speed != 0.0 or self._local_turn_speed != 0.0:
+            self._local_siege_braking = enabled
+            self._report_local_siege_edge(
+                'brake', getattr(entity, 'siegeState', None))
+            return True
+        return self._send_local_siege_request(entity, enabled)
+
     def _send_local_siege_request(self, entity, enabled):
         """Submit a stopped drivetrain and the mode request in one input."""
-        if not self._sender.send_current(siege_enabled=enabled):
-            return False
-        request_seq = getattr(self.client, '_input_seq', None)
+        client, server = self.client, self._server
+        generation = self._generation
+        round_id = getattr(client, 'round_id', None)
+        token = getattr(self, '_local_siege_request_token', None)
+        observer = getattr(self, '_player_control_siege_observer', None)
+        request_seq = self._sender.send_current(
+            siege_enabled=enabled, sequence_result=True)
         if (isinstance(request_seq, bool) or
                 not isinstance(request_seq, _INTEGER_TYPES) or request_seq <= 0):
-            request_seq = None
-        self._local_siege_braking = None
+            return False
+        if (self.client is not client or self._server is not server or
+                self._generation != generation or
+                getattr(client, 'round_id', None) != round_id or
+                self._server_entity(server.vehicle_id) is not entity):
+            return False
+        if getattr(self, '_local_siege_request_token', None) is token:
+            self._local_siege_braking = None
         # Only the already-stopped drivetrain is locked while the server
         # acknowledges the request and advances the native transition timer.
-        self._local_siege_pending = (enabled, request_seq)
+        # Post-send callbacks may have submitted a newer request: preserve its
+        # lock instead of replacing it with this older return value.
+        pending = self._local_siege_pending
+        if (pending is None or pending[1] is None or
+                pending[1] < request_seq):
+            self._local_siege_pending = (enabled, request_seq)
         self._report_local_siege_edge(
             'request', getattr(entity, 'siegeState', None),
             input_seq=request_seq)
+        if (getattr(self, '_player_control_siege_observer', None) is observer
+                and getattr(self, '_local_siege_request_token', None) is token):
+            self._notify_player_control_siege(observer, request_seq)
         return True
 
     @timed('local.drive')
@@ -29109,6 +29188,18 @@ class BattleRuntime(object):
 
     def _apply_siege_state(self, record, state):
         """Apply a server-owned Siege transition through #1513's callback."""
+        if not record.get('local'):
+            return self._apply_siege_state_observed(record, state)
+        previous = getattr(self, '_local_siege_applying', None)
+        token = object()
+        self._local_siege_applying = token
+        try:
+            return self._apply_siege_state_observed(record, state)
+        finally:
+            if self._local_siege_applying is token:
+                self._local_siege_applying = previous
+
+    def _apply_siege_state_observed(self, record, state):
         siege_states = self._runtime.constants.VEHICLE_SIEGE_STATE
         disabled = siege_states.DISABLED
         siege_state = state.get('siege_state', disabled)
@@ -29175,7 +29266,8 @@ class BattleRuntime(object):
         self._binding.update_vehicle_siege_state(
             record['engine_id'], siege_state,
             float(time_left_ms) / 1000.0)
-        record['presented_siege_state'] = siege_state
+        if not record.get('local'):
+            record['presented_siege_state'] = siege_state
         if (self._worker_mode and record.get('native_remote') and
                 self._remote_factory is not None):
             updater = getattr(
@@ -29218,6 +29310,10 @@ class BattleRuntime(object):
         if record.get('local') and self._local_matrix is not None:
             self._update_local_hull_aiming(entity, 0.0)
         if record.get('local'):
+            # Stable presentation includes the installed gun and motion laws,
+            # not just the first native enum callback. A failed adaptation
+            # remains observable as incomplete and can be retried.
+            record['presented_siege_state'] = siege_state
             self._report_local_siege_edge(
                 'state', siege_state, time_left_ms, state.get('input_seq'))
         return True
@@ -31472,6 +31568,37 @@ class BattleRuntime(object):
         return True
 
     def shoot(self, aim_yaw, gun_pitch, player_burst=None):
+        """Keep one controller authorization across the native shot callback."""
+        control = getattr(self, '_player_control', None)
+        authorize = getattr(control, 'authorize_trigger', None)
+        context = getattr(control, 'trigger_context', None)
+        if context is None and isinstance(player_burst, dict):
+            context = player_burst.get('player_control')
+        guard = None
+        if isinstance(context, dict) and callable(authorize):
+            if context.get('native_attempt') is not None:
+                return self._reject_local_fire('trigger_busy')
+            attempt = object()
+            context['native_attempt'] = attempt
+            guard = (control, context, attempt)
+        try:
+            return self._shoot_authorized(aim_yaw, gun_pitch, player_burst, guard)
+        finally:
+            if guard is not None and context.get('native_attempt') is guard[2]:
+                context.pop('native_attempt', None)
+
+    def _player_control_fire_reason(self, guard, entity=None, state=None,
+                                    shot_ray=None, player_burst=None):
+        if guard is None:
+            return None
+        control, context, attempt = guard
+        if getattr(self, '_player_control', None) is not control:
+            return 'controller_changed'
+        return control.authorize_trigger(context, entity=entity, gun=state,
+            shot_ray=shot_ray, player_burst=player_burst, native_attempt=attempt)
+
+    def _shoot_authorized(self, aim_yaw, gun_pitch, player_burst=None,
+                          player_control_guard=None):
         if self._replay_mode or self._worker_mode:
             return False
         if (self._local_player_burst is not None and
@@ -31504,6 +31631,10 @@ class BattleRuntime(object):
         now = self._clock()
         # Close the 100 ms HUD/state race at the exact trigger edge.
         state = self._advance_local_gun_to(entity, now)
+        reason = self._player_control_fire_reason(player_control_guard,
+            entity=entity, state=state, player_burst=player_burst)
+        if reason is not None:
+            return self._reject_local_fire(reason)
         continuing_burst = bool(
             player_burst is not None and
             player_burst is self._local_player_burst and
@@ -31554,6 +31685,13 @@ class BattleRuntime(object):
         if trigger_server_time_ms is None:
             return self._reject_local_fire('trigger_clock_unavailable')
         trigger_wall = _PROFILE_CLOCK()
+        # These are the unscattered physical inputs. A held-aim proof must
+        # validate this very ray, not only a newer native pose after callbacks.
+        frozen_ray = (tuple(_xyz(shot_origin)), tuple(_xyz(shot_direction)))
+        reason = self._player_control_fire_reason(player_control_guard,
+            entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
+        if reason is not None:
+            return self._reject_local_fire(reason)
         if not self._sender.send_current():
             return self._reject_local_fire('input_send_failed')
         shot_direction.normalise()
@@ -31599,6 +31737,15 @@ class BattleRuntime(object):
         }
         if player_burst is not None:
             intent['player_burst'] = player_burst
+        if player_control_guard is not None:
+            intent['player_control'] = player_control_guard[1]
+        reason = self._player_control_fire_reason(player_control_guard,
+            entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
+        if reason is not None:
+            if (player_burst is not None and player_burst['committed'] == 0 and
+                    self._local_player_burst is player_burst):
+                self._local_player_burst = None
+            return self._reject_local_fire(reason)
         projectile_id = self._preinstall_player_projectile(
             intent, record, origin, velocity, gravity, maximum,
             PROJECTILE_MAX_TIME_MS, is_he, splash_radius,
@@ -31608,6 +31755,16 @@ class BattleRuntime(object):
                 self._local_player_burst = None
             return self._reject_local_fire('projectile_admission_failed')
         meta = self._projectile_meta[projectile_id]
+        reason = self._player_control_fire_reason(player_control_guard,
+            entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
+        if reason is not None:
+            # This exact provisional shell has not been submitted or debited.
+            # Earlier committed rounds of a burst remain untouched.
+            self._discard_provisional_projectile(projectile_id)
+            if (player_burst is not None and player_burst['committed'] == 0 and
+                    self._local_player_burst is player_burst):
+                self._local_player_burst = None
+            return self._reject_local_fire(reason)
         try:
             accepted = sender(
                 'player', self.client.player_id, shot_seq, shell_index,
@@ -31641,6 +31798,13 @@ class BattleRuntime(object):
             'maxDistance': meta['max_distance'],
         })
         self._commit_local_player_fire(event, record, intent)
+        if (player_control_guard is not None and player_burst is not None and
+                self._local_player_burst is player_burst and
+                self._player_control_fire_reason(player_control_guard,
+                    entity=entity, state=state, player_burst=player_burst) is not None):
+            # A native callback after the wire boundary may revoke the tail,
+            # but cannot roll back the round that was already sent/committed.
+            player_control_guard[0].release_burst(player_burst)
         # Avatar.shoot starts its wait token after this mailbox returns.
         # Gameplay is already committed; only the native visual waits for
         # the next local callback, never for the worker or server echo.
@@ -32401,6 +32565,9 @@ class BattleRuntime(object):
         self._local_service_brake = False
         self._local_siege_braking = None
         self._local_siege_pending = None
+        self._local_siege_request_token = None
+        self._player_control_siege_observer = None
+        self._local_siege_applying = None
         self._local_siege_edge_reports = 0
         self._local_push_x = 0.0
         self._local_push_z = 0.0

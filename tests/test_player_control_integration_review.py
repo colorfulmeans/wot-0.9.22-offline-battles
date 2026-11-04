@@ -183,6 +183,8 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
 
     def test_fire_timeout_cancels_only_future_rounds_of_its_owned_burst(self):
         controller = self.control()
+        now = [0.]
+        controller.owner._clock = lambda: now[0]
         burst = {'group_seq': 12, 'count': 3, 'committed': 1}
         def shoot():
             controller.owner._local_player_burst = burst
@@ -195,6 +197,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         receipt = controller.gateway.submit(request, 0.)
         self.assertEqual('accepted', receipt['status'])
         self.assertIs(burst, controller.owner._local_player_burst)
+        now[0] = .2
         controller.gateway.tick(.2)
         self.assertEqual('failed', controller.gateway.requests['one']['receipt']['status'])
         self.assertEqual(1, controller.automatic_commits)

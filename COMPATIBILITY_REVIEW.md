@@ -1,3 +1,51 @@
+# November 4 explicit foreground command completion
+
+This continuation starts from the clean, published PR #119 commit
+`bdc9bd117cb88023d3f9b2c0e73368a1312ccb75`. The previous implementation was
+already committed; its explicit held-aim, equipment and siege commands were
+documented remaining work, not an unverified dirty tree. This section closes
+that command gap and supersedes the earlier open-work paragraph below. Player
+decisions and execution remain in the visible client. The room worker retains
+its existing Bot/world responsibilities; no new player worker or native ABI is
+introduced.
+
+## Implemented command and ownership boundaries
+
+| Boundary | Implementation and regression evidence |
+| --- | --- |
+| Held target/point aiming | `ManualAim` owns the reviewed `shotPointSourceFunctor` / `clientMode` seam. Visible targets are observed engine entity IDs with native started/alive and spotting gates. It does not reuse the automatic driver's mutable contact history or a Bot selector. |
+| Actual aim completion | The existing native angle/source inversion and mechanical limits validate reachable low/high arcs. Completion requires observed turret/gun angles and the current muzzle direction, not a successful setter. It neither asserts an unobstructed path/hit nor drives/fires. Missing native proof fails explicitly. |
+| Persistent and exclusive source ownership | Completed aim retains its source past the acquisition deadline. `release_aim` can be fenced to an exact holder ID. Stop, replacement, identity/real-entity change and target loss retire only the owned source/mode. Setter/getter reentry and third-party takeover cannot let old cleanup overwrite a new source. |
+| Current rather than historical firing proof | `fire` checks the held source against the current target, loaded shell and observed native angles. Its shot ledger records that held target, independently of a drive-only automatic target field. A completed aim receipt is not reused as current alignment. |
+| Native firing reentry | An actual `Avatar.updateVehicleAmmo` callback could cancel a command while the old firing stack still continued. The same trigger/attempt token is now checked after native callbacks and before projectile preparation/publication, including the actual frozen unscattered ray. Stop, expiry, entity/shell/source replacement and recursive triggers cannot admit an uncommitted round; already sent/committed rounds retain their factual ledger and ordinary manual fire is unchanged. |
+| Automatic start and partial restoration | A start lease is installed before native source/mode setters can re-enter Stop. Its release barrier survives input/navigation cleanup until the interrupted setter unwinds, preventing an old bind from reviving cancelled controls or overwriting a new owner. Source and client-mode restoration retain separate completion state, so a failed second restoration remains retryable without clobbering a third-party source. |
+| Independent movement and explicit channels | Timed drive completion/timeout and Halt retire movement/automatic policies while preserving explicit held aim, gun-setting observers and independently admitted fire. Stop and lifecycle teardown still release all owned controls; committed shots/equipment effects remain physical facts. |
+| Canonical equipment confirmation | The existing activation encoder returns its actual `send_equipment_intent` sequence. Small kits use real descriptor extra indices; all-target kits, manual extinguishers and RPM limiters retain their native codes. Only the exact canonical accepted result completes. A newer superseding result is an explicit unobserved failure, not an inferred cooldown success. |
+| Exact siege input identity | The existing input encoder exposes the particular queued input sequence. Post-send landing/contact callbacks may enqueue a later input, but cannot change this request's correlation ID. Ordinary callers retain the previous bool return contract. No wire field is added. |
+| Siege transition completion | The existing brake, native setter, ordered server request and canonical stable echo are retained. Completion also requires native entity/presented mode and completion of local descriptor/gun/physics application. A local applying token and delayed presentation stamp prevent synchronous native callbacks or failed adaptation from reporting early success. |
+| Owned cancellation and retry | Only the exact siege observer token can cancel its unsent brake. A submitted transition is never rolled back by cancelling observation. Failed source/brake cleanup remains in the existing retry loop and blocks conflicting work; repeated non-live stops cannot starve its retry deadline. |
+| Cross-channel conflict rejection | Automatic firing cannot steal a held source; native siege cannot compete with held aim, automatic driving/firing or a gun operation. Pending siege excludes new drive/aim/gun/fire consumers. Explicit equipment and automatic consumables cannot overlap ownership. Invalid requests leave existing channels intact. |
+| Native-query admission and gun identity | Admission rechecks the typed launch/round/player identity after preflight and receipt publication. Native setting preparation retains the admitted identity, actual entity and stop generation, then rechecks the clock before submission. Same-ID vehicle replacement cannot turn an old selection/reload into a successful command on the new vehicle. |
+| Launcher and schema parity | The same five actions, strict numeric/bool/target vocabulary, timeout defaults and ownership IDs are validated at both ends. The bilingual scrolling panel exposes current held/aligned status, visible target IDs, actual equipment stock and pending native sequence separately from historical command results. The result-line limit remains 16384 bytes. |
+
+The foreground tests exercise the real command gateway and controller routing,
+native source observations, same-ID entity replacement, callback reentry,
+movement/aim coexistence, exact deadlines, late results and cleanup retries.
+Equipment tests run the native wrapper, actual LAN encoder, server application,
+public canonical row and snapshot restoration. Siege tests run the actual brake
+and setting helpers, LAN encoder, server transition and `_apply_siege_state`,
+with explicit fake native body/descriptor presentation boundaries. Those fakes
+prove callback contracts and ordering, not Windows gameplay.
+
+The final-tree handoff and PR record the isolated client/launcher regression
+results, real CPython 2.7.18 compilation/contracts, exact-head CI and package
+inspection. New actual-Tk tests must execute in Windows CI; the absence of a
+Linux display is recorded as a skip, not GUI acceptance. No exact Windows
+Chinese HD #1513 game session is claimed for these changes. Native frame cost,
+held aiming feel, physical braking and the complete live-client handover still
+need observed client acceptance. The protocol and observed-state behavior do
+not substitute for that evidence.
+
 # November 4 adversarial foreground-completion follow-up
 
 The second audit of PR #119 at `0f92a1317843ced2bab2fb6bbb9812e45d922210`
@@ -57,12 +105,13 @@ identity before reporting completion; a setting that took effect after the
 deadline is not rolled back or labelled a timely success.
 The status stock list exposes the actual descriptors needed by a script.
 
-Explicit held aiming, equipment activation and siege commands remain separate
-open work. A held aim source must survive command completion until release;
+At this earlier checkpoint, explicit held aiming, equipment activation and
+siege commands remained separate open work; the continuation above now implements
+and tests them. A held aim source must survive command completion until release;
 equipment requires exact intent-sequence correlation, not a guessed revision or
 cooldown; siege requires the matching stable canonical echo, not a successful
 braking request. Their existing automatic player paths are not removed or moved
-to a worker, and these additional manual commands are not claimed implemented.
+to a worker. This historical paragraph is not the current implementation status.
 
 ## Verification boundary
 

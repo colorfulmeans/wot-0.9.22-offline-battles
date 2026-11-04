@@ -12,8 +12,17 @@ RESULT_ENV = 'WOT_OFFLINE_TEST_CONTROL_RESULT_FILE'
 SESSION_ENV = 'WOT_OFFLINE_TEST_CONTROL_SESSION'
 ACTIONS = frozenset(('start', 'stop', 'halt', 'attack', 'return_base',
                      'defend_base', 'hold_position', 'capture_base',
-                     'drive', 'fire', 'status', 'select_shell', 'reload', 'wait_state', 'assert_state'))
+                     'drive', 'fire', 'status', 'select_shell', 'reload', 'wait_state', 'assert_state',
+                     'aim_target', 'aim_point', 'release_aim', 'use_equipment', 'set_siege'))
 READ_ONLY_ACTIONS = frozenset(('status', 'wait_state', 'assert_state'))
+AIM_ACTIONS = frozenset(('aim_target', 'aim_point'))
+NATIVE_ACTIONS = frozenset(('use_equipment', 'set_siege'))
+EQUIPMENT_TARGETS = frozenset((
+    'engineHealth', 'ammoBayHealth', 'fuelTankHealth', 'radioHealth',
+    'leftTrackHealth', 'rightTrackHealth', 'gunHealth',
+    'turretRotatorHealth', 'surveyingDeviceHealth',
+    'commander', 'driver', 'gunner1', 'gunner2', 'loader1',
+    'loader2', 'radioman1', 'radioman2'))
 STATE_CONDITIONS = frozenset(('ammo_ready', 'ammo_empty', 'halted', 'active',
     'mission_status', 'mission_phase', 'shot_terminal', 'shot_effect'))
 MISSION_STATUS_VALUES = frozenset(('idle', 'pending', 'running', 'completed', 'failed', 'cancelled'))
@@ -63,6 +72,42 @@ def validate_arguments(action, arguments):
         value = args.get('compact_descr')
         if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2147483647:
             raise ValueError('invalid_compact_descr')
+    elif action in AIM_ACTIONS:
+        allowed = {'tolerance_deg'}
+        args['tolerance_deg'] = number(args.get('tolerance_deg', .5), 'tolerance_deg', .05, 5.)
+        if action == 'aim_target':
+            allowed.add('target_id')
+            value = args.get('target_id')
+            if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 2147483647:
+                raise ValueError('invalid_target_id')
+        else:
+            allowed.add('position')
+            value = args.get('position')
+            if not isinstance(value, (list, tuple)) or len(value) != 3:
+                raise ValueError('invalid_position')
+            args['position'] = [number(v, 'position', -100000., 100000.) for v in value]
+    elif action == 'release_aim':
+        allowed = {'command_id'}
+        if 'command_id' in args:
+            value = args['command_id']
+            if not isinstance(value, str) or not 1 <= len(value) <= 128:
+                raise ValueError('invalid_command_id')
+    elif action == 'use_equipment':
+        allowed = {'equipment_id', 'target', 'active'}
+        value = args.get('equipment_id')
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535:
+            raise ValueError('invalid_equipment_id')
+        if 'target' in args:
+            value = args['target']
+            if (not isinstance(value, str) or not 1 <= len(value) <= 64 or
+                    value not in EQUIPMENT_TARGETS):
+                raise ValueError('invalid_equipment_target')
+        if 'active' in args and not isinstance(args['active'], bool):
+            raise ValueError('invalid_active')
+    elif action == 'set_siege':
+        allowed = {'enabled'}
+        if not isinstance(args.get('enabled'), bool):
+            raise ValueError('invalid_enabled')
     elif action in ('wait_state', 'assert_state'):
         condition = args.get('condition')
         if not isinstance(condition, str) or condition not in STATE_CONDITIONS:
@@ -506,7 +551,8 @@ class PlayerControlTransport:
             return None
         if timeout_seconds is None:
             timeout_seconds = (180. if action in ('select_shell', 'reload') else
-                               30. if action == 'wait_state' else 15.)
+                               30. if action == 'wait_state' or action in AIM_ACTIONS | NATIVE_ACTIONS else
+                               10. if action == 'release_aim' else 15.)
         if not isinstance(replace, bool):
             self._set_error('invalid_replace')
             return None
