@@ -107,6 +107,7 @@ class Aiming(object):
         self.targets = {}
         self.observations = {}
         self.entries = {}
+        self.direct_entries = {}
         self._tick = None
         self._next_final_at = float('-inf')
         self._final_segments = self._final_attempts = self._dynamic_checks = 0
@@ -151,6 +152,9 @@ class Aiming(object):
         for target_id in list(self.entries):
             if target_id not in targets:
                 self.entries.pop(target_id, None)
+        for key in list(self.direct_entries):
+            if key[0] not in targets:
+                self.direct_entries.pop(key)
         if now == self._tick:
             return
         self._tick = now
@@ -182,12 +186,13 @@ class Aiming(object):
                             dynamic_checks=self._dynamic_checks,
                             final_reason=self._final_reason)
 
-    def _own(self):
+    def _own(self, shell_index=None):
         owner = self.owner
         entity = owner._server_entity(owner._server.vehicle_id)
         descriptor = entity.typeDescriptor
         gun = owner._gun_state
-        shot = gun.shots[gun.shot_index]
+        shell_index = gun.shot_index if shell_index is None else shell_index
+        shot = gun.shots[shell_index]
         speed = float(_field(shot, 'speed'))
         gravity = abs(float(_field(shot, 'gravity')))
         maximum = float(_field(shot, 'maxDistance'))
@@ -201,7 +206,7 @@ class Aiming(object):
                     speed=speed, gravity=gravity, maximum=maximum,
                     matrix=matrix, body=(float(matrix.yaw), float(matrix.pitch),
                                          float(matrix.roll)),
-                    key=(gun.shot_index, id(shot), speed, gravity, maximum,
+                    key=(shell_index, id(shot), speed, gravity, maximum,
                          id(_field(descriptor, 'gun'))))
 
     def _pose(self, target):
@@ -268,7 +273,7 @@ class Aiming(object):
             source = tuple(own['origin'][i] + world[i]*distance for i in range(3))
         return None
 
-    def _armor_score(self, target, own, sample_point, direction, flight):
+    def _armor_score(self, target, own, sample_point, direction, flight, threshold=None):
         """Nominal damage against observed native plates, without shot RNG."""
         from .. import combat_rules
         from ..entities.remote_vehicle import collide_vehicle_at_matrix
@@ -289,9 +294,12 @@ class Aiming(object):
                 return None
             distance = math.sqrt(_distance_sq(own['origin'], sample_point))
             contact = combat_rules.resolve_armor_contact(
-                own['shot'], distance, collisions, penetration_factor=1.)
+                own['shot'], distance, collisions,
+                penetration_factor=1. if threshold is None else threshold)
             if contact is None:
                 return None
+            if threshold is not None:
+                return contact['layer'] == 'structural' and contact['result'] == 2
             if contact['layer'] != 'structural' and not combat_rules.is_he(own['shot']):
                 return 0.
             nominal = combat_rules.he_nominal_armor(collisions, target.typeDescriptor)
@@ -305,7 +313,7 @@ class Aiming(object):
             # fictitious weak spot or proof of zero damage.
             return None
 
-    def _candidate(self, target, own, entry, key, now):
+    def _candidate(self, target, own, entry, key, now, direct=False, threshold=None):
         if self._candidates <= 0:
             return None
         self._candidates -= 1
@@ -346,13 +354,21 @@ class Aiming(object):
                 own['speed'], own['gravity'], flight))
         reach = mechanical_reach(own['descriptor'], direction, own['body'])
         result.update(reach)
-        source = self._source_point(own, aim, reach) if reach['reachable'] else None
+        mounted = own['key'][0] == self.owner._gun_state.shot_index
+        source = self._source_point(own, aim, reach) if reach['reachable'] and (
+            not direct or mounted) else None
+        if direct and not mounted and reach['reachable']:
+            source = aim
         result['source_verified'] = source is not None
         if source is not None:
             result['source_point'] = source
         elif reach['reachable']:
             result['reason'] = 'native_source_unverified'
-        result['score'] = self._armor_score(target, own, point, direction, flight)
+        if not direct:
+            result['score'] = self._armor_score(target, own, point, direction, flight)
+        elif threshold is not None and reach['reachable'] and source is not None:
+            result['penetration_ok'] = self._armor_score(
+                target, own, point, direction, flight, threshold)
         return result
 
     @staticmethod
@@ -508,6 +524,79 @@ class Aiming(object):
         self._publish_budget()
         return result
 
+    def ordered(self, target, index, threshold, now, lane):
+        """Advance one fixed-order scan without publishing an unverified point."""
+        if target.id not in self.targets or self._candidates <= 0:
+            return 'pending', None
+        try:
+            own = self._own(index)
+        except (AttributeError, TypeError, ValueError, IndexError, RuntimeError):
+            return 'pending', None
+        identity = (target.id, index, threshold)
+        entry = self.direct_entries.get(identity)
+        signature = (id(target), id(target.typeDescriptor), own['key'],
+                     index == self.owner._gun_state.shot_index)
+        if entry is None or entry['signature'] != signature:
+            entry = dict(signature=signature,
+                samples=shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor),
+                cursor=0, locked=None, job=None, retry=0., blocked_armor=False,
+                unknown=False, mechanical=None, deferred_at=None)
+            self.direct_entries[identity] = entry
+        if not entry['samples']:
+            return 'unavailable', None
+        if now < entry['retry']:
+            return 'pending', entry['mechanical']
+        locked = entry['locked']
+        key = locked if locked is not None else (entry['cursor'], 'low')
+        candidate = self._candidate(target, own, entry, key, now, True, threshold)
+        job = entry['job']
+        if (job is None or job['solution']['key'] != key or
+                not self._valid(job['solution'], own, self.observations[target.id], now)):
+            job = dict(solution=candidate, next=0, done=False, clear=False, completed=None)
+            entry['job'] = job
+        self._advance(job, lane, min(self._segments, 8), now)
+        result = self._result(candidate, job)
+        result['ordered'] = True
+        if not job['done']:
+            return 'pending', None
+        if result['clear'] and result['reachable']:
+            penetrates = result.get('penetration_ok')
+            if threshold is None or penetrates is True:
+                entry.update(locked=key, job=None, deferred_at=None)
+                return 'ready', result
+            if penetrates is False:
+                entry['blocked_armor'] = True
+            else:
+                entry['unknown'] = True
+        elif result['geometry_clear'] and not result['reachable']:
+            if entry['mechanical'] is None:
+                entry['mechanical'] = result
+        elif result['geometry_clear'] and not result.get('source_verified'):
+            entry['unknown'] = True
+
+        if locked is not None:
+            entry.update(locked=None, cursor=0, job=None, blocked_armor=False,
+                         unknown=False, mechanical=None, deferred_at=None)
+            return 'lost', None
+        if (result['geometry_clear'] and result['reachable'] and
+                (not result.get('source_verified') or
+                 (threshold is not None and result.get('penetration_ok') is None))):
+            if entry['deferred_at'] is None:
+                entry['deferred_at'] = now
+            if now - entry['deferred_at'] < .5:
+                return 'pending', None
+        entry['job'] = None
+        entry['deferred_at'] = None
+        entry['cursor'] += 1
+        if entry['cursor'] < len(entry['samples']):
+            return 'pending', entry['mechanical']
+        status = ('armor' if entry['blocked_armor'] and not entry['unknown'] else
+                  'unavailable')
+        mechanical = entry['mechanical']
+        entry.update(cursor=0, retry=now + .7, blocked_armor=False,
+                     unknown=False, mechanical=None)
+        return status, mechanical
+
     def _final_verdict(self, reason):
         self._final_reason = reason
         self._publish_budget()
@@ -563,6 +652,12 @@ class Aiming(object):
         for first, last in zip(path, path[1:]):
             self._final_segments += 1
             if not static_lane(first, last):
+                if solution.get('ordered'):
+                    for identity, ordered in self.direct_entries.items():
+                        if identity[:2] == (target.id, own['key'][0]):
+                            ordered.update(locked=None, cursor=0, job=None,
+                                blocked_armor=False, unknown=False, mechanical=None,
+                                deferred_at=None, retry=0.)
                 if entry is not None:
                     failed = entry['jobs'].get(solution.get('key'))
                     if failed is not None:

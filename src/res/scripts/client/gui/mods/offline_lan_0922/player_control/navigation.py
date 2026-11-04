@@ -133,6 +133,10 @@ class PlayerNavigation(object):
         self.pending = None
         self.join_origin = None
         self.retry_at = 0.
+        control = getattr(owner, '_player_control', None)
+        self.opening_origin = getattr(control, 'opening_origin', None)
+        anchors = graph.get('spawn_anchors') or graph.get('bases') or ()
+        self.opening_anchor = anchors[self.team - 1] if len(anchors) == 2 else None
         self.receipt = dict(status='not_started')
 
     def close(self):
@@ -146,6 +150,7 @@ class PlayerNavigation(object):
         return self.support.height(point, hint, strict)
 
     def _reset_travel(self, routes):
+        self.opening_origin = None
         self.policy_cache = None
         self.mission_goal_key = None
         self.selection = list(routes)
@@ -415,9 +420,24 @@ class PlayerNavigation(object):
         if self.candidates is None:
             self.join_origin = tuple(position)
             candidates = []
+            opening_origin = getattr(self, 'opening_origin', None)
+            home = getattr(self, 'home_area', None)
+            opening = (opening_origin is not None and home is not None and
+                       distance(position, opening_origin) <= 3. and
+                       math.hypot(position[0] - home['point'][0],
+                                  position[2] - home['point'][1]) <= home['radius'])
             for route in getattr(self, 'selection', self.routes):
+                points = route.get('waypoints', ())
+                second_only = False
+                if opening and len(points) > 1 and not route.get('player_start_at_first'):
+                    first = points[0]
+                    anchor = getattr(self, 'opening_anchor', None)
+                    second_only = (math.hypot(first[0] - home['point'][0],
+                                              first[1] - home['point'][1]) <= home['radius'] or
+                                   anchor is not None and math.hypot(first[0] - anchor[0],
+                                                                    first[1] - anchor[1]) <= 6.)
                 for index, point in enumerate(route.get('waypoints', ())):
-                    if route.get('player_start_at_first') and index:
+                    if second_only and index != 1 or route.get('player_start_at_first') and index:
                         continue
                     hint = route.get('player_goal_height')
                     height = self._height(point, position[1] if hint is None else hint,

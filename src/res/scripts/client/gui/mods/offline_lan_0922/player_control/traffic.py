@@ -113,3 +113,25 @@ class Traffic(object):
         b = self.current
         return tank_collision.rotation_fraction((b['x'],b['y'],b['z']),b['yaw'],
             b['yaw']+turn*.15,b['shape'],self.neighbours) >= .999
+
+    def can_steer(self, throttle, turn, speed):
+        """Check turning and translation together over the near command horizon."""
+        moving = dict(self.current)
+        yaw = moving['yaw']
+        sign = 1. if throttle > 0. else -1.
+        reach = max(1., min(8., abs(speed) * .65 + 1.))
+        step = sign * reach / 4.
+        for index in range(4):
+            new_yaw = yaw + turn * .12
+            position = (moving['x'], moving['y'], moving['z'])
+            if tank_collision.rotation_fraction(position, yaw, new_yaw,
+                    moving['shape'], self.neighbours) < .999:
+                return False
+            moving['yaw'] = new_yaw
+            dx, dz = math.sin(new_yaw) * step, math.cos(new_yaw) * step
+            if tank_collision.translation_fraction(moving, (dx, dz), self.neighbours) < .999:
+                return False
+            moving['x'] += dx
+            moving['z'] += dz
+            yaw = new_yaw
+        return True

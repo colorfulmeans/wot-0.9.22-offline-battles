@@ -43,6 +43,7 @@ class PlayerControl(object):
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
         self.aiming = None
+        self.direct_engagement = None
         self.strategy = None
         self.next_strategy = 0.
         self.handover_burst = None
@@ -277,6 +278,9 @@ class PlayerControl(object):
         self.halted = False
         self.last_fire_failure = None
         self.aiming = Aiming(owner)
+        if not self.ammo_policy.artillery:
+            from .direct_engagement import DirectEngagement
+            self.direct_engagement = DirectEngagement(entity.typeDescriptor)
         self.last_decision = None
         self.next_decision = 0.0
         self.release_pending.append(('automatic_start_release', release_weapon))
@@ -409,6 +413,7 @@ class PlayerControl(object):
         if self.aiming is not None:
             callbacks.append(('aim_cache_reset', self.aiming.reset))
         self.aiming = None
+        self.direct_engagement = None
         burst = self.owned_burst
         keep_burst = bool(preserve_explicit and burst is not None and
                           (burst.get('player_control') or {}).get('command') is not None)
@@ -1145,21 +1150,33 @@ class PlayerControl(object):
         self.emit_shot(self.shot_receipts.terminal(event, self.owner._clock()))
 
     def select_ammo(self, now):
-        from ..gun_mechanics import _field
         gun, policy = self.owner._gun_state, self.ammo_policy
         if policy is None:
             return
         for row in policy.settle(gun.ammo, now):
             self.record('shot_result', result=row, failures=policy.failures, desired=policy.desired)
-        if self.owner._local_fire_intent is not None:
+            if self.direct_engagement is not None:
+                self.direct_engagement.result(row)
+        if self.direct_engagement is None:
+            selected = policy.choose(gun.ammo)
+            if not policy.protected:
+                self.queue_automatic_shell(selected)
+
+    def queue_automatic_shell(self, selected):
+        from ..gun_mechanics import _field
+        owner = self.owner
+        gun = owner._gun_state
+        if (owner._local_fire_intent is not None or
+                (self.direct_engagement is not None and getattr(owner, '_local_player_burst', None))):
             return
-        selected = policy.choose(gun.ammo)
-        if policy.protected:
-            return
-        if selected != gun.shot_index and selected != gun.pending_index:
-            settings = self.owner._runtime.constants.VEHICLE_SETTING
-            code = settings.CURRENT_SHELLS if gun.clip_size <= 1 or gun.clip <= 0 else settings.NEXT_SHELLS
-            self.owner.change_vehicle_setting(code, _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
+        if (selected != gun.shot_index and
+                (self.direct_engagement is not None or selected != gun.pending_index)):
+            settings = owner._runtime.constants.VEHICLE_SETTING
+            # Direct fire can have no legal shot with the current magazine.
+            # Request the native immediate reload instead of waiting to empty it.
+            code = (settings.CURRENT_SHELLS if self.direct_engagement is not None or
+                    gun.clip_size <= 1 or gun.clip <= 0 else settings.NEXT_SHELLS)
+            owner.change_vehicle_setting(code, _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
             self.record('ammo_queued', shell=selected)
 
     def consumables(self, entity):
@@ -1356,20 +1373,27 @@ class PlayerControl(object):
                 item.id != self.target_engine,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
             self.aiming.begin(list(records.values()), now)
-            for candidate in candidates:
-                trial = self.aiming.update(candidate, now,
-                    lambda a, b: self.lane_from(candidate, a, b), artillery=artillery)
-                if target is None:
-                    target, solution = candidate, trial
-                elif trial.get('geometry_clear') and not solution.get('geometry_clear'):
-                    target, solution = candidate, trial
-                if trial.get('clear') and trial.get('reachable'):
-                    target, solution = candidate, trial
-                    break
-            fire_clear = bool(solution and solution.get('clear') and solution.get('reachable'))
+            if self.direct_engagement is not None:
+                generation = self.control_generation
+                target, solution, fire_clear = self.direct_engagement.update(self, candidates, now)
+                if generation != self.control_generation:
+                    return
+            else:
+                for candidate in candidates:
+                    trial = self.aiming.update(candidate, now,
+                        lambda a, b: self.lane_from(candidate, a, b), artillery=artillery)
+                    if target is None:
+                        target, solution = candidate, trial
+                    elif trial.get('geometry_clear') and not solution.get('geometry_clear'):
+                        target, solution = candidate, trial
+                    if trial.get('clear') and trial.get('reachable'):
+                        target, solution = candidate, trial
+                        break
+                fire_clear = bool(solution and solution.get('clear') and solution.get('reachable'))
         tactical_clear = bool(solution and solution.get('geometry_clear'))
         if self.ammo_policy is not None:
-            self.ammo_policy.context(position, target.id if target is not None else None)
+            self.ammo_policy.context(position, self.direct_engagement.target
+                if self.direct_engagement is not None else target.id if target is not None else None)
         if 'fire' in self.features and self.ammo_state['available']:
             previous_shell = owner._gun_state.shot_index
             self.select_ammo(now)
@@ -1384,7 +1408,8 @@ class PlayerControl(object):
             from .weapon import barrel_aligned
             self.target_engine = target.id
             point = solution['point']
-            self.weapon.aim_solution(target.id, solution, now)
+            if self.direct_engagement is None or fire_clear:
+                self.weapon.aim_solution(target.id, solution, now)
             start, direction = owner._mutable_shot_ray()
             distance = math.sqrt(sum((point[i]-start[i])**2 for i in range(3)))
             gun = owner._gun_state
@@ -1412,7 +1437,8 @@ class PlayerControl(object):
         else:
             self.target_engine = None
             self.aim_progress_sample = None
-            if 'fire' in self.features and self.weapon is not None:
+            if ('fire' in self.features and self.weapon is not None and
+                    (self.direct_engagement is None or self.direct_engagement.target is None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
                 self.aim_receipt = dict(mode='forward',point=self.weapon.point,
                     client_mode=owner._avatar.gunRotator.clientMode)
@@ -1548,6 +1574,9 @@ class PlayerControl(object):
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
+            if (not pushing and order['throttle'] and order['turn'] and
+                    not traffic.can_steer(order['throttle'], order['turn'], state['speed'])):
+                order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
                     getattr(entity.typeDescriptor, 'hasSiegeMode', False) and
                     entity.siegeState == owner._runtime.constants.VEHICLE_SIEGE_STATE.ENABLED):
@@ -1598,6 +1627,8 @@ def attach(owner):
     if _current is not None:
         _current.close()
     _current = PlayerControl(owner, raw.split(','))
+    if not owner._worker_mode and callable(getattr(owner, 'local_pose', None)):
+        _current.opening_origin = tuple(owner.local_pose()[0])
     path = os.environ.get('WOT_OFFLINE_TEST_CONTROL_FILE')
     if path and os.path.isfile(path):
         _current.command_offset = os.path.getsize(path)
