@@ -11,6 +11,7 @@ class TurnClearance(object):
         self.heading = None
         self.advance_origin = None
         self.advance_sign = 1.
+        self.recovery = BlockedMotion()
 
     def apply(self, order, yaw, traffic, position=None, clear=None):
         def delta(a,b):
@@ -60,6 +61,69 @@ class TurnClearance(object):
                     return
         order.update(turn=self.sign if allowed else 0.,throttle=0.,brake=not allowed,
                      recovery_mode='vehicle_turn_clearance_latched')
+
+
+
+class BlockedMotion(object):
+    """Own the bounded response after an ordinary motion command is refused."""
+    def __init__(self):
+        self.action = None
+        self.wait_until = 0.
+        self.rejected = {}
+        self.blocked_target = None
+
+    def apply(self, order, state, probe, report):
+        now, position, yaw = state['now'], state['position'], state['yaw']
+        mode = order.get('recovery_mode')
+        if order.get('holding') or mode == 'hold' and not order.get('travel_intent'):
+            self.__init__()
+            return False
+        command = (order['throttle'], order['turn'])
+        refused = any(command) and not probe(*command)
+        stuck_pivot = mode == 'vehicle_turn_clearance_latched' and not any(command)
+        if not (self.action or self.blocked_target is not None or refused or stuck_pivot):
+            return False
+        if self.blocked_target is None:
+            self.blocked_target = order.get('local_target')
+        if self.blocked_target is not None:
+            report(self.blocked_target)
+        if self.action is not None:
+            pedals, start, heading, deadline = self.action
+            travelled = math.hypot(position[0]-start[0], position[2]-start[2])
+            turned = abs((yaw-heading+math.pi) % (2.*math.pi)-math.pi)
+            reached = travelled >= .55 if pedals[0] else turned >= .22
+            if not reached and now < deadline and probe(pedals[0], pedals[1], .55):
+                order.update(throttle=pedals[0], turn=pedals[1], brake=False,
+                             recovery_mode='traffic_escape')
+                return True
+            if not reached:
+                self.rejected[pedals] = now + 1.5
+            self.action = None
+            self.wait_until = now + .25
+            if reached:
+                self.blocked_target = None
+            order.update(throttle=0., turn=0., brake=True,
+                         recovery_mode='traffic_escape_rejoin' if reached else 'traffic_wait')
+            return True
+        if now >= self.wait_until and abs(state['speed']) < .5:
+            if any(command) and not refused:
+                self.blocked_target = None
+                return False
+            # A four-metre corridor can be blocked while a short separating
+            # step is safe. Recheck each candidate including its real sweep.
+            steer = -1. if command[1] < 0. else 1.
+            choices = ((-.35, 0.), (.35, 0.), (-.35, -steer*.35),
+                       (-.35, steer*.35), (.35, -steer*.35),
+                       (.35, steer*.35), (0., -steer*.35), (0., steer*.35))
+            for pedals in choices:
+                if now >= self.rejected.get(pedals, 0.) and probe(pedals[0], pedals[1], .55):
+                    self.action = (pedals, tuple(position), yaw, now + .9)
+                    order.update(throttle=pedals[0], turn=pedals[1], brake=False,
+                                 recovery_mode='traffic_escape')
+                    return True
+            self.wait_until = now + .3
+        order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_wait')
+        return True
 
 
 def body(identity, position, yaw, shape, pitch=0., roll=0.):
@@ -117,14 +181,15 @@ class Traffic(object):
         return tank_collision.rotation_fraction((b['x'],b['y'],b['z']),b['yaw'],
             b['yaw']+turn*.15,b['shape'],self.neighbours) >= .999
 
-    def swept_command_clear(self, throttle, turn, speed, pivot_for, world_clear):
+    def swept_command_clear(self, throttle, turn, speed, pivot_for, world_clear, reach=None):
         """Check live hull geometry along a short turn/translation horizon."""
         from ..vehicle_physics import track_pivot_position
         moving = dict(self.current)
         yaw = moving['yaw']
         step = 0.
         if throttle:
-            reach = max(1., min(5., abs(speed) * .5 + 1.))
+            reach = (max(1., min(5., abs(speed) * .5 + 1.)) if reach is None else
+                     max(reach, abs(speed) * .35))
             step = math.copysign(reach / 3., throttle)
         for unused in range(3):
             new_yaw = yaw + turn * .12

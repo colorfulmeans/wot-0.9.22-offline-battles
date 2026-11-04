@@ -143,3 +143,52 @@ class SweptCommandTests(unittest.TestCase):
         position, yaw, end_yaw, pivot, travel = world.call_args.args
         self.assertEqual((1.2, (0., 0.)), (pivot, travel))
         self.assertGreater(end_yaw, yaw)
+
+    def test_captured_latched_pivot_takes_short_exit_and_rejoins(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import BlockedMotion
+        recovery = BlockedMotion()
+        waypoint = (-14., .246, -90.)
+        state = dict(position=(-24.51, .25, -95.78), yaw=-1.59, speed=0., now=0.)
+        report = mock.Mock()
+
+        def blocked():
+            return dict(throttle=0., turn=0., brake=True,
+                        recovery_mode='vehicle_turn_clearance_latched', local_target=waypoint)
+
+        def probe(throttle, turn, reach=None):
+            return reach == .55 and throttle < 0. and not turn
+
+        order = blocked()
+        self.assertTrue(recovery.apply(order, state, probe, report))
+        self.assertEqual(('traffic_escape', -.35, 0.),
+                         (order['recovery_mode'], order['throttle'], order['turn']))
+        self.assertEqual(waypoint, order['local_target'])
+        state.update(position=(-23.94, .25, -95.78), now=.5)
+        order = blocked()
+        self.assertTrue(recovery.apply(order, state, probe, report))
+        self.assertEqual('traffic_escape_rejoin', order['recovery_mode'])
+        self.assertTrue(order['brake'])
+        report.assert_called_with(waypoint)
+
+    def test_refused_short_exit_times_out_and_can_take_other_direction(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import BlockedMotion
+        recovery = BlockedMotion()
+        state = dict(position=(0., 0., 0.), yaw=0., speed=0., now=0.)
+        report = mock.Mock()
+
+        def order():
+            return dict(throttle=1., turn=.3, brake=False,
+                        recovery_mode='travel', local_target=(0., 0., 9.))
+
+        def probe(throttle, turn, reach=None):
+            return reach == .55 and not turn
+
+        self.assertTrue(recovery.apply(order(), state, probe, report))
+        state['now'] = 1.
+        waiting = order()
+        self.assertTrue(recovery.apply(waiting, state, probe, report))
+        self.assertEqual('traffic_wait', waiting['recovery_mode'])
+        state['now'] = 1.3
+        alternate = order()
+        self.assertTrue(recovery.apply(alternate, state, probe, report))
+        self.assertEqual(.35, alternate['throttle'])

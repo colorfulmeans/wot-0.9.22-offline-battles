@@ -1093,7 +1093,7 @@ class PlayerControl(object):
             return track_pivot_offset(params, state['speed'], turn * .8,
                                       False, throttle)
 
-        def check(throttle, turn):
+        def check(throttle, turn, reach=None):
             contact = self.motion_contact
             if contact is not None:
                 at, position, forward, steer, unused = contact
@@ -1102,10 +1102,10 @@ class PlayerControl(object):
                         math.hypot(here[0]-position[0], here[2]-position[2]) < 1. and
                         (turn and turn * steer > 0. or throttle and throttle * forward > 0.)):
                     return False
-            key = (throttle, turn)
+            key = (throttle, turn, reach)
             if key not in cache:
                 cache[key] = traffic.swept_command_clear(
-                    throttle, turn, state['speed'], pivot_for, world_clear)
+                    throttle, turn, state['speed'], pivot_for, world_clear, reach)
             return cache[key]
         return check
 
@@ -1622,14 +1622,20 @@ class PlayerControl(object):
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
-            if (not pushing and traffic.motion_probe is not None and
-                    (order['throttle'] or order['turn']) and
-                    not traffic.motion_probe(order['throttle'], order['turn'])):
-                turn = order['turn']
-                if order['throttle'] and turn and traffic.can_turn(turn):
-                    order.update(throttle=0., brake=False, recovery_mode='traffic_pivot')
-                else:
-                    order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
+            if not pushing and traffic.motion_probe is not None:
+                recovery = self.turn_clearance.recovery
+
+                def blocked_step(target):
+                    planner = self.navigation.navigator
+                    if planner.report_blocked_step(state['id'], position, target, now,
+                                                   observation_interval=.1):
+                        self.turn_clearance.heading = None
+                        self.navigation.driver.recovery_heading = None
+
+                if recovery.apply(order, state, traffic.motion_probe, blocked_step):
+                    self.turn_clearance.heading = None
+                    if order['recovery_mode'] == 'traffic_escape_rejoin':
+                        self.navigation.driver.recovery_heading = None
             if self.motion_contact is not None and now - self.motion_contact[0] < .8:
                 order['motion_contact'] = self.motion_contact[-1]
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
