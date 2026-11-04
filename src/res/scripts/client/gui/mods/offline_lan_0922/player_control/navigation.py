@@ -659,6 +659,15 @@ class PlayerNavigation(object):
                        route_index=self.index, driving=self.driver.receipt)
         return command
 
+    def report_drive_blockage(self, identity, order, position, heading, now, dt,
+                              realised=False):
+        target = (order or {}).get('local_target')
+        if target is None or order.get('holding'):
+            return
+        report = (self.navigator.report_hard_contact if realised else
+                  self.navigator.report_blocked_corridor)
+        return report(identity, position, target, heading, now, dt)
+
     def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route'):
         position, now = state['position'], state['now']
         self.support.begin(position, now)

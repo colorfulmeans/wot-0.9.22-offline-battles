@@ -1,4 +1,5 @@
 """Foreground-only regression coverage for ordered engagement and HE fallback."""
+import math
 import sys
 import unittest
 from unittest import mock
@@ -132,14 +133,61 @@ class OrderedPointTests(unittest.TestCase):
             self.assertEqual(('ready', (1, 'low')), (result[0], result[1]['key']))
 
 
-class SweptCommandTests(unittest.TestCase):
-    def test_plain_pivot_checks_world_and_uses_track_offset(self):
-        from gui.mods.offline_lan_0922.player_control.traffic import Traffic, body
-        traffic = Traffic(body(1, (9.85, .31, 99.39), 3.019, (1.62, 3.1, 0., 3.)), [])
-        world = mock.Mock(return_value=False)
-        self.assertFalse(traffic.swept_command_clear(
-            0., .8, 0., lambda turn, throttle: 1.2, world))
-        world.assert_called_once()
-        position, yaw, end_yaw, pivot, travel = world.call_args.args
-        self.assertEqual((1.2, (0., 0.)), (pivot, travel))
-        self.assertGreater(end_yaw, yaw)
+class PlayerTrafficRecoveryTests(unittest.TestCase):
+    def test_short_escape_revalidates_and_changes_gear_after_real_contact(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import PlayerTraffic, Traffic, body
+        player = PlayerTraffic()
+        shape = (1.6, 3.1, 0., 3.)
+        origin = (0., 0., 0.)
+        state = dict(engine_id=1, position=origin, yaw=0., now=1.,
+                     speed=0., half_length=shape[1], half_width=shape[0])
+        traffic = Traffic(body(1, origin, 0., shape), [])
+        clear = lambda heading, reach=None: reach <= 1.
+        def apply(stalled=False, failure=None):
+            order = dict(throttle=0., turn=0., brake=True, recovery_mode='blocked')
+            player.apply(order, state, traffic, 1, clear, lambda: 0., 1. / 30.,
+                         stalled, failure)
+            return order
+
+        self.assertEqual('short_reverse_escape', apply(stalled=True)['recovery_mode'])
+        state['now'] += .1
+        self.assertEqual('short_reverse_escape', apply()['recovery_mode'])
+        state['now'] += .1
+        self.assertEqual('short_forward_escape', apply(True, (origin, math.pi))['recovery_mode'])
+
+    def test_stationary_escape_does_not_renew_the_expired_gear(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import PlayerTraffic, Traffic, body
+        player = PlayerTraffic()
+        shape = (1.6, 3.1, 0., 3.)
+        origin = (0., 0., 0.)
+        traffic = Traffic(body(1, origin, 0., shape), [])
+        state = dict(position=origin, yaw=0., speed=0.)
+        for now, expected in ((1., 'short_reverse_escape'), (5.1, 'short_forward_escape')):
+            state['now'] = now
+            order = dict(throttle=0., turn=0., brake=True, recovery_mode='blocked')
+            player.apply(order, state, traffic, 1, lambda *a: True,
+                         lambda: 0., 1. / 30., True, None)
+            self.assertEqual(expected, order['recovery_mode'])
+
+    def test_foreground_stopping_law_has_a_python_fallback(self):
+        from gui.mods.offline_lan_0922.player_control import traffic_laws
+        with mock.patch.object(traffic_laws.vehicle_physics, 'native_stopping_distance',
+                               return_value=None), mock.patch.object(
+                traffic_laws.vehicle_physics, 'longitudinal_step', side_effect=(1., 0.)):
+            self.assertAlmostEqual(1. / 30.,
+                traffic_laws.traffic_stopping_distance({}, 2., 0., False))
+
+    def test_stopping_envelope_brakes_a_straight_approach_to_an_ally(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import PlayerTraffic, Traffic, body
+        shape = (1.6, 3.1, 0., 3.)
+        origin = (0., 0., 0.)
+        ally = dict(id=2, position=(0., 0., 8.), yaw=0., collision_shape=shape,
+                    team=1, alive=True)
+        traffic = Traffic(body(1, origin, 0., shape), [ally])
+        state = dict(position=origin, yaw=0., speed=4., now=1.)
+        order = dict(throttle=1., turn=0., brake=False, recovery_mode='travel')
+        PlayerTraffic().apply(order, state, traffic, 1, lambda *a: True,
+                              lambda: 4., 1. / 30., False, None)
+        self.assertEqual(2, order['forward_blocked_by'])
+        self.assertTrue(order['brake'])
+        self.assertEqual(0., order['throttle'])

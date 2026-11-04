@@ -39,12 +39,15 @@ def handle_key(is_down, key, mods=0):
 
 class PlayerControl(object):
     def __init__(self, owner, features, notify=native_message):
+        from .traffic import PlayerTraffic
+        self.player_traffic = PlayerTraffic()
+        self.drive_failure = None
+        self.blocked_fire_target = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
         self.aiming = None
         self.direct_engagement = None
-        self.motion_contact = None
         self.strategy = None
         self.next_strategy = 0.
         self.handover_burst = None
@@ -271,6 +274,10 @@ class PlayerControl(object):
         self.navigation = None
         self.strategy = Strategy()
         self.turn_clearance = TurnClearance()
+        from .traffic import PlayerTraffic
+        self.player_traffic = PlayerTraffic()
+        self.drive_failure = None
+        self.blocked_fire_target = None
         self.next_strategy = 0.
         self.weapon = weapon
         self.active = True
@@ -415,7 +422,6 @@ class PlayerControl(object):
             callbacks.append(('aim_cache_reset', self.aiming.reset))
         self.aiming = None
         self.direct_engagement = None
-        self.motion_contact = None
         burst = self.owned_burst
         keep_burst = bool(preserve_explicit and burst is not None and
                           (burst.get('player_control') or {}).get('command') is not None)
@@ -949,8 +955,9 @@ class PlayerControl(object):
                 ('SPG', 'AT-SPG', 'heavyTank', 'mediumTank', 'lightTank') if tag in tags), 'mediumTank')
             neighbours.append(row)
             # Actual presentation visibility, not the omniscient LAN roster.
-            if team in (1, 2) and team != int(owner.client.team) and row['alive'] and target.isStarted and record.get('spot_visible', False):
-                row.update(visible=True)
+            ally = team == int(owner.client.team)
+            visible_enemy = team in (1, 2) and not ally and record.get('spot_visible', False)
+            if row['alive'] and target.isStarted and (ally or visible_enemy):
                 previous = self.observations.get(target.id)
                 velocity = (0., 0., 0.)
                 if previous is not None and .05 <= now - previous[0] <= 1.:
@@ -964,8 +971,10 @@ class PlayerControl(object):
                 row['speed'] = math.sqrt(sum(v*v for v in velocity))
                 self.observations[target.id] = (now, point)
                 seen.add(target.id)
-                contacts.append(row)
-                records[target.id] = target
+                if visible_enemy:
+                    row['visible'] = True
+                    contacts.append(row)
+                    records[target.id] = target
         for identity in list(self.observations):
             if identity not in seen:
                 del self.observations[identity]
@@ -1069,45 +1078,16 @@ class PlayerControl(object):
         return bool(path) and all(self.lane_from(target, a, b)
                                   for a, b in zip(path, path[1:]))
 
-    def note_motion_contact(self, path, position, throttle, turn):
-        if (self.active and 'drive' in self.features and self.navigation is not None and
-                self.navigation.tag != 'SPG' and (throttle or turn)):
-            self.motion_contact = (self.owner._clock(), tuple(position), throttle, turn, path)
-
-    def motion_probe(self, traffic, entity, state):
-        from ..vehicle_physics import track_pivot_offset
-        owner = self.owner
-        native = getattr(owner, '_native_world_rotation_is_clear', None)
-        params = getattr(owner, '_local_physics', None)
-        if not callable(native) or params is None:
-            return None
-        pitch, roll = owner._local_pitch, owner._local_roll
-        cache = {}
-
-        def world_clear(position, yaw, end_yaw, pivot, translation):
-            return native(position, yaw, end_yaw, entity.typeDescriptor,
-                pitch=pitch, roll=roll, record_local=False, pivot_offset=pivot,
-                include_static=True, translation=translation, follow_ground=True)
-
-        def pivot_for(turn, throttle):
-            return track_pivot_offset(params, state['speed'], turn * .8,
-                                      False, throttle)
-
-        def check(throttle, turn):
-            contact = self.motion_contact
-            if contact is not None:
-                at, position, forward, steer, unused = contact
-                here = state['position']
-                if (state['now'] - at < .8 and
-                        math.hypot(here[0]-position[0], here[2]-position[2]) < 1. and
-                        (turn and turn * steer > 0. or throttle and throttle * forward > 0.)):
-                    return False
-            key = (throttle, turn)
-            if key not in cache:
-                cache[key] = traffic.swept_command_clear(
-                    throttle, turn, state['speed'], pivot_for, world_clear)
-            return cache[key]
-        return check
+    def drive_contact(self, position, heading, dt, static):
+        navigation = self.navigation
+        if (not self.active or 'drive' not in self.features or navigation is None
+                or navigation.tag == 'SPG'):
+            return
+        self.drive_failure = (tuple(position), heading)
+        if static:
+            navigation.report_drive_blockage(
+                self.owner.client.player_id, self.last_order, position, heading,
+                self.owner._clock(), dt, realised=True)
 
     def direction_clear(self, position, yaw, descriptor, shape, reach=None):
         # Corridor lanes follow the hull support plane even when the query
@@ -1499,15 +1479,16 @@ class PlayerControl(object):
                 getattr(owner,'_local_pitch',0.),getattr(owner,'_local_roll',0.)),peers)
             state = dict(id=owner.client.player_id, engine_id=entity.id, position=position, yaw=yaw,
                          speed=owner._local_speed, now=now, half_length=shape[1], half_width=shape[0])
-            if not artillery:
-                traffic.motion_probe = self.motion_probe(traffic, entity, state)
+            blocked_corridors = []
             def clear(angle, reach=None):
-                alignment = math.cos(angle - yaw)
-                if (traffic.motion_probe is not None and abs(alignment) > .995 and
-                        not traffic.motion_probe(math.copysign(1., alignment), 0.)):
+                if not traffic.clear(angle, reach or 5.):
                     return False
-                return (traffic.clear(angle, reach or 5.) and
-                        self.direction_clear(position, angle, entity.typeDescriptor, shape, reach))
+                if self.direction_clear(position, angle, entity.typeDescriptor, shape, reach):
+                    return True
+                probe = self.probe_receipt or {}
+                if any(probe.get(key) for key in ('collision', 'water', 'cliff')):
+                    blocked_corridors.append(angle)
+                return False
             base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
             enemy_base = (owner._rules_state.get('bases') or {}).get(str(3 - int(owner.client.team)), {})
             allies = [r for r in peers if r['team'] == int(owner.client.team)]
@@ -1562,6 +1543,8 @@ class PlayerControl(object):
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             position_goal = None
+            final_blocked = bool(not artillery and target is not None and
+                                 target.id == getattr(self, 'blocked_fire_target', None))
             withdrawal = None
             if isinstance(self.navigation, PlayerNavigation):
                 if ('fire' in self.features and not self.ammo_state['empty'] and
@@ -1572,10 +1555,15 @@ class PlayerControl(object):
                 else:
                     self.navigation.cover_move = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_firing_position') and not tactical_clear and candidates and
-                        not automatic_defence and withdrawal is None):
+                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked)
+                        and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
+                    def firing_lane_from(candidate, start):
+                        end = point if final_blocked else self.target_point(candidate)
+                        return (self.lane_from(candidate, start, end) and
+                                (not final_blocked or self.dynamic_path_clear(candidate, (start, end))))
                     position_goal = self.navigation.firing_position(
-                        state, candidates[0], clear, self.lane_from, owner._mutable_shot_ray()[0])
+                        state, target if final_blocked else candidates[0], clear,
+                        firing_lane_from, owner._mutable_shot_ray()[0])
                 if position_goal is None:
                     self.navigation.firing_move = None
             if withdrawal is not None:
@@ -1584,6 +1572,7 @@ class PlayerControl(object):
             elif position_goal is None:
                 order = self.navigation.decide(state, clear, hold=hold)
             else:
+                hold = False
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)
             pushing = self.wreck_push.apply(order,state,traffic,
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach))
@@ -1611,8 +1600,8 @@ class PlayerControl(object):
                     facing['state'] = 'braking'
                     if abs(state['speed']) <= 1.5:
                         turn = max(-1., min(1., delta / .5))
-                        if (traffic.can_turn(turn) and (traffic.motion_probe is not None or self.direction_clear(
-                                position, yaw + turn * .15, entity.typeDescriptor, shape, shape[1]))):
+                        if (traffic.can_turn(turn) and self.direction_clear(
+                                position, yaw + turn * .15, entity.typeDescriptor, shape, shape[1])):
                             order.update(turn=turn, throttle=0., brake=False,
                                          recovery_mode='combat_facing')
                             facing['state'] = 'turning'
@@ -1622,16 +1611,29 @@ class PlayerControl(object):
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
-            if (not pushing and traffic.motion_probe is not None and
-                    (order['throttle'] or order['turn']) and
-                    not traffic.motion_probe(order['throttle'], order['turn'])):
-                turn = order['turn']
-                if order['throttle'] and turn and traffic.can_turn(turn):
-                    order.update(throttle=0., brake=False, recovery_mode='traffic_pivot')
-                else:
+            if not pushing:
+                if not artillery and isinstance(self.navigation, PlayerNavigation):
+                    failure, self.drive_failure = self.drive_failure, None
+                    if (order.get('travel_intent') and yaw in blocked_corridors and
+                            (order['recovery_mode'] == 'blocked' or self.navigation.driver.replan)):
+                        self.navigation.report_drive_blockage(
+                            state['id'], order, position, yaw, now, dt)
+                    from .traffic_laws import traffic_stopping_distance
+                    def stopping_distance():
+                        params = getattr(owner, '_local_physics', None)
+                        if params is None:
+                            return 0.
+                        return traffic_stopping_distance(params, state['speed'],
+                            getattr(owner, '_local_smooth_drive_pitch', owner._local_pitch),
+                            bool(order['turn']))
+                    self.player_traffic.apply(order, state, traffic, int(owner.client.team),
+                        clear, stopping_distance, 1. / 30.,
+                        self.navigation.driver.replan or failure is not None, failure)
+                if (order['throttle'] and order['turn'] and
+                        not traffic.can_steer(order['throttle'], order['turn'], state['speed'])):
                     order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
-            if self.motion_contact is not None and now - self.motion_contact[0] < .8:
-                order['motion_contact'] = self.motion_contact[-1]
+            else:
+                self.drive_failure = None
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
                     getattr(entity.typeDescriptor, 'hasSiegeMode', False) and
                     entity.siegeState == owner._runtime.constants.VEHICLE_SIEGE_STATE.ENABLED):
@@ -1653,11 +1655,22 @@ class PlayerControl(object):
         if artillery and order.get('artillery') and not mission_order:
             fire_allowed = fire_allowed and order['artillery'].get('phase') not in (
                 'deploying', 'relocating', 'sortie_return')
+        if target is None or target.id != getattr(self, 'blocked_fire_target', None):
+            self.blocked_fire_target = None
         if fire_ready and fire_allowed:
             unused_start, direction = owner._mutable_shot_ray()
-            if self.aiming.confirm(target, solution, direction, now,
-                    owner._tactical_ray_clear,
-                    dynamic_clear=lambda path:self.dynamic_path_clear(target, path)):
+            confirmed = self.aiming.confirm(target, solution, direction, now,
+                owner._tactical_ray_clear,
+                dynamic_clear=lambda path:self.dynamic_path_clear(target, path))
+            if not artillery and getattr(self.aiming, 'receipt', {}).get('final_reason') in (
+                    'dynamic_blocked', 'static_blocked'):
+                if (self.blocked_fire_target != target.id and self.navigation is not None
+                        and 'drive' in self.features):
+                    self.navigation.firing_retry_at = 0.
+                self.blocked_fire_target = target.id
+            elif confirmed:
+                self.blocked_fire_target = None
+            if confirmed:
                 accepted = self.trigger(self.weapon, now)
                 self.record('automatic_fire', target=target.id, accepted=accepted,
                             native=self.weapon.trigger_receipt)

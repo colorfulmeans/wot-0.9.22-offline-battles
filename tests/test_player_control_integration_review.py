@@ -230,5 +230,31 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 self.assertEqual((0., 0., True), (sender.forward, sender.turn, sender.handbrake))
 
 
+    def test_final_blockage_requests_a_new_firing_position_on_next_update(self):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        control, target = PlayerRegressionTests().aim_controller()
+        control.navigation = navigation_controller()
+        control.owner.local_pose = lambda: ((-85., 0., 0.), 0.)
+        control.owner._mutable_shot_ray = lambda: ((-85., 2., 0.), (0., 0., 1.))
+        target.position = (-85., 0., 40.)
+        control.firing_lane = lambda unused: True
+        control.lane_from = lambda *args: True
+        control.dynamic_path_clear = mock.Mock(return_value=True)
+        def confirm(*args, **kwargs):
+            control.aiming.receipt = dict(final_reason='dynamic_blocked')
+            return False
+        control.aiming.confirm = confirm
+
+        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',
+                        return_value=True):
+            control.update(.1, 1.)
+            self.assertEqual(target.id, control.blocked_fire_target)
+            control.update(.1, 1.2)
+        self.assertEqual('firing_position', control.last_order['combat_mode'])
+        control.dynamic_path_clear.assert_called()
+        control.weapon.trigger.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
