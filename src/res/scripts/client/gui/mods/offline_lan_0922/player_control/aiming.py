@@ -794,12 +794,15 @@ class Aiming(object):
             if current_barrel:
                 return 'ready', result
             if physical:
-                if result.get('needs_hydraulic'):
-                    return 'laying', dict(result, laying=True)
                 unused, direction = self.owner._mutable_shot_ray()
-                verdict = self.actual_contact(target, result, own, direction, threshold)
+                verdict = ('laying' if result.get('needs_hydraulic') else
+                           self.actual_contact(target, result, own, direction, threshold))
                 if verdict in ('laying', 'miss', 'unknown'):
-                    return 'laying', dict(result, laying=True)
+                    error = None
+                    if verdict == 'laying':
+                        dot = sum(result['direction'][i]*direction[i] for i in range(3))
+                        error = math.acos(max(-1., min(1., dot)))
+                    return 'laying', dict(result, laying=True, barrel_error=error)
                 return verdict, result
             if threshold is None:
                 return 'ready', result

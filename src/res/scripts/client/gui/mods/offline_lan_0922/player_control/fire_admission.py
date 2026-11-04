@@ -12,6 +12,7 @@ import random
 
 from .. import ballistics, combat_rules, lan_client, projectile_runtime, shot_geometry
 from .weapon import artillery_path
+from .firing_lane import FiringLane
 
 
 WORLD_CHORDS_PER_ATTEMPT = 24
@@ -68,6 +69,7 @@ class FireAdmission(object):
 
     def reset(self):
         self.pending = None
+        self.lane = FiringLane()
         self.receipt = dict(status='idle', reason='idle', world_chords=0)
         self._next_probe = float('-inf')
         self._next_full_probe = float('-inf')
@@ -75,6 +77,10 @@ class FireAdmission(object):
     def _result(self, status, reason, token=None, **fields):
         result = dict(status=status, reason=reason, token=token)
         result.update(fields)
+        if getattr(self.control, 'direct_engagement', None) is not None:
+            result.update(self.lane.receipt())
+            if status != 'pending' or reason == 'auto_friendly_lane':
+                self.lane.pending_since = None
         result['proof_native_collision_calls_upper'] = (int(fields.get('world_chords', 0)) +
             4*int(fields.get('target_queries', 0)))
         self.receipt = dict((key, value) for key, value in result.items()
@@ -181,13 +187,26 @@ class FireAdmission(object):
 
     def _dynamic_reason(self, target, proof, splash):
         for name in ('raw_path', 'path'):
-            if not self.control.dynamic_path_clear(target, proof[name]):
-                return 'auto_friendly_lane', self._lane_blocker(name)
+            reason, blocker = self._check_lane(target, proof[name], name)
+            if reason is not None:
+                return reason, blocker
         # Range/time expiry is not an explosion. HE safety is tied to the
         # first proved actual world/vehicle contact, never an aiming plane.
         impact = proof.get('terminal_impact')
         if impact is not None and not self._splash_clear(impact, splash):
             return 'auto_friendly_splash', None
+        return None, None
+
+    def _check_lane(self, target, path, name):
+        if getattr(self.control, 'direct_engagement', None) is not None:
+            status, blocker = self.lane.check(self.control.owner, target, path)
+            if status == 'clear':
+                return None, None
+            reason = dict(blocked='auto_friendly_lane', pending='auto_lane_pending',
+                          unknown='auto_lane_geometry_unavailable')[status]
+            return reason, dict(blocker or {}, path=name)
+        if not self.control.dynamic_path_clear(target, path):
+            return 'auto_friendly_lane', self._lane_blocker(name)
         return None, None
 
     def _lane_blocker(self, path):
@@ -455,9 +474,9 @@ class FireAdmission(object):
             # Check the full current centre lane before native work. A random
             # ray can terminate on scenery earlier than its nominal endpoint,
             # so its friendly/splash check follows that exact terminal proof.
-            if not self.control.dynamic_path_clear(target, proof['raw_path']):
-                return self._result('pending', 'auto_friendly_lane', candidate, world_chords=0,
-                                    blocker=self._lane_blocker('raw_path'))
+            reason, blocker = self._check_lane(target, proof['raw_path'], 'raw_path')
+            if reason is not None:
+                return self._result('pending', reason, candidate, world_chords=0, blocker=blocker)
             if proof['blocked']:
                 # Scenery may be destroyed. Re-prove this same random shot,
                 # not a newly sampled one, on the next bounded attempt.
@@ -547,6 +566,8 @@ class FireAdmission(object):
             reason, blocker = self._dynamic_reason(target, proof, token['splash'])
             if reason is not None:
                 self.receipt['blocker'] = blocker
+                if getattr(self.control, 'direct_engagement', None) is not None:
+                    self.receipt.update(self.lane.receipt())
                 return reason
             if (token is not self.pending or not self.control.active or
                     self.control.control_generation != context.get('generation')):

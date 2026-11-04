@@ -1582,6 +1582,8 @@ class PlayerControl(object):
             max(0., now - self.last_decision) if self.last_decision is not None else .1)
         self.last_decision = now
         self.next_decision = now+.1
+        if self.direct_engagement is not None:
+            self.fire_admission.lane.begin(now)
         decision_generation = self.control_generation
         decision_identity = self.identity()
         decision_navigation, decision_weapon = self.navigation, self.weapon
@@ -1661,6 +1663,14 @@ class PlayerControl(object):
                         target, solution = candidate, trial
                         break
                 fire_clear = bool(solution and solution.get('clear') and solution.get('reachable'))
+        engagement = self.direct_engagement
+        settling_aim = bool(engagement is not None and
+            (getattr(engagement, 'checking', False) or getattr(engagement, 'laying_until', None)
+             is not None or solution and solution.get('laying') or
+             self.fire_admission.receipt.get('reason') in (
+                 'auto_lane_pending', 'auto_lane_geometry_unavailable')
+             and target is not None and target.id == engagement.target)
+            and not getattr(engagement, 'seek', False) and not getattr(engagement, 'retreat', False))
         tactical_clear = bool(solution and solution.get('geometry_clear'))
         if self.ammo_policy is not None:
             self.ammo_policy.context(position, self.direct_engagement.target
@@ -1721,7 +1731,7 @@ class PlayerControl(object):
                 self.no_aim_since = now
             aim_idle = (self.direct_engagement is None or
                         self.direct_engagement.target is None or now - self.no_aim_since >= 1.5)
-            if ('fire' in self.features and self.weapon is not None and aim_idle and
+            if ('fire' in self.features and self.weapon is not None and aim_idle and not settling_aim and
                     not getattr(owner, '_local_fire_intent', None) and
                     not getattr(owner, '_local_player_burst', None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
@@ -1809,6 +1819,9 @@ class PlayerControl(object):
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
+            if (settling_aim and movement.get('allow_firing_position', True) and
+                    not movement.get('force_move') and not final_blocked):
+                hold = True
             if now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
@@ -1846,7 +1859,7 @@ class PlayerControl(object):
                     if not decision_current():
                         return
                 elif ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_withdrawal') and not automatic_defence and
+                        movement.get('allow_withdrawal') and not automatic_defence and not settling_aim and
                         (target is not None or self.navigation.cover_move is not None or
                          self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
@@ -1862,12 +1875,14 @@ class PlayerControl(object):
                 if self.direct_engagement is not None and not (self.direct_engagement.retreat or direct_reload):
                     self.navigation.ammo_retreat = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked or seeking)
+                        movement.get('allow_firing_position') and (not settling_aim or final_blocked)
+                        and (not tactical_clear or final_blocked or seeking)
                         and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
                     def firing_lane_from(candidate, start):
                         end = point if final_blocked and target is not None else self.target_point(candidate)
                         return (self.lane_from(candidate, start, end) and
-                                (not final_blocked or self.dynamic_path_clear(candidate, (start, end))))
+                                (not final_blocked or self.direct_engagement is not None or
+                                 self.dynamic_path_clear(candidate, (start, end))))
                     position_goal = self.navigation.firing_position(
                         state, blocked_target if final_blocked else records.get(
                             getattr(self.direct_engagement, 'target', None), candidates[0]), clear,
@@ -1877,7 +1892,8 @@ class PlayerControl(object):
                 if position_goal is None:
                     self.navigation.firing_move = None
                 manoeuvre = self.combat_tactics.movement(state, context, entity.typeDescriptor,
-                    allowed=bool(movement.get('allow_firing_position') and not automatic_defence and
+                    allowed=bool(movement.get('allow_firing_position') and not automatic_defence
+                        and not settling_aim and
                         withdrawal is None and position_goal is None),
                     height=self.navigation._height, clear=clear)
                 if not decision_current():
@@ -1892,6 +1908,10 @@ class PlayerControl(object):
                     mode=manoeuvre['phase'], key=('player_flank', manoeuvre['target']))
             elif position_goal is None:
                 order = self.navigation.decide(state, clear, hold=hold)
+                if (settling_aim and hold and not final_blocked and not movement.get('force_move')
+                        and not order.get('mission') and not order.get('holding')):
+                    order.update(throttle=0., turn=0., brake=True, holding=True,
+                                 travel_intent=False, recovery_mode='aim_check_hold')
             else:
                 hold = False
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)
@@ -1914,7 +1934,7 @@ class PlayerControl(object):
                 not (order.get('holding') and mission_order and not arrival.get('settled')) and
                 not (order.get('holding') and order.get('artillery') and not mission_order and
                      order['artillery'].get('phase') != 'holding'))
-            if hold and facing_allowed:
+            if hold and facing_allowed and target is not None:
                 from .driving import angle
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
@@ -1923,6 +1943,9 @@ class PlayerControl(object):
                 traverse = hull_traverse_error(owner, entity.typeDescriptor, point, delta, solution=solution)
                 if traverse is not None:
                     delta = traverse
+                elif settling_aim or self.direct_engagement is not None and (
+                        fire_clear or solution.get('reachable')):
+                    delta = 0.
                 else:
                     angled = self.combat_tactics.facing(state, target, entity.typeDescriptor)
                     if angled is not None:
@@ -1989,6 +2012,8 @@ class PlayerControl(object):
                 return
         else:
             order = {}
+        if settling_aim and self.aim_receipt is not None:
+            self.aim_receipt['settling'] = True
         self.last_order = order
         self.finish_mission(now)
         if not decision_current():
@@ -2019,7 +2044,7 @@ class PlayerControl(object):
                 self.blocked_fire_target = target.id
                 key = (target.id, owner._gun_state.shot_index, solution.get('key'))
                 previous = self.blocked_fire_sample
-                if previous is None or previous[0] != key or now - previous[2] > .5:
+                if previous is None or previous[0] != key or now - previous[2] > 1.5:
                     previous = (key, now, now)
                 self.blocked_fire_sample = (key, previous[1], now)
                 if (self.direct_engagement is not None and now - previous[1] >= .6 and

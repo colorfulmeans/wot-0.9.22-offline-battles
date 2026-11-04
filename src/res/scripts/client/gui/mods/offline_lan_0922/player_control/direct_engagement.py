@@ -8,6 +8,7 @@ from ..gun_mechanics import _field
 
 PENETRATION_FACTOR_65 = 0.9679810530375992
 SEARCH_SECONDS = 8.
+OWN_RESCAN_SECONDS = .7
 HE = 'HIGH_EXPLOSIVE'
 
 
@@ -26,6 +27,9 @@ class DirectEngagement(object):
         self.retreat = False
         self.laying_until = None
         self.next_clip_scan = None
+        self.checking = False
+        self.last_full_at = None
+        self.laying_error = None
 
     def shells(self, policy, gun):
         main = next((row for row in policy.shells if row['index'] == policy.main), None)
@@ -48,22 +52,22 @@ class DirectEngagement(object):
         self.target, self.stage = target, stage
         self.sample = self.scan = self.last_solution = self.motion = None
         self.fallback = False
-        self.laying_until = self.next_clip_scan = None
+        self.laying_until = self.next_clip_scan = self.last_full_at = self.laying_error = None
+        self.checking = False
 
-    def _stationary(self, aiming, target):
+    def _motion_changes(self, aiming, target):
         try:
             pose = aiming.direct_pose(target)
         except (AttributeError, ValueError, TypeError, RuntimeError):
-            self.motion = None
-            return False
-        old, self.motion = self.motion, pose
-        if old is None:
-            return False
-        for index in (0, 2):
-            if sum((pose[index][axis] - old[index][axis])**2 for axis in range(3)) > .04**2:
-                return False
-        return all(abs((pose[i] - old[i] + math.pi) % (2.*math.pi) - math.pi) <= .005
-                   for i in (1, 3, 4, 5, 6))
+            return True, False, None
+        if self.motion is None:
+            return True, False, pose
+        def changed(index, angles):
+            if sum((pose[index][axis] - self.motion[index][axis])**2 for axis in range(3)) > .04**2:
+                return True
+            return any(abs((pose[i] - self.motion[i] + math.pi) % (2.*math.pi) - math.pi) > .005
+                       for i in angles)
+        return changed(2, (3, 4, 5, 6)), changed(0, (1,)), pose
 
     def _scan(self, control, target, rows, now, mode, sample=None):
         aiming = control.aiming
@@ -113,14 +117,18 @@ class DirectEngagement(object):
         if verdict in ('ready', 'laying'):
             self.last_solution = solution
             if verdict == 'laying':
-                if self.laying_until is None:
+                error = solution.get('barrel_error')
+                progressing = error is not None and (self.laying_error is None or
+                                                      error < self.laying_error - .002)
+                if self.laying_until is None or progressing:
                     self.laying_until = now + 5.
+                    self.laying_error = error
                 elif now >= self.laying_until:
                     aiming.defer_ordered_point(target, index, solution, now)
-                    self.sample = self.last_solution = self.laying_until = None
+                    self.sample = self.last_solution = self.laying_until = self.laying_error = None
                     return None, None, False
                 return target, solution, False
-            self.laying_until = None
+            self.laying_until = self.laying_error = None
             if not fallback:
                 self.search_since = None
                 self.exhausted.clear()
@@ -137,7 +145,9 @@ class DirectEngagement(object):
                     return target, solution, False
                 control.queue_next_automatic_clip(next_pick[0] if next_pick else index)
             return target, solution, True
+        self.checking = verdict == 'pending'
         if verdict != 'pending':
+            self.laying_until = self.laying_error = None
             self.sample = self.last_solution = None
             self.fallback = False
         if verdict == 'pending' and self.last_solution is not None:
@@ -148,6 +158,7 @@ class DirectEngagement(object):
         owner, aiming = control.owner, control.aiming
         gun, policy = owner._gun_state, control.ammo_policy
         rows = self.shells(policy, gun)
+        self.checking = False
         self.seek = self.search_since is not None and not self.retreat
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
@@ -164,7 +175,9 @@ class DirectEngagement(object):
         if self.target not in by_id:
             self.adopt(candidates[0].id)
         target = by_id[self.target]
-        stationary = self._stationary(aiming, target)
+        target_moved, own_moved, pose = self._motion_changes(aiming, target)
+        own_due = own_moved and (self.last_full_at is None or
+                                 now - self.last_full_at >= OWN_RESCAN_SECONDS)
         magazine = gun.clip_size > 1
         loaded = next((row for row in rows if row['index'] == gun.shot_index), None)
         keep_clip = magazine and gun.clip > 0 and loaded is not None
@@ -186,15 +199,24 @@ class DirectEngagement(object):
             mode = 'next' if keep_clip and not he else 'splash' if he else 'full'
         elif self.scan is not None and self.scan['identity'][2] == 'splash':
             mode = 'splash'
-        elif self.sample is not None and stationary and (
-                self.scan is None or self.scan['identity'][2] == 'barrel'):
+        elif self.scan is not None and self.scan['identity'][2] == 'full':
+            mode = 'full'
+        elif self.sample is not None and not (target_moved or own_due):
             mode = 'barrel'
+        elif (self.sample is None and own_moved and not target_moved and not own_due
+                and self.last_full_at is not None):
+            self.checking = True
+            return None, None, False
         else:
             mode = 'full'
+        if mode == 'full' and (self.scan is None or self.scan['identity'][2] != 'full'):
+            self.motion = pose
+            self.last_full_at = now
         compare = he if mode == 'splash' else rows if mode == 'next' else eligible
         verdict, pick = self._scan(control, target, compare,
                                    now, mode, self.sample if mode == 'barrel' else None)
         if verdict == 'pending':
+            self.checking = True
             if self.last_solution is not None and now - self.last_solution['created'] <= .5:
                 return target, self.last_solution, False
             return None, None, False
@@ -215,6 +237,7 @@ class DirectEngagement(object):
             index, self.sample = pick
             self.stage = (index, None if mode == 'splash' else PENETRATION_FACTOR_65)
             self.last_solution = None
+            self.laying_until = self.laying_error = None
             self.fallback = mode == 'splash'
             return self._lay(control, target, index, self.sample, now, self.fallback)
         if mode == 'barrel':

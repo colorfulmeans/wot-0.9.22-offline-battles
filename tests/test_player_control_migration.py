@@ -574,6 +574,31 @@ class DynamicTrajectoryTests(unittest.TestCase):
         control=PlayerControl(owner,('fire',))
         return control,other,types.SimpleNamespace(id=99),record
 
+    def test_precise_lane_resumes_after_two_chords_and_invalidates_moved_wreck(self):
+        from gui.mods.offline_lan_0922.player_control.firing_lane import FiringLane
+        control, wreck, target, unused = self.scene((0., 0., 0.))
+        wreck.alive = False
+        control.owner._vector = lambda point: point
+        lane = FiringLane()
+        path = ((0., 1., -1.), (0., 1., -.5), (0., 1., .5), (0., 1., 1.))
+        with mock.patch('gui.mods.offline_lan_0922.player_control.firing_lane.collide_vehicle_at_matrix',
+                        return_value=[]) as native:
+            lane.begin(1.)
+            self.assertEqual('pending', lane.check(control.owner, target, path)[0])
+            self.assertEqual(2, native.call_count)
+            lane.begin(1.1)
+            self.assertEqual('clear', lane.check(control.owner, target, path)[0])
+            self.assertEqual(3, native.call_count)
+            self.assertEqual('clear', lane.check(control.owner, target, path)[0])
+            self.assertEqual(3, native.call_count)
+            native.return_value = [object()]
+            wreck.matrix.setTranslate((.2, 0., 0.))
+            lane.begin(1.2)
+            status, blocker = lane.check(control.owner, target, path)
+            self.assertEqual(('blocked', 'native_contact', wreck.id),
+                             (status, blocker['reason'], blocker['id']))
+            self.assertEqual(4, native.call_count)
+
     def test_friend_entering_earlier_chord_is_rechecked_from_current_pose(self):
         c,friend,target,record=self.scene()
         path=((0.,1.,0.),(0.,1.,5.),(0.,1.,40.))

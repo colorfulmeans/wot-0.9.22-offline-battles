@@ -314,5 +314,24 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.forward.assert_called_once()
 
 
+    def test_pending_direct_scan_preserves_aim_and_does_not_take_route(self):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        from types import SimpleNamespace
+        control, target = PlayerRegressionTests().aim_controller()
+        control.navigation = navigation_controller()
+        control.direct_engagement = SimpleNamespace(target=target.id, checking=True,
+            retreat=False, seek=False, update=lambda *args: (None, None, False))
+        control.navigation.firing_position = mock.Mock()
+        control.navigation.decide = mock.Mock(return_value=dict(
+            throttle=1., turn=.4, brake=False, recovery_mode='travel', combat_mode='route'))
+        control.update(.1, 1.)
+        control.update(.1, 3.)
+        control.weapon.forward.assert_not_called()
+        control.navigation.firing_position.assert_not_called()
+        self.assertEqual((0., 0., True),
+            (control.last_order['throttle'], control.last_order['turn'], control.last_order['brake']))
+
+
 if __name__ == '__main__':
     unittest.main()

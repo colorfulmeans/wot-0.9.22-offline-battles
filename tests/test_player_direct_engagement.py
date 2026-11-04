@@ -91,6 +91,37 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual([], self.calls)
 
 
+    def test_own_hull_rescan_cools_down_but_target_turret_can_trigger_it(self):
+        state = self.state
+        state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        state.sample = 0
+        state.last_solution = dict(created=1.)
+        state.motion = self.control.aiming.direct_pose(self.first)
+        state.last_full_at = 1.
+        changed = ((.2, 0, 0), 0., (0, 0, 10), 0., 0., 0., 0.)
+        self.control.aiming.direct_pose = lambda target: changed
+        scan = mock.Mock(return_value=('pending', None))
+        state._scan = scan
+        state.update(self.control, [self.first], 1.4)
+        self.assertEqual('barrel', scan.call_args.args[-2])
+        changed = changed[:4] + (.1, 0., 0.)
+        state.update(self.control, [self.first], 1.5)
+        self.assertEqual('full', scan.call_args.args[-2])
+
+    def test_slow_barrel_keeps_its_point_while_angular_error_improves(self):
+        state = self.state
+        state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        state.sample = 0
+        self.control.aiming.compare_direct = mock.Mock(side_effect=[
+            ('laying', dict(laying=True, barrel_error=error)) for error in (1.0, .8, .6)])
+        for now in (1., 5., 9.):
+            target, solution, ready = state.update(self.control, [self.first], now)
+            self.assertIs(target, self.first)
+            self.assertTrue(solution['laying'])
+            self.assertFalse(ready)
+        self.assertEqual(0, state.sample)
+
+
 class OrderedPointTests(unittest.TestCase):
     def test_retain_first_eligible_point_and_restart_at_first_after_loss(self):
         aim = Aiming(SimpleNamespace(_gun_state=SimpleNamespace(shot_index=0)))
