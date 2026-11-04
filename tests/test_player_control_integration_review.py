@@ -1,0 +1,230 @@
+"""Independent producer/controller lifecycle regressions found during integration review.
+
+These exercise real admission, mission validation, cleanup, and launcher readback;
+engine stubs model only the unavailable native boundary.
+"""
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+import types
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
+sys.path.insert(0, str(ROOT / 'launcher'))
+from gui.mods.offline_lan_0922.player_control import PlayerControl
+from gui.mods.offline_lan_0922.player_control.commands import CommandGateway, append_result
+from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation
+from player_control_transport import PlayerControlTransport
+
+
+class PlayerControlIntegrationReviewTests(unittest.TestCase):
+    def setUp(self):
+        self.environ = mock.patch.dict(os.environ, {'WOT_OFFLINE_TEST_CONTROL_SESSION': 'review-session'})
+        self.environ.start()
+        self.addCleanup(self.environ.stop)
+        self.rows = []
+
+    def control(self):
+        entity = types.SimpleNamespace(id=1, isAlive=lambda: True,
+            typeDescriptor=types.SimpleNamespace(maxHealth=1000), health=1000)
+        sender = types.SimpleNamespace(forward=1., turn=.3, handbrake=False,
+                                       send_current=mock.Mock())
+        gun = types.SimpleNamespace(shots=[{}], ammo=[10], clip=1, clip_size=1,
+                                    reload_time=0., shot_index=0)
+        gun.can_fire = lambda unused: gun.reload_time <= 0 and gun.clip > 0 and gun.ammo[0] > 0
+        owner = types.SimpleNamespace(_server=types.SimpleNamespace(vehicle_id=1),
+            _server_entity=lambda unused: entity, _sender=sender, _gun_state=gun,
+            state='running', _battle_live=True, _battle_result=None,
+            _worker_mode=False, _replay_mode=False, _clock=lambda: 1.,
+            _start_message={'round_id': 'round-a'},
+            client=types.SimpleNamespace(player_id=1, team=1),
+            _avatar=types.SimpleNamespace(isWaitingForShot=False),
+            _local_fire_intent=None, _local_player_burst=None,
+            _cancel_local_player_burst=mock.Mock(), _local_speed=0.,
+            local_pose=lambda: ((0., 0., 0.), 0.),
+            _collision_shape=lambda unused: (1., 3., 0., 2.))
+        controller = PlayerControl(owner, ('drive', 'fire'), notify=lambda text: None)
+        owner._player_control = controller
+        controller.record = mock.Mock()
+        controller.emit_result = lambda row: self.rows.append(dict(row)) or True
+        controller.gateway.emit = controller.emit_result
+        return controller
+
+    @staticmethod
+    def request(controller, action, command_id='one', **overrides):
+        request = dict(controller.identity(), id=command_id, action=action,
+                       args={}, timeout_seconds=15., replace=True)
+        request.update(overrides)
+        return request
+
+    def test_rejected_fire_retry_never_creates_a_later_unreported_shot(self):
+        controller = self.control()
+        gun = controller.owner._gun_state
+        gun.reload_time = 5.
+        request = self.request(controller, 'fire')
+        first = controller.gateway.submit(request, 0.)
+        self.assertEqual(('rejected', 'gun_not_ready'), (first['status'], first['reason']))
+        gun.reload_time = 0.
+        def shoot():
+            controller.owner._local_fire_intent = {'projectile_id': 'late-shot'}
+        controller.owner._avatar.shoot = mock.Mock(side_effect=shoot)
+        second = controller.gateway.submit(request, 1.)
+        controller.owner._avatar.shoot.assert_not_called()
+        self.assertEqual(first, second)
+
+    def test_cleanup_error_cannot_latch_an_automatic_movement_input(self):
+        controller = self.control()
+        controller.active = True
+        controller.navigation = types.SimpleNamespace(
+            close=mock.Mock(side_effect=[RuntimeError('native close failed'), None]))
+        try:
+            controller.stop('controller_error')
+        except RuntimeError:
+            pass
+        # The battle loop also retries stop after a controller exception.
+        controller.stop('controller_error')
+        sender = controller.owner._sender
+        self.assertEqual((0., 0., False), (sender.forward, sender.turn, sender.handbrake))
+        self.assertFalse(controller.owns_drive())
+
+    def test_invalid_mission_destination_does_not_preempt_a_running_timed_drive(self):
+        controller = self.control()
+        controller.override = (10., 1., 0.)
+        previous = controller.override
+        navigation = PlayerNavigation.__new__(PlayerNavigation)
+        navigation.mission_sequence = 0
+        navigation.home_area = {'point': (0., 0.), 'radius': 25., 'team': 1}
+        navigation.enemy_area = {'point': (50., 50.), 'radius': 25., 'team': 2}
+        navigation.bounds = (-100., -100., 100., 100.)
+        navigation.mission = None
+        def start_takeover():
+            controller.active = True
+            controller.navigation = navigation
+            return True
+        controller.toggle = mock.Mock(side_effect=start_takeover)
+        request = self.request(controller, 'hold_position', args={'position': (1000., 0., 0.)})
+        with mock.patch('gui.mods.offline_lan_0922.player_control.navigation.PlayerNavigation',
+                        return_value=navigation):
+            receipt = controller.gateway.submit(request, 0.)
+        self.assertEqual('failed', receipt['status'])
+        self.assertEqual('objective_outside_arena', receipt['reason'])
+        self.assertEqual(previous, controller.override)
+        self.assertFalse(controller.active)
+
+    def test_stop_status_does_not_republish_the_released_automatic_target(self):
+        controller = self.control()
+        controller.active = True
+        controller.target_engine = 202
+        controller.aim_receipt = {'target': 202, 'aligned': True, 'fire_clear': True}
+        controller.stop('manual')
+        controller.publish_status(1., force=True)
+        status = self.rows[-1]
+        self.assertFalse(status['active'])
+        self.assertIsNone(status['aim'])
+
+    def transport_and_gateway(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        command_path = os.path.join(directory.name, 'commands.jsonl')
+        result_path = os.path.join(directory.name, 'results.jsonl')
+        for path in (command_path, result_path):
+            Path(path).write_bytes(b'')
+        identity = dict(session_id='review-session', round_id='round-a', player_id=1)
+        transport = PlayerControlTransport(command_path, result_path, identity['session_id'])
+        append_result(result_path, dict(identity, type='status', live=True, active=True))
+        gateway = CommandGateway(lambda: dict(identity),
+            lambda row: append_result(result_path, row), lambda request, now: None,
+            lambda request: None, lambda request, reason: None)
+        return transport, gateway, identity, command_path
+
+    def test_conflicting_retry_does_not_poison_the_original_request_terminal_result(self):
+        transport, gateway, unused_identity, command_path = self.transport_and_gateway()
+        command_id = transport.send('drive', {'seconds': 1., 'forward': 1.})
+        request = json.loads(Path(command_path).read_text())
+        gateway.submit(request, 0.)
+        conflict = dict(request, args={'seconds': 1., 'forward': -1.})
+        gateway.submit(conflict, .1)
+        gateway.finish(command_id, 'completed', 'drive_completed', 1.)
+        transport.poll()
+        self.assertEqual('completed', gateway.requests[command_id]['receipt']['status'])
+        self.assertEqual('completed', transport.results[command_id]['status'])
+
+    def test_stale_round_rejection_is_observable_by_the_request_producer(self):
+        transport, gateway, identity, command_path = self.transport_and_gateway()
+        command_id = transport.send('stop')
+        request = json.loads(Path(command_path).read_text())
+        identity['round_id'] = 'round-b'
+        receipt = gateway.submit(request, 0.)
+        self.assertEqual('stale_round_id', receipt['reason'])
+        transport.poll()
+        self.assertEqual('rejected', transport.results[command_id]['status'])
+        self.assertEqual('stale_round_id', transport.results[command_id]['reason'])
+
+    def test_float_player_identity_is_not_admitted_as_an_integer_player(self):
+        controller = self.control()
+        controller.active = True
+        receipt = controller.gateway.submit(self.request(controller, 'stop', player_id=1.0), 0.)
+        self.assertEqual('rejected', receipt['status'])
+        self.assertTrue(controller.active)
+
+    def test_request_history_limit_never_blocks_releasing_control(self):
+        controller = self.control()
+        controller.active = True
+        for index in range(2049):
+            controller.gateway.submit(self.request(controller, 'status', command_id='status-%d' % index), 0.)
+        receipt = controller.gateway.submit(self.request(controller, 'stop', command_id='release'), 0.)
+        self.assertEqual('completed', receipt['status'])
+        self.assertFalse(controller.active)
+
+    def test_fire_timeout_cancels_only_future_rounds_of_its_owned_burst(self):
+        controller = self.control()
+        burst = {'group_seq': 12, 'count': 3, 'committed': 1}
+        def shoot():
+            controller.owner._local_player_burst = burst
+            controller.shot_committed({'projectile_id': 'first-round', 'shell_index': 0},
+                {'player_burst': burst, 'burst_group_seq': 12, 'burst_count': 3, 'reload_factor': 1.})
+        controller.owner._avatar.shoot = shoot
+        controller.owner._cancel_local_player_burst.side_effect = lambda **unused: setattr(
+            controller.owner, '_local_player_burst', None)
+        request = self.request(controller, 'fire', timeout_seconds=.1)
+        receipt = controller.gateway.submit(request, 0.)
+        self.assertEqual('accepted', receipt['status'])
+        self.assertIs(burst, controller.owner._local_player_burst)
+        controller.gateway.tick(.2)
+        self.assertEqual('failed', controller.gateway.requests['one']['receipt']['status'])
+        self.assertEqual(1, controller.automatic_commits)
+        self.assertIsNone(controller.owner._local_player_burst)
+
+    def test_mission_arrival_and_failure_brakes_survive_outer_combat_facing(self):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller, state
+        for failure in (False, True):
+            with self.subTest(task_failed=failure):
+                control, target = PlayerRegressionTests().aim_controller()
+                control.navigation = navigation_controller()
+                control.owner.local_pose = lambda: ((-85., 0., 0.), 0.)
+                control.owner._mutable_shot_ray = lambda: ((-85., 2., 0.), (0., 0., 1.))
+                control.owner._local_speed = 0. if failure else .8
+                target.position = (-50., 0., 50.)
+                control.firing_lane = lambda unused: True
+                control.navigation.start_mission('return_base',
+                    {'command_id': 'return', 'timeout': .5 if failure else 180.}, state())
+                with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True):
+                    control.update(.1, 1.)
+                mission = control.navigation.mission_status()
+                self.assertEqual('failed' if failure else 'running', mission['status'])
+                self.assertEqual('failed' if failure else 'arriving', mission['phase'])
+                self.assertTrue(control.last_order['holding'])
+                self.assertEqual('mission_hold', control.last_order['combat_mode'])
+                # Native navigation requested a brake, but the caller must also
+                # preserve it until arrival settles, or while the task failed.
+                sender = control.owner._sender
+                self.assertEqual((0., 0., True), (sender.forward, sender.turn, sender.handbrake))
+
+
+if __name__ == '__main__':
+    unittest.main()

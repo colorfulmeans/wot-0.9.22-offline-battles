@@ -15,28 +15,40 @@ def barrel_aligned(start, direction, speed, gravity, point, radius):
     if speed <= 0 or horizontal <= 1.e-8:
         return False
     seconds = ((point[0]-start[0])*direction[0]+(point[2]-start[2])*direction[2])/(speed*horizontal)
-    if seconds <= 0:
+    from ..ballistics import PROJECTILE_MAX_FLIGHT_SECONDS
+    if not 0. < seconds <= PROJECTILE_MAX_FLIGHT_SECONDS:
         return False
     projected = [start[i]+direction[i]*speed*seconds for i in range(3)]
-    projected[1] -= .5*gravity*seconds*seconds
+    projected[1] -= .5*abs(gravity)*seconds*seconds
     return sum((projected[i]-point[i])**2 for i in range(3)) <= radius*radius
 
 
-def artillery_path(start, point, shot, direction=None):
-    """Sample a candidate artillery arc, or the actual laid barrel's arc."""
+def artillery_path(start, point, shot, direction=None, prefer_high=False):
+    """Sample a candidate arc or the actual laid barrel, including zero gravity."""
     from .. import ballistics
     from ..gun_mechanics import _field
-    speed = float(_field(shot, 'speed'))
-    gravity = abs(float(_field(shot, 'gravity')))
-    maximum = float(_field(shot, 'maxDistance', float('inf')))
-    if speed <= 0. or gravity <= 0.:
+    try:
+        speed = float(_field(shot, 'speed'))
+        gravity = abs(float(_field(shot, 'gravity')))
+        maximum = float(_field(shot, 'maxDistance'))
+    except (TypeError, ValueError, OverflowError):
         return ()
-    dx, dz = point[0] - start[0], point[2] - start[2]
+    if (speed <= 0. or maximum <= 0. or
+            any(math.isnan(v) or math.isinf(v)
+                for v in (speed, gravity, maximum))):
+        return ()
+    dx, dy, dz = (point[i] - start[i] for i in range(3))
     if direction is None:
-        solutions = ballistics.ballistic_solutions(start, point, speed, gravity)
-        if not solutions:
-            return ()
-        pitch, flight = solutions[0]
+        if gravity == 0.:
+            if prefer_high:
+                return ()
+            flight = math.sqrt(dx*dx+dy*dy+dz*dz) / speed
+            pitch = -math.atan2(dy, math.hypot(dx, dz))
+        else:
+            solutions = ballistics.ballistic_solutions(start, point, speed, gravity)
+            if not solutions or (prefer_high and len(solutions) < 2):
+                return ()
+            pitch, flight = solutions[-1] if prefer_high else solutions[0]
         yaw = math.atan2(dx, dz)
     else:
         x, y, z = direction
@@ -51,7 +63,7 @@ def artillery_path(start, point, shot, direction=None):
     return ballistics.ballistic_path(start, yaw, pitch, speed, gravity, flight)
 
 
-def hull_traverse_error(owner, descriptor, point, world_error):
+def hull_traverse_error(owner, descriptor, point, world_error, solution=None):
     """Return the extra hull rotation needed by the mounted gun."""
     from ..gun_mechanics import _field
     from .driving import angle
@@ -63,7 +75,12 @@ def hull_traverse_error(owner, descriptor, point, world_error):
     runtime = owner._runtime
     get_angles = getattr(runtime, 'get_shot_angles', None)
     relative = world_error
-    if body is not None and callable(get_angles):
+    if body is not None and solution is not None and solution.get('direction') is not None:
+        from ..shot_geometry import world_direction_to_local_gun_angles
+        matrix = runtime.math.Matrix(body)
+        relative, unused = world_direction_to_local_gun_angles(
+            solution['direction'], float(matrix.yaw), float(matrix.pitch), float(matrix.roll))
+    elif body is not None and callable(get_angles):
         rotator = owner._avatar.gunRotator
         relative, unused = get_angles(descriptor, runtime.math.Matrix(body),
             (float(rotator.turretYaw), float(rotator.gunPitch)), owner._vector(point))
@@ -81,6 +98,8 @@ class Weapon(object):
         self.owner = owner
         self.target = None
         self.point = None
+        self.source_point = None
+        self.solution = None
         self.acquired = 0.
         self.fired = False
         self.saved = None
@@ -101,15 +120,28 @@ class Weapon(object):
             rotator.clientMode = True
 
     def shot_point(self):
-        return self.owner._vector(self.point) if self.point is not None else None
+        point = self.source_point if self.source_point is not None else self.point
+        return self.owner._vector(point) if point is not None else None
 
-    def aim(self, target, point, now):
+    def aim(self, target, point, now, solution=None):
         self.bind()
-        if self.target != target:
+        previous = self.solution or {}
+        current = solution or {}
+        changed = (previous.get('arc'), previous.get('sample')) != (
+            current.get('arc'), current.get('sample'))
+        if self.target != target or changed:
             self.target, self.acquired, self.fired = target, now, False
         self.point = tuple(point)
+        self.source_point = tuple(current.get('source_point') or point)
+        self.solution = solution
+
+    def aim_solution(self, target, solution, now):
+        self.aim(target, solution['point'], now, solution=solution)
 
     def ready(self, now, factor):
+        if self.solution is not None and (not self.solution.get('reachable') or
+                                         not self.solution.get('source_verified')):
+            return False
         elapsed = now-self.acquired
         return (self.target is not None and elapsed >= REACTION_SECONDS and
                 (self.fired or factor <= CONVERGED_FACTOR or elapsed >= PATIENCE_SECONDS))
@@ -120,23 +152,29 @@ class Weapon(object):
         self.triggering = True
         committed = self.committed
         controller = getattr(self.owner, '_player_control', None)
-        player_committed = getattr(controller, 'shot_commits', 0)
+        player_committed = getattr(controller, 'automatic_commits',
+                                   getattr(controller, 'shot_commits', 0))
+        previous_intent = self.owner._local_fire_intent
         try:
             self.owner._avatar.shoot()
         finally:
             self.triggering = False
         committed_delta = max(self.committed-committed,
-            getattr(controller, 'shot_commits', 0)-player_committed)
+            getattr(controller, 'automatic_commits',
+                    getattr(controller, 'shot_commits', 0))-player_committed)
         self.trigger_receipt = dict(committed_during_call=committed_delta,
             pending=isinstance(self.owner._local_fire_intent, dict),
             waiting=bool(getattr(self.owner._avatar, 'isWaitingForShot', False)))
-        return bool(committed_delta) or isinstance(self.owner._local_fire_intent, dict)
+        return bool(committed_delta) or (isinstance(self.owner._local_fire_intent, dict) and
+                                         self.owner._local_fire_intent is not previous_intent)
 
     def forward(self, position, yaw, height):
         self.bind()
         self.target = None
         self.point = (position[0]+math.sin(yaw)*100.,position[1]+height,
                       position[2]+math.cos(yaw)*100.)
+        self.source_point = self.point
+        self.solution = None
 
     def close(self):
         if self.saved is not None:
@@ -145,4 +183,4 @@ class Weapon(object):
                 rotator.shotPointSourceFunctor = source
                 rotator.clientMode = mode
             self.saved = None
-        self.target = self.point = None
+        self.target = self.point = self.source_point = self.solution = None

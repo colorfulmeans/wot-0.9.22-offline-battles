@@ -18,21 +18,82 @@ outer launcher entrances remain available. Dedicated scene-launch buttons are
 replaced by the scene selector. Network/replay launches never inherit a
 single-player fixture.
 
-With player control enabled, every battle still starts manually. The physical
-grave key left of `1` toggles takeover; chat/input/menu focus suppresses it. Player decisions run in the visible client in an independent module, with private route/defence, vehicle-and-wreck clearance, native aiming/trigger and ammunition-result state. They do not register a Bot or call Bot driving, gunnery or shell policies.
-Native local battle messages show the state without sending a player chat
-message. Driving, aim/fire and consumables can be enabled separately. Open the
-mouse control panel for Toggle, Stop, Fire, or one-second driving commands.
-Closing that panel sends Stop. Stop also clears queued burst shots and restores
-the original input handler on battle exit. Actual player fitting and ammunition
-remain in use; this tool does not install the Bot's elite ammunition policy.
+With player control enabled, every battle starts under manual control. The
+physical grave key left of `1` toggles takeover; chat/input/menu focus suppresses
+that shortcut. Player decisions and native input run in the visible client,
+with private navigation, missions, targeting, ammunition feedback and equipment
+state. Shared services provide static map geometry and native mechanics. The
+room's required worker continues to own Bots and world simulation; it does not
+execute player commands or player decisions.
 
-The launcher creates a fresh temporary JSON-lines command file at launch and
-passes its path as `WOT_OFFLINE_TEST_CONTROL_FILE`. Local test scripts can append
-`{"action":"toggle"}`, `{"action":"stop"}`, `{"action":"fire"}` or
-`{"action":"drive","forward":1,"turn":0,"seconds":1}` followed by a newline.
-Driving is bounded to ten seconds; each new round ignores earlier commands.
-`PLAYER CONTROL` logs identify accepted commands, decisions and releases.
+Driving, aim/fire and consumables can be enabled separately. The mouse panel
+offers **Start**, **Release to manual**, **Halt**, **Attack**, **Return to base**,
+**Defend base**, **Hold position**, **Capture base**, **Fire once**, bounded
+driving and **Refresh status**. Halt brakes to an observed stop and retains
+parking control. Release only clears the channels owned by this controller;
+manual driving and a pre-existing manual burst retain their owners. Admitted
+projectiles still settle. Closing the panel or disabling its master switch
+requests release. Battle exit restores the original native input binding.
+
+Explicit missions take priority over automatic front/base retasking. Return
+and hold commands complete after supported, stopped arrival and retain their
+parking anchor until replaced or released. Capture waits for an actual enemy
+flag result; entering the circle is progress, not completion. No-ammunition
+state distinguishes total exhaustion, empty current stock, clip reload and
+unavailable data. Total exhaustion clears combat holds and makes an automatic
+or attacking player proceed to capture; explicit return, defend and hold
+commands retain their meaning. Mounted shell order and inventory are preserved.
+
+### Player command protocol for local tests
+
+Each launch creates a new session and two JSON-lines journals:
+
+| Environment variable | Meaning |
+| --- | --- |
+| `WOT_OFFLINE_TEST_CONTROL_FILE` | Requests appended by the launcher or local script |
+| `WOT_OFFLINE_TEST_CONTROL_RESULT_FILE` | Receipts and one-second status snapshots from the visible client |
+| `WOT_OFFLINE_TEST_CONTROL_SESSION` | Identity of this client launch |
+
+Read a current `type: "status"` record with `live: true`, then copy its
+`session_id`, `round_id` and `player_id` into each request. Use a fresh string
+`id` for each operation. For example, append this object followed by a newline,
+substituting the observed identities:
+
+```json
+{"id":"test-return-1","session_id":"OBSERVED_SESSION","round_id":"OBSERVED_ROUND","player_id":1,"action":"return_base","args":{},"timeout_seconds":180,"replace":true}
+```
+
+Actions are `start`, `stop`, `halt`, `attack`, `return_base`, `defend_base`,
+`hold_position`, `capture_base`, `drive`, `fire` and `status`. `drive` accepts
+`seconds` (0.01–10), `forward` and `turn` (both -1–1). Attack/hold arguments may
+include `position: [x,y,z]` and `radius` (2–150 metres); a hold defaults to the current pose,
+and base commands use the active match's flag geometry. Attack with a position
+advances to that point. A plain attack follows the selected route and then
+enters its capture phase.
+
+Writing a request means submitted. Match its ID to `type: "command"` receipts:
+`accepted`, then `completed`, `failed` or `cancelled`; invalid requests return
+`rejected`. Identical retries return the existing receipt without repeating a
+shot or drive. Reusing an ID with another payload is rejected. Invalid input is
+checked before changing the current task. `replace: false` rejects an occupied
+movement channel instead of replacing its task. For a sequence, wait for the
+terminal receipt before appending the next operation; there is no implicit
+command queue. Late identities from another round or session are rejected.
+An ID conflict is a separate `type: "request_error"` receipt; it cannot overwrite
+the original operation's eventual result. Identity rejections echo the request's
+identity and also carry `current_identity`, so an old-round producer can observe
+the rejection. A rejected ID remains rejected on retry; use a new ID for a new
+attempt after conditions change.
+
+`fire` completes when its native trigger's physical rounds have committed and
+returns their projectile IDs (including a multi-round burst); this does not
+assert a hit or damage. Cancelling a burst tail retains the already committed
+rounds. Later `type: "shot"`
+receipts describe terminal events or rejected launches. Status snapshots expose
+mission progress, ammunition capability, current target/aim, pose and the latest
+command receipt. `PLAYER CONTROL` diagnostics retain the corresponding decisions.
+The precise native Windows acceptance boundary is recorded in
+[COMPATIBILITY_REVIEW.md](COMPATIBILITY_REVIEW.md).
 
 ### Historical battle review notes
 

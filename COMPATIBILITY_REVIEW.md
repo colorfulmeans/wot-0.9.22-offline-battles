@@ -1,3 +1,115 @@
+# November 4 foreground player-control completion
+
+This follow-up is based on PR #119 at `21301607cf61fc77a57ea8b7da5f9128f73f0eaa`.
+All player policy and command execution remain in the visible client. The
+required room worker retains Bot/world authority. No player actor is registered
+in a Bot runtime, no Bot mutable policy is called, and no control command is
+forwarded to a worker. Static route/position catalogues, pure geometry and native
+mechanical services remain shared data/services.
+
+## Confirmed regression corrections
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Actual ammunition exhaustion | Classify known total-empty, current-stock-empty, clip reload, busy, ready and unknown separately. Exhaustion releases aiming/combat/cover/deployment holds and enters capture unless an explicit return/defend/hold command owns movement. Unknown inventory cannot assert exhaustion. |
+| APCR magazine tail | A failure-triggered desired HE phase remains latched across the final APCR receipt; automatic main-shell return cannot overwrite it. |
+| Mounted shell order | Resolve reviewed shell roles from the actual `GunState.shots` names after garage `shell_order`; policy indices always address the mounted slots. |
+| Reload cover | Approach has a bounded movement deadline; reached cover remains held until native clip/reload readiness, including the final two seconds. Critical-health cover has a separate bounded hold/retry policy. |
+| Banked direction probes | Pass occupied hull yaw/pitch/roll to the native corridor probe, retaining hull orientation for reverse travel. Analytic banked-ground fixtures retain real wall/missing-ground vetoes. |
+| Governor intent | Require sustained contacted uphill grade or an own-progress wreck push; unknown support, airborne/downhill travel and engine damage cannot keep it enabled. Release only a governor requested by this controller. |
+| Stop ownership | Release only claimed movement, aim source, equipment intent and controller-issued future bursts. A pre-existing manual burst is not adopted or cancelled. Accepted rounds retain original settlement ownership and policy receipt ledgers. |
+| Invalid timed drive | Validate finite values/ranges before any stop, replacement or input mutation. |
+| Oversized command record | Reject and drain overlong records under a per-poll byte budget; incomplete valid tails wait for a newline. A following stop remains consumable. |
+
+## Command and lifecycle contract
+
+The launcher and scripts share one identity-bound JSONL entrance. Each launch
+has request/result paths and a session UUID. Requests carry ID, session, round,
+player, action, arguments, timeout and replacement policy. Client validation
+precedes ownership changes. Identical retries replay receipts; conflicting ID
+reuse is rejected. Accepted tasks complete on observed execution, fail with a
+reason/timeout, or cancel on replacement, release, death or battle exit. Result
+transport errors cannot be presented as successful execution.
+
+The panel exposes start/release/halt, attack/return/defend/hold/capture, bounded
+movement, one trigger and status. It reads actual live status rather than
+treating file writes as completion. Halt retains a brake until release, and
+reports completion after observed stopping. Timed drive reports completion
+after its input duration; it does not assert a particular travelled distance.
+A fire command reports an actual local gun/projectile commit, with projectile
+identity. Later terminal/rejected-launch events are separate from that commit;
+completion does not claim a hit or damage.
+
+Explicit missions suppress automatic front switching and base retasking.
+Supported, stopped arrival is required for return/hold completion; completed
+parking retains its anchor and a shove triggers re-entry. Capture uses active
+match flag circles and continues until the real capture outcome. A route end
+is only a handoff into capture. No-ammo attack changes phase without replacing
+the accepted command ID. Return, defend and hold preserve the user's explicit
+intent. Invalid new missions must preserve the previous movement owner.
+
+## Capability migration
+
+The independent ammunition ledger now tracks target/position epochs, phase,
+magazine and physical firing groups. Old target/position/phase results drain
+their own rows without changing the current decision. Cancelled burst tails
+close at their actual committed count. Both HE stocks retain one logical phase.
+
+Independent artillery navigation copies authored parking candidates and uses
+observed occupancy, supported/stopped deployment, measured nonprogress,
+persistent firing failure and cooldowns to relocate. Public friendly life/class
+observations govern the late-battle sortie; missing presentation cannot prove
+that all non-artillery allies are dead. Automatic defence saves and restores the
+player's deployment phase. Flag-circle retention and explicit mission priority
+also apply to artillery.
+
+Targeting uses observed visible positions for motion estimation, sampled
+vehicle parts, mechanical reachability and armor evaluation. Candidate/arc
+planning shares a controller-tick budget of two candidates, twelve world
+segments and twelve native angle calls. A proposed artillery arc must also be
+representable by the exact native shot-point/angle contract; an unverified
+high arc is not executable merely because a ballistic solution exists.
+Actual laid-barrel clearance remains the final fire gate: one current full-path
+proof, at most twice per second, has a hard maximum of 167 world segments.
+It first rejects current friendly/wreck and settled-turret bounds along the
+entire path using pure geometry, checks the current static-world chords, then
+rechecks the dynamic bounds before admission. This runs after movement/mode
+decisions and immediately before the native trigger.
+Attached turret/gun extents are included; missing attached geometry cannot
+certify clearance. These conservative descriptor boxes do not claim exact
+native BSP hit equality. Final admission does not reuse already-scanned chords
+from earlier frames. Millimetre-scale muzzle movement therefore cannot keep
+resetting a multi-frame confirmation, and a friend entering an earlier chord
+is not missed. The bounded final proof's actual frame cost remains unmeasured
+on Windows #1513. Native gun
+rotation, dispersion, trigger handshake and projectile ownership remain in the
+existing player mechanical path.
+
+Range intent follows the current class catalogue. Ready-without-shot holds
+have bounded recovery; ordinary reload and continuing aim progress are not
+classified as a stalled gun. Mounted repair/medical/fire equipment retains the
+existing native activation encoding. Player governor decisions use contacted
+terrain grade and measured push progress; airborne, stopped/downhill and damaged
+engine states release only a governor activated by this controller.
+
+## Validation boundary
+
+The new suites exercise journal recovery, full launcher/client round trips,
+all eight release masks, actual mounted-role mapping, ammo/group/epoch feedback,
+banked probes, mission/capture transitions, artillery recovery and aiming
+budgets. Adversarial checks cover rejected-ID retries, ID conflicts, stale
+identity receipts, cleanup exceptions, request-cap release, burst timeout,
+invalid mission replacement and preservation of arrival/failure braking.
+Native mechanics regressions remain part of the focused and full test
+gates. Exact final test and CI results are recorded with the implementation
+commit/PR handoff; an intermediate passing tree is not acceptance evidence.
+
+No new Windows #1513 gameplay run has been performed for this follow-up.
+Earlier native observations below belong to their named builds. New native
+acceptance must separately exercise long magazine reload cover, zero-ammo
+movement/capture, moving/partially exposed targets, artillery arc/deployment,
+mission completion/replacement and mixed manual/automatic channel handover.
+
 # November 3 coherent-rule and player-control follow-up
 
 ## Independent native follow-up: static-building pivot stall

@@ -1947,8 +1947,8 @@ class _LANInputSender(object):
     def send_avatar_input(self, vehicle_id, kind, payload):
         payload = payload if isinstance(payload, dict) else {}
         control = getattr(self.owner, '_player_control', None)
-        if control is not None and (control.active or control.override is not None):
-            if kind in ('move', 'cruise') and (control.override is not None or 'drive' in control.features):
+        if control is not None and (control.active or control.owns_drive()):
+            if kind in ('move', 'cruise') and control.owns_drive():
                 return True
             if (kind == 'shoot' and control.active and 'fire' in control.features and
                     not (control.weapon is not None and control.weapon.triggering)):
@@ -11067,6 +11067,9 @@ class BattleRuntime(object):
             return False
         if sequence != int(meta.get('fire_intent_seq', 0)):
             return False
+        control = getattr(self, '_player_control', None)
+        if control is not None:
+            control.fire_rejected(message.get('reason', 'launch_rejected'), projectile_id)
         self._report_projectile_terminal_failure(
             meta, {}, 'launch_rejected',
             str(message.get('reason', 'rejected') or 'rejected'))
@@ -13819,6 +13822,10 @@ class BattleRuntime(object):
         if not isinstance(result, dict):
             return False
         self._battle_result = dict(result)
+        control = getattr(self, '_player_control', None)
+        if control is not None and not self._worker_mode:
+            self._run_optional_feature('player control result',
+                control.battle_finished, args=(result,), disable=False)
         if self._worker_mode:
             # Stop authority simulation immediately. Native teardown waits for
             # the ordered waiting roster, but no bot/projectile work should run
@@ -31407,6 +31414,11 @@ class BattleRuntime(object):
         sys.stdout.write(
             '[Offline LAN 0.9.22] LOCAL FIRE rejected reason=%s '
             'reload=%.3f\n' % (str(reason), remaining))
+        control = getattr(self, '_player_control', None)
+        if control is not None and (control.trigger_context is not None or
+                (control.owned_burst is not None and
+                 control.owned_burst is self._local_player_burst)):
+            control.fire_rejected(reason)
         return False
 
     def _cancel_local_player_burst(self, apply_settings=False):
@@ -31435,6 +31447,10 @@ class BattleRuntime(object):
                     gun.reload_time, gun.reload_duration, force=True)
                 if self._sender is not None:
                     self._sender.send_current()
+        control = getattr(self, '_player_control', None)
+        if control is not None and burst is not None:
+            self._run_optional_feature('player control burst receipt',
+                control.burst_cancelled, args=(burst,), disable=False)
         return burst
 
     def _advance_local_player_burst(self):

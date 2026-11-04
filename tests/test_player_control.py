@@ -95,7 +95,8 @@ class PlayerRegressionTests(unittest.TestCase):
     def aim_controller(self):
         target = types.SimpleNamespace(id=2130706445,
             position=(-137.9715, 1.3475, -102.), typeDescriptor=object())
-        entity = types.SimpleNamespace(id=1, isAlive=lambda:True, typeDescriptor=object())
+        entity = types.SimpleNamespace(id=1, isAlive=lambda:True, health=1000,
+            typeDescriptor=types.SimpleNamespace(maxHealth=1000))
         sender = types.SimpleNamespace(forward=0., turn=0., handbrake=False,
                                        send_current=mock.Mock())
         owner = types.SimpleNamespace(_server=types.SimpleNamespace(vehicle_id=1),
@@ -104,10 +105,13 @@ class PlayerRegressionTests(unittest.TestCase):
             _collision_shape=lambda unused:(1.,3.,1.,2.),
             _mutable_shot_ray=lambda:((-198.5,2.,-9.4),(0.,0.,1.)),
             _gun_state=types.SimpleNamespace(shots=[dict(speed=1000.,gravity=0.)],
-                shot_index=0,base_dispersion=.1,can_fire=lambda unused:True),
+                shot_index=0,base_dispersion=.1,can_fire=lambda unused:True,
+                ammo=[10],clip=1,clip_size=1,reload_time=0.),
             _local_stat_factor=lambda *args:1., _native_dispersion_angle=lambda:.1,
             _avatar=types.SimpleNamespace(gunRotator=types.SimpleNamespace(clientMode=True)),
-            _local_speed=0.,_rules_state={},client=types.SimpleNamespace(team=1,player_id=1))
+            _local_speed=0.,_rules_state={},_clock=lambda:0.,
+            _tactical_ray_clear=lambda *a:True,
+            client=types.SimpleNamespace(team=1,player_id=1))
         c=player_control.PlayerControl(owner,('fire','drive'))
         c.active=True;c.live=lambda:True;c.bind_input=lambda:None;c.poll_commands=lambda now:None
         c.select_ammo=lambda now:None;c.record=mock.Mock()
@@ -115,8 +119,16 @@ class PlayerRegressionTests(unittest.TestCase):
         c._contacts=lambda unused:([],[],{target.id:target})
         c.weapon=types.SimpleNamespace(aim=mock.Mock(),forward=mock.Mock(),
             ready=lambda *args:True,trigger=mock.Mock(return_value=True),trigger_receipt={},point=(0,0,0))
-        c.navigation=types.SimpleNamespace(routes=[],route=None,home=None,receipt={},
-            decide=mock.Mock(return_value=dict(throttle=1.,turn=0.,brake=False)))
+        c.weapon.aim_solution=lambda identity, solution, now:c.weapon.aim(identity,solution['point'],now)
+        c.aiming=types.SimpleNamespace(begin=lambda *a:None, reset=lambda:None,
+            update=lambda item, now, lane, **kw:dict(target=item.id,point=c.target_point(item),
+                source_point=c.target_point(item),reachable=True,clear=c.firing_lane(item),
+                geometry_clear=c.firing_lane(item)),
+            confirm=lambda *a, **kw:True)
+        c.navigation=types.SimpleNamespace(routes=[],route=None,home=None,receipt={},tag='mediumTank',
+            decide=mock.Mock(return_value=dict(throttle=1.,turn=0.,brake=False)),
+            set_context=mock.Mock(),mission_status=lambda:None,
+            movement_policy=lambda state:dict(force_move=False,allow_strategy=True))
         c.strategy=types.SimpleNamespace(mode='front',decide=lambda *a,**kw:None)
         c.turn_clearance=types.SimpleNamespace(apply=lambda *a:None)
         return c,target
@@ -615,6 +627,7 @@ class PlayerRegressionTests(unittest.TestCase):
             _cancel_local_player_burst=lambda **kw:events.append('cancel'),
             _rescale_current_reload=lambda *a:events.append('reload'))
         c=player_control.PlayerControl(owner,('fire',));c.active=True;c.live=lambda:False
+        c.owned_burst=burst
         c.record=lambda *a,**kw:None
         c.stop()
         self.assertEqual([],events)
@@ -634,12 +647,17 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertFalse(w.triggering)
 
     def test_inactive_panel_fire_records_synchronous_native_commit(self):
-        owner=types.SimpleNamespace(_sender=object(),_local_fire_intent=None)
+        owner=types.SimpleNamespace(_sender=object(),_local_fire_intent=None,
+            _server=types.SimpleNamespace(vehicle_id=1),
+            _server_entity=lambda unused:types.SimpleNamespace(isAlive=lambda:True),
+            _gun_state=types.SimpleNamespace(ammo=[10],shots=[{}],shot_index=0,
+                clip=1,reload_time=0.,can_fire=lambda unused:True),_clock=lambda:0.)
         c=player_control.PlayerControl(owner,())
         owner._player_control=c
         c.live=lambda:True
         c.record=lambda *a,**kw:None
-        owner._avatar=types.SimpleNamespace(shoot=lambda:c.shot_committed({},{}))
+        owner._avatar=types.SimpleNamespace(shoot=lambda:c.shot_committed(
+            dict(projectile_id='actual',shell_index=0),{}))
         self.assertTrue(c.command(dict(action='fire'),0))
         self.assertFalse(c.active)
         self.assertIsNone(c.ammo_policy)

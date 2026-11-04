@@ -17,7 +17,8 @@ class WreckPush(object):
                 self.history.pop(key)
         self.receipt = None
         previous, self.active = self.active, None
-        if order.get('combat_mode') != 'route' or order.get('recovery_mode') == 'hold':
+        if ((order.get('combat_mode') != 'route' and not order.get('travel_intent')) or
+                order.get('recovery_mode') == 'hold'):
             return False
         goal = order.get('local_target')
         if goal is None:

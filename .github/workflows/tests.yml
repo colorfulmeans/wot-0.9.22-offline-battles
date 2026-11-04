@@ -88,7 +88,10 @@ jobs:
         run: |
           set -euo pipefail
           patterns=(
-            'test_player_control.py'
+            'test_player_control*.py'
+            'test_player_command_protocol.py'
+            'test_player_weapon_migration.py'
+            'test_player_navigation_migration.py'
             'test_port_0922_ai.py'
             'test_port_0922_house_corner_feedback.py'
             'test_diagnostic_log_modes.py'

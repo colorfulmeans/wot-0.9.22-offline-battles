@@ -35,6 +35,70 @@ def defence_routes(home, routes):
 FRONT_INTERVAL = 180.
 PRESSURE_WINDOW = 45.
 
+# The static class distances match the current battle profile catalogue. They
+# are local intent, never a claim that a shot is possible at that distance.
+CLASS_RANGES = {'heavyTank': (72., 260.), 'mediumTank': (135., 340.),
+                'lightTank': (175., 320.), 'AT-SPG': (255., 450.),
+                'SPG': (650., 1250.)}
+
+
+def target_value(target, name, default=None):
+    return target.get(name, default) if isinstance(target, dict) else getattr(target, name, default)
+
+
+class CombatPolicy(object):
+    """Player-owned range intent and a bounded ready-without-shot lease."""
+    def __init__(self, tag):
+        self.desired_range, self.fire_range = CLASS_RANGES.get(tag, CLASS_RANGES['mediumTank'])
+        self.record = None
+        self.recovery = None
+        self.receipt = {}
+
+    def reset(self):
+        self.record = self.recovery = None
+
+    def update(self, state, context, allowed=True):
+        now, position = state['now'], state['position']
+        target = context.get('target')
+        point = target_value(target, 'position')
+        identity = target_value(target, 'id')
+        span = math.hypot(point[0] - position[0], point[2] - position[2]) if point is not None else None
+        hold = bool(allowed and point is not None and context.get('fire_clear') and
+                    span <= self.desired_range * 1.15)
+        self.receipt = dict(hold=hold, desired_range=self.desired_range,
+                            fire_range=self.fire_range, distance=span, phase='idle')
+        if not allowed or context.get('empty_ammo'):
+            self.reset()
+            self.receipt.update(hold=False, reason='mission_owns_movement')
+            return False
+        if self.recovery is not None:
+            if (now < self.recovery['until'] and identity == self.recovery['target'] and
+                    point is not None and context.get('fire_seq') == self.recovery['sequence']):
+                self.receipt.update(hold=False, phase='recovering',
+                                    reason='ready_without_shot', until=self.recovery['until'])
+                return False
+            self.reset()
+        sequence = context.get('fire_seq')
+        if (not hold or not context.get('gun_ready') or sequence is None or
+                (not context.get('aligned') and context.get('aim_progress'))):
+            self.record = None
+            self.receipt['phase'] = 'engage' if hold else 'advance'
+            return hold
+        record = self.record
+        moved = record is not None and math.hypot(position[0] - record['position'][0],
+                                                  position[2] - record['position'][2]) >= 2.
+        if record is None or record['target'] != identity or record['sequence'] != sequence or moved:
+            record = dict(target=identity, sequence=sequence, since=now, position=tuple(position))
+            self.record = record
+        elapsed = now - record['since']
+        self.receipt.update(phase='engage', ready_elapsed=elapsed, reason='ready_without_shot')
+        if elapsed >= 8.:
+            self.recovery = dict(target=identity, point=tuple(point), sequence=sequence,
+                                 until=now + 4., goal=None)
+            self.receipt.update(hold=False, phase='recovering', until=now + 4.)
+            return False
+        return True
+
 
 class Strategy(object):
     def __init__(self):
@@ -45,7 +109,8 @@ class Strategy(object):
         self.recent_losses = []
         self.receipt={}
 
-    def decide(self, now, routes, current, contacts, allies, base, home, engaged=False):
+    def decide(self, now, routes, current, contacts, allies, base, home, engaged=False,
+               mission=None, empty_ammo=False):
         # Damage is observed from the player's friendly roster. A route with
         # many idle hulls has no more pressure than an empty route.
         health = {}
@@ -65,6 +130,12 @@ class Strategy(object):
         check_front = now >= self.next_front
         if check_front:
             self.next_front = now + FRONT_INTERVAL
+
+        if ((mission and mission.get('explicit') and mission.get('status') != 'cancelled') or
+                empty_ammo):
+            self.receipt = dict(mode='mission_owned', action=(mission or {}).get('action'),
+                                reason='empty_ammo_capture' if empty_ammo else 'explicit_command')
+            return None
 
         alarm = bool(base.get('points', 0) > 0 or base.get('invaders', 0) > 0)
         if alarm and home is not None:
