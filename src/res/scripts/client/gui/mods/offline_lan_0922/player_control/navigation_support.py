@@ -6,7 +6,7 @@ a local floor, including a floor below the graph's bridge deck.
 """
 from __future__ import division
 import math
-from ..ai.local_height import LocalHeightLinks, MAX_COLUMNS, RADIUS
+from .local_height import PlayerLocalHeightLinks, MAX_COLUMNS, RADIUS
 
 
 class PlayerHeightSupport(object):
@@ -14,7 +14,7 @@ class PlayerHeightSupport(object):
         self.grid = grid
         self.ground = ground if callable(ground) else None
         self.columns = columns if callable(columns) else None
-        self.links = LocalHeightLinks(self._column) if self.columns is not None else None
+        self.links = PlayerLocalHeightLinks(self._column) if self.columns is not None else None
         self.origin = None
         self.sample = None
         self.native_queries = 0
@@ -37,10 +37,17 @@ class PlayerHeightSupport(object):
 
     def close(self):
         self.origin = self.sample = None
+        self.columns = self.ground = None
         self.ground_cache.clear()
         if self.links is not None:
             self.links.origin = None
             self.links._column_history.clear()
+            self.links.columns.clear()
+            self.links.results.clear()
+            self.links.receipts[:] = []
+            if self.grid.local_height_links is self.links:
+                self.grid.local_height_links = None
+        self.receipt = dict(status='closed')
 
     def _column(self, x, z, low, high):
         # Column enumeration and the legacy native ground seam share one

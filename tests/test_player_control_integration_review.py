@@ -241,10 +241,10 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.firing_lane = lambda unused: True
         control.lane_from = lambda *args: True
         control.dynamic_path_clear = mock.Mock(return_value=True)
-        def confirm(*args, **kwargs):
-            control.aiming.receipt = dict(final_reason='dynamic_blocked')
+        def admission(*args, **kwargs):
+            control.fire_admission.receipt = dict(status='pending', reason='auto_friendly_lane')
             return False
-        control.aiming.confirm = confirm
+        control.trigger = mock.Mock(side_effect=admission)
 
         with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',
                         return_value=True):

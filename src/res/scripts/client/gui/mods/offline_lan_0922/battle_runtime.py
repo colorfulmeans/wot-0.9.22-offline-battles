@@ -7060,7 +7060,7 @@ class BattleRuntime(object):
         This changes collision geometry only. The same 25-degree centre and
         shoulder limits remain; walls, gaps and unproved long lanes still veto.
         """
-        from .ai.driver import NAVIGATION_MAX_GRADE
+        from .native_navigation_query import NAVIGATION_MAX_GRADE
         dx, dz = float(end[0])-float(start[0]), float(end[2])-float(start[2])
         distance = math.hypot(dx,dz)
         if not 0.1 <= distance <= 24.0:
@@ -13156,6 +13156,12 @@ class BattleRuntime(object):
             entity.last_killer_id = int(attacker_id or 0)
         if record.get('local') and attacker is not None and not cosmetic:
             self._local_last_attacker = (attacker_kind, int(attacker))
+            control = getattr(self, '_player_control', None)
+            attacked = getattr(control, 'attacked', None)
+            if attacker_record is not None and callable(attacked):
+                engine_id = attacker_record.get('engine_id')
+                if engine_id is not None:
+                    attacked(engine_id, event)
         if source == 'player_left' and attacker_record is not None:
             raise RuntimeError('player_left event has an attacker')
         if attacker_record is not None:
@@ -24314,6 +24320,7 @@ class BattleRuntime(object):
             if physical.get('physical_velocity') is not None:
                 physical['vx'], physical['vz'] = physical['physical_velocity']
             physical_others.append(physical)
+        self._report_player_planar_contacts(own, physical_others, yaw, dt, now)
         contact = tank_collision.resolve_tank(
             own, physical_others, now=now,
             ram_cooldowns=self._local_ram_cooldowns,
@@ -24446,6 +24453,38 @@ class BattleRuntime(object):
                 position = candidate
         self._local_push_x, self._local_push_z = push_x, push_z
         return self._resolve_local_turret_contacts(entity, position, yaw, dt)
+
+    def _report_player_planar_contacts(self, own, others, yaw, dt, now):
+        """Publish the copied solver's actual SAT witness to player driving.
+
+        This is an observed physical overlap, not a centre-distance steering
+        guess and not a claim that a native armour/damage callback occurred.
+        """
+        callback = getattr(getattr(self, '_player_control', None), 'drive_contact', None)
+        if not callable(callback):
+            return
+        from .vehicle_stack import planar_pair
+        heading = float(yaw) + (math.pi if self._local_speed < 0. else 0.)
+        for other in others:
+            record, remote = other.get('_record') or {}, other.get('_vehicle')
+            peer = getattr(remote, 'id', record.get('engine_id'))
+            if (peer is None or not planar_pair(own, other) or
+                    not tank_collision.planar_body_contact(own, other) or
+                    not tank_collision.vertical_overlap(
+                        own['y'], own['shape'], other['y'], other['shape'],
+                        pitch_a=own.get('pitch', 0.), roll_a=own.get('roll', 0.),
+                        pitch_b=other.get('pitch', 0.), roll_b=other.get('roll', 0.))):
+                continue
+            contact = tank_collision.obb_contact(own['x'], own['z'], own['yaw'], own['shape'],
+                other['x'], other['z'], other['yaw'], other['shape'])
+            if contact is None:
+                continue
+            position = (own['x'], own['y'], own['z'])
+            witness = dict(peer=peer, normal=tuple(contact[:2]), position=position,
+                peer_position=(other['x'], other['y'], other['z']), at=float(now),
+                attempted_heading=heading, own_shape=own['shape'], peer_shape=other['shape'],
+                source='copied_planar_contact')
+            callback(position, heading, dt, static=False, contact=witness)
 
     def _present_tank_collision(self, entity, own, other, now):
         hook = self._native_ram_contact_hook
@@ -26985,7 +27024,13 @@ class BattleRuntime(object):
         if control is not None and not airborne_at_start:
             if throttle and contact_path == 'brake':
                 heading = tick_yaw if drive_speed >= 0.0 else tick_yaw + math.pi
-                control.drive_contact(tick_pose, heading, dt, static=True)
+                normal = vehicle_physics.horizontal_contact_normal(
+                    (primary_contact or {}).get('normal'))
+                witness = (dict(peer=None, normal=(normal[0], normal[2]),
+                    position=tuple(tick_pose), at=float(self._clock()),
+                    attempted_heading=heading, source='world_collision')
+                    if normal[0] or normal[2] else None)
+                control.drive_contact(tick_pose, heading, dt, static=True, contact=witness)
             elif turn and contact_path in ('tank_turn_contact', 'turn_contact',
                     'world_reaction_turn', 'arena_turn'):
                 control.drive_contact(tick_pose, None, dt, static=False)
@@ -31574,6 +31619,14 @@ class BattleRuntime(object):
         # shoot freezes a fresh native gun ray for every real subshot. Its
         # local gun transaction remains the only ammunition debit.
         if not self.shoot(0.0, 0.0, player_burst=burst):
+            context = burst.get('player_control')
+            if (isinstance(context, dict) and context.get('automatic') and
+                    context.get('automatic_wait') and
+                    self._local_player_burst is burst):
+                # A fresh geometry proof or temporary friendly obstruction
+                # has not admitted a round. Preserve its random candidate,
+                # burst lineage and ammunition until a later exact check.
+                return False
             self._cancel_local_player_burst(apply_settings=True)
             return False
         return True
@@ -31587,6 +31640,7 @@ class BattleRuntime(object):
             context = player_burst.get('player_control')
         guard = None
         if isinstance(context, dict) and callable(authorize):
+            context.pop('automatic_wait', None)
             if context.get('native_attempt') is not None:
                 return self._reject_local_fire('trigger_busy')
             attempt = object()
@@ -31607,6 +31661,28 @@ class BattleRuntime(object):
             return 'controller_changed'
         return control.authorize_trigger(context, entity=entity, gun=state,
             shot_ray=shot_ray, player_burst=player_burst, native_attempt=attempt)
+
+    def _defer_automatic_player_fire(self, guard, reason):
+        """Keep an uncommitted automatic candidate without a false rejection."""
+        control, context, unused_attempt = guard
+        if (getattr(self, '_player_control', None) is not control or
+                not control.active or
+                control.control_generation != context.get('generation')):
+            context.pop('automatic_wait', None)
+            context.pop('automatic_wait_reason', None)
+            return self._reject_local_fire(reason)
+        admission = getattr(control, 'fire_admission', None)
+        if admission is not None and admission.terminal_reason(reason):
+            context.pop('automatic_wait', None)
+            context.pop('automatic_wait_reason', None)
+            admission.rejected(reason)
+            return self._reject_local_fire(reason)
+        context['automatic_wait'] = True
+        context['automatic_wait_reason'] = reason
+        control.last_fire_failure = reason
+        if admission is not None:
+            admission.deferred(reason)
+        return False
 
     def _shoot_authorized(self, aim_yaw, gun_pitch, player_burst=None,
                           player_control_guard=None):
@@ -31708,13 +31784,42 @@ class BattleRuntime(object):
         shot_direction.normalise()
         if shot_direction.length <= 0.0:
             return self._reject_local_fire('shot_ray_unavailable')
-        state.scatter(
-            shot_direction,
-            bool(self._config and self._config.get('perfect_accuracy', False)),
-            dispersion_angle=dispersion_angle)
-        origin = tuple(_xyz(shot_origin))
-        velocity = tuple(value * speed for value in _xyz(shot_direction))
-        penetration_factor = combat_rules.sample_penetration_factor()
+        reason = self._player_control_fire_reason(player_control_guard,
+            entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
+        if reason is not None:
+            return self._reject_local_fire(reason)
+        admission = None
+        admission_token = None
+        admission_burst = player_burst
+        if player_control_guard is not None and player_control_guard[1].get('automatic'):
+            admission = getattr(player_control_guard[0], 'fire_admission', None)
+            if admission is None:
+                return self._reject_local_fire('auto_admission_unavailable')
+            verdict = admission.prepare(player_control_guard[1], entity, state,
+                frozen_ray, dispersion_angle, source_shot, now, player_burst,
+                range_origin=local_position)
+            if verdict['status'] == 'pending':
+                return self._defer_automatic_player_fire(player_control_guard, verdict['reason'])
+            if verdict['status'] != 'ready':
+                return self._reject_local_fire(verdict['reason'])
+            admission_token = verdict['token']
+            origin = verdict['origin']
+            velocity = verdict['velocity']
+            penetration_factor = verdict['penetration_factor']
+            reason = admission.validate(admission_token, player_control_guard[1],
+                entity, state, now, admission_burst)
+            if reason is not None:
+                return self._defer_automatic_player_fire(player_control_guard, reason)
+        else:
+            # A normal manual Avatar trigger retains its original sampler and
+            # burst contract. Automatic admission never filters manual shots.
+            state.scatter(
+                shot_direction,
+                bool(self._config and self._config.get('perfect_accuracy', False)),
+                dispersion_angle=dispersion_angle)
+            origin = tuple(_xyz(shot_origin))
+            velocity = tuple(value * speed for value in _xyz(shot_direction))
+            penetration_factor = combat_rules.sample_penetration_factor()
         is_he = combat_rules.is_he(source_shot)
         splash_radius = combat_rules.he_radius(source_shot) if is_he else 0.0
         self._local_projectile_sequence += 1
@@ -31757,6 +31862,14 @@ class BattleRuntime(object):
                     self._local_player_burst is player_burst):
                 self._local_player_burst = None
             return self._reject_local_fire(reason)
+        if admission is not None:
+            reason = admission.validate(admission_token, player_control_guard[1],
+                entity, state, now, admission_burst)
+            if reason is not None:
+                if (player_burst is not None and player_burst['committed'] == 0 and
+                        self._local_player_burst is player_burst):
+                    self._local_player_burst = None
+                return self._defer_automatic_player_fire(player_control_guard, reason)
         projectile_id = self._preinstall_player_projectile(
             intent, record, origin, velocity, gravity, maximum,
             PROJECTILE_MAX_TIME_MS, is_he, splash_radius,
@@ -31776,6 +31889,25 @@ class BattleRuntime(object):
                     self._local_player_burst is player_burst):
                 self._local_player_burst = None
             return self._reject_local_fire(reason)
+        if admission is not None:
+            reason = admission.validate(admission_token, player_control_guard[1],
+                entity, state, now, admission_burst, launch=meta)
+            if reason is not None:
+                self._discard_provisional_projectile(projectile_id)
+                if (player_burst is not None and player_burst['committed'] == 0 and
+                        self._local_player_burst is player_burst):
+                    self._local_player_burst = None
+                return self._defer_automatic_player_fire(player_control_guard, reason)
+            # Exact plate/pose reads above can enter native callbacks too.
+            # A final owner fence must follow those reads, not precede them.
+            reason = self._player_control_fire_reason(player_control_guard,
+                entity=entity, state=state, shot_ray=frozen_ray, player_burst=player_burst)
+            if reason is not None:
+                self._discard_provisional_projectile(projectile_id)
+                if (player_burst is not None and player_burst['committed'] == 0 and
+                        self._local_player_burst is player_burst):
+                    self._local_player_burst = None
+                return self._reject_local_fire(reason)
         try:
             accepted = sender(
                 'player', self.client.player_id, shot_seq, shell_index,
@@ -31809,6 +31941,8 @@ class BattleRuntime(object):
             'maxDistance': meta['max_distance'],
         })
         self._commit_local_player_fire(event, record, intent)
+        if admission is not None:
+            admission.committed(admission_token)
         if (player_control_guard is not None and player_burst is not None and
                 self._local_player_burst is player_burst and
                 self._player_control_fire_reason(player_control_guard,

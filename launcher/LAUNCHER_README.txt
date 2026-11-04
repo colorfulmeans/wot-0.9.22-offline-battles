@@ -70,6 +70,25 @@ until the budget reopens. Test captures split rotation catalog/native costs
 without changing collision queries. Errors and
 lifecycle messages remain enabled after the diagnostic budget is exhausted.
 
+The same Testing tab enables optional player automation and its mouse control
+panel. Every battle starts manual; the grave key left of 1 toggles takeover
+outside chat, menu and text input. Driving, aim/fire and consumables are
+independent switches. The panel offers Attack, Return to base, Defend base,
+Hold position, Capture base, Halt, Release to manual and the existing bounded
+drive, gun, held-aim, equipment and siege test commands. A submitted command is
+not complete until its matching visible-client receipt says so; fire completion
+means committed physical rounds, not a proved hit.
+
+Each LAN participant computes their own player navigation, traffic, target and
+fire-admission decisions in their visible client. The required room worker still
+owns Bots and world simulation, but does not execute player commands. Player
+route searches, recovery, ammunition and command ownership are independent of
+Bot actors. Releasing control cancels owned future actions without erasing
+already committed shots or equipment effects. Install matching packages on all
+participants and restart the room before testing a changed build. Python/CI
+results are not a substitute for observing native #1513 driving and dual-LAN
+handover; see README.md and COMPATIBILITY_REVIEW.md for the current boundary.
+
 Customize save -> Appearance inventory has My style and Preset styles pages,
 with nation/type/vehicle filters, garage-only targets and vehicle-name search.
 My style includes paints, camouflage, emblems, inscriptions and wear; active

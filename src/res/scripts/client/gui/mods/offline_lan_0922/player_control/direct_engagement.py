@@ -67,6 +67,16 @@ class DirectEngagement(object):
         owner = control.owner
         gun, policy, aiming = owner._gun_state, control.ammo_policy, control.aiming
         stages = self.stages(policy, gun.ammo)
+        held = bool(getattr(control, 'owned_burst', None) is not None or
+                    getattr(owner, '_local_player_burst', None) is not None or
+                    getattr(owner, '_local_fire_intent', None) is not None)
+        # An admitted trigger owns its target and loaded shell until its tail
+        # terminates. Still refresh that target's physical laying point, but
+        # do not switch the owner beneath FireAdmission or defer a surprise
+        # shell change into the next physical round.
+        if held and (not candidates or self.stage not in stages or
+                     not any(item.id == self.target for item in candidates)):
+            return None, None, False
         if not candidates or not stages:
             self.adopt(None, None)
             return None, None, False
@@ -84,7 +94,8 @@ class DirectEngagement(object):
 
         stage = self.stage
         if gun.shot_index != stage[0]:
-            control.queue_automatic_shell(stage[0])
+            if not held:
+                control.queue_automatic_shell(stage[0])
             return None, None, False
         status, solution = scan(target, stage, physical=True)
         sample = solution.get('sample') if solution is not None else None
@@ -95,7 +106,7 @@ class DirectEngagement(object):
                            penetration_gate=stage[1] is not None, verdict=status, point=sample)
         if status == 'ready':
             self.last_solution = solution
-        elif status == 'armor':
+        elif status == 'armor' and not held:
             next_index = stages.index(stage) + 1
             if next_index < len(stages):
                 self.adopt(target.id, stages[next_index])
@@ -103,6 +114,14 @@ class DirectEngagement(object):
                 return None, None, False
         elif status in ('unavailable', 'lost'):
             self.last_solution = None
+
+        if held:
+            if solution is not None:
+                return target, solution, status == 'ready'
+            if (status == 'pending' and self.last_solution is not None and
+                    now - self.last_solution['created'] < .5):
+                return target, self.last_solution, False
+            return None, None, False
 
         self.alternate_stages = dict((identity, value)
             for identity, value in self.alternate_stages.items() if identity in by_id)

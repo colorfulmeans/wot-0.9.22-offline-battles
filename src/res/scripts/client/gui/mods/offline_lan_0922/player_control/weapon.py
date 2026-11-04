@@ -141,6 +141,7 @@ class Weapon(object):
 
     def ready(self, now, factor):
         if self.solution is not None and (not self.solution.get('reachable') or
+                                         self.solution.get('needs_hydraulic') or
                                          not self.solution.get('source_verified')):
             return False
         elapsed = now-self.acquired

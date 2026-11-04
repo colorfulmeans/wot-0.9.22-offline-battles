@@ -34,7 +34,7 @@ ALIVE_ALLY = dict(id=3, alive=True, health=500, max_health=500,
 
 class NativeNavigationSeam(object):
     def __init__(self):
-        self.bot_states = {}
+        self.player_states = {}
         self.ground = lambda x, z, hint: 0.
         self.grid = types.SimpleNamespace(_ground=lambda x, z, hint: self.ground(x, z, hint),
                                           begin_plan=self.begin)
@@ -74,7 +74,7 @@ def controller(tag='heavyTank', positions=(), active=None, route_end=70.):
     with mock.patch.object(navigation.prebaked_navigation, 'load_graph', return_value=graph), \
          mock.patch.object(navigation.prebaked_navigation, 'clip_graph_to_arena'), \
          mock.patch.object(navigation.prebaked_navigation, 'with_shore_hazards', side_effect=lambda g: g), \
-         mock.patch.object(navigation, 'TerrainNavigator', return_value=seam), \
+         mock.patch.object(navigation, 'PlayerPathfinder', return_value=seam), \
          mock.patch.object(native_navigation_query.Oracle, 'create', return_value=None):
         result = navigation.PlayerNavigation(owner, descriptor)
     return result
@@ -358,6 +358,14 @@ class WithdrawalMigrationTests(unittest.TestCase):
         self.entity = types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(maxHealth=1000), health=1000)
         self.target = types.SimpleNamespace(id=5, position=(0., 0., 30.))
         self.gun = types.SimpleNamespace(clip_size=3, clip=0, reload_time=40.)
+        # This suite owns the withdrawal state machine, not native cover
+        # geometry. The complete candidate sampler is tested separately using
+        # real descriptors in test_player_cover_independence.
+        self.nav._cover_candidate = lambda pose, target, entity, clear, ray: dict(
+            target=target.id, goal=(0., 0., -5.), peek=(0., 0., 0.))
+        self.nav.cover_search.current_exposure = lambda *args: 0.
+        self.nav.cover_search.peek_clear = lambda pose, context, target, entity, point, ground, ray: ray(
+            (0., 1.7, 30.), (point[0], point[1]+1.5, point[2]))
 
     def apply(self, pose, target=None, ray=lambda *args: False):
         return self.nav.withdrawal(pose, target, self.entity, self.gun,

@@ -188,21 +188,26 @@ class PlayerRegressionTests(unittest.TestCase):
             VEHICLE_SIEGE_STATE=types.SimpleNamespace(DISABLED=0, ENABLED=1,
                                                      SWITCHING_ON=2, SWITCHING_OFF=3),
             VEHICLE_SETTING=types.SimpleNamespace(SIEGE_MODE_ENABLED=10)))
-        c.owner._change_local_siege = mock.Mock(return_value=True)
+        def submitted(enabled, callback):
+            callback(7, enabled)
+            return True
+        c.owner._request_player_control_siege = mock.Mock(side_effect=submitted)
+        c.owner._cancel_player_control_siege = mock.Mock(return_value=True)
         engage = dict(combat_mode='engage')
         c.update_siege(entity, engage, True, 0.)
         c.update_siege(entity, engage, True, .2)
-        c.owner._change_local_siege.assert_not_called()
+        c.owner._request_player_control_siege.assert_not_called()
         c.update_siege(entity, engage, True, .4)
-        c.owner._change_local_siege.assert_called_once_with(True)
+        c.owner._request_player_control_siege.assert_called_once_with(True, mock.ANY)
+        self.assertTrue(callable(c.owner._request_player_control_siege.call_args.args[1]))
         c.owner._local_siege_pending = (True, 3)
         c.update_siege(entity, engage, True, 1.)
-        c.owner._change_local_siege.assert_called_once()
+        c.owner._request_player_control_siege.assert_called_once()
         c.owner._local_siege_pending = None
         entity.siegeState = 1
         c.update_siege(entity, dict(combat_mode='route'), False, 2.)
         c.update_siege(entity, dict(combat_mode='route'), False, 3.)
-        self.assertEqual(mock.call(False), c.owner._change_local_siege.call_args)
+        self.assertEqual(mock.call(False, mock.ANY), c.owner._request_player_control_siege.call_args)
 
     def test_route_cannot_reverse_combat_facing_while_siege_is_enabled(self):
         c, _ = self.aim_controller()
@@ -613,25 +618,29 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertIsNone(s.decide(2,routes,None,[],[],{},(0,0)))
         self.assertEqual(routes,s.decide(6,routes,None,[],[],{},(0,0)))
 
-    def test_front_support_uses_recent_losses_on_a_three_minute_schedule(self):
+    def test_front_support_uses_persistent_visible_pressure_and_private_lease(self):
         s = Strategy()
         routes = [dict(id='a', waypoints=[(0, 0), (0, 400)]),
                   dict(id='b', waypoints=[(300, 0), (300, 400)])]
         contacts = [dict(position=(300, 0, 100))]
         ally = dict(id=7, position=(300, 0, 110), health=1000, max_health=1000)
-        self.assertIsNone(s.decide(0, routes, routes[0], contacts, [ally], {}, None))
-        ally['health'] = 450
-        self.assertIsNone(s.decide(179, routes, routes[0], contacts, [ally], {}, None))
-        self.assertEqual([routes[1]], s.decide(180, routes, routes[0], contacts, [ally], {}, None))
-        self.assertEqual(360., s.next_front)
-        self.assertIsNone(s.decide(181, routes, routes[0], contacts, [ally], {}, None))
-        self.assertIsNone(s.decide(360, routes, routes[0], contacts, [ally], {}, None))
+        for now in range(12):
+            self.assertIsNone(s.decide(now, routes, routes[0], contacts, [ally], {}, None))
+        # An observed under-covered front no longer needs three minutes or a
+        # damaged ally to be considered. A short private lease avoids churn.
+        self.assertEqual([routes[1]], s.decide(12, routes, routes[0], contacts, [ally], {}, None))
+        self.assertEqual(24., s.next_front)
+        self.assertEqual(42., s.receipt['lease_until'])
+        for now in range(13, 43):
+            self.assertIsNone(s.decide(now, routes, routes[1], contacts, [ally], {}, None))
+        self.assertEqual([], s.recent_losses)
 
     def test_blocked_flag_centre_can_join_supported_defence_approach(self):
         from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         s=Strategy()
         routes=s.decide(0,[],None,[],[],dict(points=29,invaders=1),(0,0))
         p=PlayerNavigation.__new__(PlayerNavigation)
+        p.route_history=[]
         p.routes=routes
         p.route=None;p.index=None;p.candidates=None;p.search=None;p.pending=None;p.retry_at=0.;p.receipt={}
         p.join_origin=None
@@ -755,6 +764,7 @@ class PlayerRegressionTests(unittest.TestCase):
 
     def test_opening_inside_base_joins_second_point_from_native_spawn(self):
         nav = PlayerNavigation.__new__(PlayerNavigation)
+        nav.route_history = []
         spawn = (-34., .25, -110.)
         nav.opening_origin = spawn
         nav.opening_anchor = (-34., -130.)
@@ -774,6 +784,7 @@ class PlayerRegressionTests(unittest.TestCase):
     def test_layer_disconnected_entry_is_rejected_before_ground_route(self):
         from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         p=PlayerNavigation.__new__(PlayerNavigation)
+        p.route_history=[]
         p.routes=[dict(id='bridge',waypoints=[(0,0)]),dict(id='ground',waypoints=[(20,0)])]
         p.route=None;p.index=None;p.candidates=None;p.search=None;p.pending=None;p.retry_at=0.;p.receipt={}
         p.join_origin=None
@@ -812,6 +823,13 @@ class FiringPositionTests(unittest.TestCase):
         nav.cover_move = None
         nav.cover_retry_at = 0.
         nav._height = lambda point, hint: 0.
+        # This case checks the withdrawal lifecycle after a proved candidate;
+        # native body geometry and multi-threat proof have separate contracts.
+        def proved_cover(state, target, entity, clear, ray):
+            if not clear(math.pi, 5.):
+                return None
+            return dict(goal=(0., 0., -5.), peek=(0., 0., 0.), target=1)
+        nav._cover_candidate = proved_cover
         entity = types.SimpleNamespace(typeDescriptor=types.SimpleNamespace(maxHealth=1000),
                                        health=1000)
         gun = types.SimpleNamespace(clip_size=3, clip=0, reload_time=10.)

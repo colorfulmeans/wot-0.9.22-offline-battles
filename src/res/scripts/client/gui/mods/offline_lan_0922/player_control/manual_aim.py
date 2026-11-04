@@ -194,7 +194,7 @@ class ManualAim(object):
                 if flight > ballistics.PROJECTILE_MAX_FLIGHT_SECONDS or own['speed']*flight > own['maximum']:
                     continue
                 direction = _direction(math.atan2(dx, dz), pitch)
-                reach = mechanical_reach(own['descriptor'], direction, own['body'])
+                reach = mechanical_reach(own['descriptor'], direction, own['body'], own.get('hydraulic'))
                 if not reach['reachable']:
                     continue
                 reachable = True
@@ -202,6 +202,7 @@ class ManualAim(object):
                 if source is not None:
                     return dict(point=point, source_point=_point(source), direction=direction,
                         origin=own['origin'], yaw=reach['local_yaw'], pitch=reach['local_pitch'],
+                        needs_hydraulic=bool(reach.get('needs_hydraulic')),
                         target=target, entity=entity, gun=gun, shot_key=own['key']), None
             return None, 'aim_native_unavailable' if reachable else 'aim_unreachable'
         except (AttributeError, TypeError, ValueError, RuntimeError, KeyError, IndexError, OverflowError):
@@ -232,6 +233,8 @@ class ManualAim(object):
             return 'aim_observation_unavailable'
 
     def _alignment(self, solution, tolerance, shot_ray=None):
+        if solution.get('needs_hydraulic'):
+            return False
         try:
             rotator = self.control.owner._avatar.gunRotator
             yaw, pitch = _finite(rotator.turretYaw), _finite(rotator.gunPitch)

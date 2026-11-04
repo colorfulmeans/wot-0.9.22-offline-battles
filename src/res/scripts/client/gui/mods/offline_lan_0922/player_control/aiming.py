@@ -8,7 +8,7 @@ from __future__ import division
 
 import math
 
-from .. import ballistics, gun_pitch_limits, shot_geometry
+from .. import ballistics, gun_pitch_limits, hull_aiming, shot_geometry
 from ..gun_mechanics import _field
 
 
@@ -46,7 +46,7 @@ def _direction(yaw, pitch):
             math.cos(yaw) * math.cos(pitch))
 
 
-def mechanical_reach(descriptor, direction, body_ypr):
+def mechanical_reach(descriptor, direction, body_ypr, hydraulic=None):
     """Check the mounted yaw and yaw-dependent pitch envelope in body space."""
     yaw, pitch = shot_geometry.world_direction_to_local_gun_angles(
         direction, *body_ypr)
@@ -61,12 +61,44 @@ def mechanical_reach(descriptor, direction, body_ypr):
                     reason='pitch_limits_unavailable', local_yaw=yaw,
                     local_pitch=pitch)
     pitch_ok = minimum - 1.e-5 <= pitch <= maximum + 1.e-5
-    return dict(reachable=bool(yaw_ok and pitch_ok),
+    result = dict(reachable=bool(yaw_ok and pitch_ok),
                 needs_hull=bool(not yaw_ok and pitch_ok),
                 reason=('pitch_limit' if not pitch_ok else
                         'yaw_limit' if not yaw_ok else 'reachable'),
                 local_yaw=yaw, local_pitch=pitch,
                 pitch_limits=(minimum, maximum))
+    if pitch_ok or hydraulic is None:
+        return result
+    # The actuator has a separate chassis pitch. Do not enlarge the native
+    # gun's own stops, and do not claim that a theoretically reachable ray
+    # is already laid. Only the active local siege descriptor supplies travel.
+    base = hydraulic['body']
+
+    def status(correction):
+        local_yaw, local_pitch = shot_geometry.world_direction_to_local_gun_angles(
+            direction, base[0], base[1]+correction, base[2])
+        low, high = gun_pitch_limits.calc_pitch_limits(
+            local_yaw, _field(gun, 'pitchLimits'))
+        return hull_aiming.classify_pitch(local_pitch, low, high, 1.e-7)
+
+    neutral = max(hydraulic['minimum'], min(hydraulic['maximum'], 0.))
+    initial = status(neutral)
+    correction = neutral
+    if initial:
+        boundary = hydraulic['minimum'] if initial < 0 else hydraulic['maximum']
+        if status(boundary) == initial:
+            return result
+        failed, correction = neutral, boundary
+        for unused in range(32):
+            middle = (failed+correction)*.5
+            if status(middle) == initial:
+                failed = middle
+            else:
+                correction = middle
+    result.update(reachable=bool(yaw_ok), needs_hull=bool(not yaw_ok),
+        needs_hydraulic=True, hydraulic_pitch=correction,
+        hydraulic_speed=hydraulic['speed'], reason='hydraulic_laying')
+    return result
 
 
 def _straight_intercept(start, point, velocity, speed):
@@ -202,8 +234,21 @@ class Aiming(object):
             raise ValueError('missing or invalid mounted shell ballistics')
         origin, unused_direction = owner._mutable_shot_ray()
         matrix = owner._runtime.math.Matrix(owner._local_stabilised_pose())
+        hydraulic = None
+        try:
+            config = hull_aiming.pitch_params(descriptor)
+            flat = getattr(owner, '_local_siege_flat_body_matrix', None)
+            if (config is not None and config['isAvailable'] and config['isEnabled'] and
+                    bool(_field(descriptor, 'hasSiegeMode', False)) and
+                    getattr(entity, 'siegeState', hull_aiming.DISABLED) == hull_aiming.ENABLED and
+                    flat is not None):
+                base = owner._runtime.math.Matrix(flat)
+                hydraulic = dict(config, body=(float(base.yaw), float(base.pitch), float(base.roll)))
+        except (AttributeError, TypeError, ValueError):
+            pass
         return dict(descriptor=descriptor, shot=shot, origin=_point(origin),
                     speed=speed, gravity=gravity, maximum=maximum,
+                    hydraulic=hydraulic,
                     matrix=matrix, body=(float(matrix.yaw), float(matrix.pitch),
                                          float(matrix.roll)),
                     key=(shell_index, id(shot), speed, gravity, maximum,
@@ -352,7 +397,7 @@ class Aiming(object):
         result.update(yaw=yaw, direction=direction,
             path=ballistics.ballistic_path(own['origin'], yaw, pitch,
                 own['speed'], own['gravity'], flight))
-        reach = mechanical_reach(own['descriptor'], direction, own['body'])
+        reach = mechanical_reach(own['descriptor'], direction, own['body'], own.get('hydraulic'))
         result.update(reach)
         mounted = own['key'][0] == self.owner._gun_state.shot_index
         source = self._source_point(own, aim, reach) if reach['reachable'] and (
@@ -423,7 +468,8 @@ class Aiming(object):
         result['needs_hull'] = bool(result.get('needs_hull') and result['geometry_clear'])
         result['clear'] = bool(result['geometry_clear'] and result.get('source_verified'))
         if result['reachable'] and result.get('source_verified'):
-            result['reason'] = ('clear' if job['done'] and job['clear'] else
+            result['reason'] = ('hydraulic_laying' if result.get('needs_hydraulic') else
+                                'clear' if job['done'] and job['clear'] else
                                 'world_blocked' if job['done'] else 'checking_path')
         return result
 
@@ -524,7 +570,7 @@ class Aiming(object):
         self._publish_budget()
         return result
 
-    def actual_contact(self, target, solution, own, direction, threshold):
+    def actual_contact(self, target, solution, own, direction, threshold, velocity=None):
         """Resolve the laid, pre-dispersion barrel against the observed vehicle."""
         from .. import combat_rules
         from ..entities.remote_vehicle import collide_vehicle_at_matrix
@@ -540,7 +586,8 @@ class Aiming(object):
         first, last = max(0., flight-span), min(own['maximum']/speed, flight+span)
         if last <= first:
             return 'miss'
-        velocity = self.observations[target.id]['velocity']
+        if velocity is None:
+            velocity = self.observations[target.id]['velocity']
 
         def observed_chord(at):
             projected = [origin[i] + (direction[i]*speed-velocity[i])*at for i in range(3)]
@@ -602,6 +649,9 @@ class Aiming(object):
         if not job['done']:
             return 'pending', None
         if result['clear'] and result['reachable']:
+            if physical and result.get('needs_hydraulic'):
+                result['laying'] = True
+                return 'laying', result
             penetrates = result.get('penetration_ok')
             if physical:
                 unused, direction = self.owner._mutable_shot_ray()
@@ -650,6 +700,62 @@ class Aiming(object):
                      unknown=False, mechanical=None)
         return status, mechanical
 
+    def fire_preflight(self, target, solution, raw_ray, shot, now):
+        """Fresh pre-dispersion gate for a first shot or any automatic tail.
+
+        Unlike the advisory planner's half-second confirm throttle, this is
+        called for each actual physical round. It rebuilds the ordered point
+        from the currently presented target and checks the current native
+        barrel. World/friendly proofs belong to FireAdmission, not Bot AI.
+        """
+        from .weapon import barrel_aligned
+        if (self.targets.get(target.id) is not target or
+                solution.get('target') != target.id or
+                not solution.get('clear') or not solution.get('source_verified')):
+            return 'auto_solution_stale', None
+        observation = self.observations.get(target.id)
+        if observation is None or not 0. <= float(now)-observation['time'] <= .35:
+            return 'auto_observation_stale', None
+        try:
+            own = self._own()
+            if solution.get('shell_key') != own['key']:
+                return 'auto_shell_changed', None
+            origin, direction = _point(raw_ray[0]), _point(raw_ray[1])
+            own.update(origin=origin, shot=shot, speed=float(_field(shot, 'speed')),
+                gravity=abs(float(_field(shot, 'gravity'))),
+                maximum=float(_field(shot, 'maxDistance')))
+            samples = (shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor)
+                       if solution.get('ordered') else
+                       shot_geometry.vehicle_aim_samples(target.typeDescriptor))
+            point = shot_geometry.vehicle_aim_point(samples[solution['sample']], self._pose(target))
+            velocity = observation['velocity']
+            if own['gravity'] == 0.:
+                intercept = _straight_intercept(origin, point, velocity, own['speed'])
+            else:
+                intercept = ballistics.ballistic_intercept(origin, point, velocity,
+                    own['speed'], own['gravity'], prefer_high=solution.get('arc') == 'high')
+            if intercept is None or own['speed']*intercept[2] > own['maximum']:
+                return 'auto_intercept_unavailable', None
+            fresh = dict(solution, point=intercept[0], pitch=intercept[1],
+                         flight_time=intercept[2], velocity=velocity, origin=origin)
+            # This gate deliberately uses only the current mechanical pose.
+            # Hydraulic reachability authorizes laying, never premature fire.
+            reach = mechanical_reach(own['descriptor'], direction, own['body'])
+            if not reach['reachable']:
+                return 'auto_gun_laying', fresh
+            if solution.get('physical'):
+                verdict = self.actual_contact(target, fresh, own, direction,
+                    solution.get('penetration_threshold'), velocity=velocity)
+                if verdict != 'ready':
+                    return 'auto_actual_barrel_'+verdict, fresh
+            radius = max(.3, self.owner._collision_shape(target.typeDescriptor)[0]*.5)
+            if not barrel_aligned(origin, direction, own['speed'], own['gravity'], fresh['point'], radius):
+                return 'auto_gun_laying', fresh
+            return None, fresh
+        except (AttributeError, TypeError, ValueError, KeyError, IndexError,
+                RuntimeError, OverflowError, ZeroDivisionError):
+            return 'auto_geometry_unavailable', None
+
     def _final_verdict(self, reason):
         self._final_reason = reason
         self._publish_budget()
@@ -668,6 +774,8 @@ class Aiming(object):
                 self.targets[target.id] is not target or not solution.get('clear') or
                 not solution.get('reachable') or solution.get('target') != target.id):
             return self._final_verdict('not_current')
+        if solution.get('needs_hydraulic'):
+            return self._final_verdict('hydraulic_laying')
         if now < self._next_final_at:
             return self._final_verdict('probe_cooldown')
         try:

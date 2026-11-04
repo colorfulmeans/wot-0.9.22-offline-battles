@@ -5,6 +5,8 @@ This is interpreter/logic evidence, not a native-client acceptance run.
 """
 from __future__ import print_function
 import os
+import importlib
+import sys
 import types
 import unittest
 
@@ -146,6 +148,226 @@ class EmbeddedForegroundContractTests(unittest.TestCase):
         owner._local_suspension_pitch_velocity = 0.
         self.assertFalse(rest.observe(owner, 1.3))
         self.assertTrue(rest.observe(owner, 1.9))
+
+
+class EmbeddedIndependentRuntimeTests(unittest.TestCase):
+    """Import the real package modules with only the stock GUI/native seam.
+
+    CPython 2 does not provide the game's GUI namespace packages. Install that
+    namespace explicitly, but execute the actual player and neutral primitive
+    modules. No Bot import, stand-in pathfinder or substituted height algorithm
+    is allowed. Native C++ is explicitly unavailable in this engine-free gate;
+    the shipped Python fallback and real import closure must still work.
+    """
+    def setUp(self):
+        self.saved_gui = dict((name, module) for name, module in sys.modules.items()
+                              if name == 'gui' or name.startswith('gui.'))
+        for name in self.saved_gui:
+            del sys.modules[name]
+        self.addCleanup(self.restore_namespace)
+        package_root = os.path.dirname(BASE)
+        mods_root = os.path.dirname(package_root)
+        for name, path in (('gui', os.path.dirname(mods_root)),
+                           ('gui.mods', mods_root),
+                           ('gui.mods.offline_lan_0922', package_root),
+                           ('gui.mods.offline_lan_0922.player_control', BASE)):
+            package = types.ModuleType(name)
+            package.__path__ = [path]
+            package.__package__ = name
+            sys.modules[name] = package
+            if '.' in name:
+                parent, child = name.rsplit('.', 1)
+                setattr(sys.modules[parent], child, package)
+        native = importlib.import_module('gui.mods.offline_lan_0922.native_math')
+        native._backend, native._attempted = None, True
+        diagnostics = importlib.import_module(
+            'gui.mods.offline_lan_0922.native_input_diagnostics')
+        diagnostics.write_json_record = lambda *args, **kwargs: None
+        self.modules = dict((name, importlib.import_module(
+            'gui.mods.offline_lan_0922.player_control.' + name)) for name in (
+                'pathfinding', 'local_height', 'local_routes', 'navigation_support',
+                'observations', 'targeting', 'tactics', 'fire_admission', 'cover'))
+
+    def restore_namespace(self):
+        for name in list(sys.modules):
+            if name == 'gui' or name.startswith('gui.'):
+                del sys.modules[name]
+        sys.modules.update(self.saved_gui)
+
+    @staticmethod
+    def graph():
+        size, cell, origin = 31, 2., -30.
+        links = []
+        directions = ((-1, -1), (0, -1), (1, -1), (-1, 0),
+                      (1, 0), (-1, 1), (0, 1), (1, 1))
+        for z in range(size):
+            for x in range(size):
+                mask = 0
+                for bit, (dx, dz) in enumerate(directions):
+                    if 0 <= x + dx < size and 0 <= z + dz < size:
+                        mask |= 1 << bit
+                links.append(mask)
+        return dict(format='offline-lan-0922-navgraph', version=2,
+            width=size, height=size, origin=[origin, origin],
+            bounds=[-30., -30., 30., 30.], cell_size=cell,
+            heights_mm=[0] * (size * size), links=links,
+            hazards=[0] * (size * size))
+
+    def pathfinder(self):
+        result = self.modules['pathfinding'].PlayerPathfinder(
+            lambda *args: 0., lambda *args: False, baked_graph=self.graph())
+        self.addCleanup(result.close)
+        return result
+
+    def test_all_new_modules_import_without_bot_or_game_runtime(self):
+        for name, module in self.modules.items():
+            self.assertEqual(os.path.join(BASE, name + '.py'), module.__file__.rstrip('co'))
+        forbidden = [name for name in sys.modules if
+            name == 'gui.mods.offline_lan_0922.ai' or
+            name.startswith('gui.mods.offline_lan_0922.ai.') or
+            name == 'gui.mods.offline_lan_0922.bot_runtime']
+        self.assertEqual([], forbidden)
+        self.assertEqual((object,), self.modules['pathfinding'].PlayerPathfinder.__bases__)
+        self.assertEqual((object,), self.modules['pathfinding'].PlayerTerrainGrid.__bases__)
+        self.assertEqual((object,), self.modules['local_height'].PlayerLocalHeightLinks.__bases__)
+
+    def test_real_search_observed_wreck_and_private_close_on_python27(self):
+        first, second = self.pathfinder(), self.pathfinder()
+        support = self.modules['navigation_support'].PlayerHeightSupport(
+            first.grid, lambda *args: 0., None)
+        self.addCleanup(support.close)
+        routes = self.modules['local_routes'].LocalRoutes(first, support, 1)
+        current = dict(id=17, engine_id=77, position=(0., 0., -20.),
+                       yaw=0., now=0., speed=0., half_length=3.5, half_width=1.5)
+        routes.publish(current, dict(neighbours=[dict(id=9, alive=False,
+            position=(0., 0., 0.), yaw=0., collision_shape=(1.5, 3.5, -.4, 2.))],
+            turret_hulls=[(-90, 20., 0., 0., 2., 1.)]))
+        self.assertEqual(2, routes.static_receipt['count'])
+        self.assertGreater(first.grid.static_hull_revision, second.grid.static_hull_revision)
+        self.assertTrue(first.grid.segment_penalty((0., 0., -20.), (0., 0., 20.), 0.))
+        search = first.grid.begin_plan((0., 0., -20.), (0., 0., 20.))
+        for unused in range(8):
+            if search.step(4096):
+                break
+        self.assertTrue(search.done)
+        self.assertGreater(len(search.result), 2)
+        self.assertFalse(first.grid.path_crosses_static_hull(search.result))
+        first.close()
+        self.assertTrue(first.closed)
+        self.assertIsNone(first.grid.ground_probe)
+        self.assertFalse(second.closed)
+        other = second.grid.begin_plan((0., 0., -20.), (0., 0., 20.))
+        for unused in range(8):
+            if other.step(4096):
+                break
+        self.assertTrue(other.done)
+        self.assertGreater(len(other.result), 1)
+
+    def test_actual_multilayer_links_and_budget_are_not_a_height_stub(self):
+        calls = []
+        def columns(x, z, low, high):
+            calls.append((x, z, low, high))
+            return dict(status='complete', generation=('scene', 1), surfaces=[
+                dict(point=(x, 0., z), normal=(0., 1., 0.)),
+                dict(point=(x, 8., z), normal=(0., 1., 0.))])
+        links = self.modules['local_height'].PlayerLocalHeightLinks(columns)
+        links.begin((0., 0., 0.), now=0.)
+        status, point = links.inspect((0., 0., 0.), (0., 8., 4.), baked_start=8.)
+        self.assertEqual('other_surface', status)
+        self.assertEqual((0., 0., 4.), point)
+        self.assertTrue(calls)
+        self.assertLessEqual(links.queries, self.modules['local_height'].MAX_COLUMNS)
+        count = len(calls)
+        self.assertEqual(('connected', point), links.inspect((0., 0., 0.), point))
+        self.assertEqual(count, len(calls))
+
+    def test_visible_priority_public_roster_and_tactics_execute_on_python27(self):
+        selection = self.modules['targeting'].TargetSelection()
+        rows = [dict(id=8, position=(0., 0., 200.), alive=True, visible=True,
+                     health=1000, max_health=1000),
+                dict(id=9, position=(0., 0., 25.), alive=True, visible=True,
+                     health=1000, max_health=1000)]
+        self.assertEqual(([9, 8], True), selection.rank(rows, (0., 0., 0.), 8, 0.))
+        owner = types.ModuleType('visible_client')
+        owner.client = types.ModuleType('public_identity')
+        owner.client.team, owner.client.player_id = 1, 7
+        owner._start_message = dict(round_id=1, players=[dict(id=7, team=1),
+                                                       dict(id=8, team=1)], bots=[])
+        owner._records, owner._last_snapshot = {}, {}
+        allies, complete = self.modules['observations'].public_allies(owner, [])
+        self.assertTrue(complete)
+        self.assertEqual('player:8', allies[0]['id'])
+        self.assertTrue(allies[0]['alive'])
+        self.assertNotIn('position', allies[0])
+        tactics = self.modules['tactics'].CombatTactics()
+        state = dict(now=0., position=(0., 0., 0.), yaw=0., speed=0., id=1,
+                     engine_id=1, health=1000., max_health=1000.)
+        descriptor = dict(type=dict(tags=('heavyTank',)), hull=dict(primaryArmor=(120., 80., 60.)))
+        angle = tactics.facing(state, rows[0], descriptor)
+        self.assertIsNotNone(angle)
+        self.assertEqual(angle, tactics.facing(dict(state, now=1.), rows[0], descriptor))
+
+    def test_fire_candidate_random_draw_and_flight_limit_execute_on_python27(self):
+        module = self.modules['fire_admission']
+        draw = module._ScatterDraw()
+        first = (draw.uniform(-1., 1.), draw.uniform(3., 5.), draw.gauss(2., .5))
+        draw.cursor = 0
+        self.assertEqual(first, (draw.uniform(-1., 1.), draw.uniform(3., 5.), draw.gauss(2., .5)))
+        path, times = module.FireAdmission._launch_path((0., 0., 0.), (100., 0., 0.), 0., 25.)
+        self.assertAlmostEqual(25., path[-1][0], places=6)
+        self.assertAlmostEqual(.25, times[-1], places=6)
+        self.assertLessEqual(len(path), module.MAX_PROOF_CHORDS + 1)
+        self.assertEqual(((), ()), module.FireAdmission._launch_path(
+            (0., 0., 0.), (0., 0., 0.), 0., 25.))
+
+    def test_real_cover_search_uses_native_angles_body_samples_and_rank_on_python27(self):
+        import math
+        class Record(object):
+            def __init__(self, **values):
+                self.__dict__.update(values)
+        descriptor = dict(chassis=dict(hullPosition=(0., 0., 0.)),
+            hull=dict(hitTester=dict(bbox=((-1., 0., -2.), (1., 1.4, 2.))),
+                      turretPositions=((0., 1.4, 0.),)),
+            turret=dict(hitTester=dict(bbox=((-0.7, 0., -1.), (.7, 1., 1.))),
+                        gunPosition=(0., .3, 0.)),
+            gun=dict(turretYawLimits=None, staticTurretYaw=None,
+                     pitchLimits=dict(minPitch=((0., -.5), (2.*math.pi, -.5)),
+                                      maxPitch=((0., .5), (2.*math.pi, .5)))))
+        target = Record(id=9, typeDescriptor=descriptor, position=(0., 0., 40.),
+            isStarted=True, isAlive=lambda: True, getAimParams=lambda: (.2, -.1),
+            matrix=Record(yaw=0., pitch=0., roll=0.))
+        own = Record(id=77, typeDescriptor=descriptor)
+        owner = Record(client=Record(player_id=17, team=1),
+            _avatar=Record(spaceID=1, gunRotator=Record(turretYaw=.1, gunPitch=.05)),
+            _start_message=dict(round_id=1),
+            _records={'target': dict(engine_id=9, ready=True, spot_visible=True, state=dict(team=2))},
+            _server_entity=lambda identity: target if identity == 9 else None)
+        context = dict(contacts=[dict(id=9, visible=True, alive=True, health=1000.,
+            position=target.position, yaw=0., pitch=0., roll=0.)], supported=True)
+        state = dict(now=0., position=(0., 0., 0.), yaw=0., pitch=0., roll=0.,
+                     half_width=1., half_length=2., engine_id=77)
+        sampler = self.modules['cover'].PlayerCover(owner)
+        self.addCleanup(sampler.close)
+        rays = []
+        def ray(start, end):
+            rays.append((start, end))
+            return end[2] >= -4. if start[2] > 30. else True
+        result = None
+        for index in range(20):
+            state['now'] = index*.1
+            result = sampler.update(state, context, target, own,
+                lambda *args: 0., lambda *args: 0., lambda *args: True, ray, scene=lambda: 1)
+            if result is not None:
+                break
+        self.assertIsNotNone(result)
+        self.assertEqual((9,), result['threats'])
+        self.assertEqual(4, len(self.modules['cover'].body_samples(descriptor)))
+        self.assertIn('enemy_occlusion', result['breakdown'])
+        self.assertTrue(result['peek_feasible'])
+        self.assertLessEqual(sampler.receipt['queries'], sampler.receipt['query_limit'])
+        observed = sampler.observe(state, context, target)[0]
+        self.assertEqual((.2, -.1), (observed['pose']['turret_yaw'], observed['pose']['gun_pitch']))
+        self.assertTrue(any(abs(first[1]-1.7) < 1.e-9 for first, unused in rays))
 
 
 if __name__ == '__main__':

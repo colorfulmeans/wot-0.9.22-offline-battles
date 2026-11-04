@@ -42,12 +42,19 @@ class PlayerControl(object):
         from .traffic import PlayerTraffic
         self.player_traffic = PlayerTraffic()
         self.drive_failure = None
+        self.drive_contact_receipt = None
         self.blocked_fire_target = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
         self.aiming = None
         self.direct_engagement = None
+        from .targeting import TargetSelection
+        from .tactics import CombatTactics
+        from .fire_admission import FireAdmission
+        self.target_selection = TargetSelection()
+        self.combat_tactics = CombatTactics()
+        self.fire_admission = FireAdmission(self)
         self.strategy = None
         self.next_strategy = 0.
         self.handover_burst = None
@@ -87,6 +94,7 @@ class PlayerControl(object):
         self.next_release = 0.
         self.siege_intent = None
         self.siege_brake = None
+        self.siege_observer = None
         from .wrecks import WreckPush
         self.wreck_push = WreckPush()
         from .commands import CommandGateway, JournalReader
@@ -277,6 +285,10 @@ class PlayerControl(object):
         from .traffic import PlayerTraffic
         self.player_traffic = PlayerTraffic()
         self.drive_failure = None
+        self.drive_contact_receipt = None
+        self.target_selection.reset()
+        self.combat_tactics.reset()
+        self.fire_admission.reset()
         self.blocked_fire_target = None
         self.next_strategy = 0.
         self.weapon = weapon
@@ -368,6 +380,10 @@ class PlayerControl(object):
             self.fire_command = None
         self.active = False
         self.control_generation += 1
+        self.fire_admission.reset()
+        self.target_selection.reset()
+        self.combat_tactics.reset()
+        self.drive_contact_receipt = None
         if preserve_explicit:
             # Movement turnover does not revoke a separately admitted fire
             # transaction. Its actual token and all other identity/aim/gun
@@ -429,9 +445,13 @@ class PlayerControl(object):
             callbacks.append(('burst_release', lambda:self.release_burst(burst)))
         if not keep_burst:
             self.owned_burst = None
-        if self.siege_brake is not None and owner._local_siege_braking == self.siege_brake:
-            owner._local_siege_braking = None
+        siege_observer, self.siege_observer = self.siege_observer, None
         self.siege_intent = self.siege_brake = None
+        if siege_observer is not None:
+            # Cancel only this automatic request's still-unsent brake. A
+            # submitted native transition or a newer explicit owner remains.
+            callbacks.append(('automatic_siege_release',
+                lambda:owner._cancel_player_control_siege(siege_observer)))
         from .wrecks import WreckPush
         self.wreck_push = WreckPush()
         if not any(stage == 'governor_release' for stage, unused in callbacks):
@@ -774,6 +794,16 @@ class PlayerControl(object):
                 return 'vehicle_changed'
             if native_attempt is not None and context.get('native_attempt') is not native_attempt:
                 return 'trigger_replaced'
+            if context.get('automatic'):
+                weapon = context.get('weapon')
+                if not self.active or 'fire' not in self.features or weapon is not self.weapon:
+                    return 'automatic_owner_changed'
+                source = getattr(weapon, 'bound_source', None)
+                if source is not None:
+                    rotator = getattr(owner._avatar, 'gunRotator', None)
+                    if (getattr(rotator, '_VehicleGunRotator__shotPointSourceFunctor', None) is not source or
+                            getattr(rotator, 'clientMode', False) is not True):
+                        return 'aim_source_lost'
             if command_id is not None:
                 entry = self.gateway.requests.get(command_id)
                 receipt = entry.get('receipt', {}) if entry else {}
@@ -837,6 +867,9 @@ class PlayerControl(object):
         entity = owner._server_entity(owner._server.vehicle_id)
         gun = getattr(owner, '_gun_state', None)
         context = dict(command=command_id, target=target,
+                                    automatic=bool(command_id is None and self.active and
+                                        self.manual_aim.operation is None and weapon is self.weapon),
+                                    weapon=weapon,
                                     policy=self.ammo_policy, time=now, projectiles=[],
                                     generation=generation, identity=identity, entity=entity,
                                     server=owner._server, client=owner.client, vehicle_id=owner._server.vehicle_id,
@@ -945,7 +978,8 @@ class PlayerControl(object):
                 continue
             point = tuple(target.position)
             team = int((record.get('state') or {}).get('team', 0))
-            row = dict(id=target.id, team=team, position=point,
+            row = dict(id=target.id, actor_key=(record.get('kind'), record.get('network_id')),
+                       team=team, position=point,
                        health=target.health, max_health=target.typeDescriptor.maxHealth,
                        alive=target.isAlive(), speed=0.0, yaw=float(target.matrix.yaw),
                        pitch=float(target.matrix.pitch), roll=float(target.matrix.roll),
@@ -953,6 +987,13 @@ class PlayerControl(object):
             tags = target.typeDescriptor.type.tags
             row['class_tag'] = next((tag for tag in
                 ('SPG', 'AT-SPG', 'heavyTank', 'mediumTank', 'lightTank') if tag in tags), 'mediumTank')
+            # These are received physical input facts, not macro orders from
+            # a Bot scheduler. A missing intent stays unknown/absent.
+            public = record.get('state') or {}
+            throttle = public.get('throttle', public.get('forward'))
+            if isinstance(throttle, (int, float)) and not (math.isnan(throttle) or math.isinf(throttle)):
+                row['throttle'] = max(-1., min(1., float(throttle)))
+                row['movement_intent'] = row['throttle']
             neighbours.append(row)
             # Actual presentation visibility, not the omniscient LAN roster.
             ally = team == int(owner.client.team)
@@ -968,7 +1009,7 @@ class PlayerControl(object):
                     if sum(v*v for v in candidate) <= 10000.:
                         velocity = candidate
                 row['velocity'] = velocity
-                row['speed'] = math.sqrt(sum(v*v for v in velocity))
+                row['speed'] = math.sin(row['yaw'])*velocity[0] + math.cos(row['yaw'])*velocity[2]
                 self.observations[target.id] = (now, point)
                 seen.add(target.id)
                 if visible_enemy:
@@ -1078,16 +1119,49 @@ class PlayerControl(object):
         return bool(path) and all(self.lane_from(target, a, b)
                                   for a, b in zip(path, path[1:]))
 
-    def drive_contact(self, position, heading, dt, static):
+    def attacked(self, attacker_engine_id, event=None):
+        # Accepted local damage/hit feedback records an identity, not hidden
+        # coordinates. It can only reprioritise a currently visible contact.
+        if self.active and attacker_engine_id is not None:
+            self.target_selection.attacked(attacker_engine_id, self.owner._clock())
+
+    def drive_contact(self, position, heading, dt, static, contact=None):
         navigation = self.navigation
-        if (not self.active or 'drive' not in self.features or navigation is None
-                or navigation.tag == 'SPG'):
+        if not self.active or 'drive' not in self.features or navigation is None:
             return
         self.drive_failure = (tuple(position), heading)
+        if isinstance(contact, dict):
+            self.drive_contact_receipt = dict(contact)
         if static:
             navigation.report_drive_blockage(
                 self.owner.client.player_id, self.last_order, position, heading,
                 self.owner._clock(), dt, realised=True)
+
+    def rotation_clear(self, entity, position, yaw, end_yaw):
+        """Read-only native static/body sweep for a proposed wreck-push turn."""
+        owner = self.owner
+        native = getattr(owner, '_native_world_rotation_is_clear', None)
+        boundary = getattr(owner, '_arena_rotation_is_clear', None)
+        turrets = getattr(owner, '_turret_pose_is_clear', None)
+        catalog = getattr(owner, '_destructible_pose_sweep', None)
+        sensor = getattr(owner, '_destructibles', None)
+        bbox = getattr(sensor, '_vehicle_body_bbox', None) or getattr(sensor, '_vehicle_hull_bbox', None)
+        if not all(callable(value) for value in (native, boundary, turrets, catalog, bbox)):
+            return False
+        descriptor = entity.typeDescriptor
+        shape = bbox(descriptor)
+        if not isinstance(shape, (tuple, list)) or len(shape) < 2:
+            return False
+        pitch, roll = owner._local_pitch, owner._local_roll
+        if (not boundary(entity, position, yaw, end_yaw, position) or
+                not turrets(position, yaw, position, end_yaw, descriptor, pitch, roll)):
+            return False
+        proposal = catalog(position, yaw, position, end_yaw, 0., descriptor,
+            owner._clock(), .1, commit_enabled=False, pitch=pitch, roll=roll)
+        if proposal.get('status') != 'clear' or proposal.get('requires_commit'):
+            return False
+        return native(position, yaw, end_yaw, descriptor, pitch=pitch, roll=roll,
+                      record_local=False, include_static=True)
 
     def direction_clear(self, position, yaw, descriptor, shape, reach=None):
         # Corridor lanes follow the hull support plane even when the query
@@ -1205,6 +1279,22 @@ class PlayerControl(object):
         # Player-owned activation decisions, actual mounted kits/cooldowns.
         from ..equipment_mechanics import BOT_REPAIR_PRIORITY, BOT_CREW_PRIORITY
         owner = self.owner
+        generation, control_identity, active = self.control_generation, self.identity(), self.active
+        client, server, descriptor = owner.client, owner._server, entity.typeDescriptor
+        mounted, features = owner._equipment_state, set(self.features)
+
+        def current():
+            # A native activation/extra lookup can synchronously dispatch Stop
+            # or replace this vehicle's mounted state. Only the call already
+            # admitted may finish; another item cannot inherit its old view.
+            return bool(not self.closed and self.owner is owner and self.active == active and
+                self.control_generation == generation and self.identity() == control_identity and
+                self.features == features and owner.client is client and owner._server is server and
+                server is not None and owner._server_entity(server.vehicle_id) is entity and
+                entity.typeDescriptor is descriptor and owner._equipment_state is mounted)
+
+        if not current():
+            return
         record = owner._records.get('player:%s' % owner.client.player_id) or {}
         critical = record.get('critical_state') or (record.get('state') or {}).get('critical') or {}
         states = dict((r['name'], r['state']) for r in critical.get('devices', ()))
@@ -1218,7 +1308,9 @@ class PlayerControl(object):
         stun_end = (record.get('state') or {}).get('stun_end_server_time_ms', 0)
         estimated_time = owner._projectile_estimated_server_time(now) if stun_end else None
         stunned = estimated_time is not None and stun_end > estimated_time
-        for item in owner._equipment_state or ():
+        for item in mounted or ():
+            if not current():
+                return
             kind = item.contract.get('kind')
             if item.contract.get('autoactivate'):
                 continue
@@ -1239,11 +1331,23 @@ class PlayerControl(object):
                 if ((wanted != item.active or changed_intent) and (owned or wanted) and
                         (changed_intent or now >= self.consumable_pending.get(item.contract['id'], 0))):
                     code = item.contract['id'] | (int(wanted) << 16)
-                    requested = bool(owner._activate_equipment(code))
-                    if requested:
-                        self.owned_governor = identity if wanted else None
+                    if not current():
+                        return
+                    previous_owner = self.owned_governor
+                    # Publish ownership before the native call. Stop must be
+                    # able to cancel even an on-request whose call has not
+                    # returned yet; its old stack must not resurrect the lease.
+                    if wanted:
+                        self.owned_governor = identity
                     self.governor_request = (identity, wanted)
                     self.consumable_pending[item.contract['id']] = now + 2.
+                    requested = bool(owner._activate_equipment(code))
+                    if not current():
+                        return
+                    if requested:
+                        self.owned_governor = identity if wanted else None
+                    else:
+                        self.owned_governor = previous_owner
                     self.record('governor', wanted=wanted, requested=requested,
                                 pitch=pitch, uphill_since=self.governor.uphill_since)
                 continue
@@ -1267,18 +1371,25 @@ class PlayerControl(object):
                     for name in ('commander',) + tuple(BOT_CREW_PRIORITY):
                         try:
                             index = owner._critical_extra_index(entity.typeDescriptor, name)
+                            if not current():
+                                return
                             selected = name
                             break
                         except RuntimeError:
-                            pass
+                            if not current():
+                                return
                     if index is None:
                         self.record('consumable_unavailable', equipment=item.contract['id'],
                                     reason='crew_activation_target_unavailable')
                         self.consumable_pending[item.contract['id']] = now + 2.
                         continue
                 activation_code = item.contract['id'] | (index << 16)
-                requested = bool(owner._activate_equipment(activation_code))
+                if not current():
+                    return
                 self.consumable_pending[item.contract['id']] = now+2.
+                requested = bool(owner._activate_equipment(activation_code))
+                if not current():
+                    return
                 self.record('consumable', equipment=item.contract['id'],
                             selected=None if all_targets else selected,
                             needed_target=selected, activation_code=activation_code,
@@ -1287,6 +1398,9 @@ class PlayerControl(object):
     def update_siege(self, entity, order, fire_clear, now):
         """Debounce the player's native travel/siege setting independently."""
         owner = self.owner
+        if (getattr(self, '_siege_call_token', None) is not None or
+                self.siege_observer is not None):
+            return
         if not getattr(entity.typeDescriptor, 'hasSiegeMode', False):
             return
         if getattr(owner, '_local_player_burst', None) or owner._local_siege_pending is not None:
@@ -1296,8 +1410,8 @@ class PlayerControl(object):
         if current in (states.SWITCHING_ON, states.SWITCHING_OFF):
             return
         mission = order.get('mission') or {}
-        desired = bool(fire_clear and
-            (order.get('combat_mode') == 'engage' or order.get('holding')) and
+        desired = bool(fire_clear and not order.get('suppress_fire') and
+            (order.get('combat_mode') in ('engage', 'support_hold') or order.get('holding')) and
             mission.get('status') not in ('failed', 'cancelled'))
         if self.siege_intent is None or self.siege_intent[0] != desired:
             self.siege_intent = (desired, now)
@@ -1306,9 +1420,51 @@ class PlayerControl(object):
             return
         if (current == states.ENABLED) == desired or owner._local_siege_braking is not None:
             return
-        if owner._change_local_siege(desired):
-            self.siege_brake = owner._local_siege_braking
-            self.record('siege_request', enabled=desired, previous=current)
+        generation, identity, active = self.control_generation, self.identity(), self.active
+        client, server, descriptor = owner.client, owner._server, entity.typeDescriptor
+        intent, features = self.siege_intent, set(self.features)
+        token = object()
+        self._siege_call_token = token
+        outcome = {}
+
+        def retire():
+            if self.siege_observer is observer:
+                self.siege_observer = self.siege_brake = None
+                self._run_releases([('automatic_siege_release',
+                    lambda:owner._cancel_player_control_siege(observer))], now)
+
+        def observer(sequence, enabled, reason=None):
+            outcome.update(sequence=sequence, reason=reason)
+            # Once submitted, the native pending transition owns its lock.
+            # Token-specific cleanup cannot undo it or another request.
+            retire()
+
+        # Publish the exact callback before native code can notify the prior
+        # observer. A Stop there must revoke this new request before the
+        # runtime installs its braking flag, not just after the call returns.
+        self.siege_observer = observer
+        self.siege_brake = desired
+        try:
+            requested = owner._request_player_control_siege(desired, observer)
+            retained = bool(not self.closed and self.owner is owner and self.active == active and
+                self.control_generation == generation and self.identity() == identity and
+                owner.client is client and owner._server is server and server is not None and
+                owner._server_entity(server.vehicle_id) is entity and
+                entity.typeDescriptor is descriptor and self.siege_intent is intent and
+                self.features == features)
+            if not retained or not requested:
+                retire()
+                return
+            if self.siege_observer is observer:
+                self.siege_brake = owner._local_siege_braking
+            if self.siege_observer is observer or outcome.get('sequence') is not None:
+                self.record('siege_request', enabled=desired, previous=current)
+        except Exception:
+            retire()
+            raise
+        finally:
+            if self._siege_call_token is token:
+                self._siege_call_token = None
 
     def update(self, dt, now):
         if self.closed:
@@ -1376,11 +1532,43 @@ class PlayerControl(object):
         if not self.active or now < self.next_decision:
             self.publish_status(now)
             return
+        decision_horizon = max(.1, float(dt),
+            max(0., now - self.last_decision) if self.last_decision is not None else .1)
+        self.last_decision = now
         self.next_decision = now+.1
+        decision_generation = self.control_generation
+        decision_identity = self.identity()
+        decision_navigation, decision_weapon = self.navigation, self.weapon
+        decision_aiming, decision_policy = self.aiming, self.ammo_policy
+        decision_server, decision_client = owner._server, owner.client
+        decision_gun = owner._gun_state
+        decision_features = set(self.features)
+        decision_mission = self.mission_command
+
+        def decision_current():
+            # Every native query/source setter can synchronously dispatch a
+            # Stop, a new command, a siege descriptor or another round. Native
+            # observations may finish, but the retired decision cannot publish
+            # old movement, fire, or equipment intents afterwards.
+            if not self.active or self.control_generation != decision_generation or not self.live():
+                return False
+            server = getattr(owner, '_server', None)
+            actual = (owner._server_entity(server.vehicle_id)
+                      if server is decision_server and server is not None else None)
+            return bool(self.active and not self.closed and self.control_generation == decision_generation and
+                self.owner is owner and self.identity() == decision_identity and actual is entity and
+                owner._sender is sender and owner.client is decision_client and owner._server is decision_server and
+                owner._gun_state is decision_gun and self.features == decision_features and
+                self.mission_command == decision_mission and
+                self.navigation is decision_navigation and self.weapon is decision_weapon and
+                self.aiming is decision_aiming and self.ammo_policy is decision_policy)
+
         position, yaw = owner.local_pose()
         position = tuple(position)
         contacts, neighbours, records = self._contacts(entity)
         shape = owner._collision_shape(entity.typeDescriptor)
+        if not decision_current():
+            return
         previous_target = self.target_engine
         target = None
         fire_clear = False
@@ -1390,20 +1578,36 @@ class PlayerControl(object):
         fire_ready = False
         artillery = 'SPG' in getattr(getattr(entity.typeDescriptor, 'type', None), 'tags', ())
         if 'fire' in self.features and self.ammo_state['available'] and not self.ammo_state['empty']:
-            # Keep a valid current target instead of resetting aim every tick.
+            base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
+            mission = self.navigation.mission_status() if self.navigation is not None else None
+            home = self.navigation.home if self.navigation is not None else None
+            locked = self.direct_engagement.target if self.direct_engagement is not None else self.target_engine
+            ranked, preempt = self.target_selection.rank(contacts, position, locked,
+                now, home=home, base=base, mission=mission)
+            priorities = dict((identity, index) for index, identity in enumerate(ranked))
             candidates = sorted(records.values(), key=lambda item: (
-                item.id != self.target_engine,
+                priorities.get(item.id, len(priorities)), item.id != locked,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
+            if (preempt and candidates and self.direct_engagement is not None and
+                    not getattr(owner, '_local_player_burst', None) and
+                    not getattr(owner, '_local_fire_intent', None)):
+                stages = self.direct_engagement.stages(self.ammo_policy, owner._gun_state.ammo)
+                if stages:
+                    self.direct_engagement.adopt(candidates[0].id, stages[0])
             self.aiming.begin(list(records.values()), now)
+            if not decision_current():
+                return
             if self.direct_engagement is not None:
                 generation = self.control_generation
                 target, solution, fire_clear = self.direct_engagement.update(self, candidates, now)
-                if generation != self.control_generation:
+                if generation != self.control_generation or not decision_current():
                     return
             else:
                 for candidate in candidates:
                     trial = self.aiming.update(candidate, now,
                         lambda a, b: self.lane_from(candidate, a, b), artillery=artillery)
+                    if not decision_current():
+                        return
                     if target is None:
                         target, solution = candidate, trial
                     elif trial.get('geometry_clear') and not solution.get('geometry_clear'):
@@ -1419,6 +1623,8 @@ class PlayerControl(object):
         if 'fire' in self.features and self.ammo_state['available']:
             previous_shell = owner._gun_state.shot_index
             self.select_ammo(now)
+            if not decision_current():
+                return
             if previous_shell != owner._gun_state.shot_index:
                 # Ballistic and armor proofs belong to one mounted shell.
                 fire_clear = False
@@ -1432,6 +1638,8 @@ class PlayerControl(object):
             point = solution['point']
             if self.direct_engagement is None or fire_clear or solution.get('laying'):
                 self.weapon.aim_solution(target.id, solution, now)
+                if not decision_current():
+                    return
             start, direction = owner._mutable_shot_ray()
             distance = math.sqrt(sum((point[i]-start[i])**2 for i in range(3)))
             gun = owner._gun_state
@@ -1448,11 +1656,15 @@ class PlayerControl(object):
             aim_progress = (previous_aim is None or previous_aim[0] != target.id or
                             error < previous_aim[1] - .002 or factor < previous_aim[2] - .02)
             self.aim_progress_sample = (target.id, error, factor)
+            if not decision_current():
+                return
             self.aim_receipt = dict(target=target.id, point=point, aligned=aligned, distance=distance,
                                     fire_clear=fire_clear, reason=solution.get('reason'),
                                     geometry_clear=tactical_clear, needs_hull=solution.get('needs_hull'),
                                     reachable=solution.get('reachable'), arc=solution.get('arc'),
                                     velocity=solution.get('velocity'), progress=aim_progress,
+                                    needs_hydraulic=solution.get('needs_hydraulic'),
+                                    selection=self.target_selection.receipt,
                                     client_mode=owner._avatar.gunRotator.clientMode)
             fire_ready = (fire_clear and aligned and gun.can_fire(True) and
                           self.weapon.ready(now, factor))
@@ -1462,6 +1674,8 @@ class PlayerControl(object):
             if ('fire' in self.features and self.weapon is not None and
                     (self.direct_engagement is None or self.direct_engagement.target is None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
+                if not decision_current():
+                    return
                 self.aim_receipt = dict(mode='forward',point=self.weapon.point,
                     client_mode=owner._avatar.gunRotator.clientMode)
         if previous_target != self.target_engine:
@@ -1477,8 +1691,23 @@ class PlayerControl(object):
             peers = [r for r in neighbours if r['team']==int(owner.client.team) or r.get('visible') or not r['alive']]
             traffic = Traffic(body(entity.id,position,yaw,shape,
                 getattr(owner,'_local_pitch',0.),getattr(owner,'_local_roll',0.)),peers)
-            state = dict(id=owner.client.player_id, engine_id=entity.id, position=position, yaw=yaw,
-                         speed=owner._local_speed, now=now, half_length=shape[1], half_width=shape[0])
+            state = dict(id=owner.client.player_id, engine_id=entity.id,
+                         actor_key=('player', int(owner.client.player_id)), position=position, yaw=yaw,
+                         speed=owner._local_speed, now=now, half_length=shape[1], half_width=shape[0],
+                         health=entity.health, max_health=entity.typeDescriptor.maxHealth,
+                         collision_shape=shape, pitch=getattr(owner, '_local_pitch', 0.),
+                         roll=getattr(owner, '_local_roll', 0.),
+                         decision_horizon=decision_horizon,
+                         burst_active=bool(getattr(owner, '_local_player_burst', None)))
+            from .traffic_laws import traffic_stopping_distance
+            def stopping_distance(turn=False):
+                params = getattr(owner, '_local_physics', None)
+                if params is None:
+                    return 0.
+                return traffic_stopping_distance(params, state['speed'],
+                    getattr(owner, '_local_smooth_drive_pitch', getattr(owner, '_local_pitch', 0.)),
+                    bool(turn))
+            state['stopping_distance'] = stopping_distance()
             blocked_corridors = []
             def clear(angle, reach=None):
                 if not traffic.clear(angle, reach or 5.):
@@ -1492,46 +1721,46 @@ class PlayerControl(object):
             base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
             enemy_base = (owner._rules_state.get('bases') or {}).get(str(3 - int(owner.client.team)), {})
             allies = [r for r in peers if r['team'] == int(owner.client.team)]
-            allies.append(dict(id=entity.id, alive=True, class_tag=self.navigation.tag,
+            allies.append(dict(id=entity.id, actor_key=state['actor_key'],
+                               alive=True, class_tag=self.navigation.tag,
                                position=position, health=entity.health,
                                max_health=entity.typeDescriptor.maxHealth))
-            public_allies = list(allies)
-            observed_ids = set(row['id'] for row in allies)
-            for record in getattr(owner, '_records', {}).values():
-                public = record.get('state') or {}
-                identity = record.get('engine_id')
-                if int(public.get('team', 0)) != int(owner.client.team) or identity in observed_ids:
-                    continue
-                # A teammate without a streamed entity remains conservatively
-                # alive and unclassified. Missing presentation is not death.
-                alive = public.get('alive', True) and public.get('health', 1) > 0
-                public_allies.append(dict(id=identity, alive=alive, class_tag=None))
-            self.navigation.set_context(dict(empty_ammo=self.ammo_state['empty'],
-                target=target, contacts=contacts, allies=public_allies, neighbours=peers,
+            from .observations import public_allies
+            roster, roster_complete = public_allies(owner, allies)
+            turret_reader = getattr(owner, '_turret_navigation_hulls', None)
+            turret_hulls = tuple(turret_reader()) if callable(turret_reader) else ()
+            context = dict(empty_ammo=self.ammo_state['empty'],
+                target=target, contacts=contacts, allies=roster, neighbours=peers,
                 base=base, enemy_base=enemy_base,
-                allies_complete=getattr(owner, '_bots_ready_reported', True) and
-                    not bool(getattr(owner, '_pending_bot_create_order', None)),
+                allies_complete=roster_complete, turret_hulls=turret_hulls,
+                burst_active=state['burst_active'],
                 fire_clear=tactical_clear, aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
                 battle_finished=False, supported=not getattr(owner, '_local_airborne', False)
                     and not getattr(owner, '_local_support_rise_blocked', False),
-                overturned=bool(getattr(owner, '_overturn_level', 0))))
+                overturned=bool(getattr(owner, '_overturn_level', 0)))
+            self.navigation.set_context(context)
             movement = self.navigation.movement_policy(state)
+            if not decision_current():
+                return
             hold = bool(not self.ammo_state['empty'] and not movement.get('force_move') and
                 target is not None and tactical_clear and
-                (artillery or self.aim_receipt['distance'] <= movement.get('engage_range', 150.)))
+                (artillery or movement.get('combat_hold',
+                    self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
             if now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
                 redirect=self.strategy.decide(now,self.navigation.routes,self.navigation.route,
                     contacts, allies, base, self.navigation.home, engaged=hold,
-                    mission=self.navigation.mission_status(), empty_ammo=self.ammo_state['empty'])
+                    mission=self.navigation.mission_status(), empty_ammo=self.ammo_state['empty'], state=state)
                 if redirect is not None:
                     reason = ('rejoin_after_defence' if previous_mode == 'defend' and
                               self.strategy.mode != 'defend' else self.strategy.mode)
                     self.navigation.retask(redirect, reason=reason)
+                    if not decision_current():
+                        return
                     self.record('player_strategy',decision=self.strategy.receipt)
             automatic_defence = self.strategy.mode == 'defend' and movement.get('allow_strategy')
             if automatic_defence and self.navigation.home is not None:
@@ -1546,14 +1775,22 @@ class PlayerControl(object):
             final_blocked = bool(not artillery and target is not None and
                                  target.id == getattr(self, 'blocked_fire_target', None))
             withdrawal = None
+            manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
                 if ('fire' in self.features and not self.ammo_state['empty'] and
                         movement.get('allow_withdrawal') and not automatic_defence and
-                        (target is not None or self.navigation.cover_move is not None)):
+                        (target is not None or self.navigation.cover_move is not None or
+                         self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
                         state, target, entity, owner._gun_state, clear, owner._tactical_ray_clear)
+                    if not decision_current():
+                        return
                 else:
                     self.navigation.cover_move = None
+                    self.navigation.reload_route = None
+                    cover_search = getattr(self.navigation, 'cover_search', None)
+                    if cover_search is not None:
+                        cover_search.reset()
                 if ('fire' in self.features and not self.ammo_state['empty'] and
                         movement.get('allow_firing_position') and (not tactical_clear or final_blocked)
                         and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
@@ -1564,20 +1801,40 @@ class PlayerControl(object):
                     position_goal = self.navigation.firing_position(
                         state, target if final_blocked else candidates[0], clear,
                         firing_lane_from, owner._mutable_shot_ray()[0])
+                    if not decision_current():
+                        return
                 if position_goal is None:
                     self.navigation.firing_move = None
+                manoeuvre = self.combat_tactics.movement(state, context, entity.typeDescriptor,
+                    allowed=bool(movement.get('allow_firing_position') and not automatic_defence and
+                        withdrawal is None and position_goal is None),
+                    height=self.navigation._height, clear=clear)
+                if not decision_current():
+                    return
             if withdrawal is not None:
                 hold = False
-                order = dict(withdrawal, recovery_mode=withdrawal['combat_mode'])
+                order = dict(withdrawal)
+                order.setdefault('recovery_mode', withdrawal['combat_mode'])
+            elif manoeuvre is not None:
+                hold = False
+                order = self.navigation.drive_combat_goal(state, clear, manoeuvre['goal'],
+                    mode=manoeuvre['phase'], key=('player_flank', manoeuvre['target']))
             elif position_goal is None:
                 order = self.navigation.decide(state, clear, hold=hold)
             else:
                 hold = False
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)
+            if not decision_current():
+                return
             pushing = self.wreck_push.apply(order,state,traffic,
-                lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach))
+                lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach),
+                pose_clear=lambda end_yaw:self.rotation_clear(entity,position,yaw,end_yaw))
+            if not decision_current():
+                return
             if not pushing:
                 self.turn_clearance.apply(order,yaw,traffic,position,clear)
+                if not decision_current():
+                    return
             mission_order = order.get('mission') or {}
             arrival = mission_order.get('arrival') or {}
             facing_allowed = (mission_order.get('status') not in ('failed', 'cancelled') and
@@ -1593,6 +1850,10 @@ class PlayerControl(object):
                 traverse = hull_traverse_error(owner, entity.typeDescriptor, point, delta, solution=solution)
                 if traverse is not None:
                     delta = traverse
+                else:
+                    angled = self.combat_tactics.facing(state, target, entity.typeDescriptor)
+                    if angled is not None:
+                        delta = angled
                 order['combat_facing'] = dict(target=target.id, error=delta, state='aligned',
                                               limited_traverse=traverse is not None)
                 if abs(delta) > (.02 if traverse is not None else .20):
@@ -1608,27 +1869,25 @@ class PlayerControl(object):
                         else:
                             facing['state'] = 'blocked'
             order['wreck_push'] = self.wreck_push.receipt
+            order['tactics'] = dict(self.combat_tactics.receipt)
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
             if not pushing:
-                if not artillery and isinstance(self.navigation, PlayerNavigation):
+                if isinstance(self.navigation, PlayerNavigation):
                     failure, self.drive_failure = self.drive_failure, None
+                    contact, self.drive_contact_receipt = self.drive_contact_receipt, None
                     if (order.get('travel_intent') and yaw in blocked_corridors and
                             (order['recovery_mode'] == 'blocked' or self.navigation.driver.replan)):
                         self.navigation.report_drive_blockage(
                             state['id'], order, position, yaw, now, dt)
-                    from .traffic_laws import traffic_stopping_distance
-                    def stopping_distance():
-                        params = getattr(owner, '_local_physics', None)
-                        if params is None:
-                            return 0.
-                        return traffic_stopping_distance(params, state['speed'],
-                            getattr(owner, '_local_smooth_drive_pitch', owner._local_pitch),
-                            bool(order['turn']))
+                        if not decision_current():
+                            return
                     self.player_traffic.apply(order, state, traffic, int(owner.client.team),
-                        clear, stopping_distance, 1. / 30.,
-                        self.navigation.driver.replan or failure is not None, failure)
+                        clear, lambda:stopping_distance(order['turn']), 1. / 30.,
+                        self.navigation.driver.replan or failure is not None, failure, contact=contact)
+                    if not decision_current():
+                        return
                 if (order['throttle'] and order['turn'] and
                         not traffic.can_steer(order['throttle'], order['turn'], state['speed'])):
                     order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
@@ -1642,40 +1901,54 @@ class PlayerControl(object):
                 # until travel mode owns movement.
                 order.update(throttle=0., turn=0., brake=True,
                              recovery_mode='siege_wait_travel')
+            if not decision_current():
+                return
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()
+            if not decision_current():
+                return
             self.update_siege(entity, order, tactical_clear, now)
+            if not decision_current():
+                return
         else:
             order = {}
         self.last_order = order
         self.finish_mission(now)
+        if not decision_current():
+            return
         mission_order = order.get('mission') or {}
-        fire_allowed = mission_order.get('status') not in ('failed', 'cancelled')
+        fire_allowed = (mission_order.get('status') not in ('failed', 'cancelled') and
+                        not order.get('suppress_fire') and order.get('fire_allowed', True))
         if artillery and order.get('artillery') and not mission_order:
             fire_allowed = fire_allowed and order['artillery'].get('phase') not in (
                 'deploying', 'relocating', 'sortie_return')
         if target is None or target.id != getattr(self, 'blocked_fire_target', None):
             self.blocked_fire_target = None
         if fire_ready and fire_allowed:
-            unused_start, direction = owner._mutable_shot_ray()
-            confirmed = self.aiming.confirm(target, solution, direction, now,
-                owner._tactical_ray_clear,
-                dynamic_clear=lambda path:self.dynamic_path_clear(target, path))
-            if not artillery and getattr(self.aiming, 'receipt', {}).get('final_reason') in (
-                    'dynamic_blocked', 'static_blocked'):
+            # The physical trigger (including each native burst tail) now
+            # owns the final current-barrel + frozen-scatter admission. A
+            # second complete centre-ray proof here would reset its bounded
+            # work and reintroduce the old 0.5-second trigger-only gate.
+            accepted = self.trigger(self.weapon, now)
+            if not decision_current():
+                return
+            admission = self.fire_admission.receipt
+            if not artillery and admission.get('reason') in (
+                    'auto_friendly_lane', 'auto_world_blocked', 'auto_friendly_splash'):
                 if (self.blocked_fire_target != target.id and self.navigation is not None
                         and 'drive' in self.features):
                     self.navigation.firing_retry_at = 0.
                 self.blocked_fire_target = target.id
-            elif confirmed:
+            elif accepted:
                 self.blocked_fire_target = None
-            if confirmed:
-                accepted = self.trigger(self.weapon, now)
-                self.record('automatic_fire', target=target.id, accepted=accepted,
-                            native=self.weapon.trigger_receipt)
+            self.record('automatic_fire', target=target.id, accepted=accepted,
+                        admission=admission, native=self.weapon.trigger_receipt)
+            if not decision_current():
+                return
         if self.aiming is not None and self.aim_receipt is not None:
             self.aim_receipt['budget'] = dict(getattr(self.aiming, 'receipt', {}))
+            self.aim_receipt['admission'] = dict(self.fire_admission.receipt)
         if 'consumables' in self.features:
             self.consumables(entity)
         if now >= getattr(self, 'next_log', 0.):

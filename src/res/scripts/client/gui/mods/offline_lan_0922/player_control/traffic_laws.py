@@ -1,13 +1,18 @@
-"""Foreground copies of the Bot crossing and braking laws."""
+"""Foreground crossing, contact and braking geometry; no actor allocations."""
 
 import math
 
 from .. import tank_collision, vehicle_physics
+from .observations import actor_priority
 
 
 PREDICTION_SECONDS = 1.0
 YIELD_SECONDS = 1.5
 HEAD_ON_OFFSET = 0.42
+HEAD_ON_RETREAT_SECONDS = 6.0
+PARKED_JAM_SECONDS = 1.5
+PARKED_YIELD_SECONDS = 4.0
+PARKED_CONTACT_MARGIN = .15
 _EPSILON = 1.0e-9
 
 
@@ -68,6 +73,34 @@ def _dimensions(body):
             (body.get('half_length', 3.5), body.get('half_width', 1.7)))
 
 
+def separation(first, second):
+    """Signed observed hull gap, not a manufactured native impact receipt."""
+    if not _same_level(first, second):
+        return float('inf')
+    a, b = _position(first), _position(second)
+    first_shape = first.get('shape') or (_dimensions(first)[1], _dimensions(first)[0])
+    second_shape = second.get('shape') or (_dimensions(second)[1], _dimensions(second)[0])
+    return -tank_collision._obb_overlap(a[0], a[1], first['yaw'], first_shape,
+                                       b[0], b[1], second['yaw'], second_shape)[2]
+
+
+def separating_exit(first, second, normal, sign=None):
+    """Choose the separating face or nearer longitudinal end of a side touch.
+
+    The normal must point from the observed peer towards this hull. An end
+    choice is only a proposal; the caller still proves its complete sweep.
+    """
+    forward = _axes(first)[1]
+    a, b = _position(first), _position(second)
+    alignment = _dot(forward, normal)
+    offset = _dot((a[0] - b[0], a[1] - b[1]), forward)
+    epsilon = tank_collision.POSITION_SLOP
+    value = alignment if abs(alignment) > epsilon else offset
+    sign = (1. if value > epsilon else -1.) if sign is None else sign
+    remaining = _radius(first, forward) + _radius(second, forward) - sign * offset
+    return sign, max(.5, remaining + PARKED_CONTACT_MARGIN * 3.)
+
+
 def _contact_time(first, second):
     """Intersect exact OBB intervals under their actual relative velocity."""
     first_pos, second_pos = _position(first), _position(second)
@@ -114,10 +147,10 @@ def _arrival(body, axis, speed, gate, reference=0.0):
     distance = _dot((gate[0] - position[0], gate[1] - position[1]), axis)
     front_distance = distance - _radius(body, axis)
     if front_distance <= 0.0:
-        return (0, front_distance, body['id'])
+        return (0, front_distance, actor_priority(body))
     pace = speed if speed > _EPSILON else reference
     return (1, front_distance / pace if pace > _EPSILON else float('inf'),
-            body['id'])
+            actor_priority(body))
 
 
 def _reference_braking_roster(body, neighbours, throttle):
@@ -149,7 +182,7 @@ def _reference_braking_roster(body, neighbours, throttle):
 
 def _reference_braking_blocker(body, candidates, position, axis, speed, step,
                                brake_distance):
-    # One integration slice of reaction plus a small standstill gap.
+    # One held control-decision horizon plus a small standstill gap.
     # The brake integral is based on this vehicle's real parameters.
     distance = min(80.0, brake_distance) + abs(speed) * step + 0.12
     horizon = min(1.0, max(step, 2.0 * min(brake_distance, 80.0) /
@@ -242,11 +275,12 @@ def traffic_stopping_distance(p, speed, slope_pitch, steering,
                               epsilon=0.02, step=1.0 / 30.0):
     """Integrate the copied coast law to the first stationary pose.
 
-    Traffic is evaluated before this authority tick's longitudinal step,
-    so there is no separate reaction-distance term.  Advancing with the
-    same nominal 30 Hz semi-implicit step used by copied physics gives the
-    actual forward travel remaining after throttle is released.  A grade
-    which cannot reduce forward speed has no finite stopping distance.
+    This returns only the coast distance. The caller separately includes the
+    interval for which its previous foreground decision can remain held.
+    Advancing with the same nominal 30 Hz semi-implicit step used by copied
+    physics gives the actual forward travel remaining after throttle is
+    released. A grade which cannot reduce forward speed has no finite
+    stopping distance.
     """
     current = float(speed)
     if abs(current) <= epsilon:

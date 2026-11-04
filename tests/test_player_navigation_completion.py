@@ -1,7 +1,7 @@
 """Real-map foreground navigation completion and adversarial ownership tests.
 
 The Caucasus column faces replay recorded native evidence; the other native
-seams replay map heights. TerrainNavigator/TerrainGrid are never replaced.
+seams replay map heights. PlayerPathfinder/PlayerTerrainGrid are never replaced.
 These contracts do not establish Windows physics, timing or driving feel.
 """
 import copy
@@ -15,8 +15,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
 from gui.mods.offline_lan_0922 import bot_tactics, prebaked_navigation, native_navigation_query
-from gui.mods.offline_lan_0922.ai.navigation import TerrainNavigator, TerrainGrid
-from gui.mods.offline_lan_0922.ai.local_height import MAX_COLUMNS
+from gui.mods.offline_lan_0922.player_control.pathfinding import PlayerPathfinder, PlayerTerrainGrid
+from gui.mods.offline_lan_0922.player_control.local_height import MAX_COLUMNS
 from gui.mods.offline_lan_0922.player_control.navigation import PlayerNavigation
 from gui.mods.offline_lan_0922.player_control.strategy import Strategy
 
@@ -55,8 +55,8 @@ class RealNavigationCase(unittest.TestCase):
             nav = PlayerNavigation(owner, descriptor)
         holder['nav'] = nav
         self.addCleanup(nav.close)
-        self.assertIsInstance(nav.navigator, TerrainNavigator)
-        self.assertIsInstance(nav.navigator.grid, TerrainGrid)
+        self.assertIsInstance(nav.navigator, PlayerPathfinder)
+        self.assertIsInstance(nav.navigator.grid, PlayerTerrainGrid)
         self.assertTrue(nav.navigator.grid.prebaked)
         return nav
 

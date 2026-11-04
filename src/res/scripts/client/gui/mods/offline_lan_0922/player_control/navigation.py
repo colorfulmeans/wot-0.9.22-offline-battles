@@ -3,12 +3,14 @@ from __future__ import division
 import copy
 import math
 from .. import prebaked_navigation, bot_tactics
-from ..ai.navigation import TerrainNavigator
+from .pathfinding import PlayerPathfinder
 from .driving import Driver, angle
 from .missions import Mission, base_areas, distance, legal_support, TERMINAL
 from .artillery import Artillery
 from .strategy import CombatPolicy, target_value
 from .navigation_support import PlayerHeightSupport
+from .local_routes import LocalRoutes
+from .cover import PlayerCover
 from .parking import RouteParking
 
 
@@ -115,16 +117,20 @@ class PlayerNavigation(object):
         self.sortie_started = False
         self.firing_move = None
         self.cover_move = None
+        self.cover_search = PlayerCover(owner)
         self.cover_retry_at = 0.
         self.firing_retry_at = 0.
         self.selection = self.travel_routes or self.routes
-        self.navigator = TerrainNavigator(owner._navigation_ground, owner._navigation_obstacle,
+        self.navigator = PlayerPathfinder(owner._navigation_ground, owner._navigation_obstacle,
             graph.get('bounds'), 18., baked_graph=graph)
         from ..native_navigation_query import Oracle
-        self.navigator.grid.native_query_oracle = Oracle.create(owner)
+        self.navigator.grid.native_query_oracle = Oracle.create(owner, watch_bot_owner=False)
         self.support = PlayerHeightSupport(self.navigator.grid,
             getattr(owner, '_navigation_ground', None),
             getattr(owner, '_navigation_height_columns', None))
+        self.local_routes = LocalRoutes(self.navigator, self.support, self.team)
+        self.route_history = []
+        self.reload_route = None
         self.driver = Driver()
         self.route = None
         self.index = None
@@ -143,8 +149,14 @@ class PlayerNavigation(object):
         if self.mission is not None and self.mission.status not in TERMINAL:
             self.mission.finish('cancelled', 'controller_stopped', self.mission._last_now)
         self.support.close()
+        self.local_routes.reset()
         self.parking.release()
         self.navigator.close()
+        self.cover_search.close()
+        self.search = self.pending = self.candidates = None
+        self.cover_move = self.firing_move = self.reload_route = None
+        self.route_history = []
+        self.context = {}
 
     def _height(self, point, hint, strict=False):
         return self.support.height(point, hint, strict)
@@ -157,7 +169,15 @@ class PlayerNavigation(object):
         self.route = self.index = self.candidates = self.search = self.pending = None
         self.retry_at = 0.
         self.driver = Driver()
-        self.navigator.bot_states.clear()
+        reset = getattr(self.navigator, 'reset_travel', None)
+        if callable(reset):
+            reset()
+        else:
+            self.navigator.player_states.clear()
+        self.local_routes.reset()
+        self.route_history = []
+        self.reload_route = None
+        self.cover_search.reset()
         self.parking.release()
         self.parking_order = None
 
@@ -346,6 +366,7 @@ class PlayerNavigation(object):
         context = self.context
         context['now'] = state['now']
         self.support.begin(state['position'], state['now'])
+        self.local_routes.publish(state, context)
         empty = bool(context.get('empty_ammo'))
         if empty:
             if self.mission is None:
@@ -367,7 +388,7 @@ class PlayerNavigation(object):
         parked_route = bool(parking is not None and not parking['complete'])
         parked_artillery = False
         if self.artillery is not None and mission is None and not self.automatic_defence:
-            self.artillery.update(state, context, self._height)
+            self.artillery.update(state, context, self._height, evidence=self.support.snapshot)
             parked_artillery = self.artillery.mode not in ('sortie', 'fallback')
         ordinary_combat = (not empty and not parked_artillery and not parked_route and
                            (mission is None or (mission.route_attack and mission.status not in TERMINAL)))
@@ -461,6 +482,7 @@ class PlayerNavigation(object):
             if (status == 'connected' and callable(segment) and
                     abs(resolved[1] - goal[1]) <= 1. and segment(position, resolved)):
                 self.route, self.index = self.pending[3], self.pending[2]
+                self._remember_route_anchor(position)
                 self.receipt = dict(status='joined_native_floor', route=self.pending[1],
                     index=self.pending[2], start=tuple(position), goal=resolved, path_length=2)
                 return True
@@ -483,26 +505,102 @@ class PlayerNavigation(object):
             self.receipt['status'] = 'rejected_layer_or_path'
             return False
         self.route, self.index = self.pending[3], self.pending[2]
+        self._remember_route_anchor(position)
         self.receipt.update(status='joined', path_length=len(path))
         return True
 
+    def _remember_route_anchor(self, position):
+        if not self.route_history or distance(position, self.route_history[-1]) >= 3.:
+            self.route_history.append(tuple(position))
+            del self.route_history[:-12]
+
+    def _cover_ground(self, x, z, hint):
+        return self._height((x, z), hint, strict=True)
+
+    def _cover_candidate(self, state, target, entity, clear, ray):
+        search = getattr(self, 'cover_search', None)
+        if search is None:
+            return None
+        owner = search.owner
+        grid = self.navigator.grid
+        self.support.begin(state['position'], state['now'])
+        self.local_routes.publish(state, self.context)
+        def scene():
+            revision = getattr(getattr(owner, '_destructibles', None), '_spatial_revision_1513', None)
+            return (getattr(grid, 'static_hull_revision', 0),
+                    revision() if callable(revision) else None,
+                    getattr(grid, '_native_proof_revision', 0))
+        def segment(start, end):
+            if distance(start, end) < .1:
+                return True
+            proof = getattr(grid, 'dry_segment_clear', None)
+            obstacle = getattr(owner, '_navigation_obstacle', None)
+            if not callable(proof) or not callable(obstacle):
+                return None
+            before = scene()
+            allowed = proof(start, end, state['now'])
+            if getattr(grid, '_proof_deferred', False) or before != scene():
+                return None
+            if not allowed:
+                return False
+            footprint = getattr(grid, 'hull_pose_clear', None)
+            if callable(footprint) and not footprint(end, state['yaw'], state['half_length'], state['half_width']):
+                return False
+            if tuple(start) == tuple(state['position']):
+                return clear(math.atan2(end[0]-start[0], end[2]-start[2]), distance(start, end))
+            return not obstacle(start, end, state['half_width'])
+        route_goal = None
+        if self.route is not None and self.index is not None:
+            points = self.route.get('waypoints', ())
+            if self.index < len(points):
+                point = points[self.index]
+                route_goal = (point[0], state['position'][1], point[1])
+        return search.update(state, self.context, target, entity, self._cover_ground,
+            getattr(owner, '_water_depth', None), segment, ray, scene=scene, route_goal=route_goal)
+
     def withdrawal(self, state, target, entity, gun, clear, terrain_ray):
-        """Separate a bounded move from occupancy while the weapon reloads."""
+        """Own checked combat cover, clip retreat, and the existing health rule.
+
+        Cover is useful to a healthy hull too. Empty magazines first seek hard
+        cover; if none is reachable, only previously travelled route anchors
+        may become a retreat objective. None of these policies replace a fixed
+        command, a capture owner, or an active native firing group.
+        """
         position, now = state['position'], state['now']
         context = getattr(self, 'context', {})
         mission = getattr(self, 'mission', None)
+        search = getattr(self, 'cover_search', None)
         if (self.tag == 'SPG' or context.get('empty_ammo') or
                 (mission is not None and (not mission.route_attack or mission.status in TERMINAL))):
             self.cover_move = None
+            self.reload_route = None
+            if search is not None:
+                search.reset()
             return None
         maximum = getattr(entity.typeDescriptor, 'maxHealth', 0)
         critical = maximum > 0 and entity.health <= maximum * .25
         reloading = (getattr(gun, 'clip_size', 1) > 1 and
                      getattr(gun, 'clip', 0) <= 0 and getattr(gun, 'reload_time', 0.) > 0.)
-        if not (critical or reloading):
+        normal_cover = (target is not None and
+            (bool(context.get('fire_clear')) or self.cover_move is not None) and
+            distance(position, target_value(target, 'position')) <=
+                getattr(getattr(self, 'combat', None), 'fire_range', 250.))
+        if not reloading:
+            self.reload_route = None
+        if getattr(self, 'reload_route', None) is not None:
+            return self._reload_route_order(state, clear)
+        if not (critical or reloading or normal_cover):
             self.cover_move = None
+            if search is not None:
+                search.reset()
             return None
-        rear = state['yaw'] + math.pi
+        if self.cover_move is not None and search is not None:
+            binding = self.cover_move.get('binding')
+            if (binding is not None and binding != search.identity(entity) or
+                    target is not None and self.cover_move['target'] != target_value(target, 'id')):
+                self.cover_move = None
+                self.cover_retry_at = now
+                search.reset()
         if self.cover_move is not None:
             cover = self.cover_move
             if reloading and cover['phase'] == 'peek':
@@ -519,18 +617,29 @@ class PlayerNavigation(object):
                 # and its final two seconds retain the same cover owner.
                 if not arrived:
                     self._cover_phase(cover, 'return', now, position)
-                elif reloading:
+                elif target is not None and search is not None and now >= cover.get('review_at', 0.):
+                    exposure = search.current_exposure(state, context, target, entity, terrain_ray)
+                    cover['review_at'], cover['review_exposure'] = now + .5, exposure
+                    if exposure is not None and exposure > .5:
+                        self.cover_move = None
+                        self.cover_retry_at = now
+                        search.reset()
+                        return None
+                if cover['phase'] == 'hold' and reloading:
                     return self._cover_order('cover_hold', cover['goal'])
-                elif target is None:
+                elif (cover['phase'] == 'hold' and target is not None and search is not None and
+                      cover.get('review_exposure') is None):
+                    return self._cover_order('cover_hold', cover['goal'])
+                elif cover['phase'] == 'hold' and target is None:
                     if now - cover['held_since'] < 5.:
                         return self._cover_order('cover_hold', cover['goal'])
                     self.cover_move = None
                     return None
-                elif now - cover['held_since'] >= 1. and context.get('gun_ready', True):
-                    threat = target_value(target, 'position')
-                    source = (threat[0], threat[1] + 1.5, threat[2])
+                elif cover['phase'] == 'hold' and now - cover['held_since'] >= 1. and context.get('gun_ready', True):
                     peek = cover['peek']
-                    if terrain_ray(source, (peek[0], peek[1] + 1.5, peek[2])):
+                    lane = (search.peek_clear(state, context, target, entity, peek,
+                            self._cover_ground, terrain_ray) if search is not None else None)
+                    if lane is True:
                         self._cover_phase(cover, 'peek', now, position)
                         cover['fire_seq'] = context.get('fire_seq')
                     elif now - cover['held_since'] >= 10.:
@@ -539,7 +648,7 @@ class PlayerNavigation(object):
                         return None
                     else:
                         return self._cover_order('cover_hold', cover['goal'])
-                else:
+                elif cover['phase'] == 'hold':
                     return self._cover_order('cover_hold', cover['goal'])
             if cover['phase'] == 'peek':
                 goal = cover['peek']
@@ -552,7 +661,7 @@ class PlayerNavigation(object):
                     if fired and getattr(gun, 'clip_size', 1) > 1 and getattr(gun, 'clip', 0) > 0:
                         cover['fire_seq'] = sequence
                         cover['peek_until'] = now + max(3., getattr(gun, 'reload_time', 0.) + 1.)
-                    elif fired or (not context.get('burst_active') and now >= cover['peek_until']):
+                    elif not context.get('burst_active') and (fired or now >= cover['peek_until']):
                         self._cover_phase(cover, 'return', now, position)
                         goal = cover['goal']
                     else:
@@ -567,28 +676,61 @@ class PlayerNavigation(object):
                 self.receipt = dict(status='cover_movement_timeout')
                 return None
             return self._cover_motion(state, clear, goal, cover['phase'])
+        if context.get('burst_active'):
+            if search is not None:
+                search.reset()
+            return None
         if target is None or now < self.cover_retry_at:
             return None
-        self.cover_retry_at = now + 10.
         threat = tuple(target_value(target, 'position'))
-        source = (threat[0], threat[1] + 1.5, threat[2])
-        for reach in (5., 8., 12.):
-            x = position[0] + math.sin(rear) * reach
-            z = position[2] + math.cos(rear) * reach
-            height = self._height((x, z), position[1])
-            if height is None or abs(height - position[1]) > 1. or not clear(rear, reach):
-                continue
-            if terrain_ray(source, (x, height + 1.5, z)):
-                continue
-            self.cover_move = dict(target=target_value(target, 'id'), goal=(x, height, z),
-                peek=tuple(position), phase='approach', progress_at=now,
-                best_distance=reach, held_since=None, peek_until=None)
-            return self._cover_motion(state, clear, (x, height, z), 'approach')
+        candidate = self._cover_candidate(state, target, entity, clear, terrain_ray)
+        if candidate is not None:
+            self.cover_retry_at = now + 10.
+            self.cover_move = dict(candidate, phase='approach', progress_at=now,
+                best_distance=distance(position, candidate['goal']), held_since=None, peek_until=None,
+                reason='magazine_reload' if reloading else 'critical_custom' if critical else 'combat_cover')
+            return self._cover_motion(state, clear, candidate['goal'], 'approach')
+        if search is not None and search.receipt.get('status') == 'pending':
+            return None  # Current mission/traffic remains the movement owner.
+        self.cover_retry_at = now + 10.
+        if reloading:
+            for anchor in reversed(getattr(self, 'route_history', ())):
+                reach = distance(position, anchor)
+                if not 5. <= reach <= 80. or distance(anchor, threat) < distance(position, threat) + 2.:
+                    continue
+                height = self._height((anchor[0], anchor[2]), anchor[1], strict=True)
+                if height is None or abs(height - anchor[1]) > 1.:
+                    continue
+                self.reload_route = dict(goal=(anchor[0], height, anchor[2]),
+                    origin=tuple(position), progress_at=now, best_distance=reach,
+                    reason='empty_magazine_known_route')
+                return self._reload_route_order(state, clear)
         return None
+
+    def _reload_route_order(self, state, clear):
+        retreat = self.reload_route
+        goal, now = retreat['goal'], state['now']
+        remaining = distance(state['position'], goal)
+        if remaining < retreat['best_distance'] - .5:
+            retreat['best_distance'], retreat['progress_at'] = remaining, now
+        supported = legal_support(state, self.context, self._height(
+            (state['position'][0], state['position'][2]), state['position'][1]))
+        held = remaining <= 2. and supported
+        if not held and now - retreat['progress_at'] >= 8.:
+            self.reload_route = None
+            self.cover_retry_at = now + 10.
+            self.receipt = dict(status='reload_route_timeout')
+            return None
+        command = self._drive_goal(state, clear, goal,
+            ('player_reload_route', tuple(goal)), hold=held,
+            mode='reload_route_hold' if held else 'reload_withdraw', end_point=True)
+        command['reload_retreat'] = dict(retreat)
+        return command
 
     @staticmethod
     def _cover_order(mode, goal):
-        return dict(throttle=0., turn=0., brake=True, combat_mode=mode, local_target=goal)
+        return dict(throttle=0., turn=0., brake=True, combat_mode=mode, local_target=goal,
+                    holding=True, travel_intent=False)
 
     @staticmethod
     def _cover_phase(cover, phase, now, position):
@@ -601,15 +743,33 @@ class PlayerNavigation(object):
         heading = math.atan2(goal[0] - position[0], goal[2] - position[2])
         mode = 'cover_peek' if phase == 'peek' else 'cover_return' if phase == 'return' else 'withdraw'
         if phase != 'peek' and abs(angle(heading - state['yaw'] - math.pi)) <= .35:
+            stopping = state.get('stopping_distance')
+            stopping = stopping() if callable(stopping) else stopping
+            if (stopping is not None and abs(state.get('speed', 0.)) > .05 and
+                    remaining - 1.5 <= float(stopping) +
+                        abs(state.get('speed', 0.)) * state.get('decision_horizon', .1)):
+                command = self._cover_order(mode, goal)
+                command.update(holding=False, travel_intent=True)
+                return command
             if clear(heading, min(remaining, 5.)):
-                return dict(throttle=-.65, turn=0., brake=False, combat_mode=mode, local_target=goal)
-            return self._cover_order(mode, goal)
+                return dict(throttle=-.65, turn=0., brake=False, combat_mode=mode,
+                            local_target=goal, holding=False, travel_intent=True)
+            command = self._cover_order(mode, goal)
+            command.update(holding=False, travel_intent=True)
+            return command
         driver = getattr(self, 'driver', None)
         if driver is None:
             return self._cover_order(mode, goal)
+        if getattr(self, 'navigator', None) is not None:
+            return self._drive_goal(state, clear, goal,
+                ('player_cover', phase, tuple(goal)), mode=mode, end_point=True,
+                arrival_radius=1.5)
         command = driver.drive(position, state['yaw'], state.get('speed', 0.),
-                               goal, state['now'], clear)
-        command.update(combat_mode=mode, local_target=goal, driving=driver.receipt)
+            goal, state['now'], clear, terminal=True, arrival_radius=1.5,
+            stopping_distance=state.get('stopping_distance'),
+            decision_horizon=state.get('decision_horizon', .1))
+        command.update(combat_mode=mode, local_target=goal, driving=driver.receipt,
+                       holding=False, travel_intent=True)
         return command
 
     def firing_position(self, state, target, clear, lane_from, muzzle):
@@ -652,12 +812,13 @@ class PlayerNavigation(object):
         return None
 
     def drive_to_firing_position(self, state, clear, goal):
-        command = self.driver.drive(state['position'], state['yaw'], state['speed'],
-                                    goal, state['now'], clear)
-        command.update(combat_mode='firing_position', local_target=goal,
-                       route_id=self.route['id'] if self.route else None,
-                       route_index=self.index, driving=self.driver.receipt)
-        return command
+        return self.drive_combat_goal(state, clear, goal, 'firing_position',
+                                      ('player_firing_position', tuple(goal)))
+
+    def drive_combat_goal(self, state, clear, goal, mode='flank', key=None):
+        """One actual combat endpoint, with the same path/support ownership."""
+        return self._drive_goal(state, clear, goal,
+            key or ('player_combat', mode, tuple(goal)), mode=mode, end_point=True)
 
     def report_drive_blockage(self, identity, order, position, heading, now, dt,
                               realised=False):
@@ -668,9 +829,11 @@ class PlayerNavigation(object):
                   self.navigator.report_blocked_corridor)
         return report(identity, position, target, heading, now, dt)
 
-    def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route'):
+    def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route',
+                    end_point=False, arrival_radius=2.):
         position, now = state['position'], state['now']
         self.support.begin(position, now)
+        self.local_routes.publish(state, self.context)
         identity = int(state['id'])
         self.navigator.set_boundary_body(identity, position, state['yaw'],
                                          state['half_length'], state['half_width'])
@@ -678,6 +841,9 @@ class PlayerNavigation(object):
             identity, position, goal, key, now)
         if target is None:
             target = position
+        final_leg = getattr(self.navigator, 'target_is_terminal', None)
+        final_leg = (bool(final_leg(identity)) if callable(final_leg) else
+                     goal is not None and distance(target, goal) <= 1.5)
         if not hold and goal is not None:
             status, resolved = self.support.inspect(target)
             if status in ('connected', 'other_surface'):
@@ -690,8 +856,23 @@ class PlayerNavigation(object):
                 # An incomplete local column cannot authorize an apparent
                 # jump onto a baked overhead layer.
                 target = position
+            selected = target
+            target = self.local_routes.adjust(state, self.context, goal, selected,
+                key, direction_clear, allow_lane=mode in ('route', 'joining', 'return_base',
+                    'base_capture', 'base_defence', 'attack', 'hold_position'))
+            final_leg = final_leg and tuple(target) == tuple(selected) and distance(target, goal) <= 1.5
+        else:
+            end_narrow = getattr(self.navigator, 'end_narrow_passage', None)
+            if callable(end_narrow):
+                end_narrow(identity, now, 'tactical_hold')
+        terminal = bool(final_leg and (end_point or mode in (
+            'return_base', 'base_capture', 'base_defence', 'attack', 'hold_position',
+            'artillery_deploy', 'parking_approach')))
         command = self.driver.drive(position, state['yaw'], state['speed'], target,
-                                    now, direction_clear, hold=hold or goal is None)
+            now, direction_clear, hold=hold or goal is None,
+            stopping_distance=state.get('stopping_distance'),
+            decision_horizon=state.get('decision_horizon', .1), terminal=terminal,
+            arrival_radius=arrival_radius)
         if self.driver.replan and distance(position, target) >= 2.:
             # Preserve the path cursor and progress history across local
             # recovery. Retire a cached corridor only on obstruction evidence.
@@ -699,15 +880,17 @@ class PlayerNavigation(object):
         command.update(route_id=self.route['id'] if self.route else None,
                        route_index=self.index, local_target=target, combat_mode=mode,
                        driving=self.driver.receipt, holding=bool(hold),
-                       travel_intent=bool(not hold and goal is not None and mode in (
-                           'route', 'return_base', 'base_capture', 'base_defence',
-                           'attack', 'hold_position', 'artillery_deploy', 'parking_approach')))
+                       traffic_hold_protected=bool(hold and (
+                           mode in ('parking_hold', 'mission_hold') or
+                           (self.mission is not None and (self.mission.explicit or self.mission.capturing)))),
+                       travel_intent=bool(not hold and goal is not None))
         if self.mission is not None:
             command['mission'] = self.mission_status()
         if self.artillery is not None:
             command['artillery'] = self.artillery.snapshot()
         command['combat'] = dict(self.combat.receipt)
         command['height_support'] = self.support.snapshot()
+        command['local_navigation'] = self.local_routes.snapshot()
         if self.parking.receipt.get('phase') != 'idle' or self.parking.last_completion is not None:
             command['parking'] = self.parking.snapshot()
         if self.automatic_recovery is not None:
@@ -810,6 +993,7 @@ class PlayerNavigation(object):
                 if not finished_parking and (height is None or abs(height-position[1]) > 1. or math.hypot(
                         point[0]-position[0], point[1]-position[2]) > 6.):
                     break
+                self._remember_route_anchor(position)
                 self.index += 1
             if parking is not None and not parking['complete']:
                 order = self._drive_goal(state, direction_clear, parking.get('goal'),
@@ -831,8 +1015,12 @@ class PlayerNavigation(object):
                 return self._mission_order(state, direction_clear)
             if terminal and self.automatic_defence:
                 hold = True
-        mode = 'base_defence' if self.automatic_defence else 'engage' if hold else 'route' if joined else 'joining'
-        return self._drive_goal(state, direction_clear, goal, key, hold=hold or not joined, mode=mode)
+        combat_phase = self.combat.receipt.get('phase', 'engage')
+        if combat_phase not in ('engage', 'support_hold'):
+            combat_phase = 'engage'
+        mode = 'base_defence' if self.automatic_defence else combat_phase if hold else 'route' if joined else 'joining'
+        return self._drive_goal(state, direction_clear, goal, key, hold=hold or not joined, mode=mode,
+                                end_point=bool(joined and self.index == len(self.route['waypoints']) - 1))
 
     def decide(self, state, direction_clear, hold=False):
         policy = self.movement_policy(state)

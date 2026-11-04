@@ -7,7 +7,8 @@ team reservation slots, Bot actors or hidden-worker callbacks in this module.
 from __future__ import division
 import copy
 import math
-from .missions import distance, horizontal, legal_support, STOP_SPEED, SETTLE_SECONDS
+from .missions import (distance, horizontal, legal_support, STOP_SPEED,
+                       SETTLE_SECONDS, PROGRESS_TIMEOUT)
 
 
 MAX_PARKING_GRADE = math.tan(math.radians(12.))
@@ -58,6 +59,8 @@ class Artillery(object):
         self.failed_zone = None
         self.last_relocation_reason = None
         self.pending_candidates = None
+        self.parking_scans = {}
+        self.evidence_since = {}
         self.return_goal = None
         self.return_started = None
         self.return_progress_at = None
@@ -70,6 +73,8 @@ class Artillery(object):
             return
         self.saved = dict(mode=self.mode, current=copy.deepcopy(self.current))
         self.mode = 'defending'
+        self.parking_scans.clear()
+        self.evidence_since.clear()
         self._reset_failure()
         self.receipt = dict(phase='defending', reason='base_alarm',
                             resume_phase=self.saved['mode'])
@@ -83,6 +88,8 @@ class Artillery(object):
         self.progress_position = None
         self.best_distance = None
         self.settle_at = None
+        self.parking_scans.clear()
+        self.evidence_since.clear()
         self._reset_failure()
         if self.mode == 'sortie_return':
             self.return_started = self.return_progress_at = now
@@ -109,7 +116,7 @@ class Artillery(object):
                 return True
         return False
 
-    def _choose(self, state, context, height):
+    def _choose(self, state, context, height, evidence=None):
         now, position = state['now'], state['position']
         self.rejected = dict((key, until) for key, until in self.rejected.items() if until > now)
         if self.pending_candidates is None:
@@ -117,14 +124,44 @@ class Artillery(object):
                 state.get('half_length', 2.), state.get('half_width', 1.))
             self.pending_candidates.sort(key=lambda row: (row['zone'] == self.failed_zone,
                 -row['priority'], distance(position, row['point']), row['id']))
-        for unused in range(PARKING_CANDIDATE_BUDGET):
+        deferred = 0
+        timed_out = False
+        # Inspect each candidate at most once per observation. Unknown native
+        # evidence is queued, not discarded as an invalid parking location.
+        for unused in range(min(PARKING_CANDIDATE_BUDGET, len(self.pending_candidates))):
             if not self.pending_candidates:
                 break
             row = self.pending_candidates.pop(0)
             if row['id'] in self.rejected or self._occupied(row['point'], state, context):
                 continue
-            supported = self._parking_height(row['point'], state, height)
-            if supported is None:
+            scan = self.parking_scans.setdefault(row['id'], {})
+            status, supported = self._parking_height(row['point'], state, height, evidence, scan)
+            if status == 'unknown':
+                since = self.evidence_since.setdefault(row['id'], now)
+                if now - since < PROGRESS_TIMEOUT:
+                    deferred += 1
+                    receipt = evidence() if evidence is not None else {}
+                    budget = receipt.get('native_budget')
+                    budget_limited = (receipt.get('status') == 'query_budget' or
+                        budget is not None and receipt.get('native_queries', 0) >= budget or
+                        any(link.get('unknown_reason') == 'query_budget'
+                            for link in receipt.get('links', ())))
+                    if budget_limited:
+                        # Resume on the next observation, while the proved
+                        # prefix/column cache is still fresh. Rotating behind
+                        # dozens of candidates can outlive that cache forever.
+                        # Truly unknown geometry still rotates, and this head
+                        # retains its original finite evidence deadline.
+                        self.pending_candidates.insert(0, row)
+                        break
+                    self.pending_candidates.append(row)
+                else:
+                    timed_out = True
+                    self.rejected[row['id']] = now + 5.
+                continue
+            if status != 'supported':
+                self.parking_scans.pop(row['id'], None)
+                self.evidence_since.pop(row['id'], None)
                 continue
             self.current = dict(row, goal=(row['point'][0], supported, row['point'][1]))
             self.chosen_at = self.progress_at = now
@@ -133,38 +170,65 @@ class Artillery(object):
             self.settle_at = None
             self._reset_failure()
             self.pending_candidates = None
+            self.parking_scans.clear()
+            self.evidence_since.clear()
             self.receipt = dict(phase=self.mode, reason='parking_candidate',
                                 parking=row['id'], goal=self.current['goal'],
                                 relocation_reason=self.last_relocation_reason)
             return True
         if self.pending_candidates:
             self.receipt = dict(phase=self.mode, reason='checking_parking_geometry',
-                                remaining_candidates=len(self.pending_candidates))
+                                remaining_candidates=len(self.pending_candidates),
+                                deferred_candidates=deferred)
             return False
         self.pending_candidates = None
+        self.parking_scans.clear()
+        self.evidence_since.clear()
         self.current = None
         self.mode = 'fallback'
         self.retry_at = now + 5.
-        self.receipt = dict(phase=self.mode, reason='no_supported_unoccupied_parking')
+        self.receipt = dict(phase=self.mode, reason=('parking_evidence_timeout' if timed_out
+                            else 'no_supported_unoccupied_parking'))
         return False
 
     @staticmethod
-    def _parking_height(point, state, height):
+    def _parking_height(point, state, height, evidence=None, scan=None):
+        def unavailable():
+            status = evidence().get('status') if evidence is not None else None
+            return ('rejected' if status in ('water', 'disconnected', 'outside_bounds')
+                    else 'unknown'), None
         centre = height(point, state['position'][1])
         if centre is None:
-            return None
+            return unavailable()
         # Use the current profile's static parking limit and a full hull-turn
         # footprint, not just a supported centre on a steep edge. Movement
         # collision and actual stopped support still need fresh native proof.
         reach = math.hypot(state.get('half_length', 2.), state.get('half_width', 1.)) + 2.5
-        for index in range(8):
+        # One complete footprint may exceed the local column budget. Keep a
+        # short positive prefix only while pose, floor and surface generation
+        # remain identical. The centre is re-proved on every observation.
+        if scan is None:
+            scan = {}
+        now, position = float(state['now']), state['position']
+        generation = evidence().get('generation') if evidence is not None else None
+        if (not scan or not 0. <= now - scan['at'] <= .5 or
+                abs(centre - scan['centre']) > .01 or reach != scan['reach'] or
+                generation != scan.get('generation') or
+                math.sqrt(sum((a-b)**2 for a, b in zip(position, scan['origin']))) > .25):
+            scan.clear()
+            scan.update(at=now, origin=tuple(position), centre=centre,
+                        reach=reach, generation=generation, verified=0)
+        for index in range(scan['verified'], 8):
             heading = index * math.pi / 4.
             sample = (point[0] + math.sin(heading) * reach,
                       point[1] + math.cos(heading) * reach)
             supported = height(sample, centre)
-            if supported is None or abs(supported - centre) > reach * MAX_PARKING_GRADE:
-                return None
-        return centre
+            if supported is None:
+                return unavailable()
+            if abs(supported - centre) > reach * MAX_PARKING_GRADE:
+                return 'rejected', None
+            scan['verified'] = index + 1
+        return 'supported', centre
 
     def _reject(self, state, reason):
         now = state['now']
@@ -174,6 +238,8 @@ class Artillery(object):
         self.last_relocation_reason = reason
         self.current = None
         self.pending_candidates = None
+        self.parking_scans.clear()
+        self.evidence_since.clear()
         self.mode = 'relocating'
         self.relocate_after = now + 45.
         self.settle_at = None
@@ -197,7 +263,7 @@ class Artillery(object):
             self.endgame_since = state['now']
         return state['now'] - self.endgame_since >= 5.
 
-    def update(self, state, context, height):
+    def update(self, state, context, height, evidence=None):
         now, position = state['now'], state['position']
         if self.mode == 'defending':
             return
@@ -233,7 +299,7 @@ class Artillery(object):
             if now < self.retry_at:
                 return
             self.mode = 'deploying'
-        if self.current is None and not self._choose(state, context, height):
+        if self.current is None and not self._choose(state, context, height, evidence):
             return
         goal = self.current['goal']
         remaining = distance(position, goal)
@@ -262,7 +328,7 @@ class Artillery(object):
                 self.best_distance = remaining
             if now - self.progress_at >= 30. or now - self.chosen_at >= 120.:
                 self._reject(state, 'parking_movement_timeout')
-                self._choose(state, context, height)
+                self._choose(state, context, height, evidence)
                 return
         self.receipt.update(phase=self.mode, parking=self.current['id'], goal=goal,
                             arrived=arrived, settled=self.mode == 'holding')
@@ -290,7 +356,7 @@ class Artillery(object):
                             failure=context.get('fire_failure') or 'no_usable_shot')
         if elapsed >= 30. and self.failure_count >= 2 and now >= self.relocate_after:
             self._reject(state, 'persistent_firing_failure')
-            self._choose(state, context, height)
+            self._choose(state, context, height, evidence)
 
     def goal(self, state, height):
         if self.mode == 'sortie_return' and self.home is not None:

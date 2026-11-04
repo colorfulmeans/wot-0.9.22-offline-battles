@@ -92,6 +92,22 @@ class NativeNavigationQueryTests(unittest.TestCase):
             self.assertEqual((-1, 0, 0), oracle.run(*ARGS))
             self.assertEqual([], backend.calls)
 
+    def test_player_oracle_does_not_read_or_require_a_bot_owner(self):
+        class PlayerOwner:
+            @property
+            def _bots(self):
+                raise AssertionError('foreground query read a Bot owner')
+        original = owner()
+        target = PlayerOwner()
+        target._avatar, target._runtime = original._avatar, original._runtime
+        backend = Backend()
+        oracle = query.Oracle(target, backend, watch_bot_owner=False)
+        self.assertEqual((1, 9, 3), oracle.run(*ARGS))
+        self.assertEqual((1, 9, 3), oracle.run(*ARGS, slope_limit=.7))
+        self.assertEqual(query.NAVIGATION_MAX_GRADE, backend.calls[-1][0][7])
+        target._avatar.spaceID = 8
+        self.assertEqual((-1, 0, 0), oracle.run(*ARGS))
+
     def test_water_capability_contains_constructor_and_engine_failure(self):
         vector = mock.Mock(side_effect=RuntimeError('Vector3 failed'))
         target = owner(vector)

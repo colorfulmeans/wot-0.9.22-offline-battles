@@ -20,15 +20,28 @@ class Driver(object):
         self.replan = False
         self.receipt = {}
 
-    def drive(self, position, yaw, speed, target, now, clear, hold=False):
+    def drive(self, position, yaw, speed, target, now, clear, hold=False,
+              stopping_distance=None, decision_horizon=.1, terminal=False,
+              arrival_radius=2.):
         dx, dz = target[0]-position[0], target[2]-position[2]
         distance = math.hypot(dx, dz)
         heading = math.atan2(dx, dz) if distance > .1 else yaw
         delta = angle(heading-yaw)
         self.replan = False
         mode, throttle, turn, brake = 'travel', 0., 0., False
-        if hold or distance < 2.:
+        radius = max(0., float(arrival_radius)) if terminal else 2.
+        stopping = None
+        if stopping_distance is not None:
+            value = stopping_distance() if callable(stopping_distance) else stopping_distance
+            value = float(value)
+            if not math.isnan(value) and value >= 0.:
+                stopping = value + abs(speed) * max(0., float(decision_horizon))
+        arrival_brake = (terminal and stopping is not None and speed > .05 and
+                         abs(delta) < math.pi / 2. and distance - radius <= stopping)
+        if hold or distance <= radius or arrival_brake:
             mode, brake = 'hold', True
+            if arrival_brake and not hold and distance >= radius:
+                mode = 'arrival_brake'
             self.anchor = None
             self.alignment_best = None
             self.reverse_until = 0.
@@ -125,5 +138,8 @@ class Driver(object):
         self.receipt = dict(mode=mode, distance=distance, heading=heading,
                             yaw=yaw, delta=delta, reverse_until=self.reverse_until,
                             forward_until=self.forward_until,
-                            clearance_checks=self.clearance_checks)
+                            clearance_checks=self.clearance_checks,
+                            terminal=bool(terminal), arrival_radius=radius,
+                            stopping_envelope=stopping,
+                            decision_horizon=max(0., float(decision_horizon)))
         return dict(throttle=throttle, turn=turn, brake=brake, recovery_mode=mode)

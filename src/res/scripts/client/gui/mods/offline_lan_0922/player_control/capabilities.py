@@ -43,7 +43,7 @@ class Governor(object):
         if not supported or engine_damaged:
             self.uphill_since = self.push = None
             return False
-        if push and push.get('phase') == 'pushing':
+        if push and push.get('phase') in ('pushing', 'steering'):
             self.uphill_since = None
             previous = self.push
             progress = float(push.get('progress', 0.))

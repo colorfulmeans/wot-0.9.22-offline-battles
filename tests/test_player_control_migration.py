@@ -516,14 +516,14 @@ class ControllerMigrationTests(unittest.TestCase):
             c.owner._runtime=types.SimpleNamespace(constants=types.SimpleNamespace(
                 VEHICLE_SIEGE_STATE=types.SimpleNamespace(DISABLED=0,ENABLED=1,SWITCHING_ON=2,SWITCHING_OFF=3),
                 VEHICLE_SETTING=types.SimpleNamespace(SIEGE_MODE_ENABLED=10)))
-            c.owner._change_local_siege=mock.Mock(return_value=True)
+            c.owner._request_player_control_siege=mock.Mock(return_value=True)
             order=dict(combat_mode='mission_hold',holding=True,mission=dict(status=status))
             c.update_siege(entity,order,True,0.)
             c.update_siege(entity,order,True,1.)
-            self.assertEqual(status in ('running','completed'),c.owner._change_local_siege.called)
+            self.assertEqual(status in ('running','completed'),c.owner._request_player_control_siege.called)
 
-    def test_final_barrel_proof_follows_mode_changes_and_skips_forbidden_fire(self):
-        for mode in ('permitted','failed_mission','deploying'):
+    def test_physical_trigger_admission_follows_mode_changes_and_skips_forbidden_fire(self):
+        for mode in ('permitted','failed_mission','deploying','traffic_yield'):
             c,target=existing.PlayerRegressionTests().aim_controller()
             c.firing_lane=lambda unused:True
             order=dict(throttle=0.,turn=0.,brake=True)
@@ -532,6 +532,8 @@ class ControllerMigrationTests(unittest.TestCase):
             elif mode=='deploying':
                 c.owner._server_entity(1).typeDescriptor.type=types.SimpleNamespace(tags=('SPG',))
                 order['artillery']=dict(phase='deploying')
+            elif mode=='traffic_yield':
+                order['suppress_fire']=True
             c.navigation.decide.return_value=order
             events=[]
             actual=[(0.,0.,1.)]
@@ -540,17 +542,17 @@ class ControllerMigrationTests(unittest.TestCase):
                 events.append('mode')
                 actual[0]=(1.,0.,0.)
             c.update_siege=changed
-            def confirm(target,solution,direction,*args,**kwargs):
+            def trigger(*args):
                 self.assertEqual(['mode'],events)
-                self.assertEqual(actual[0],direction)
-                events.append('proof')
+                self.assertEqual((1.,0.,0.),c.owner._mutable_shot_ray()[1])
+                events.append('physical_trigger')
                 return True
-            c.aiming.confirm=mock.Mock(side_effect=confirm)
-            c.trigger=mock.Mock(side_effect=lambda *a:events.append('fire') or True)
+            c.aiming.confirm=mock.Mock(side_effect=AssertionError('obsolete trigger-only proof'))
+            c.trigger=mock.Mock(side_effect=trigger)
             with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',return_value=True):
                 c.update(.1,1.)
-            self.assertEqual(['mode','proof','fire'] if mode=='permitted' else ['mode'],events)
-            self.assertEqual(mode=='permitted',c.aiming.confirm.called)
+            self.assertEqual(['mode','physical_trigger'] if mode=='permitted' else ['mode'],events)
+            c.aiming.confirm.assert_not_called()
 
 
 class DynamicTrajectoryTests(unittest.TestCase):

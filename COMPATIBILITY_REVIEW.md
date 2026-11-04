@@ -1,3 +1,106 @@
+# November 5 independent foreground migration
+
+This implementation starts from PR #119 commit
+`310276ece390694ad57dc2369e2ba0b0186ab4b2`, including its newer ordered
+target/ammunition aiming logic. It closes the subsequent migration audit's
+runtime-coupling, traffic, firing and tactical gaps. It does not revert that
+aiming model, merge `main`, publish a release, change the native ABI or remove
+the room's required Bot/world worker. The affected completeness claims in older
+sections below are historical; the boundaries in this section supersede them.
+
+## Runtime ownership and capability matrix
+
+| Boundary | Independent implementation and regression contract |
+| --- | --- |
+| Player navigation algorithm | `PlayerPathfinder` and `PlayerTerrainGrid` contain their own mature search/recovery implementation, not a subclass, alias or delegate of `ai.navigation.TerrainNavigator`. Searches, failed edges, route anchors and native CPU jobs belong to that player and are cancelled on retask/close. Tests make the Bot constructors fail while the player completes a real search. |
+| Player local-height evidence | `PlayerLocalHeightLinks` replaces the imported Bot height class. `PlayerHeightSupport` retains local columns, actual-floor connectivity, generation fencing and the per-observation budget. Native unknown/budget exhaustion cannot authorize a bridge-level jump or turn into proved water/support. |
+| Neutral native oracle | A player oracle uses `watch_bot_owner=False`: replacing a Bot runtime cannot retire a player's query, and a property which throws on `_bots` access is covered. Avatar and space changes still invalidate it. Water/grade query constants live in the neutral oracle, not a Bot runtime import. Existing Bot callers keep their previous owner fence. |
+| Whole-route obstacles | Locally observed wrecks and landed turrets publish into the private grid. A geometry revision invalidates active cached paths; stable geometry does not churn the cache. No hidden enemy tactical position is introduced. |
+| Local passage and lane intent | Independent narrow-passage axis/rear-clearance guidance, finite occupied-destination detours and bounded local same-direction passing use actual observations and connected support proofs. They consume neither Bot queues nor team slot reservations. |
+| Traffic on every movement path | `travel_intent` reaches intersection/head-on coordination from ordinary routes, SPG travel, firing positions, flanks and cover/reload withdrawal, even when the first driver pass has already stopped for the peer. Network player IDs and native collision IDs remain distinct. |
+| Cross-client role identity | Collision lookup keeps the local engine entity ID; traffic tie breaks and local flanker election use the public `(kind, network_id)` actor key. A real `_contacts` to `update` regression gives both clients local ID 7 and remote ID 8 and still elects only one backing player. Bot/player namespaces retain the conservative Bot-first ordering without reading a Bot queue. |
+| Contact and stationary-friendly recovery | The actual copied planar contact reaches the player traffic owner. It chooses proved separation using the contact normal and unequal front/rear lengths; bounded retry/progress state prevents permanent reverse or endless renewed yields. Protected explicit parking/capture/waits and burst owners are not displaced by soft yielding. |
+| Wreck interaction | A bounded push can enter a proved steering phase. Full-body rotation queries are read-only (`record_local=False`, `commit_enabled=False`, static geometry included); other hulls and support still veto. Steering shares the same own-progress deadline and governor lease, not a new unlimited attempt. |
+| Real terminal braking | The driver consumes actual stopping distance and `max(0.1, dt, elapsed_decision_time)`. Only a true terminal destination brakes; intermediate A* corners do not. Turn-clearance and withdrawal dispatch preserve arrival-brake ownership. |
+| Cover and empty magazines | `PlayerCover` owns bounded multi-threat, native-muzzle and descriptor-body exposure checks, supported candidate/peek poses, bidirectional escape paths and route/congestion scoring. Healthy vehicles can approach verified cover, peek, fire and return; a fixed-height single ray is not treated as equivalent evidence. Empty-magazine withdrawal has a private actually traversed route fallback when no cover is available, and waits for native reload readiness. Low-health custom cover remains a separately labelled policy; it is not a substitute for magazine handling. Disabling firing or replacing the movement owner retires pending cover work. |
+| Combat intent | Range hysteresis and a short hold lease prevent oscillation. Observed friendly support controls distant support-hold and one locally selected mobile flanker; blocked/unsupported/expired flanks retire instead of reserving Bot slots. Stationary hull angling is stable and still subject to real collision and limited-traverse gates. |
+| Target priorities and ordered aiming | A private visible-contact selector considers close threats, base invaders, recent accepted hits, health and distance. Ordinary locks remain stable; urgent preemption cannot change an admitted burst's target/ammunition stage. Retaliation records an attacker identity, not an unspotted position. |
+| Every physical automatic round | `FireAdmission` runs at the native trigger/commit boundary for initial rounds and burst tails, not only at the high-level trigger. Current source ownership, actual laid muzzle, shell, target visibility/geometry, friendly lanes and HE splash gate the same launch that is published. The scatter/penetration draw is frozen for that physical round across pending work; obstruction does not permit rerolling. |
+| Real scattered endpoint and freshness | The scattered ray continues past the aiming plane until proved actual contact or the real range/time limit. Current component geometry, rather than an AABB overlap alone, establishes a vehicle terminal. HE uses the actual proved impact point. A destructible/space generation change or an expired completed proof forces reproof of the same draw. A failed/cancelled mission retires only uncommitted burst tails; temporary traffic/geometry waits preserve them. |
+| Long-arc progress | Static proof normally advances by 24 world chords. Two productive restarts caused by continuous target/muzzle tracking or scene revisions switch to a bounded complete attempt, throttled to at most one per 0.5 seconds, instead of starving at the first chord forever. World chords and exact component queries are separate measured costs; this is not a native-frame-time acceptance claim. |
+| Hydraulic and limited guns | A future hydraulically reachable solution may drive the native aim source, but `Weapon.ready` refuses fire while hydraulic actuation remains outstanding. Current angle/muzzle preflight and the physical-round gate are still required. |
+| Artillery parking progress | Candidate parking evidence retains a valid positive footprint prefix across a 64-column budget boundary. A budget-limited candidate resumes next observation before its cache expires, even with 64 queued alternatives; genuinely unknown geometry rotates and has a finite deadline. Pose/generation changes invalidate the prefix. A regression runs the retained Caucasus bake/lower-floor fixture. |
+| Artillery endgame observation | Public roster completeness comes from the current start/snapshot identity, not a Bot-created callback. A room with zero Bots is complete; an unstreamed live or unknown-class teammate cannot be mistaken for a dead non-SPG. Old-round snapshots do not establish current deaths. |
+| Local front reassessment | Visible enemy pressure and actual friendly losses/support replace the old three-minute damage-only retask. The player checks at 12 seconds, requires sustained evidence and keeps a 30-second private anti-oscillation lease. Explicit missions, active engagement and capture/base-defence priority retain ownership. |
+| Callback reentry | Actual decision-owner, generation, round, native entity, gun, feature and mission identities are rechecked after native query/setting/send seams. Stop inside navigation or a read-only wreck rotation query cannot let the old stack re-publish throttle or resurrect `last_order`. |
+| Consumable callback ownership | Stop during a kit activation, descriptor-extra lookup or mounted-equipment replacement cannot activate a second retired kit. Governor ownership is published before the native request so a same-stack Stop can release its on-intent, without resurrecting the old owner when the call returns. |
+| Siege while yielding and cancelling | Suppressed firing during contact separation/yield requests travel mode instead of maintaining siege because an earlier combat phase said `engage`. Automatic requests publish an exact observer token before notifying an old native observer; a same-stack Stop cannot reinstall braking, and cleanup cannot cancel a newer third-party request even if its boolean value matches. Failed cleanup retries only that token. Already submitted native transitions remain physical facts and are not rolled back. |
+
+Shared dependencies are limited to immutable route/position/vehicle catalogues,
+pure geometry/ballistic rules and native collision, input, physics and CPU-search
+services. A native CPU search worker is not a hidden game-client worker. Each
+LAN joiner computes its own decisions from its own visible-client observations;
+canonical server validation and world/Bot ownership are unchanged. Shared Bot
+team reservations, omniscient targeting and difficulty/player-preference
+advantages are deliberately not imported as player policy.
+
+Cover evaluates the focus and one relevant cross-direction visible threat,
+using up to four descriptor body samples per threat. Ordinary searches spend
+at most 40 probe operations per decision. After two productive budget-prefix
+invalidations, a single fresh candidate can use at most 84 operations, no more
+than once per 0.5 seconds, so a moving hull/target cannot permanently starve a
+candidate that requires its third peek. These are bounded probe operations,
+not a claim that every operation costs exactly one native call. The search
+episode has a three-second deadline; unknown geometry is never promoted to
+clear. Current native gun angles, owner/epoch, local pose, visible threat poses
+and the re-readable scene revision are checked before publishing a candidate.
+
+The firing receipt separates `world_chords`, `target_queries` and
+`proof_native_collision_calls_upper`. Its 334-chord complete-pass ceiling is
+**not** a ceiling on all native calls: a scattered path has at most 167 chords,
+with at most 30 observed enemy candidates and four component hit-test queries
+per candidate. Broad-phase filtering and nearest-contact pruning normally
+remove most of those queries, but the loose combined collision ceiling is
+20,374, plus the bounded actual-muzzle preflight. More than 30 observed enemies
+rejects admission explicitly instead of silently truncating the collision set.
+Extreme stacked-vehicle/long-arc native frame time remains an acceptance item.
+
+## Verification and acceptance boundary
+
+New tests cover independent search/close and two-owner state, actual baked
+support, dynamic obstacle invalidation, traffic intent and contact delivery,
+main-loop braking and stop reentry, visible targeting/support, artillery budget
+progress and per-physical-round firing. The integration regressions execute
+`PlayerControl.update()` or the actual native firing wrapper, rather than
+calling only the new helper in isolation. Engine-native calls use explicitly
+controlled test seams; their passing assertions do not establish physical
+Windows behaviour.
+
+The final-tree checks use the isolated file runner for all `tests/test_*.py`
+and `launcher/tests/test_*.py`, focused player regressions, real CPython 2.7.18
+source compilation and the embedded contract suite. The checked-in embedded
+suite imports the new package modules without a Bot runtime and executes actual
+independent searches, lower-floor links, local policy and frozen-round/flight
+contracts, not only syntax compilation. Exact-head CI must also
+build and inspect every shipped PYC; matching an artifact name or an old green
+run is insufficient. The commit/PR handoff records the observed results.
+
+The frozen pre-push focused check passed all 706 cases in 25 isolated files,
+without failures or skips. All 261 client modules compiled with actual CPython
+2.7.18, and all 13 embedded foreground contracts executed successfully. The
+Linux launcher check passed 49 isolated files: 1,317 cases discovered, 1,147
+executed successfully and 170 explicitly skipped for platform/resources. Full
+client, exact-head CI and package results are recorded in the PR handoff;
+these focused numbers are not substituted for those wider checks.
+
+Still required on Chinese HD Windows `0.9.22.0.1 #1513`: native frame cost for
+long arcs and simultaneous local searches, slope/bridge and crowded-passage
+driving, real contact/push/steering feel, hydraulic/siege actuation and firing,
+full input handover, and a two-machine LAN test proving that stopping one
+player's controller or replacing the Bot runtime cannot stop the other's local
+controller. CPython 2.7.18 compatibility and Windows Tk tests are not an
+embedded 32-bit CPython 2.7.7 gameplay run. No such gameplay run is claimed here.
+
 # November 4 explicit foreground command completion
 
 This continuation starts from the clean, published PR #119 commit
