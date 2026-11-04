@@ -1819,9 +1819,6 @@ class PlayerControl(object):
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
-            if (settling_aim and movement.get('allow_firing_position', True) and
-                    not movement.get('force_move') and not final_blocked):
-                hold = True
             if now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
@@ -1859,7 +1856,7 @@ class PlayerControl(object):
                     if not decision_current():
                         return
                 elif ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_withdrawal') and not automatic_defence and not settling_aim and
+                        movement.get('allow_withdrawal') and not automatic_defence and
                         (target is not None or self.navigation.cover_move is not None or
                          self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
@@ -1875,8 +1872,7 @@ class PlayerControl(object):
                 if self.direct_engagement is not None and not (self.direct_engagement.retreat or direct_reload):
                     self.navigation.ammo_retreat = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_firing_position') and (not settling_aim or final_blocked)
-                        and (not tactical_clear or final_blocked or seeking)
+                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked or seeking)
                         and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
                     def firing_lane_from(candidate, start):
                         end = point if final_blocked and target is not None else self.target_point(candidate)
@@ -1892,8 +1888,7 @@ class PlayerControl(object):
                 if position_goal is None:
                     self.navigation.firing_move = None
                 manoeuvre = self.combat_tactics.movement(state, context, entity.typeDescriptor,
-                    allowed=bool(movement.get('allow_firing_position') and not automatic_defence
-                        and not settling_aim and
+                    allowed=bool(movement.get('allow_firing_position') and not automatic_defence and
                         withdrawal is None and position_goal is None),
                     height=self.navigation._height, clear=clear)
                 if not decision_current():
@@ -1908,10 +1903,6 @@ class PlayerControl(object):
                     mode=manoeuvre['phase'], key=('player_flank', manoeuvre['target']))
             elif position_goal is None:
                 order = self.navigation.decide(state, clear, hold=hold)
-                if (settling_aim and hold and not final_blocked and not movement.get('force_move')
-                        and not order.get('mission') and not order.get('holding')):
-                    order.update(throttle=0., turn=0., brake=True, holding=True,
-                                 travel_intent=False, recovery_mode='aim_check_hold')
             else:
                 hold = False
                 order = self.navigation.drive_to_firing_position(state, clear, position_goal)
