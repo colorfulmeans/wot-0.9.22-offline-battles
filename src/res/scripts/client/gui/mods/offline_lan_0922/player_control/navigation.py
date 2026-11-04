@@ -445,8 +445,8 @@ class PlayerNavigation(object):
                     if height is None or (hint is not None and abs(height - hint) > 1.):
                         continue
                     goal = (float(point[0]), height, float(point[1]))
-                    distance = math.sqrt(sum((a-b)**2 for a,b in zip(position,goal)))
-                    candidates.append((distance, str(route['id']), index, route, goal))
+                    entry_distance = math.sqrt(sum((a-b)**2 for a,b in zip(position,goal)))
+                    candidates.append((entry_distance, str(route['id']), index, route, goal))
             self.candidates = sorted(candidates, key=lambda r: r[:3])
         if self.search is None:
             if not self.candidates:

@@ -753,6 +753,24 @@ class PlayerRegressionTests(unittest.TestCase):
             player_control.handle_key(True,41)
             self.assertEqual(2,c.toggle.call_count)
 
+    def test_opening_inside_base_joins_second_point_from_native_spawn(self):
+        nav = PlayerNavigation.__new__(PlayerNavigation)
+        spawn = (-34., .25, -110.)
+        nav.opening_origin = spawn
+        nav.opening_anchor = (-34., -130.)
+        nav.home_area = dict(point=(-34., -100.), radius=30.)
+        nav.routes = [dict(id='pit', waypoints=[(-34., -130.), (-34., -110.), (-14., -90.)])]
+        nav.route = nav.index = nav.candidates = nav.search = nav.pending = nav.join_origin = None
+        nav.retry_at = 0.
+        nav._height = lambda point, hint, strict=False: .25
+        nav.support = types.SimpleNamespace(begin=lambda *args: None,
+            inspect=lambda point, authored=False: ('connected', point))
+        nav.navigator = types.SimpleNamespace(grid=types.SimpleNamespace(
+            segment_clear=lambda *args: True))
+        self.assertTrue(nav.join(spawn, 1.))
+        self.assertEqual(1, nav.index)
+        self.assertEqual((-34., .25, -110.), nav.receipt['goal'])
+
     def test_layer_disconnected_entry_is_rejected_before_ground_route(self):
         from gui.mods.offline_lan_0922.player_control.navigation_support import PlayerHeightSupport
         p=PlayerNavigation.__new__(PlayerNavigation)
