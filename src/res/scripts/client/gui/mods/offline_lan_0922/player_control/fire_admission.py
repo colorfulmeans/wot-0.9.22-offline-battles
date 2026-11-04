@@ -180,15 +180,18 @@ class FireAdmission(object):
         return True
 
     def _dynamic_reason(self, target, proof, splash):
-        if (not self.control.dynamic_path_clear(target, proof['raw_path']) or
-                not self.control.dynamic_path_clear(target, proof['path'])):
-            return 'auto_friendly_lane'
+        for name in ('raw_path', 'path'):
+            if not self.control.dynamic_path_clear(target, proof[name]):
+                return 'auto_friendly_lane', self._lane_blocker(name)
         # Range/time expiry is not an explosion. HE safety is tied to the
         # first proved actual world/vehicle contact, never an aiming plane.
         impact = proof.get('terminal_impact')
         if impact is not None and not self._splash_clear(impact, splash):
-            return 'auto_friendly_splash'
-        return None
+            return 'auto_friendly_splash', None
+        return None, None
+
+    def _lane_blocker(self, path):
+        return dict(getattr(self.control, 'dynamic_blocker', None) or {}, path=path)
 
     def _target_pose(self, target):
         """Snapshot only this client's observed native collision geometry."""
@@ -453,7 +456,8 @@ class FireAdmission(object):
             # ray can terminate on scenery earlier than its nominal endpoint,
             # so its friendly/splash check follows that exact terminal proof.
             if not self.control.dynamic_path_clear(target, proof['raw_path']):
-                return self._result('pending', 'auto_friendly_lane', candidate, world_chords=0)
+                return self._result('pending', 'auto_friendly_lane', candidate, world_chords=0,
+                                    blocker=self._lane_blocker('raw_path'))
             if proof['blocked']:
                 # Scenery may be destroyed. Re-prove this same random shot,
                 # not a newly sampled one, on the next bounded attempt.
@@ -486,9 +490,9 @@ class FireAdmission(object):
                 proof['completed'] = float(owner._clock())
             else:
                 used = 0
-            reason = self._dynamic_reason(target, proof, splash)
+            reason, blocker = self._dynamic_reason(target, proof, splash)
             if reason is not None:
-                return self._result('pending', reason, candidate, world_chords=used,
+                return self._result('pending', reason, candidate, world_chords=used, blocker=blocker,
                     proof_mode=proof.get('mode'),
                     target_queries=proof['target_queries']-queries_before)
             candidate.update(target=target, source_shot=source_shot, splash=splash,
@@ -540,8 +544,9 @@ class FireAdmission(object):
                     tuple(row['signature'] for row in roster) != proof['roster_signature']):
                 token['proof'] = None
                 return 'auto_target_changed'
-            reason = self._dynamic_reason(target, proof, token['splash'])
+            reason, blocker = self._dynamic_reason(target, proof, token['splash'])
             if reason is not None:
+                self.receipt['blocker'] = blocker
                 return reason
             if (token is not self.pending or not self.control.active or
                     self.control.control_generation != context.get('generation')):

@@ -133,6 +133,31 @@ class OrderedPointTests(unittest.TestCase):
             self.assertEqual(('ready', (1, 'low')), (result[0], result[1]['key']))
 
 
+    def test_final_blockage_defers_only_the_locked_physical_point(self):
+        owner = SimpleNamespace(_gun_state=SimpleNamespace(shot_index=0),
+                                _mutable_shot_ray=lambda: ((0, 0, 0), (0, 0, 1)))
+        aim = Aiming(owner)
+        target = SimpleNamespace(id=1, typeDescriptor=object())
+        aim.targets[1], aim.observations[1] = target, {}
+        aim._own = lambda index: {'key': (index,)}
+        aim._candidate = lambda target, own, entry, key, *args: dict(
+            key=key, reachable=True, source_verified=True, penetration_ok=True)
+        aim._advance = lambda job, lane, limit, now: job.update(
+            done=True, clear=True, completed=now)
+        aim.actual_contact = mock.Mock(return_value='ready')
+        aim._candidates = 2
+        threshold = PENETRATION_FACTOR_65
+        with mock.patch('gui.mods.offline_lan_0922.shot_geometry.ordered_vehicle_aim_samples',
+                        return_value=(object(), object())):
+            verdict, solution = aim.ordered(target, 0, threshold, 1., None, physical=True)
+            self.assertEqual(('ready', (0, 'low')), (verdict, solution['key']))
+            aim.defer_ordered_point(target, 0, solution, 1.)
+            verdict, solution = aim.ordered(target, 0, threshold, 1.1, None, physical=True)
+            self.assertEqual(('ready', (1, 'low')), (verdict, solution['key']))
+            verdict, solution = aim.ordered(target, 0, threshold, 1.1, None)
+            self.assertEqual(('ready', (0, 'low')), (verdict, solution['key']))
+
+
 class PlayerTrafficRecoveryTests(unittest.TestCase):
     def test_short_escape_revalidates_and_changes_gear_after_real_contact(self):
         from gui.mods.offline_lan_0922.player_control.traffic import PlayerTraffic, Traffic, body

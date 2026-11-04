@@ -610,6 +610,17 @@ class Aiming(object):
         except (AttributeError, TypeError, ValueError, IndexError, KeyError, RuntimeError):
             return 'unknown'
 
+    def defer_ordered_point(self, target, index, solution, now):
+        """Try the remaining samples when the final lane repeatedly rejects one."""
+        key = solution.get('key')
+        identity = (target.id, index, solution.get('penetration_threshold'), True)
+        entry = self.direct_entries.get(identity)
+        if entry is not None and key is not None and entry['locked'] == key:
+            entry.setdefault('blocked_points', {})[key[0]] = now + 1.5
+            entry.update(cursor=0, locked=None, job=None, mechanical=None,
+                         unknown=False, blocked_armor=False, laying_since=None,
+                         deferred_at=None)
+
     def ordered(self, target, index, threshold, now, lane, physical=False):
         """Advance one fixed-order scan without publishing an unverified point."""
         if target.id not in self.targets or self._candidates <= 0:
@@ -633,6 +644,16 @@ class Aiming(object):
         if now < entry['retry']:
             return 'pending', entry['mechanical']
         locked = entry['locked']
+        blocked_points = entry.get('blocked_points', {})
+        while entry['cursor'] < len(entry['samples']) and locked is None:
+            if now >= blocked_points.get(entry['cursor'], 0.):
+                break
+            entry['unknown'] = True
+            entry['cursor'] += 1
+        if entry['cursor'] >= len(entry['samples']):
+            entry.update(cursor=0, retry=now + .7, blocked_armor=False,
+                         unknown=False, mechanical=None)
+            return 'unavailable', None
         key = locked if locked is not None else (entry['cursor'], 'low')
         candidate = self._candidate(target, own, entry, key, now, True,
                                     None if physical else threshold)

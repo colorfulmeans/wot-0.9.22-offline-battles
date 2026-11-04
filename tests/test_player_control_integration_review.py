@@ -256,5 +256,63 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.trigger.assert_not_called()
 
 
+    def test_blocked_target_releases_combat_hold_without_a_side_position(self):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        control, target = PlayerRegressionTests().aim_controller()
+        control.navigation = navigation_controller()
+        control.owner.local_pose = lambda: ((-85., 0., 0.), 0.)
+        control.owner._mutable_shot_ray = lambda: ((-85., 2., 0.), (0., 0., 1.))
+        target.position = (-85., 0., 40.)
+        control.firing_lane = lambda unused: True
+        control.navigation.firing_position = mock.Mock(return_value=None)
+        control.combat_tactics.movement = mock.Mock(return_value=None)
+        control.navigation.decide = mock.Mock(return_value=dict(
+            throttle=1., turn=0., brake=False, recovery_mode='travel', combat_mode='route'))
+        control.blocked_fire_target = target.id
+        control.trigger = mock.Mock(return_value=False)
+        control.fire_admission.receipt = dict(status='pending', reason='auto_friendly_lane')
+
+        with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',
+                        return_value=True):
+            control.update(.1, 1.)
+        self.assertFalse(control.navigation.context['fire_clear'])
+        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
+
+    def test_automatic_shell_requests_cannot_immediately_override_each_other(self):
+        from test_player_control import PlayerRegressionTests
+        control, unused = PlayerRegressionTests().aim_controller()
+        clock = [1.]
+        owner = control.owner
+        owner._clock = lambda: clock[0]
+        owner._local_fire_intent = None
+        from types import SimpleNamespace
+        owner._runtime = SimpleNamespace(constants=SimpleNamespace(
+            VEHICLE_SETTING=SimpleNamespace(CURRENT_SHELLS=1, NEXT_SHELLS=2)))
+        owner._gun_state.shots = [dict(shell=dict(compactDescr=i)) for i in range(3)]
+        owner.change_vehicle_setting = mock.Mock()
+        control.direct_engagement = object()
+        control.queue_automatic_shell(2)
+        clock[0] = 1.1
+        control.queue_automatic_shell(1)
+        clock[0] = 1.4
+        control.queue_automatic_shell(1)
+        self.assertEqual([mock.call(1, 2), mock.call(1, 1)],
+                         owner.change_vehicle_setting.call_args_list)
+
+
+    def test_turret_returns_forward_after_an_unusable_lock_persists(self):
+        from test_player_control import PlayerRegressionTests
+        from types import SimpleNamespace
+        control, target = PlayerRegressionTests().aim_controller()
+        control.direct_engagement = SimpleNamespace(target=target.id,
+            update=lambda *args: (None, None, False))
+        control.update(.1, 1.)
+        control.update(.1, 2.)
+        control.weapon.forward.assert_not_called()
+        control.update(.1, 2.6)
+        control.weapon.forward.assert_called_once()
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -44,6 +44,9 @@ class PlayerControl(object):
         self.drive_failure = None
         self.drive_contact_receipt = None
         self.blocked_fire_target = None
+        self.blocked_fire_sample = None
+        self.no_aim_since = None
+        self.last_shell_request = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
@@ -290,6 +293,9 @@ class PlayerControl(object):
         self.combat_tactics.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
+        self.blocked_fire_sample = None
+        self.no_aim_since = None
+        self.last_shell_request = None
         self.next_strategy = 0.
         self.weapon = weapon
         self.active = True
@@ -1075,7 +1081,9 @@ class PlayerControl(object):
             vehicle_target_bounds_at_matrix)
         from ..shot_geometry import segment_box_entry_distance
         owner = self.owner
+        self.dynamic_blocker = None
         if not path or len(path) < 2:
+            self.dynamic_blocker = dict(kind='missing_path')
             return False
         segments = tuple(zip(path, path[1:]))
         for record in owner._records.values():
@@ -1085,13 +1093,16 @@ class PlayerControl(object):
             if other is None or other.id == target.id or not other.isStarted:
                 continue
             state = record.get('state') or {}
-            if other.isAlive() and int(state.get('team', 0)) != int(owner.client.team):
+            alive = other.isAlive()
+            if alive and int(state.get('team', 0)) != int(owner.client.team):
                 continue
+            blocker = dict(id=other.id, kind='ally' if alive else 'wreck')
             names = ('chassis', 'hull', 'turret', 'gun') if turret_is_attached(other) else ('chassis', 'hull')
             for name in names:
                 component = _component_value(other.typeDescriptor, name)
                 tester = _component_value(component, 'hitTester')
                 if _blast_bbox_bounds(_component_value(tester, 'bbox')) is None:
+                    self.dynamic_blocker = dict(blocker, reason='missing_bounds', component=name)
                     return False
             if record.get('native_remote'):
                 body, chassis = owner._projectile_vehicle_matrices(record, other)
@@ -1099,15 +1110,20 @@ class PlayerControl(object):
                 body, chassis = other.matrix, None
             bounds = vehicle_target_bounds_at_matrix(
                 other, body, owner._runtime.math, chassis_matrix=chassis)
-            if bounds is None or any(segment_box_entry_distance(a, b, bounds) is not None
-                                     for a, b in segments):
+            if bounds is None:
+                self.dynamic_blocker = dict(blocker, reason='missing_bounds')
                 return False
+            for index, (a, b) in enumerate(segments):
+                if segment_box_entry_distance(a, b, bounds) is not None:
+                    self.dynamic_blocker = dict(blocker, reason='bounds_intersection', chord=index)
+                    return False
         debris = getattr(owner, '_detached_turret_obstacles', None)
         if debris is not None and debris.active():
             server_time = owner._turret_server_time_ms()
-            if any(debris.target_entry_distance(a, b, server_time) is not None
-                   for a, b in segments):
-                return False
+            for index, (a, b) in enumerate(segments):
+                if debris.target_entry_distance(a, b, server_time) is not None:
+                    self.dynamic_blocker = dict(kind='detached_turret', chord=index)
+                    return False
         return True
 
     def artillery_lane(self, target, direction=None):
@@ -1272,6 +1288,12 @@ class PlayerControl(object):
             # Request the native immediate reload instead of waiting to empty it.
             code = (settings.CURRENT_SHELLS if self.direct_engagement is not None or
                     gun.clip_size <= 1 or gun.clip <= 0 else settings.NEXT_SHELLS)
+            if self.direct_engagement is not None:
+                now = owner._clock()
+                previous = self.last_shell_request
+                if previous is not None and previous[0] is gun and 0. <= now - previous[1] < .35:
+                    return
+                self.last_shell_request = (gun, now)
             owner.change_vehicle_setting(code, _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
             self.record('ammo_queued', shell=selected)
 
@@ -1632,6 +1654,7 @@ class PlayerControl(object):
                 self.aiming.reset()
         self.aim_receipt = None
         if target is not None:
+            self.no_aim_since = None
             from ..gun_mechanics import _field
             from .weapon import barrel_aligned
             self.target_engine = target.id
@@ -1671,8 +1694,13 @@ class PlayerControl(object):
         else:
             self.target_engine = None
             self.aim_progress_sample = None
-            if ('fire' in self.features and self.weapon is not None and
-                    (self.direct_engagement is None or self.direct_engagement.target is None)):
+            if self.no_aim_since is None:
+                self.no_aim_since = now
+            aim_idle = (self.direct_engagement is None or
+                        self.direct_engagement.target is None or now - self.no_aim_since >= 1.5)
+            if ('fire' in self.features and self.weapon is not None and aim_idle and
+                    not getattr(owner, '_local_fire_intent', None) and
+                    not getattr(owner, '_local_player_burst', None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
                 if not decision_current():
                     return
@@ -1729,12 +1757,20 @@ class PlayerControl(object):
             roster, roster_complete = public_allies(owner, allies)
             turret_reader = getattr(owner, '_turret_navigation_hulls', None)
             turret_hulls = tuple(turret_reader()) if callable(turret_reader) else ()
+            blocked_target = records.get(self.blocked_fire_target) if not artillery else None
+            if target is not None and blocked_target is not target:
+                blocked_target = None
+            elif target is None and (self.direct_engagement is None or
+                    self.direct_engagement.target != self.blocked_fire_target):
+                blocked_target = None
+            final_blocked = blocked_target is not None
             context = dict(empty_ammo=self.ammo_state['empty'],
                 target=target, contacts=contacts, allies=roster, neighbours=peers,
                 base=base, enemy_base=enemy_base,
                 allies_complete=roster_complete, turret_hulls=turret_hulls,
                 burst_active=state['burst_active'],
-                fire_clear=tactical_clear, aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
+                fire_clear=tactical_clear and not final_blocked,
+                aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
@@ -1746,7 +1782,7 @@ class PlayerControl(object):
             if not decision_current():
                 return
             hold = bool(not self.ammo_state['empty'] and not movement.get('force_move') and
-                target is not None and tactical_clear and
+                target is not None and tactical_clear and not final_blocked and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
             if now >= self.next_strategy and movement.get('allow_strategy'):
@@ -1768,12 +1804,10 @@ class PlayerControl(object):
                 # A distant incidental target cannot pin the defender on the
                 # wrong side of the map. Fire may continue while returning.
                 hold=bool(not self.ammo_state['empty'] and not movement.get('force_move') and
-                    tactical_clear and target is not None and math.hypot(
+                    tactical_clear and not final_blocked and target is not None and math.hypot(
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
             position_goal = None
-            final_blocked = bool(not artillery and target is not None and
-                                 target.id == getattr(self, 'blocked_fire_target', None))
             withdrawal = None
             manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
@@ -1795,11 +1829,11 @@ class PlayerControl(object):
                         movement.get('allow_firing_position') and (not tactical_clear or final_blocked)
                         and (final_blocked or candidates) and not automatic_defence and withdrawal is None):
                     def firing_lane_from(candidate, start):
-                        end = point if final_blocked else self.target_point(candidate)
+                        end = point if final_blocked and target is not None else self.target_point(candidate)
                         return (self.lane_from(candidate, start, end) and
                                 (not final_blocked or self.dynamic_path_clear(candidate, (start, end))))
                     position_goal = self.navigation.firing_position(
-                        state, target if final_blocked else candidates[0], clear,
+                        state, blocked_target if final_blocked else candidates[0], clear,
                         firing_lane_from, owner._mutable_shot_ray()[0])
                     if not decision_current():
                         return
@@ -1923,8 +1957,9 @@ class PlayerControl(object):
         if artillery and order.get('artillery') and not mission_order:
             fire_allowed = fire_allowed and order['artillery'].get('phase') not in (
                 'deploying', 'relocating', 'sortie_return')
-        if target is None or target.id != getattr(self, 'blocked_fire_target', None):
-            self.blocked_fire_target = None
+        if (self.blocked_fire_target not in records or
+                target is not None and target.id != self.blocked_fire_target):
+            self.blocked_fire_target = self.blocked_fire_sample = None
         if fire_ready and fire_allowed:
             # The physical trigger (including each native burst tail) now
             # owns the final current-barrel + frozen-scatter admission. A
@@ -1940,8 +1975,20 @@ class PlayerControl(object):
                         and 'drive' in self.features):
                     self.navigation.firing_retry_at = 0.
                 self.blocked_fire_target = target.id
+                key = (target.id, owner._gun_state.shot_index, solution.get('key'))
+                previous = self.blocked_fire_sample
+                if previous is None or previous[0] != key or now - previous[2] > .5:
+                    previous = (key, now, now)
+                self.blocked_fire_sample = (key, previous[1], now)
+                if (self.direct_engagement is not None and now - previous[1] >= .6 and
+                        not getattr(owner, '_local_player_burst', None) and
+                        not getattr(owner, '_local_fire_intent', None)):
+                    self.aiming.defer_ordered_point(target, owner._gun_state.shot_index,
+                        solution, now)
+                    self.direct_engagement.last_solution = None
+                    self.blocked_fire_sample = None
             elif accepted:
-                self.blocked_fire_target = None
+                self.blocked_fire_target = self.blocked_fire_sample = None
             self.record('automatic_fire', target=target.id, accepted=accepted,
                         admission=admission, native=self.weapon.trigger_receipt)
             if not decision_current():
