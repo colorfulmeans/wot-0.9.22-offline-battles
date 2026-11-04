@@ -26981,6 +26981,11 @@ class BattleRuntime(object):
                 vehicle_physics.rebase_airborne_velocity(
                     self._local_speed, self._local_air_lateral,
                     motion_yaw, yaw))
+        control = getattr(self, '_player_control', None)
+        if (control is not None and contact_path in (
+                'brake', 'deflect', 'tank_turn_contact', 'held_peer_reaction_turn',
+                'turn_contact', 'world_reaction_turn', 'arena_turn', 'detached_turret')):
+            control.note_motion_contact(contact_path, position, throttle, turn)
         self._report_local_contact_tick(
             contact_path, previous_speed, slope_pitch,
             position[1] - tick_pose[1])

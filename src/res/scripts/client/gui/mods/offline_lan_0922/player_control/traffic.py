@@ -73,6 +73,7 @@ class Traffic(object):
         self.neighbours = [body(r['id'],r['position'],r['yaw'],r['collision_shape'],
                                r.get('pitch',0.),r.get('roll',0.)) for r in neighbours]
         self.receipt = {}
+        self.motion_probe = None
         self.blocked_queries = []
         self.peers = dict((r['id'], r) for r in neighbours)
 
@@ -110,28 +111,37 @@ class Traffic(object):
     def can_turn(self, turn):
         if not turn:
             return True
+        if self.motion_probe is not None:
+            return self.motion_probe(0., turn)
         b = self.current
         return tank_collision.rotation_fraction((b['x'],b['y'],b['z']),b['yaw'],
             b['yaw']+turn*.15,b['shape'],self.neighbours) >= .999
 
-    def can_steer(self, throttle, turn, speed):
-        """Check turning and translation together over the near command horizon."""
+    def swept_command_clear(self, throttle, turn, speed, pivot_for, world_clear):
+        """Check live hull geometry along a short turn/translation horizon."""
+        from ..vehicle_physics import track_pivot_position
         moving = dict(self.current)
         yaw = moving['yaw']
-        sign = 1. if throttle > 0. else -1.
-        reach = max(1., min(8., abs(speed) * .65 + 1.))
-        step = sign * reach / 4.
-        for index in range(4):
+        step = 0.
+        if throttle:
+            reach = max(1., min(5., abs(speed) * .5 + 1.))
+            step = math.copysign(reach / 3., throttle)
+        for unused in range(3):
             new_yaw = yaw + turn * .12
             position = (moving['x'], moving['y'], moving['z'])
-            if tank_collision.rotation_fraction(position, yaw, new_yaw,
-                    moving['shape'], self.neighbours) < .999:
+            pivot = pivot_for(turn, throttle)
+            if turn and tank_collision.rotation_fraction(position, yaw, new_yaw,
+                    moving['shape'], self.neighbours, pivot_offset=pivot) < .999:
                 return False
-            moving['yaw'] = new_yaw
-            dx, dz = math.sin(new_yaw) * step, math.cos(new_yaw) * step
-            if tank_collision.translation_fraction(moving, (dx, dz), self.neighbours) < .999:
+            rotated = track_pivot_position(position, yaw, new_yaw, pivot)
+            moving.update(x=rotated[0], z=rotated[2], yaw=new_yaw)
+            translation = (math.sin(new_yaw) * step, math.cos(new_yaw) * step)
+            if step and tank_collision.translation_fraction(moving, translation,
+                                                            self.neighbours) < .999:
                 return False
-            moving['x'] += dx
-            moving['z'] += dz
+            if not world_clear(position, yaw, new_yaw, pivot, translation):
+                return False
+            moving['x'] += translation[0]
+            moving['z'] += translation[1]
             yaw = new_yaw
         return True

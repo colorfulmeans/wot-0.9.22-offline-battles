@@ -31,7 +31,7 @@ class DirectEngagementTests(unittest.TestCase):
         self.apcr = (1, PENETRATION_FACTOR_65)
         self.fallback = (0, None)
 
-    def scan(self, target, index, threshold, now, lane):
+    def scan(self, target, index, threshold, now, lane, physical=False):
         status = self.verdicts.get((target.id, (index, threshold)), 'pending')
         return status, dict(created=now, key=(0, 'low'), geometry_clear=True) if status == 'ready' else None
 
@@ -106,3 +106,40 @@ class OrderedPointTests(unittest.TestCase):
                                              float(now), lambda *args: True)
                 self.assertEqual(expected, status)
         self.assertEqual([0, 1, 1, 1, 0], checked)
+
+    def test_physical_scan_moves_barrel_before_accepting_and_skips_bad_contact(self):
+        owner = SimpleNamespace(_gun_state=SimpleNamespace(shot_index=0),
+                                _mutable_shot_ray=lambda: ((0, 0, 0), (0, 0, 1)))
+        aim = Aiming(owner)
+        target = SimpleNamespace(id=1, typeDescriptor=object())
+        aim.targets[1], aim.observations[1] = target, {}
+        aim._own = lambda index: {'key': (index,)}
+        aim._valid = lambda *args: True
+        aim._candidate = lambda target, own, entry, key, *args: dict(
+            key=key, reachable=True, source_verified=True, penetration_ok=True)
+        aim._advance = lambda job, lane, limit, now: job.update(
+            done=True, clear=True, completed=now)
+        aim.actual_contact = mock.Mock(side_effect=('laying', 'armor', 'ready'))
+        aim._candidates = 2
+        with mock.patch('gui.mods.offline_lan_0922.shot_geometry.ordered_vehicle_aim_samples',
+                        return_value=(object(), object())):
+            result = aim.ordered(target, 0, PENETRATION_FACTOR_65, 0., None, physical=True)
+            self.assertEqual('laying', result[0])
+            self.assertTrue(result[1]['laying'])
+            self.assertEqual('pending', aim.ordered(
+                target, 0, PENETRATION_FACTOR_65, .1, None, physical=True)[0])
+            result = aim.ordered(target, 0, PENETRATION_FACTOR_65, .2, None, physical=True)
+            self.assertEqual(('ready', (1, 'low')), (result[0], result[1]['key']))
+
+
+class SweptCommandTests(unittest.TestCase):
+    def test_plain_pivot_checks_world_and_uses_track_offset(self):
+        from gui.mods.offline_lan_0922.player_control.traffic import Traffic, body
+        traffic = Traffic(body(1, (9.85, .31, 99.39), 3.019, (1.62, 3.1, 0., 3.)), [])
+        world = mock.Mock(return_value=False)
+        self.assertFalse(traffic.swept_command_clear(
+            0., .8, 0., lambda turn, throttle: 1.2, world))
+        world.assert_called_once()
+        position, yaw, end_yaw, pivot, travel = world.call_args.args
+        self.assertEqual((1.2, (0., 0.)), (pivot, travel))
+        self.assertGreater(end_yaw, yaw)

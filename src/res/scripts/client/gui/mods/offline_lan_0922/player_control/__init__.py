@@ -44,6 +44,7 @@ class PlayerControl(object):
         self.navigation = self.weapon = self.ammo_policy = None
         self.aiming = None
         self.direct_engagement = None
+        self.motion_contact = None
         self.strategy = None
         self.next_strategy = 0.
         self.handover_burst = None
@@ -414,6 +415,7 @@ class PlayerControl(object):
             callbacks.append(('aim_cache_reset', self.aiming.reset))
         self.aiming = None
         self.direct_engagement = None
+        self.motion_contact = None
         burst = self.owned_burst
         keep_burst = bool(preserve_explicit and burst is not None and
                           (burst.get('player_control') or {}).get('command') is not None)
@@ -1067,6 +1069,46 @@ class PlayerControl(object):
         return bool(path) and all(self.lane_from(target, a, b)
                                   for a, b in zip(path, path[1:]))
 
+    def note_motion_contact(self, path, position, throttle, turn):
+        if (self.active and 'drive' in self.features and self.navigation is not None and
+                self.navigation.tag != 'SPG' and (throttle or turn)):
+            self.motion_contact = (self.owner._clock(), tuple(position), throttle, turn, path)
+
+    def motion_probe(self, traffic, entity, state):
+        from ..vehicle_physics import track_pivot_offset
+        owner = self.owner
+        native = getattr(owner, '_native_world_rotation_is_clear', None)
+        params = getattr(owner, '_local_physics', None)
+        if not callable(native) or params is None:
+            return None
+        pitch, roll = owner._local_pitch, owner._local_roll
+        cache = {}
+
+        def world_clear(position, yaw, end_yaw, pivot, translation):
+            return native(position, yaw, end_yaw, entity.typeDescriptor,
+                pitch=pitch, roll=roll, record_local=False, pivot_offset=pivot,
+                include_static=True, translation=translation, follow_ground=True)
+
+        def pivot_for(turn, throttle):
+            return track_pivot_offset(params, state['speed'], turn * .8,
+                                      False, throttle)
+
+        def check(throttle, turn):
+            contact = self.motion_contact
+            if contact is not None:
+                at, position, forward, steer, unused = contact
+                here = state['position']
+                if (state['now'] - at < .8 and
+                        math.hypot(here[0]-position[0], here[2]-position[2]) < 1. and
+                        (turn and turn * steer > 0. or throttle and throttle * forward > 0.)):
+                    return False
+            key = (throttle, turn)
+            if key not in cache:
+                cache[key] = traffic.swept_command_clear(
+                    throttle, turn, state['speed'], pivot_for, world_clear)
+            return cache[key]
+        return check
+
     def direction_clear(self, position, yaw, descriptor, shape, reach=None):
         # Corridor lanes follow the hull support plane even when the query
         # points backwards or sideways. Travel yaw is not body orientation.
@@ -1408,7 +1450,7 @@ class PlayerControl(object):
             from .weapon import barrel_aligned
             self.target_engine = target.id
             point = solution['point']
-            if self.direct_engagement is None or fire_clear:
+            if self.direct_engagement is None or fire_clear or solution.get('laying'):
                 self.weapon.aim_solution(target.id, solution, now)
             start, direction = owner._mutable_shot_ray()
             distance = math.sqrt(sum((point[i]-start[i])**2 for i in range(3)))
@@ -1457,7 +1499,13 @@ class PlayerControl(object):
                 getattr(owner,'_local_pitch',0.),getattr(owner,'_local_roll',0.)),peers)
             state = dict(id=owner.client.player_id, engine_id=entity.id, position=position, yaw=yaw,
                          speed=owner._local_speed, now=now, half_length=shape[1], half_width=shape[0])
+            if not artillery:
+                traffic.motion_probe = self.motion_probe(traffic, entity, state)
             def clear(angle, reach=None):
+                alignment = math.cos(angle - yaw)
+                if (traffic.motion_probe is not None and abs(alignment) > .995 and
+                        not traffic.motion_probe(math.copysign(1., alignment), 0.)):
+                    return False
                 return (traffic.clear(angle, reach or 5.) and
                         self.direction_clear(position, angle, entity.typeDescriptor, shape, reach))
             base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
@@ -1563,8 +1611,8 @@ class PlayerControl(object):
                     facing['state'] = 'braking'
                     if abs(state['speed']) <= 1.5:
                         turn = max(-1., min(1., delta / .5))
-                        if (traffic.can_turn(turn) and self.direction_clear(
-                                position, yaw + turn * .15, entity.typeDescriptor, shape, shape[1])):
+                        if (traffic.can_turn(turn) and (traffic.motion_probe is not None or self.direction_clear(
+                                position, yaw + turn * .15, entity.typeDescriptor, shape, shape[1]))):
                             order.update(turn=turn, throttle=0., brake=False,
                                          recovery_mode='combat_facing')
                             facing['state'] = 'turning'
@@ -1574,9 +1622,16 @@ class PlayerControl(object):
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
                 wreck_count=sum(not r['alive'] for r in peers),
                 blocked_queries=traffic.blocked_queries)
-            if (not pushing and order['throttle'] and order['turn'] and
-                    not traffic.can_steer(order['throttle'], order['turn'], state['speed'])):
-                order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
+            if (not pushing and traffic.motion_probe is not None and
+                    (order['throttle'] or order['turn']) and
+                    not traffic.motion_probe(order['throttle'], order['turn'])):
+                turn = order['turn']
+                if order['throttle'] and turn and traffic.can_turn(turn):
+                    order.update(throttle=0., brake=False, recovery_mode='traffic_pivot')
+                else:
+                    order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
+            if self.motion_contact is not None and now - self.motion_contact[0] < .8:
+                order['motion_contact'] = self.motion_contact[-1]
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
                     getattr(entity.typeDescriptor, 'hasSiegeMode', False) and
                     entity.siegeState == owner._runtime.constants.VEHICLE_SIEGE_STATE.ENABLED):

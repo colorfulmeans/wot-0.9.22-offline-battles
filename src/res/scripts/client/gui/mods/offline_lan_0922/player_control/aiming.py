@@ -524,7 +524,46 @@ class Aiming(object):
         self._publish_budget()
         return result
 
-    def ordered(self, target, index, threshold, now, lane):
+    def actual_contact(self, target, solution, own, direction, threshold):
+        """Resolve the laid, pre-dispersion barrel against the observed vehicle."""
+        from .. import combat_rules
+        from ..entities.remote_vehicle import collide_vehicle_at_matrix
+        from .weapon import barrel_aligned
+        origin, speed, gravity = own['origin'], own['speed'], own['gravity']
+        point = solution['point']
+        if not barrel_aligned(origin, direction, speed, gravity, point, .30):
+            return 'laying'
+        horizontal = direction[0]**2 + direction[2]**2
+        flight = sum((point[i]-origin[i])*direction[i] for i in (0, 2))/(speed*horizontal)
+        radius = max(abs(v) for v in self.owner._collision_shape(target.typeDescriptor))
+        span = max(4., radius*2.) / speed
+        first, last = max(0., flight-span), min(own['maximum']/speed, flight+span)
+        if last <= first:
+            return 'miss'
+        velocity = self.observations[target.id]['velocity']
+
+        def observed_chord(at):
+            projected = [origin[i] + (direction[i]*speed-velocity[i])*at for i in range(3)]
+            projected[1] -= .5*gravity*at*at
+            return self.owner._vector(projected)
+
+        try:
+            hits = collide_vehicle_at_matrix(target, target.matrix,
+                observed_chord(first), observed_chord(last), self.owner._runtime.math)
+            if not hits:
+                return 'miss'
+            if threshold is None:
+                return 'ready'
+            contact = combat_rules.resolve_armor_contact(
+                own['shot'], flight*speed, hits, penetration_factor=threshold)
+            if contact is None:
+                return 'unknown'
+            return ('ready' if contact['layer'] == 'structural' and
+                    contact['result'] == 2 else 'armor')
+        except (AttributeError, TypeError, ValueError, IndexError, KeyError, RuntimeError):
+            return 'unknown'
+
+    def ordered(self, target, index, threshold, now, lane, physical=False):
         """Advance one fixed-order scan without publishing an unverified point."""
         if target.id not in self.targets or self._candidates <= 0:
             return 'pending', None
@@ -532,7 +571,7 @@ class Aiming(object):
             own = self._own(index)
         except (AttributeError, TypeError, ValueError, IndexError, RuntimeError):
             return 'pending', None
-        identity = (target.id, index, threshold)
+        identity = (target.id, index, threshold, physical)
         entry = self.direct_entries.get(identity)
         signature = (id(target), id(target.typeDescriptor), own['key'],
                      index == self.owner._gun_state.shot_index)
@@ -540,7 +579,7 @@ class Aiming(object):
             entry = dict(signature=signature,
                 samples=shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor),
                 cursor=0, locked=None, job=None, retry=0., blocked_armor=False,
-                unknown=False, mechanical=None, deferred_at=None)
+                unknown=False, mechanical=None, deferred_at=None, laying_since=None)
             self.direct_entries[identity] = entry
         if not entry['samples']:
             return 'unavailable', None
@@ -548,7 +587,8 @@ class Aiming(object):
             return 'pending', entry['mechanical']
         locked = entry['locked']
         key = locked if locked is not None else (entry['cursor'], 'low')
-        candidate = self._candidate(target, own, entry, key, now, True, threshold)
+        candidate = self._candidate(target, own, entry, key, now, True,
+                                    None if physical else threshold)
         job = entry['job']
         if (job is None or job['solution']['key'] != key or
                 not self._valid(job['solution'], own, self.observations[target.id], now)):
@@ -557,16 +597,29 @@ class Aiming(object):
         self._advance(job, lane, min(self._segments, 8), now)
         result = self._result(candidate, job)
         result['ordered'] = True
+        result['physical'] = physical
+        result['penetration_threshold'] = threshold
         if not job['done']:
             return 'pending', None
         if result['clear'] and result['reachable']:
             penetrates = result.get('penetration_ok')
-            if threshold is None or penetrates is True:
-                entry.update(locked=key, job=None, deferred_at=None)
+            if physical:
+                unused, direction = self.owner._mutable_shot_ray()
+                verdict = self.actual_contact(target, result, own, direction, threshold)
+                if verdict in ('laying', 'miss', 'unknown'):
+                    if entry['laying_since'] is None:
+                        entry['laying_since'] = now
+                    if now - entry['laying_since'] < (5. if verdict == 'laying' else .5):
+                        result['laying'] = True
+                        return 'laying', result
+                    entry['unknown'] |= verdict == 'unknown'
+                penetrates = verdict == 'ready' if verdict in ('ready', 'armor') else None
+            if (not physical and threshold is None) or penetrates is True:
+                entry.update(locked=key, job=None, deferred_at=None, laying_since=None)
                 return 'ready', result
             if penetrates is False:
                 entry['blocked_armor'] = True
-            else:
+            elif not physical:
                 entry['unknown'] = True
         elif result['geometry_clear'] and not result['reachable']:
             if entry['mechanical'] is None:
@@ -576,9 +629,9 @@ class Aiming(object):
 
         if locked is not None:
             entry.update(locked=None, cursor=0, job=None, blocked_armor=False,
-                         unknown=False, mechanical=None, deferred_at=None)
+                         unknown=False, mechanical=None, deferred_at=None, laying_since=None)
             return 'lost', None
-        if (result['geometry_clear'] and result['reachable'] and
+        if (not physical and result['geometry_clear'] and result['reachable'] and
                 (not result.get('source_verified') or
                  (threshold is not None and result.get('penetration_ok') is None))):
             if entry['deferred_at'] is None:
@@ -586,7 +639,7 @@ class Aiming(object):
             if now - entry['deferred_at'] < .5:
                 return 'pending', None
         entry['job'] = None
-        entry['deferred_at'] = None
+        entry['deferred_at'] = entry['laying_since'] = None
         entry['cursor'] += 1
         if entry['cursor'] < len(entry['samples']):
             return 'pending', entry['mechanical']
@@ -624,6 +677,11 @@ class Aiming(object):
             return self._final_verdict('native_aim_inputs_unavailable')
         if solution.get('shell_key') != own['key']:
             return self._final_verdict('shell_changed')
+        if solution.get('physical'):
+            verdict = self.actual_contact(
+                target, solution, own, direction, solution.get('penetration_threshold'))
+            if verdict != 'ready':
+                return self._final_verdict('actual_barrel_' + verdict)
         radius = max(.3, self.owner._collision_shape(target.typeDescriptor)[0]*.5)
         if not barrel_aligned(own['origin'], direction, own['speed'], own['gravity'],
                               solution['point'], radius):

@@ -77,15 +77,16 @@ class DirectEngagement(object):
             self.adopt(self.target, stages[0])
         target = by_id[self.target]
 
-        def scan(item, stage):
+        def scan(item, stage, physical=False):
             return aiming.ordered(item, stage[0], stage[1], now,
-                                  lambda a, b: control.lane_from(item, a, b))
+                                  lambda a, b: control.lane_from(item, a, b),
+                                  physical=physical)
 
         stage = self.stage
         if gun.shot_index != stage[0]:
             control.queue_automatic_shell(stage[0])
             return None, None, False
-        status, solution = scan(target, stage)
+        status, solution = scan(target, stage, physical=True)
         sample = solution.get('sample') if solution is not None else None
         receipt = (target.id, stage, status, sample)
         if status != 'pending' and receipt != self.last_receipt:
@@ -107,7 +108,7 @@ class DirectEngagement(object):
             for identity, value in self.alternate_stages.items() if identity in by_id)
         self.search_tick += 1
         if (stage[1] is None and self.search_tick % 2 == 0 or
-                status != 'ready' and now >= self.retry):
+                status not in ('ready', 'laying') and now >= self.retry):
             alternatives = [item for item in candidates if item.id != target.id]
             if alternatives:
                 item = alternatives[(self.background + self.search_tick // 24) % len(alternatives)]
@@ -148,6 +149,8 @@ class DirectEngagement(object):
                     self.return_cursor += 1
         if status == 'ready':
             return target, solution, True
+        if status == 'laying':
+            return target, solution, False
         if solution is not None and solution.get('geometry_clear'):
             return target, solution, False
         if (status == 'pending' and self.last_solution is not None and
