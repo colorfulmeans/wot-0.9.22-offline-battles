@@ -1789,7 +1789,8 @@ class PlayerControl(object):
             from .weapon import barrel_aligned
             self.target_engine = target.id
             point = solution['point']
-            if self.direct_engagement is None or fire_clear or solution.get('laying'):
+            if (not getattr(engagement, 'locked_wait', False) and
+                    (engagement is None or fire_clear or solution.get('laying'))):
                 self.weapon.aim_solution(target.id, solution, now)
                 aim_command = 'track'
                 if not decision_current():
@@ -1915,6 +1916,10 @@ class PlayerControl(object):
                 facing_key = None
             pivot_hold = (self.confirmed_facing.owns_hold(facing_key) or
                           getattr(engagement, 'pivot_search', None) is not None)
+            locked_wait = (getattr(engagement, 'locked_wait', False) and not final_blocked
+                and not self.ammo_state['empty'] and self.last_order.get('holding')
+                and self.last_order.get('combat_mode') in ('engage', 'support_hold', 'base_capture'))
+            protected_hold = pivot_hold or locked_wait
             established = self.engagement_hold
             retain_hold = bool(established is not None and engagement is not None and
                 records.get(engagement.target) is established[0] and
@@ -1928,7 +1933,7 @@ class PlayerControl(object):
                 fire_clear=tactical_clear and not (final_blocked or seeking),
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
-                pivot_hold=pivot_hold,
+                pivot_hold=protected_hold,
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
                 battle_finished=False, supported=not getattr(owner, '_local_airborne', False)
@@ -1942,10 +1947,10 @@ class PlayerControl(object):
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
-            retain_hold = bool((retain_hold or pivot_hold) and not movement.get('force_move') and
+            retain_hold = bool((retain_hold or protected_hold) and not movement.get('force_move') and
                                movement.get('allow_firing_position', True))
             hold = hold or retain_hold
-            if not pivot_hold and now >= self.next_strategy and movement.get('allow_strategy'):
+            if not protected_hold and now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
                 redirect=self.strategy.decide(now,self.navigation.routes,self.navigation.route,
@@ -2036,7 +2041,7 @@ class PlayerControl(object):
             if not decision_current():
                 return
             reverse_only = bool(order.get('reverse_only'))
-            if pivot_hold and order.get('holding') and order.get('combat_mode') in (
+            if protected_hold and order.get('holding') and order.get('combat_mode') in (
                     'engage', 'support_hold', 'base_capture'):
                 order['traffic_hold_protected'] = True
                 if engagement.pivot_search is not None:
@@ -2131,7 +2136,8 @@ class PlayerControl(object):
                     self.confirmed_facing.apply(order, state, facing_key, delta,
                         getattr(owner, '_local_turn_speed', 0.),
                         getattr(engagement, 'confirmed', None) == facing_key,
-                        getattr(engagement, 'checking', False))
+                        getattr(engagement, 'checking', False),
+                        can_turn=not getattr(engagement, 'locked_wait', False))
                 else:
                     self.confirmed_facing.reset()
             else:

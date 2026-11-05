@@ -402,12 +402,16 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 self.assertEqual((0., 0., True), (battle._sender.forward, battle._sender.turn,
                                                   battle._sender.handbrake))
                 self.assertEqual('engage', control.last_order['combat_mode'])
-                self.assertTrue(control.last_order['pivot_point_search'])
-                expected = {(0, 0): 'armor'} if loss == 'armor' else {}
-                self.assertEqual(expected, control.direct_engagement.pivot_search)
+                if loss == 'armor':
+                    self.assertTrue(control.last_order['pivot_point_search'])
+                    self.assertEqual({(0, 0): 'armor'}, control.direct_engagement.pivot_search)
+                else:
+                    self.assertTrue(control.direct_engagement.locked_wait)
+                    self.assertEqual(target.id, control.target_engine)
+                    self.assertEqual(0, control.direct_engagement.sample)
                 compare.return_value = ('pending', None)
                 control.update(.1, 1.4)
-                self.assertTrue(control.last_order['pivot_point_search'])
+                self.assertTrue(control.last_order['traffic_hold_protected'])
                 self.assertEqual('engage', control.last_order['combat_mode'])
                 control.trigger.assert_not_called()
                 control.navigation.firing_position.assert_not_called()
@@ -418,11 +422,46 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 compare.reset_mock()
                 compare.side_effect = next_point
                 control.update(.1, 1.6)
+                if loss == 'pending':
+                    self.assertTrue(control.last_order['pivot_point_search'])
+                    control.update(.1, 1.8)
                 self.assertIsNone(control.direct_engagement.pivot_search)
                 self.assertEqual(1, control.direct_engagement.sample)
                 if loss == 'armor':
                     self.assertTrue(all(call.args[2] == 1 for call in compare.call_args_list))
                 self.assertEqual('engage', control.last_order['combat_mode'])
+
+    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
+    def test_budget_wait_keeps_stationary_engagement_and_never_triggers(self, unused_aligned):
+        from release097.test_096_contact_steering5 import DriveLoopTests
+        _, battle, _ = DriveLoopTests().actor(turn=0.)
+        control, target = self.confirmed_pivot_controller(battle)
+        target.position = (0., 0., 25.)
+        compare = control.aiming.compare_direct
+        ready = compare.side_effect
+        control.update(.1, 1.)
+        self.assertEqual('engage', control.last_order['combat_mode'])
+        self.assertNotIn('confirmed_facing', control.last_order)
+        control.navigation.firing_position = mock.Mock(wraps=control.navigation.firing_position)
+        control.trigger.reset_mock()
+        control.weapon.aim.reset_mock()
+        compare.side_effect = None
+        compare.return_value = ('pending', None)
+        for now in (1.2, 2., 4., 6.):
+            control.update(.1, now)
+            self.assertEqual(target.id, control.target_engine)
+            self.assertFalse(control.aim_receipt['fire_clear'])
+            self.assertEqual('engage', control.last_order['combat_mode'])
+            self.assertEqual((0., 0., True), (battle._sender.forward, battle._sender.turn,
+                                              battle._sender.handbrake))
+        control.trigger.assert_not_called()
+        control.weapon.aim.assert_not_called()
+        control.weapon.forward.assert_not_called()
+        control.navigation.firing_position.assert_not_called()
+        compare.side_effect = ready
+        control.update(.1, 6.2)
+        control.trigger.assert_called_once()
+        self.assertEqual(target.id, control.target_engine)
 
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
     def test_capture_pivot_is_limited_by_actual_track_arc(self, unused_aligned):

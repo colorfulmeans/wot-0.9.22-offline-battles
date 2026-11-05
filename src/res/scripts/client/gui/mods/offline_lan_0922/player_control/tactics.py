@@ -171,7 +171,7 @@ class ConfirmedFacing(object):
         return bool(self.attempt is not None and self.attempt['key'] == key and
                     self.attempt['phase'] in ('turning', 'settling', 'recheck'))
 
-    def apply(self, order, state, key, error, yaw_rate, confirmed, pending):
+    def apply(self, order, state, key, error, yaw_rate, confirmed, pending, can_turn=True):
         now = state['now']
         attempt = self.attempt
         if attempt is not None and attempt['key'] != key:
@@ -198,7 +198,7 @@ class ConfirmedFacing(object):
                 attempt['outcome'] = 'aligned'
             elif not stopped or now - attempt['start'] >= 8. or now - attempt['progress'] >= 2.:
                 attempt['outcome'] = 'stalled'
-            else:
+            elif can_turn:
                 order.update(turn=attempt['direction'] * min(1., remaining / .5),
                              throttle=0., brake=False, recovery_mode='combat_facing')
             if attempt['outcome'] is not None:

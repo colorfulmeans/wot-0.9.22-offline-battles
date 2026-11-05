@@ -26,7 +26,7 @@ class DirectEngagementTests(unittest.TestCase):
         self.calls = []
         self.verdicts = {}
         self.control = SimpleNamespace(owner=SimpleNamespace(_gun_state=self.gun),
-            ammo_policy=self.rounds, aiming=SimpleNamespace(compare_direct=self.probe,
+            ammo_policy=self.rounds, aiming=SimpleNamespace(compare_direct=self.probe, defer_ordered_point=mock.Mock(),
                 direct_samples=lambda target: 2, direct_pose=lambda target:
                     ((0, 0, 0), 0., (0, 0, 10), 0., 0., 0., 0.)),
             queue_automatic_shell=self.calls.append, lane_from=lambda *args: True,
@@ -208,13 +208,39 @@ class DirectEngagementTests(unittest.TestCase):
         state.last_full_at = 1.
         changed = ((.2, 0, 0), 0., (0, 0, 10), 0., 0., 0., 0.)
         self.control.aiming.direct_pose = lambda target: changed
+        self.verdicts[(21, 0, 0)] = 'ready'
         scan = mock.Mock(return_value=('pending', None))
         state._scan = scan
         state.update(self.control, [self.first], 1.4)
-        self.assertEqual('barrel', scan.call_args.args[-2])
+        scan.assert_not_called()
         changed = changed[:4] + (.1, 0., 0.)
         state.update(self.control, [self.first], 1.5)
-        self.assertEqual('full', scan.call_args.args[-2])
+        self.assertEqual('full', scan.call_args.args[-1])
+
+    def test_locked_barrel_gets_first_candidate_and_alternates_resume_each_tick(self):
+        state = self.state
+        state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        state.sample, state.last_solution = 0, dict(created=0.)
+        state.motion = self.control.aiming.direct_pose(self.first)
+        trace = []
+        remaining = [0]
+        def compare(target, index, point, now, lane, threshold, **options):
+            trace.append((index, options.get('physical', False)))
+            self.assertGreater(remaining[0], 0)
+            remaining[0] -= 1
+            if index == 2 and now == 0.:
+                return 'pending', None
+            return 'ready', dict(created=now)
+        self.control.aiming.compare_direct = compare
+        for tick, expected in enumerate((2, 1, 2, 1)):
+            trace[:] = []
+            remaining[0] = 2
+            target, solution, clear = state.update(self.control, [self.first], tick*.1)
+            self.assertEqual([(0, True), (expected, False)], trace)
+            self.assertIs(target, self.first)
+            self.assertTrue(clear)
+            self.assertEqual(0, remaining[0])
+        self.assertEqual(2, state.next_shell)
 
     def test_slow_barrel_keeps_its_point_while_angular_error_improves(self):
         state = self.state
