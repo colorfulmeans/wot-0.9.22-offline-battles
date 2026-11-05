@@ -167,7 +167,11 @@ def route_disk_reached(position, point, following=None, previous=None):
     """Shared two-dimensional macro disk/crossing/forward-passage contract."""
     bx, bz = position
     px, pz = point
-    if math.hypot(px-bx, pz-bz) <= ROUTE_ARRIVAL_RADIUS:
+    # Decimal authored coordinates need not subtract exactly in binary:
+    # (14.7903 + 6) - 14.7903 is 6.000000000000002. Preserve the closed
+    # six-metre disk with a numerical roundoff margin, not a gameplay buffer.
+    closed_radius = ROUTE_ARRIVAL_RADIUS + 1.e-9
+    if math.hypot(px-bx, pz-bz) <= closed_radius:
         return True
     if previous is not None:
         ax, az = previous
@@ -175,7 +179,7 @@ def route_disk_reached(position, point, following=None, previous=None):
         length = dx*dx + dz*dz
         if length > 0.000001:
             fraction = max(0., min(1., ((px-ax)*dx+(pz-az)*dz)/length))
-            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS:
+            if math.hypot(px-(ax+dx*fraction), pz-(az+dz*fraction)) <= closed_radius:
                 return True
     # A convoy can shove a hull past the gate along its finite outgoing lane.
     if following is None:
@@ -188,7 +192,7 @@ def route_disk_reached(position, point, following=None, previous=None):
     if fraction <= 0.0:
         return False
     fraction = min(1., fraction)
-    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= ROUTE_ARRIVAL_RADIUS
+    return math.hypot(bx-(px+dx*fraction), bz-(pz+dz*fraction)) <= closed_radius
 
 
 def waiting_heading(place, following=None):

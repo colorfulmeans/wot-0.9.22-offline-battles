@@ -12,6 +12,7 @@ import math
 import threading
 
 
+PROBE_KINDS = ('visibility', 'lane', 'cover', 'ground', 'motion')
 CAPTURE_SECONDS = 30.0
 CAPTURE_COOLDOWN_SECONDS = 30.0
 MAX_CAPTURES = 3

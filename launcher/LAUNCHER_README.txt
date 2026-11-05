@@ -83,7 +83,11 @@ Each LAN participant computes their own player navigation, traffic, target and
 fire-admission decisions in their visible client. The required room worker still
 owns Bots and world simulation, but does not execute player commands. Player
 route searches, recovery, ammunition and command ownership are independent of
-Bot actors. Releasing control cancels owned future actions without erasing
+Bot actors. The visible lifecycle creates no BotRuntime. Expired traffic
+retreat/yield actions release their controls instead of indefinitely retaining
+brake and fire suppression; real collision checks still apply. Player-owned SPG
+sortie recovery reports its current node, phase and failed-route outcome through
+the existing status channel. Releasing control cancels owned future actions without erasing
 already committed shots or equipment effects. Install matching packages on all
 participants and restart the room before testing a changed build. Python/CI
 results are not a substitute for observing native #1513 driving and dual-LAN

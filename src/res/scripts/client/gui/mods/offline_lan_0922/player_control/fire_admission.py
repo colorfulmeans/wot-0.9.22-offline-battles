@@ -10,7 +10,8 @@ from __future__ import division
 import math
 import random
 
-from .. import ballistics, combat_rules, lan_client, projectile_runtime, shot_geometry
+from .. import ballistics, combat_rules, projectile_runtime, shot_geometry
+from ..projectile_wire import round_scalar
 from .weapon import artillery_path
 from .firing_lane import FiringLane
 
@@ -472,11 +473,11 @@ class FireAdmission(object):
             if candidate is None or candidate['identity'] != key:
                 candidate = dict(identity=key, draw=_ScatterDraw(), proof=None,
                     restarts=0, full_proof=False,
-                    penetration_factor=lan_client._projectile_wire_round(
+                    penetration_factor=round_scalar(
                         combat_rules.sample_penetration_factor()))
                 self.pending = candidate
             owner = self.control.owner
-            canonical = lan_client._projectile_wire_round
+            canonical = round_scalar
             range_origin = tuple(canonical(value) for value in (
                 owner.local_pose()[0] if range_origin is None else range_origin))
             target_signature, target_body, target_chassis = self._target_pose(target)

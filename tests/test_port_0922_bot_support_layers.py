@@ -16,6 +16,7 @@ class BotSupportLayerTests(unittest.TestCase):
     DECK = -5.151131629943848
 
     def setUp(self):
+        from gui.mods.offline_lan_0922.native_navigation_query import Oracle
         self.output = contextlib.redirect_stdout(io.StringIO())
         self.output.__enter__()
         self.addCleanup(self.output.__exit__, None, None, None)
@@ -26,16 +27,25 @@ class BotSupportLayerTests(unittest.TestCase):
         self.runtime = fixture._runtime()
         self.battle = fixture.BattleRuntime(self.runtime)
         self.addCleanup(self.battle.stop, show_login=False)
-        self.assertTrue(self.battle.start({
-            'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
-            'name': 'Player'}, fixture._minimal_start(), fixture._Client()))
-        for unused in range(8):
-            if self.battle.state == 'running':
-                break
-            self.assertTrue(self.runtime.bigworld.callbacks)
-            self.runtime.bigworld.callbacks.pop(0)()
+        client = fixture._Client()
+        client.player_id = -1
+        client.name = 'Worker'
+        client.bot_authority_id = -1
+        client.is_bot_authority = lambda: True
+        start = fixture._minimal_start()
+        start['players'] = []
+        with mock.patch.object(Oracle, 'create', return_value=object()):
+            self.assertTrue(self.battle.start({
+                'map': '01_karelia', 'vehicle': 'ussr:R11_MS-1',
+                'name': 'Worker', 'worker_mode': True}, start, client))
+            for unused in range(8):
+                if self.battle.state == 'running':
+                    break
+                self.assertTrue(self.runtime.bigworld.callbacks)
+                self.runtime.bigworld.callbacks.pop(0)()
         self.assertEqual('running', self.battle.state, self.battle.error)
         self.bots = self.battle._bots
+        self.assertIsNotNone(self.bots)
 
     def collision_planes(self, floor, deck=None):
         def collide(space, start, end, skip_flags, ground_filter=None):

@@ -10,7 +10,9 @@ across the passage.
 import copy
 import json
 import math
+import os
 from pathlib import Path
+import subprocess
 import sys
 import unittest
 from unittest import mock
@@ -34,6 +36,7 @@ PASSAGE_SOUTH = -158.0
 PASSAGE_NORTH = -140.0
 SECONDS = 30.0
 FPS = 15
+SCENE_GEOMETRY = '19d79b1a08e03deb0635373bd1eebc4346ab42b3'
 
 
 def _flat_graph():
@@ -45,6 +48,26 @@ def _flat_graph():
     graph['heights_mm'] = [
         0 if value is not None else None for value in graph['heights_mm']]
     return graph
+
+
+def _recorded_scene_profile(module):
+    # The recorded allocation puts id 16 on valley and id 17 on wall_pass,
+    # both inside the eastern gate. The new authoritative Default moved
+    # wall_pass to the western crossing, so reusing only the old ids no longer
+    # reconstructs that opposed-gate scene. Publish its exact old geometry as
+    # an explicit custom test profile, not a Default document that is ignored.
+    # The current collision topology, physics, driver and traffic law remain.
+    old=json.loads(subprocess.check_output(
+        ['git','show',SCENE_GEOMETRY+':navgraphs/'+MAP_NAME+'.json'],cwd=ROOT,
+        env=dict(os.environ,GIT_NO_LAZY_FETCH='1')))
+    profile=module.bot_tactics.empty('recorded_opposed_gate_scene')
+    profile['maps'][MAP_NAME]=dict(mode='regular',
+        resource_sha256=module.bot_tactics.MAPS[MAP_NAME]['resource_sha256'],
+        routes=[],positions=[],default_routes=[dict(id=route['id'],team=int(team),
+            class_tag='all',symmetric=False,
+            points=[[point[0],point[1],int(point[2])] for point in route['waypoints']])
+            for team,routes in sorted(old['routes'].items()) for route in routes])
+    return profile
 
 
 class GreatWallGateTests(unittest.TestCase):
@@ -120,7 +143,7 @@ class GreatWallGateTests(unittest.TestCase):
             published=runtime.battle_start({'map': MAP_NAME, 'round_id': 7,
                                   'bot_tactics': (module.bot_tactics.default_profile()
                                       if getattr(self, 'authoritative', False)
-                                      else module.bot_tactics.empty()),
+                                      else _recorded_scene_profile(module)),
                                   'bot_authority_id': 1, 'bots': _bots()})[0]
         if not getattr(self,'authoritative',False):
             for agent in runtime.adapter.director.agents.values():agent.pop('route_entry_fixed',None)

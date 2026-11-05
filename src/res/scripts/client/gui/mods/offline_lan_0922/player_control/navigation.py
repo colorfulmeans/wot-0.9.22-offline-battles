@@ -2,23 +2,27 @@
 from __future__ import division
 import copy
 import math
-from .. import prebaked_navigation, bot_tactics
+from .. import prebaked_navigation
+from . import route_catalog
 from .pathfinding import PlayerPathfinder
 from .driving import Driver, angle
-from .missions import Mission, base_areas, distance, legal_support, TERMINAL
+from .missions import Mission, base_areas, distance, legal_support, PROGRESS_TIMEOUT, TERMINAL
 from .artillery import Artillery
 from .strategy import CombatPolicy, target_value
 from .navigation_support import PlayerHeightSupport
 from .local_routes import LocalRoutes
 from .cover import PlayerCover
 from .parking import RouteParking
+from .sortie import SortieProgress, geometry as route_geometry
 
 
 def authored_routes(profile, name, graph):
     """Copy static geometry only; no director, allocation or Bot actor calls."""
     result = copy.deepcopy(graph.get('routes') or {})
-    edits = bot_tactics.map_settings(profile, name).get('default_routes', ())
-    for edit in edits:
+    edits = (profile or {}).get('maps', {}).get(name, {}).get('default_routes', ())
+    # Common geometry is the parent of every class projection, even if the
+    # wire document happens to put an AT-SPG variant before its common row.
+    for edit in sorted(edits, key=lambda row: row.get('class_tag', 'all') != 'all'):
         rows = result.get(str(edit['team']), [])
         base = next((r for r in rows if r['id'] == edit['id']), None)
         if base is None:
@@ -30,12 +34,14 @@ def authored_routes(profile, name, graph):
             else:
                 base.setdefault('_editor_disabled_classes', []).append(tag)
         elif tag == 'all':
-            base['waypoints'] = copy.deepcopy(edit['points'])
+            route_catalog.apply_geometry(base, edit)
         else:
             variant = copy.deepcopy(base)
-            variant.update(id=bot_tactics.default_route_id(edit),
+            variant.update(id=route_catalog.class_route_id(edit),
                            _editor_source=base['id'], _editor_class=tag,
-                           waypoints=copy.deepcopy(edit['points']))
+                           class_weights=dict((name, 1. if name == tag else 0.)
+                                              for name in route_catalog.VEHICLE_CLASSES))
+            route_catalog.apply_geometry(variant, edit)
             rows.append(variant)
     return result
 
@@ -66,10 +72,10 @@ class PlayerNavigation(object):
             raise ValueError('Player navigation map is unavailable')
         prebaked_navigation.clip_graph_to_arena(graph, owner._arena_bounds)
         graph = prebaked_navigation.with_shore_hazards(graph)
-        settings = bot_tactics.effective_map(owner._start_message.get('bot_tactics'), name)
+        settings = route_catalog.map_settings(owner._start_message.get('bot_tactics'), name)
         catalog = authored_routes({'maps': {name: settings}}, name, graph)
         tags = descriptor.type.tags
-        self.tag = next((t for t in bot_tactics.CLASSES if t in tags), 'mediumTank')
+        self.tag = next((t for t in route_catalog.VEHICLE_CLASSES if t in tags), 'mediumTank')
         self.routes = route_candidates(catalog, int(owner.client.team), self.tag)
         self.team = int(owner.client.team)
         self.bounds = graph.get('bounds')
@@ -81,17 +87,28 @@ class PlayerNavigation(object):
         if self.home_area is not None:
             self.home = tuple(self.home_area['point'])
         for route in settings.get('routes', ()):
-            if route.get('disabled') or route['team'] != int(owner.client.team):
+            if not route_catalog.accepts_route(route, self.team, self.tag):
                 continue
             if route.get('purpose') == 'spg_attack':
-                if self.tag == 'SPG':
-                    self.routes.append(dict(route, id='user_'+route['id'],
-                                            waypoints=route['points'], player_spg_attack=True))
-            elif bot_tactics.matches(route, dict(team=int(owner.client.team), slot=0,
-                                               profile=dict(class_tag=self.tag))):
+                self.routes.append(dict(route, id='user_'+route['id'],
+                                        waypoints=route['points'], player_spg_attack=True))
+            else:
                 self.routes.append(dict(route, id='user_'+route['id'], waypoints=route['points']))
         self.spg_attack_routes = [route for route in self.routes if route.get('player_spg_attack')]
         self.travel_routes = [route for route in self.routes if not route.get('player_spg_attack')]
+        self.sortie_routes = list(self.spg_attack_routes)
+        if self.tag == 'SPG':
+            roads = []
+            for tag in route_catalog.VEHICLE_CLASSES[:-1]:
+                roads.extend(route_candidates(catalog, self.team, tag))
+            roads.extend(dict(route, id='user_'+route['id'], waypoints=route['points'])
+                         for route in settings.get('routes', ())
+                         if route.get('purpose') != 'spg_attack' and any(
+                             route_catalog.accepts_route(route, self.team, tag)
+                             for tag in route_catalog.VEHICLE_CLASSES[:-1]))
+            self.sortie_routes.extend(route_catalog.borrowed_roads(roads))
+        for route in self.sortie_routes:
+            route['player_sortie'] = True
         self.context = {}
         self.policy_cache = None
         self.mission = None
@@ -107,12 +124,18 @@ class PlayerNavigation(object):
         if self.tag == 'SPG':
             positions = settings.get('positions')
             if positions is None:
-                positions = bot_tactics.default_map(name).get('positions', ())
+                positions = route_catalog.packaged_map(name).get('positions', ())
             deleted = set(settings.get('deleted_positions', ()))
             self.artillery = Artillery([row for row in positions if row['id'] not in deleted],
                                        self.team, self.home_area)
         self.automatic_defence = False
         self.resume_route = None
+        self.resume_sortie = None
+        self.sortie_progress = SortieProgress()
+        self.sortie_rejections = {}
+        self.sortie_receipt = None
+        self.sortie_terminal = None
+        self.sortie_entry_since = None
         self.sortie_started = False
         self.firing_move = None
         self.cover_move = None
@@ -158,6 +181,12 @@ class PlayerNavigation(object):
         self.ammo_retreat = None
         self.route_history = []
         self.context = {}
+        self.sortie_progress.reset()
+        self.sortie_rejections.clear()
+        self.resume_sortie = None
+        self.sortie_receipt = None
+        self.sortie_terminal = None
+        self.sortie_entry_since = None
 
     def _height(self, point, hint, strict=False):
         return self.support.height(point, hint, strict)
@@ -181,6 +210,10 @@ class PlayerNavigation(object):
         self.cover_search.reset()
         self.parking.release()
         self.parking_order = None
+        self.sortie_entry_since = None
+        progress = getattr(self, 'sortie_progress', None)
+        if progress is not None:
+            progress.reset()
 
     def retask(self, routes, reason=None):
         """Automatic suggestions cannot replace an accepted player command."""
@@ -195,6 +228,32 @@ class PlayerNavigation(object):
         defending = reason == 'defend' or any(
             str(route['id']).startswith('player_base_defence') for route in routes)
         now = self.context.get('now', 0.)
+        if self.artillery is not None and self.artillery.mode == 'sortie' and not defending:
+            # Strategy proposes ordinary lane identities. Resolve those to
+            # this player's own sortie projection (including its home branch)
+            # instead of accepting a road that bypasses the sortie cursor.
+            identities = set(route['id'] for route in routes)
+            geometries = set(route_geometry(route) for route in routes)
+            routes = [copy.deepcopy(route) for route in self.sortie_routes
+                if (route['id'] in identities or
+                    identities.intersection(route.get('player_road_ids', ())) or
+                    route_geometry(route) in geometries) and
+                route_geometry(route) not in self.sortie_rejections]
+            if not routes:
+                self.receipt = dict(status='unavailable_sortie_routes_rejected')
+                return False
+            proposed = set(route_geometry(route) for route in routes)
+            unchanged = (self.route is not None and self.route.get('player_sortie') and
+                         route_geometry(self.route) in proposed)
+            unchanged = unchanged or (self.route is None and self.selection and
+                all(route.get('player_sortie') for route in self.selection) and
+                proposed == set(route_geometry(route) for route in self.selection))
+            if unchanged:
+                # A strategy lane and its SPG projection have different ids.
+                # Repeated pressure suggestions for that same geometry cannot
+                # renew entry/recovery deadlines or discard an existing cursor.
+                self.receipt = dict(status='sortie_route_unchanged')
+                return False
         if (self.artillery is not None and not defending and not self.automatic_defence and
                 self.artillery.mode not in ('sortie', 'fallback')):
             # Validate the replacement owner before retiring a live automatic
@@ -208,6 +267,8 @@ class PlayerNavigation(object):
         if self.artillery is not None:
             if defending and not self.automatic_defence:
                 self.resume_route = (list(self.selection), self.route, self.index)
+                self.resume_sortie = copy.deepcopy(self.sortie_progress)
+                self.resume_sortie.pause(now)
                 self.artillery.suspend(now)
             elif self.automatic_defence and not defending:
                 self.artillery.resume(now)
@@ -215,6 +276,10 @@ class PlayerNavigation(object):
                     selection, route, index = self.resume_route
                     self._reset_travel(selection)
                     self.route, self.index = route, index
+                    if self.resume_sortie is not None:
+                        self.sortie_progress = self.resume_sortie
+                        self.sortie_progress.resume(now)
+                    self.resume_sortie = None
                     self.resume_route = None
                     self.automatic_defence = False
                     self.receipt = dict(status='resumed_after_defence')
@@ -237,6 +302,11 @@ class PlayerNavigation(object):
             progress=0., reason=None, result=None, holding=False)
         if self.automatic_recovery is not None:
             result['automatic_recovery'] = copy.deepcopy(self.automatic_recovery)
+        if self.sortie_receipt is not None:
+            result['sortie_recovery'] = copy.deepcopy(self.sortie_receipt)
+        if self.mission is None and self.sortie_terminal is not None:
+            result.update(status='failed', phase='failed', reason=self.sortie_terminal,
+                          result=dict(reason=self.sortie_terminal))
         return result
 
     def _prepare_mission(self, action, args, state):
@@ -273,9 +343,13 @@ class PlayerNavigation(object):
         self.combat.reset()
         self.automatic_defence = False
         self.resume_route = None
+        self.resume_sortie = None
+        self.sortie_rejections.clear()
+        self.sortie_receipt = None
+        self.sortie_terminal = None
         routes = self.travel_routes or self.routes
         if self.tag == 'SPG' and action == 'attack':
-            routes = self.spg_attack_routes or routes
+            routes = self.sortie_routes
         self._reset_travel(routes)
         self.receipt = dict(status='mission_started', mission=mission.identity, action=action)
         return self.mission_status()
@@ -290,6 +364,10 @@ class PlayerNavigation(object):
             self.artillery.resume(self.context.get('now', 0.) if now is None else now)
         self.automatic_defence = False
         self.resume_route = None
+        self.resume_sortie = None
+        self.sortie_rejections.clear()
+        self.sortie_receipt = None
+        self.sortie_terminal = None
         self.sortie_started = False
         self.cover_move = self.firing_move = None
         self.combat.reset()
@@ -344,7 +422,14 @@ class PlayerNavigation(object):
         self.mission = None
         self.cover_move = self.firing_move = None
         self.combat.reset()
-        self._reset_travel(self.travel_routes or self.routes)
+        routes = self.travel_routes or self.routes
+        if self.artillery is not None and self.artillery.mode == 'sortie':
+            # Capture timeout is not a new command or actual route progress.
+            # Keep the sortie retirement ledger; when exhausted, an empty
+            # selection lets the existing capture backoff own the next retry.
+            routes = [route for route in self.sortie_routes
+                      if route_geometry(route) not in self.sortie_rejections]
+        self._reset_travel(routes)
         self.receipt = dict(status='automatic_mission_recovery',
                             recovery=copy.deepcopy(self.automatic_recovery))
         return True
@@ -469,7 +554,11 @@ class PlayerNavigation(object):
                     goal = (float(point[0]), height, float(point[1]))
                     entry_distance = math.sqrt(sum((a-b)**2 for a,b in zip(position,goal)))
                     candidates.append((entry_distance, str(route['id']), index, route, goal))
-            self.candidates = sorted(candidates, key=lambda r: r[:3])
+            # Prefer an authored SPG sortie when its entry is actually
+            # connected. Borrowed roads remain fallbacks in this same bounded
+            # search, not a team-wide reservation or hidden allocation.
+            self.candidates = sorted(candidates,
+                key=lambda r: (r[3].get('player_sortie_priority', 0),) + r[:3])
         if self.search is None:
             if not self.candidates:
                 self.receipt = dict(status='no_connected_entry')
@@ -1002,25 +1091,158 @@ class PlayerNavigation(object):
         self.receipt = dict(status='firing_recovery_blocked', until=recovery['until'])
         return None
 
-    def _capture_handoff(self, state):
+    def _capture_handoff(self, state, reason='route_terminal_capture'):
         if self.automatic_defence or self.enemy_area is None:
             return False
         if self.mission is None:
-            if not self._automatic_capture(state, 'route_terminal_capture'):
+            if not self._automatic_capture(state, reason):
                 return False
         elif self.mission.route_attack:
-            self.mission.enter_capture(self.enemy_area, state, 'route_terminal_capture')
+            self.mission.enter_capture(self.enemy_area, state, reason)
         else:
             return False
         position = state['position']
         self.mission.observe(state, self.context, self._height((position[0], position[2]), position[1]))
         return True
 
+    def _sortie_order(self, state, direction_clear, hold):
+        position = state['position']
+        supported = legal_support(state, self.context,
+            self._height((position[0], position[2]), position[1]))
+        finished_parking = False
+        if self.sortie_progress.phase not in ('return', 'home'):
+            parking = self.parking.update(self.route, self.index, state, self.context,
+                                          self._height, self.support.snapshot)
+            self.parking_order = parking
+            if not parking['complete']:
+                # Explicit authored waits own a separate, bounded approach
+                # and an intentional wait duration (including wait forever).
+                # The route stall clock must not retire that valid owner.
+                self.sortie_progress.pause(state['now'])
+                receipt = dict(phase='authored_parking', reason=parking['phase'],
+                               route=self.route['id'], index=self.index)
+                order = self._drive_goal(state, direction_clear, parking.get('goal'),
+                    ('player_sortie_parking', self.route['id'], self.index),
+                    hold=parking['holding'], mode='parking_hold' if parking['holding'] else 'parking_approach')
+                self.sortie_receipt = receipt
+                order['sortie_recovery'] = dict(receipt)
+                self.receipt['sortie_recovery'] = dict(receipt)
+                return order
+            finished_parking = bool(not parking.get('skipped') and
+                route_catalog.waiting_positions(self.route['waypoints'][self.index]))
+        checked_index = self.index
+        def reached(point, radius):
+            height = self._height(point, position[1])
+            return bool(supported and height is not None and
+                        abs(height-position[1]) <= 1. and distance(position, point) <= radius)
+        def can_advance(index, phase):
+            return (phase == 'return' or index == checked_index or
+                    not route_catalog.waiting_positions(self.route['waypoints'][index]))
+        aiming = bool(hold and self.context.get('target') is not None and
+                      self.context.get('fire_clear') and
+                      (self.context.get('gun_ready') or self.context.get('aim_progress') or
+                       self.context.get('burst_active')))
+        receipt = self.sortie_progress.update(self.route, self.index, state,
+            self.home_area, reached, aiming=aiming, sequence=self.context.get('fire_seq'),
+            can_advance=can_advance,
+            arrived_index=checked_index if finished_parking and supported else None)
+        self.index = receipt['index']
+        self.sortie_receipt = receipt
+        inside = self.enemy_area is not None and reached(
+            self.enemy_area['point'], self.enemy_area['radius'])
+        if receipt.get('node_owner_pending'):
+            # A future authored wait was reached during this tick's cursor
+            # burst. Stop here; its own approach/wait owner runs next tick.
+            self.sortie_progress.pause(state['now'])
+            order = self._drive_goal(state, direction_clear, None,
+                ('player_sortie_parking_pending', self.route['id'], self.index),
+                hold=True, mode='parking_hold')
+        elif (receipt.get('complete') or inside) and self._capture_handoff(state):
+            order = self._mission_order(state, direction_clear)
+        elif receipt.get('complete') and self.enemy_area is None:
+            order = self._fail_sortie(state, direction_clear, receipt)
+        elif receipt.get('replace'):
+            self.sortie_rejections[route_geometry(self.route)] = dict(
+                route=self.route['id'], reason=receipt['reason'])
+            order = self._replace_sortie(state, direction_clear, receipt)
+        else:
+            point = receipt['goal']
+            height = self._height(point, position[1]) if point is not None else None
+            goal = (point[0], height, point[1]) if height is not None else None
+            order = self._drive_goal(state, direction_clear, goal,
+                ('player_sortie', self.route['id'], receipt['phase'], self.index),
+                hold=hold, mode='engage' if hold else 'route',
+                end_point=receipt['phase'] == 'home' or self.index == len(self.route['waypoints'])-1)
+        self.sortie_receipt = dict(receipt)
+        order['sortie_recovery'] = dict(receipt)
+        self.receipt['sortie_recovery'] = dict(receipt)
+        return order
+
+    def _replace_sortie(self, state, direction_clear, receipt):
+        routes = [copy.deepcopy(route) for route in self.sortie_routes
+                  if route_geometry(route) not in self.sortie_rejections]
+        receipt['failed_routes'] = sorted(row['route'] for row in self.sortie_rejections.values())
+        if routes:
+            for route in routes:
+                route['player_start_at_first'] = receipt['reason'] == 'returned_home'
+            self._reset_travel(routes)
+            receipt['handoff'] = 'another_player_sortie_route'
+            return self._drive_goal(state, direction_clear, None,
+                ('player_sortie_reselect',), hold=True, mode='joining')
+        if self._capture_handoff(state, 'sortie_routes_exhausted_native_capture'):
+            receipt['handoff'] = 'native_capture_after_route_exhaustion'
+            return self._mission_order(state, direction_clear)
+        if self.enemy_area is not None:
+            receipt.update(handoff='capture_retry_backoff', retry_at=self.capture_retry_at)
+            return self._drive_goal(state, direction_clear, None,
+                ('player_sortie_capture_retry', self.capture_retry_at), hold=True, mode='mission_hold')
+        return self._fail_sortie(state, direction_clear, receipt)
+
+    def _fail_sortie(self, state, direction_clear, receipt):
+        # Missing objectives cannot establish a successful capture. Publish a
+        # terminal failure and release this cursor until an explicit new task.
+        receipt['handoff'] = self.sortie_terminal = 'sortie_failed_no_capture_objective'
+        if self.mission is not None and self.mission.status not in TERMINAL:
+            self.mission.finish('failed', self.sortie_terminal, state['now'])
+        self.sortie_progress.reset()
+        return self._drive_goal(state, direction_clear, None,
+            ('player_sortie_failed',), hold=True, mode='mission_hold')
+
     def _route_order(self, state, direction_clear, hold=False):
         position, now = state['position'], state['now']
+        if self.sortie_terminal is not None:
+            return self._drive_goal(state, direction_clear, None,
+                ('player_sortie_failed',), hold=True, mode='mission_hold')
+        sortie_intent = bool(self.tag == 'SPG' and not self.automatic_defence and
+            (self.artillery is not None and self.artillery.mode == 'sortie' or
+             self.mission is not None and self.mission.route_attack))
+        if sortie_intent and not self.selection:
+            receipt = dict(phase='entry_failed', reason='no_sortie_routes')
+            order = self._replace_sortie(state, direction_clear, receipt)
+            self.sortie_receipt = dict(receipt)
+            order['sortie_recovery'] = dict(receipt)
+            self.receipt['sortie_recovery'] = dict(receipt)
+            return order
         joined = self.join(position, now)
         goal = None
         key = ('player_joining', int(state['id']))
+        if (joined and (sortie_intent or self.route.get('player_sortie')) and
+                not self.automatic_defence):
+            return self._sortie_order(state, direction_clear, hold)
+        if (not joined and not self.automatic_defence and (sortie_intent or
+                self.selection and all(route.get('player_sortie') for route in self.selection))):
+            if self.sortie_entry_since is None:
+                self.sortie_entry_since = now
+            if now-self.sortie_entry_since >= PROGRESS_TIMEOUT:
+                for route in self.selection:
+                    self.sortie_rejections[route_geometry(route)] = dict(
+                        route=route['id'], reason='sortie_entry_timeout')
+                receipt = dict(phase='entry_failed', reason='sortie_entry_timeout')
+                order = self._replace_sortie(state, direction_clear, receipt)
+                self.sortie_receipt = dict(receipt)
+                order['sortie_recovery'] = dict(receipt)
+                self.receipt['sortie_recovery'] = dict(receipt)
+                return order
         if joined:
             points = self.route['waypoints']
             parking = None
@@ -1029,7 +1251,7 @@ class PlayerNavigation(object):
                 parking = self.parking.update(self.route, self.index, state, self.context,
                                               self._height, self.support.snapshot)
                 self.parking_order = parking
-                finished_parking = bool(bot_tactics.waiting_positions(points[self.index]) and
+                finished_parking = bool(route_catalog.waiting_positions(points[self.index]) and
                     parking['complete'] and not parking.get('skipped'))
                 if not parking['complete'] or self.index + 1 >= len(points):
                     break
@@ -1074,9 +1296,13 @@ class PlayerNavigation(object):
         if self.artillery is not None and self.mission is None and not self.automatic_defence:
             mode = self.artillery.mode
             if mode == 'sortie' and not self.sortie_started:
-                routes = copy.deepcopy(self.spg_attack_routes or self.travel_routes or self.routes)
+                routes = copy.deepcopy(self.sortie_routes)
                 for route in routes:
                     route['player_start_at_first'] = not self.artillery.sortie_home_failed
+                    route['player_sortie'] = True
+                self.sortie_rejections.clear()
+                self.sortie_receipt = None
+                self.sortie_terminal = None
                 self._reset_travel(routes)
                 self.sortie_started = True
             elif mode not in ('sortie', 'fallback'):

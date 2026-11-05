@@ -2,9 +2,11 @@
 import base64
 import copy
 from gui.mods.offline_lan_0922.bot_fitting_data import PLANS, CLASSES
-from gui.mods.offline_lan_0922 import default_crew, siege_mechanics
+from gui.mods.offline_lan_0922 import default_crew
+from gui.mods.offline_lan_0922.vehicle_fitting_context import (
+    _CONTEXTS, context, clear, register, native_factors, battle_factors,
+    skill_snapshot, skill_count, skill_level, descriptor_crew_roster)
 
-_CONTEXTS = {}
 TIERS = ('rookie', 'regular', 'veteran', 'elite')
 try:
     TEXT_TYPES = (basestring,)
@@ -64,132 +66,10 @@ def validate_profile(profile):
                         raise bot_tactics.TacticsError('Stock development only allows no equipment')
 
 
-def context(descriptor):
-    entry = _CONTEXTS.get(id(descriptor))
-    return entry[1] if entry is not None and entry[0] is descriptor else None
-
-
-def clear():
-    _CONTEXTS.clear()
-
-
-def native_factors(descriptor, critical=None, equipments=()):
-    """Cache native factors by immutable fitting and actual crew/fire state."""
-    from gui.mods.offline_lan_0922 import loadout
-    value = context(descriptor)
-    if value is None:
-        raise ValueError('Bot fitting is unavailable')
-    critical = critical or {}
-    knocked_out = frozenset(critical.get('crew_ko') or ())
-    flags = tuple(name not in knocked_out for name in value['crew_roster'])
-    fire = bool(critical.get('fire', False))
-    consumables = tuple(equipments or ())
-    key = (id(descriptor), flags, fire, consumables)
-    cache = value.setdefault('factors', {})
-    if key not in cache:
-        factors = loadout.attribute_factors(
-            descriptor, equipments=consumables, activity_flags=flags, is_fire=fire,
-            crew_level=value['wire']['crew_level'])
-        if factors is None:
-            raise RuntimeError('native Bot fitting crew factors were rejected')
-        cache[key] = factors
-        from gui.mods.offline_lan_0922 import native_input_diagnostics as diagnostic
-        if diagnostic.detailed_enabled():
-            modifiers = loadout.modifiers(
-                descriptor, crew_skills=value.get('crew_skills', ()), factors=factors)
-            misc = getattr(descriptor, 'miscAttrs', None) or {}
-            gun = getattr(descriptor, 'gun', None)
-            base_reload = getattr(gun, 'reloadTime', None)
-            diagnostic.validation_event('bot_effective_factors', vehicle=value['wire'].get('vehicle'),
-                tier=value['wire'].get('tier'), crew_level=value['wire']['crew_level'],
-                devices=value['wire'].get('devices'), directive=value['wire'].get('directive'),
-                crew_active=list(flags), fire=fire,
-                descriptor_misc=dict((name, misc[name]) for name in (
-                    'gunReloadTimeFactor', 'gunAimingTimeFactor',
-                    'crewChanceToHitFactor', 'vehicleByChassisDamageFactor',
-                    'chassisHealthFactor', 'ammoBayHealthFactor',
-                    'engineHealthFactor', 'fuelTankHealthFactor') if name in misc),
-                final_modifiers=dict((name, factor) for name, factor in modifiers.items()
-                                     if isinstance(factor, (int, float))),
-                base_reload_seconds=base_reload,
-                effective_reload_seconds=(float(base_reload) * modifiers['reload_factor']
-                                          if base_reload is not None else None),
-                factors=dict((name, factor) for name, factor in factors.items()
-                             if isinstance(factor, (int, float))))
-    return cache[key]
-
-
-def battle_factors(descriptor, critical=None, equipments=()):
-    from gui.mods.offline_lan_0922 import crew_battle
-    return crew_battle.from_native(native_factors(descriptor, critical, equipments=equipments))
-
-
-def skill_snapshot(descriptor):
-    """Project generated native crew slots through the player's eligibility law."""
-    value = context(descriptor)
-    if value is None:
-        return None
-    if 'skill_snapshot' not in value:
-        from items import tankmen
-        from gui.mods.offline_lan_0922 import effective_params
-        members = []
-        for index, raw in enumerate(value['crew']):
-            member = tankmen.TankmanDescr(raw)
-            names = tuple(member.skills)
-            roles = list(descriptor.type.crewRoles[index])
-            skills = []
-            for order, name in enumerate(names):
-                name = str(name).lower()
-                role = effective_params.skill_required_role(name)
-                level = (float(getattr(member, 'lastSkillLevel', 100))
-                         if order == len(names) - 1 else 100.0)
-                skills.append(dict(name=name, level=level, active=True,
-                                   enabled=role is None or role in roles))
-            # Discrete perks do not pass through native numerical factors.
-            # A directive must also grant its perk to an untrained Bot, just
-            # as the player's immutable skill projection does.
-            for booster in value.get('directives', ()):
-                name = str(getattr(booster, 'skillName', '')).lower()
-                if (name not in effective_params.DISCRETE_SKILL_ROLES or
-                        effective_params.skill_required_role(name) not in roles):
-                    continue
-                existing = next((row for row in skills if row['name'] == name), None)
-                if existing is None:
-                    existing = dict(name=name)
-                    skills.append(existing)
-                existing.update(level=100.0, active=True, enabled=True)
-            members.append(dict(instance=value['crew_roster'][index],
-                                roles=roles, skills=skills))
-        value['skill_snapshot'] = {'crew': {'members': members}}
-    return value['skill_snapshot']
-
-
-def skill_count(descriptor, name, critical=None):
-    from gui.mods.offline_lan_0922 import effective_params
-    snapshot = skill_snapshot(descriptor)
-    return (effective_params.living_skill_count(
-        snapshot, name, (critical or {}).get('crew_ko', ()))
-        if snapshot is not None else 0)
-
-
-def skill_level(descriptor, name, critical=None):
-    from gui.mods.offline_lan_0922 import effective_params
-    snapshot = skill_snapshot(descriptor)
-    return (effective_params.living_skill_level(
-        snapshot, name, (critical or {}).get('crew_ko', ()))
-        if snapshot is not None else 0.0)
-
-
 def project_shot(descriptor, shot, critical=None):
     from gui.mods.offline_lan_0922 import descriptor_donation
     return descriptor_donation.project_shot(shot, deadeye=bool(
         skill_count(descriptor, 'gunner_sniper', critical)))
-
-
-def register(descriptor, value):
-    for member in (descriptor,) + siege_mechanics.descriptor_pair(descriptor):
-        if member is not None:
-            _CONTEXTS[id(member)] = (member, value)
 
 
 def canonical(value):
@@ -313,8 +193,7 @@ def build(vehicles, vehicle, tier, crew_level=None, restored=None, overrides=Non
     value = dict(wire=wire, crew=crew, directives=directives, skills=skills,
                  crew_skills=crew_skills, camouflages=camouflages,
                  outfits=outfits, native_style=selected['style'])
-    from gui.mods.offline_lan_0922.bot_runtime import _descriptor_crew_roster
-    value['crew_roster'] = _descriptor_crew_roster(descriptor)
+    value['crew_roster'] = descriptor_crew_roster(descriptor)
     register(descriptor, value)
     from gui.mods.offline_lan_0922.native_input_diagnostics import validation_event
     validation_event('bot_fitting_installed', vehicle=vehicle, tier=tier,

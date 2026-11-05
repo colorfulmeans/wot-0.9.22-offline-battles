@@ -87,7 +87,10 @@ class PostmortemFireTests(unittest.TestCase):
 
 class RailwayBirthDataTests(unittest.TestCase):
     def test_all_railway_spawn_changes_are_recorded_without_grid_or_route_edits(self):
+        import sys
         root=Path(__file__).resolve().parents[1]
+        sys.path.insert(0,str(root/'tools'))
+        from check_navigation_resolution import verify_default_routes
         checked=changed=0
         for path in (root/'navgraphs').glob('*.json'):
             graph=json.loads(path.read_bytes())
@@ -102,7 +105,9 @@ class RailwayBirthDataTests(unittest.TestCase):
                 ['git','show','100bac61:navgraphs/'+path.name],cwd=root))
             for key in ('routes','heights_mm','links','hazards','local_meshes'):
                 self.assertEqual(original.get(key),historical.get(key),(path.name,key))
-            self.assertEqual(original['routes'],graph['routes'])
+            # The subsequent Default publication replaces only waypoints;
+            # the historical railway-only no-route-edit proof above remains.
+            verify_default_routes(original,graph,path.stem)
             expected=copy.deepcopy(original['spawn_formations'])
             for row in receipt['changes']:
                 self.assertEqual(row['before'],expected[row['team']][row['slot']])

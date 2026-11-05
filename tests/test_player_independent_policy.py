@@ -126,10 +126,10 @@ class RosterOwnershipTests(unittest.TestCase):
         owner._last_snapshot['round_id'] = 3
         self.assertTrue(public_allies(owner, [])[0][0]['alive'])
 
-    def test_unknown_roster_or_pending_create_is_not_complete(self):
+    def test_pending_presentation_does_not_gate_a_valid_public_roster(self):
         owner = self.owner()
         owner._pending_bot_create_order = ['bot:1']
-        self.assertFalse(public_allies(owner, [])[1])
+        self.assertTrue(public_allies(owner, [])[1])
         owner._pending_bot_create_order = []
         del owner._start_message['bots']
         self.assertFalse(public_allies(owner, [])[1])

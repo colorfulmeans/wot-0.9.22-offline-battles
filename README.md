@@ -61,7 +61,8 @@ user replaces or releases them.
 ### Independent foreground behaviour
 
 Player automation runs on **each participant's own visible client**, including
-LAN joiners. It does not construct a Bot actor, call a Bot navigator or share
+LAN joiners. The visible lifecycle creates no `BotRuntime` or Bot artillery
+controller. It does not construct a Bot actor, call a Bot navigator or share
 Bot targeting, traffic reservations, ammunition policy or recovery state.
 The room worker is still required for Bots and world authority. Native CPU
 pathfinding jobs, collision/physics primitives and immutable map/vehicle data
@@ -69,20 +70,24 @@ are shared services, not a hidden game client making player decisions.
 
 | Capability | Foreground implementation |
 | --- | --- |
-| Routes and local support | Private `PlayerPathfinder`, `PlayerTerrainGrid` and `PlayerLocalHeightLinks`; own searches, actual-floor support, shallow-water rules, failure edges and cancellation. Local observed wrecks and landed turrets invalidate its own routes. |
-| Traffic and recovery | All travelling modes, including SPG travel, firing-position changes and reload withdrawal, use local intersection/head-on rules, bounded stationary-friendly yielding, contact-normal separation and narrow-passage/rear-clearance checks. Wreck pushing includes proved steering and an own-progress deadline. |
+| Routes and local support | Private route-catalogue projection, `PlayerPathfinder`, `PlayerTerrainGrid` and `PlayerLocalHeightLinks`; own searches, actual-floor support, shallow-water rules, failure edges and cancellation. Route choice does not call Bot matching or assume Bot slot zero. Local observed wrecks and landed turrets invalidate its own routes. |
+| Traffic and recovery | All travelling modes use local intersection/head-on rules, bounded stationary-friendly yielding, contact-normal separation and narrow-passage/rear-clearance checks. Expired/exhausted traffic and short-escape owners return control to the driver; a static encounter cannot keep renewing them. Wreck pushing includes proved steering and an own-progress deadline. |
 | Arrival | Braking uses actual stopping distance and elapsed decision time at the real destination, not every intermediate A* corner. Explicit parking, capture and authored waits retain their own protected movement ownership. |
 | Combat movement | Range hysteresis, observed support, bounded local flanking and stable stationary hull angling. Player-owned cover checks visible threats against actual muzzle/body geometry, supported peek/escape paths and exposure, rather than one fixed-height ray. Healthy-vehicle peek/return coexists with empty-magazine withdrawal; without cover, withdrawal can use an actually traversed private route anchor. |
 | Target selection | Visible close threats, base invaders and recently observed attackers can interrupt an ordinary target lock. The ordered target/ammunition engagement owner and its admitted burst retain their current target and shell stage. |
 | Fire admission | Each physical automatic round, including burst tails, checks the current source, laid muzzle, ammunition and geometry. A frozen scatter draw is proved before debit/publication; a pending query or friendly obstruction cannot silently become a successful shot or reroll that draw. |
-| Special vehicles | Independent artillery deployment/relocation and conservative public-roster endgame checks, limited traverse and native siege/hydraulic aiming gates. Native state must actually reach the requested mode/angles before firing. |
+| Special vehicles | Independent artillery deployment/relocation, authored SPG sortie roads and ordinary-road borrowing through defense connectors. Private stalled-node/next-node/reverse/home recovery retains real authored parking and reports `sortie_recovery`; failed choices hand off to bounded capture or explicit failure. Conservative public-roster endgame checks, limited traverse and native siege/hydraulic aiming gates remain. |
+| Equipment and contact facts | Player-owned repair/crew priorities; neutral installed fitting, critical effects and physical replica readers. Contacts use public poses/ACKs and actual descriptors without asking a Bot controller to calculate player decisions or maintain local history. |
 | Local strategy | Visible pressure and observed friendly losses/support can retask an unengaged player, with a private anti-oscillation lease. Explicit missions and real capture ownership take priority; no Bot team assignment or queue is borrowed. |
 
 These are source and regression-tested capabilities, not a claim of completed
 Windows gameplay acceptance. Native frame cost, long-arc moving-target fire,
 slopes/bridges, busy narrow passages and two-machine LAN independence still need
 an observed Chinese HD #1513 client run. See `COMPATIBILITY_REVIEW.md` for the
-current test evidence and the remaining acceptance boundary.
+current test evidence and the remaining acceptance boundary. The November 6
+error report exposed an exhausted retreat that still held brake/fire control;
+its correction is a tested control handoff, not a guarantee that an actually
+blocked passage can be traversed. Real clearance and final-fire checks remain.
 
 ### Player command protocol for local tests
 

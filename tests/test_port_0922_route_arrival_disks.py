@@ -96,6 +96,25 @@ class RouteArrivalDiskTests(unittest.TestCase):
                         checked += 1
         self.assertGreater(checked, 1000)
 
+    def test_fractional_authored_disk_boundary_keeps_crossing_and_finite_lane(self):
+        point = (14.7903, 77.0369)
+        self.assertGreater((point[0]+6.)-point[0], 6.)
+        for sign in (-1., 1.):
+            with self.subTest(sign=sign):
+                edge = point[0]+sign*6., point[1]
+                outside = point[0]+sign*(6.+1.e-6), point[1]
+                self.assertTrue(bot_tactics.route_disk_reached(edge, point))
+                self.assertFalse(bot_tactics.route_disk_reached(outside, point))
+                before = edge[0], point[1]-10.
+                after = edge[0], point[1]+10.
+                self.assertTrue(bot_tactics.route_disk_reached(after, point, previous=before))
+                self.assertFalse(bot_tactics.route_disk_reached(
+                    (outside[0], after[1]), point, previous=(outside[0], before[1])))
+                following = point[0], point[1]+20.
+                self.assertTrue(bot_tactics.route_disk_reached(after, point, following))
+                self.assertFalse(bot_tactics.route_disk_reached(
+                    (outside[0], after[1]), point, following))
+
 
 class CapturedE3CornerTests(unittest.TestCase):
     def scene(self):

@@ -119,6 +119,9 @@ class TrackPivotGeometryTests(unittest.TestCase):
         runtime = battle_fixture._runtime()
         battle = battle_fixture.BattleRuntime(runtime)
         battle._avatar = runtime.bigworld.avatar
+        # This geometry-only fixture has no native crew/fitting context. Keep
+        # the neutral replica parameter seam absent, as the old fixture did.
+        battle._replica_contact_params = lambda *args: None
         runtime.bigworld.entities[11] = battle_fixture._Vehicle(
             11, battle_fixture._Descriptor(), battle_fixture._Vector(),
             (0, 0, 0), {'health': 500})

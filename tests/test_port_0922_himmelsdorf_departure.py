@@ -185,15 +185,22 @@ class HimmelsdorfDepartureTests(unittest.TestCase):
                 self.assertEqual((local_point['x'],local_point['y'],local_point['z']),
                                  local_order['move_position'])
                 server_expected = route['waypoints'][server_index]
-                self.assertEqual(server_expected, server_point)
-                for cursor, joined, anchor in (
-                        (local_index,local_order['route_join'],local_order['route_anchor']),
-                        (server_index,server_join,(server_anchor['x'],server_anchor['y'],server_anchor['z']))):
+                # Reviewed Default points retain four decimal places, while
+                # server_bot_ai._point has always published millimetres.
+                # Assert that exact wire projection, not raw editor precision.
+                self.assertEqual({key:round(value,3) for key,value in server_expected.items()},
+                                 server_point)
+                for cursor, joined, anchor, wire in (
+                        (local_index,local_order['route_join'],local_order['route_anchor'],False),
+                        (server_index,server_join,(server_anchor['x'],server_anchor['y'],server_anchor['z']),True)):
                     if joined:
-                        self.assertEqual(spawn,anchor)
+                        expected_anchor=spawn
                     else:
                         previous = route['waypoints'][cursor-1]
-                        self.assertEqual((previous['x'],previous['y'],previous['z']),anchor)
+                        expected_anchor=(previous['x'],previous['y'],previous['z'])
+                    if wire:
+                        expected_anchor=tuple(round(value,3) for value in expected_anchor)
+                    self.assertEqual(expected_anchor,anchor)
 
                 if team == 1 and route_id == 'hill':
                     dx = local_order['move_position'][0] - spawn[0]

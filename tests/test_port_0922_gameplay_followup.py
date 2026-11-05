@@ -927,6 +927,7 @@ class PresentedCollisionTests(unittest.TestCase):
         from gui.mods.offline_lan_0922 import tank_collision as collision
         runtime = fixture._runtime()
         battle = fixture.BattleRuntime(runtime)
+        battle._replica_contact_params = fixture._replica_physics_fixture
         battle._avatar = runtime.bigworld.avatar
         battle._local_pitch = -0.6
         shape = (1.5, 3.5, -0.8, 2.0)

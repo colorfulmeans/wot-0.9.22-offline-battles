@@ -1,9 +1,86 @@
-# November 5 independent foreground migration
+# November 6 foreground lifecycle and traffic liveness correction
+
+The installed-build metadata in `wot-error-report-20261106-000120-b685f31afb01`
+identifies PR #119 baseline `71f44fb0e8b8fd32dca88d32b7e34c0d8656e4dd`.
+The second-round Mittengard observations and the corresponding source disprove
+the previous blanket runtime-independence and finite-recovery claims. Older
+sections below retain their individual historical contracts, not a declaration
+that every foreground dependency or native gameplay case was complete.
+
+## Captured failure and corrected ownership
+
+The visible client continued producing frames and completed aiming scans while
+its player remained at one pose. `head_on_retreat` retained the controls after
+both its time and distance limits were exhausted: the receipt's deadline was
+in the past, its remaining distance was negative, and the same branch continued
+writing zero throttle/turn, braking and fire suppression. This was a control
+livelock, not evidence that the Python interpreter had stopped running. An old
+unit test explicitly expected the expired retreat to keep braking; that test
+contract was wrong.
+
+| Boundary | Correction and regression evidence |
+| --- | --- |
+| Expired head-on/crossing control | Deadline or distance exhaustion finishes the encounter and returns the unmodified controls to the current driver. A non-owning finished record prevents immediate same-pair renewal. Real geometry departure/reentry, public actor identity and a finite backoff govern a later attempt; tiny pose jitter alone cannot renew it. |
+| Short escape renewal | An expired short escape cannot immediately swap gear and renew its own authority in the same update. The normal driver/replanner receives a finite interval before another fully proved escape. Ending a lease does not bypass live-hull, static-world, support or turning checks. |
+| Foreground lifecycle | The visible client no longer constructs `BotRuntime` or the Bot `ArtilleryController`. Bot initialization, prewarm, update, authority reconciliation and authority pose publication belong to the room worker. Foreground snapshots materialize published replicas and retain contact history without a Bot controller. |
+| Replica physics | Player contacts derive remote physical parameters from the installed descriptor/native fitting and public snapshot/ACK history. They do not call `BotRuntime.replica_contact_params`, use its difficulty/slot decisions, or replace visible poses with Bot control state. Ground-pose and collision-pose math now live in actor-neutral vehicle physics; a player keeps its player identity. |
+| Route catalogue and parking | `player_control.route_catalog` projects immutable map/editor publications into private player rows. It neither calls `bot_tactics.effective_map/matches` nor fabricates Bot slot zero. Current Default geometry, class variants, authored waits, deleted routes and custom overrides remain effective. Bot formation slot filters do not exclude a human route. |
+| SPG roads and progress | A player can borrow ordinary class roads and follow a reversed authored defense connector to its junction. Ordinary-vehicle waits are removed from borrowed roads; an SPG's own authored waits retain their owner. A private sortie cursor attempts the next node after stalled net progress, then visited nodes in reverse, then home; entry and home failure are finite. Failed route geometry is not immediately resurrected. Exhausted choices enter the existing capture task with its own deadline, or explicitly fail if no objective exists. |
+| SPG pauses and receipts | Only observed productive aiming can temporarily pause a sortie attempt, with a finite allowance renewed by actual shots; blocked traffic is not progress. Authored parking and temporary base-defense ownership preserve the route cursor. Repeated strategy suggestions for the same projected road cannot reset recovery; explicit replacement/Stop clears the correct private state. `sortie_recovery` reports phase, reason, node and replacement outcome. |
+| Parking progress and authored waits | A parking approach renews its progress clock only for a better net distance, not arbitrary displacement or repeated space selection; a whole-approach deadline also bounds slow creep. Already-arrived indefinite holds remain intentional. A nearby-node burst must visit each authored wait owner, and a completed wait at one node cannot complete a different node at the same coordinates. Empty route catalogues and missing capture objectives terminate or hand off explicitly. |
+| Equipment and native factors | Player repair/crew priorities belong to `equipment_policy`, not Bot constants. `vehicle_fitting_context` owns the actual installed-fact registry/readers used by loadout, contact physics, critical effects and ammunition-rack HP. Bot compatibility exports point to that neutral implementation, not the other way round. Equipment decisions remain player-local; activation/damage laws stay shared. |
+| Firing dependency and blocked scans | `FireAdmission` reads neutral `projectile_wire.round_scalar`, not `lan_client` and its transitive Bot imports. Wire rounding and frozen physical-shot semantics are unchanged. A real `Aiming + DirectEngagement` regression completes repeated bounded scans and rotates targets during prolonged obstruction; it does not grant permission to shoot through the obstacle. |
+
+The error-tail reproduction retains the captured local pose, heading, deadline
+and negative distance. The peer's contemporaneous pose and the lease origin
+were not recorded, so those inputs are explicitly synthetic. The regression
+executes the real player update/driver handoff, but is not described as a full
+replay of Windows collision physics. Earlier segments of the log contain a
+different aiming comparison mode; installed metadata alone does not prove that
+every earlier round ran the same already-loaded modules.
+
+The newer ordered target/ammunition aiming model remains in place. Completed
+blocked scans are not evidence of an unbounded scan job, and removing static
+obstruction, friendly-fire or frozen-shot proof would not repair the movement
+owner. This correction changes neither the native ABI nor the server's accepted
+projectile/physics authority.
+
+## Deliberate sharing and remaining verification boundary
+
+The application still contains Bot code because a match still contains Bots.
+In particular, visible replicas must reconstruct the published Bot vehicle's
+installed equipment for correct rendering and collision facts. That data
+reconstruction is not a player decision controller. Immutable route text,
+descriptor data, collision/ballistic laws and native query services remain
+shared. Bot team allocations, mutable reservations, difficulty advantages,
+omniscient targeting and server order queues are not player policy. Obsolete
+route-network parking links are not reinstated merely for nominal parity.
+
+Tests now distinguish real worker authority from foreground replication rather
+than making a visible fixture generate Bot manifests. Foreground construction,
+snapshot and contact tests deliberately make Bot construction/authority access
+fail. Fresh-process import guards exercise actual route, loadout, projectile
+rounding and device-health consumers without Bot implementation imports. The
+existing worker physics, prewarm, authority handoff and critical HP assertions
+remain covered. Per-file isolation is required because native module fakes must
+not leak from one test file into another.
+
+The PR handoff records the exact tested tree, current isolated client/launcher
+results and exact-head CI/package status. Compilation and embedded-contract
+checks under CPython 2.7.18 do not establish native x86 CPython 2.7.7 gameplay.
+The changed foreground lifecycle still needs a fresh Chinese HD #1513 session
+for crowded passages, long-round handover, actual shell/impact presentation,
+SPG route recovery and two-machine LAN operation. Each machine must install
+the same new package and restart the client/room; an already-running Python
+process does not acquire replaced PYC code.
+
+# November 5 independent foreground migration (historical checkpoint)
 
 This implementation starts from PR #119 commit
 `310276ece390694ad57dc2369e2ba0b0186ab4b2`, including its newer ordered
 target/ammunition aiming logic. It closes the subsequent migration audit's
-runtime-coupling, traffic, firing and tactical gaps. It does not revert that
+runtime-coupling, traffic, firing and tactical gaps found at that checkpoint;
+the November 6 report above supersedes its completeness claims. It does not revert that
 aiming model, merge `main`, publish a release, change the native ABI or remove
 the room's required Bot/world worker. The affected completeness claims in older
 sections below are historical; the boundaries in this section supersede them.

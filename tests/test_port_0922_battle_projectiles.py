@@ -1809,6 +1809,7 @@ class BattleProjectileTests(unittest.TestCase):
 
     def test_bot_authority_change_invalidates_artillery_proofs_once(self):
         battle, unused_bigworld = _battle()
+        battle._worker_mode = True
 
         class _Bots(object):
             def __init__(self):

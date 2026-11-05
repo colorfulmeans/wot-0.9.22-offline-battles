@@ -117,12 +117,14 @@ class ResolutionTests(unittest.TestCase):
 
     def test_local_meshes_keep_original_base_and_short_bidirectional_passages(self):
         import subprocess, math, copy
+        from check_navigation_resolution import verify_default_routes
         from gui.mods.offline_lan_0922.ai.navigation import TerrainGrid
         for name in ('04_himmelsdorf', '86_himmelsdorf_winter'):
             graph=json.loads((ROOT/'navgraphs'/(name+'.json')).read_bytes())
             baseline=json.loads(subprocess.check_output(['git','show','ca22f909:navgraphs/'+name+'.json'],cwd=ROOT))
-            for key in ('cell_size','width','height','origin','hazards','routes'):
+            for key in ('cell_size','width','height','origin','hazards'):
                 self.assertEqual(baseline[key],graph[key],key)
+            verify_default_routes(baseline,graph,name)
             expected=copy.deepcopy(baseline['spawn_formations'])
             for change in graph['validation']['spawn_railway_revalidation']['changes']:
                 self.assertEqual(expected[change['team']][change['slot']],change['before'])

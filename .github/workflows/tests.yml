@@ -203,6 +203,7 @@ jobs:
           python tools/run_test_suite.py --jobs 3
           --logs build/bot-test-results/fittings-ammunition
           --pattern test_bot_fittings.py
+          --pattern test_vehicle_fitting_context.py
           --pattern test_port_0922_equipment_skill_effects.py
           --pattern test_fire_decay_model.py
           --pattern test_shot_dispersion.py

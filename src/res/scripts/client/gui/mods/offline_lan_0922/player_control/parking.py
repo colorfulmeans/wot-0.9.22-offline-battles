@@ -2,9 +2,12 @@
 from __future__ import division
 import copy
 import math
-from .. import bot_tactics
+from .route_catalog import PARKING_ARRIVAL_RADIUS, waiting_positions
 from .artillery import MAX_PARKING_GRADE
 from .missions import distance, legal_support, STOP_SPEED, PROGRESS_TIMEOUT
+
+
+APPROACH_TIMEOUT = 4. * PROGRESS_TIMEOUT
 
 
 class RouteParking(object):
@@ -91,7 +94,7 @@ class RouteParking(object):
         return self._result(record, 'recheck', None, True, now, reason)
 
     def update(self, route, index, state, context, height, evidence=None):
-        places = bot_tactics.waiting_positions(route['waypoints'][index])
+        places = waiting_positions(route['waypoints'][index])
         if not places:
             self.release()
             return dict(phase='idle', complete=True, holding=False)
@@ -100,7 +103,8 @@ class RouteParking(object):
         now, position = float(state['now']), state['position']
         record = self.records.setdefault(key, dict(complete=False, slot=None,
             arrived_at=None, arrival=None, duration=None, progress_at=now,
-            progress_position=tuple(position), best=None))
+            progress_position=tuple(position), best=None, approach_at=now,
+            approach_best={}))
         if record['complete']:
             return dict(phase='completed', complete=True, holding=False,
                         skipped=record.get('reason') != 'authored_wait_elapsed')
@@ -121,6 +125,10 @@ class RouteParking(object):
             if not record.get('rechecking'):
                 record['rechecking'] = True
                 record['progress_at'], record['progress_position'] = now, tuple(position)
+                record['approach_at'], record['approach_best'] = now, {}
+                record['best'] = None
+        if now - record['approach_at'] >= APPROACH_TIMEOUT:
+            return self._finish(record, 'parking_approach_deadline')
         reason = 'parking_candidate'
         if record['slot'] is not None:
             place = places[record['slot']]
@@ -141,9 +149,10 @@ class RouteParking(object):
                 record['slot'] = slot
                 record['goal'] = candidate
                 record['duration'] = float(place[2])
-                record['best'] = distance(position, record['goal'])
-                record['progress_at'] = now
-                record['progress_position'] = tuple(position)
+                # Re-selecting a space is not physical progress. Keep each
+                # space's best approach distance and one whole-attempt clock.
+                record['best'] = record['approach_best'].setdefault(
+                    slot, distance(position, record['goal']))
                 break
             if record['slot'] is None:
                 if unknown:
@@ -157,13 +166,13 @@ class RouteParking(object):
         goal = (place[0], candidate_height, place[1])
         record['goal'] = goal
         remaining = distance(position, goal)
-        if (record['best'] is None or remaining < record['best'] - .5 or
-                distance(position, record['progress_position']) >= 2.):
+        if record['best'] is None or remaining < record['best'] - .5:
             record['best'] = remaining
+            record['approach_best'][record['slot']] = remaining
             record['progress_at'], record['progress_position'] = now, tuple(position)
         if now - record['progress_at'] >= PROGRESS_TIMEOUT:
             return self._finish(record, 'blocked_approach_timeout')
-        reached = (supported and remaining <= bot_tactics.ROUTE_ARRIVAL_RADIUS and
+        reached = (supported and remaining <= PARKING_ARRIVAL_RADIUS and
                    abs(position[1] - candidate_height) <= 1. + remaining * math.tan(math.radians(27.5)))
         if reached:
             if abs(state['speed']) > STOP_SPEED:

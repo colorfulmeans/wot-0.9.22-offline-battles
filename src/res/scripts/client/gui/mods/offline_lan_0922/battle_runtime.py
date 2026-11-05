@@ -22,7 +22,8 @@ from gui.mods.offline_lan_0922 import water_surfaces
 from gui.mods.offline_lan_0922.ai import maps as tactical_maps
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
 from gui.mods.offline_lan_0922.ai import tactical_geometry
-from gui.mods.offline_lan_0922.ai.driver import gun_yaw_limits, NAVIGATION_MAX_GRADE
+from gui.mods.offline_lan_0922.native_navigation_query import (
+    NAVIGABLE_WATER_DEPTH, NAVIGATION_MAX_GRADE)
 from gui.mods.offline_lan_0922.artillery_controller import \
     ArtilleryController
 from gui.mods.offline_lan_0922.authority_worker_probe import \
@@ -30,9 +31,7 @@ from gui.mods.offline_lan_0922.authority_worker_probe import \
 from gui.mods.offline_lan_0922.battle_feedback import (
     SixthSenseController, VehicleStatePresenter, is_gold_shell)
 from gui.mods.offline_lan_0922 import battle_missions
-from gui.mods.offline_lan_0922.bot_runtime import (
-    BOT_WATER_AVOID_DEPTH, BotRuntime, PROBE_KINDS,
-    WORKER_CONTROL_SECONDS, ground_pose_for_yaw)
+from gui.mods.offline_lan_0922.vehicle_physics import ground_pose_for_yaw
 from gui.mods.offline_lan_0922.entities.avatar_server import AvatarServerBridge
 from gui.mods.offline_lan_0922.entities.bigworld_binding import \
     BigWorldVehicleBinding
@@ -64,7 +63,7 @@ from gui.mods.offline_lan_0922.spawn_planner import SpawnPlanner
 from gui.mods.offline_lan_0922.collision_flags import VEHICLE_SKIP_FLAGS
 from gui.mods.offline_lan_0922.native_world import readonly_queries
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    WorkerCombatDiagnostics, timed, call as timed_call, observed_ray,
+    WorkerCombatDiagnostics, PROBE_KINDS, timed, call as timed_call, observed_ray,
     observed_call, observed)
 from gui.mods.offline_lan_0922 import (
     ballistics, burst_mechanics, combat_rules, critical_damage, descriptor_donation,
@@ -2870,9 +2869,10 @@ class BattleRuntime(object):
         self._projectile_perf = {}
         self._projectile_scan_count = 0
         self._projectile_candidate_count = 0
-        self._artillery = ArtilleryController(
+        self._artillery = (ArtilleryController(
             origin_resolver=self._bot_artillery_planning_origin,
             aim_samples_resolver=self._bot_artillery_aim_samples)
+            if self._worker_mode else None)
         self._generation += 1
         self._deadline = self._clock() + float(
             self._config.get('startupTimeoutSeconds', 30.0))
@@ -4087,6 +4087,101 @@ class BattleRuntime(object):
             return
         self._schedule(0.05, self._wait_for_client_ready)
 
+    def _create_worker_bots(self):
+        """Only the room worker may instantiate or service Bot policy."""
+        if not self._worker_mode:
+            return None
+        from .bot_runtime import BotRuntime, WORKER_CONTROL_SECONDS
+        bots = BotRuntime(
+            self.client.player_id,
+            descriptor_resolver=self._resolve_descriptor,
+            bot_descriptor_resolver=self._resolve_bot_fitted_descriptor,
+            player_descriptor_resolver=self._resolve_player_descriptor,
+            direction_probe=self._direction_probe,
+            vehicle_selector=self._select_bot_vehicle,
+            visibility_probe=self._bot_visibility,
+            visibility_async_probe=(self._bot_visibility_async
+                                    if self._worker_mode else None),
+            firing_lane_probe=self._bot_firing_lane,
+            incoming_lane_probe=self._bot_incoming_lane,
+            friendly_lane_probe=self._bot_friendly_firing_lane,
+            direct_launch_origin_probe=self._bot_direct_launch_origin,
+            direct_aim_point_probe=self._bot_aim_point,
+            artillery_aim_samples_probe=self._bot_artillery_aim_samples,
+            ballistic_solution_probe=self._bot_ballistic_solution,
+            artillery_launch_probe=self._bot_artillery_launch,
+            artillery_friendly_lane_probe=(
+                self._bot_artillery_friendly_lane),
+            artillery_launch_cancel=self._bot_artillery_cancel,
+            artillery_status_probe=self._bot_artillery_status,
+            spawn_resolver=self._formation_pose,
+            impact_contacts_resolver=self._bot_impact_module_contacts,
+            ground_probe=self._navigation_ground,
+            navigation_height_columns=(self._navigation_height_columns
+                if self._worker_mode else None),
+            # Use the player's near-body support layer for Bot height
+            # and attitude. The wider placement query can acquire an
+            # overhead bridge and turn every clear step into a rollback.
+            physics_ground_probe=self._support_column,
+            physics_ground_limit_probe=self._bot_support_column,
+            navigation_surface_probe=(self._navigation_surface_observation
+                if self._worker_mode else None),
+            obstacle_probe=self._navigation_obstacle,
+            bounds=getattr(self._spawn_planner, 'bounds', None),
+            arena_bounds=self._arena_bounds,
+            cover_probe=self._sample_bot_cover,
+            motion_resolver=self._resolve_bot_motion,
+            motion_report=self._report_bot_destructible_contact,
+            turret_motion_probe=self._turret_motion_is_clear,
+            wreck_rotation_probe=self._resolve_bot_rotation,
+            rotation_resolver=self._resolve_bot_rotation,
+            local_sweep_probe=self._probe_bot_local_motion,
+            wreck_ground_probe=self._suspension_ground_y,
+            turret_hulls_provider=self._turret_navigation_hulls,
+            world_receipt_probe=self._direction_world_receipt,
+            water_depth_probe=self._water_depth,
+            ram_contact_probe=self._bot_ram_contact_armor,
+            bot_equipment_resolver=(
+                self._default_bot_equipment_contracts),
+            destructible_body_scan=(
+                self._scan_bot_destructible_body
+                if self._worker_mode else None),
+            baked_graph=self._navigation_graph,
+            # Keep the mature 0.8.2 authority model: the copied physics
+            # integrator owns bot poses and the engine interpolates those
+            # poses for presentation.  A remote #1513 Vehicle has no
+            # retail server stream, so treating its WGVehiclePhysics as
+            # authoritative leaves movement inputs without pose samples.
+            # Keep logical probe counts for frame correlation, but do not
+            # read a high-resolution clock around every native query. The
+            # two clock calls are diagnostic work on the render thread and
+            # cannot affect probe order, results, deadlines or budgets.
+            # The hidden worker enables them only for its first five
+            # authoritative seconds so we can separate native query time
+            # from pure Python without permanently lowering its cadence.
+            native_motion=False,
+            probe_clock=(_PROFILE_CLOCK if self._worker_mode else None),
+            probe_timing_seconds=(
+                WORKER_NATIVE_PROBE_SECONDS if self._worker_mode else 0.0),
+            control_seconds=(
+                WORKER_CONTROL_SECONDS if self._worker_mode else None),
+            combat_diagnostics=self._combat_diagnostics)
+        # The native oracle freezes this exact owner identity. Publish it
+        # before constructing the oracle, just as the previous inline path did.
+        self._bots = bots
+        bots.support_context = self._stack_support_context
+        bots.stack_impact = self._bot_stack_impact
+        bots.stack_impact_contact = self._bot_stack_impact_contact
+        bots.stack_impact_commit = self._commit_stack_impact
+        bots.stack_update = self._advance_stack_contacts
+        bots.stack_publication = self._stack_publication
+        if self._worker_mode:
+            from .native_navigation_query import Oracle
+            bots.navigator.grid.native_query_oracle = Oracle.create(self)
+        bots.debug_logging = bool(
+            self._config.get('debug_logging', False))
+        return bots
+
     def _finish_entity_startup(self):
         try:
             if self.state != 'loading_entities':
@@ -4148,93 +4243,9 @@ class BattleRuntime(object):
                 self._restore_local_equipment_snapshot(
                     self._last_snapshot, present=True)
                 self._sync.snapshot(self._last_snapshot)
-            self._bots = BotRuntime(
-                self.client.player_id,
-                descriptor_resolver=self._resolve_descriptor,
-                bot_descriptor_resolver=self._resolve_bot_fitted_descriptor,
-                player_descriptor_resolver=self._resolve_player_descriptor,
-                direction_probe=self._direction_probe,
-                vehicle_selector=self._select_bot_vehicle,
-                visibility_probe=self._bot_visibility,
-                visibility_async_probe=(self._bot_visibility_async
-                                        if self._worker_mode else None),
-                firing_lane_probe=self._bot_firing_lane,
-                incoming_lane_probe=self._bot_incoming_lane,
-                friendly_lane_probe=self._bot_friendly_firing_lane,
-                direct_launch_origin_probe=self._bot_direct_launch_origin,
-                direct_aim_point_probe=self._bot_aim_point,
-                artillery_aim_samples_probe=self._bot_artillery_aim_samples,
-                ballistic_solution_probe=self._bot_ballistic_solution,
-                artillery_launch_probe=self._bot_artillery_launch,
-                artillery_friendly_lane_probe=(
-                    self._bot_artillery_friendly_lane),
-                artillery_launch_cancel=self._bot_artillery_cancel,
-                artillery_status_probe=self._bot_artillery_status,
-                spawn_resolver=self._formation_pose,
-                impact_contacts_resolver=self._bot_impact_module_contacts,
-                ground_probe=self._navigation_ground,
-                navigation_height_columns=(self._navigation_height_columns
-                    if self._worker_mode else None),
-                # Use the player's near-body support layer for Bot height
-                # and attitude. The wider placement query can acquire an
-                # overhead bridge and turn every clear step into a rollback.
-                physics_ground_probe=self._support_column,
-                physics_ground_limit_probe=self._bot_support_column,
-                navigation_surface_probe=(self._navigation_surface_observation
-                    if self._worker_mode else None),
-                obstacle_probe=self._navigation_obstacle,
-                bounds=getattr(self._spawn_planner, 'bounds', None),
-                arena_bounds=self._arena_bounds,
-                cover_probe=self._sample_bot_cover,
-                motion_resolver=self._resolve_bot_motion,
-                motion_report=self._report_bot_destructible_contact,
-                turret_motion_probe=self._turret_motion_is_clear,
-                wreck_rotation_probe=self._resolve_bot_rotation,
-                rotation_resolver=self._resolve_bot_rotation,
-                local_sweep_probe=self._probe_bot_local_motion,
-                wreck_ground_probe=self._suspension_ground_y,
-                turret_hulls_provider=self._turret_navigation_hulls,
-                world_receipt_probe=self._direction_world_receipt,
-                water_depth_probe=self._water_depth,
-                ram_contact_probe=self._bot_ram_contact_armor,
-                bot_equipment_resolver=(
-                    self._default_bot_equipment_contracts),
-                destructible_body_scan=(
-                    self._scan_bot_destructible_body
-                    if self._worker_mode else None),
-                baked_graph=self._navigation_graph,
-                # Keep the mature 0.8.2 authority model: the copied physics
-                # integrator owns bot poses and the engine interpolates those
-                # poses for presentation.  A remote #1513 Vehicle has no
-                # retail server stream, so treating its WGVehiclePhysics as
-                # authoritative leaves movement inputs without pose samples.
-                # Keep logical probe counts for frame correlation, but do not
-                # read a high-resolution clock around every native query. The
-                # two clock calls are diagnostic work on the render thread and
-                # cannot affect probe order, results, deadlines or budgets.
-                # The hidden worker enables them only for its first five
-                # authoritative seconds so we can separate native query time
-                # from pure Python without permanently lowering its cadence.
-                native_motion=False,
-                probe_clock=(_PROFILE_CLOCK if self._worker_mode else None),
-                probe_timing_seconds=(
-                    WORKER_NATIVE_PROBE_SECONDS if self._worker_mode else 0.0),
-                control_seconds=(
-                    WORKER_CONTROL_SECONDS if self._worker_mode else None),
-                combat_diagnostics=self._combat_diagnostics)
-            self._bots.support_context = self._stack_support_context
-            self._bots.stack_impact = self._bot_stack_impact
-            self._bots.stack_impact_contact = self._bot_stack_impact_contact
-            self._bots.stack_impact_commit = self._commit_stack_impact
-            self._bots.stack_update = self._advance_stack_contacts
-            self._bots.stack_publication = self._stack_publication
-            if self._worker_mode:
-                from .native_navigation_query import Oracle
-                self._bots.navigator.grid.native_query_oracle = Oracle.create(self)
-            self._bots.debug_logging = bool(
-                self._config.get('debug_logging', False))
-            # Sampled here, not before BotRuntime exists: the bot, navigator
-            # and planner structures are most of what this port holds.
+            self._bots = self._create_worker_bots()
+            # Sample after this role has created its own round structures.
+            # Visible clients deliberately have no BotRuntime or Bot navigator.
             reset_pose_animation_writes()
             track_damage.reset_diagnostics()
             self._report_memory('battle_start')
@@ -4263,7 +4274,8 @@ class BattleRuntime(object):
                     lan_protocol.HUMAN_RAM_TIMELINE_CAPABILITY in
                     getattr(self.client, 'server_capabilities', ())):
                 bot_start_message['human_ram_timeline'] = True
-            for outgoing in self._bots.battle_start(bot_start_message):
+            for outgoing in (self._bots.battle_start(bot_start_message)
+                             if self._bots is not None else ()):
                 # The authority already owns the exact bot poses it is about
                 # to publish.  Materialize that canonical lineup locally now,
                 # like 0.8.2 does, instead of waiting for a server echo.  Do
@@ -4283,7 +4295,8 @@ class BattleRuntime(object):
                 else:
                     self._send_bot_message(outgoing)
             if self._last_snapshot is not None:
-                self._bots.apply_snapshot(self._last_snapshot)
+                if self._bots is not None:
+                    self._bots.apply_snapshot(self._last_snapshot)
                 self._remember_ram_bot_snapshot(self._last_snapshot)
             self.state = 'running'
             if not self._worker_mode:
@@ -6054,7 +6067,7 @@ class BattleRuntime(object):
             if key == own or key[0] not in ('bot', 'player') or not record.get('ready'):
                 continue
             state = record.get('state') or {}
-            if key[0] == 'bot' and self._bots is not None:
+            if key[0] == 'bot' and self._worker_mode and self._bots is not None:
                 state = self._bots.states.get(key[1], state)
             if not self._worker_mode and isinstance(record.get('presented_pose'), dict):
                 state = dict(state, **record['presented_pose'])
@@ -6226,7 +6239,7 @@ class BattleRuntime(object):
                     self._warn_optional_failure('vertical vehicle contact', error)
         return best
 
-    def _bot_stack_impact_contact(self, actor, params, ground, pseudo_ground,
+    def _vehicle_stack_impact_contact(self, actor, params, ground, pseudo_ground,
                                   solved, sample_pose, velocity,
                                   before_airborne, before_velocity, dt):
         context = getattr(self, '_stack_context', None)
@@ -6278,6 +6291,9 @@ class BattleRuntime(object):
             native_input_diagnostics.write_json_record('VEHICLE IMPACT COMMIT', dict(
                 actor=[actor.get('kind','bot'), actor['id']], carrier=decision['carrier'],
                 descent=decision['descent'], damage=damage, speed=decision['speed']))
+
+    # Worker adapter compatibility; the physical implementation is actor-neutral.
+    _bot_stack_impact_contact = _vehicle_stack_impact_contact
 
     def _bot_stack_impact(self, actor, speed, upper_damage=0):
         context = getattr(self, '_stack_context', None)
@@ -6706,7 +6722,7 @@ class BattleRuntime(object):
                 return dict(status='invalid_hit', surfaces=rows,generation=generation)
             if n[1] > .0001:
                 rows.append(dict(point=p,normal=n,
-                    navigation_water=self._water_depth(p)>BOT_WATER_AVOID_DEPTH))
+                    navigation_water=self._water_depth(p)>NAVIGABLE_WATER_DEPTH))
             top = p[1]-.02
             if top <= low:
                 return dict(status='complete',surfaces=rows,generation=generation)
@@ -6730,7 +6746,7 @@ class BattleRuntime(object):
             if (height <= float(hint_y) + 4.5 and
                     normal_y > 0.0):
                 if self._water_depth((x, height, z)) > \
-                        BOT_WATER_AVOID_DEPTH:
+                        NAVIGABLE_WATER_DEPTH:
                     return None
                 return height
             next_top = height - 0.05
@@ -6838,7 +6854,7 @@ class BattleRuntime(object):
                     'water': False, 'slope': 0.0}
         x, y, z = _xyz(position)
         current_water = self._water_depth((x, y, z))
-        wet_escape = current_water > BOT_WATER_AVOID_DEPTH
+        wet_escape = current_water > NAVIGABLE_WATER_DEPTH
         far_distance = 20.0 if abs(float(speed or 0.0)) > 5.0 else 15.0
         if maximum_distance is not None:
             try:
@@ -6923,7 +6939,7 @@ class BattleRuntime(object):
                         BOT_WATER_ESCAPE_DEEPEN_EPSILON):
                     return {'clear': False, 'collision': False,
                             'water': True, 'slope': 0.0}
-                if not wet_escape and water_depth > BOT_WATER_AVOID_DEPTH:
+                if not wet_escape and water_depth > NAVIGABLE_WATER_DEPTH:
                     return {'clear': False, 'collision': False,
                             'water': True, 'slope': 0.0}
                 delta = next_y - previous_y
@@ -7760,7 +7776,9 @@ class BattleRuntime(object):
         return pose
 
     def _cover_gun_lane(self, pose, descriptor, target, clear):
-        """Prove a peek from the installed gun envelope and physical pivot."""
+        """Worker-only Bot cover policy; player cover has its own proof path."""
+        from .bot_runtime import BotRuntime
+        from .ai.driver import gun_yaw_limits
         target_descriptor = self._observed_vehicle_descriptor(target)
         if target_descriptor is None:
             return False
@@ -7860,7 +7878,7 @@ class BattleRuntime(object):
                     continue
                 point = (point[0], ground, point[2])
                 water_depth = budget.call(self._water_depth, point)
-                if (water_depth > BOT_WATER_AVOID_DEPTH or
+                if (water_depth > NAVIGABLE_WATER_DEPTH or
                         not segment_clear(current, point)):
                     continue
                 pose = self._cover_surface_pose(source, point, descriptor, ground_at)
@@ -7879,7 +7897,7 @@ class BattleRuntime(object):
                     if peek_ground is None:
                         continue
                     peek = (peek[0], peek_ground, peek[2])
-                    if (budget.call(self._water_depth, peek) > BOT_WATER_AVOID_DEPTH or
+                    if (budget.call(self._water_depth, peek) > NAVIGABLE_WATER_DEPTH or
                             not segment_clear(point, peek) or
                             not segment_clear(peek, point)):
                         continue
@@ -9511,11 +9529,11 @@ class BattleRuntime(object):
         season = self._arena_outfit_season()
         outfits = state.get('outfits')
         if kind == 'bot' and state.get('fitting'):
-            from gui.mods.offline_lan_0922 import bot_fittings
+            from gui.mods.offline_lan_0922 import vehicle_fitting_context
             fitting = state['fitting']
             descriptor = self._resolve_bot_fitted_descriptor(
                 state['vehicle'], fitting['tier'], fitting['crew_level'], fitting)
-            context = bot_fittings.context(descriptor)
+            context = vehicle_fitting_context.context(descriptor)
             outfits = context['outfits']
             context['season'] = str(season)
         elif kind != 'player':
@@ -9944,7 +9962,7 @@ class BattleRuntime(object):
                     state.get('effective_params'))
         device_profile = snapshot.get('critical') if isinstance(snapshot,dict) else None
         if device_profile is None and record.get('kind') == 'bot':
-            from gui.mods.offline_lan_0922 import bot_fittings
+            from gui.mods.offline_lan_0922 import vehicle_fitting_context
             from gui.mods.offline_lan_0922 import player_critical_mechanics
             descriptor = getattr(entity, 'typeDescriptor', None)
             fitting = state.get('fitting')
@@ -9952,7 +9970,7 @@ class BattleRuntime(object):
                 descriptor = self._resolve_bot_fitted_descriptor(
                     state['vehicle'], fitting['tier'], fitting['crew_level'],
                     fitting)
-            context = bot_fittings.context(descriptor)
+            context = vehicle_fitting_context.context(descriptor)
             if context is not None:
                 # The damage ledger is sparse mutable state, not a profile:
                 # its device rows deliberately have no regen_hp. Read every
@@ -9966,9 +9984,9 @@ class BattleRuntime(object):
         critical_damage.bind_device_profile(entity,device_profile)
         battle_factors = crew_battle.for_critical(
             snapshot, crew_battle.critical_from_vehicle(entity))
-        from gui.mods.offline_lan_0922 import bot_fittings
-        if bot_fittings.context(getattr(entity, 'typeDescriptor', None)) is not None:
-            battle_factors = bot_fittings.battle_factors(
+        from gui.mods.offline_lan_0922 import vehicle_fitting_context
+        if vehicle_fitting_context.context(getattr(entity, 'typeDescriptor', None)) is not None:
+            battle_factors = vehicle_fitting_context.battle_factors(
                 entity.typeDescriptor, crew_battle.critical_from_vehicle(entity))
         entity._fire_starting_chance_factor = (
             max(0.0, _number(passives.get('fireStartingChanceFactor'), 1.0)) *
@@ -10546,12 +10564,12 @@ class BattleRuntime(object):
             if 'destructibles' in self._last_snapshot:
                 self._apply_destructible_state(
                     self._last_snapshot.get('destructibles'))
-            if self._bots is not None:
+            if self._worker_mode and self._bots is not None:
                 if 'bot_authority_id' in self._last_snapshot:
                     self._reconcile_bot_authority(
                         self._last_snapshot.get('bot_authority_id'))
                 self._bots.apply_snapshot(self._last_snapshot)
-                self._remember_ram_bot_snapshot(self._last_snapshot)
+            self._remember_ram_bot_snapshot(self._last_snapshot)
             if self._sync is not None:
                 try:
                     self._sync.snapshot(message)
@@ -10586,7 +10604,7 @@ class BattleRuntime(object):
 
     def _remember_ram_bot_snapshot(self, snapshot):
         """Retain the canonical bot bodies referenced by player contacts."""
-        if not isinstance(snapshot, dict) or self._bots is None:
+        if not isinstance(snapshot, dict):
             return False
         try:
             revision = int(snapshot.get('bot_state_revision'))
@@ -10596,7 +10614,8 @@ class BattleRuntime(object):
         if revision < 0 or sample_time_us < 0:
             return False
         states = {}
-        current = getattr(self._bots, 'states', {}) or {}
+        current = (getattr(self._bots, 'states', {}) or {}
+                   if self._worker_mode else {})
         for raw in snapshot.get('bots') or ():
             if not isinstance(raw, dict) or raw.get('id') is None:
                 continue
@@ -10610,6 +10629,8 @@ class BattleRuntime(object):
             # that newer state to fill descriptor-derived static fields.
             state = {}
             current_state = current.get(bot_id)
+            if current_state is None:
+                current_state = (self._records.get('bot:%d' % bot_id) or {}).get('state')
             if isinstance(current_state, dict):
                 for name in ('mass', 'collision_shape', 'ram_profile',
                              'vehicle', 'team'):
@@ -10895,7 +10916,7 @@ class BattleRuntime(object):
 
     def _reconcile_bot_authority(self, player_id):
         """Recover authority changes even if the one-shot event was missed."""
-        if (self._bots is None or
+        if (not self._worker_mode or self._bots is None or
                 getattr(self._bots, 'authority_id', None) == player_id):
             return False
         # Arc jobs and completed launch receipts are native-world proofs made
@@ -10915,14 +10936,6 @@ class BattleRuntime(object):
                 getattr(self.client, 'server_capabilities', ())):
             start['human_ram_timeline'] = True
         snapshot = self._last_snapshot or {}
-        if not self._worker_mode:
-            # A visible client tracks the infrastructure lineage only. It
-            # must never build a takeover manifest or publish bot messages,
-            # even if a malformed server announces an ownership change.
-            if self._bots.battle_start(start):
-                raise RuntimeError(
-                    'visible client attempted to become bot authority')
-            return True
         manifest = snapshot.get(
             'bot_manifest', start.get('bot_manifest', [])) or []
         live_by_id = {}
@@ -11533,7 +11546,7 @@ class BattleRuntime(object):
         if kind == 'authority':
             self._set_projectile_epoch(
                 event.get('authority_epoch'), self._clock())
-            if self._bots is not None:
+            if self._worker_mode and self._bots is not None:
                 changed = self._reconcile_bot_authority(
                     event.get('player_id'))
                 if changed and self._last_snapshot is not None:
@@ -19690,7 +19703,7 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['drown'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if (not self._battle_live and
+            if (self._worker_mode and not self._battle_live and
                     self._prebattle_deadline is not None and
                     self._bots is not None):
                 prewarm = getattr(
@@ -19828,7 +19841,8 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['outline'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None and not self._replay_mode:
+            if (self._worker_mode and self._battle_live and
+                    self._bots is not None and not self._replay_mode):
                 if self._worker_mode:
                     self._worker_probe_authority_callbacks += 1
                 self._advance_artillery_arcs(now)
@@ -19913,7 +19927,8 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['bots_update'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None and not self._replay_mode:
+            if (self._worker_mode and self._battle_live and
+                    self._bots is not None and not self._replay_mode):
                 presentation_states = getattr(
                     self._bots, 'presentation_states', None)
                 if not callable(presentation_states):
@@ -19941,7 +19956,8 @@ class BattleRuntime(object):
                 next_boundary = _PROFILE_CLOCK()
                 stages['bot_present'] = max(0.0, next_boundary - boundary)
                 boundary = next_boundary
-            if self._battle_live and self._bots is not None and not self._replay_mode:
+            if (self._worker_mode and self._battle_live and
+                    self._bots is not None and not self._replay_mode):
                 for outgoing in outgoing_messages:
                     is_bot_state = outgoing.get('type') == 'bot_state'
                     if is_bot_state:
@@ -22820,10 +22836,10 @@ class BattleRuntime(object):
             float(position[1]),
             float(position[2]) + math.cos(travel_yaw) * abs(speed) * dt)
         if not self._turret_motion_is_clear(
-                BotRuntime._turret_state_pose(
-                    bot_state, position, yaw),
-                BotRuntime._turret_state_pose(
-                    bot_state, contact_end, yaw), descriptor):
+                vehicle_physics.collision_state_pose(
+                    bot_state, position, yaw, 'bot:%d' % bot_id),
+                vehicle_physics.collision_state_pose(
+                    bot_state, contact_end, yaw, 'bot:%d' % bot_id), descriptor):
             self._bot_motion_kinds[int(bot_id)] = 'detached_turret'
             bot_state['_world_contact_trace'] = dict(reason='detached_turret',
                 sampled_at=now, position=tuple(position), yaw=yaw, speed=speed,
@@ -24001,7 +24017,7 @@ class BattleRuntime(object):
         """Use ACK-coherent momentum and its elapsed drive/ground reaction."""
         timeline = self._ram_bot_history_index.get(bot_id)
         now = self._estimated_motion_time_us(self._clock())
-        if not timeline or now is None or self._bots is None:
+        if not timeline or now is None:
             return None
         sample_time, revision = timeline[-1]
         checkpoint = self._ram_bot_history.get(revision, {}).get(bot_id)
@@ -24041,6 +24057,11 @@ class BattleRuntime(object):
             params, checkpoint, shape, (sample_time-transit)/1000000.0,
             now/1000000.0, impulses)
 
+    @staticmethod
+    def _replica_contact_params(state, descriptor):
+        from .replica_physics import contact_params
+        return contact_params(state, descriptor)
+
     @timed('local.contact_gather')
     def _contact_tanks(self, position, own_shape, dt=0.0, extra_reach=0.0):
         """Build only bodies that can contact this presented player pose.
@@ -24053,15 +24074,12 @@ class BattleRuntime(object):
         result = []
         own_radius = math.sqrt(
             own_shape[0] * own_shape[0] + own_shape[1] * own_shape[1])
-        bot_states = getattr(self._bots, 'states', {}) if self._bots else {}
         for record in self._records.values():
             if (record.get('local') or record.get('tombstone') or
                     not record.get('ready')):
                 continue
             state = record.get('state') or {}
             presented_pose = record.get('presented_pose')
-            if record.get('kind') == 'bot':
-                state = bot_states.get(record.get('network_id'), state)
             pose = presented_pose if isinstance(presented_pose, dict) else {}
             x = _number(pose.get('x', state.get('x')))
             y = _number(pose.get('y', state.get('y')))
@@ -24152,12 +24170,10 @@ class BattleRuntime(object):
             bot_contact_params = None
             push_yaw = _number(physical_state.get('push_yaw'))
             if record.get('kind') == 'bot':
-                parameter_key = (descriptor, state.get('skill_rating'), state.get('skill'),
-                                 state.get('team'), state.get('slot'))
+                parameter_key = (descriptor, state.get('fitting'))
                 cached = record.get('_contact_parameters')
                 if cached is None or cached[0] != parameter_key:
-                    bot_contact_params = (self._bots.replica_contact_params(state, descriptor)
-                                          if self._bots is not None else None)
+                    bot_contact_params = self._replica_contact_params(state, descriptor)
                     record['_contact_parameters'] = (parameter_key, bot_contact_params)
                     if bot_contact_params is not None:
                         sys.stdout.write('[Offline LAN 0.9.22] CONTACT parameters bot=%d mass=%.3f powerW=%.3f source=presented_descriptor\n' % (
@@ -25987,7 +26003,7 @@ class BattleRuntime(object):
         actor = dict((context or {}).get('actor') or {},
             kind='player', id=int(getattr(self.client,'player_id',0) or 0),
             x=position[0], y=position[1], z=position[2], yaw=yaw)
-        roof_impact = self._bot_stack_impact_contact(actor, params, ground, pseudo_ground,
+        roof_impact = self._vehicle_stack_impact_contact(actor, params, ground, pseudo_ground,
             solved, (previous_pitch, previous_roll), contact_velocity,
             before_airborne, before_vertical_speed, dt)
         if impact_vertical is None and roof_impact is not None and roof_impact['verdict'] == 'admit':
@@ -28769,7 +28785,7 @@ class BattleRuntime(object):
                     event.get('entity') not in self._records):
                 self._queue_bot_create(event)
             else:
-                if (event.get('kind') == 'bot' and
+                if (self._worker_mode and event.get('kind') == 'bot' and
                         self._bots is not None and
                         self._bots.is_authority()):
                     # The copied 0.8.2 authority has already presented this
@@ -30868,7 +30884,7 @@ class BattleRuntime(object):
             entity = self._server_entity(record['engine_id']) if record else None
             if entity is None:
                 continue
-            pose = BotRuntime._turret_state_pose(state)
+            pose = vehicle_physics.collision_state_pose(state, actor_key=key)
             pose.update(aim_yaw=state.get('aim_yaw', pose['yaw']), gun_pitch=state.get('gun_pitch', 0.0))
             try:
                 boxes = turret_obstacles.vehicle_support_boxes(
@@ -32557,8 +32573,8 @@ class BattleRuntime(object):
                 cleanup_error = error
         self._report_skill_diagnostic_drops()
         self._descriptor_cache = {}
-        from gui.mods.offline_lan_0922 import bot_fittings
-        bot_fittings.clear()
+        from gui.mods.offline_lan_0922 import vehicle_fitting_context
+        vehicle_fitting_context.clear()
         self._prepared_vehicle_names = []
         self._unusable_vehicles_reported = set()
         self._records = {}

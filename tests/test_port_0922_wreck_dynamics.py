@@ -542,8 +542,10 @@ class WreckOwnerTests(unittest.TestCase):
         native=vt._runtime();battle=vt.BattleRuntime(native)
         battle.client=vt._Client();battle._avatar=native.bigworld.avatar
         battle._local_physics=human_params
-        battle._bots=types.SimpleNamespace(states={11:copy.deepcopy(state)},
-            replica_contact_params=lambda raw,descriptor:params)
+        # The foreground owns only the published body and neutral physical
+        # parameters. The real worker below remains the sole wreck integrator.
+        self.assertIsNone(battle._bots)
+        battle._replica_contact_params=lambda raw,descriptor:params
         local=vt._Vehicle(10,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':500})
         native.bigworld.entities[11]=vt._Vehicle(11,vt._Descriptor(),vt._Vector(),(0,0,0),{'health':0})
         record=dict(engine_id=11,network_id=11,kind='bot',local=False,ready=True,
@@ -580,7 +582,6 @@ class WreckOwnerTests(unittest.TestCase):
                 while queue and queue[0][0]<=clock[0]+1.e-9:
                     unused,stamp,revision,published=queue.pop(0)
                     record.update(state=published,presented_pose=published)
-                    battle._bots.states[11]=published
                     battle._remember_ram_bot_snapshot(dict(bot_state_revision=revision,
                         bot_state_time_us=int(stamp*1000000),bots=[published]))
         self.assertGreater(state['x'],1.)

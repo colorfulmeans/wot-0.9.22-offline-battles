@@ -3,7 +3,7 @@ from __future__ import print_function
 """Authority-side, engine-free bridge from v5 bots to the local AI package."""
 
 from gui.mods.offline_lan_0922.worker_diagnostics import (
-    detailed_observed,
+    detailed_observed, PROBE_KINDS,
     observed, observed_call, current as current_combat, count as combat_count)
 
 import copy
@@ -208,7 +208,6 @@ SPG_SHOT_LANE_QUERY_DISTANCE = 2500.0
 # through its first half. Visibility reports continue independently.
 COVER_REFRESH_SECONDS = TACTICAL_REFRESH_SECONDS
 COVER_JOB_WINDOW_SECONDS = COVER_REFRESH_SECONDS * 0.5
-PROBE_KINDS = ('visibility', 'lane', 'cover', 'ground', 'motion')
 DECISION_SECONDS = 0.150
 # Distance tiers for planner and suspension sampling.  Physical integration is
 # globally capped by PUBLICATION_SECONDS; MatrixAnimation interpolates the
@@ -892,12 +891,7 @@ def slope_pose(probe, position, yaw, half_length, half_width,
 
 def ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw):
     """Preserve the sampled world-space plane under a hull yaw change."""
-    nx, ny, nz = vehicle_physics.suspension_point_offset(
-        dict(x=0.0, y=1.0, z=0.0), pitch, roll)
-    delta = _angle_delta(new_yaw, old_yaw)
-    local_x = math.cos(delta)*nx - math.sin(delta)*nz
-    local_z = math.sin(delta)*nx + math.cos(delta)*nz
-    return math.atan2(local_z, ny), math.atan2(-local_x, math.hypot(ny, local_z))
+    return vehicle_physics.ground_pose_for_yaw(pitch, roll, old_yaw, new_yaw)
 
 
 def _gun_pitch_limits(descriptor, turret_yaw=0.0):
@@ -1224,29 +1218,9 @@ class _BotCriticalVehicle(object):
 
 def _descriptor_crew_roster(descriptor):
     """Return the exact #1513 health-instance names for one real crew."""
-    roles = getattr(getattr(descriptor, 'type', None), 'crewRoles', None)
-    if not isinstance(roles, (list, tuple)) or not roles:
-        return ()
-    counters = {'gunner': 1, 'loader': 1, 'radioman': 1}
-    allowed = frozenset(
-        ('commander', 'driver', 'gunner', 'loader', 'radioman'))
-    roster = []
-    for crewman_roles in roles:
-        if (not isinstance(crewman_roles, (list, tuple)) or
-                not crewman_roles):
-            return ()
-        main_role = str(crewman_roles[0])
-        if main_role not in allowed:
-            return ()
-        if main_role in counters:
-            name = main_role + str(counters[main_role])
-            counters[main_role] += 1
-        else:
-            name = main_role
-        if name in roster:
-            return ()
-        roster.append(name)
-    return tuple(roster)
+    from gui.mods.offline_lan_0922.vehicle_fitting_context import (
+        descriptor_crew_roster)
+    return descriptor_crew_roster(descriptor)
 
 
 def _terminal_critical(state, descriptor, cause):
@@ -12792,19 +12766,9 @@ class BotRuntime(object):
 
     @staticmethod
     def _turret_state_pose(state, position=None, yaw=None):
-        pose = dict((name, state.get(name, 0.0))
-                    for name in ('x', 'y', 'z', 'yaw', 'pitch', 'roll'))
-        if position is not None:
-            pose.update(x=position[0], y=position[1], z=position[2])
-        if yaw is not None:
-            pose['yaw'] = yaw
-        if 'id' in state:
-            pose['actor_key'] = 'bot:%d' % state['id']
-        chassis = dict(pose)
-        chassis['pitch'] = state.get(
-            'terrain_pitch', pose['pitch'] - state.get('suspension_pitch', 0.0))
-        pose['chassis'] = chassis
-        return pose
+        return vehicle_physics.collision_state_pose(
+            state, position, yaw,
+            'bot:%d' % state['id'] if 'id' in state else None)
 
     def _turret_pose_is_clear(self, state, start, start_yaw, end, end_yaw):
         """Keep turns and contact pushes outside the same landed turret body."""

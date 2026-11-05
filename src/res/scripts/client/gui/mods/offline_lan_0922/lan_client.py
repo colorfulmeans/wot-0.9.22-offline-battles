@@ -25,6 +25,8 @@ from gui.mods.offline_lan_0922 import mission_events
 from gui.mods.offline_lan_0922 import siege_mechanics
 from gui.mods.offline_lan_0922 import spotting
 from gui.mods.offline_lan_0922 import turret_obstacle_schema
+from gui.mods.offline_lan_0922.projectile_wire import (
+    round_scalar as _projectile_wire_round)
 
 
 PROTOCOL_VERSION = 5
@@ -738,24 +740,6 @@ def _projectile_float_range(value, minimum, maximum):
     if parsed < minimum or parsed > maximum:
         return None
     return parsed
-
-
-def _projectile_wire_round(value):
-    """Round identically on the shipped Python 2.7 and Python 3 server."""
-    number = float(value)
-    numerator, denominator = number.as_integer_ratio()
-    negative = math.copysign(1.0, number) < 0.0
-    scaled = abs(numerator) * 1000000
-    quotient, remainder = divmod(scaled, denominator)
-    twice_remainder = remainder * 2
-    if (twice_remainder > denominator or
-            (twice_remainder == denominator and quotient % 2)):
-        quotient += 1
-    if quotient == 0:
-        return -0.0 if negative else 0.0
-    if negative:
-        quotient = -quotient
-    return float(quotient) / 1000000.0
 
 
 def _valid_visible_authority_id(value):

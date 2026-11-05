@@ -36,8 +36,6 @@ def public_allies(owner, observed):
     start = getattr(owner, '_start_message', {}) or {}
     team = int(owner.client.team)
     roster_valid = all(isinstance(start.get(name), (list, tuple)) for name in ('players', 'bots'))
-    pending = bool(getattr(owner, '_pending_bot_create_order', None) or
-                   getattr(owner, '_pending_bot_creates', None))
     # Read only public health/alive fields from a same-round snapshot. Native
     # entity observations still own class and physical occupancy information.
     snapshot = getattr(owner, '_last_snapshot', None) or {}
@@ -80,4 +78,7 @@ def public_allies(owner, observed):
             alive=bool(public.get('alive', True) and
             public.get('health', 1) > 0), class_tag=None, source='public_record'))
         seen.add(identity)
-    return result, bool(roster_valid and not pending)
+    # Presentation/creation may lag a valid publication. Unknown teammates
+    # above remain alive with an unknown class, so Bot creation queues are
+    # neither needed as a safety gate nor a dependency of local decisions.
+    return result, bool(roster_valid)

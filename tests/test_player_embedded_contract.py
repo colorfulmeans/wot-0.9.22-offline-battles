@@ -165,6 +165,28 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         for name in self.saved_gui:
             del sys.modules[name]
         self.addCleanup(self.restore_namespace)
+        class NoBotPolicy(object):
+            @staticmethod
+            def reject(fullname):
+                prefix = 'gui.mods.offline_lan_0922.'
+                if not fullname.startswith(prefix):
+                    return
+                leaf = fullname.rsplit('.', 1)[-1]
+                if (fullname == prefix + 'ai' or fullname.startswith(prefix + 'ai.') or
+                        leaf in ('bots', 'lan_client') or
+                        leaf.startswith('bot_') and leaf != 'bot_tactics_default_data'):
+                    raise ImportError('foreground imported Bot/network owner: ' + fullname)
+
+            def find_module(self, fullname, path=None):
+                self.reject(fullname)
+                return None
+
+            def find_spec(self, fullname, path=None, target=None):
+                self.reject(fullname)
+                return None
+        guard = NoBotPolicy()
+        sys.meta_path.insert(0, guard)
+        self.addCleanup(sys.meta_path.remove, guard)
         package_root = os.path.dirname(BASE)
         mods_root = os.path.dirname(package_root)
         for name, path in (('gui', os.path.dirname(mods_root)),
@@ -186,7 +208,8 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         self.modules = dict((name, importlib.import_module(
             'gui.mods.offline_lan_0922.player_control.' + name)) for name in (
                 'pathfinding', 'local_height', 'local_routes', 'navigation_support',
-                'observations', 'targeting', 'tactics', 'fire_admission', 'cover'))
+                'observations', 'targeting', 'tactics', 'fire_admission', 'cover',
+                'traffic', 'route_catalog', 'sortie'))
 
     def restore_namespace(self):
         for name in list(sys.modules):
@@ -230,6 +253,102 @@ class EmbeddedIndependentRuntimeTests(unittest.TestCase):
         self.assertEqual((object,), self.modules['pathfinding'].PlayerPathfinder.__bases__)
         self.assertEqual((object,), self.modules['pathfinding'].PlayerTerrainGrid.__bases__)
         self.assertEqual((object,), self.modules['local_height'].PlayerLocalHeightLinks.__bases__)
+
+    def test_spent_traffic_lease_releases_and_only_real_reentry_rearms_on_python27(self):
+        import math
+        module = self.modules['traffic']
+        shape = (1., 2., 0., 2.)
+        player = module.PlayerTraffic()
+        own = dict(id=1002, engine_id=2, position=(0., 0., 0.), yaw=0., speed=0.,
+                   half_width=1., half_length=2., decision_horizon=.1)
+        peer = dict(id=1, position=(0., 0., 4.3), yaw=math.pi,
+                    velocity=(0., 0., 0.), alive=True, team=1, collision_shape=shape)
+        def advance(now, clear):
+            own['now'] = now
+            command = dict(throttle=1., turn=0., brake=False, holding=False,
+                travel_intent=True, combat_mode='route', recovery_mode='travel',
+                local_target=(0., 0., 30.))
+            traffic = module.Traffic(module.body(2, own['position'], 0., shape), [peer])
+            player.apply(command, own, traffic, 1,
+                lambda *args: clear, lambda: 0., 1./30., False, None)
+            return command
+        self.assertEqual('head_on_blocked', advance(0., False)['traffic_mode'])
+        self.assertEqual('head_on_retreat', advance(1.6, False)['recovery_mode'])
+        for now in (8., 100., 1000.):
+            result = advance(now, True)
+            self.assertEqual('finished', result['traffic_control']['phase'])
+            self.assertNotEqual('head_on_retreat', result['recovery_mode'])
+            self.assertNotIn('suppress_fire', result)
+        peer['position'] = (10., 0., 4.3)
+        advance(1001., True)
+        self.assertFalse(player.pairs)
+        peer['position'] = (0., 0., 4.3)
+        self.assertEqual('head_on_blocked', advance(1002., False)['traffic_mode'])
+
+    def test_default_map_is_readonly_and_each_player_gets_private_rows_on_python27(self):
+        import copy
+        catalog = self.modules['route_catalog']
+        name = '02_malinovka'
+        profile = dict(name='DEFAULT', maps={name: dict(
+            routes=[], positions=[], default_routes=[])})
+        original = copy.deepcopy(profile)
+        expected = catalog.packaged_map(name)
+        first = catalog.map_settings(profile, name)
+        second = catalog.map_settings(profile, name)
+        self.assertEqual(expected, first)
+        self.assertEqual(expected, second)
+        first['default_routes'][0]['points'][0][0] += 100.
+        first['positions'].append(dict(id='player-only', point=[0., 0.]))
+        self.assertNotEqual(first, second)
+        self.assertEqual(expected, second)
+        self.assertEqual(expected, catalog.map_settings(profile, name))
+        self.assertEqual(original, profile)
+
+    def test_stalled_sortie_and_unchanged_shot_reach_bounded_terminal_on_python27(self):
+        module = self.modules['sortie']
+        progress = module.SortieProgress()
+        route = dict(id='local-sortie', waypoints=[[-100., 0., 0], [-50., 0., 0],
+                                                   [0., 0., 0], [0., 100., 0]])
+        home = dict(point=(-100., 0.), radius=10.)
+        phases = set()
+        for now in range(201):
+            # The caller repeatedly supplies the original cursor and keeps
+            # aiming, but neither is evidence of motion or another shot.
+            result = progress.update(route, 2,
+                dict(now=float(now), position=(-70., 0., 0.)), home,
+                lambda *args: False, aiming=True, sequence=7)
+            phases.add(result['phase'])
+            if result.get('replace'):
+                break
+        self.assertLess(now, 150)
+        self.assertEqual('home_progress_timeout', result['reason'])
+        self.assertTrue(result['replace'])
+        self.assertNotIn('complete', result)
+        self.assertEqual(set(('forward', 'skip', 'return', 'home')), phases)
+        self.assertEqual(module.MAX_AIM_PAUSE_SECONDS, result['aim_pause'])
+        other = module.SortieProgress()
+        unchanged = other.update(route, 2, dict(now=200., position=(-70., 0., 0.)),
+                                 home, lambda *args: False)
+        self.assertEqual(('forward', 2), (unchanged['phase'], unchanged['index']))
+        progress.reset()
+        self.assertIsNone(progress.identity)
+        self.assertEqual(2, other.index)
+
+    def test_neutral_projectile_rounding_keeps_half_even_and_signed_zero_on_python27(self):
+        import math
+        wire = importlib.import_module('gui.mods.offline_lan_0922.projectile_wire')
+        # Exact binary fractions exercise both half-even tie directions;
+        # relying on the host's built-in round would differ on Python 2.
+        for value, expected in ((.0078125, .007812), (.0234375, .023438),
+                                (-.0078125, -.007812), (-.0234375, -.023438)):
+            self.assertEqual(expected, wire.round_scalar(value))
+        for value in (0., -0., .0000001, -.0000001):
+            actual = wire.round_scalar(value)
+            self.assertEqual(0., actual)
+            self.assertEqual(math.copysign(1., value), math.copysign(1., actual))
+        for value in (float('nan'), float('inf'), float('-inf')):
+            with self.assertRaises((ValueError, OverflowError)):
+                wire.round_scalar(value)
 
     def test_real_search_observed_wreck_and_private_close_on_python27(self):
         first, second = self.pathfinder(), self.pathfinder()

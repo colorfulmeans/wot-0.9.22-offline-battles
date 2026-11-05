@@ -2422,6 +2422,9 @@ class WindowTest(unittest.TestCase):
         self.assertIn("Enter the address", self._log_text())
 
     def test_a_matching_existing_server_is_reused(self):
+        # The harness enables diagnostics for trace tests. This case exercises
+        # an ordinary LAN entry, not the fresh-server diagnostic entry.
+        self.window._diagnostic_entry = False
         with mock.patch("core.listener_status",
                         return_value=core.LISTENER_COMPATIBLE), \
                 mock.patch("wot_launcher.subprocess.Popen") as popen:
@@ -2449,7 +2452,21 @@ class WindowTest(unittest.TestCase):
         popen.assert_not_called()
         self.assertIn("fresh launcher-owned server", self._log_text())
 
+    def test_diagnostic_entry_refuses_an_external_compatible_server(self):
+        self.window._diagnostic_entry = True
+        with mock.patch("core.listener_status",
+                        return_value=core.LISTENER_COMPATIBLE), \
+                mock.patch("wot_launcher.subprocess.Popen") as popen, \
+                mock.patch("wot_launcher.bot_tactics_store.Store") as store:
+            self.assertFalse(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+        popen.assert_not_called()
+        store.assert_not_called()
+        self.assertIn("fresh launcher-owned server", self._log_text())
+
     def test_exact_lineup_refuses_an_external_compatible_server(self):
+        # Isolate the exact-roster guard from the earlier diagnostic-mode guard.
+        self.window._diagnostic_entry = False
         lineup = [{
             "team": 2, "slot": 0,
             "vehicle": "germany:G12_Ltraktor",
@@ -2509,6 +2526,7 @@ class WindowTest(unittest.TestCase):
                 self.window._stop_server(force=True)
 
     def test_launcher_owned_server_reuse_requires_game_and_visibility_context(self):
+        self.window._diagnostic_entry = False
         server = _Process()
         self.window._server = server
         game_root = os.path.realpath(self.settings_dir)
@@ -2526,6 +2544,38 @@ class WindowTest(unittest.TestCase):
                 os.path.join(self.settings_dir, "other"),
                 core.PORT_0_9_22))
         listener.assert_not_called()
+        self.assertIn("different game or visibility", self._log_text())
+
+    def test_launcher_owned_server_reuse_requires_tactics_and_scene_context(self):
+        self.window._server = _Process()
+        self.window._diagnostic_entry = True
+        self.window._server_context = {
+            "game_root": os.path.normcase(os.path.realpath(self.settings_dir)),
+            "port_version": core.PORT_0_9_22,
+            "loopback_only": False,
+            "built_in_tactics": True,
+            "test_scene": (),
+        }
+        with mock.patch("core.listener_status") as listener, \
+                mock.patch("wot_launcher.subprocess.Popen") as popen:
+            self.assertTrue(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+            self.window._diagnostic_entry = False
+            self.assertFalse(self.window._start_server(
+                self.settings_dir, core.PORT_0_9_22))
+            self.window._server_context.update(
+                loopback_only=True, test_scene=("3", "0", "0"))
+            with mock.patch.dict(os.environ, {
+                    "WOT_OFFLINE_EQUIPMENT_TEST": "3",
+                    "WOT_OFFLINE_ROOF_CRUSH_TEST": "0",
+                    "WOT_OFFLINE_ROOF_SHOT_DROP": "0"}):
+                self.assertTrue(self.window._start_server(
+                    self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+                os.environ["WOT_OFFLINE_EQUIPMENT_TEST"] = "4"
+                self.assertFalse(self.window._start_server(
+                    self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+        listener.assert_not_called()
+        popen.assert_not_called()
         self.assertIn("different game or visibility", self._log_text())
 
     def test_persistent_server_survives_session_cleanup_until_stopped(self):

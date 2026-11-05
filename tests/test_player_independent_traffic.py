@@ -83,8 +83,13 @@ class IndependentTrafficTests(unittest.TestCase):
                           [peer(1, (0., 0., 0.))], order('return_to_base'),
                           lambda heading, reach=6.: True)
         self.assertTrue(exhausted['traffic_control']['exhausted'])
-        self.assertTrue(exhausted['brake'])
-        self.assertEqual(0., exhausted['throttle'])
+        self.assertEqual('finished', exhausted['traffic_control']['phase'])
+        self.assertNotEqual('head_on_retreat', exhausted['recovery_mode'])
+        self.assertNotIn('suppress_fire', exhausted)
+        # Actual hull braking still applies at the 10cm gap; a finished lease
+        # no longer owns that stop or disables the independent fire pipeline.
+        self.assertEqual('vehicle_brake', exhausted['traffic_mode'])
+        self.assertEqual(1, exhausted['forward_blocked_by'])
 
     def test_real_driver_zero_throttle_blockage_still_enters_coordination(self):
         player = PlayerTraffic()

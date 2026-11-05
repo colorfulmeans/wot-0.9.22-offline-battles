@@ -325,7 +325,7 @@ class NativeColumnContractTests(unittest.TestCase):
             if isinstance(n,ast.ClassDef) and n.name==class_name)
         node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name==name)
         node.decorator_list=[]
-        ns=dict(_xyz=lambda x:tuple(x),BOT_WATER_AVOID_DEPTH=1.2)
+        ns=dict(_xyz=lambda x:tuple(x),NAVIGABLE_WATER_DEPTH=1.2)
         exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),ns)
         return ns[name]
 

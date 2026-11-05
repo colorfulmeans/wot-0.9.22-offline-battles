@@ -1407,7 +1407,7 @@ class PlayerControl(object):
 
     def consumables(self, entity):
         # Player-owned activation decisions, actual mounted kits/cooldowns.
-        from ..equipment_mechanics import BOT_REPAIR_PRIORITY, BOT_CREW_PRIORITY
+        from .equipment_policy import CREW_PRIORITY, select_targets
         owner = self.owner
         generation, control_identity, active = self.control_generation, self.identity(), self.active
         client, server, descriptor = owner.client, owner._server, entity.typeDescriptor
@@ -1427,13 +1427,7 @@ class PlayerControl(object):
             return
         record = owner._records.get('player:%s' % owner.client.player_id) or {}
         critical = record.get('critical_state') or (record.get('state') or {}).get('critical') or {}
-        states = dict((r['name'], r['state']) for r in critical.get('devices', ()))
-        states.update((name, 'destroyed') for name in critical.get('destroyed', ()))
-        # Share the immutable reviewed priorities, never a Bot policy instance.
-        repair = next((name for name, severity in BOT_REPAIR_PRIORITY
-                       if states.get(name) == severity), None)
-        crew = next((name for name in BOT_CREW_PRIORITY
-                     if name in critical.get('crew_ko', ())), None)
+        states, repair, crew = select_targets(critical)
         now = owner._clock()
         stun_end = (record.get('state') or {}).get('stun_end_server_time_ms', 0)
         estimated_time = owner._projectile_estimated_server_time(now) if stun_end else None
@@ -1498,7 +1492,7 @@ class PlayerControl(object):
                     # A small kit can clear stun with a healthy, real crew
                     # target. Its high word still needs an installed extra.
                     index = None
-                    for name in ('commander',) + tuple(BOT_CREW_PRIORITY):
+                    for name in ('commander',) + CREW_PRIORITY:
                         try:
                             index = owner._critical_extra_index(entity.typeDescriptor, name)
                             if not current():

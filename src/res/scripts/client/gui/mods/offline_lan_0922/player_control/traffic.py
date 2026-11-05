@@ -162,6 +162,7 @@ class PlayerTraffic(object):
         self.pairs = {}
         self.wait = None
         self.escape = None
+        self.escape_retry_after = 0.
         self.failures = {}
         self.observations = {}
         self.jams = {}
@@ -169,6 +170,46 @@ class PlayerTraffic(object):
         self.contact_escape = None
         self.contact_memory = None
         self.receipt = {}
+
+    def _finish_pair(self, lease, first, second, peer_id, now, reason, remaining=None):
+        from .traffic_laws import HEAD_ON_RETREAT_SECONDS, TRAFFIC_REENTRY_SECONDS
+        # A finished encounter is a non-owning memory, not a zero-throttle
+        # command. Keep it until a physical departure/reentry, otherwise the
+        # same stationary pair would start a fresh lease on the next decision.
+        if lease.get('phase') != 'finished':
+            lease.update(phase='finished', reason=reason, finished_at=now,
+                retry_after=now+TRAFFIC_REENTRY_SECONDS, clear_seen=False,
+                finished_poses=((tuple(first['position']), first['yaw']),
+                                (tuple(second['position']), second['yaw'])))
+            lease.setdefault('actors', (actor_priority(first), actor_priority(second)))
+            if remaining is not None:
+                lease['remaining'] = remaining
+        until = lease['until'] + (HEAD_ON_RETREAT_SECONDS if 'retreat' in lease else 0.)
+        self.receipt = dict(mode=lease['mode'], phase='finished', peer=peer_id,
+            reason=lease['reason'], until=until, exhausted=lease['reason'] == 'deadline',
+            retry_after=lease['retry_after'])
+        for name in ('priority', 'retreat', 'remaining'):
+            if name in lease:
+                self.receipt[name] = lease[name]
+
+    @staticmethod
+    def _pair_departed(lease, first, second, candidate):
+        from .traffic_laws import _cleared
+        if _cleared(lease, first, second):
+            return True
+        if candidate is not None:
+            return False
+        # A reversed speed sample or sub-centimetre native-pose jitter alone
+        # is not a new encounter. The previously conflicting geometry must
+        # have changed while the pair is outside the admission envelope.
+        for actor, previous in zip((first, second), lease['finished_poses']):
+            position, yaw = previous
+            moved = math.hypot(actor['position'][0]-position[0],
+                               actor['position'][2]-position[2])
+            turned = abs((actor['yaw']-yaw+math.pi) % (2.*math.pi)-math.pi)
+            if moved >= .5 or turned >= .35:
+                return True
+        return False
 
     def _coordinate(self, order, current, peers, now, traffic, clear):
         from .traffic_laws import _begin, _cleared, _same_level, HEAD_ON_RETREAT_SECONDS
@@ -180,7 +221,8 @@ class PlayerTraffic(object):
                 del self.pairs[peer_id]
         if not order.get('travel_intent') or current['speed'] < -.05:
             # An existing backing lease still owns its already-admitted exit.
-            if not any(row.get('retreat') == identity for row in self.pairs.values()):
+            if not any(row.get('retreat') == identity and row.get('phase') != 'finished'
+                       for row in self.pairs.values()):
                 return False
         # Local vehicle clearance runs before coordination. A proved obstacle
         # may already have reduced the raw driving command to zero; requiring
@@ -196,6 +238,21 @@ class PlayerTraffic(object):
             first, second = ((current, peer) if actor_priority(current) < actor_priority(peer)
                              else (peer, current))
             lease = self.pairs.get(peer_id)
+            actors = (actor_priority(first), actor_priority(second))
+            if lease is not None and lease.get('actors', actors) != actors:
+                # Native handles can be reused; a different public actor must
+                # not inherit another actor's active or spent encounter.
+                del self.pairs[peer_id]
+                lease = None
+            if lease is not None and lease.get('phase') == 'finished':
+                candidate = _begin(first, second, now, None)
+                if self._pair_departed(lease, first, second, candidate):
+                    lease['clear_seen'] = True
+                if not lease['clear_seen'] or now < lease['retry_after']:
+                    self._finish_pair(lease, first, second, peer_id, now, lease['reason'])
+                    continue
+                del self.pairs[peer_id]
+                lease = None
             if lease is not None and _cleared(lease, first, second):
                 del self.pairs[peer_id]
                 lease = None
@@ -206,12 +263,27 @@ class PlayerTraffic(object):
                 if lease is None:
                     continue
                 self.pairs[peer_id] = lease
+            lease.setdefault('actors', actors)
             if lease['mode'] == 'yield':
                 if now < lease['until'] and identity != lease['winner']:
                     order.update(throttle=0., turn=0., brake=True, traffic_mode='yield')
+                    self.receipt = dict(mode='yield', phase='active', peer=peer_id,
+                                        winner=lease['winner'], until=lease['until'])
                     return True
+                if now >= lease['until']:
+                    self._finish_pair(lease, first, second, peer_id, now, 'deadline')
                 continue
             if now >= lease['until']:
+                until = lease['until'] + HEAD_ON_RETREAT_SECONDS
+                if now >= until:
+                    remaining = None
+                    if 'origin' in lease:
+                        remaining = max(2., current['shape'][1]*3.2)-math.hypot(
+                            current['position'][0]-lease['origin'][0],
+                            current['position'][2]-lease['origin'][2])
+                    self._finish_pair(lease, first, second, peer_id, now, 'deadline',
+                                      remaining=remaining)
+                    continue
                 # Both visible clients independently derive the same roles
                 # from public actor identities. No Bot queue or peer order is
                 # read. A stopped peer plus our rejected lateral sweep is the
@@ -222,20 +294,26 @@ class PlayerTraffic(object):
                     lease.setdefault('retreat', second['id'])
                     lease.setdefault('origin', tuple(current['position']))
                 if 'retreat' not in lease:
+                    if not lease.get('blocked'):
+                        self._finish_pair(lease, first, second, peer_id, now, 'sidestep_complete')
                     continue
-                until = lease['until'] + HEAD_ON_RETREAT_SECONDS
                 sign = -1. if identity == lease['retreat'] else 1.
                 heading = current['yaw'] + (math.pi if sign < 0. else 0.)
                 maximum = max(2., current['shape'][1] * 3.2)
                 travelled = math.hypot(current['position'][0]-lease['origin'][0],
                                        current['position'][2]-lease['origin'][2])
                 remaining = maximum-travelled
-                allowed = now < until and remaining > .1 and clear(heading, remaining)
+                if remaining <= .1:
+                    self._finish_pair(lease, first, second, peer_id, now,
+                                      'distance_complete', remaining=remaining)
+                    continue
+                allowed = clear(heading, remaining)
                 order.update(throttle=.7*sign if allowed else 0., turn=0.,
                     brake=not allowed, traffic_mode='head_on_retreat',
                     recovery_mode='head_on_retreat', suppress_fire=True,
                     fire_allowed=False)
-                self.receipt.update(mode='head_on_retreat', peer=peer_id,
+                self.receipt = dict(mode='head_on_retreat', peer=peer_id,
+                    phase='active' if allowed else 'blocked',
                     priority=lease['priority'], retreat=lease['retreat'], until=until,
                     exhausted=now >= until, remaining=remaining)
                 return True
@@ -245,8 +323,12 @@ class PlayerTraffic(object):
             if not traffic.can_turn(turn) or not clear(heading):
                 lease['blocked'] = True
                 order.update(throttle=0., turn=0., brake=True, traffic_mode='head_on_blocked')
+                self.receipt = dict(mode='head_on', phase='blocked', peer=peer_id,
+                                    until=lease['until'])
                 return True
             order.update(turn=turn, traffic_mode='head_on')
+            self.receipt = dict(mode='head_on', phase='active', peer=peer_id,
+                                until=lease['until'])
             return True
         return False
 
@@ -444,6 +526,7 @@ class PlayerTraffic(object):
         return clear(heading, distance)
 
     def _recover(self, order, state, clear, stopping_distance, step, start, failure):
+        from .traffic_laws import TRAFFIC_REENTRY_SECONDS
         position, yaw, now = state['position'], state['yaw'], state['now']
         if isinstance(failure, dict):
             failure = (failure.get('position', position), failure.get('attempted_heading'))
@@ -468,6 +551,16 @@ class PlayerTraffic(object):
                     order.update(throttle=0., turn=0., brake=True,
                                  recovery_mode='short_escape_complete')
                     return
+                if now >= until:
+                    # Expiring one gear and admitting the other in this same
+                    # frame can keep a stationary vehicle under recovery's
+                    # ownership forever. The driver/replanner gets a finite
+                    # unmodified interval before a fresh, fully proved retry.
+                    self.escape_retry_after = now+TRAFFIC_REENTRY_SECONDS
+                    self.receipt = dict(mode='short_escape', phase='finished',
+                        reason='deadline', retry_after=self.escape_retry_after)
+        if escape is None and now < self.escape_retry_after:
+            return
         if escape is None and start and abs(state['speed']) <= 1.5:
             minimum = max(.5, stopping_distance() + abs(state['speed']) * step)
             for distance in (max(2., minimum), max(1., minimum), minimum):
@@ -508,6 +601,15 @@ class PlayerTraffic(object):
         soft_hold = mode in ('hold', 'combat_facing') or order.get('holding')
         if protected:
             self.escape = self.wait = self.parked = self.contact_escape = None
+            by_id = dict((peer['id'], peer) for peer in peers)
+            for peer_id, lease in list(self.pairs.items()):
+                peer = by_id.get(peer_id)
+                if peer is None or not peer['alive'] or peer['team'] != team:
+                    self.pairs.pop(peer_id, None)
+                    continue
+                first, second = ((current, peer) if actor_priority(current) < actor_priority(peer)
+                                 else (peer, current))
+                self._finish_pair(lease, first, second, peer_id, now, 'control_hold')
         else:
             managed = self._parked_yield(order, current, peers, now, clear)
             if not managed and not soft_hold:

@@ -166,7 +166,6 @@ class TransportTests(unittest.TestCase):
 
     def test_stationary_render_history_reads_paired_incoming_sample(self):
         b = visible.BattleRuntime(visible._runtime())
-        b._bots = types.SimpleNamespace(states={})
         for revision, stamp in ((1, 1000000), (2, 1200000)):
             b._remember_ram_bot_snapshot(dict(bot_state_revision=revision,
                 bot_state_time_us=stamp, bots=[dict(id=22, x=0., y=0., z=6.,
@@ -181,8 +180,9 @@ class VisibleAdmissionTests(unittest.TestCase):
         b = visible.BattleRuntime(visible._runtime())
         state = dict(id=22, alive=True, team=2, x=0., y=0., z=6.,
                      yaw=math.pi, speed=0., mass=37400., collision_shape=SHAPE)
-        b._bots = types.SimpleNamespace(states={22: state},
-                                       replica_contact_params=lambda *a: None)
+        # This fixture isolates incoming evidence, not native motor factors.
+        # Public replica facts remain usable without any Bot controller.
+        b._replica_contact_params = lambda *a: None
         b._server_entity = lambda engine_id: types.SimpleNamespace(
             typeDescriptor=bots._combat_descriptor())
         b._ram_profile = lambda *a, **k: dict(spall_coefficient=1., ramming_bonus=0.)

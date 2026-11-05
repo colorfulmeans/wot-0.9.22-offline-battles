@@ -417,7 +417,10 @@ class PlayerTrafficRecoveryTests(unittest.TestCase):
         origin = (0., 0., 0.)
         traffic = Traffic(body(1, origin, 0., shape), [])
         state = dict(position=origin, yaw=0., speed=0.)
-        for now, expected in ((1., 'short_reverse_escape'), (5.1, 'short_forward_escape')):
+        # An expired escape must hand back to the driver before a newly
+        # proved attempt, not perpetually alternate the two gears in place.
+        for now, expected in ((1., 'short_reverse_escape'), (5.1, 'blocked'),
+                              (5.2, 'blocked'), (6.7, 'short_forward_escape')):
             state['now'] = now
             order = dict(throttle=0., turn=0., brake=True, recovery_mode='blocked')
             player.apply(order, state, traffic, 1, lambda *a: True,
