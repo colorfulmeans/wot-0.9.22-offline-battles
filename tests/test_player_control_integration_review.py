@@ -203,130 +203,6 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual(1, controller.automatic_commits)
         self.assertIsNone(controller.owner._local_player_burst)
 
-    def direct_facing_controller(self):
-        from test_player_control import PlayerRegressionTests
-        from test_player_navigation_migration import controller as navigation_controller
-        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
-        control, target = PlayerRegressionTests().aim_controller()
-        control.navigation = navigation_controller()
-        owner = control.owner
-        owner.local_pose = lambda: ((-85., 0., 0.), 0.)
-        owner._mutable_shot_ray = lambda: ((-85., 2., 0.), (0., 0., 1.))
-        from gui.mods.offline_lan_0922 import vehicle_physics
-        owner._local_physics = dict(vehicle_physics.derive_params(
-            owner._server_entity(1).typeDescriptor), rotSpd=1.,
-            rotationIsAroundCenter=False, trackCenter=1.5)
-        target.position = (-68., 0., 30.)
-        control.direct_engagement = DirectEngagement(None)
-        control.ammo_policy = types.SimpleNamespace(main=0, context=lambda *args: None,
-            shells=[dict(index=0, kind='ARMOR_PIERCING')])
-        control.aiming.direct_samples = lambda unused: 1
-        control.aiming.direct_pose = lambda item: (
-            owner.local_pose()[0], owner.local_pose()[1], item.position, 0., 0., 0., 0.)
-        control.aiming.compare_direct = mock.Mock(side_effect=lambda item, index, sample, now,
-            *args, **kwargs: ('ready', dict(created=now, point=item.position, clear=True,
-                                         geometry_clear=True, reachable=True)))
-        control.rotation_clear = mock.Mock(return_value=True)
-        control.trigger = mock.Mock(return_value=False)
-        return control, target
-
-    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_direct_facing_waits_for_stop_but_does_not_own_the_trigger(self, unused_aligned):
-        control, target = self.direct_facing_controller()
-        owner = control.owner
-        owner._local_speed = .8
-        control.update(.1, 1.)
-        self.assertEqual('braking', control.last_order['combat_facing']['state'])
-        self.assertEqual((0., 0., True), (owner._sender.forward, owner._sender.turn,
-                                          owner._sender.handbrake))
-        owner._local_speed = 0.
-        control.trigger.reset_mock()
-        control.update(.1, 1.2)
-        self.assertEqual('turning', control.last_order['combat_facing']['state'])
-        self.assertGreater(owner._sender.turn, 0.)
-        control.trigger.assert_called_once()
-        control.rotation_clear.return_value = False
-        control.trigger.reset_mock()
-        control.update(.1, 1.4)
-        self.assertEqual('blocked', control.last_order['combat_facing']['state'])
-        self.assertEqual((0., 0., True), (owner._sender.forward, owner._sender.turn,
-                                          owner._sender.handbrake))
-        control.trigger.assert_called_once()
-        control.weapon.forward.assert_not_called()
-
-    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_direct_turret_centers_only_during_targetless_forward_travel(self, unused_aligned):
-        control, target = self.direct_facing_controller()
-        control.update(.1, 1.)
-        control.weapon.forward.assert_not_called()
-        control.aiming.compare_direct.side_effect = None
-        control.aiming.compare_direct.return_value = ('pending', None)
-        for now in (1.2, 2., 3., 4.):
-            control.update(.1, now)
-        control.weapon.forward.assert_not_called()
-
-        control.direct_engagement.retreat = True
-        control.navigation.ammo_withdrawal = mock.Mock(return_value=dict(throttle=0., turn=0.,
-            brake=True, reverse_only=True, holding=True, travel_intent=False,
-            combat_mode='ammo_retreat_hold', recovery_mode='ammo_retreat_hold'))
-        control.update(.1, 4.2)
-        self.assertEqual('ammo_retreat_hold', control.last_order['combat_mode'])
-        control.weapon.forward.assert_not_called()
-        control.aiming.compare_direct.return_value = ('ready', dict(
-            created=4.4, point=target.position, clear=True, geometry_clear=True, reachable=True))
-        control.trigger.reset_mock()
-        control.update(.1, 4.4)
-        self.assertFalse(control.direct_engagement.retreat)
-        self.assertEqual(target.id, control.target_engine)
-        control.trigger.assert_called_once()
-
-        control._contacts = lambda unused: ([], [], {})
-        control.navigation.decide = mock.Mock(return_value=dict(throttle=1., turn=0., brake=False,
-            holding=False, travel_intent=True, combat_mode='route', recovery_mode='travel'))
-        control.update(.1, 4.6)
-        control.weapon.forward.assert_not_called()
-        control.update(.1, 5.4)
-        control.weapon.forward.assert_called_once()
-
-    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_capture_pivot_stays_in_circle_and_never_requests_combat_movement(self, unused_aligned):
-        from test_player_navigation_migration import state
-        control, target = self.direct_facing_controller()
-        owner = control.owner
-        control.navigation.start_mission('capture_base', {'command_id': 'capture'}, state())
-        mission = control.navigation.mission
-        x, z = mission.goal
-        owner.local_pose = lambda: ((x, 0., z), 0.)
-        target.position = (x+15., 0., z+25.)
-        control.direct_engagement.retreat = True
-        control.navigation.ammo_withdrawal = mock.Mock()
-        control.navigation.firing_position = mock.Mock()
-        control.update(.1, 1.)
-        control.update(.1, 2.)
-        self.assertEqual('capturing', control.last_order['mission']['phase'])
-        self.assertEqual('turning', control.last_order['combat_facing']['state'])
-        self.assertEqual(0., owner._sender.forward)
-
-        edge = x+mission.radius-.019
-        owner.local_pose = lambda: ((edge, 0., z), 0.)
-        target.position = (edge+15., 0., z+25.)
-        control.trigger.reset_mock()
-        control.update(.1, 2.2)
-        self.assertEqual('blocked', control.last_order['combat_facing']['state'])
-        self.assertEqual((0., 0., True), (owner._sender.forward, owner._sender.turn,
-                                          owner._sender.handbrake))
-        control.trigger.assert_called_once()
-
-        control.direct_engagement.retreat = True
-        control.aiming.compare_direct.side_effect = None
-        control.aiming.compare_direct.return_value = ('pending', None)
-        control.update(.1, 2.4)
-        self.assertEqual('capturing', control.last_order['mission']['phase'])
-        self.assertEqual((0., 0., True), (owner._sender.forward, owner._sender.turn,
-                                          owner._sender.handbrake))
-        control.navigation.ammo_withdrawal.assert_not_called()
-        control.navigation.firing_position.assert_not_called()
-
     def test_mission_arrival_and_failure_brakes_survive_outer_combat_facing(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller, state
@@ -425,7 +301,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                          owner.change_vehicle_setting.call_args_list)
 
 
-    def test_turret_retains_aim_while_an_unusable_lock_persists(self):
+    def test_turret_returns_forward_after_an_unusable_lock_persists(self):
         from test_player_control import PlayerRegressionTests
         from types import SimpleNamespace
         control, target = PlayerRegressionTests().aim_controller()
@@ -435,7 +311,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 2.)
         control.weapon.forward.assert_not_called()
         control.update(.1, 2.6)
-        control.weapon.forward.assert_not_called()
+        control.weapon.forward.assert_called_once()
 
 
     def test_pending_direct_scan_preserves_turret_and_leaves_route_in_control(self):

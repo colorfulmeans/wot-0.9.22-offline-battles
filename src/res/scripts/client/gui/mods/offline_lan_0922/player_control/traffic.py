@@ -123,14 +123,13 @@ class Traffic(object):
         self.receipt['blocked_queries'] = self.blocked_queries
         return fraction >= .999
 
-    def can_turn(self, turn, ignore_ids=(), sweep=None, pivot_offset=0.):
+    def can_turn(self, turn, ignore_ids=()):
         if not turn:
             return True
         b = self.current
         peers = [peer for peer in self.neighbours if peer['id'] not in ignore_ids]
         return tank_collision.rotation_fraction((b['x'],b['y'],b['z']),b['yaw'],
-            b['yaw'] + (turn*.15 if sweep is None else sweep), b['shape'], peers,
-            pivot_offset=pivot_offset) >= .999
+            b['yaw']+turn*.15,b['shape'],peers) >= .999
 
     def can_steer(self, throttle, turn, speed, ignore_ids=(), reach=None):
         """Check turning and translation together over the near command horizon."""

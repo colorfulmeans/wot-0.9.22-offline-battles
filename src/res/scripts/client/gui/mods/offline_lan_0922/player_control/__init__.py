@@ -45,9 +45,9 @@ class PlayerControl(object):
         self.drive_contact_receipt = None
         self.blocked_fire_target = None
         self.engagement_hold = None
-        self.turret_idle_since = None
         self.front_priority = None
         self.blocked_fire_sample = None
+        self.no_aim_since = None
         self.last_shell_request = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
@@ -55,11 +55,10 @@ class PlayerControl(object):
         self.aiming = None
         self.direct_engagement = None
         from .targeting import TargetSelection
-        from .tactics import CombatFacing, CombatTactics
+        from .tactics import CombatTactics
         from .fire_admission import FireAdmission
         self.target_selection = TargetSelection()
         self.combat_tactics = CombatTactics()
-        self.combat_facing = CombatFacing()
         self.fire_admission = FireAdmission(self)
         self.strategy = None
         self.next_strategy = 0.
@@ -294,13 +293,12 @@ class PlayerControl(object):
         self.drive_contact_receipt = None
         self.target_selection.reset()
         self.combat_tactics.reset()
-        self.combat_facing.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
         self.engagement_hold = None
-        self.turret_idle_since = None
         self.front_priority = None
         self.blocked_fire_sample = None
+        self.no_aim_since = None
         self.last_shell_request = None
         self.next_strategy = 0.
         self.weapon = weapon
@@ -417,8 +415,6 @@ class PlayerControl(object):
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
         self.engagement_hold = self.front_priority = None
-        self.turret_idle_since = None
-        self.combat_facing.reset()
         callbacks = list(self.release_pending)
         self.release_pending = []
         if not preserve_explicit:
@@ -1162,8 +1158,8 @@ class PlayerControl(object):
                 self.owner.client.player_id, self.last_order, position, heading,
                 self.owner._clock(), dt, realised=True)
 
-    def rotation_clear(self, entity, position, yaw, end_yaw, pivot_offset=0.):
-        """Read-only native static/body sweep for a proposed hull turn."""
+    def rotation_clear(self, entity, position, yaw, end_yaw):
+        """Read-only native static/body sweep for a proposed wreck-push turn."""
         owner = self.owner
         native = getattr(owner, '_native_world_rotation_is_clear', None)
         boundary = getattr(owner, '_arena_rotation_is_clear', None)
@@ -1177,39 +1173,16 @@ class PlayerControl(object):
         shape = bbox(descriptor)
         if not isinstance(shape, (tuple, list)) or len(shape) < 2:
             return False
-        from .. import vehicle_physics
-        end = vehicle_physics.track_pivot_position(position, yaw, end_yaw, pivot_offset)
         pitch, roll = owner._local_pitch, owner._local_roll
-        if (not boundary(entity, position, yaw, end_yaw, end) or
-                not turrets(position, yaw, end, end_yaw, descriptor, pitch, roll)):
+        if (not boundary(entity, position, yaw, end_yaw, position) or
+                not turrets(position, yaw, position, end_yaw, descriptor, pitch, roll)):
             return False
-        proposal = catalog(position, yaw, end, end_yaw, 0., descriptor,
+        proposal = catalog(position, yaw, position, end_yaw, 0., descriptor,
             owner._clock(), .1, commit_enabled=False, pitch=pitch, roll=roll)
         if proposal.get('status') != 'clear' or proposal.get('requires_commit'):
             return False
         return native(position, yaw, end_yaw, descriptor, pitch=pitch, roll=roll,
-                      record_local=False, include_static=True, pivot_offset=pivot_offset)
-
-    def combat_pivot_clear(self, entity, state, traffic, turn, capture):
-        from .. import vehicle_physics
-        physics = getattr(self.owner, '_local_physics', None)
-        if not physics:
-            return False
-        position, yaw = state['position'], state['yaw']
-        rate = max(abs(physics['rotSpd']), abs(getattr(self.owner, '_local_turn_speed', 0.)))
-        horizon = state['decision_horizon'] + vehicle_physics.ANG_ACCELERATION_TIME
-        swept_angle = rate * horizon
-        gauge = 0. if physics['rotationIsAroundCenter'] else physics['trackCenter']
-        if capture:
-            x, z = capture['goal']
-            margin = capture['radius'] - math.hypot(position[0]-x, position[2]-z)
-            # Arc length plus residual braking travel bounds the whole sweep.
-            if margin <= gauge * swept_angle + abs(state['speed']) * horizon + .02:
-                return False
-        sweep = math.copysign(max(.15 * abs(turn), swept_angle), turn)
-        pivot = math.copysign(gauge, turn) * (-1. if state['speed'] < -1.e-9 else 1.)
-        return (traffic.can_turn(turn, sweep=sweep, pivot_offset=pivot) and
-                self.rotation_clear(entity, position, yaw, yaw + sweep, pivot_offset=pivot))
+                      record_local=False, include_static=True)
 
     def direction_clear(self, position, yaw, descriptor, shape, reach=None):
         # Corridor lanes follow the hull support plane even when the query
@@ -1734,6 +1707,7 @@ class PlayerControl(object):
                 self.aiming.reset()
         self.aim_receipt = None
         if target is not None:
+            self.no_aim_since = None
             from ..gun_mechanics import _field
             from .weapon import barrel_aligned
             self.target_engine = target.id
@@ -1773,7 +1747,11 @@ class PlayerControl(object):
         else:
             self.target_engine = None
             self.aim_progress_sample = None
-            if (engagement is None and 'fire' in self.features and self.weapon is not None and not settling_aim and
+            if self.no_aim_since is None:
+                self.no_aim_since = now
+            aim_idle = (self.direct_engagement is None or
+                        self.direct_engagement.target is None or now - self.no_aim_since >= 1.5)
+            if ('fire' in self.features and self.weapon is not None and aim_idle and not settling_aim and
                     not getattr(owner, '_local_fire_intent', None) and
                     not getattr(owner, '_local_player_burst', None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
@@ -1979,7 +1957,7 @@ class PlayerControl(object):
                 not (order.get('holding') and mission_order and not arrival.get('settled')) and
                 not (order.get('holding') and order.get('artillery') and not mission_order and
                      order['artillery'].get('phase') != 'holding'))
-            if engagement is None and hold and facing_allowed and target is not None:
+            if hold and facing_allowed and target is not None:
                 from .driving import angle
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
@@ -2035,31 +2013,6 @@ class PlayerControl(object):
                     order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
             else:
                 self.drive_failure = None
-            capture = (mission_order if order.get('combat_mode') == 'base_capture' and
-                       mission_order.get('phase') == 'capturing' and arrival.get('inside') and
-                       arrival.get('settled') else None)
-            if (engagement is not None and target is not None and facing_allowed and
-                    order.get('holding') and not (pushing or reverse_only or order['throttle']
-                    or order['turn'] or state['burst_active'] or not context['supported']
-                    or context['overturned'] or getattr(owner, '_local_fire_intent', None)) and
-                    (capture or hold and order.get('combat_mode') in ('engage', 'support_hold'))):
-                from .driving import angle
-                from .weapon import hull_traverse_error
-                dx, dz = target.position[0]-position[0], target.position[2]-position[2]
-                delta = angle(math.atan2(dx, dz)-yaw) if math.hypot(dx, dz) > .1 else 0.
-                traverse = hull_traverse_error(owner, entity.typeDescriptor, point, delta,
-                                               solution=solution)
-                if traverse is not None:
-                    delta = traverse
-                self.combat_facing.apply(order, state, target.id, delta,
-                    .02 if traverse is not None else .20, getattr(owner, '_local_turn_speed', 0.),
-                    lambda turn: self.combat_pivot_clear(entity, state, traffic, turn, capture))
-                if not decision_current():
-                    return
-            elif engagement is not None and not (order.get('holding') and (
-                    (retain_hold or capture) and target is None or state['burst_active'] or
-                    getattr(owner, '_local_fire_intent', None))):
-                self.combat_facing.reset()
             if reverse_only and (order['throttle'] > 0. or order['turn']):
                 order.update(throttle=0., turn=0., brake=True)
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
@@ -2082,24 +2035,6 @@ class PlayerControl(object):
                 return
         else:
             order = {}
-        cruising = (engagement is not None and target is None and not candidates and
-            self.weapon is not None and 'fire' in self.features and not settling_aim and
-            engagement.target is None and not (engagement.seek or engagement.retreat) and
-            order.get('combat_mode') in ('route', 'joining') and
-            order.get('recovery_mode') == 'travel' and order.get('travel_intent') and
-            order.get('throttle', 0.) > 0. and not order.get('brake') and
-            not getattr(owner, '_local_fire_intent', None) and
-            not getattr(owner, '_local_player_burst', None))
-        if not cruising:
-            self.turret_idle_since = None
-        elif self.turret_idle_since is None:
-            self.turret_idle_since = now
-        elif now - self.turret_idle_since >= .7:
-            self.weapon.forward(position, yaw, max(.5, (shape[2]+shape[3])*.5))
-            if not decision_current():
-                return
-            self.aim_receipt = dict(mode='forward', point=self.weapon.point,
-                client_mode=owner._avatar.gunRotator.clientMode)
         if settling_aim and self.aim_receipt is not None:
             self.aim_receipt['settling'] = True
         if engagement is not None and order.get('holding') and order.get('combat_mode') in (
@@ -2162,8 +2097,7 @@ class PlayerControl(object):
             if isinstance(getattr(self.direct_engagement, 'stage', None), tuple):
                 self.aim_receipt['engagement'] = dict(stage=self.direct_engagement.stage,
                     search_since=self.direct_engagement.search_since,
-                    fallback=self.direct_engagement.fallback, retreat=self.direct_engagement.retreat,
-                    search_expired=getattr(self.direct_engagement, 'search_expired', False))
+                    fallback=self.direct_engagement.fallback, retreat=self.direct_engagement.retreat)
         if 'consumables' in self.features:
             self.consumables(entity)
         if now >= getattr(self, 'next_log', 0.):

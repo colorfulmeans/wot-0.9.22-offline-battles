@@ -21,7 +21,6 @@ class DirectEngagement(object):
         self.scan = None
         self.motion = None
         self.search_since = None
-        self.search_expired = False
         self.exhausted = set()
         self.fallback = False
         self.seek = False
@@ -132,7 +131,6 @@ class DirectEngagement(object):
             self.laying_until = self.laying_error = None
             if not fallback:
                 self.search_since = None
-                self.search_expired = False
                 self.exhausted.clear()
                 self.retreat = self.seek = False
             if gun.clip_size > 1 and gun.clip == 1 and not (
@@ -161,9 +159,6 @@ class DirectEngagement(object):
         gun, policy = owner._gun_state, control.ammo_policy
         rows = self.shells(policy, gun)
         self.checking = False
-        if self.search_since is not None and now - self.search_since >= SEARCH_SECONDS:
-            self.search_since = None
-            self.search_expired = True
         self.seek = self.search_since is not None and not self.retreat
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
@@ -181,14 +176,6 @@ class DirectEngagement(object):
             self.adopt(candidates[0].id)
         target = by_id[self.target]
         target_moved, own_moved, pose = self._motion_changes(aiming, target)
-        facing = getattr(control, 'last_order', {}).get('combat_facing', {})
-        if (own_moved and self.motion is not None and facing.get('target') == target.id
-                and facing.get('state') in ('turning', 'settling')
-                and sum((pose[0][axis] - self.motion[0][axis])**2 for axis in range(3)) <= .5**2):
-            # A controlled pivot already has an admitted point. Recheck it
-            # against the live barrel without using hull yaw to restart a scan.
-            self.motion = pose[:2] + self.motion[2:]
-            own_moved = False
         own_due = own_moved and (self.last_full_at is None or
                                  now - self.last_full_at >= OWN_RESCAN_SECONDS)
         magazine = gun.clip_size > 1
@@ -205,15 +192,16 @@ class DirectEngagement(object):
                 self.last_solution is None or self.laying_until is not None or
                 self.next_clip_scan is not None and keep_clip and gun.clip == 1):
             return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
+        expired = self.search_since is not None and now - self.search_since >= SEARCH_SECONDS
         if self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
             mode = 'next'
-        elif self.search_expired and self.sample is None and self.scan is None and not self.retreat:
+        elif expired and self.sample is None and self.scan is None and not self.retreat:
             mode = 'next' if keep_clip and not he else 'splash' if he else 'full'
         elif self.scan is not None and self.scan['identity'][2] == 'splash':
             mode = 'splash'
         elif self.scan is not None and self.scan['identity'][2] == 'full':
             mode = 'full'
-        elif self.sample is not None and not (target_moved or own_due or self.fallback):
+        elif self.sample is not None and not (target_moved or own_due):
             mode = 'barrel'
         elif (self.sample is None and own_moved and not target_moved and not own_due
                 and self.last_full_at is not None):
@@ -241,7 +229,6 @@ class DirectEngagement(object):
                 return self._lay(control, target, next_index, self.sample, now, False)
             if control.reload_automatic_clip(next_index):
                 self.search_since = None
-                self.search_expired = False
                 self.exhausted.clear()
             elif not he and not any(row['kind'] == HE for row in rows):
                 self.retreat = True
@@ -258,9 +245,11 @@ class DirectEngagement(object):
             self.fallback = False
             return None, None, False
         self.sample = self.last_solution = None
-        if verdict == 'armor' and self.search_since is None and not self.search_expired:
+        if verdict == 'armor' and self.search_since is None:
             self.search_since = now
-        if self.search_expired and not keep_clip and not he:
+        if self.search_since is None:
+            self.exhausted.add(target.id)
+        elif now - self.search_since >= SEARCH_SECONDS and not keep_clip and not he:
             self.retreat = True
         else:
             self.exhausted.add(target.id)
@@ -270,5 +259,5 @@ class DirectEngagement(object):
             self.adopt(alternate.id)
         elif self.scan is None:
             self.exhausted.clear()
-            self.seek = not (self.retreat or self.search_expired)
+            self.seek = not self.retreat
         return None, None, False
