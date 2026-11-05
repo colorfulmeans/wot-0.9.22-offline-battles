@@ -26827,6 +26827,14 @@ class BattleRuntime(object):
                 drive_intent=throttle)
             self._local_turn_speed *= critical_damage.stat_factor(
                 entity, 'traverse')
+        control = getattr(self, '_player_control', None)
+        player_order = {}
+        if (getattr(control, 'active', False) and not getattr(control, 'halted', False)
+                and getattr(control, 'override', None) is None and not throttle):
+            player_order = getattr(control, 'last_order', {})
+        facing = player_order.get('confirmed_facing', {})
+        combat_pivot = facing.get('state') in ('turning', 'settling')
+        capture_circle = player_order.get('capture_pivot_circle')
         pivot_offset = vehicle_physics.track_pivot_offset(
             self._local_physics, self._local_speed, self._local_turn_speed,
             self._local_airborne, throttle)
@@ -26843,8 +26851,8 @@ class BattleRuntime(object):
                 position, yaw, candidate_yaw, shape, turn_peers,
                 pivot_offset=pivot_offset)
             if allowed < 1.0:
-                recovery = self._recover_local_held_peer_turn(
-                    entity, position, yaw, turn, dt, turn_peers)
+                recovery = (None if combat_pivot or capture_circle else
+                    self._recover_local_held_peer_turn(entity, position, yaw, turn, dt, turn_peers))
                 if recovery is not None:
                     position, yaw = recovery
                     candidate_yaw = yaw
@@ -26857,7 +26865,17 @@ class BattleRuntime(object):
                     contact_path = contact_path or 'tank_turn_contact'
         candidate_position = vehicle_physics.track_pivot_position(
             position, yaw, candidate_yaw, pivot_offset)
-        if self._arena_rotation_is_clear(
+        inside_capture = True
+        if capture_circle and abs(_angle_delta(candidate_yaw, yaw)) > 1.0e-9:
+            from .player_control.tactics import capture_pivot_allows
+            inside_capture = capture_pivot_allows(capture_circle, position,
+                candidate_position, pivot_offset, _angle_delta(candidate_yaw, yaw))
+        if not inside_capture:
+            self._local_turn_speed = 0.0
+            self._local_reaction_rate = 0.0
+            self._local_drive_turn = 0.0
+            contact_path = contact_path or 'capture_pivot_limit'
+        elif self._arena_rotation_is_clear(
                 entity, position, yaw, candidate_yaw, candidate_position):
             yaw_changed = abs(_angle_delta(yaw, candidate_yaw)) > 1.0e-8
             if yaw_changed:
@@ -26882,8 +26900,8 @@ class BattleRuntime(object):
                 # passed the unchanged native world probe above.
                 primary_turn_trace = dict(getattr(
                     self, '_local_world_collision_trace', None) or {})
-                recovery = self._recover_local_world_turn(
-                    entity, position, yaw, turn, dt, primary_turn_trace)
+                recovery = (None if combat_pivot or capture_circle else
+                    self._recover_local_world_turn(entity, position, yaw, turn, dt, primary_turn_trace))
                 if recovery is not None:
                     position, yaw = recovery
                     self._local_turn_speed = self._local_reaction_rate

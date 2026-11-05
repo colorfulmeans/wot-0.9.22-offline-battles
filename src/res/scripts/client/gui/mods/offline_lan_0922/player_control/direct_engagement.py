@@ -28,6 +28,7 @@ class DirectEngagement(object):
         self.laying_until = None
         self.next_clip_scan = None
         self.checking = False
+        self.confirmed = None
         self.last_full_at = None
         self.laying_error = None
 
@@ -54,6 +55,7 @@ class DirectEngagement(object):
         self.fallback = False
         self.laying_until = self.next_clip_scan = self.last_full_at = self.laying_error = None
         self.checking = False
+        self.confirmed = None
 
     def _motion_changes(self, aiming, target):
         try:
@@ -129,6 +131,7 @@ class DirectEngagement(object):
                     return None, None, False
                 return target, solution, False
             self.laying_until = self.laying_error = None
+            self.confirmed = (target.id, sample, index)
             if not fallback:
                 self.search_since = None
                 self.exhausted.clear()
@@ -159,6 +162,7 @@ class DirectEngagement(object):
         gun, policy = owner._gun_state, control.ammo_policy
         rows = self.shells(policy, gun)
         self.checking = False
+        self.confirmed = None
         self.seek = self.search_since is not None and not self.retreat
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
@@ -176,6 +180,14 @@ class DirectEngagement(object):
             self.adopt(candidates[0].id)
         target = by_id[self.target]
         target_moved, own_moved, pose = self._motion_changes(aiming, target)
+        facing = getattr(control, 'last_order', {}).get('confirmed_facing')
+        pivoting = (self.sample is not None and facing is not None and
+            facing['key'] == (target.id, self.sample, gun.shot_index) and
+            facing['state'] in ('turning', 'settling'))
+        if pivoting and own_moved and self.motion is not None:
+            # Keep the target pose anchor and the current scan across our pivot.
+            self.motion = pose[:2] + self.motion[2:]
+            own_moved = False
         own_due = own_moved and (self.last_full_at is None or
                                  now - self.last_full_at >= OWN_RESCAN_SECONDS)
         magazine = gun.clip_size > 1
@@ -188,6 +200,11 @@ class DirectEngagement(object):
         if self.stage is not None and not any(row['index'] == self.stage[0] for row in eligible):
             self.sample = self.last_solution = None
             self.fallback = False
+        if (pivoting and not target_moved and self.sample is not None and self.stage is not None
+                and self.stage[0] == gun.shot_index):
+            # Re-lay the verified point on the live barrel if stabilization
+            # needs time. A transient laying result is not a failed point.
+            return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
         if self.sample is not None and self.stage is not None and (
                 self.last_solution is None or self.laying_until is not None or
                 self.next_clip_scan is not None and keep_clip and gun.clip == 1):

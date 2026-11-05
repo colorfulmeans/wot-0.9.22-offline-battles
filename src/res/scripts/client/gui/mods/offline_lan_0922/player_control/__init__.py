@@ -55,10 +55,11 @@ class PlayerControl(object):
         self.aiming = None
         self.direct_engagement = None
         from .targeting import TargetSelection
-        from .tactics import CombatTactics
+        from .tactics import CombatTactics, ConfirmedFacing
         from .fire_admission import FireAdmission
         self.target_selection = TargetSelection()
         self.combat_tactics = CombatTactics()
+        self.confirmed_facing = ConfirmedFacing()
         self.fire_admission = FireAdmission(self)
         self.strategy = None
         self.next_strategy = 0.
@@ -293,6 +294,7 @@ class PlayerControl(object):
         self.drive_contact_receipt = None
         self.target_selection.reset()
         self.combat_tactics.reset()
+        self.confirmed_facing.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
         self.engagement_hold = None
@@ -414,6 +416,7 @@ class PlayerControl(object):
         self.halt_observation = HaltObservation()
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
+        self.confirmed_facing.reset()
         self.engagement_hold = self.front_priority = None
         callbacks = list(self.release_pending)
         self.release_pending = []
@@ -1706,9 +1709,9 @@ class PlayerControl(object):
                 tactical_clear = False
                 self.aiming.reset()
         self.aim_receipt = None
+        from ..gun_mechanics import _field
         if target is not None:
             self.no_aim_since = None
-            from ..gun_mechanics import _field
             from .weapon import barrel_aligned
             self.target_engine = target.id
             point = solution['point']
@@ -1957,7 +1960,9 @@ class PlayerControl(object):
                 not (order.get('holding') and mission_order and not arrival.get('settled')) and
                 not (order.get('holding') and order.get('artillery') and not mission_order and
                      order['artillery'].get('phase') != 'holding'))
-            if hold and facing_allowed and target is not None:
+            full_turret = (engagement is not None and not artillery and
+                _field(_field(entity.typeDescriptor, 'gun'), 'turretYawLimits') is None)
+            if not full_turret and hold and facing_allowed and target is not None:
                 from .driving import angle
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
@@ -2013,6 +2018,29 @@ class PlayerControl(object):
                     order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
             else:
                 self.drive_failure = None
+            parked_capture = (order.get('combat_mode') == 'base_capture' and
+                order.get('holding') and arrival.get('inside') and
+                mission_order.get('status') == 'running')
+            if full_turret and parked_capture:
+                order['capture_pivot_circle'] = (mission_order['goal'], mission_order['radius'])
+            if (full_turret and facing_allowed and order.get('holding') and
+                    not (pushing or reverse_only or order['throttle'] or order['turn']) and
+                    context['supported'] and not context['overturned'] and
+                    (parked_capture or order.get('combat_mode') in ('engage', 'support_hold'))):
+                identity = engagement.target
+                aiming_target = records.get(identity)
+                if aiming_target is not None and getattr(engagement, 'sample', None) is not None and not seeking:
+                    from .driving import angle
+                    key = (identity, engagement.sample, owner._gun_state.shot_index)
+                    dx, dz = aiming_target.position[0]-position[0], aiming_target.position[2]-position[2]
+                    delta = angle(math.atan2(dx, dz)-yaw) if math.hypot(dx, dz) > .1 else 0.
+                    self.confirmed_facing.apply(order, state, key, delta,
+                        getattr(owner, '_local_turn_speed', 0.),
+                        getattr(engagement, 'confirmed', None) == key)
+                else:
+                    self.confirmed_facing.reset()
+            else:
+                self.confirmed_facing.reset()
             if reverse_only and (order['throttle'] > 0. or order['turn']):
                 order.update(throttle=0., turn=0., brake=True)
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
@@ -2025,6 +2053,7 @@ class PlayerControl(object):
                              recovery_mode='siege_wait_travel')
             if not decision_current():
                 return
+            self.last_order = order
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
             sender.send_current()

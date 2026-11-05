@@ -203,6 +203,116 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual(1, controller.automatic_commits)
         self.assertIsNone(controller.owner._local_player_burst)
 
+    def confirmed_pivot_controller(self, battle):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
+        control, target = PlayerRegressionTests().aim_controller()
+        control.navigation = navigation_controller()
+        owner = control.owner
+        owner.local_pose = lambda: (battle._local_position, battle._local_yaw)
+        owner._mutable_shot_ray = lambda: ((0., 2., 0.), (0., 0., 1.))
+        owner._sender = battle._sender
+        owner._records = {}
+        battle._player_control = control
+        target.position = (15., 0., 25.)
+        control.direct_engagement = DirectEngagement(None)
+        control.ammo_policy = types.SimpleNamespace(main=0, context=lambda *args: None,
+            shells=[dict(index=0, kind='ARMOR_PIERCING')])
+        control.aiming.direct_samples = lambda unused: 1
+        control.aiming.direct_pose = lambda item: (
+            battle._local_position, battle._local_yaw, item.position, 0., 0., 0., 0.)
+        control.aiming.compare_direct = mock.Mock(side_effect=lambda item, index, sample, now,
+            *args, **kwargs: ('ready', dict(created=now, point=item.position, clear=True,
+                                         geometry_clear=True, reachable=True)))
+        control.trigger = mock.Mock(return_value=False)
+        return control, target
+
+    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
+    def test_confirmed_pivot_uses_normal_physics_and_keeps_fire_independent(self, unused_aligned):
+        from release097.test_096_contact_steering5 import DriveLoopTests
+        from gui.mods.offline_lan_0922 import battle_runtime
+        for wall in (False, True):
+            with self.subTest(wall=wall):
+                fixture = DriveLoopTests()
+                runtime, battle, entity = fixture.actor(turn=0.)
+                if wall:
+                    fixture.scene(runtime)
+                    battle._destructibles.native_replacement_bsp_active = lambda: True
+                control, target = self.confirmed_pivot_controller(battle)
+                compare = control.aiming.compare_direct
+                compare.side_effect = None
+                compare.return_value = ('pending', None)
+                control.update(.1, 1.)
+                self.assertNotIn('confirmed_facing', control.last_order)
+
+                compare.return_value = ('ready', dict(created=1.2, point=target.position,
+                    clear=True, geometry_clear=True, reachable=True))
+                control.owner._local_speed = .8
+                control.update(.1, 1.2)
+                self.assertNotIn('confirmed_facing', control.last_order)
+
+                control.owner._local_speed = 0.
+                control.trigger.reset_mock()
+                control.update(.1, 1.4)
+                self.assertEqual('turning', control.last_order['confirmed_facing']['state'])
+                self.assertEqual(0., battle._sender.forward)
+                self.assertGreater(battle._sender.turn, 0.)
+                control.trigger.assert_called_once()
+                with mock.patch.object(battle_runtime.world_collision, '_destroy_and_recast',
+                                       return_value=False):
+                    battle._drive_local_step(.04)
+                if wall:
+                    self.assertAlmostEqual(0., battle._local_yaw)
+                    self.assertEqual((0., 0., 0.), battle._local_position)
+                    control.trigger.reset_mock()
+                    control.update(.1, 3.5)
+                    self.assertEqual('stalled', control.last_order['confirmed_facing']['state'])
+                    self.assertEqual(0., battle._sender.turn)
+                    control.trigger.assert_called_once()
+                else:
+                    self.assertGreater(battle._local_yaw, 0.)
+                    last_full = control.direct_engagement.last_full_at
+                    compare.reset_mock()
+                    compare.return_value = ('laying', dict(created=2.2, point=target.position,
+                        clear=True, geometry_clear=True, reachable=True, laying=True, barrel_error=.01))
+                    control.update(.1, 2.2)
+                    self.assertEqual(0, control.direct_engagement.sample)
+                    self.assertEqual(last_full, control.direct_engagement.last_full_at)
+                    compare.assert_called_once()
+                    self.assertTrue(compare.call_args.kwargs['physical'])
+                    self.assertEqual(target.id, control.target_engine)
+                    control.weapon.forward.assert_not_called()
+
+    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
+    def test_capture_pivot_is_limited_by_actual_track_arc(self, unused_aligned):
+        from release097.test_096_contact_steering5 import DriveLoopTests
+        from test_player_navigation_migration import state
+        for edge in (False, True):
+            with self.subTest(edge=edge):
+                _, battle, entity = DriveLoopTests().actor(turn=0.)
+                battle._local_physics.update(rotationIsAroundCenter=False, trackCenter=1.5)
+                control, target = self.confirmed_pivot_controller(battle)
+                nav = control.navigation
+                nav.start_mission('capture_base', {'command_id': 'capture'}, state())
+                mission = nav.mission
+                mission.goal = (0., -29.999 if edge else 0.)
+                mission.radius = 30.
+                control.update(.1, 1.)
+                control.trigger.reset_mock()
+                control.update(.1, 2.)
+                self.assertEqual('capturing', control.last_order['mission']['phase'])
+                self.assertEqual('turning', control.last_order['confirmed_facing']['state'])
+                self.assertEqual(0., battle._sender.forward)
+                control.trigger.assert_called_once()
+                battle._drive_local_step(.04)
+                if edge:
+                    self.assertEqual((0., 0., 0.), battle._local_position)
+                    self.assertEqual(0., battle._local_yaw)
+                else:
+                    self.assertGreater(battle._local_yaw, 0.)
+                    self.assertGreater(battle._local_position[2], 0.)
+
     def test_mission_arrival_and_failure_brakes_survive_outer_combat_facing(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller, state

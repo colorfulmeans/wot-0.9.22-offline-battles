@@ -157,3 +157,53 @@ class CombatTactics(object):
         self.receipt = dict(phase='angled_hold', target=identity,
                             degrees=math.degrees(self.angle_anchor['offset']))
         return _angle(bearing + self.angle_anchor['offset'] - state['yaw'])
+
+
+class ConfirmedFacing(object):
+    """A bounded stationary pivot after the barrel proves its selected point."""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.attempt = None
+
+    def apply(self, order, state, key, error, yaw_rate, confirmed):
+        now = state['now']
+        attempt = self.attempt
+        if attempt is not None and attempt['key'] != key:
+            self.reset()
+            attempt = None
+        stopped = abs(state['speed']) <= .2
+        rotating = abs(yaw_rate) > .05
+        if confirmed and stopped and not rotating and abs(error) > .20 and (
+                attempt is None or attempt['phase'] == 'aligned' and abs(error) > .30):
+            attempt = self.attempt = dict(key=key, phase='turning', start=now,
+                                          progress=now, error=abs(error))
+        if attempt is None:
+            return
+        phase = attempt['phase']
+        if phase == 'turning':
+            if abs(error) < attempt['error'] - .015:
+                attempt.update(progress=now, error=abs(error))
+            if abs(error) <= .20:
+                phase = 'aligned'
+            elif now - attempt['start'] >= 8. or now - attempt['progress'] >= 2.:
+                phase = 'stalled'
+            elif confirmed and stopped:
+                order.update(turn=max(-1., min(1., error / .5)), throttle=0., brake=False,
+                             recovery_mode='combat_facing')
+            attempt['phase'] = phase
+        state_name = phase if order['turn'] or not rotating else 'settling'
+        if phase == 'turning' and not order['turn'] and not rotating:
+            state_name = 'waiting_for_point'
+        order['confirmed_facing'] = dict(key=key, state=state_name, error=error,
+                                         elapsed=now - attempt['start'])
+
+
+def capture_pivot_allows(circle, position, end, pivot_offset, angle):
+    """Bound the centre's arc by its chord plus the arc's sagitta."""
+    (x, z), radius = circle
+    farthest_end = max(math.hypot(position[0]-x, position[2]-z),
+                       math.hypot(end[0]-x, end[2]-z))
+    sagitta = abs(pivot_offset) * (1. - math.cos(angle * .5))
+    return farthest_end + sagitta <= radius
