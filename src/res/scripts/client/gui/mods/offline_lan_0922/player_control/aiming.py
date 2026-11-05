@@ -141,6 +141,7 @@ class Aiming(object):
         self.entries = {}
         self.direct_entries = {}
         self.comparison_jobs = {}
+        self.comparison_trace = None
         self.comparison_deferrals = {}
         self.front_points = {}
         self._tick = None
@@ -197,6 +198,8 @@ class Aiming(object):
         if now == self._tick:
             return
         self._tick = now
+        from ..native_input_diagnostics import detailed_enabled
+        self.comparison_trace = [] if detailed_enabled() else None
         self._candidates = CANDIDATES_PER_TICK
         self._segments = SEGMENTS_PER_TICK
         self._angles = NATIVE_ANGLES_PER_TICK
@@ -817,16 +820,45 @@ class Aiming(object):
     def compare_direct(self, target, index, sample, now, lane, threshold,
                        physical=False, current_barrel=False, nominal=False, verify_point=False):
         """Compare one shell and one ordered point within the shared aim budget."""
+        trace = getattr(self, 'comparison_trace', None)
+        detail = None
+        if trace is not None:
+            detail = dict(target=target.id, shell=index, sample=sample,
+                mode=('pivot' if verify_point else 'physical' if physical else
+                      'barrel' if current_barrel else 'nominal' if nominal else 'candidate'),
+                before=(self._candidates, self._segments, self._angles))
+        verdict, solution = self._compare_direct(target, index, sample, now, lane, threshold,
+            physical, current_barrel, nominal, verify_point, detail)
+        if detail is not None:
+            detail.update(verdict=verdict, after=(self._candidates, self._segments, self._angles))
+            if 'reason' not in detail:
+                detail['reason'] = verdict
+            if solution is not None:
+                detail['point_viable'] = solution.get('point_viable')
+            trace.append(detail)
+        return verdict, solution
+
+    def _compare_direct(self, target, index, sample, now, lane, threshold,
+                        physical, current_barrel, nominal, verify_point, detail):
         if target.id not in self.targets or self._candidates <= 0:
+            if detail is not None:
+                detail['reason'] = ('target_not_observed' if target.id not in self.targets else
+                                    'candidate_budget')
             return 'pending', None
         if now < self.comparison_deferrals.get((target.id, index, sample), 0.):
+            if detail is not None:
+                detail['reason'] = 'deferred_point'
             return 'unavailable', None
         try:
             if self._front_point_blocked(target, sample):
+                if detail is not None:
+                    detail['reason'] = 'front_vehicle'
                 return 'unavailable', None
             own = self._own(index)
             samples = shot_geometry.ordered_vehicle_aim_samples(target.typeDescriptor)
             if sample >= len(samples):
+                if detail is not None:
+                    detail['reason'] = 'sample_unavailable'
                 return 'unknown', None
             key = (sample, 'low')
             test_armor = threshold if verify_point or not (physical or current_barrel) else None
@@ -837,8 +869,12 @@ class Aiming(object):
                 unused, direction = self.owner._mutable_shot_ray()
                 result['path'] = artillery_path(own['origin'], result['point'], own['shot'], direction)
                 if not result['path']:
+                    if detail is not None:
+                        detail['reason'] = 'barrel_path_unavailable'
                     return 'unavailable', None
                 contact = self.actual_contact(target, result, own, direction, threshold)
+                if detail is not None:
+                    detail['barrel_verdict'] = contact
                 if contact != 'ready':
                     return ('unknown' if contact == 'unknown' else contact), None
             identity = (target.id, index, sample, current_barrel, verify_point)
@@ -854,12 +890,20 @@ class Aiming(object):
             # chord budget. No speculative scan runs alongside that proof.
             self._advance(job, lane, self._segments if verify_point else min(self._segments, 8), now)
             if not job['done']:
+                if detail is not None:
+                    detail.update(reason='chord_budget' if self._segments <= 0 else 'path_slice_pending',
+                                  path_cursor=job['next'], path_chords=len(job['solution'].get('path', ())) - 1)
                 return 'pending', None
             result = self._result(result, job)
             result.update(ordered=True, physical=True, penetration_threshold=threshold)
             if not result['geometry_clear'] or not result['reachable']:
+                if detail is not None:
+                    detail['reason'] = result.get('reason') or (
+                        'geometry_unavailable' if not result['geometry_clear'] else 'traverse_unreachable')
                 return 'unavailable', result
             if not result['source_verified']:
+                if detail is not None:
+                    detail['reason'] = 'native_source_unverified'
                 return 'unknown', None
             if nominal:
                 result['nominal_required'] = True
@@ -868,6 +912,8 @@ class Aiming(object):
                     shot_geometry.vehicle_aim_point(samples[sample], self._pose(target)),
                     result['direction'], result['flight_time'], nominal_only=True)
                 if thickness is None:
+                    if detail is not None:
+                        detail['reason'] = 'nominal_armor_unknown'
                     return 'unknown', None
                 result['nominal_armor'] = thickness
             if current_barrel:
@@ -876,6 +922,8 @@ class Aiming(object):
                 unused, direction = self.owner._mutable_shot_ray()
                 verdict = ('laying' if result.get('needs_hydraulic') else
                            self.actual_contact(target, result, own, direction, threshold))
+                if detail is not None:
+                    detail['barrel_verdict'] = verdict
                 if verify_point and verdict != 'ready':
                     proof = True if nominal else result.get('penetration_ok')
                     if proof is not True:
@@ -898,6 +946,8 @@ class Aiming(object):
             return ('ready' if proof is True else 'armor' if proof is False else 'unknown'), result
         except (AttributeError, TypeError, ValueError, KeyError, IndexError,
                 RuntimeError, OverflowError, ZeroDivisionError):
+            if detail is not None:
+                detail['reason'] = 'comparison_inputs_unavailable'
             return 'unknown', None
 
     def fire_preflight(self, target, solution, raw_ray, shot, now):

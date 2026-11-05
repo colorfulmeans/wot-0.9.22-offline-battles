@@ -203,6 +203,40 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual(1, controller.automatic_commits)
         self.assertIsNone(controller.owner._local_player_burst)
 
+    def test_aim_detail_uses_the_existing_opt_in_log_and_emits_changes(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
+        control = self.control()
+        control.direct_engagement = DirectEngagement(None)
+        control.direct_engagement.adopt(21)
+        control.direct_engagement.sample = 2
+        trace = dict(target=21, mode='physical', shell=0, sample=2, verdict='pending',
+                     reason='candidate_budget', before=(0, 9, 8), after=(0, 9, 8))
+        control.aiming = types.SimpleNamespace(targets={21: object()}, comparison_trace=[trace],
+            _candidates=0, _segments=9, _angles=8)
+        pose, order = ((0., 0., 0.), 0.), {'combat_mode': 'engage', 'brake': True}
+        output = StringIO()
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '0'}), redirect_stdout(output):
+            control.record_aim_decision(1., pose, 'unchanged', order, False, True)
+        self.assertEqual('', output.getvalue())
+
+        control.aim_detail_signature = None
+        with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '1'}), redirect_stdout(output):
+            control.record_aim_decision(1.1, pose, 'unchanged', order, False, True)
+            control.record_aim_decision(1.2, pose, 'unchanged', order, False, True)
+            trace.update(verdict='ready', reason='ready', before=(2, 12, 12), after=(1, 9, 8))
+            control.target_engine = 21
+            control.record_aim_decision(1.3, pose, 'track', order, True, True)
+        rows = [json.loads(line.split('PLAYER AIM DECISION ', 1)[1])
+                for line in output.getvalue().splitlines()]
+        self.assertEqual(2, len(rows))
+        self.assertEqual('candidate_budget', rows[0]['comparisons'][0]['reason'])
+        self.assertEqual([0, 9, 8], rows[0]['budget_left'])
+        self.assertIsNone(rows[0]['target'])
+        self.assertEqual((21, 'track', True), (rows[1]['target'], rows[1]['command'], rows[1]['fire_ready']))
+        self.assertEqual(2, rows[1]['decision'] - rows[0]['decision'])
+
     def test_automatic_next_round_preserves_the_loaded_round_and_reload_clock(self):
         control = self.control()
         owner, gun = control.owner, control.owner._gun_state

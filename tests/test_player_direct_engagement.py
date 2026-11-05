@@ -112,6 +112,25 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual([], self.calls)
         self.assertEqual(1, self.state.sample)
 
+    def test_direct_comparison_trace_distinguishes_budget_and_unobserved_target(self):
+        aiming = Aiming.__new__(Aiming)
+        aiming._candidates, aiming._segments, aiming._angles = 0, 8, 10
+        aiming.targets = {self.first.id: self.first}
+        aiming.comparison_trace = []
+        for target in (self.first, self.second):
+            self.assertEqual(('pending', None), aiming.compare_direct(target, 1, 2, 1.,
+                lambda *args: True, PENETRATION_FACTOR_65, physical=True))
+        first, second = aiming.comparison_trace
+        self.assertEqual(('candidate_budget', 'target_not_observed'),
+                         (first['reason'], second['reason']))
+        self.assertEqual((0, 8, 10), first['before'])
+        self.assertEqual(first['before'], first['after'])
+        self.assertEqual(('physical', 1, 2), (first['mode'], first['shell'], first['sample']))
+        aiming.comparison_trace = None
+        self.assertEqual(('pending', None), aiming.compare_direct(self.first, 1, 2, 1.,
+            lambda *args: True, PENETRATION_FACTOR_65, physical=True))
+        self.assertIsNone(aiming.comparison_trace)
+
     def test_pivot_point_proof_is_independent_of_live_barrel_alignment(self):
         aiming = Aiming.__new__(Aiming)
         target = SimpleNamespace(id=21, typeDescriptor=object())

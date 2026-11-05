@@ -49,6 +49,8 @@ class PlayerControl(object):
         self.blocked_fire_sample = None
         self.no_aim_since = None
         self.last_shell_request = None
+        self.aim_detail_sequence = 0
+        self.aim_detail_signature = None
         self.next_round_request = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
@@ -208,6 +210,44 @@ class PlayerControl(object):
                       round=self.owner._start_message.get('round_id'), active=self.active)
         write_json_record('PLAYER CONTROL', fields)
 
+    def record_aim_decision(self, now, pose, command, order, fire_ready, fire_allowed):
+        trace = getattr(self.aiming, 'comparison_trace', None)
+        engagement = self.direct_engagement
+        if trace is None or engagement is None:
+            return
+        self.aim_detail_sequence += 1
+        aim = self.aim_receipt or {}
+        scan = engagement.scan
+        mode = scan['identity'][2] if scan is not None else None
+        stage = engagement.stage
+        shell = self.owner._gun_state.shot_index
+        signature = (engagement.target, engagement.sample, stage, self.target_engine, shell,
+            aim.get('fire_clear'), aim.get('aligned'), bool(fire_ready), bool(fire_allowed), mode,
+            command, self.ammo_state.get('state'), order.get('combat_mode'),
+            tuple((item['target'], item['mode'], item['shell'], item['sample'],
+                item['verdict'], item['reason'], item.get('barrel_verdict')) for item in trace))
+        if signature == self.aim_detail_signature:
+            return
+        self.aim_detail_signature = signature
+        from ..native_input_diagnostics import write_json_record
+        try:
+            write_json_record('PLAYER AIM DECISION', dict(
+                player=self.owner.client.player_id, round=self.owner._start_message.get('round_id'),
+                decision=self.aim_detail_sequence, battle_time=now, lock=engagement.target,
+                target=self.target_engine, sample=engagement.sample, stage=stage, shell=shell,
+                position=pose[0], yaw=pose[1], point=aim.get('point'), aligned=aim.get('aligned'),
+                ammo_state=self.ammo_state.get('state'), fire_clear=aim.get('fire_clear'),
+                fire_ready=bool(fire_ready), fire_allowed=bool(fire_allowed),
+                command=command, checking=engagement.checking, scan=mode,
+                remaining=len(scan['pending']) if scan is not None else None,
+                visible=len(self.aiming.targets), comparisons=trace,
+                budget_left=(self.aiming._candidates, self.aiming._segments, self.aiming._angles),
+                movement=order.get('combat_mode'), turn=order.get('turn'),
+                brake=order.get('brake')))
+        except Exception:
+            # A diagnostic sink may be closed while gameplay still runs.
+            pass
+
     def input_available(self):
         from messenger import MessengerEntry
         handler = getattr(self.owner._avatar, 'inputHandler', None)
@@ -303,6 +343,7 @@ class PlayerControl(object):
         self.blocked_fire_sample = None
         self.no_aim_since = None
         self.last_shell_request = None
+        self.aim_detail_signature = None
         self.next_strategy = 0.
         self.weapon = weapon
         self.active = True
@@ -1741,6 +1782,7 @@ class PlayerControl(object):
                 tactical_clear = False
                 self.aiming.reset()
         self.aim_receipt = None
+        aim_command = 'unchanged'
         from ..gun_mechanics import _field
         if target is not None:
             self.no_aim_since = None
@@ -1749,6 +1791,7 @@ class PlayerControl(object):
             point = solution['point']
             if self.direct_engagement is None or fire_clear or solution.get('laying'):
                 self.weapon.aim_solution(target.id, solution, now)
+                aim_command = 'track'
                 if not decision_current():
                     return
             start, direction = owner._mutable_shot_ray()
@@ -1790,6 +1833,7 @@ class PlayerControl(object):
                     not getattr(owner, '_local_fire_intent', None) and
                     not getattr(owner, '_local_player_burst', None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
+                aim_command = 'forward'
                 if not decision_current():
                     return
                 self.aim_receipt = dict(mode='forward',point=self.weapon.point,
@@ -2188,6 +2232,7 @@ class PlayerControl(object):
                 self.aim_receipt['engagement'] = dict(stage=self.direct_engagement.stage,
                     search_since=self.direct_engagement.search_since,
                     fallback=self.direct_engagement.fallback, retreat=self.direct_engagement.retreat)
+        self.record_aim_decision(now, (position, yaw), aim_command, order, fire_ready, fire_allowed)
         if 'consumables' in self.features:
             self.consumables(entity)
         if now >= getattr(self, 'next_log', 0.):
