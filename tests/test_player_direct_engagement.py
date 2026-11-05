@@ -122,33 +122,6 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual(0, state.sample)
 
 
-    def test_hull_facing_pauses_laying_but_does_not_reset_penetration_search(self):
-        state = self.state
-        state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
-        state.sample = 0
-        state.last_solution = dict(created=1., geometry_clear=True)
-        state.laying_until = 5.
-        state.search_since = 1.
-        state.motion = self.control.aiming.direct_pose(self.first)
-        active = [True]
-        self.control.combat_facing = SimpleNamespace(active_for=lambda identity: active[0])
-        state._scan = mock.Mock(return_value=('pending', None))
-        for now in (4., 6.):
-            target, solution, ready = state.update(self.control, [self.first], now)
-            self.assertIs(target, self.first)
-            self.assertTrue(solution['laying'])
-            self.assertFalse(ready)
-        state._scan.assert_not_called()
-        self.assertEqual(7., state.laying_until)
-        self.assertEqual(1., state.search_since)
-        active[0] = False
-        self.control.aiming.direct_pose = lambda target: (
-            (0, 0, 0), 1., (0, 0, 10), 0., 0., 0., 0.)
-        state.update(self.control, [self.first], 6.2)
-        self.assertEqual('full', state._scan.call_args.args[-2])
-        self.assertEqual(1., state.search_since)
-
-
 class OrderedPointTests(unittest.TestCase):
     def test_retain_first_eligible_point_and_restart_at_first_after_loss(self):
         aim = Aiming(SimpleNamespace(_gun_state=SimpleNamespace(shot_index=0)))

@@ -55,11 +55,10 @@ class PlayerControl(object):
         self.aiming = None
         self.direct_engagement = None
         from .targeting import TargetSelection
-        from .tactics import CombatFacing, CombatTactics
+        from .tactics import CombatTactics
         from .fire_admission import FireAdmission
         self.target_selection = TargetSelection()
         self.combat_tactics = CombatTactics()
-        self.combat_facing = CombatFacing()
         self.fire_admission = FireAdmission(self)
         self.strategy = None
         self.next_strategy = 0.
@@ -294,7 +293,6 @@ class PlayerControl(object):
         self.drive_contact_receipt = None
         self.target_selection.reset()
         self.combat_tactics.reset()
-        self.combat_facing.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
         self.engagement_hold = None
@@ -417,7 +415,6 @@ class PlayerControl(object):
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
         self.engagement_hold = self.front_priority = None
-        self.combat_facing.reset()
         callbacks = list(self.release_pending)
         self.release_pending = []
         if not preserve_explicit:
@@ -1632,7 +1629,6 @@ class PlayerControl(object):
         candidates = []
         aim_progress = False
         fire_ready = False
-        facing_wait = False
         artillery = 'SPG' in getattr(getattr(entity.typeDescriptor, 'type', None), 'tags', ())
         if 'fire' in self.features and self.ammo_state['available'] and not self.ammo_state['empty']:
             base = (owner._rules_state.get('bases') or {}).get(str(owner.client.team), {})
@@ -1835,8 +1831,6 @@ class PlayerControl(object):
                 fire_clear=tactical_clear and not (final_blocked or seeking),
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
-                facing_in_progress=bool(engagement is not None and target is not None and
-                                        self.combat_facing.active_for(target.id)),
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
                 battle_finished=False, supported=not getattr(owner, '_local_airborne', False)
@@ -1963,38 +1957,7 @@ class PlayerControl(object):
                 not (order.get('holding') and mission_order and not arrival.get('settled')) and
                 not (order.get('holding') and order.get('artillery') and not mission_order and
                      order['artillery'].get('phase') != 'holding'))
-            if (engagement is not None and hold and facing_allowed and target is not None and
-                    order.get('holding') and order.get('combat_mode') in ('engage', 'support_hold')
-                    and not pushing and not reverse_only and not state['burst_active'] and
-                    not getattr(owner, '_local_fire_intent', None)):
-                from .driving import angle
-                from .weapon import hull_traverse_error
-                dx, dz = target.position[0]-position[0], target.position[2]-position[2]
-                error = angle(math.atan2(dx, dz)-yaw) if math.hypot(dx, dz) > .1 else 0.
-                traverse = hull_traverse_error(owner, entity.typeDescriptor, point, error,
-                                              solution=solution)
-                limited = traverse is not None and abs(traverse) > .02
-                if limited:
-                    error = traverse
-                def pivot_clear(turn):
-                    return traffic.can_turn(turn) and self.rotation_clear(
-                        entity, position, yaw, yaw + turn*.15)
-                def pivot_obstacles():
-                    sensor = getattr(owner, '_destructibles', None)
-                    revision = getattr(sensor, '_spatial_revision_1513', None)
-                    nearby = [(row['id'], tuple(round(value, 1) for value in row['position']),
-                               round(row['yaw'], 2), row['alive']) for row in peers if
-                              math.hypot(row['position'][0]-position[0], row['position'][2]-position[2])
-                              <= shape[0] + shape[1] + sum(row['collision_shape'][:2]) + 1.]
-                    return (revision() if callable(revision) else None,
-                            tuple(sorted(nearby)), turret_hulls)
-                facing_wait = self.combat_facing.apply(order, state, target.id, error,
-                    .02 if limited else .20, getattr(owner, '_local_turn_speed', 0.),
-                    pivot_clear, pivot_obstacles)
-                order['combat_facing']['limited_traverse'] = limited
-                if not decision_current():
-                    return
-            elif engagement is None and hold and facing_allowed and target is not None:
+            if hold and facing_allowed and target is not None:
                 from .driving import angle
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
@@ -2003,7 +1966,8 @@ class PlayerControl(object):
                 traverse = hull_traverse_error(owner, entity.typeDescriptor, point, delta, solution=solution)
                 if traverse is not None:
                     delta = traverse
-                elif settling_aim:
+                elif settling_aim or self.direct_engagement is not None and (
+                        fire_clear or solution.get('reachable')):
                     delta = 0.
                 else:
                     angled = self.combat_tactics.facing(state, target, entity.typeDescriptor)
@@ -2023,9 +1987,6 @@ class PlayerControl(object):
                             facing['state'] = 'turning'
                         else:
                             facing['state'] = 'blocked'
-            if engagement is not None and not order.get('combat_facing') and not (
-                    retain_hold and order.get('holding') and target is None):
-                self.combat_facing.reset()
             order['wreck_push'] = self.wreck_push.receipt
             order['tactics'] = dict(self.combat_tactics.receipt)
             order['traffic'] = dict(traffic.receipt,peer_count=len(peers),
@@ -2078,8 +2039,7 @@ class PlayerControl(object):
             self.aim_receipt['settling'] = True
         if engagement is not None and order.get('holding') and order.get('combat_mode') in (
                 'engage', 'support_hold'):
-            if target is not None and (fire_clear or facing_wait and self.engagement_hold is not None
-                                       and self.engagement_hold[0] is target):
+            if target is not None and fire_clear:
                 self.engagement_hold = (target, now + 4.)
             elif not retain_hold:
                 self.engagement_hold = None
@@ -2098,7 +2058,7 @@ class PlayerControl(object):
         if (self.blocked_fire_target not in records or
                 target is not None and target.id != self.blocked_fire_target):
             self.blocked_fire_target = self.blocked_fire_sample = None
-        if fire_ready and fire_allowed and not facing_wait:
+        if fire_ready and fire_allowed:
             # The physical trigger (including each native burst tail) now
             # owns the final current-barrel + frozen-scatter admission. A
             # second complete centre-ray proof here would reset its bounded
