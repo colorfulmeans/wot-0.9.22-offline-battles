@@ -48,6 +48,31 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual([2], self.calls)
         self.assertEqual(1, self.state.sample)
 
+    def test_pivot_point_proof_is_independent_of_live_barrel_alignment(self):
+        aiming = Aiming.__new__(Aiming)
+        target = SimpleNamespace(id=21, typeDescriptor=object())
+        aiming.owner = SimpleNamespace(_mutable_shot_ray=lambda: ((0, 0, 0), (0, 0, 1)))
+        aiming.targets = {21: target}
+        aiming._candidates = aiming._segments = 8
+        aiming.comparison_deferrals = {}
+        aiming._front_point_blocked = lambda *args: False
+        aiming._own = lambda index: {}
+        aiming._advance = mock.Mock(side_effect=lambda job, *args: job.update(done=True, clear=True))
+        aiming._result = lambda solution, job: solution
+        aiming.actual_contact = mock.Mock(return_value='laying')
+        with mock.patch('gui.mods.offline_lan_0922.player_control.aiming.shot_geometry.'
+                        'ordered_vehicle_aim_samples', return_value=[object()]):
+            for proof, expected in ((True, 'laying'), (False, 'armor'), (None, 'unknown')):
+                aiming.comparison_jobs = {}
+                aiming._candidate = mock.Mock(return_value=dict(
+                    geometry_clear=True, reachable=True, source_verified=True,
+                    direction=(.1, 0, .99), penetration_ok=proof))
+                verdict, result = aiming.compare_direct(target, 0, 0, 1., lambda a, b: True,
+                    PENETRATION_FACTOR_65, physical=True, verify_point=True)
+                self.assertEqual(expected, verdict)
+                self.assertEqual(proof is True, bool(result.get('point_viable')))
+                self.assertEqual(PENETRATION_FACTOR_65, aiming._candidate.call_args.args[-1])
+
     def test_he_main_prefers_lowest_piercing_alternative_and_skips_empty(self):
         self.rounds.main = 2
         self.gun.shots[0]['piercingPower'] = (300., 250.)

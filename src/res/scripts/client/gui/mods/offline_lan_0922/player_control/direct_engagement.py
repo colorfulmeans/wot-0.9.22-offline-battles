@@ -29,6 +29,7 @@ class DirectEngagement(object):
         self.next_clip_scan = None
         self.checking = False
         self.confirmed = None
+        self.pivot_search = None
         self.last_full_at = None
         self.laying_error = None
 
@@ -56,6 +57,7 @@ class DirectEngagement(object):
         self.laying_until = self.next_clip_scan = self.last_full_at = self.laying_error = None
         self.checking = False
         self.confirmed = None
+        self.pivot_search = None
 
     def _motion_changes(self, aiming, target):
         try:
@@ -78,8 +80,10 @@ class DirectEngagement(object):
         identity = (target.id, indices, mode, sample, count)
         if self.scan is None or self.scan['identity'] != identity:
             points = (sample,) if sample is not None else range(count)
+            rejected = self.pivot_search if mode == 'full' and self.pivot_search is not None else {}
             self.scan = dict(identity=identity, pending=[(index, point)
-                for point in points for index in indices], hits=[], armor=False, unknown=False)
+                for point in points for index in indices if (index, point) not in rejected],
+                hits=[], armor='armor' in rejected.values(), unknown='unknown' in rejected.values())
         scan = self.scan
         for unused in range(2):
             if not scan['pending']:
@@ -107,18 +111,37 @@ class DirectEngagement(object):
             return 'ready', (index, point)
         return ('armor' if scan['armor'] and not scan['unknown'] else 'unavailable'), None
 
-    def _lay(self, control, target, index, sample, now, fallback):
+    def interrupt_pivot(self, index, sample, verdict):
+        already_searching = self.pivot_search is not None
+        if not already_searching:
+            self.pivot_search = {}
+        if verdict in ('armor', 'unavailable') or (already_searching and verdict == 'unknown'):
+            self.pivot_search[(index, sample)] = verdict
+        self.sample = self.last_solution = self.scan = None
+        self.laying_until = self.laying_error = None
+        self.fallback = False
+        self.checking = True
+
+    def _lay(self, control, target, index, sample, now, fallback, facing=None):
         gun, aiming = control.owner._gun_state, control.aiming
         self.stage = (index, None if fallback else PENETRATION_FACTOR_65)
         if gun.shot_index != index:
             control.queue_automatic_shell(index)
             return None, None, False
+        turning = facing == 'turning'
         verdict, solution = aiming.compare_direct(target, index, sample, now,
             lambda a, b: control.lane_from(target, a, b), self.stage[1],
-            physical=True, nominal=fallback)
+            physical=True, nominal=fallback, verify_point=turning)
+        if turning and verdict != 'ready' and not (solution and solution.get('point_viable')):
+            # A missing or failed current point proof releases the tracks to
+            # stationary point search. Unknown evidence does not reject armor.
+            self.interrupt_pivot(index, sample, verdict)
+            return None, None, False
         if verdict in ('ready', 'laying'):
             self.last_solution = solution
             if verdict == 'laying':
+                if turning:
+                    return target, solution, False
                 error = solution.get('barrel_error')
                 progressing = error is not None and (self.laying_error is None or
                                                       error < self.laying_error - .002)
@@ -127,11 +150,15 @@ class DirectEngagement(object):
                     self.laying_error = error
                 elif now >= self.laying_until:
                     aiming.defer_ordered_point(target, index, solution, now)
-                    self.sample = self.last_solution = self.laying_until = self.laying_error = None
+                    if facing or self.pivot_search is not None:
+                        self.interrupt_pivot(index, sample, 'unavailable')
+                    else:
+                        self.sample = self.last_solution = self.laying_until = self.laying_error = None
                     return None, None, False
                 return target, solution, False
             self.laying_until = self.laying_error = None
             self.confirmed = (target.id, sample, index)
+            self.pivot_search = None
             if not fallback:
                 self.search_since = None
                 self.exhausted.clear()
@@ -150,9 +177,12 @@ class DirectEngagement(object):
             return target, solution, True
         self.checking = verdict == 'pending'
         if verdict != 'pending':
-            self.laying_until = self.laying_error = None
-            self.sample = self.last_solution = None
-            self.fallback = False
+            if facing or self.pivot_search is not None:
+                self.interrupt_pivot(index, sample, verdict)
+            else:
+                self.laying_until = self.laying_error = None
+                self.sample = self.last_solution = None
+                self.fallback = False
         if verdict == 'pending' and self.last_solution is not None:
             return target, self.last_solution, False
         return None, None, False
@@ -168,10 +198,15 @@ class DirectEngagement(object):
                     getattr(owner, '_local_player_burst', None) or
                     getattr(control, 'owned_burst', None))
         by_id = dict((target.id, target) for target in candidates)
+        facing = getattr(control, 'last_order', {}).get('confirmed_facing', {})
+        phase = facing.get('state')
+        facing_phase = phase if (phase in ('turning', 'settling', 'recheck') and
+            facing.get('key') == (self.target, self.sample, gun.shot_index)) else None
         if held:
             target = by_id.get(self.target)
             if target is not None and self.sample is not None and self.stage is not None:
-                return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
+                return self._lay(control, target, self.stage[0], self.sample, now, self.fallback,
+                                 facing=facing_phase)
             return None, None, False
         if not rows or not candidates:
             self.adopt(None)
@@ -180,12 +215,9 @@ class DirectEngagement(object):
             self.adopt(candidates[0].id)
         target = by_id[self.target]
         target_moved, own_moved, pose = self._motion_changes(aiming, target)
-        facing = getattr(control, 'last_order', {}).get('confirmed_facing')
-        pivoting = (self.sample is not None and facing is not None and
-            facing['key'] == (target.id, self.sample, gun.shot_index) and
-            facing['state'] in ('turning', 'settling'))
+        pivoting = facing_phase is not None and self.sample is not None and self.target == target.id
         if pivoting and own_moved and self.motion is not None:
-            # Keep the target pose anchor and the current scan across our pivot.
+            # Retain the target anchor and existing scan across our pivot.
             self.motion = pose[:2] + self.motion[2:]
             own_moved = False
         own_due = own_moved and (self.last_full_at is None or
@@ -200,17 +232,17 @@ class DirectEngagement(object):
         if self.stage is not None and not any(row['index'] == self.stage[0] for row in eligible):
             self.sample = self.last_solution = None
             self.fallback = False
-        if (pivoting and not target_moved and self.sample is not None and self.stage is not None
-                and self.stage[0] == gun.shot_index):
-            # Re-lay the verified point on the live barrel if stabilization
-            # needs time. A transient laying result is not a failed point.
-            return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
+        if pivoting and self.sample is not None and self.stage is not None and self.stage[0] == gun.shot_index:
+            return self._lay(control, target, self.stage[0], self.sample, now, self.fallback,
+                             facing=facing_phase)
         if self.sample is not None and self.stage is not None and (
                 self.last_solution is None or self.laying_until is not None or
                 self.next_clip_scan is not None and keep_clip and gun.clip == 1):
             return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
         expired = self.search_since is not None and now - self.search_since >= SEARCH_SECONDS
-        if self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
+        if self.pivot_search is not None and self.sample is None:
+            mode = 'full'
+        elif self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
             mode = 'next'
         elif expired and self.sample is None and self.scan is None and not self.retreat:
             mode = 'next' if keep_clip and not he else 'splash' if he else 'full'
@@ -262,6 +294,7 @@ class DirectEngagement(object):
             self.fallback = False
             return None, None, False
         self.sample = self.last_solution = None
+        self.pivot_search = None
         if verdict == 'armor' and self.search_since is None:
             self.search_since = now
         if self.search_since is None:

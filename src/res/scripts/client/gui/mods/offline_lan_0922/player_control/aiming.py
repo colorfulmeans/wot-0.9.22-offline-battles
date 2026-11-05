@@ -815,7 +815,7 @@ class Aiming(object):
         return False
 
     def compare_direct(self, target, index, sample, now, lane, threshold,
-                       physical=False, current_barrel=False, nominal=False):
+                       physical=False, current_barrel=False, nominal=False, verify_point=False):
         """Compare one shell and one ordered point within the shared aim budget."""
         if target.id not in self.targets or self._candidates <= 0:
             return 'pending', None
@@ -829,8 +829,9 @@ class Aiming(object):
             if sample >= len(samples):
                 return 'unknown', None
             key = (sample, 'low')
+            test_armor = threshold if verify_point or not (physical or current_barrel) else None
             result = self._candidate(target, own, dict(samples=samples), key, now,
-                                     True, None if physical or current_barrel else threshold)
+                                     True, test_armor)
             if current_barrel:
                 from .weapon import artillery_path
                 unused, direction = self.owner._mutable_shot_ray()
@@ -840,14 +841,18 @@ class Aiming(object):
                 contact = self.actual_contact(target, result, own, direction, threshold)
                 if contact != 'ready':
                     return ('unknown' if contact == 'unknown' else contact), None
-            identity = (target.id, index, sample, current_barrel)
+            identity = (target.id, index, sample, current_barrel, verify_point)
             job = self.comparison_jobs.get(identity)
             if (job is None or not self._valid(job['solution'], own, self.observations[target.id], now)
                     or now - job['solution']['created'] > 1.
-                    or current_barrel and job['solution']['path'] != result['path']):
+                    or (current_barrel or verify_point) and
+                       job['solution'].get('path') != result.get('path')
+                    or verify_point and job['done'] and job['completed'] != now):
                 job = dict(solution=result, next=0, done=False, clear=False, completed=None)
                 self.comparison_jobs[identity] = job
-            self._advance(job, lane, min(self._segments, 8), now)
+            # The single retained point may use this decision's remaining
+            # chord budget. No speculative scan runs alongside that proof.
+            self._advance(job, lane, self._segments if verify_point else min(self._segments, 8), now)
             if not job['done']:
                 return 'pending', None
             result = self._result(result, job)
@@ -858,7 +863,7 @@ class Aiming(object):
                 return 'unknown', None
             if nominal:
                 result['nominal_required'] = True
-            if nominal and not physical:
+            if nominal and (not physical or verify_point):
                 thickness = self._armor_score(target, own,
                     shot_geometry.vehicle_aim_point(samples[sample], self._pose(target)),
                     result['direction'], result['flight_time'], nominal_only=True)
@@ -871,6 +876,15 @@ class Aiming(object):
                 unused, direction = self.owner._mutable_shot_ray()
                 verdict = ('laying' if result.get('needs_hydraulic') else
                            self.actual_contact(target, result, own, direction, threshold))
+                if verify_point and verdict != 'ready':
+                    proof = True if nominal else result.get('penetration_ok')
+                    if proof is not True:
+                        return ('armor' if proof is False else 'unknown'), result
+                    # The proposed line can still attack this point. The
+                    # current barrel is a separate proof used only to fire.
+                    result['point_viable'] = True
+                    if verdict == 'armor':
+                        verdict = 'laying'
                 if verdict in ('laying', 'miss', 'unknown'):
                     error = None
                     if verdict == 'laying':

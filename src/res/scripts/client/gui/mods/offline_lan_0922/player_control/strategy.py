@@ -121,6 +121,10 @@ class CombatPolicy(object):
             self.reset()
             self.receipt.update(hold=False, reason='mission_owns_movement')
             return False
+        if context.get('pivot_hold'):
+            # Preserve the previous recovery clock while the admitted pivot
+            # or its stationary point search owns the tracks.
+            return hold
         if self.recovery is not None:
             if (now < self.recovery['until'] and identity == self.recovery['target'] and
                     point is not None and context.get('fire_seq') == self.recovery['sequence']):

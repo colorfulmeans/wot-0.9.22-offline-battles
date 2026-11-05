@@ -167,37 +167,56 @@ class ConfirmedFacing(object):
     def reset(self):
         self.attempt = None
 
-    def apply(self, order, state, key, error, yaw_rate, confirmed):
+    def owns_hold(self, key):
+        return bool(self.attempt is not None and self.attempt['key'] == key and
+                    self.attempt['phase'] in ('turning', 'settling', 'recheck'))
+
+    def apply(self, order, state, key, error, yaw_rate, confirmed, pending):
         now = state['now']
         attempt = self.attempt
         if attempt is not None and attempt['key'] != key:
             self.reset()
             attempt = None
         stopped = abs(state['speed']) <= .2
-        rotating = abs(yaw_rate) > .05
-        if confirmed and stopped and not rotating and abs(error) > .20 and (
+        settled = stopped and abs(yaw_rate) <= .05
+        if confirmed and settled and abs(error) > .20 and (
                 attempt is None or attempt['phase'] == 'aligned' and abs(error) > .30):
             attempt = self.attempt = dict(key=key, phase='turning', start=now,
-                                          progress=now, error=abs(error))
+                progress=now, error=abs(error), direction=math.copysign(1., error),
+                outcome=None, pending_since=None)
         if attempt is None:
             return
         phase = attempt['phase']
         if phase == 'turning':
-            if abs(error) < attempt['error'] - .015:
-                attempt.update(progress=now, error=abs(error))
-            if abs(error) <= .20:
-                phase = 'aligned'
-            elif now - attempt['start'] >= 8. or now - attempt['progress'] >= 2.:
-                phase = 'stalled'
-            elif confirmed and stopped:
-                order.update(turn=max(-1., min(1., error / .5)), throttle=0., brake=False,
-                             recovery_mode='combat_facing')
-            attempt['phase'] = phase
-        state_name = phase if order['turn'] or not rotating else 'settling'
-        if phase == 'turning' and not order['turn'] and not rotating:
-            state_name = 'waiting_for_point'
-        order['confirmed_facing'] = dict(key=key, state=state_name, error=error,
-                                         elapsed=now - attempt['start'])
+            # Unwrap the error in the admitted direction near the rear axis.
+            remaining = error * attempt['direction']
+            if remaining < -math.pi / 2.:
+                remaining += 2. * math.pi
+            if remaining < attempt['error'] - .015:
+                attempt.update(progress=now, error=remaining)
+            if remaining <= .20:
+                attempt['outcome'] = 'aligned'
+            elif not stopped or now - attempt['start'] >= 8. or now - attempt['progress'] >= 2.:
+                attempt['outcome'] = 'stalled'
+            else:
+                order.update(turn=attempt['direction'] * min(1., remaining / .5),
+                             throttle=0., brake=False, recovery_mode='combat_facing')
+            if attempt['outcome'] is not None:
+                phase = 'settling'
+        elif phase in ('settling', 'recheck') and settled:
+            # The aim decision already checked the live ray for this stopped pose.
+            phase = 'recheck'
+            if confirmed:
+                phase = attempt['outcome']
+            elif not pending:
+                attempt['pending_since'] = None
+            elif attempt['pending_since'] is None:
+                attempt['pending_since'] = now
+            elif now - attempt['pending_since'] >= 5.:
+                phase = 'recheck_timeout'
+        attempt['phase'] = phase
+        order['confirmed_facing'] = dict(key=key, state=phase, error=error,
+                                         elapsed=now - attempt['start'], outcome=attempt['outcome'])
 
 
 def capture_pivot_allows(circle, position, end, pivot_offset, angle):
