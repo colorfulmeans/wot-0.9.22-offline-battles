@@ -49,6 +49,7 @@ class PlayerControl(object):
         self.blocked_fire_sample = None
         self.no_aim_since = None
         self.last_shell_request = None
+        self.next_round_request = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
@@ -392,6 +393,8 @@ class PlayerControl(object):
             self.fire_command = None
         self.active = False
         self.control_generation += 1
+        if self.next_round_request is not None:
+            self.queue_next_automatic_round(None)
         self.fire_admission.reset()
         self.target_selection.reset()
         self.combat_tactics.reset()
@@ -1300,21 +1303,50 @@ class PlayerControl(object):
                 if previous is not None and previous[0] is gun and 0. <= now - previous[1] < .35:
                     return
                 self.last_shell_request = (gun, now)
-            owner.change_vehicle_setting(code, _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
-            self.record('ammo_queued', shell=selected)
+            compact = _field(_field(gun.shots[selected], 'shell'), 'compactDescr')
+            current = _field(_field(gun.shots[gun.shot_index], 'shell'), 'compactDescr')
+            if compact != current:
+                owner.change_vehicle_setting(code, compact)
+                self.record('ammo_queued', shell=selected)
 
-    def queue_next_automatic_clip(self, selected):
+    def _queue_next_shell(self, gun, selected):
         from ..gun_mechanics import _field
-        owner, gun = self.owner, self.owner._gun_state
-        if (gun.clip_size <= 1 or gun.clip <= 0 or gun.ammo[selected] <= 0 or
+        owner = self.owner
+        if (gun.clip <= 0 or gun.ammo[selected] <= 0 or
                 getattr(owner, '_local_fire_intent', None) or
                 getattr(owner, '_local_player_burst', None)):
-            return
+            return False
         queued = gun.pending_index if gun.pending_index is not None else gun.shot_index
-        if queued != selected:
-            settings = owner._runtime.constants.VEHICLE_SETTING
-            owner.change_vehicle_setting(settings.NEXT_SHELLS,
-                _field(_field(gun.shots[selected], 'shell'), 'compactDescr'))
+        if queued == selected:
+            return False
+        settings = owner._runtime.constants.VEHICLE_SETTING
+        compact = _field(_field(gun.shots[selected], 'shell'), 'compactDescr')
+        return owner.change_vehicle_setting(settings.NEXT_SHELLS, compact)
+
+    def queue_next_automatic_clip(self, selected):
+        gun = self.owner._gun_state
+        if gun.clip_size > 1:
+            self._queue_next_shell(gun, selected)
+
+    def queue_next_automatic_round(self, selected):
+        gun = self.owner._gun_state
+        if gun is None or gun.clip_size > 1:
+            self.next_round_request = None
+            return
+        queued = getattr(gun, 'pending_index', None)
+        owned = queued is not None and self.next_round_request == (gun, queued)
+        if not owned:
+            self.next_round_request = None
+            if queued is not None:
+                # An explicit player's next-shell selection takes precedence.
+                return
+        if selected is None:
+            if owned and self._queue_next_shell(gun, gun.shot_index):
+                self.next_round_request = None
+            return
+        if self._queue_next_shell(gun, selected):
+            self.next_round_request = (gun, selected)
+            self.record('ammo_next', shell=selected, loaded=gun.shot_index)
 
     def reload_automatic_clip(self, selected):
         owner, gun = self.owner, self.owner._gun_state
@@ -2111,9 +2143,19 @@ class PlayerControl(object):
             # owns the final current-barrel + frozen-scatter admission. A
             # second complete centre-ray proof here would reset its bounded
             # work and reintroduce the old 0.5-second trigger-only gate.
+            if engagement is not None and owner._gun_state.clip_size <= 1:
+                self.queue_next_automatic_round(getattr(engagement, 'next_shell', None))
+                if not decision_current():
+                    if self.next_round_request is not None:
+                        self.queue_next_automatic_round(None)
+                    return
             accepted = self.trigger(self.weapon, now)
             if not decision_current():
                 return
+            if not accepted and self.next_round_request is not None:
+                self.queue_next_automatic_round(None)
+                if not decision_current():
+                    return
             admission = self.fire_admission.receipt
             if not artillery and admission.get('reason') in (
                     'auto_friendly_lane', 'auto_world_blocked', 'auto_friendly_splash'):

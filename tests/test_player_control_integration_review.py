@@ -203,6 +203,27 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual(1, controller.automatic_commits)
         self.assertIsNone(controller.owner._local_player_burst)
 
+    def test_automatic_next_round_preserves_the_loaded_round_and_reload_clock(self):
+        control = self.control()
+        owner, gun = control.owner, control.owner._gun_state
+        owner._runtime = types.SimpleNamespace(constants=types.SimpleNamespace(
+            VEHICLE_SETTING=types.SimpleNamespace(CURRENT_SHELLS=1, NEXT_SHELLS=2)))
+        gun.shots = [dict(shell=dict(compactDescr=58)), dict(shell=dict(compactDescr=570))]
+        gun.ammo = [20, 10]
+        gun.pending_index = None
+        def setting(code, compact):
+            self.assertEqual(2, code)
+            gun.pending_index = None if compact == 58 else 1
+            return True
+        owner.change_vehicle_setting = mock.Mock(side_effect=setting)
+        control.queue_next_automatic_round(1)
+        control.queue_next_automatic_round(1)
+        self.assertEqual((0, 1, 0., 1), (gun.shot_index, gun.clip, gun.reload_time, gun.pending_index))
+        owner.change_vehicle_setting.assert_called_once_with(2, 570)
+        control.queue_next_automatic_round(None)
+        self.assertIsNone(gun.pending_index)
+        self.assertEqual((0, 1, 0.), (gun.shot_index, gun.clip, gun.reload_time))
+
     def confirmed_pivot_controller(self, battle):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller

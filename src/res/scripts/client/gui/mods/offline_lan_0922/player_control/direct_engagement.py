@@ -30,6 +30,9 @@ class DirectEngagement(object):
         self.checking = False
         self.confirmed = None
         self.pivot_search = None
+        self.next_round = None
+        self.next_shell = None
+        self.switch_from = None
         self.last_full_at = None
         self.laying_error = None
 
@@ -58,6 +61,9 @@ class DirectEngagement(object):
         self.checking = False
         self.confirmed = None
         self.pivot_search = None
+        self.next_round = None
+        self.next_shell = None
+        self.switch_from = None
 
     def _motion_changes(self, aiming, target):
         try:
@@ -77,13 +83,18 @@ class DirectEngagement(object):
         aiming = control.aiming
         indices = tuple(row['index'] for row in rows)
         count = aiming.direct_samples(target)
-        identity = (target.id, indices, mode, sample, count)
+        gun = control.owner._gun_state
+        protect_current = gun.clip_size <= 1 and mode in ('full', 'barrel') and gun.shot_index in indices
+        current = gun.shot_index if protect_current else None
+        identity = (target.id, indices, mode, sample, count, current)
         if self.scan is None or self.scan['identity'] != identity:
             points = (sample,) if sample is not None else range(count)
             rejected = self.pivot_search if mode == 'full' and self.pivot_search is not None else {}
             self.scan = dict(identity=identity, pending=[(index, point)
                 for point in points for index in indices if (index, point) not in rejected],
-                hits=[], armor='armor' in rejected.values(), unknown='unknown' in rejected.values())
+                hits=[], armor='armor' in rejected.values(), unknown='unknown' in rejected.values(),
+                current_unknown=any(index == current and verdict == 'unknown'
+                    for (index, unused_point), verdict in rejected.items()))
         scan = self.scan
         for unused in range(2):
             if not scan['pending']:
@@ -103,11 +114,29 @@ class DirectEngagement(object):
                 scan['armor'] = True
             elif verdict == 'unknown':
                 scan['unknown'] = True
+                if index == current:
+                    scan['current_unknown'] = True
         if scan['pending']:
             return 'pending', None
         self.scan = None
         if scan['hits']:
-            unused_score, point, unused_rank, index = min(scan['hits'])
+            best = min(scan['hits'])
+            if protect_current:
+                mounted = [hit for hit in scan['hits'] if hit[3] == current]
+                if mounted:
+                    if mode == 'full' or best[3] != current:
+                        self.next_round = ((target.id, current, best[3], best[1])
+                                           if best[3] != current else None)
+                    best = min(mounted)
+                elif mode == 'barrel' or scan['current_unknown']:
+                    # A single ray or missing evidence cannot justify unloading
+                    # the current round. Fall back to full point selection.
+                    if mode == 'full':
+                        self.next_round = None
+                    return 'unavailable', None
+                else:
+                    self.next_round = None
+            unused_score, point, unused_rank, index = best
             return 'ready', (index, point)
         return ('armor' if scan['armor'] and not scan['unknown'] else 'unavailable'), None
 
@@ -126,8 +155,25 @@ class DirectEngagement(object):
         gun, aiming = control.owner._gun_state, control.aiming
         self.stage = (index, None if fallback else PENETRATION_FACTOR_65)
         if gun.shot_index != index:
+            if gun.clip_size <= 1 and self.switch_from != gun.shot_index:
+                # A completed shot or a manual selection can replace the
+                # mounted shell while the old aiming stage is still present.
+                self.sample = self.last_solution = self.switch_from = None
+                self.checking = True
+                return None, None, False
+            if gun.clip_size <= 1 and not fallback:
+                # Recheck the alternate before committing a full reload. A
+                # completed scan may have spanned several vehicle poses.
+                verdict, unused_solution = aiming.compare_direct(target, index, sample, now,
+                    lambda a, b: control.lane_from(target, a, b), self.stage[1])
+                if verdict != 'ready':
+                    self.checking = verdict == 'pending'
+                    if not self.checking:
+                        self.sample = self.last_solution = None
+                    return None, None, False
             control.queue_automatic_shell(index)
             return None, None, False
+        self.switch_from = None
         turning = facing == 'turning'
         verdict, solution = aiming.compare_direct(target, index, sample, now,
             lambda a, b: control.lane_from(target, a, b), self.stage[1],
@@ -159,6 +205,16 @@ class DirectEngagement(object):
             self.laying_until = self.laying_error = None
             self.confirmed = (target.id, sample, index)
             self.pivot_search = None
+            if (gun.clip_size <= 1 and gun.clip > 0 and self.next_round is not None
+                    and self.next_round[:2] == (target.id, index)):
+                next_index, next_sample = self.next_round[2:]
+                if gun.ammo[next_index] > 0:
+                    verdict, unused_solution = aiming.compare_direct(target, next_index, next_sample, now,
+                        lambda a, b: control.lane_from(target, a, b), PENETRATION_FACTOR_65)
+                    if verdict == 'ready':
+                        self.next_shell = next_index
+                    elif verdict != 'pending':
+                        self.next_round = None
             if not fallback:
                 self.search_since = None
                 self.exhausted.clear()
@@ -180,6 +236,10 @@ class DirectEngagement(object):
             if facing or self.pivot_search is not None:
                 self.interrupt_pivot(index, sample, verdict)
             else:
+                if (verdict == 'armor' and solution is not None and gun.clip_size <= 1 and
+                        not getattr(control.owner, '_local_player_burst', None) and
+                        not getattr(control.owner, '_local_fire_intent', None)):
+                    aiming.defer_ordered_point(target, index, solution, now)
                 self.laying_until = self.laying_error = None
                 self.sample = self.last_solution = None
                 self.fallback = False
@@ -193,6 +253,7 @@ class DirectEngagement(object):
         rows = self.shells(policy, gun)
         self.checking = False
         self.confirmed = None
+        self.next_shell = None
         self.seek = self.search_since is not None and not self.retreat
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
@@ -288,6 +349,8 @@ class DirectEngagement(object):
             self.last_solution = None
             self.laying_until = self.laying_error = None
             self.fallback = mode == 'splash'
+            if mode in ('full', 'splash') and gun.clip_size <= 1 and index != gun.shot_index:
+                self.switch_from = gun.shot_index
             return self._lay(control, target, index, self.sample, now, self.fallback)
         if mode == 'barrel':
             self.sample = self.last_solution = None

@@ -48,6 +48,70 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual([2], self.calls)
         self.assertEqual(1, self.state.sample)
 
+    def test_keeps_loaded_ap_when_another_point_penetrates_and_plans_he_next(self):
+        self.verdicts.update({(21, 1, 0): 'ready', (21, 2, 0): 'ready',
+                              (21, 0, 1): 'ready'})
+        with mock.patch.object(self.control.aiming, 'compare_direct', wraps=self.probe) as compare:
+            for tick in range(3):
+                target, solution, fire_clear = self.state.update(self.control, [self.first], tick*.1)
+        self.assertTrue(fire_clear)
+        self.assertIs(target, self.first)
+        self.assertEqual(1, self.state.sample)
+        self.assertEqual(2, self.state.next_shell)
+        self.assertEqual([], self.calls)
+        self.assertEqual({(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)},
+                         {call.args[1:3] for call in compare.call_args_list})
+
+    def test_does_not_restart_apcr_reload_when_new_target_can_take_both_shells(self):
+        self.gun.ammo[2] = 0
+        self.verdicts[(21, 1, 0)] = 'ready'
+        def switch(index):
+            self.calls.append(index)
+            self.gun.shot_index, self.gun.clip, self.gun.reload_time = index, 0, 6.7
+        self.control.queue_automatic_shell = switch
+        for tick in range(3):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertEqual([1], self.calls)
+        self.verdicts[(22, 0, 1)] = self.verdicts[(22, 1, 0)] = 'ready'
+        for tick in range(3):
+            self.state.update(self.control, [self.second], 1. + tick*.1)
+        self.assertEqual([1], self.calls)
+        self.assertEqual((1, 0, 6.7), (self.gun.shot_index, self.gun.clip, self.gun.reload_time))
+        self.gun.clip, self.gun.reload_time = 1, 0.
+        target, solution, fire_clear = self.state.update(self.control, [self.second], 8.)
+        self.assertIs(target, self.second)
+        self.assertTrue(fire_clear)
+        self.assertEqual(0, self.state.next_shell)
+
+    def test_old_aim_cannot_unload_a_shell_selected_at_the_previous_shot_boundary(self):
+        self.state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        self.state.sample = 1
+        self.gun.shot_index = 2
+        self.gun.clip, self.gun.reload_time = 0, 6.7
+        self.state.update(self.control, [self.first], 1.)
+        self.assertEqual([], self.calls)
+        self.assertIsNone(self.state.sample)
+        self.assertEqual((2, 6.7), (self.gun.shot_index, self.gun.reload_time))
+
+    def test_unknown_current_ammo_does_not_authorize_a_reload(self):
+        self.verdicts[(21, 0, 1)] = 'unknown'
+        self.verdicts[(21, 1, 0)] = 'ready'
+        for tick in range(6):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertEqual([], self.calls)
+
+    def test_current_barrel_failure_requires_full_scan_before_switch(self):
+        self.verdicts[(21, 1, 0)] = 'ready'
+        self.verdicts[(21, 0, 1)] = 'ready'
+        self.state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        self.state.motion = self.control.aiming.direct_pose(self.first)
+        self.state.sample = 0
+        self.state.last_solution = dict(created=0.)
+        for tick in range(5):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertEqual([], self.calls)
+        self.assertEqual(1, self.state.sample)
+
     def test_pivot_point_proof_is_independent_of_live_barrel_alignment(self):
         aiming = Aiming.__new__(Aiming)
         target = SimpleNamespace(id=21, typeDescriptor=object())
