@@ -480,6 +480,8 @@ def _route_matches_points(edit, waypoints):
 
 
 def route_config(raw, name, route_id, team=None, waypoints=None):
+    if not route_id:
+        return None
     entry = map_settings(raw, name)
     custom = next((r for r in entry.get('routes', ()) if 'user_' + r['id'] == route_id), None)
     if custom is not None:
@@ -491,10 +493,11 @@ def route_config(raw, name, route_id, team=None, waypoints=None):
     if edit is not None and edit.get('disabled'):
         return None
     if edit is None or (waypoints is not None and not _route_matches_points(edit, waypoints)):
-        edit = find(default_map(name))
-    if edit is None or edit.get('disabled') or (
-            waypoints is not None and not _route_matches_points(edit, waypoints)):
-        return None
+        edit = find(_default_profile_data()['maps'].get(name, {}))
+        if edit is None or edit.get('disabled') or (
+                waypoints is not None and not _route_matches_points(edit, waypoints)):
+            return None
+        edit = copy.deepcopy(edit)
     tag = edit.get('class_tag', 'all')
     return dict(edit, id=route_id, default=True, source_id=edit['id'],
                 classes=list(CLASSES) if tag == 'all' else [tag],
