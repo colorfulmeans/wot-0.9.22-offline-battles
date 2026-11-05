@@ -64,6 +64,7 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual([2], self.calls)
         self.assertEqual(1, self.state.sample)
         self.assertTrue(self.state.fallback)
+        self.assertIsNone(self.state.search_since)
 
     def test_obstruction_does_not_start_the_armor_search_clock(self):
         self.control.aiming.compare_direct = mock.Mock(return_value=('unavailable', None))
@@ -78,6 +79,7 @@ class DirectEngagementTests(unittest.TestCase):
         for now in (0., .1, 7., 7.1, 8., 8.2):
             self.state.update(self.control, [self.first], now)
         self.assertTrue(self.state.retreat)
+        self.assertIsNone(self.state.search_since)
         self.assertEqual([], self.calls)
 
     def test_partial_cassette_uses_next_shell_only_after_timeout(self):
@@ -107,6 +109,29 @@ class DirectEngagementTests(unittest.TestCase):
         changed = changed[:4] + (.1, 0., 0.)
         state.update(self.control, [self.first], 1.5)
         self.assertEqual('full', scan.call_args.args[-2])
+
+    def test_managed_pivot_rechecks_barrel_without_forcing_full_rescan(self):
+        self.gun.ammo[1:] = [0, 0]
+        state = self.state
+        state.adopt(self.first.id, (0, PENETRATION_FACTOR_65))
+        state.sample, state.last_solution = 0, dict(created=1.)
+        state.motion = self.control.aiming.direct_pose(self.first)
+        state.last_full_at = 1.
+        self.verdicts[(21, 0, 0)] = 'ready'
+        self.control.last_order = dict(combat_facing=dict(target=21, state='turning'))
+        pose = ((0, 0, 0), .3, (0, 0, 10), 0., 0., 0., 0.)
+        self.control.aiming.direct_pose = lambda target: pose
+        with mock.patch.object(state, '_scan', wraps=state._scan) as scan:
+            target, _, clear = state.update(self.control, [self.first], 1.9)
+            self.assertEqual('barrel', scan.call_args.args[-2])
+            self.assertIs(target, self.first)
+            self.assertTrue(clear)
+            self.control.last_order = {}
+            state.update(self.control, [self.first], 2.)
+            self.assertEqual('barrel', scan.call_args.args[-2])
+            pose = pose[:4] + (.2, 0., 0.)
+            state.update(self.control, [self.first], 2.1)
+            self.assertEqual('full', scan.call_args.args[-2])
 
     def test_slow_barrel_keeps_its_point_while_angular_error_improves(self):
         state = self.state
