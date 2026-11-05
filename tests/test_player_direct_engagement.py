@@ -58,22 +58,30 @@ class DirectEngagementTests(unittest.TestCase):
     def test_two_deadlines_do_not_renew_on_target_or_destination_change(self):
         state = self.state
         state.adopt(21)
-        self.assertEqual('turret', state.movement_stage(0., True, True))
+        self.assertEqual('turret', state.movement_stage(0., True, True, active=True))
         state.adopt(22)
-        self.assertEqual('turret', state.movement_stage(7.9, True, True))
-        self.assertEqual('position', state.movement_stage(8., True, True))
+        self.assertEqual('turret', state.movement_stage(7.9, True, True, active=True))
+        self.assertEqual('position', state.movement_stage(8., True, True, active=True))
         self.assertEqual('turret_timeout', state.receipt['reason'])
         state.adopt(21)
-        self.assertEqual('position', state.movement_stage(13.9, False, True))
-        self.assertEqual('retreat', state.movement_stage(14., False, True))
+        self.assertEqual('position', state.movement_stage(13.9, False, True, active=True))
+        self.assertEqual('retreat', state.movement_stage(14., False, True, active=True))
         self.assertEqual('position_timeout', state.receipt['reason'])
-        self.assertEqual('turret', state.movement_stage(15., False, True, ready=True))
+        self.assertEqual('turret', state.movement_stage(15., False, True, ready=True, active=True))
         self.assertEqual('ray_ready', state.receipt['reason'])
+
+    def test_unadmitted_contacts_cannot_start_any_stage_clock(self):
+        self.state.adopt(21)
+        for now in (0., 8., 14., 60.):
+            self.state.movement_stage(now, True, True)
+            self.assertIsNone(self.state.phase_since)
+            self.assertFalse(self.state.seek or self.state.retreat)
+            self.assertFalse(self.state.active_engagement)
 
     def test_capture_never_spends_or_enters_movement_phase(self):
         self.state.adopt(21)
         for now in (0., 9., 16., 40.):
-            self.assertEqual('turret', self.state.movement_stage(now, True, False))
+            self.assertEqual('turret', self.state.movement_stage(now, True, False, active=True))
             self.assertFalse(self.state.seek or self.state.retreat)
 
     def test_pending_candidate_does_not_starve_the_next_point(self):
@@ -96,7 +104,7 @@ class DirectEngagementTests(unittest.TestCase):
             return 'ready', solution
         self.control.aiming.compare_direct = probe
         self.state.update(self.control, [self.first], 0.)
-        self.state.movement_stage(0., True, True)
+        self.state.movement_stage(0., True, True, active=True)
         target, solution, ready = self.state.update(self.control, [self.first], .1)
         self.assertEqual([0, 1], physical)
         self.assertIs(target, self.first)
@@ -128,7 +136,7 @@ class DirectEngagementTests(unittest.TestCase):
         target, solution, ready = self.state.update(self.control, [self.first], 15.)
         self.assertTrue(ready)
         self.assertFalse(self.state.fallback)
-        self.assertEqual('turret', self.state.movement_stage(15., False, True, ready))
+        self.assertEqual('turret', self.state.movement_stage(15., False, True, ready, active=True))
         self.assertFalse(self.state.retreat)
 
     def test_pending_physical_point_yields_and_is_revisited_later(self):
@@ -145,14 +153,14 @@ class DirectEngagementTests(unittest.TestCase):
 
     def test_he_fallback_cannot_start_before_both_timeouts(self):
         self.state.adopt(21)
-        self.state.movement_stage(0., True, True)
+        self.state.movement_stage(0., True, True, active=True)
         for tick in range(3):
             self.state.update(self.control, [self.first], tick*.1)
         self.assertFalse(self.state.fallback)
-        self.state.movement_stage(8., True, True)
+        self.state.movement_stage(8., True, True, active=True)
         self.state.update(self.control, [self.first], 8.)
         self.assertFalse(self.state.fallback)
-        self.state.movement_stage(14., True, True)
+        self.state.movement_stage(14., True, True, active=True)
         for tick in range(10):
             self.state.update(self.control, [self.first], 14.+tick*.1)
             if self.state.fallback:
@@ -166,10 +174,10 @@ class DirectEngagementTests(unittest.TestCase):
         self.gun.clip_size, self.gun.clip = 3, 2
         self.verdicts[(21, 2, 0)] = 'ready'
         self.state.update(self.control, [self.first], 0.)
-        self.state.movement_stage(0., True, True)
-        self.state.movement_stage(8., True, True)
+        self.state.movement_stage(0., True, True, active=True)
+        self.state.movement_stage(8., True, True, active=True)
         self.control.reload_automatic_clip.assert_not_called()
-        self.state.movement_stage(14., True, True)
+        self.state.movement_stage(14., True, True, active=True)
         for tick in range(8):
             self.state.update(self.control, [self.first], 14.+tick*.1)
         self.control.reload_automatic_clip.assert_called_with(2)

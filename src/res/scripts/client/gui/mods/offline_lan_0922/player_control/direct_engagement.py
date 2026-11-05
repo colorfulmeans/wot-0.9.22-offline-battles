@@ -38,11 +38,21 @@ class DirectEngagement(object):
         self.tried = set()
         self.point_since = None
         self.fallback_due = False
+        self.engaged_targets = set()
+        self.active_engagement = False
+        self.checked_targets = set()
+        self.visible_targets = set()
+        self.clear_for_cruise = False
 
-    def movement_stage(self, now, stopped, permitted, ready=False):
+    def movement_stage(self, now, stopped, permitted, ready=False, active=False):
         """One encounter clock; changing point, target or destination cannot renew it."""
         previous = self.phase
-        if ready:
+        self.active_engagement = bool(active)
+        if not active:
+            self.phase, self.phase_since = 'turret', None
+            self.search_expired = self.retreat = self.seek = False
+            self.search_since = None
+        elif ready:
             self.phase, self.phase_since = 'turret', None
             self.search_expired = self.retreat = self.seek = False
             self.search_since = None
@@ -66,10 +76,11 @@ class DirectEngagement(object):
         self.retreat = self.phase == 'retreat'
         self.search_since = self.phase_since
         self.search_expired = self.retreat
-        self.receipt.update(phase=self.phase, since=self.phase_since,
+        self.receipt.update(phase=self.phase, since=self.phase_since, active=bool(active),
+            admitted_targets=sorted(self.engaged_targets), cruise_scan_complete=self.clear_for_cruise,
             elapsed=0. if self.phase_since is None else now-self.phase_since,
             previous=previous, transition=previous != self.phase,
-            reason='ray_ready' if ready else 'movement_prohibited' if not permitted else
+            reason='no_admitted_engagement' if not active else 'ray_ready' if ready else 'movement_prohibited' if not permitted else
                    'turret_timeout' if previous == 'turret' and self.seek else
                    'position_timeout' if previous == 'position' and self.retreat else 'search')
         return self.phase
@@ -135,11 +146,17 @@ class DirectEngagement(object):
                 None if mode == 'splash' else PENETRATION_FACTOR_65,
                 current_barrel=mode == 'barrel', nominal=mode == 'splash', prepare=mode == 'full')
             self.receipt.setdefault('candidates', []).append(dict(
-                target=target.id, index=index, sample=point, verdict=verdict, mode=mode, at=now))
+                target=target.id, index=index, sample=point, verdict=verdict, mode=mode, at=now,
+                reason=(solution or {}).get('reason'),
+                geometry_clear=(solution or {}).get('geometry_clear'),
+                reachable=(solution or {}).get('reachable')))
             if verdict == 'pending':
                 scan['pending'].append((index, point))
                 continue
             if verdict == 'ready' and mode == 'full':
+                self.engaged_targets.add(target.id)
+                self.checked_targets.discard(target.id)
+                self.clear_for_cruise = False
                 self.scan = None
                 return 'ready', (index, point)
             if verdict == 'ready':
@@ -155,7 +172,7 @@ class DirectEngagement(object):
         if scan['hits']:
             unused_score, point, unused_rank, index = min(scan['hits'])
             return 'ready', (index, point)
-        return ('armor' if scan['armor'] and not scan['unknown'] else 'unavailable'), None
+        return ('unknown' if scan['unknown'] else 'armor' if scan['armor'] else 'unavailable'), None
 
     def _lay(self, control, target, index, sample, now, fallback):
         gun, aiming = control.owner._gun_state, control.aiming
@@ -179,6 +196,8 @@ class DirectEngagement(object):
             verdict = 'point_timeout'
         self.receipt['physical'] = dict(target=target.id, index=index, sample=sample, verdict=verdict, at=now)
         if verdict in ('ready', 'laying'):
+            self.engaged_targets.add(target.id)
+            self.clear_for_cruise = False
             self.last_solution = solution
             if verdict == 'laying':
                 self.laying_until = self.point_since + 5.
@@ -220,6 +239,12 @@ class DirectEngagement(object):
                     getattr(owner, '_local_player_burst', None) or
                     getattr(control, 'owned_burst', None))
         by_id = dict((target.id, target) for target in candidates)
+        visible = set(by_id)
+        if visible != self.visible_targets:
+            self.checked_targets.intersection_update(visible)
+            self.clear_for_cruise = not visible
+            self.visible_targets = visible
+        self.engaged_targets.intersection_update(visible)
         if held:
             target = by_id.get(self.target)
             if target is not None and self.sample is not None and self.stage is not None:
@@ -313,6 +338,12 @@ class DirectEngagement(object):
         self.tried.clear()
         self.fallback_due = mode == 'full' and self.search_expired
         self.exhausted.add(target.id)
+        if mode == 'full':
+            if verdict == 'unavailable':
+                self.checked_targets.add(target.id)
+            else:
+                self.checked_targets.discard(target.id)
+            self.clear_for_cruise = self.visible_targets.issubset(self.checked_targets)
         alternate = next((item for item in candidates if item.id not in self.exhausted
                           and item.id != target.id), None)
         if alternate is not None and self.scan is None:

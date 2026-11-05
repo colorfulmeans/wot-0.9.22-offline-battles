@@ -451,7 +451,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.forward.assert_not_called()
 
 
-    def test_pending_direct_scan_preserves_turret_and_holds_before_movement(self):
+    def test_unadmitted_pending_direct_scan_preserves_turret_and_route(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller
         from types import SimpleNamespace
@@ -469,7 +469,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 1.)
         control.update(.1, 3.)
         control.weapon.forward.assert_not_called()
-        self.assertTrue(control.navigation.decide.call_args.kwargs['hold'])
+        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
         control.navigation.firing_position.assert_not_called()
 
 
@@ -491,6 +491,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.direct_engagement.adopt(target.id)
         control.direct_engagement.checking = True
         control.direct_engagement.update = lambda *args: (None, None, False)
+        control.direct_engagement.engaged_targets.add(target.id)
         control.engagement_hold = (target, 5.)
         control.update(.1, 2.)
         self.assertTrue(control.navigation.decide.call_args.kwargs['hold'])

@@ -67,6 +67,80 @@ class CombatStageScenarios(unittest.TestCase):
                     for call in battle._native_world_rotation_is_clear.call_args_list))
                 self.assertEqual(status, preview['catalog']['status'])
 
+    def test_report_141316_spotted_unavailable_contacts_keep_route_and_forward_turret(self):
+        control, target = fixtures.PlayerControlIntegrationReviewTests().direct_facing_controller()
+        owner = control.owner
+        from test_player_navigation_migration import controller as navigation_controller
+        control.navigation = navigation_controller(tag='mediumTank')
+        owner.local_pose = lambda: ((7.2566, .26, -60.0757), -.01724)
+        target.position = (6., .32, 94.)  # 154 m: inside the captured 135 * 1.15 threshold.
+        other = types.SimpleNamespace(id=target.id+1, position=(15., .32, 82.),
+                                      typeDescriptor=target.typeDescriptor)
+        control._contacts = lambda unused: ([], [], {target.id: target, other.id: other})
+        control.aiming.compare_direct.side_effect = None
+        control.aiming.compare_direct.return_value = ('unavailable', None)
+        control.navigation.firing_position = mock.Mock()
+        control.navigation.ammo_withdrawal = mock.Mock()
+        control.navigation.decide = mock.Mock(side_effect=lambda *a, **kw: dict(
+            throttle=0. if kw['hold'] else 1., turn=0., brake=kw['hold'],
+            holding=kw['hold'], travel_intent=not kw['hold'],
+            combat_mode='engage' if kw['hold'] else 'route',
+            recovery_mode='hold' if kw['hold'] else 'travel'))
+        for now in (1., 1.2, 2., 9.5, 16., 60.):
+            control.update(.1, now)
+            self.assertEqual(1., owner._sender.forward)
+            self.assertFalse(owner._sender.handbrake)
+            self.assertIsNone(control.direct_engagement.phase_since)
+            self.assertFalse(control.direct_engagement.seek or control.direct_engagement.retreat)
+        control.navigation.firing_position.assert_not_called()
+        control.navigation.ammo_withdrawal.assert_not_called()
+        control.weapon.forward.assert_called()
+        self.assertTrue(control.direct_engagement.clear_for_cruise)
+        # A new pending contact is not a reason to stop, but is not a completed
+        # no-engagement proof for centering the turret either.
+        control.weapon.forward.reset_mock()
+        third = types.SimpleNamespace(id=target.id+2, position=target.position,
+                                      typeDescriptor=target.typeDescriptor)
+        control._contacts = lambda unused: ([], [], {third.id: third})
+        control.aiming.compare_direct.return_value = ('pending', None)
+        for now in (61., 62., 80.):
+            control.update(.1, now)
+            self.assertEqual(1., owner._sender.forward)
+        control.weapon.forward.assert_not_called()
+        control.aiming.compare_direct.return_value = ('unknown', None)
+        for now in (81., 82., 100.):
+            control.update(.1, now)
+            self.assertEqual(1., owner._sender.forward)
+        control.weapon.forward.assert_not_called()
+        self.assertFalse(control.direct_engagement.clear_for_cruise)
+
+    @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
+    def test_lost_or_distant_admitted_contact_cannot_lend_its_clock_to_raw_contact(self, unused):
+        for keep_distant in (False, True):
+            with self.subTest(still_spotted=keep_distant):
+                control, target = fixtures.PlayerControlIntegrationReviewTests().direct_facing_controller()
+                control.update(.1, 1.)
+                self.assertTrue(control.direct_engagement.active_engagement)
+                raw = types.SimpleNamespace(id=target.id+1, position=(-70., 0., 20.),
+                                            typeDescriptor=target.typeDescriptor)
+                target.position = (1000., 0., 1000.)
+                records = {raw.id: raw}
+                if keep_distant:
+                    records[target.id] = target
+                control._contacts = lambda unused: ([], [], records)
+                control.aiming.compare_direct.side_effect = None
+                control.aiming.compare_direct.return_value = ('unavailable', None)
+                control.navigation.decide = mock.Mock(side_effect=lambda *a, **kw: dict(
+                    throttle=0. if kw['hold'] else 1., turn=0., brake=kw['hold'],
+                    holding=kw['hold'], travel_intent=not kw['hold'],
+                    combat_mode='engage' if kw['hold'] else 'route',
+                    recovery_mode='hold' if kw['hold'] else 'travel'))
+                for now in (2., 10., 20.):
+                    control.update(.1, now)
+                    self.assertEqual(1., control.owner._sender.forward)
+                    self.assertIsNone(control.direct_engagement.phase_since)
+                    self.assertFalse(control.direct_engagement.active_engagement)
+
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
     def test_barrel_is_commanded_to_next_point_before_chassis_position_search(self, unused):
         control, target = fixtures.PlayerControlIntegrationReviewTests().direct_facing_controller()
@@ -92,6 +166,7 @@ class CombatStageScenarios(unittest.TestCase):
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
     def test_outer_controller_waits_twice_reverses_then_recovers(self, unused):
         control, target = fixtures.PlayerControlIntegrationReviewTests().direct_facing_controller()
+        control.update(.1, .8)  # Establish an actual usable engagement first.
         control.aiming.compare_direct.side_effect = None
         control.aiming.compare_direct.return_value = ('pending', None)
         control.navigation.firing_position = mock.Mock(return_value=None)

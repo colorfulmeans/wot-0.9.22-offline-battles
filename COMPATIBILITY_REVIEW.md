@@ -14206,3 +14206,30 @@ physical-contact verdicts, pending-point fairness, two outer-controller deadline
 reverse stall/recovery and capture-edge braking. Native service responses in
 these tests are fixtures. Python 2.7.18 compilation/contracts and host tests do
 not establish Chinese HD #1513 gameplay acceptance; a new client run is required.
+
+### November 5 14:13 report: reject unadmitted roadside encounters
+
+Report `wot-error-report-20261105-141316-c5ff25d07612.zip` confirms installed
+and running identity `colorfulmeans-pr119-a3c0447a-local-qa`. Its 79 sampled
+decisions contain no target aim solution; all 147 recorded point comparisons
+are unavailable. At 14:12:19 the controller nevertheless brakes into engage,
+then enters position_wait and reverse withdrawal at 14:12:33, finally holding
+at the reverse endpoint through 14:13:16. The recorded travel probe is clear.
+This is an erroneous combat ownership transition, not evidence of a road blocker.
+
+The previous stage_hold condition admitted any spotted candidate within the
+class engagement distance. The forward-turret gate also treated any candidate
+as an engagement. Both are corrected: a geometrically reachable prepared point
+or actual laying/ready solution must first admit an encounter. Admission is
+retained across point/target searches, but removed when the admitted contact is
+lost or leaves engagement range. Raw spotted/pending/unknown contacts alone
+cannot stop the route or start either timeout. Once all current candidates have
+completed an unavailable scan, normal forward travel may center the turret;
+pending and unknown results do not constitute that completed scan.
+
+The report-pose medium-tank regression fails on the old commit with forward
+input zero, and passes on the correction with route travel, turret centering,
+and no firing-position/withdrawal request after 60 seconds. The established
+engagement test now first acquires an actual usable solution before verifying
+both deadlines. This corrects the test's earlier overbroad admission assumption.
+Native acceptance of the replacement package remains unproved.

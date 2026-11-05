@@ -1904,16 +1904,22 @@ class PlayerControl(object):
             hold = hold or retain_hold
             stage_hold = False
             if engagement is not None:
-                phase = engagement.movement_stage(now, abs(state['speed']) <= .2 and bool(candidates) and
-                    min(math.hypot(item.position[0]-position[0], item.position[2]-position[2])
-                        for item in candidates) <= movement.get('engage_range', 150.),
+                # Spotted contacts are scan inputs, not permission to stop a
+                # route. Admit only a reachable point or an existing encounter.
+                if target is not None and solution and solution.get('geometry_clear') and solution.get('reachable'):
+                    engagement.engaged_targets.add(target.id)
+                nearby = set(item.id for item in candidates if
+                    math.hypot(item.position[0]-position[0], item.position[2]-position[2])
+                        <= movement.get('engage_range', 150.))
+                engagement.engaged_targets.intersection_update(nearby)
+                close_engagement = bool(engagement.engaged_targets)
+                phase = engagement.movement_stage(now, abs(state['speed']) <= .2,
                     bool(movement.get('allow_firing_position') and not movement.get('force_move')),
-                    ready=fire_clear and not final_blocked and not engagement.fallback)
+                    ready=fire_clear and not final_blocked and not engagement.fallback,
+                    active=close_engagement)
                 seeking = engagement.seek
-                stage_hold = bool(candidates and not self.ammo_state['empty'] and
-                    not movement.get('force_move') and phase == 'turret' and
-                    min(math.hypot(item.position[0]-position[0], item.position[2]-position[2])
-                        for item in candidates) <= movement.get('engage_range', 150.))
+                stage_hold = bool(close_engagement and not self.ammo_state['empty'] and
+                    not movement.get('force_move') and phase == 'turret')
                 hold = hold or stage_hold
                 if phase != 'turret':
                     hold = retain_hold = False
@@ -2142,9 +2148,10 @@ class PlayerControl(object):
                 return
         else:
             order = {}
-        cruising = (engagement is not None and target is None and not candidates and
-            self.weapon is not None and 'fire' in self.features and not settling_aim and
-            engagement.target is None and not (engagement.seek or engagement.retreat) and
+        cruising = (engagement is not None and target is None and
+            (not candidates or engagement.clear_for_cruise) and not engagement.active_engagement and
+            self.weapon is not None and 'fire' in self.features and
+            not (engagement.seek or engagement.retreat) and
             order.get('combat_mode') in ('route', 'joining') and
             order.get('recovery_mode') == 'travel' and order.get('travel_intent') and
             order.get('throttle', 0.) > 0. and not order.get('brake') and
