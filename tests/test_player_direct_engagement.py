@@ -173,6 +173,67 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual(1, self.state.sample)
         self.assertTrue(self.state.fallback)
 
+    def test_expired_search_keeps_loaded_apcr_on_a_new_target(self):
+        self.gun.shot_index = 1
+        self.state.adopt(self.first.id)
+        self.state.search_since = 1.
+        self.verdicts[(22, 1, 1)] = 'ready'
+        with mock.patch.object(self.control.aiming, 'compare_direct', wraps=self.probe) as compare:
+            self.state.update(self.control, [self.second], 10.)
+            self.state.update(self.control, [self.second], 10.1)
+            target, unused, ready = self.state.update(self.control, [self.second], 10.2)
+        self.assertIs(self.second, target)
+        self.assertTrue(ready)
+        self.assertEqual(1, self.state.sample)
+        self.assertFalse(self.state.fallback)
+        self.assertEqual([], self.calls)
+        self.assertEqual(1., self.state.search_since)
+        self.assertEqual([(2, 0), (0, 0), (1, 0), (2, 1), (0, 1), (1, 1)],
+                         [call.args[1:3] for call in compare.call_args_list[:6]])
+
+    def test_expired_search_checks_new_target_before_allowing_he_fallback(self):
+        self.state.adopt(self.first.id)
+        self.state.search_since = 1.
+        self.state.update(self.control, [self.second], 10.)
+        self.assertEqual([], self.calls)
+        for now in (10.1, 10.2):
+            self.state.update(self.control, [self.second, self.first], now)
+            self.assertEqual([], self.calls)
+        self.assertEqual(self.second.id, self.state.target)
+        self.state.update(self.control, [self.second, self.first], 10.3)
+        self.assertEqual([2], self.calls)
+        self.assertTrue(self.state.fallback)
+        self.assertEqual(1, self.state.sample)
+        self.assertEqual(1., self.state.search_since)
+
+    def test_expired_search_does_not_treat_new_target_unknown_as_armor(self):
+        self.state.adopt(self.first.id)
+        self.state.search_since = 1.
+        self.verdicts[(22, 0, 1)] = 'unknown'
+        self.state.update(self.control, [self.second], 10.)
+        for now in (10.1, 10.2, 10.3, 10.4, 10.5):
+            self.state.update(self.control, [self.second, self.first], now)
+        self.assertEqual(self.first.id, self.state.target)
+        self.assertEqual([], self.calls)
+        self.assertFalse(self.state.fallback)
+        self.assertEqual(1., self.state.search_since)
+
+    def test_failed_splash_sweep_can_rotate_back_to_penetration(self):
+        self.state.adopt(self.first.id)
+        self.state.search_since = 1.
+        self.verdicts[(22, 0, 1)] = 'ready'
+        probe = self.probe
+        def compare(*args, **kwargs):
+            return ('unavailable', None) if kwargs.get('nominal') else probe(*args, **kwargs)
+        self.control.aiming.compare_direct = compare
+        for now in (10., 10.1, 10.2, 10.3, 10.4, 10.5):
+            self.state.update(self.control, [self.first, self.second], now)
+        target, unused, ready = self.state.update(self.control, [self.first, self.second], 10.6)
+        self.assertIs(self.second, target)
+        self.assertTrue(ready)
+        self.assertEqual([], self.calls)
+        self.assertEqual(1., self.state.search_since)
+
     def test_search_clock_survives_ready_point_until_shot_is_admitted(self):
         self.gun.ammo[1] = 0
         self.state.search_since = 1.

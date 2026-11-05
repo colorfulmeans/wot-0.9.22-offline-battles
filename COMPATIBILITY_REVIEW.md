@@ -1,3 +1,33 @@
+# November 6 target changes during the HE fallback search
+
+In the second round of `wot-error-report-20261106-000829-b685f31afb01`
+(installed build `71f44fb0`), the controller adopted vehicle `2130706487`
+at 00:06:31 with APCR already loaded. Its first scan was the nominal HE
+sweep. It loaded HE and did 42 damage, then found APCR penetration on the
+same vehicle. The overall search deadline survived the target change as
+intended, but incorrectly authorized fallback without a penetration sweep
+of the new target.
+
+The player still shares one eight-second search budget across target
+changes. A finished full sweep must independently establish an armor
+failure for the adopted target and its eligible ammunition before the
+deadline can authorize nominal HE or a partial-magazine fallback. A
+successful proof or target change invalidates that failure evidence. An
+unsuccessful nominal sweep hands back to penetration search, and pending,
+blocked-only and unknown sweeps do not establish an armor failure.
+
+The earlier `auto_front_vehicle` rejection occurred at 00:06:27.366.
+The next decision did adopt `2130706509`; its sweep produced armor and
+unverified-source results rather than a viable aiming solution. Later
+periodic samples repeated the old admission receipt. The front-enemy
+handoff remains in place. The controller regression now combines a real
+front-contact receipt with an already-expired search and verifies that
+a viable loaded round on the front vehicle actually reaches the weapon
+aim adapter, then that selection resumes when that vehicle disappears.
+All 770 isolated player tests in 27 files passed locally, and the changed
+client module compiled under CPython 2.7.18. The exact-client replay of
+this interaction remains Windows playtest work.
+
 # November 6 foreground lifecycle and traffic liveness correction
 
 The installed-build metadata in `wot-error-report-20261106-000120-b685f31afb01`

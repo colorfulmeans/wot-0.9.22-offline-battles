@@ -671,6 +671,53 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 1.6)
         self.assertIn(rear, engagement.update.call_args.args[1])
 
+    def test_front_contact_after_search_deadline_sends_aim_for_loaded_round(self):
+        from test_player_control import PlayerRegressionTests
+        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
+        control, rear = PlayerRegressionTests().aim_controller()
+        front = types.SimpleNamespace(id=rear.id + 1, position=rear.position,
+                                      typeDescriptor=rear.typeDescriptor)
+        records = {target.id: target for target in (rear, front)}
+        control._contacts = lambda unused: ([], [], records)
+        gun = control.owner._gun_state
+        gun.ammo = [10, 10]
+        gun.shots.append(dict(speed=900., gravity=0.))
+        control.ammo_policy = types.SimpleNamespace(main=0, shells=[
+            dict(index=0, kind='ARMOR_PIERCING'), dict(index=1, kind='HIGH_EXPLOSIVE')],
+            context=mock.Mock())
+        control.queue_automatic_shell = mock.Mock()
+        control.aiming.defer_front_point = mock.Mock()
+        control.aiming.front_blocked_targets = lambda: {rear.id} if front.id in records else set()
+        control.aiming.direct_samples = lambda unused: 2
+        control.aiming.direct_pose = lambda target: (
+            (0., 0., 0.), 0., tuple(target.position), 0., 0., 0., 0.)
+        def compare(target, index, sample, now, lane, threshold, **kwargs):
+            if index == 0 and sample == 1 or kwargs.get('nominal'):
+                return 'ready', dict(point=control.target_point(target), created=now,
+                    reachable=True, geometry_clear=True, nominal_armor=20.)
+            return 'armor', None
+        control.aiming.compare_direct = compare
+        control.direct_engagement = DirectEngagement(None)
+        control.direct_engagement.adopt(rear.id)
+        control.direct_engagement.search_since = 1.
+        control.target_engine = rear.id
+        result = control.fire_admission._reject_front(
+            dict(target=rear, front_vehicle=front.id), dict(sample=0), 10., 1)
+        self.assertEqual('rejected', result['status'])
+
+        control.update(.1, 10.1)
+        control.update(.1, 10.22)
+        control.weapon.aim.assert_called_once_with(front.id, control.target_point(front), 10.22)
+        self.assertEqual(front.id, control.target_engine)
+        self.assertEqual(front.id, control.front_priority)
+        control.queue_automatic_shell.assert_not_called()
+
+        del records[front.id]
+        control.update(.1, 10.34)
+        control.update(.1, 10.46)
+        self.assertIsNone(control.front_priority)
+        self.assertEqual(rear.id, control.weapon.aim.call_args.args[0])
+
 
 if __name__ == '__main__':
     unittest.main()

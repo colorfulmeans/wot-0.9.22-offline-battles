@@ -21,6 +21,7 @@ class DirectEngagement(object):
         self.scan = None
         self.motion = None
         self.search_since = None
+        self.failed_penetration_shells = None
         self.exhausted = set()
         self.fallback = False
         self.seek = False
@@ -57,6 +58,8 @@ class DirectEngagement(object):
     def adopt(self, target, stage=None):
         self.target, self.stage = target, stage
         self.sample = self.scan = self.last_solution = self.motion = None
+        # The search clock spans targets; a completed armor check does not.
+        self.failed_penetration_shells = None
         self.fallback = False
         self.laying_until = self.next_shell_scan = self.last_full_at = self.laying_error = None
         self.checking = False
@@ -70,6 +73,7 @@ class DirectEngagement(object):
     def shot_admitted(self, target):
         if self.target == target and not self.fallback:
             self.search_since = None
+            self.failed_penetration_shells = None
             self.exhausted.clear()
             self.retreat = self.seek = False
 
@@ -257,6 +261,7 @@ class DirectEngagement(object):
             if not fallback:
                 # Hold the verified point for the trigger. Its final ray
                 # proof can still reject the shot, so keep the search clock.
+                self.failed_penetration_shells = None
                 self.retreat = self.seek = False
             waiting_for_clip = compare_next and self._compare_next_shell(control, target, index, sample, now)
             return target, solution, not waiting_for_clip
@@ -342,16 +347,19 @@ class DirectEngagement(object):
                         self.stage = (index, PENETRATION_FACTOR_65)
                         self.last_solution = None
                         self.fallback = False
+                        self.failed_penetration_shells = None
                         if not magazine and index != gun.shot_index:
                             self.switch_from = gun.shot_index
                         return result[0], result[1], False
                 return result
         expired = self.search_since is not None and now - self.search_since >= SEARCH_SECONDS
+        eligible_shells = tuple(row['index'] for row in eligible)
         if self.pivot_search is not None and self.sample is None:
             mode = 'full'
         elif self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
             mode = 'next'
-        elif expired and self.sample is None and self.scan is None and not self.retreat:
+        elif (expired and self.failed_penetration_shells == eligible_shells and
+              self.sample is None and self.scan is None and not self.retreat):
             mode = 'next' if keep_clip and not he else 'splash' if he else 'full'
         elif self.scan is not None and self.scan['identity'][2] == 'splash':
             mode = 'splash'
@@ -373,6 +381,8 @@ class DirectEngagement(object):
             if self.last_solution is not None and now - self.last_solution['created'] <= .5:
                 return target, self.last_solution, False
             return None, None, False
+        if mode == 'full':
+            self.failed_penetration_shells = eligible_shells if verdict == 'armor' else None
         if mode == 'next':
             next_index = (pick[0] if pick is not None else
                           next((row['index'] for row in rows if row['kind'] == HE), gun.shot_index))
@@ -397,12 +407,17 @@ class DirectEngagement(object):
             return self._lay(control, target, index, self.sample, now, self.fallback)
         self.sample = self.last_solution = None
         self.pivot_search = None
+        if mode == 'splash':
+            # A failed splash sweep also gives penetration another turn.
+            self.failed_penetration_shells = None
         if verdict == 'armor' and self.search_since is None:
             self.search_since = now
-        if self.search_since is None:
-            self.exhausted.add(target.id)
-        elif now - self.search_since >= SEARCH_SECONDS and not keep_clip and not he:
+        if expired and self.failed_penetration_shells == eligible_shells:
+            if keep_clip or he:
+                # Give the completed target its fallback before rotating again.
+                return None, None, False
             self.retreat = True
+            self.seek = False
         else:
             self.exhausted.add(target.id)
         alternate = next((item for item in candidates if item.id not in self.exhausted
