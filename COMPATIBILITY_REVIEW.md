@@ -14233,3 +14233,31 @@ and no firing-position/withdrawal request after 60 seconds. The established
 engagement test now first acquires an actual usable solution before verifying
 both deadlines. This corrects the test's earlier overbroad admission assumption.
 Native acceptance of the replacement package remains unproved.
+
+### November 5 14:22 report: shell priority spans all ordered points
+
+Report `wot-error-report-20261105-142206-c5ff25d07612.zip` is a cumulative
+snapshot of the same `a3c0447a` session. It records alternating automatic
+requests for shell 1/APCR and shell 2/HE approximately every 0.4 seconds at
+14:21:30–34. At 14:21:34 the retained point is sample 4: HE reports armor and
+APCR ready. Repeated two-shell current-barrel comparisons also consume the
+two-candidate tick budget before physical laying can run in that decision.
+The intervening roadside-admission fix did not change this shell-selection bug.
+
+The first-ready-point migration incorrectly made point order outrank ammunition
+priority. Direct search now traverses every available point of a preferred
+shell before the next shell. Completed geometric and physical failures advance
+that frontier. Pending geometric points rotate within their shell; unresolved
+work yields as unknown after a bounded 0.5 seconds, rather than blocking the
+entire frontier or being labelled armor. Retaining a validated barrel ray tests
+only its selected shell; a failure returns to the remaining shell/point frontier.
+Magazine next-clip comparison remains a separate owner.
+
+The counterexample has point 0 penetrable by APCR only and point 1 penetrable
+by HE. Old code never visits physical HE point 1; the correction retains HE at
+point 1. A second test permits APCR only after all HE points fail and verifies
+one switch, including subsequent hull-pivot updates. The integration test uses
+real Aiming candidate generation, source inversion, path work and two-candidate
+budgets, with a simulated turret and contact verdict boundary; it reaches the
+later HE point and continuously retains its proof without switching back.
+These are policy/adapter results, not a new #1513 native gameplay acceptance.

@@ -10,6 +10,7 @@ PENETRATION_FACTOR_65 = 0.9679810530375992
 SEARCH_SECONDS = 8.
 POSITION_SECONDS = 6.
 OWN_RESCAN_SECONDS = .7
+POINT_PENDING_SECONDS = .5
 HE = 'HIGH_EXPLOSIVE'
 
 
@@ -134,25 +135,50 @@ class DirectEngagement(object):
         if self.scan is None or self.scan['identity'] != identity:
             points = (sample,) if sample is not None else range(count)
             self.scan = dict(identity=identity, pending=[(index, point)
-                for point in points for index in indices
-                if mode != 'full' or (index, point) not in self.tried], hits=[], armor=False, unknown=False)
+                for index in indices for point in points
+                if mode != 'full' or (index, point) not in self.tried],
+                hits=[], armor=False, unknown=False, waiting={})
         scan = self.scan
+        checked = set()
         for unused in range(min(2, len(scan['pending']))):
             if not scan['pending']:
                 break
-            index, point = scan['pending'].pop(0)
+            if mode == 'full':
+                # Finish the preferred shell's point frontier before mounting
+                # a lower-priority shell. Rotate pending points within it.
+                first_index = scan['pending'][0][0]
+                candidate = next((item for item in scan['pending']
+                    if item[0] == first_index and item not in checked), None)
+                if candidate is None:
+                    break
+                scan['pending'].remove(candidate)
+                index, point = candidate
+            else:
+                index, point = scan['pending'].pop(0)
+            checked.add((index, point))
             verdict, solution = aiming.compare_direct(target, index, point, now,
                 lambda a, b: control.lane_from(target, a, b),
                 None if mode == 'splash' else PENETRATION_FACTOR_65,
                 current_barrel=mode == 'barrel', nominal=mode == 'splash', prepare=mode == 'full')
+            if verdict == 'pending' and mode == 'full':
+                since = scan['waiting'].setdefault((index, point), now)
+                if now - since >= POINT_PENDING_SECONDS:
+                    verdict = 'unknown'
             self.receipt.setdefault('candidates', []).append(dict(
                 target=target.id, index=index, sample=point, verdict=verdict, mode=mode, at=now,
                 reason=(solution or {}).get('reason'),
                 geometry_clear=(solution or {}).get('geometry_clear'),
                 reachable=(solution or {}).get('reachable')))
             if verdict == 'pending':
-                scan['pending'].append((index, point))
+                if mode == 'full':
+                    insertion = next((i for i, item in enumerate(scan['pending'])
+                        if item[0] != index), len(scan['pending']))
+                    scan['pending'].insert(insertion, (index, point))
+                else:
+                    scan['pending'].append((index, point))
                 continue
+            if mode == 'full' and verdict != 'ready':
+                self.tried.add((index, point))
             if verdict == 'ready' and mode == 'full':
                 self.engaged_targets.add(target.id)
                 self.checked_targets.discard(target.id)
@@ -191,7 +217,7 @@ class DirectEngagement(object):
         verdict, solution = aiming.compare_direct(target, index, sample, now,
             lambda a, b: control.lane_from(target, a, b), self.stage[1],
             physical=True, nominal=fallback)
-        if (verdict == 'pending' and now-self.point_since >= .5) or (
+        if (verdict == 'pending' and now-self.point_since >= POINT_PENDING_SECONDS) or (
                 verdict == 'laying' and now-self.point_since >= 5.):
             verdict = 'point_timeout'
         self.receipt['physical'] = dict(target=target.id, index=index, sample=sample, verdict=verdict, at=now)
@@ -234,7 +260,8 @@ class DirectEngagement(object):
         gun, policy = owner._gun_state, control.ammo_policy
         rows = self.shells(policy, gun)
         self.checking = False
-        self.receipt.update(candidates=[], visible=[item.id for item in candidates], at=now)
+        self.receipt.update(candidates=[], visible=[item.id for item in candidates],
+                            shell_order=[row['index'] for row in rows], at=now)
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
                     getattr(control, 'owned_burst', None))
@@ -301,6 +328,10 @@ class DirectEngagement(object):
             self.motion = pose
             self.last_full_at = now
         compare = he if mode == 'splash' else rows if mode == 'next' else eligible
+        if mode == 'barrel':
+            # Retaining a ray is not an ammunition election at just one plate.
+            # If it fails, resume the ordered shell/point frontier below.
+            compare = [row for row in eligible if row['index'] == self.stage[0]]
         verdict, pick = self._scan(control, target, compare,
                                    now, mode, self.sample if mode == 'barrel' else None)
         if verdict == 'pending':

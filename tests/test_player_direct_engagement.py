@@ -40,13 +40,120 @@ class DirectEngagementTests(unittest.TestCase):
                         nominal_armor=70 if point == 0 else 25)
         return ('ready', solution) if kwargs.get('nominal') else (status, solution)
 
-    def test_fixed_point_order_does_not_wait_for_later_geometry(self):
+    def test_he_on_later_point_precedes_apcr_on_first_point(self):
         self.verdicts[(21, 1, 0)] = 'ready'
         self.verdicts[(21, 2, 1)] = 'ready'
-        for tick in range(2):
+        for tick in range(10):
+            self.state.update(self.control, [self.first], tick*.1)
+            if self.calls:
+                break
+        self.assertEqual([2], self.calls)
+        self.assertEqual(1, self.state.sample)
+
+    def physical_shell_probe(self, he_ready_point):
+        self.gun.ammo[0] = 0
+        self.gun.shot_index = 2
+        physical = []
+        def queue(index):
+            self.calls.append(index)
+            self.gun.shot_index = index
+        self.control.queue_automatic_shell = queue
+        def probe(target, index, point, now, *args, **kwargs):
+            solution = dict(created=now, point=(0., float(point), 10.),
+                key=(point, 'low'), geometry_clear=True, reachable=True, clear=True)
+            if kwargs.get('physical') or kwargs.get('current_barrel'):
+                physical.append((index, point))
+                return ('ready' if index == 1 or point == he_ready_point else 'armor'), solution
+            return 'ready', solution
+        self.control.aiming.compare_direct = probe
+        return physical
+
+    def test_failed_he_point_moves_to_next_he_point_without_mounting_apcr(self):
+        physical = self.physical_shell_probe(1)
+        for tick in range(15):
+            self.state.update(self.control, [self.first], tick*.1)
+        self.assertIn((2, 0), physical)
+        self.assertIn((2, 1), physical)
+        self.assertNotIn((1, 0), physical)
+        self.assertEqual([], self.calls)
+        self.assertEqual((2, 1), (self.state.stage[0], self.state.sample))
+
+    def test_apcr_is_mounted_once_only_after_all_he_points_fail(self):
+        physical = self.physical_shell_probe(None)
+        for tick in range(15):
             self.state.update(self.control, [self.first], tick*.1)
         self.assertEqual([1], self.calls)
-        self.assertEqual(0, self.state.sample)
+        self.assertLess(physical.index((2, 1)), physical.index((1, 0)))
+        self.assertEqual((1, 0), (self.state.stage[0], self.state.sample))
+        # A managed hull pivot and a refreshed own pose must not undo the
+        # failed HE-point traversal or restart an HE/APCR swap loop.
+        self.control.last_order = dict(combat_facing=dict(target=21, state='turning'))
+        self.control.aiming.direct_pose = lambda target: (
+            ((.1, 0, 0), .3, (0, 0, 10), 0., 0., 0., 0.))
+        for now in (2., 2.2, 2.4):
+            self.state.update(self.control, [self.first], now)
+        self.assertEqual([1], self.calls)
+
+    def test_lower_priority_ready_point_waits_for_bounded_he_pending_work(self):
+        self.gun.ammo[0] = 0
+        self.gun.shot_index = 2
+        self.verdicts[(21, 2, 0)] = 'pending'
+        self.verdicts[(21, 2, 1)] = 'armor'
+        self.verdicts[(21, 1, 0)] = 'ready'
+        for now in (0., .1, .3):
+            self.state.update(self.control, [self.first], now)
+        self.assertEqual([], self.calls)
+        for now in (.6, .7, .8):
+            self.state.update(self.control, [self.first], now)
+            if self.calls:
+                break
+        self.assertEqual([1], self.calls)
+
+    def test_real_aim_budget_lays_later_he_point_and_keeps_the_proved_pair(self):
+        from test_player_weapon_migration import aiming_scene
+        owner, target, shot, body = aiming_scene(speed=900., gravity=0., distance=30.)
+        self.gun.ammo[0] = 0
+        self.gun.shot_index = 1
+        self.gun.shots = [dict(shot, shell=dict(shot['shell'], kind=row['kind']))
+                         for row in self.rounds.shells]
+        owner._gun_state = self.gun
+        owner.local_pose = lambda: ((0., 0., 0.), 0.)
+        origin = (0., 1., 0.)
+        ray = [(0., 0., 1.)]
+        owner._mutable_shot_ray = lambda: (origin, ray[0])
+        aim = Aiming(owner)
+        self.control.owner, self.control.aiming = owner, aim
+        physical = []
+        def contact(item, solution, own, direction, threshold):
+            physical.append((own['key'][0], solution['sample']))
+            if sum(direction[i]*solution['direction'][i] for i in range(3)) < .999999:
+                return 'laying'
+            return 'ready' if own['key'][0] == 1 or solution['sample'] == 1 else 'armor'
+        aim.actual_contact = contact
+        def queue(index):
+            self.calls.append(index)
+            self.gun.shot_index = index
+        self.control.queue_automatic_shell = queue
+        samples = (('hull', (0., 0., 0.), (0., 1.3, 0.), None),
+                   ('hull', (0., 0., 0.), (0., .7, 0.), None))
+        ready_ticks = []
+        with mock.patch('gui.mods.offline_lan_0922.shot_geometry.ordered_vehicle_aim_samples',
+                        return_value=samples):
+            for tick in range(25):
+                now = tick*.1
+                aim.begin([target], now)
+                chosen, solution, ready = self.state.update(self.control, [target], now)
+                self.assertGreaterEqual(aim._candidates, 0)
+                if solution is not None:
+                    ray[0] = solution['direction']  # Simulated turret actuator.
+                if ready:
+                    ready_ticks.append(tick)
+        self.assertEqual([2], self.calls)
+        self.assertIn((2, 1), physical)
+        self.assertNotIn((1, 0), physical)
+        self.assertEqual((2, 1), (self.state.stage[0], self.state.sample))
+        self.assertTrue(ready_ticks)
+        self.assertEqual(list(range(ready_ticks[0], 25)), ready_ticks)
 
     def test_he_main_prefers_lowest_piercing_alternative_and_skips_empty(self):
         self.rounds.main = 2
