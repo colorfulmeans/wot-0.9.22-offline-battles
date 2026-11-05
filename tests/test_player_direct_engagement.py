@@ -40,13 +40,13 @@ class DirectEngagementTests(unittest.TestCase):
                         nominal_armor=70 if point == 0 else 25)
         return ('ready', solution) if kwargs.get('nominal') else (status, solution)
 
-    def test_checks_every_point_and_chooses_he_before_premium(self):
+    def test_fixed_point_order_does_not_wait_for_later_geometry(self):
         self.verdicts[(21, 1, 0)] = 'ready'
         self.verdicts[(21, 2, 1)] = 'ready'
-        for tick in range(3):
+        for tick in range(2):
             self.state.update(self.control, [self.first], tick*.1)
-        self.assertEqual([2], self.calls)
-        self.assertEqual(1, self.state.sample)
+        self.assertEqual([1], self.calls)
+        self.assertEqual(0, self.state.sample)
 
     def test_he_main_prefers_lowest_piercing_alternative_and_skips_empty(self):
         self.rounds.main = 2
@@ -55,43 +55,125 @@ class DirectEngagementTests(unittest.TestCase):
         self.gun.ammo[1] = 0
         self.assertEqual([2, 0], [row['index'] for row in self.state.shells(self.rounds, self.gun)])
 
-    def test_search_expires_before_nominal_he_fallback(self):
-        for tick in range(3):
-            self.state.update(self.control, [self.first], tick*.1)
-        self.assertEqual(.2, self.state.search_since)
-        self.assertEqual([], self.calls)
-        self.state.update(self.control, [self.first], 8.21)
-        self.assertEqual([2], self.calls)
+    def test_two_deadlines_do_not_renew_on_target_or_destination_change(self):
+        state = self.state
+        state.adopt(21)
+        self.assertEqual('turret', state.movement_stage(0., True, True))
+        state.adopt(22)
+        self.assertEqual('turret', state.movement_stage(7.9, True, True))
+        self.assertEqual('position', state.movement_stage(8., True, True))
+        self.assertEqual('turret_timeout', state.receipt['reason'])
+        state.adopt(21)
+        self.assertEqual('position', state.movement_stage(13.9, False, True))
+        self.assertEqual('retreat', state.movement_stage(14., False, True))
+        self.assertEqual('position_timeout', state.receipt['reason'])
+        self.assertEqual('turret', state.movement_stage(15., False, True, ready=True))
+        self.assertEqual('ray_ready', state.receipt['reason'])
+
+    def test_capture_never_spends_or_enters_movement_phase(self):
+        self.state.adopt(21)
+        for now in (0., 9., 16., 40.):
+            self.assertEqual('turret', self.state.movement_stage(now, True, False))
+            self.assertFalse(self.state.seek or self.state.retreat)
+
+    def test_pending_candidate_does_not_starve_the_next_point(self):
+        self.gun.ammo[1:] = [0, 0]
+        self.verdicts[(21, 0, 0)] = 'pending'
+        self.verdicts[(21, 0, 1)] = 'ready'
+        target, unused, ready = self.state.update(self.control, [self.first], 0.)
+        self.assertIs(target, self.first)
+        self.assertTrue(ready)
         self.assertEqual(1, self.state.sample)
-        self.assertTrue(self.state.fallback)
-        self.assertIsNone(self.state.search_since)
 
-    def test_obstruction_does_not_start_the_armor_search_clock(self):
-        self.control.aiming.compare_direct = mock.Mock(return_value=('unavailable', None))
+    def test_actual_armor_failure_advances_barrel_before_any_movement(self):
+        self.gun.ammo[1:] = [0, 0]
+        physical = []
+        def probe(target, index, sample, now, *args, **kwargs):
+            solution = dict(created=now, point=(0., 0., 10.), barrel_error=.1)
+            if kwargs.get('physical'):
+                physical.append(sample)
+                return ('armor' if sample == 0 else 'laying'), solution
+            return 'ready', solution
+        self.control.aiming.compare_direct = probe
+        self.state.update(self.control, [self.first], 0.)
+        self.state.movement_stage(0., True, True)
+        target, solution, ready = self.state.update(self.control, [self.first], .1)
+        self.assertEqual([0, 1], physical)
+        self.assertIs(target, self.first)
+        self.assertFalse(ready)
+        self.assertEqual('turret', self.state.phase)
+        self.assertFalse(self.state.seek or self.state.retreat)
+
+    def test_target_motion_does_not_restart_failed_physical_point_order(self):
+        self.gun.ammo[1:] = [0, 0]
+        physical = []
+        def probe(target, index, sample, now, *args, **kwargs):
+            if kwargs.get('physical'):
+                physical.append(sample)
+                return 'armor', dict(created=now)
+            return 'ready', dict(created=now)
+        self.control.aiming.compare_direct = probe
+        self.state.update(self.control, [self.first], 0.)
+        self.control.aiming.direct_pose = lambda target: (
+            (0, 0, 0), 0., (0, 0, 10), .2, .3, 0., 0.)
+        self.state.update(self.control, [self.first], .1)
+        self.assertEqual([0, 1], physical)
+
+    def test_penetrating_he_is_not_fallback_and_restores_turret_stage(self):
+        self.gun.shot_index = 2
+        self.verdicts[(21, 2, 0)] = 'ready'
+        self.state.adopt(21)
+        self.state.phase, self.state.phase_since = 'retreat', 14.
+        self.state.retreat = self.state.search_expired = True
+        target, solution, ready = self.state.update(self.control, [self.first], 15.)
+        self.assertTrue(ready)
+        self.assertFalse(self.state.fallback)
+        self.assertEqual('turret', self.state.movement_stage(15., False, True, ready))
+        self.assertFalse(self.state.retreat)
+
+    def test_pending_physical_point_yields_and_is_revisited_later(self):
+        self.gun.ammo[1:] = [0, 0]
+        checked = []
+        def probe(target, index, sample, now, *args, **kwargs):
+            checked.append((sample, kwargs.get('physical', False)))
+            return ('pending' if kwargs.get('physical') and sample == 0 else 'ready'), dict(created=now)
+        self.control.aiming.compare_direct = probe
+        for now in (0., .6, .7):
+            self.state.update(self.control, [self.first], now)
+        self.assertIn((1, True), checked)
+        self.assertEqual(1, self.state.sample)
+
+    def test_he_fallback_cannot_start_before_both_timeouts(self):
+        self.state.adopt(21)
+        self.state.movement_stage(0., True, True)
         for tick in range(3):
             self.state.update(self.control, [self.first], tick*.1)
-        self.assertIsNone(self.state.search_since)
-        self.assertEqual([], self.calls)
-
-
-    def test_no_he_retreats_only_after_search_expires(self):
-        self.gun.ammo[2] = 0
-        for now in (0., .1, 7., 7.1, 8., 8.2):
-            self.state.update(self.control, [self.first], now)
+        self.assertFalse(self.state.fallback)
+        self.state.movement_stage(8., True, True)
+        self.state.update(self.control, [self.first], 8.)
+        self.assertFalse(self.state.fallback)
+        self.state.movement_stage(14., True, True)
+        for tick in range(10):
+            self.state.update(self.control, [self.first], 14.+tick*.1)
+            if self.state.fallback:
+                break
         self.assertTrue(self.state.retreat)
-        self.assertIsNone(self.state.search_since)
-        self.assertEqual([], self.calls)
+        self.assertTrue(self.state.fallback)
+        self.assertEqual(1, self.state.sample)
+        self.assertIn(2, self.calls)
 
-    def test_partial_cassette_uses_next_shell_only_after_timeout(self):
+    def test_partial_cassette_compares_next_shell_after_both_timeouts(self):
         self.gun.clip_size, self.gun.clip = 3, 2
         self.verdicts[(21, 2, 0)] = 'ready'
         self.state.update(self.control, [self.first], 0.)
+        self.state.movement_stage(0., True, True)
+        self.state.movement_stage(8., True, True)
         self.control.reload_automatic_clip.assert_not_called()
-        for now in (8.1, 8.2, 8.3):
-            self.state.update(self.control, [self.first], now)
-        self.control.reload_automatic_clip.assert_called_once_with(2)
+        self.state.movement_stage(14., True, True)
+        for tick in range(8):
+            self.state.update(self.control, [self.first], 14.+tick*.1)
+        self.control.reload_automatic_clip.assert_called_with(2)
         self.assertEqual([], self.calls)
-
 
     def test_own_hull_rescan_cools_down_but_target_turret_can_trigger_it(self):
         state = self.state
@@ -139,7 +221,7 @@ class DirectEngagementTests(unittest.TestCase):
         state.sample = 0
         self.control.aiming.compare_direct = mock.Mock(side_effect=[
             ('laying', dict(laying=True, barrel_error=error)) for error in (1.0, .8, .6)])
-        for now in (1., 5., 9.):
+        for now in (1., 3., 5.):
             target, solution, ready = state.update(self.control, [self.first], now)
             self.assertIs(target, self.first)
             self.assertTrue(solution['laying'])
@@ -204,6 +286,33 @@ class OrderedPointTests(unittest.TestCase):
             result = aim.ordered(target, 0, PENETRATION_FACTOR_65, .2, None, physical=True)
             self.assertEqual(('ready', (1, 'low')), (result[0], result[1]['key']))
 
+
+    def test_direct_preparation_is_not_an_actual_barrel_proof(self):
+        owner = SimpleNamespace(_mutable_shot_ray=lambda: ((0, 0, 0), (0, 0, 1)))
+        aim = Aiming(owner)
+        target = SimpleNamespace(id=1, typeDescriptor=object())
+        aim.targets[1], aim.observations[1] = target, {}
+        aim._own = lambda index: dict(key=(index,))
+        aim._valid = lambda *args: True
+        aim._candidate = lambda target, own, entry, key, now, *args: dict(
+            key=key, sample=key[0], created=now, direction=(0., 0., 1.),
+            reachable=True, source_verified=True, penetration_ok=False)
+        aim._advance = lambda job, lane, limit, now: job.update(
+            done=True, clear=True, completed=now)
+        aim.actual_contact = mock.Mock(return_value='armor')
+        aim._candidates = 10
+        with mock.patch('gui.mods.offline_lan_0922.shot_geometry.ordered_vehicle_aim_samples',
+                        return_value=(object(), object())):
+            verdict, solution = aim.compare_direct(target, 0, 0, 0., None,
+                PENETRATION_FACTOR_65, prepare=True)
+            self.assertEqual('ready', verdict)
+            aim.actual_contact.assert_not_called()
+            for expected in ('laying', 'unknown', 'miss', 'armor', 'ready'):
+                aim.actual_contact.return_value = expected
+                verdict, unused = aim.compare_direct(target, 0, 0, .1, None,
+                    PENETRATION_FACTOR_65, physical=True)
+                self.assertEqual(expected, verdict)
+                self.assertEqual((0, 0, 1), aim.actual_contact.call_args.args[3])
 
     def test_final_blockage_defers_only_the_locked_physical_point(self):
         owner = SimpleNamespace(_gun_state=SimpleNamespace(shot_index=0),

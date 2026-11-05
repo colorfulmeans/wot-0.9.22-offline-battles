@@ -14165,3 +14165,44 @@ ammunition feedback. The first implementation is removed before replacement.
 BattleRuntime is restored byte-for-byte to 0e4146f7 (before 18983a25 introduced
 player control). Unrelated queue, earnings and governor-wear fixes are retained.
 Bot policy, driving and navigation owners are not changed by this withdrawal.
+
+### November 5 PR119: foreground pivot and staged search follow-up
+
+The cumulative native report ending 13:05:48 contains 64 blocked, 57 aligned
+and four braking facing observations, with no turning observation. Its
+13:05:38–40 engage/route/engage comparison disproves treating the preflight
+blocked label as a demonstrated physical obstacle. No refusal component was
+recorded by that build; the native static query is not proven the sole cause.
+
+Foreground combat pivot preview now uses the drive traverse and track-pivot
+laws for one bounded physics step, with the same pure-pivot static-query mode
+as the drive pose sweep. The actual drive retains collision/commit authority.
+Receipts separate vehicle, arena, detached-turret, catalog, native and capture
+checks; subsequent pose/motion-status observations expose whether commanded yaw
+was realised. A blocked preview retries after 0.5 seconds. Capture still reserves
+track-centre arc and residual travel through the decision/braking horizon.
+
+Direct fire now lays the first geometrically available ordered candidate,
+then checks the actual barrel; a completed miss, armor failure and unknown
+contact are distinct from laying or unfinished work. Pending candidates rotate
+through the bounded queue. Failed physical points yield to other candidates;
+physical pending work yields after 0.5 seconds and laying/shell selection after
+five seconds. These are foreground policy deadlines, not native API contracts.
+
+A stopped nearby encounter gets eight seconds for turret search, then a separate
+six-second position-search phase, then reverse-only withdrawal with the existing
+independent eight-second nonprogress deadline. Point, target, destination and
+hull-facing changes cannot renew these encounter deadlines. Full-magazine reload
+does not bypass the two stages. A usable penetrating ray restores the firing
+hold, including penetrating HE. Nonpenetrating HE fallback is eligible only
+after both stages and is interleaved with renewed penetrating-point scans.
+Capture/explicit movement ownership prevents combat translation and withdrawal;
+point/target scanning, safe stationary facing and firing remain independent.
+Bot and artillery owners are unchanged.
+
+Regression evidence includes the real foreground preflight and actual Python
+drive step at identical pose/input (open ground and hard catalog contact),
+physical-contact verdicts, pending-point fairness, two outer-controller deadlines,
+reverse stall/recovery and capture-edge braking. Native service responses in
+these tests are fixtures. Python 2.7.18 compilation/contracts and host tests do
+not establish Chinese HD #1513 gameplay acceptance; a new client run is required.
