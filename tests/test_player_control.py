@@ -122,6 +122,7 @@ class PlayerRegressionTests(unittest.TestCase):
             ready=lambda *args:True,trigger=mock.Mock(return_value=True),trigger_receipt={},point=(0,0,0))
         c.weapon.aim_solution=lambda identity, solution, now:c.weapon.aim(identity,solution['point'],now)
         c.aiming=types.SimpleNamespace(begin=lambda *a:None, reset=lambda:None,
+            front_blocked_targets=lambda: set(),
             update=lambda item, now, lane, **kw:dict(target=item.id,point=c.target_point(item),
                 source_point=c.target_point(item),reachable=True,clear=c.firing_lane(item),
                 geometry_clear=c.firing_lane(item)),

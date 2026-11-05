@@ -67,6 +67,12 @@ class DirectEngagement(object):
         self.next_shell = None
         self.switch_from = None
 
+    def shot_admitted(self, target):
+        if self.target == target and not self.fallback:
+            self.search_since = None
+            self.exhausted.clear()
+            self.retreat = self.seek = False
+
     def _motion_changes(self, aiming, target):
         try:
             pose = aiming.direct_pose(target)
@@ -249,8 +255,8 @@ class DirectEngagement(object):
             self.confirmed = (target.id, sample, index)
             self.pivot_search = None
             if not fallback:
-                self.search_since = None
-                self.exhausted.clear()
+                # Hold the verified point for the trigger. Its final ray
+                # proof can still reject the shot, so keep the search clock.
                 self.retreat = self.seek = False
             waiting_for_clip = compare_next and self._compare_next_shell(control, target, index, sample, now)
             return target, solution, not waiting_for_clip

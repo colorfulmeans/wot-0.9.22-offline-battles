@@ -649,18 +649,27 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         from types import SimpleNamespace
         control, rear = PlayerRegressionTests().aim_controller()
         front = SimpleNamespace(id=rear.id + 1, position=rear.position)
-        records = {rear.id: rear, front.id: front}
+        alternate = SimpleNamespace(id=front.id + 1, position=rear.position)
+        records = {target.id: target for target in (rear, front, alternate)}
         control._contacts = lambda unused: ([], [], records)
         engagement = SimpleNamespace(target=rear.id, seek=False, retreat=False,
-            update=lambda *args: (None, None, False))
+            search_since=None, update=mock.Mock(return_value=(None, None, False)))
         engagement.adopt = lambda identity: setattr(engagement, 'target', identity)
         control.direct_engagement = engagement
         control.aiming.defer_front_point = mock.Mock()
+        control.aiming.front_blocked_targets = mock.Mock(return_value={rear.id})
         solution = dict(sample=2)
         control.fire_admission.front_contact = (rear, front.id, solution, 1.)
         control.update(.1, 1.1)
         control.aiming.defer_front_point.assert_called_once_with(rear, front, solution)
         self.assertEqual(front.id, engagement.target)
+        self.assertEqual([front, alternate], engagement.update.call_args.args[1])
+        engagement.adopt(alternate.id)
+        control.update(.1, 1.3)
+        self.assertEqual([alternate, front], engagement.update.call_args.args[1])
+        control.aiming.front_blocked_targets.return_value = set()
+        control.update(.1, 1.6)
+        self.assertIn(rear, engagement.update.call_args.args[1])
 
 
 if __name__ == '__main__':

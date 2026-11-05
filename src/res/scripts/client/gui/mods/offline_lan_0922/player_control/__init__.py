@@ -1262,6 +1262,9 @@ class PlayerControl(object):
             self.emit_shot(self.shot_receipts.committed(event, pending, context,
                 self.owner._clock(), self.control_generation))
             self.automatic_commits += 1
+            if (context.get('automatic') and context['generation'] == self.control_generation
+                    and self.direct_engagement is not None):
+                self.direct_engagement.shot_admitted(context['target'])
             context.setdefault('projectiles', []).append(event.get('projectile_id'))
             if burst is not None:
                 burst['player_control'] = context
@@ -1732,14 +1735,18 @@ class PlayerControl(object):
             candidates = sorted(records.values(), key=lambda item: (
                 priorities.get(item.id, len(priorities)), item.id != locked,
                 sum((item.position[i]-position[i])**2 for i in (0, 2))))
-            if (preempt and self.front_priority is None and candidates and self.direct_engagement is not None and
-                    not getattr(owner, '_local_player_burst', None) and
-                    not getattr(owner, '_local_fire_intent', None)):
-                if self.direct_engagement.search_since is None:
-                    self.direct_engagement.adopt(candidates[0].id)
             self.aiming.begin(list(records.values()), now)
             if not decision_current():
                 return
+            if (direct is not None and not getattr(owner, '_local_player_burst', None) and
+                    not getattr(owner, '_local_fire_intent', None)):
+                blocked = self.aiming.front_blocked_targets()
+                alternatives = [item for item in candidates if item.id not in blocked]
+                if alternatives:
+                    candidates = alternatives
+                if (preempt and self.front_priority is None and candidates and
+                        candidates[0].id == ranked[0] and direct.search_since is None):
+                    direct.adopt(candidates[0].id)
             if self.direct_engagement is not None:
                 generation = self.control_generation
                 target, solution, fire_clear = self.direct_engagement.update(self, candidates, now)

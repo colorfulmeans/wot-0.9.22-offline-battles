@@ -801,7 +801,11 @@ class Aiming(object):
             except (AttributeError, TypeError, ValueError, IndexError, RuntimeError):
                 pass
 
-    def _front_point_blocked(self, target, sample):
+    def front_blocked_targets(self):
+        return {target for target, sample in list(self.front_points)
+                if self._front_point_blocked(self.targets[target], sample, selection=True)}
+
+    def _front_point_blocked(self, target, sample, selection=False):
         key = (target.id, sample)
         recorded = self.front_points.get(key)
         if recorded is None:
@@ -811,9 +815,13 @@ class Aiming(object):
         if front is not None:
             def unchanged(previous, current):
                 return (all(_distance_sq(previous[i], current[i]) <= .15**2 for i in (0, 2)) and
-                        all(abs(_angle(previous[i]-current[i])) <= .02 for i in (1, 3, 4, 5, 6)))
-            if unchanged(rear_pose, self.direct_pose(target)) and unchanged(front_pose, self.direct_pose(front)):
-                return True
+                        all(abs(_angle(previous[i]-current[i])) <= .02 for i in (3, 4, 5, 6)))
+            rear_now = self.direct_pose(target)
+            front_now = self.direct_pose(front)
+            if unchanged(rear_pose, rear_now) and unchanged(front_pose, front_now):
+                # Turning on the spot can change the muzzle ray. It does
+                # not make the previously blocked rear target a priority.
+                return selection or abs(_angle(rear_pose[1]-rear_now[1])) <= .02
         self.front_points.pop(key, None)
         return False
 

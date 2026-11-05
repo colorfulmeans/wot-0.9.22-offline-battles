@@ -173,6 +173,41 @@ class DirectEngagementTests(unittest.TestCase):
         self.assertEqual(1, self.state.sample)
         self.assertTrue(self.state.fallback)
 
+    def test_search_clock_survives_ready_point_until_shot_is_admitted(self):
+        self.gun.ammo[1] = 0
+        self.state.search_since = 1.
+        self.state.exhausted.add(self.first.id)
+        self.verdicts[(self.second.id, 0, 0)] = 'ready'
+        self.state.update(self.control, [self.second], 2.)
+        target, unused, ready = self.state.update(self.control, [self.second], 2.1)
+        self.assertIs(self.second, target)
+        self.assertTrue(ready)
+        self.assertFalse(self.state.seek)
+        self.assertEqual(1., self.state.search_since)
+        self.assertEqual({self.first.id}, self.state.exhausted)
+        self.state.shot_admitted(self.first.id)
+        self.assertEqual(1., self.state.search_since)
+        self.state.shot_admitted(self.second.id)
+        self.assertIsNone(self.state.search_since)
+        self.assertFalse(self.state.exhausted)
+
+    def test_front_blocked_target_stays_deferred_through_own_pivot(self):
+        aiming = Aiming(self.control.owner)
+        aiming.targets = {target.id: target for target in (self.first, self.second)}
+        poses = {
+            self.first.id: ((0., 0., 0.), 0., (0., 0., 20.), 0., 0., 0., 0.),
+            self.second.id: ((0., 0., 0.), 0., (0., 0., 10.), 0., 0., 0., 0.),
+        }
+        aiming.direct_pose = lambda target: poses[target.id]
+        aiming.defer_front_point(self.first, self.second, dict(sample=0))
+        self.assertTrue(aiming._front_point_blocked(self.first, 0))
+        for identity, pose in list(poses.items()):
+            poses[identity] = (pose[0], .5) + pose[2:]
+        self.assertFalse(aiming._front_point_blocked(self.first, 0))
+        self.assertEqual({self.first.id}, aiming.front_blocked_targets())
+        poses[self.second.id] = ((0., 0., 0.), .5, (1., 0., 10.), 0., 0., 0., 0.)
+        self.assertFalse(aiming.front_blocked_targets())
+
     def test_obstruction_does_not_start_the_armor_search_clock(self):
         self.control.aiming.compare_direct = mock.Mock(return_value=('unavailable', None))
         for tick in range(3):
