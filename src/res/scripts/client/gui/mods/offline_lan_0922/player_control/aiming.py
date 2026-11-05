@@ -815,7 +815,7 @@ class Aiming(object):
         return False
 
     def compare_direct(self, target, index, sample, now, lane, threshold,
-                       physical=False, current_barrel=False, nominal=False, prepare=False):
+                       physical=False, current_barrel=False, nominal=False):
         """Compare one shell and one ordered point within the shared aim budget."""
         if target.id not in self.targets or self._candidates <= 0:
             return 'pending', None
@@ -830,7 +830,7 @@ class Aiming(object):
                 return 'unknown', None
             key = (sample, 'low')
             result = self._candidate(target, own, dict(samples=samples), key, now,
-                                     True, None if physical or current_barrel or prepare else threshold)
+                                     True, None if physical or current_barrel else threshold)
             if current_barrel:
                 from .weapon import artillery_path
                 unused, direction = self.owner._mutable_shot_ray()
@@ -865,15 +865,13 @@ class Aiming(object):
                 if thickness is None:
                     return 'unknown', None
                 result['nominal_armor'] = thickness
-            if current_barrel or prepare:
+            if current_barrel:
                 return 'ready', result
             if physical:
                 unused, direction = self.owner._mutable_shot_ray()
                 verdict = ('laying' if result.get('needs_hydraulic') else
                            self.actual_contact(target, result, own, direction, threshold))
-                if verdict == 'unknown':
-                    return 'unknown', result
-                if verdict == 'laying':
+                if verdict in ('laying', 'miss', 'unknown'):
                     error = None
                     if verdict == 'laying':
                         dot = sum(result['direction'][i]*direction[i] for i in range(3))

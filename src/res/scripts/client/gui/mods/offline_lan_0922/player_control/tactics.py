@@ -171,9 +171,8 @@ class CombatFacing(object):
         now, position = state['now'], state['position']
         attempt = self.attempt
         if (attempt is None or attempt['target'] != target or
-                (attempt['phase'] in ('blocked', 'timed_out') and
-                 _distance(attempt['position'], position) > .5 or
-                 attempt['phase'] == 'blocked' and now >= attempt.get('retry_at', 0.)) or
+                attempt['phase'] in ('blocked', 'timed_out') and
+                _distance(attempt['position'], position) > .5 or
                 attempt['phase'] == 'aligned' and abs(error) > limit + .10):
             attempt = self.attempt = dict(target=target, position=position, phase='braking',
                 started=now, progress=now, best=abs(error))
@@ -198,7 +197,6 @@ class CombatFacing(object):
                                  recovery_mode='combat_facing')
                 else:
                     phase = 'blocked'
-                    attempt['retry_at'] = now + .5
             if phase in ('blocked', 'timed_out'):
                 attempt['position'] = position
             attempt['phase'] = phase

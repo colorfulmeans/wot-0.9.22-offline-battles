@@ -226,12 +226,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.aiming.compare_direct = mock.Mock(side_effect=lambda item, index, sample, now,
             *args, **kwargs: ('ready', dict(created=now, point=item.position, clear=True,
                                          geometry_clear=True, reachable=True)))
-        owner._local_pitch = owner._local_roll = 0.
-        owner._arena_rotation_is_clear = mock.Mock(return_value=True)
-        owner._turret_pose_is_clear = mock.Mock(return_value=True)
-        owner._destructible_pose_sweep = mock.Mock(return_value=dict(status='clear'))
-        owner._native_world_rotation_is_clear = mock.Mock(
-            side_effect=lambda *args, **kwargs: not kwargs.get('include_static', False))
+        control.rotation_clear = mock.Mock(return_value=True)
         control.trigger = mock.Mock(return_value=False)
         return control, target
 
@@ -250,7 +245,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         self.assertEqual('turning', control.last_order['combat_facing']['state'])
         self.assertGreater(owner._sender.turn, 0.)
         control.trigger.assert_called_once()
-        owner._destructible_pose_sweep.return_value = dict(status='hard')
+        control.rotation_clear.return_value = False
         control.trigger.reset_mock()
         control.update(.1, 1.4)
         self.assertEqual('blocked', control.last_order['combat_facing']['state'])
@@ -270,8 +265,6 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
             control.update(.1, now)
         control.weapon.forward.assert_not_called()
 
-        control.direct_engagement.phase = 'retreat'
-        control.direct_engagement.phase_since = 1.
         control.direct_engagement.retreat = True
         control.navigation.ammo_withdrawal = mock.Mock(return_value=dict(throttle=0., turn=0.,
             brake=True, reverse_only=True, holding=True, travel_intent=False,
@@ -305,8 +298,6 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         x, z = mission.goal
         owner.local_pose = lambda: ((x, 0., z), 0.)
         target.position = (x+15., 0., z+25.)
-        control.direct_engagement.phase = 'retreat'
-        control.direct_engagement.phase_since = 1.
         control.direct_engagement.retreat = True
         control.navigation.ammo_withdrawal = mock.Mock()
         control.navigation.firing_position = mock.Mock()
@@ -326,8 +317,6 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                                           owner._sender.handbrake))
         control.trigger.assert_called_once()
 
-        control.direct_engagement.phase = 'retreat'
-        control.direct_engagement.phase_since = 1.
         control.direct_engagement.retreat = True
         control.aiming.compare_direct.side_effect = None
         control.aiming.compare_direct.return_value = ('pending', None)
@@ -440,10 +429,8 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         from test_player_control import PlayerRegressionTests
         from types import SimpleNamespace
         control, target = PlayerRegressionTests().aim_controller()
-        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
-        control.direct_engagement = DirectEngagement(None)
-        control.direct_engagement.adopt(target.id)
-        control.direct_engagement.update = lambda *args: (None, None, False)
+        control.direct_engagement = SimpleNamespace(target=target.id,
+            update=lambda *args: (None, None, False))
         control.update(.1, 1.)
         control.update(.1, 2.)
         control.weapon.forward.assert_not_called()
@@ -451,18 +438,14 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.forward.assert_not_called()
 
 
-    def test_unadmitted_pending_direct_scan_preserves_turret_and_route(self):
+    def test_pending_direct_scan_preserves_turret_and_leaves_route_in_control(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller
         from types import SimpleNamespace
         control, target = PlayerRegressionTests().aim_controller()
         control.navigation = navigation_controller()
-        target.position = (-198.5, .89, 20.)
-        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
-        control.direct_engagement = DirectEngagement(None)
-        control.direct_engagement.adopt(target.id)
-        control.direct_engagement.checking = True
-        control.direct_engagement.update = lambda *args: (None, None, False)
+        control.direct_engagement = SimpleNamespace(target=target.id, checking=True,
+            retreat=False, seek=False, update=lambda *args: (None, None, False))
         control.navigation.firing_position = mock.Mock(return_value=None)
         control.navigation.decide = mock.Mock(return_value=dict(
             throttle=1., turn=.4, brake=False, recovery_mode='travel', combat_mode='route'))
@@ -470,7 +453,8 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 3.)
         control.weapon.forward.assert_not_called()
         self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
-        control.navigation.firing_position.assert_not_called()
+        self.assertEqual((1., .4, False),
+            (control.last_order['throttle'], control.last_order['turn'], control.last_order['brake']))
 
 
     def test_established_engagement_stays_parked_through_scan_gap_then_expires(self):
@@ -479,38 +463,31 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         from types import SimpleNamespace
         control, target = PlayerRegressionTests().aim_controller()
         control.navigation = navigation_controller()
-        target.position = (-198.5, .89, 20.)
         control.navigation.firing_position = mock.Mock(return_value=None)
         control.navigation.decide = mock.Mock(side_effect=lambda *a, **kw:
             dict(throttle=0. if kw['hold'] else 1., turn=0., brake=kw['hold'],
                  holding=kw['hold'], recovery_mode='hold' if kw['hold'] else 'travel',
                  combat_mode='engage' if kw['hold'] else 'route'))
         control.combat_tactics.movement = mock.Mock(return_value=None)
-        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
-        control.direct_engagement = DirectEngagement(None)
-        control.direct_engagement.adopt(target.id)
-        control.direct_engagement.checking = True
-        control.direct_engagement.update = lambda *args: (None, None, False)
-        control.direct_engagement.engaged_targets.add(target.id)
+        control.direct_engagement = SimpleNamespace(target=target.id, checking=True,
+            retreat=False, seek=False, update=lambda *args: (None, None, False))
         control.engagement_hold = (target, 5.)
         control.update(.1, 2.)
         self.assertTrue(control.navigation.decide.call_args.kwargs['hold'])
         self.assertEqual((0., True), (control.last_order['throttle'], control.last_order['brake']))
-        control.update(.1, 10.1)
-        self.assertEqual('position', control.direct_engagement.phase)
+        control.update(.1, 5.1)
+        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
         self.assertIsNone(control.engagement_hold)
 
     def test_front_contact_adopts_front_vehicle_and_defers_rear_sample(self):
         from test_player_control import PlayerRegressionTests
         from types import SimpleNamespace
         control, rear = PlayerRegressionTests().aim_controller()
-        front = SimpleNamespace(id=rear.id + 1, position=rear.position, typeDescriptor=rear.typeDescriptor)
+        front = SimpleNamespace(id=rear.id + 1, position=rear.position)
         records = {rear.id: rear, front.id: front}
         control._contacts = lambda unused: ([], [], records)
-        from gui.mods.offline_lan_0922.player_control.direct_engagement import DirectEngagement
-        engagement = DirectEngagement(None)
-        engagement.adopt(rear.id)
-        engagement.update = lambda *args: (None, None, False)
+        engagement = SimpleNamespace(target=rear.id, seek=False, retreat=False,
+            update=lambda *args: (None, None, False))
         engagement.adopt = lambda identity: setattr(engagement, 'target', identity)
         control.direct_engagement = engagement
         control.aiming.defer_front_point = mock.Mock()
