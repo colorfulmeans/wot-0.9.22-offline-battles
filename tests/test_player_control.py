@@ -821,6 +821,7 @@ class FiringPositionTests(unittest.TestCase):
     def test_clip_withdrawal_holds_cover_after_losing_contact_until_reloaded(self):
         nav = PlayerNavigation.__new__(PlayerNavigation)
         nav.tag = 'heavyTank'
+        nav.driver = Driver()
         nav.cover_move = None
         nav.cover_retry_at = 0.
         nav._height = lambda point, hint: 0.

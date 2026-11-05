@@ -55,7 +55,7 @@ class WreckPush(object):
         previous, self.active = self.active, None
         if ((order.get('combat_mode') != 'route' and not order.get('travel_intent')) or
                 order.get('recovery_mode') == 'hold' or protected_hold(order) or
-                state.get('burst_active')):
+                order.get('cover_motion') or state.get('burst_active')):
             return False
         goal = order.get('local_target')
         if goal is None:

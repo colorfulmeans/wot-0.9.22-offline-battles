@@ -39,6 +39,7 @@ class NativeNavigationSeam(object):
         self.grid = types.SimpleNamespace(_ground=lambda x, z, hint: self.ground(x, z, hint),
                                           begin_plan=self.begin)
         self.path_calls = []
+        self.blocked_plans = []
 
     def begin(self, start, goal, **unused):
         return types.SimpleNamespace(done=True, result=(start, goal), step=lambda budget: None)
@@ -49,6 +50,9 @@ class NativeNavigationSeam(object):
     def next_target(self, identity, start, goal, key, now):
         self.path_calls.append((identity, start, goal, key, now))
         return goal
+
+    def report_blocked_plan(self, position, target):
+        self.blocked_plans.append((position, target))
 
     def close(self):
         pass

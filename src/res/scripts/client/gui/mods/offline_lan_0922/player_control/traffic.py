@@ -28,6 +28,16 @@ class TurnClearance(object):
             # a newly admitted terminal brake or explicit task stop.
             self.sign, self.heading, self.advance_origin = 0., None, None
             return
+        if order.get('cover_motion'):
+            # The cover leg owns a fixed gear and a bounded short alignment.
+            # A previous route pivot must not add a long-way turn or a forward
+            # escape. Refused rotation remains stopped until cover times out.
+            self.sign, self.heading, self.advance_origin = 0., None, None
+            turn = order['turn'] * (-1. if order['throttle'] < 0. else 1.)
+            if turn and not traffic.can_turn(turn):
+                order.update(throttle=0., turn=0., brake=True,
+                             recovery_mode='cover_turn_blocked')
+            return
         def delta(a,b):
             return (a-b+math.pi) % (2*math.pi)-math.pi
         goal=order.get('driving',{}).get('heading',yaw)
@@ -40,7 +50,7 @@ class TurnClearance(object):
                 position[0]-self.advance_origin[0],position[2]-self.advance_origin[2])>=3.:
             self.sign,self.heading,self.advance_origin=0.,None,None
         if self.heading is None:
-            turn=order['turn']
+            turn=order['turn'] * (-1. if order['throttle'] < 0. else 1.)
             if not turn or traffic.can_turn(turn):
                 return
             opposite=-1. if turn>0 else 1.
@@ -599,7 +609,10 @@ class PlayerTraffic(object):
         mode = order['recovery_mode']
         protected = protected_hold(order) or bool(state.get('burst_active'))
         soft_hold = mode in ('hold', 'combat_facing') or order.get('holding')
-        if protected:
+        if protected or order.get('cover_motion'):
+            # Cover already owns its travel deadline. Retire route/traffic
+            # translations at this boundary, including leases admitted before
+            # the phase began; clearance and physical braking below still run.
             self.escape = self.wait = self.parked = self.contact_escape = None
             by_id = dict((peer['id'], peer) for peer in peers)
             for peer_id, lease in list(self.pairs.items()):
@@ -637,9 +650,12 @@ class PlayerTraffic(object):
                 current, candidates, position, axis, speed,
                 max(step, state.get('decision_horizon', step)), stopping_distance())
             if blocker is not None and speed * throttle >= -.01:
-                order.update(throttle=0., brake=True, traffic_mode='vehicle_brake')
+                # Removing reverse throttle reverses a retained steering
+                # input's native yaw sign. A brake is not an unchecked pivot.
+                order.update(throttle=0., turn=0., brake=True, traffic_mode='vehicle_brake')
                 order['forward_blocked_by' if sign > 0. else 'reverse_blocked_by'] = blocker
-        if allies and not traffic.can_turn(order['turn']):
+        physical_turn = order['turn'] * (-1. if order['throttle'] < 0. else 1.)
+        if allies and not traffic.can_turn(physical_turn):
             order.update(turn=0., traffic_mode='vehicle_brake')
         if self.receipt:
             order['traffic_control'] = dict(self.receipt)

@@ -863,47 +863,53 @@ class PlayerNavigation(object):
 
     @staticmethod
     def _cover_order(mode, goal):
-        return dict(throttle=0., turn=0., brake=True, combat_mode=mode, local_target=goal,
-                    holding=True, travel_intent=False)
+        command = dict(throttle=0., turn=0., brake=True, combat_mode=mode, local_target=goal,
+                       holding=True, travel_intent=False)
+        phase = dict(cover_hold='hold', cover_peek='peek', cover_return='return',
+                     withdraw='approach').get(mode)
+        if phase is not None:
+            command['cover_motion'] = dict(phase=phase, direction=0., goal=goal)
+        return command
 
     @staticmethod
     def _cover_phase(cover, phase, now, position):
         cover.update(phase=phase, progress_at=now, peek_until=None,
+                     drive_direction=1. if phase == 'peek' else -1.,
                      best_distance=distance(position, cover['peek'] if phase == 'peek' else cover['goal']))
 
     def _cover_motion(self, state, clear, goal, phase):
         position = state['position']
-        remaining = distance(position, goal)
         heading = math.atan2(goal[0] - position[0], goal[2] - position[2])
         mode = 'cover_peek' if phase == 'peek' else 'cover_return' if phase == 'return' else 'withdraw'
-        if phase != 'peek' and abs(angle(heading - state['yaw'] - math.pi)) <= .35:
-            stopping = state.get('stopping_distance')
-            stopping = stopping() if callable(stopping) else stopping
-            if (stopping is not None and abs(state.get('speed', 0.)) > .05 and
-                    remaining - 1.5 <= float(stopping) +
-                        abs(state.get('speed', 0.)) * state.get('decision_horizon', .1)):
-                command = self._cover_order(mode, goal)
-                command.update(holding=False, travel_intent=True)
-                return command
-            if clear(heading, min(remaining, 5.)):
-                return dict(throttle=-.65, turn=0., brake=False, combat_mode=mode,
-                            local_target=goal, holding=False, travel_intent=True)
-            command = self._cover_order(mode, goal)
-            command.update(holding=False, travel_intent=True)
-            return command
+        cover = getattr(self, 'cover_move', None)
+        if phase == 'peek':
+            direction = 1.
+        elif phase == 'return':
+            direction = -1.
+        else:
+            # Select the approach gear once. A small bearing change must not
+            # cross a per-frame reverse threshold and request a half turn.
+            direction = cover.get('drive_direction') if cover is not None else None
+            if direction is None:
+                direction = -1. if math.cos(heading - state['yaw']) < 0. else 1.
+                if cover is not None:
+                    cover['drive_direction'] = direction
         driver = getattr(self, 'driver', None)
         if driver is None:
             return self._cover_order(mode, goal)
+        key = ('player_cover', phase, tuple(goal))
         if getattr(self, 'navigator', None) is not None:
-            return self._drive_goal(state, clear, goal,
-                ('player_cover', phase, tuple(goal)), mode=mode, end_point=True,
-                arrival_radius=1.5)
-        command = driver.drive(position, state['yaw'], state.get('speed', 0.),
-            goal, state['now'], clear, terminal=True, arrival_radius=1.5,
-            stopping_distance=state.get('stopping_distance'),
-            decision_horizon=state.get('decision_horizon', .1))
-        command.update(combat_mode=mode, local_target=goal, driving=driver.receipt,
-                       holding=False, travel_intent=True)
+            command = self._drive_goal(state, clear, goal, key, mode=mode, end_point=True,
+                arrival_radius=1.5, travel_direction=direction, motion_key=key)
+        else:
+            command = driver.drive(position, state['yaw'], state.get('speed', 0.),
+                goal, state['now'], clear, terminal=True, arrival_radius=1.5,
+                stopping_distance=state.get('stopping_distance'),
+                decision_horizon=state.get('decision_horizon', .1),
+                travel_direction=direction, motion_key=key)
+            command.update(combat_mode=mode, local_target=goal, driving=driver.receipt,
+                           holding=False, travel_intent=True)
+        command['cover_motion'] = dict(phase=phase, direction=direction, goal=goal)
         return command
 
     def firing_position(self, state, target, clear, lane_from, muzzle):
@@ -964,7 +970,7 @@ class PlayerNavigation(object):
         return report(identity, position, target, heading, now, dt)
 
     def _drive_goal(self, state, direction_clear, goal, key, hold=False, mode='route',
-                    end_point=False, arrival_radius=2.):
+                    end_point=False, arrival_radius=2., travel_direction=1., motion_key=None):
         position, now = state['position'], state['now']
         self.support.begin(position, now)
         self.local_routes.publish(state, self.context)
@@ -1006,7 +1012,7 @@ class PlayerNavigation(object):
             now, direction_clear, hold=hold or goal is None,
             stopping_distance=state.get('stopping_distance'),
             decision_horizon=state.get('decision_horizon', .1), terminal=terminal,
-            arrival_radius=arrival_radius)
+            arrival_radius=arrival_radius, travel_direction=travel_direction, motion_key=motion_key)
         if self.driver.replan and distance(position, target) >= 2.:
             # Preserve the path cursor and progress history across local
             # recovery. Retire a cached corridor only on obstruction evidence.

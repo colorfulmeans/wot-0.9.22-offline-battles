@@ -1,3 +1,69 @@
+# November 6 repeated cover circuits in the foreground player
+
+`wot-error-report-20261106-024847-cfdc71d37406` identifies the installed
+and bundled build as `colorfulmeans-pr119-d69988df-local-qa`. This revision
+already contains the per-target penetration sweep described below; that
+aiming correction is retained unchanged. The session is round 1 on
+Mittengard (`100_thepit`), with player driving, firing and consumables enabled.
+The server selected the stationary-target test scene. Its 29 worker-owned
+Bots held their poses; this report cannot establish normal Bot navigation
+behavior.
+
+Between 02:42:17.423 and 02:44:54.860, 781 aiming decisions record about
+3,775 degrees of accumulated player hull yaw within an approximately
+10.7 by 5.8 metre area. The cover and peek endpoints remain fixed near
+`(118.469, 58.057)` and `(107.129, 55.199)` in X/Z. The target remains
+`2130706448`, with no strategic route replacement. Ten return-to-hold
+cycles repeat the same movement. Shooting still progresses during the
+window, so this is a repeated cover-driving circuit, not a stopped
+interpreter or a completely dead firing controller. An earlier, shorter
+cover cycle in the same session exhibits the same heading discontinuity.
+
+The return branch previously backed straight only when the cover bearing
+was within 0.35 radians of the vehicle's rear. At the captured first return
+pose, the rear error is -29.61 degrees. The branch therefore handed the
+goal to the ordinary forward-only route driver, which requested a positive
+150.39-degree hull turn without first testing a reverse corridor. Nine of
+the ten first return observations fall outside that narrow rear threshold.
+After driving nose-first back to cover, the next peek requires another half
+turn. Both legs make real distance progress, so the existing eight-second
+nonprogress deadline cannot diagnose the complete repeated circuit.
+
+The correction gives each cover leg an explicit direction: peek drives
+forward, return drives backward, and approach chooses its gear once from
+its initial geometry. All use the player's existing pathfinder, support
+checks and terminal driver. Reverse alignment uses the desired rear
+bearing; movement checks the actual `yaw + pi` corridor every update and
+reverses the steering-input sign required by `vehicle_physics.traverse_step`.
+Opposing residual velocity brakes before a gear change. Terminal stopping
+uses approach speed in the selected direction and the measured decision
+horizon. Short terminal probes do not demand cruise space beyond a valid
+cover endpoint, where the cover wall may legitimately block further travel.
+Ordinary routes retain their existing forward-only semantics.
+
+Cover phase/goal changes retire old driver detours and recovery attempts.
+An explicit cover owner also retires traffic translations, long-way pivot
+leases and wreck-push attempts, including during a cover hold. Physical
+vehicle braking, swept steering, world collision and support remain
+effective. A refused short alignment or rear corridor waits within the
+existing cover progress deadline, then releases cover instead of changing
+to an unrelated forward escape. Turn guards inspect physical yaw rather
+than the reverse steering-input sign. A braking guard clears steering when
+it clears throttle, preventing a retained reverse steering input from
+becoming an unchecked opposite-direction stationary pivot.
+
+Regressions exercise the captured return pose, both rear-error signs,
+phase/gear changes, repeated corridor validation, reverse terminal braking,
+stalled-cover expiry and the foreground sender/traffic boundary. A
+deliberately synthetic motion seam runs repeated actual withdrawal state
+transitions against the report's fixed endpoints; it distinguishes the
+baseline's repeated full turns from bounded hull alignment without claiming
+to reproduce Windows traction or pivot physics. The existing penetration,
+front-target handoff, ordinary-route and shot-admission checks remain part
+of the player suite. Exact-head CI/package evidence belongs in the PR
+handoff. A fresh Chinese HD #1513 session is still required to verify the
+corrected native movement, timing and obstacle behavior.
+
 # November 6 target changes during the HE fallback search
 
 In the second round of `wot-error-report-20261106-000829-b685f31afb01`

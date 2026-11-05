@@ -491,9 +491,10 @@ class ForegroundControllerTrafficIntegrationTests(unittest.TestCase):
         owner = controller.owner
         owner._avatar = types.SimpleNamespace(gunRotator=types.SimpleNamespace(clientMode=True))
         owner._tactical_ray_clear = lambda *args:True
-        owner._local_speed, owner._local_physics = 5., {}
+        owner._local_speed, owner._local_physics = -5., {}
+        owner.local_pose = lambda:((0., 0., 0.), 1.)
         controller.turn_clearance.heading, controller.turn_clearance.sign = 1., 1.
-        nav.cover_move = dict(goal=(math.sin(1.)*8., 0., math.cos(1.)*8.))
+        nav.cover_move = dict(goal=(-math.sin(1.)*8., 0., -math.cos(1.)*8.))
         nav.movement_policy = lambda state:dict(force_move=True, allow_strategy=False,
             allow_withdrawal=True, allow_firing_position=False)
         def retreat(state, target, entity, gun, clear, terrain_ray):
