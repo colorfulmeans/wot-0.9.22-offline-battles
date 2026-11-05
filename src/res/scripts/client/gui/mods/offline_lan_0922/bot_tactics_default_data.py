@@ -681,7 +681,7 @@ PROFILE_JSON = (
     'point":[179.8149,-151.4603],"priority":5,"radius":16.0,"team":1},{"heading":1.709814044141531,"id":"p_9aea45bfa0'
     '6c","label":"\\u5c71\\u8c37","point":[215.9256,-138.9605],"priority":5,"radius":16.0,"team":1},{"heading":1.709814'
     '044141531,"id":"p_c5a230ab940a","label":"\\u5c71\\u8c37","point":[206.2035,-179.9323],"priority":5,"radius":16.0,"'
-    'team":1}],"resource_sha256":"ccb6675c95934840a2cb0348e02485f4c5ccafd35c3642fae41b2bea670a85b0","routes":[{"capac'
+    'team":1}],"resource_sha256":"8e407d0a587f3141929470e39113c662d79de15bfcf402510396c6b533799fa1","routes":[{"capac'
     'ity":3,"classes":["SPG"],"id":"spg_attack_1","label":"SPG endgame attack","points":[[-34.6797,-100.709,0],[-43.4'
     '06,-126.8615,0],[-155.1424,-89.5788,0],[-187.1222,-52.7899,0],[-194.9986,2.345,0],[-194.4735,41.202,0],[-177.145'
     '4,80.584,0],[-92.5473,110.3283,0],[-34.68,100.7085,0]],"policy":"preferred","purpose":"spg_attack","slots":[],"t'

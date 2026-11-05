@@ -19,13 +19,15 @@ CIRCLED_PASSAGES=((( -38,158),(10,152)),((108,172),(122,122)),
     ((-194,-142),(-164,-184)),((-36,-140),(12,-142)),((334,-180),(330,-224)))
 
 
-def geometry(client, name):
+def geometry(client, name, precise_regions=None):
     """Decode exact-client terrain/collision without rebaking the main grid."""
     import bake_navigation_0922 as baker
+    if precise_regions is None:
+        precise_regions=EXTRA_REGIONS
     original=baker.refine_terrain_edges
     original_obstacles=baker.compiled_navigation_obstacles
     try:
-        baker.compiled_navigation_obstacles=lambda c,v,l:original_obstacles(c,v,l,precise_regions=EXTRA_REGIONS)
+        baker.compiled_navigation_obstacles=lambda c,v,l:original_obstacles(c,v,l,precise_regions=precise_regions)
         baker.refine_terrain_edges=lambda graph,terrain,obstacles,legacy:(terrain,obstacles,legacy)
         return baker.bake_map_graph(client,name,existing_graph={'map':name})
     finally:

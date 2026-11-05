@@ -43,7 +43,7 @@
       "routes": 18
     },
     "100_thepit": {
-      "digest": "f5f04692f774687a41c629290f47c0e66e419487c211845d6f85ef98b438098d",
+      "digest": "eda14b11af242b85f0841fdd202517f8bcc3344af74d55c35968698bc499546b",
       "parking_groups": 6,
       "points": 296,
       "routes": 30
@@ -247,6 +247,6 @@
       "routes": 26
     }
   },
-  "profile_digest": "81bb51683223ef9deaba92eefac6b0122551a124fddbf8c3406bdc5b91280ac7",
+  "profile_digest": "8285833689202c5bc870f7e0e6fcd8709d5ba937a29ece2baa870693c0dddd61",
   "source": "Complete owner profile-1 map promotion with reviewed local Stalingrad navigation, 2026-10-26"
 }
