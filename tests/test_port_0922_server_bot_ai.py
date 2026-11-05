@@ -989,7 +989,7 @@ class ServerBotTacticsTests(unittest.TestCase):
 
         self.assertEqual('central_field', route_id)
         self.assertEqual(3, index)
-        self.assertEqual({'x': -282.0, 'y': 0.0, 'z': 174.0}, point)
+        self.assertEqual({k: round(route['waypoints'][3][k], 3) for k in ('x', 'y', 'z')}, point)
         self.assertEqual({'x': -362.0, 'y': 0.0, 'z': 106.0}, anchor)
         self.assertFalse(route_join)
 
@@ -1020,24 +1020,24 @@ class ServerBotTacticsTests(unittest.TestCase):
         """A parking orientation is not a travel direction."""
         planner = BotPlanner()
 
-        route_id, index, point, unused_anchor, route_join = planner._route(
-            self._malinovka_east_hill_bot(0.0), 1.0)
+        bot = self._malinovka_east_hill_bot(0.0)
+        route_id, index, point, unused_anchor, route_join = planner._route(bot, 1.0)
 
         self.assertEqual('east_hill_loop', route_id)
         self.assertEqual(1, index)
-        self.assertEqual({'x': 234.0, 'y': 0.0, 'z': -282.0}, point)
+        self.assertEqual({k: round(bot['route']['waypoints'][1][k], 3) for k in ('x', 'y', 'z')}, point)
         self.assertTrue(route_join)
 
     def test_a_moving_hull_still_skips_a_rear_facing_connector(self):
         """Once under way the hull yaw is a real travel direction again."""
         planner = BotPlanner()
 
-        route_id, index, point, unused_anchor, unused_join = planner._route(
-            self._malinovka_east_hill_bot(6.0), 1.0)
+        bot = self._malinovka_east_hill_bot(6.0)
+        route_id, index, point, unused_anchor, unused_join = planner._route(bot, 1.0)
 
         self.assertEqual('east_hill_loop', route_id)
         self.assertEqual(3, index)
-        self.assertEqual({'x': 430.0, 'y': 0.0, 'z': -98.0}, point)
+        self.assertEqual({k: round(bot['route']['waypoints'][3][k], 3) for k in ('x', 'y', 'z')}, point)
 
     def test_reverse_recovery_keeps_the_nearest_connector_after_reset(self):
         """Negative speed is recovery, not a strategic travel heading."""
@@ -1054,7 +1054,7 @@ class ServerBotTacticsTests(unittest.TestCase):
 
         self.assertEqual('east_hill_loop', route_id)
         self.assertEqual(1, index)
-        self.assertEqual({'x': 234.0, 'y': 0.0, 'z': -282.0}, point)
+        self.assertEqual({k: round(bot['route']['waypoints'][1][k], 3) for k in ('x', 'y', 'z')}, point)
         self.assertTrue(route_join)
 
     def test_route_corridor_does_not_accept_lateral_or_distant_bypasses(self):

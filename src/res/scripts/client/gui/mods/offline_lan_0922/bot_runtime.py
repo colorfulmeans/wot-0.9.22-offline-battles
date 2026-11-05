@@ -3826,15 +3826,13 @@ class BotRuntime(object):
             self._navigation_surface_queue = []
             self._navigation_surface_next = 0.0
         if 'bot_tactics' in message:
-            proposed = bot_tactics.effective_round(bot_tactics.canonical(message['bot_tactics']),
-                tactical_maps.normalize_map_name(message.get('map')))
+            proposed = bot_tactics.canonical(message['bot_tactics'])
             if (message.get('round_id') == self.round_id and self._manifest_sent and
                     bot_tactics.digest(proposed) != bot_tactics.digest(self._bot_tactics)):
                 raise ValueError('Bot tactics changed inside an active round')
             self._bot_tactics = proposed
         elif message.get('round_id') != self.round_id:
-            self._bot_tactics = bot_tactics.effective_round(
-                bot_tactics.empty(), tactical_maps.normalize_map_name(message.get('map')))
+            self._bot_tactics = bot_tactics.empty()
         self._bot_skill_mode = bot_gunnery.normalize_skill_mode(
             message.get('bot_skill_mode'))
         self._bot_skill_pins = self._lineup_skill_pins(message)
