@@ -183,7 +183,7 @@ class DirectEngagement(object):
         facing = getattr(control, 'last_order', {}).get('confirmed_facing')
         pivoting = (self.sample is not None and facing is not None and
             facing['key'] == (target.id, self.sample, gun.shot_index) and
-            facing['state'] in ('turning', 'settling'))
+            facing['state'] in ('turning', 'settling', 'recheck'))
         if pivoting and own_moved and self.motion is not None:
             # Keep the target pose anchor and the current scan across our pivot.
             self.motion = pose[:2] + self.motion[2:]
@@ -200,10 +200,10 @@ class DirectEngagement(object):
         if self.stage is not None and not any(row['index'] == self.stage[0] for row in eligible):
             self.sample = self.last_solution = None
             self.fallback = False
-        if (pivoting and not target_moved and self.sample is not None and self.stage is not None
+        if (pivoting and self.sample is not None and self.stage is not None
                 and self.stage[0] == gun.shot_index):
-            # Re-lay the verified point on the live barrel if stabilization
-            # needs time. A transient laying result is not a failed point.
+            # Keep checking the selected point on the live barrel, including
+            # the first stationary proof after the tracks stop.
             return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
         if self.sample is not None and self.stage is not None and (
                 self.last_solution is None or self.laying_until is not None or

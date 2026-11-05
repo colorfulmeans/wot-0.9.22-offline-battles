@@ -1820,7 +1820,17 @@ class PlayerControl(object):
                     self.direct_engagement.target != self.blocked_fire_target):
                 blocked_target = None
             final_blocked = blocked_target is not None
-            seeking = bool(getattr(self.direct_engagement, 'seek', False))
+            seeking = bool(getattr(engagement, 'seek', False))
+            gun = owner._gun_state
+            direct_reload = (engagement is not None and gun.clip_size > 1 and
+                             gun.clip <= 0 and gun.reload_time > 0.)
+            facing_key = None
+            facing_target = records.get(engagement.target) if engagement is not None else None
+            if (facing_target is not None and getattr(engagement, 'sample', None) is not None
+                    and not (seeking or getattr(engagement, 'retreat', False) or direct_reload or final_blocked or
+                             self.ammo_state['empty'])):
+                facing_key = (facing_target.id, engagement.sample, gun.shot_index)
+            facing_hold = self.confirmed_facing.owns_hold(facing_key)
             established = self.engagement_hold
             retain_hold = bool(established is not None and engagement is not None and
                 records.get(engagement.target) is established[0] and
@@ -1834,6 +1844,7 @@ class PlayerControl(object):
                 fire_clear=tactical_clear and not (final_blocked or seeking),
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
+                facing_hold=facing_hold,
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
                 battle_finished=False, supported=not getattr(owner, '_local_airborne', False)
@@ -1847,10 +1858,10 @@ class PlayerControl(object):
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
-            retain_hold = bool(retain_hold and not movement.get('force_move') and
+            retain_hold = bool((retain_hold or facing_hold) and not movement.get('force_move') and
                                movement.get('allow_firing_position', True))
             hold = hold or retain_hold
-            if now >= self.next_strategy and movement.get('allow_strategy'):
+            if not facing_hold and now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
                 redirect=self.strategy.decide(now,self.navigation.routes,self.navigation.route,
@@ -1877,9 +1888,6 @@ class PlayerControl(object):
             withdrawal = None
             manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
-                gun = owner._gun_state
-                direct_reload = (self.direct_engagement is not None and gun.clip_size > 1 and
-                                 gun.clip <= 0 and gun.reload_time > 0.)
                 if (self.direct_engagement is not None and movement.get('allow_withdrawal') and
                         (self.direct_engagement.retreat or direct_reload)):
                     reason = 'magazine_reload' if direct_reload else 'no_he'
@@ -1944,6 +1952,9 @@ class PlayerControl(object):
             if not decision_current():
                 return
             reverse_only = bool(order.get('reverse_only'))
+            if facing_hold and order.get('holding') and order.get('combat_mode') in (
+                    'engage', 'support_hold', 'base_capture'):
+                order['traffic_hold_protected'] = True
             pushing = not reverse_only and self.wreck_push.apply(order,state,traffic,
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach),
                 pose_clear=lambda end_yaw:self.rotation_clear(entity,position,yaw,end_yaw))
@@ -2027,16 +2038,14 @@ class PlayerControl(object):
                     not (pushing or reverse_only or order['throttle'] or order['turn']) and
                     context['supported'] and not context['overturned'] and
                     (parked_capture or order.get('combat_mode') in ('engage', 'support_hold'))):
-                identity = engagement.target
-                aiming_target = records.get(identity)
-                if aiming_target is not None and getattr(engagement, 'sample', None) is not None and not seeking:
+                if facing_key is not None:
                     from .driving import angle
-                    key = (identity, engagement.sample, owner._gun_state.shot_index)
-                    dx, dz = aiming_target.position[0]-position[0], aiming_target.position[2]-position[2]
+                    dx, dz = facing_target.position[0]-position[0], facing_target.position[2]-position[2]
                     delta = angle(math.atan2(dx, dz)-yaw) if math.hypot(dx, dz) > .1 else 0.
-                    self.confirmed_facing.apply(order, state, key, delta,
+                    self.confirmed_facing.apply(order, state, facing_key, delta,
                         getattr(owner, '_local_turn_speed', 0.),
-                        getattr(engagement, 'confirmed', None) == key)
+                        getattr(engagement, 'confirmed', None) == facing_key,
+                        getattr(engagement, 'checking', False))
                 else:
                     self.confirmed_facing.reset()
             else:
