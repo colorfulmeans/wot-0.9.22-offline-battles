@@ -2485,6 +2485,29 @@ class WindowTest(unittest.TestCase):
             environment[core.SERVER_BOT_LINEUP_ENV_0922])
         self.window._stop_server(force=True)
 
+    def test_only_test_scenes_and_explicit_diagnostics_ignore_the_personal_profile(self):
+        for diagnostic_entry, fixture, expected in ((False, '0', 'profile-1.json'),
+                                                     (False, '3', None),
+                                                     (True, '0', None)):
+            with self.subTest(diagnostic_entry=diagnostic_entry, fixture=fixture):
+                self.window._diagnostic_entry = diagnostic_entry
+                with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS': '1',
+                                                  'WOT_OFFLINE_EQUIPMENT_TEST': fixture,
+                                                  'WOT_0922_BOT_TACTICS_PATH': 'stale.json'}), \
+                        mock.patch('core.listener_status', return_value=core.LISTENER_FREE), \
+                        mock.patch('core.wait_for_server', return_value=True), \
+                        mock.patch('core.local_addresses', return_value=[]), \
+                        mock.patch('wot_launcher.bot_tactics_store.Store') as store, \
+                        mock.patch('wot_launcher.subprocess.Popen', return_value=_Process()) as launch:
+                    store.return_value.ensure_active.return_value = 'profile-1.json'
+                    self.assertTrue(self.window._start_server(
+                        self.settings_dir, core.PORT_0_9_22, loopback_only=True))
+                    self.assertEqual(expected, launch.call_args.kwargs['env'].get(
+                        'WOT_0922_BOT_TACTICS_PATH'))
+                    if expected is None:
+                        store.assert_not_called()
+                self.window._stop_server(force=True)
+
     def test_launcher_owned_server_reuse_requires_game_and_visibility_context(self):
         server = _Process()
         self.window._server = server

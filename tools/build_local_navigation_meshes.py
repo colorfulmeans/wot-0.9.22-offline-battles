@@ -164,6 +164,8 @@ if __name__=='__main__':
         graph['bake']['local_meshes']['circled_passage_validation']=verify_passages(graph,*contexts[name])
     for graph in graphs:
         name=graph['map']
+        from bake_navigation_0922 import publish_default_routes
+        publish_default_routes(graph)
         (ROOT/'navgraphs'/ (name+'.json')).write_bytes((json.dumps(graph,separators=(',',':'))+'\n').encode('utf-8'))
         print(name,'base',graph['width']*graph['height'],'local sampled',sum(p['width']*p['height'] for p in graph['local_meshes']))
     path=ROOT/'navgraphs/manifest.json';manifest=json.loads(path.read_bytes())

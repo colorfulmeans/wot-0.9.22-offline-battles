@@ -233,6 +233,10 @@ def default_routes(profile, name, graph):
     if not edits:
         return result, {}
     grid = graph_view(name, graph)
+    baseline = dict(((r['team'], config.default_route_id(r)), r)
+                    for r in config.default_map(name).get('default_routes', ()))
+    edits = list(edits)
+    scoped = set((r['team'], config.default_route_id(r)) for r in edits)
     outcomes = {}
     for edit in edits:
         if edit.get('class_tag') == 'SPG':continue
@@ -244,6 +248,18 @@ def default_routes(profile, name, graph):
             continue
         error = validate_route(grid, edit) if source is not None else 'unknown_default_route'
         outcomes[key] = error or 'baked_route_connected'
+        if error is not None and source is not None:
+            fallback = baseline.get((edit['team'], config.default_route_id(edit)))
+            if (fallback is not None and fallback != edit and not fallback.get('disabled')
+                    and validate_route(grid, fallback) is None):
+                edit, error = fallback, None
+                outcomes[key] = 'built_in_default_fallback'
+                if edit.get('class_tag', 'all') == 'all':
+                    # A sparse common override owns the lane for all classes.
+                    # If it fails, restore the Default variants it displaced.
+                    edits.extend(r for identity, r in sorted(baseline.items())
+                                 if identity not in scoped and r['team'] == edit['team']
+                                 and r['id'] == edit['id'])
         if error is None:
             if edit.get('class_tag', 'all') == 'all':
                 source['waypoints'] = [list(p[:3]) for p in edit['points']]

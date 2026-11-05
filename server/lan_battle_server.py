@@ -77,9 +77,6 @@ from gui.mods.offline_lan_0922 import stun_mechanics
 from gui.mods.offline_lan_0922 import vehicle_physics
 from gui.mods.offline_lan_0922.ai import planner as bot_planner
 from gui.mods.offline_lan_0922.ai.maps import get_tactical_map
-from gui.mods.offline_lan_0922.ai.maps_0922_extra import (
-    TACTICAL_MAPS_0922_EXTRA as _MAPS_0922_DATA,
-)
 from gui.mods.offline_lan_0922.navigation_graph_schema import (
     SUPPORTED_MAPS as _SUPPORTED_MAPS_0922,
 )
@@ -4159,6 +4156,11 @@ class BattleState:
                     if requested_map not in active_map_pool:
                         return None, "invalid_map"
                     self.map_name = requested_map
+            try:
+                round_tactics = bot_tactics.effective_round(proposed_tactics, self.map_name)
+            except bot_tactics.TacticsError as error:
+                _server_log("BOT TACTICS refused: %s" % error)
+                return None, "invalid_bot_tactics"
             # Every accepted start owns the round length, so a host that stops
             # publishing one returns the room to the default round.
             self.battle_duration_seconds = battle_duration_seconds
@@ -4179,7 +4181,7 @@ class BattleState:
             self.bot_roster = (self._new_bot_roster(occupied_slots)
                                if battle_mode == "regular" or training_bots else [])
             self.roster_finalized = True
-            self.bot_tactics = bot_tactics.for_round(proposed_tactics, self.map_name)
+            self.bot_tactics = round_tactics
             self.bot_planner.tactics = copy.deepcopy(self.bot_tactics)
             self.bot_planner.tactics_map = self.map_name
             _server_log("BOT TACTICS pinned round=%d profile=%s profile_sha256=%s round_sha256=%s document=%s" % (
@@ -15468,8 +15470,7 @@ class BattleState:
                 self.tick >= int(round(PREBATTLE_SECONDS * TICK_HZ)))
 
     def _map_rule_data(self):
-        return (get_tactical_map(self.map_name) or
-                _MAPS_0922_DATA.get(self.map_name) or {})
+        return get_tactical_map(self.map_name) or {}
 
     @staticmethod
     def _capture_vehicle_key(kind, vehicle_id):

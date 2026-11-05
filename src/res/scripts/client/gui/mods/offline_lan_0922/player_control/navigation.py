@@ -66,8 +66,8 @@ class PlayerNavigation(object):
             raise ValueError('Player navigation map is unavailable')
         prebaked_navigation.clip_graph_to_arena(graph, owner._arena_bounds)
         graph = prebaked_navigation.with_shore_hazards(graph)
-        profile = copy.deepcopy(owner._start_message.get('bot_tactics') or bot_tactics.empty())
-        catalog = authored_routes(profile, name, graph)
+        settings = bot_tactics.effective_map(owner._start_message.get('bot_tactics'), name)
+        catalog = authored_routes({'maps': {name: settings}}, name, graph)
         tags = descriptor.type.tags
         self.tag = next((t for t in bot_tactics.CLASSES if t in tags), 'mediumTank')
         self.routes = route_candidates(catalog, int(owner.client.team), self.tag)
@@ -80,7 +80,6 @@ class PlayerNavigation(object):
         self.home_area, self.enemy_area = base_areas(graph, self.team, active_bases)
         if self.home_area is not None:
             self.home = tuple(self.home_area['point'])
-        settings = bot_tactics.map_settings(profile, name)
         for route in settings.get('routes', ()):
             if route.get('disabled') or route['team'] != int(owner.client.team):
                 continue

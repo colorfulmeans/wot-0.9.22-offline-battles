@@ -95,17 +95,34 @@ def empty(name='Default'):
             'behavior': [], 'maps': {}}
 
 
+_DEFAULT_PROFILE = None
+
+
+def _default_profile_data():
+    global _DEFAULT_PROFILE
+    if _DEFAULT_PROFILE is None:
+        from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
+        document = json.loads(PROFILE_JSON)
+        for settings in document['maps'].values():
+            route_network.migrate_default_rows(settings.get('default_routes', ()))
+        _DEFAULT_PROFILE = document
+    return _DEFAULT_PROFILE
+
+
 def default_profile(name='Default'):
-    from gui.mods.offline_lan_0922.bot_tactics_default_data import PROFILE_JSON
-    document = json.loads(PROFILE_JSON)
+    document = copy.deepcopy(_default_profile_data())
     document['name'] = name
-    for settings in document['maps'].values():
-        route_network.migrate_default_rows(settings.get('default_routes', ()))
     return document
 
 
 def default_map(name):
-    return default_profile()['maps'].get(name, {})
+    return copy.deepcopy(_default_profile_data()['maps'].get(name, {}))
+
+
+def shared_route_points(settings):
+    return dict(((row['team'], row['id']), row['points'])
+                for row in settings.get('default_routes', ())
+                if row.get('class_tag', 'all') == 'all' and not row.get('disabled'))
 
 
 def normalize_values(raw):
@@ -451,22 +468,33 @@ def map_settings(raw, name):
     return (raw or {}).get('maps', {}).get(name, {})
 
 
+def _route_matches_points(edit, waypoints):
+    if len(waypoints) != len(edit['points']):
+        return False
+    for actual, expected in zip(waypoints, edit['points']):
+        actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
+        # Manifest coordinates are rounded to three decimals.
+        if any(abs(actual[i] - expected[i]) > 0.000501 for i in (0, 1)):
+            return False
+    return True
+
+
 def route_config(raw, name, route_id, team=None, waypoints=None):
     entry = map_settings(raw, name)
     custom = next((r for r in entry.get('routes', ()) if 'user_' + r['id'] == route_id), None)
-    if custom is not None:return custom
-    edit = next((r for r in entry.get('default_routes', ())
-                 if default_route_id(r) == route_id and (team is None or r['team'] == team)), None)
-    if edit is None:return None
-    if waypoints is not None:
-        # A rejected global edit retains the original route ID in the manifest.
-        # Its optional waits must not be attached to unrelated fallback nodes.
-        if len(waypoints) != len(edit['points']):return None
-        for actual, expected in zip(waypoints, edit['points']):
-            actual = (actual['x'], actual['z']) if isinstance(actual, dict) else actual[:2]
-            # Uploaded manifest coordinates are rounded to three decimals.
-            # Accept that serialization error, not a different fallback lane.
-            if any(abs(actual[i] - expected[i]) > 0.000501 for i in (0, 1)):return None
+    if custom is not None:
+        return custom
+    def find(settings):
+        return next((r for r in settings.get('default_routes', ())
+                     if default_route_id(r) == route_id and (team is None or r['team'] == team)), None)
+    edit = find(entry)
+    if edit is not None and edit.get('disabled'):
+        return None
+    if edit is None or (waypoints is not None and not _route_matches_points(edit, waypoints)):
+        edit = find(default_map(name))
+    if edit is None or edit.get('disabled') or (
+            waypoints is not None and not _route_matches_points(edit, waypoints)):
+        return None
     tag = edit.get('class_tag', 'all')
     return dict(edit, id=route_id, default=True, source_id=edit['id'],
                 classes=list(CLASSES) if tag == 'all' else [tag],
@@ -526,6 +554,37 @@ def for_round(profile, map_name):
     if len(dumps(selected).encode('ascii')) > 64 * 1024:
         raise TacticsError('This round tactics payload exceeds 64 KiB')
     return selected
+
+
+def effective_map(profile, map_name):
+    """Resolve map geometry against the packaged Default, including sparse profiles."""
+    baseline = default_map(map_name)
+    if (profile or {}).get('name', '').lower() == 'default':
+        return baseline
+    settings = copy.deepcopy(map_settings(profile, map_name))
+    if not settings:
+        return baseline
+    if baseline:
+        def key(route):
+            return (route['team'], route['id'], route.get('class_tag', 'all'))
+        rows = dict((key(route), route) for route in settings.get('default_routes', ()))
+        common = set(identity[:2] for identity in rows if identity[2] == 'all')
+        for route in baseline.get('default_routes', ()):
+            identity = key(route)
+            if identity[:2] not in common:
+                rows.setdefault(identity, route)
+        settings['default_routes'] = [rows[identity] for identity in sorted(rows)]
+    return settings
+
+
+def effective_round(profile, map_name):
+    selected = empty(profile['name'])
+    if profile['name'].lower() != 'default':
+        selected['behavior'] = profile['behavior']
+    settings = effective_map(profile, map_name)
+    if settings:
+        selected['maps'][map_name] = settings
+    return for_round(selected, map_name)
 
 
 def team_class_choices(value=None, sizes=None):

@@ -14,7 +14,7 @@ sys.path.insert(0, str(PORT_ROOT / 'server'))
 sys.path.insert(0, str(CLIENT_SCRIPTS))
 
 from gui.mods.offline_lan_0922.ai import (
-    cover, maps, navigation, reviewed_routes_20260811,
+    cover, maps, navigation,
 )
 from gui.mods.offline_lan_0922.ai.adapter import BotAdapter
 from gui.mods.offline_lan_0922.ai.driver import (
@@ -138,12 +138,9 @@ class BotAiPortTests(unittest.TestCase):
 
     def test_tactical_authoring_registry_has_no_static_base_coordinates(self):
         self.assertGreaterEqual(len(maps.TACTICAL_MAPS), len(MAP_POOL))
-        for registry_name, registry in (
-                ('authoring', maps._TACTICAL_MAPS_AUTHORING),
-                ('runtime', maps.TACTICAL_MAPS)):
-            for map_name, tactical in sorted(registry.items()):
-                with self.subTest(registry=registry_name, map=map_name):
-                    self.assertNotIn('bases', tactical)
+        for map_name, tactical in sorted(maps.TACTICAL_MAPS.items()):
+            with self.subTest(map=map_name):
+                self.assertNotIn('bases', tactical)
 
     def test_tactical_rectangle_matches_the_baked_gameplay_rectangle(self):
         # The LAN server resolves a minimap attention-cell order through this
@@ -177,98 +174,15 @@ class BotAiPortTests(unittest.TestCase):
             checked += 1
         self.assertGreaterEqual(checked, 40)
 
-    def test_review_overlay_rejects_an_unknown_removed_route(self):
-        tactical = copy.deepcopy(
-            maps._TACTICAL_MAPS_AUTHORING['06_ensk'])
-        for team in (1, 2):
-            tactical['routes'][team] = tuple(
-                route for route in tactical['routes'][team]
-                if route['id'] != 'rail_yard')
-        with self.assertRaisesRegex(
-                ValueError, 'removed tactical route is unavailable'):
-            reviewed_routes_20260811.apply_reviewed_map(
-                '06_ensk', tactical, ((0.0, 1.0), (0.0, -1.0)))
-
-    def test_installs_all_user_reviewed_route_batches(self):
-        reviewed = set(reviewed_routes_20260811.REVIEWED_ROUTE_POINTS)
-        accepted = set(reviewed_routes_20260811.ACCEPTED_UNCHANGED_MAPS)
-        self.assertEqual(38, len(reviewed))
-        self.assertEqual(113, sum(
-            len(routes) for routes in
-            reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.values()))
-        self.assertEqual(
-            {'34_redshire', '95_lost_city', '100_thepit'}, accepted)
-        self.assertFalse(reviewed & accepted)
-
-        original_maps = {'04_himmelsdorf': maps.HIMMELSDORF}
-        for collection in (
-                maps.bot_ai_maps_group_a.TACTICAL_MAPS_GROUP_A,
-                maps.bot_ai_maps_group_b.TACTICAL_MAPS_GROUP_B,
-                maps.bot_ai_maps_group_c.TACTICAL_MAPS_GROUP_C,
-                maps.bot_ai_maps_extra.TACTICAL_MAPS_EXTRA,
-                maps.bot_ai_maps_0922_extra.TACTICAL_MAPS_0922_EXTRA):
-            original_maps.update(collection)
-        for map_name in reviewed:
-            self.assertIsNot(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-        graph_maps = set(
-            path.stem for path in (PORT_ROOT / 'navgraphs').glob('*.json')
-            if path.name != 'manifest.json')
-        self.assertEqual(graph_maps, reviewed | accepted)
-        for map_name in accepted:
-            self.assertIs(
-                original_maps[map_name], maps.TACTICAL_MAPS[map_name],
-                map_name)
-
-        ensk = maps.TACTICAL_MAPS['06_ensk']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_city', 'east_field'],
-                [route['id'] for route in ensk['routes'][team]])
-            self.assertEqual(
-                [7, 7],
-                [route['capacity'] for route in ensk['routes'][team]])
-
-        malinovka = maps.TACTICAL_MAPS['02_malinovka']
-        for team in (1, 2):
-            self.assertEqual(
-                ['west_lake_road', 'central_field', 'east_hill_loop'],
-                [route['id'] for route in malinovka['routes'][team]])
-            self.assertEqual(
-                [3, 5, 6],
-                [route['capacity'] for route in malinovka['routes'][team]])
-
-    def test_reviewed_route_geometry_is_bidirectional_and_single_gated(self):
-        for map_name, reviewed_routes in sorted(
-                reviewed_routes_20260811.REVIEWED_ROUTE_POINTS.items()):
-            tactical = maps.TACTICAL_MAPS[map_name]
-            team_routes = {}
+    def test_default_migration_keeps_lane_allocation_metadata(self):
+        expected = {
+            '06_ensk': [('west_city', 7), ('east_field', 7)],
+            '02_malinovka': [('west_lake_road', 3), ('central_field', 5), ('east_hill_loop', 6)],
+        }
+        for name, routes in expected.items():
+            tactical = maps.get_tactical_map(name)
             for team in (1, 2):
-                team_routes[team] = dict(
-                    (route['id'], route)
-                    for route in tactical['routes'][team])
-            with self.subTest(map=map_name):
-                self.assertTrue(set(reviewed_routes).issubset(team_routes[1]))
-                self.assertEqual(set(team_routes[1]), set(team_routes[2]))
-                for route_id in reviewed_routes:
-                    team_one = team_routes[1][route_id]['waypoints']
-                    team_two = team_routes[2][route_id]['waypoints']
-                    self.assertEqual(1, sum(
-                        int(bool(point[2])) for point in team_one))
-                    self.assertEqual(tuple(reversed(team_one)), team_two)
-                    for key in ('capacity', 'risk', 'role_weights'):
-                        self.assertEqual(
-                            team_routes[1][route_id][key],
-                            team_routes[2][route_id][key])
-
-        himmelsdorf = maps.TACTICAL_MAPS['04_himmelsdorf']
-        rear_one = next(route for route in himmelsdorf['routes'][1]
-                        if route['id'] == 'rear_guard')
-        rear_two = next(route for route in himmelsdorf['routes'][2]
-                        if route['id'] == 'rear_guard')
-        self.assertEqual(((-80.0, -270.0, 1),), rear_one['waypoints'])
-        self.assertEqual(((45.0, 270.0, 1),), rear_two['waypoints'])
+                self.assertEqual(routes, [(r['id'], r['capacity']) for r in tactical['routes'][team]])
 
     def test_cover_contract_is_plain_data_and_deterministic(self):
         result = cover.score_candidates([{
@@ -2413,18 +2327,9 @@ class BotAiPortTests(unittest.TestCase):
         self.assertEqual(1.0, corridor['throttle'])
         self.assertFalse(corridor['brake'])
 
-    def test_prohorovka_west_ridge_corner_keeps_forward_progress(self):
+    def test_sharp_corner_keeps_forward_progress(self):
         driver = LocalDriver()
-        graph = json.loads(
-            (PORT_ROOT / 'navgraphs' / '05_prohorovka.json').read_text())
-        route = next(
-            route for route in graph['routes']['1']
-            if route['id'] == 'west_ridge')
-        corner_index = next(
-            index for index, point in enumerate(route['waypoints'])
-            if tuple(point[:2]) == (54.0, -442.0))
-        first, corner, target = route['waypoints'][corner_index - 1:
-                                                   corner_index + 2]
+        first, corner, target = ((-6.0, -438.0), (54.0, -442.0), (54.0, -446.0))
         incoming_yaw = math.atan2(
             float(corner[0]) - float(first[0]),
             float(corner[1]) - float(first[1]))

@@ -128,6 +128,8 @@ def build(client):
         support_sample_metres=.25, water_depth_limit=legacy.WATER_DEPTH_LIMIT,
         source='exact_0922_client_compiled_geometry')
     retain_profile_identities(graph, *identity_sources)
+    from bake_navigation_0922 import publish_default_routes
+    publish_default_routes(graph)
     path.write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
     manifest_path = ROOT/'navgraphs/manifest.json'
     manifest = json.loads(manifest_path.read_bytes())

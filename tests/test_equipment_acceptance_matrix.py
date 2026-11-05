@@ -94,22 +94,28 @@ class AcceptanceMatrixTests(unittest.TestCase):
         with self.assertRaises(ValueError):crew_injuries.canonical(dict(facts,wounded=['radioman1']))
 
     def test_all_equipment_scenes_publish_valid_room_modes_after_round_reset(self):
-        from lan_battle_server import BattleState, Player, CLIENT_BUILD_0922
+        from lan_battle_server import BattleState
         from server_bot_ai import BotPlanner
-        from effective_params_fixture import effective_params as fixture_params
+        from test_port_0922_server_team_size import _attach_worker, _Connection, _hello
         from gui.mods.offline_lan_0922.lan_client import LANClient, BOT_TIER_MODES
         for mode in ('1', '2', '3', '4'):
             class SceneBattle(BattleState): pass
             class ScenePlanner(BotPlanner): pass
             with mock.patch.dict(os.environ, {'WOT_OFFLINE_DIAGNOSTICS':'1', equipment_test.ENV:mode}):
                 equipment_test.install_server(SceneBattle, ScenePlanner)
-                battle = SceneBattle()
-                battle.client_build = CLIENT_BUILD_0922
-                battle.players[1] = Player(1, None, ('127.0.0.1', 1), team=1, slot=0,
-                    effective_params=fixture_params())
+                battle = SceneBattle(bot_tactics_path='personalized-profile-must-not-load.json')
+                _attach_worker(battle)
+                player, error = battle.add_player(_Connection(), ('127.0.0.1', 1), _hello(1))
+                self.assertIsNone(error)
+                battle.vehicle_catalogs[player.player_id] = [
+                    dict(name=vehicle, level=5, tags=[]) for vehicle in equipment_test.VEHICLES]
                 # Saved-room settings replay before the actual start wrapper.
                 battle.bot_skill_mode, battle.bot_tier_mode = 'mixed', 'random'
-                battle.request_start(1)
+                start, error = battle.request_start(player.player_id)
+                from gui.mods.offline_lan_0922 import bot_tactics
+                self.assertIsNone(error)
+                self.assertEqual(bot_tactics.effective_round(bot_tactics.empty(), equipment_test.MAP),
+                                 start['bot_tactics'])
                 self.assertEqual('brutal', battle.bot_skill_mode)
                 self.assertTrue(all(row['skill']=='elite' for row in battle.bot_lineup))
                 self.assertIn(battle.bot_tier_mode, BOT_TIER_MODES)

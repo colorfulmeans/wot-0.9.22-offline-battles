@@ -148,6 +148,8 @@ def build(client):
     for key in ('routes', 'spawn_formations', 'heights_mm', 'hazards', 'width', 'height', 'origin', 'cell_size'):
         assert graph[key] == json.loads(raw)[key], key
     path = ROOT/'navgraphs/84_winter.json'
+    from bake_navigation_0922 import publish_default_routes
+    publish_default_routes(graph)
     path.write_bytes((json.dumps(graph, separators=(',', ':'))+'\n').encode())
     manifest_path = ROOT/'navgraphs/manifest.json'
     manifest = json.loads(manifest_path.read_bytes())

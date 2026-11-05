@@ -70,8 +70,10 @@ class RealNavigationCase(unittest.TestCase):
 
     def terminal_capture(self, empty=False):
         nav = self.navigation('95_lost_city')
-        route = next(row for row in nav.routes if row['id'] == 'boulevard')
-        point = route['waypoints'][-1]
+        # Exercise the capture handoff from a reachable route endpoint
+        # outside the flag, independent of the Default endpoint policy.
+        point = prebaked_navigation.load_graph('95_lost_city')['spawn_anchors'][1]
+        route = dict(id='capture-approach', waypoints=[point])
         state = pose(0., (point[0], nav._height(point, 0.), point[1]))
         nav.route, nav.index = route, len(route['waypoints']) - 1
         nav.set_context(dict(empty_ammo=empty, supported=True, contacts=[], allies=[], base={}))

@@ -3560,6 +3560,10 @@ class LauncherWindow(object):
                       loopback_only=False, persistent=False,
                       bot_lineup=None, require_owned=False,
                       bot_excluded_vehicles=None):
+        scene_flags = ('WOT_OFFLINE_EQUIPMENT_TEST', 'WOT_OFFLINE_ROOF_CRUSH_TEST',
+                       'WOT_OFFLINE_ROOF_SHOT_DROP')
+        scene = tuple(os.environ.get(key, '0') for key in scene_flags) if loopback_only else ()
+        built_in_tactics = self._diagnostic_entry or any(value != '0' for value in scene)
         requested_context = {
             "game_root": os.path.normcase(os.path.realpath(
                 os.path.abspath(game_root))),
@@ -3567,11 +3571,15 @@ class LauncherWindow(object):
             "loopback_only": bool(loopback_only),
             "bot_lineup": list(bot_lineup or ()),
             "bot_excluded_vehicles": sorted(set(bot_excluded_vehicles or ())),
+            "built_in_tactics": built_in_tactics,
+            "test_scene": scene,
         }
         if self._server_is_running():
             current_context = dict(self._server_context or {})
             current_context.setdefault("bot_lineup", [])
             current_context.setdefault("bot_excluded_vehicles", [])
+            current_context.setdefault("built_in_tactics", False)
+            current_context.setdefault("test_scene", ())
             if current_context != requested_context:
                 self._log(
                     "The launcher-owned LAN server uses a different game "
@@ -3586,7 +3594,7 @@ class LauncherWindow(object):
         status = core.listener_status(
             port_version, core.LOCAL_HOST, core.DEFAULT_SERVER_PORT)
         if status == core.LISTENER_COMPATIBLE:
-            if loopback_only or require_owned:
+            if loopback_only or require_owned or built_in_tactics:
                 self._log(
                     "This mode needs a fresh launcher-owned server, but a "
                     "compatible server already uses port %d. Close it "
@@ -3624,11 +3632,14 @@ class LauncherWindow(object):
             port_version, game_root, loopback_only=loopback_only,
             bot_lineup=bot_lineup,
             bot_excluded_vehicles=bot_excluded_vehicles)
-        try:
-            environment["WOT_0922_BOT_TACTICS_PATH"] = bot_tactics_store.Store().ensure_active()
-        except Exception as error:
-            self._log("Bot tactics: %s" % error)
-            return False
+        if built_in_tactics:
+            environment.pop("WOT_0922_BOT_TACTICS_PATH", None)
+        else:
+            try:
+                environment["WOT_0922_BOT_TACTICS_PATH"] = bot_tactics_store.Store().ensure_active()
+            except Exception as error:
+                self._log("Bot tactics: %s" % error)
+                return False
         server_log_path = core.server_log_path()
         report_session = self._active_report_session
         if report_session is not None:

@@ -6,7 +6,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_navigation_resolution import write_native_input
+from check_navigation_resolution import verify_default_routes, write_native_input
 
 
 def main():
@@ -21,7 +21,8 @@ def main():
         new=json.loads(path.read_bytes())
         if 'heights_mm' not in new:continue
         old=json.loads(subprocess.check_output(['git','show',args.baseline_ref+':'+path.as_posix()]))
-        for key in ('routes','spawn_formations','spawn_anchors','bases','objective_bases','bounds',
+        verify_default_routes(old,new,path.stem)
+        for key in ('spawn_formations','spawn_anchors','bases','objective_bases','bounds',
                     'cell_size','origin','width','height'):
             assert old.get(key)==new.get(key),(path.stem,key)
         assert new['bake']['water_depth_limit']==new['bake']['shallow_water_threshold']==1.2
@@ -53,8 +54,7 @@ def main():
         for routes in new['routes'].values():
             for route in routes:
                 cases.update((tuple(a[:2]),tuple(b[:2])) for a,b in zip(route['waypoints'],route['waypoints'][1:]))
-        # Include the actual adopted, class-specific defaults, independently
-        # of the original coarse route sketches retained in the graph.
+        # Include the reviewed class-specific route variants as well.
         from gui.mods.offline_lan_0922 import bot_tactics
         for route in bot_tactics.default_map(path.stem).get('default_routes',()):
             if not route.get('disabled'):
