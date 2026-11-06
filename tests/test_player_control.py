@@ -450,8 +450,10 @@ class PlayerRegressionTests(unittest.TestCase):
         yaw=-1.77334154
         d=Driver()
         def clear(heading, reach):
-            self.assertEqual(4.,reach)
-            return abs(angle(heading-yaw))<.01
+            # A checked short escape is available, but a normal cruise/fan
+            # probe is not. The route driver now tries ordinary forward
+            # steering before its bounded nonprogress clearance attempt.
+            return reach <= 4. and abs(angle(heading-yaw))<.01
         for tick in range(30):
             order=d.drive(position,yaw,0.,(-14,.26,6),tick*.1,clear)
             self.assertEqual(0.,order['throttle'])

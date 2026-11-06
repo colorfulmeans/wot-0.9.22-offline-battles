@@ -284,7 +284,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         return control, target
 
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_confirmed_pivot_uses_normal_physics_and_keeps_fire_independent(self, unused_aligned):
+    def test_stationary_fire_does_not_start_an_armor_pivot_or_enter_a_wall(self, unused_aligned):
         from release097.test_096_contact_steering5 import DriveLoopTests
         from gui.mods.offline_lan_0922 import battle_runtime
         for wall in (False, True):
@@ -310,43 +310,23 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 control.owner._local_speed = 0.
                 control.trigger.reset_mock()
                 control.update(.1, 1.4)
-                self.assertEqual('turning', control.last_order['confirmed_facing']['state'])
-                self.assertEqual(0., battle._sender.forward)
-                self.assertGreater(battle._sender.turn, 0.)
+                self.assertNotIn('confirmed_facing', control.last_order)
+                self.assertEqual((0., 0., True), (battle._sender.forward,
+                    battle._sender.turn, battle._sender.handbrake))
                 control.trigger.assert_called_once()
                 with mock.patch.object(battle_runtime.world_collision, '_destroy_and_recast',
                                        return_value=False):
                     battle._drive_local_step(.04)
-                if wall:
-                    self.assertAlmostEqual(0., battle._local_yaw)
-                    self.assertEqual((0., 0., 0.), battle._local_position)
-                    control.trigger.reset_mock()
-                    control.update(.1, 3.5)
-                    self.assertEqual('settling', control.last_order['confirmed_facing']['state'])
-                    self.assertEqual('stalled', control.last_order['confirmed_facing']['outcome'])
-                    self.assertEqual(0., battle._sender.turn)
-                    control.trigger.assert_called_once()
-                    control.update(.1, 3.7)
-                    self.assertEqual('stalled', control.last_order['confirmed_facing']['state'])
-                else:
-                    self.assertGreater(battle._local_yaw, 0.)
-                    last_full = control.direct_engagement.last_full_at
-                    compare.reset_mock()
-                    compare.return_value = ('laying', dict(created=2.2, point=target.position,
-                        clear=True, geometry_clear=True, reachable=True, laying=True,
-                        point_viable=True, barrel_error=.01))
-                    control.update(.1, 2.2)
-                    self.assertEqual(0, control.direct_engagement.sample)
-                    self.assertEqual(last_full, control.direct_engagement.last_full_at)
-                    compare.assert_called_once()
-                    self.assertTrue(compare.call_args.kwargs['physical'])
-                    self.assertEqual(target.id, control.target_engine)
-                    self.assertGreater(battle._sender.turn, 0.)
-                    self.assertFalse(battle._sender.handbrake)
-                    control.weapon.forward.assert_not_called()
+                self.assertAlmostEqual(0., battle._local_yaw)
+                self.assertEqual((0., 0., 0.), battle._local_position)
+                control.trigger.reset_mock()
+                control.update(.1, 3.5)
+                self.assertNotIn('confirmed_facing', control.last_order)
+                self.assertEqual(0., battle._sender.turn)
+                control.trigger.assert_called_once()
 
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_pivot_keeps_a_viable_point_until_aligned_then_checks_the_stopped_ray(self, unused_aligned):
+    def test_stationary_laying_keeps_a_viable_point_then_checks_the_stopped_ray(self, unused_aligned):
         from release097.test_096_contact_steering5 import DriveLoopTests
         _, battle, _ = DriveLoopTests().actor(turn=0.)
         control, target = self.confirmed_pivot_controller(battle)
@@ -356,34 +336,33 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         last_full = control.direct_engagement.last_full_at
         control.trigger.reset_mock()
         compare.side_effect = None
-        for tick in range(1, 41):
+        for tick in range(1, 16):
             for step in range(5):
                 battle._drive_local_step(.04)
             now = 1. + tick*.2
             compare.return_value = ('laying', dict(created=now, point=target.position,
-                geometry_clear=True, reachable=True, laying=True, point_viable=True, barrel_error=.1))
+                geometry_clear=True, reachable=True, laying=True, point_viable=True,
+                barrel_error=.1-.005*tick))
             control.update(.1, now)
-            facing = control.last_order['confirmed_facing']
-            if facing['state'] == 'settling':
-                break
-            self.assertGreater(battle._sender.turn, 0.)
-            self.assertFalse(battle._sender.handbrake)
-        self.assertEqual('aligned', facing['outcome'])
+            self.assertNotIn('confirmed_facing', control.last_order)
+            self.assertEqual((0., 0., True), (battle._sender.forward,
+                battle._sender.turn, battle._sender.handbrake))
+            self.assertEqual(0, control.direct_engagement.sample)
         self.assertEqual(0., battle._sender.turn)
         control.trigger.assert_not_called()
         compare.reset_mock()
         compare.side_effect = ready
         control.update(.1, now+.2)
-        self.assertEqual('aligned', control.last_order['confirmed_facing']['state'])
+        self.assertNotIn('confirmed_facing', control.last_order)
         self.assertEqual(last_full, control.direct_engagement.last_full_at)
         compare.assert_called_once()
         self.assertTrue(compare.call_args.kwargs['physical'])
-        self.assertFalse(compare.call_args.kwargs['verify_point'])
+        self.assertFalse(compare.call_args.kwargs.get('verify_point', False))
         self.assertEqual((target, 0, 0), compare.call_args.args[:3])
         control.trigger.assert_called_once()
 
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_lost_pivot_point_stops_the_tracks_and_searches_stationary(self, unused_aligned):
+    def test_lost_single_point_keeps_the_stationary_lease_during_a_new_sweep(self, unused_aligned):
         from release097.test_096_contact_steering5 import DriveLoopTests
         for loss in ('armor', 'pending'):
             with self.subTest(loss=loss):
@@ -392,7 +371,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 compare = control.aiming.compare_direct
                 ready = compare.side_effect
                 control.update(.1, 1.)
-                self.assertGreater(battle._sender.turn, 0.)
+                self.assertEqual(0., battle._sender.turn)
                 control.navigation.firing_position = mock.Mock(wraps=control.navigation.firing_position)
                 control.aiming.direct_samples = lambda unused: 2
                 control.trigger.reset_mock()
@@ -403,8 +382,8 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                                                   battle._sender.handbrake))
                 self.assertEqual('engage', control.last_order['combat_mode'])
                 if loss == 'armor':
-                    self.assertTrue(control.last_order['pivot_point_search'])
-                    self.assertEqual({(0, 0): 'armor'}, control.direct_engagement.pivot_search)
+                    self.assertIsNone(control.direct_engagement.sample)
+                    self.assertIsNone(control.direct_engagement.pivot_search)
                 else:
                     self.assertTrue(control.direct_engagement.locked_wait)
                     self.assertEqual(target.id, control.target_engine)
@@ -423,16 +402,17 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                 compare.side_effect = next_point
                 control.update(.1, 1.6)
                 if loss == 'pending':
-                    self.assertTrue(control.last_order['pivot_point_search'])
+                    self.assertIsNone(control.direct_engagement.sample)
+                    self.assertEqual(0., battle._sender.turn)
                     control.update(.1, 1.8)
                 self.assertIsNone(control.direct_engagement.pivot_search)
                 self.assertEqual(1, control.direct_engagement.sample)
                 if loss == 'armor':
-                    self.assertTrue(all(call.args[2] == 1 for call in compare.call_args_list))
+                    self.assertTrue(any(call.args[2] == 1 for call in compare.call_args_list))
                 self.assertEqual('engage', control.last_order['combat_mode'])
 
     @mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned', return_value=True)
-    def test_budget_wait_keeps_stationary_engagement_and_never_triggers(self, unused_aligned):
+    def test_budget_wait_keeps_a_bounded_stationary_lease_and_never_triggers(self, unused_aligned):
         from release097.test_096_contact_steering5 import DriveLoopTests
         _, battle, _ = DriveLoopTests().actor(turn=0.)
         control, target = self.confirmed_pivot_controller(battle)
@@ -442,12 +422,12 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 1.)
         self.assertEqual('engage', control.last_order['combat_mode'])
         self.assertNotIn('confirmed_facing', control.last_order)
-        control.navigation.firing_position = mock.Mock(wraps=control.navigation.firing_position)
+        control.navigation.firing_position = mock.Mock(return_value=None)
         control.trigger.reset_mock()
         control.weapon.aim.reset_mock()
         compare.side_effect = None
         compare.return_value = ('pending', None)
-        for now in (1.2, 2., 4., 6.):
+        for now in (1.2, 2., 4.):
             control.update(.1, now)
             self.assertEqual(target.id, control.target_engine)
             self.assertFalse(control.aim_receipt['fire_clear'])
@@ -458,6 +438,11 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.aim.assert_not_called()
         control.weapon.forward.assert_not_called()
         control.navigation.firing_position.assert_not_called()
+        control.update(.1, 6.)
+        self.assertEqual('advance_contact', control.last_order['combat_mode'])
+        self.assertEqual(target.id, control.last_order['combat_contact']['target'])
+        self.assertIsNone(control.engagement_hold)
+        control.trigger.assert_not_called()
         compare.side_effect = ready
         control.update(.1, 6.2)
         control.trigger.assert_called_once()
@@ -566,7 +551,9 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
                         return_value=True):
             control.update(.1, 1.)
         self.assertFalse(control.navigation.context['fire_clear'])
-        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
+        control.navigation.decide.assert_not_called()
+        self.assertEqual('advance_contact', control.last_order['combat_mode'])
+        self.assertEqual(target.id, control.last_order['combat_contact']['target'])
 
     def test_automatic_shell_requests_cannot_immediately_override_each_other(self):
         from test_player_control import PlayerRegressionTests
@@ -603,7 +590,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.forward.assert_called_once()
 
 
-    def test_pending_direct_scan_preserves_turret_and_leaves_route_in_control(self):
+    def test_pending_direct_scan_preserves_turret_and_approaches_the_selected_contact(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller
         from types import SimpleNamespace
@@ -617,9 +604,10 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 1.)
         control.update(.1, 3.)
         control.weapon.forward.assert_not_called()
-        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
-        self.assertEqual((1., .4, False),
-            (control.last_order['throttle'], control.last_order['turn'], control.last_order['brake']))
+        control.navigation.decide.assert_not_called()
+        self.assertEqual('advance_contact', control.last_order['combat_mode'])
+        self.assertEqual(target.id, control.last_order['combat_contact']['target'])
+        self.assertTrue(control.last_order['travel_intent'])
 
 
     def test_established_engagement_stays_parked_through_scan_gap_then_expires(self):
@@ -640,8 +628,11 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 2.)
         self.assertTrue(control.navigation.decide.call_args.kwargs['hold'])
         self.assertEqual((0., True), (control.last_order['throttle'], control.last_order['brake']))
+        control.navigation.decide.reset_mock()
         control.update(.1, 5.1)
-        self.assertFalse(control.navigation.decide.call_args.kwargs['hold'])
+        control.navigation.decide.assert_not_called()
+        self.assertEqual('advance_contact', control.last_order['combat_mode'])
+        self.assertEqual(target.id, control.last_order['combat_contact']['target'])
         self.assertIsNone(control.engagement_hold)
 
     def test_front_contact_adopts_front_vehicle_and_defers_rear_sample(self):

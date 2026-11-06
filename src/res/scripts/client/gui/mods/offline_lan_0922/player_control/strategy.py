@@ -93,7 +93,13 @@ class CombatPolicy(object):
         previous = self.range_mode if identity == self.range_target else 'advance'
         near = self.desired_range * (1.28 if previous == 'engage' else 1.15)
         phase = 'advance'
-        if clear and span <= near:
+        # Preferred class ranges describe an approach while a firing lane is
+        # unproved. The foreground player's explicit stop-and-fire policy
+        # takes ownership once its current aiming path proves a usable lane;
+        # advancing to a preferred distance must not undo that proof.
+        if clear and context.get('shot_lane_proven'):
+            phase = 'engage'
+        elif clear and span <= near:
             phase = 'engage'
         elif (clear and span <= self.fire_range and
               self.tag in ('AT-SPG', 'lightTank') and support < .65):
@@ -116,7 +122,8 @@ class CombatPolicy(object):
         hold = phase in ('engage', 'support_hold')
         self.receipt = dict(hold=hold, desired_range=self.desired_range,
                             fire_range=self.fire_range, distance=span, phase=phase,
-                            support=support, range_changed=self.range_changed)
+                            support=support, range_changed=self.range_changed,
+                            shot_lane_proven=bool(context.get('shot_lane_proven')))
         if not allowed or context.get('empty_ammo'):
             self.reset()
             self.receipt.update(hold=False, reason='mission_owns_movement')
@@ -166,17 +173,63 @@ class Strategy(object):
         self.last_observation = None
         self.receipt={}
 
+    @staticmethod
+    def _identity(ally):
+        actor = ally.get('actor_key')
+        return ('actor',) + tuple(actor) if actor is not None else ('entity', ally.get('id'))
+
+    @staticmethod
+    def _is_own(ally, state):
+        actor, own_actor = ally.get('actor_key'), state.get('actor_key')
+        if actor is not None and own_actor is not None:
+            return tuple(actor) == tuple(own_actor)
+        own_id = state.get('engine_id', state.get('id'))
+        return own_id is not None and ally.get('id') == own_id
+
+    def _friendly_observations(self, allies, state):
+        """Keep one physical observation per actor, including this player."""
+        own, others = None, {}
+        for ally in allies:
+            if self._is_own(ally, state):
+                if own is None:
+                    own = dict(ally)
+                continue
+            identity = self._identity(ally)
+            if identity not in others:
+                others[identity] = ally
+        if own is not None or state.get('position') is not None:
+            own = own or {}
+            for name in ('position', 'health', 'max_health', 'alive', 'class_tag', 'actor_key'):
+                if name in state:
+                    own[name] = state[name]
+            own['id'] = state.get('engine_id', state.get('id', own.get('id')))
+            others[self._identity(own)] = own
+        return list(others.values()), own
+
+    @staticmethod
+    def _health(ally):
+        return max(0., ally.get('health', 1)) if ally.get('alive', True) else 0.
+
+    def _contribution(self, ally):
+        if ally.get('class_tag') == 'SPG':
+            return 0.
+        return .65 * min(1., self._health(ally) /
+                         max(1., float(ally.get('max_health', 1))))
+
     def decide(self, now, routes, current, contacts, allies, base, home, engaged=False,
                mission=None, empty_ammo=False, state=None):
         # Damage is observed from the player's friendly roster. A route with
         # many idle hulls has no more pressure than an empty route.
+        state = state or {}
+        allies, own = self._friendly_observations(allies, state)
         health = {}
         for ally in allies:
-            identity = ally['id']
-            current_health = max(0., ally['health'])
+            identity = self._identity(ally)
+            current_health = self._health(ally)
             health[identity] = current_health
             previous = self.ally_health.get(identity, current_health)
-            if current_health < previous and ally['max_health'] > 0:
+            if (current_health < previous and ally.get('max_health', 0) > 0 and
+                    ally.get('position') is not None):
                 self.recent_losses.append((now, ally['position'],
                     (previous - current_health) / ally['max_health']))
         self.ally_health = health
@@ -209,6 +262,8 @@ class Strategy(object):
             self.mode = 'route'
             self.receipt = dict(mode='rejoin_after_defence')
             return list(routes)
+        contacts = [enemy for enemy in contacts if enemy.get('position') is not None and
+                    enemy.get('alive', True) and enemy.get('health', 1) > 0]
         if not routes or current is None or not contacts:
             self.pressure_seen.clear()
             self.last_observation = now
@@ -218,24 +273,24 @@ class Strategy(object):
         # Healthy nearby allies reduce an already-covered front's deficit;
         # idle hull count by itself never attracts more vehicles to a lane.
         for enemy in contacts:
-            if enemy.get('position') is None or not enemy.get('alive', True):
-                continue
             nearest = min(routes, key=lambda route: lane_distance(enemy['position'], route))
             if lane_distance(enemy['position'], nearest) > 100.:
                 continue
             strength = max(.25, min(1., float(enemy.get('health', 1)) /
                            max(1., float(enemy.get('max_health', 1)))))
             scores[nearest['id']] += .75 + .5 * strength
+        own_route, own_contribution = None, 0.
         for ally in allies:
-            if (ally.get('position') is None or not ally.get('alive', True) or
-                    ally.get('health', 0) <= 0 or ally.get('class_tag') == 'SPG' or
+            contribution = self._contribution(ally)
+            if (ally.get('position') is None or contribution <= 0. or
                     not any(math.hypot(ally['position'][0]-enemy['position'][0],
                         ally['position'][2]-enemy['position'][2]) <= 180. for enemy in contacts)):
                 continue
             nearest = min(routes, key=lambda route: lane_distance(ally['position'], route))
             if lane_distance(ally['position'], nearest) < 100.:
-                scores[nearest['id']] -= .65 * min(1., float(ally['health']) /
-                                                    max(1., float(ally.get('max_health', 1))))
+                scores[nearest['id']] -= contribution
+                if ally is own:
+                    own_route, own_contribution = nearest['id'], contribution
         for unused, position, loss in self.recent_losses:
             if not any(math.hypot(position[0] - enemy['position'][0],
                                   position[2] - enemy['position'][2]) < 150.
@@ -261,11 +316,32 @@ class Strategy(object):
                 scores[best['id']] <= max(.5, scores.get(current['id'], 0.) + .5) or
                 now - self.pressure_seen.get(best['id'], now) < 2.):
             return None
+        # The player's presence already reduced one observed deficit above.
+        # Reassigning that hull must reduce the larger deficit after BOTH
+        # departure and arrival, not just uncover the old lane instead.
+        # Use its physical contribution, which can still be on the source
+        # lane while navigation is completing an accepted transfer.
+        source = own_route if own_route is not None else current['id']
+        contribution = self._contribution(own if own is not None else state)
+        source_score = scores.get(source, 0.)
+        target_score = scores[best['id']]
+        before = max(0., source_score, target_score)
+        if source == best['id']:
+            after = max(0., target_score + own_contribution - contribution)
+        else:
+            after = max(0., source_score + own_contribution, target_score - contribution)
+        self.receipt = dict(mode='route', route=best['id'], current_route=current['id'],
+                            source_route=source, own_contribution=own_contribution,
+                            transfer_contribution=contribution, scores=scores,
+                            before_transfer=before, after_transfer=after,
+                            next_front=self.next_front, source='local_visible_pressure',
+                            outcome='no_pressure_improvement')
+        if after + 1.e-9 >= before:
+            return None
         # A distant route still needs the independent navigator's connected
         # entry proof. This private lease only prevents tactical oscillation;
         # it reserves no Bot slots and sends no team assignment messages.
         self.front_until = now + FRONT_LEASE
-        self.receipt = dict(mode='support_observed_front', route=best['id'],
-                            scores=scores, next_front=self.next_front,
-                            lease_until=self.front_until, source='local_visible_pressure')
+        self.receipt.update(mode='support_observed_front', outcome='assigned',
+                            lease_until=self.front_until)
         return [best]

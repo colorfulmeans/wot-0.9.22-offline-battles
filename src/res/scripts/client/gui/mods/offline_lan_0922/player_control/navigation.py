@@ -671,10 +671,21 @@ class PlayerNavigation(object):
         critical = maximum > 0 and entity.health <= maximum * .25
         reloading = (getattr(gun, 'clip_size', 1) > 1 and
                      getattr(gun, 'clip', 0) <= 0 and getattr(gun, 'reload_time', 0.) > 0.)
+        if context.get('stationary_fire_hold') and not (critical or reloading):
+            # A usable firing position owns ordinary movement. Do not start
+            # or resume healthy cover/peek cycles while the player is already
+            # able to fire, including the bounded same-target proof refresh.
+            self.cover_move = self.reload_route = None
+            if search is not None:
+                search.reset()
+            return None
+        combat = getattr(self, 'combat', None)
+        cover_range = (getattr(combat, 'receipt', {}).get('phase', 'engage') == 'engage')
         normal_cover = (target is not None and
             (bool(context.get('fire_clear')) or self.cover_move is not None) and
+            (self.cover_move is not None or cover_range) and
             distance(position, target_value(target, 'position')) <=
-                getattr(getattr(self, 'combat', None), 'fire_range', 250.))
+                getattr(combat, 'fire_range', 250.))
         if not reloading:
             self.reload_route = None
         if getattr(self, 'reload_route', None) is not None:
@@ -955,6 +966,15 @@ class PlayerNavigation(object):
         return self.drive_combat_goal(state, clear, goal, 'firing_position',
                                       ('player_firing_position', tuple(goal)))
 
+    def drive_to_contact(self, state, clear, target):
+        """Retain the selected combat objective after a firing lane is lost."""
+        point = tuple(target_value(target, 'position'))
+        order = self.drive_combat_goal(state, clear, point, 'advance_contact',
+                                      ('player_contact', target_value(target, 'id')))
+        order['combat_contact'] = dict(target=target_value(target, 'id'),
+                                      point=point, reason='firing_lane_unproved')
+        return order
+
     def drive_combat_goal(self, state, clear, goal, mode='flank', key=None):
         """One actual combat endpoint, with the same path/support ownership."""
         return self._drive_goal(state, clear, goal,
@@ -990,7 +1010,12 @@ class PlayerNavigation(object):
                 target = resolved
             elif status in ('disconnected', 'water'):
                 fallback = getattr(self.navigator.grid, 'safe_local_target', None)
-                target = fallback(position, goal, now) if callable(fallback) else None
+                penalty = getattr(self.navigator, 'player_segment_penalized', None)
+                if callable(fallback) and callable(penalty):
+                    target = fallback(position, goal, now, candidate_clear=lambda point:
+                        not penalty(identity, position, point, now))
+                else:
+                    target = fallback(position, goal, now) if callable(fallback) else None
                 target = position if target is None else target
             elif status == 'unknown' and abs(target[1] - position[1]) > 1.:
                 # An incomplete local column cannot authorize an apparent
@@ -1012,7 +1037,8 @@ class PlayerNavigation(object):
             now, direction_clear, hold=hold or goal is None,
             stopping_distance=state.get('stopping_distance'),
             decision_horizon=state.get('decision_horizon', .1), terminal=terminal,
-            arrival_radius=arrival_radius, travel_direction=travel_direction, motion_key=motion_key)
+            arrival_radius=arrival_radius, travel_direction=travel_direction, motion_key=motion_key,
+            half_length=state['half_length'], turn_speed_limit=state.get('turn_speed_limit'))
         if self.driver.replan and distance(position, target) >= 2.:
             # Preserve the path cursor and progress history across local
             # recovery. Retire a cached corridor only on obstruction evidence.
@@ -1284,7 +1310,10 @@ class PlayerNavigation(object):
                         (goal is not None and distance(position, goal) <= 6. and abs(position[1] - height) <= 1.)))
             inside_flag = (self.enemy_area is not None and supported and
                            distance(position, self.enemy_area['point']) <= self.enemy_area['radius'])
-            if not self.automatic_defence and (terminal or inside_flag) and self._capture_handoff(state):
+            combat_owner = bool(hold and (self.context.get('stationary_fire_hold') or
+                self.context.get('retain_engagement_hold') or self.combat.receipt.get('hold')))
+            if (not self.automatic_defence and not combat_owner and (terminal or inside_flag) and
+                    self._capture_handoff(state)):
                 return self._mission_order(state, direction_clear)
             if terminal and self.automatic_defence:
                 hold = True

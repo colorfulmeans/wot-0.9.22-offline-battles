@@ -8,7 +8,7 @@ from __future__ import division
 import math
 
 from .. import tank_collision
-from .pathfinding import BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER
+from .pathfinding import BAKED_FATAL_HAZARDS, BAKED_SHALLOW_WATER, WAYPOINT_ARRIVAL_RADIUS
 
 
 def _finite(value):
@@ -30,6 +30,7 @@ class LocalRoutes(object):
         self.lane = None
         self.receipt = dict(status='idle')
         self.static_receipt = dict(count=0, changed=False)
+        self.stationary_receipt = dict(count=0, changed=False)
 
     def reset(self):
         self.leg = self.lane = None
@@ -71,6 +72,32 @@ class LocalRoutes(object):
         changed = publish(hulls, clearance=state['half_width'])
         self.static_receipt = dict(count=len(hulls), invalid=invalid,
             changed=bool(changed), revision=getattr(self.navigator.grid, 'static_hull_revision', 0))
+        stationary = getattr(self.navigator, 'set_stationary_hulls', None)
+        if callable(stationary) and 'neighbours' in context:
+            living, invalid = [], 0
+            for raw, point, unused in self._bodies(state, context):
+                if not raw.get('alive', True) or _distance(state['position'], point) > 32.:
+                    continue
+                try:
+                    # Missing motion evidence is not proof that an observed
+                    # live hull is parked. Never infer an unseen enemy's pose.
+                    velocity = raw.get('velocity')
+                    speed = (math.hypot(velocity[0], velocity[2]) if velocity is not None
+                             else abs(float(raw['speed'])))
+                    shape = tuple(float(value) for value in raw['collision_shape'])
+                    yaw = float(raw['yaw'])
+                    if (len(shape) < 4 or min(shape[:2]) <= 0. or shape[3] < shape[2] or
+                            not all(_finite(value) for value in tuple(point)+shape+(yaw, speed))):
+                        raise ValueError('invalid stationary hull')
+                    if speed > .5:
+                        continue
+                    living.append(dict(raw, position=point, collision_shape=shape, yaw=yaw))
+                except (KeyError, IndexError, TypeError, ValueError, OverflowError):
+                    invalid += 1
+            shape = state.get('collision_shape') or (
+                state['half_width'], state['half_length'], -.5, 2.)
+            self.stationary_receipt = stationary(state['id'], living, shape, state['half_width'])
+            self.stationary_receipt.update(invalid=invalid, actors=[body['id'] for body in living])
 
     def _bodies(self, state, context, stationary=True):
         result = []
@@ -81,8 +108,12 @@ class LocalRoutes(object):
             # Its physical collision is still checked by the native driver.
             if raw.get('alive', True) and raw.get('team') != self.team and not raw.get('visible'):
                 continue
-            if stationary and raw.get('alive', True) and abs(raw.get('speed', 0.)) > .5:
-                continue
+            if stationary and raw.get('alive', True):
+                velocity = raw.get('velocity')
+                measured = (math.hypot(velocity[0], velocity[2]) if velocity is not None
+                            else abs(raw['speed']) if raw.get('speed') is not None else None)
+                if measured is None or not _finite(measured) or measured > .5:
+                    continue
             point, shape = raw.get('position'), raw.get('collision_shape')
             if point is None or shape is None:
                 continue
@@ -178,57 +209,71 @@ class LocalRoutes(object):
 
     def _occupied_target(self, state, context, goal, selected, key, clear):
         position, now = state['position'], state['now']
-        if _distance(position, goal) > 32.:
-            return None
         nav_state = getattr(self.navigator, 'player_states', {}).get(int(state['id']), {})
+        # The released Bot modifier checks the actual selected point after
+        # A*, including intermediate corners. The strategic endpoint alone
+        # misses a parked hull occupying an otherwise valid path vertex.
+        occupied = tuple(selected)
+        if (self.leg is not None and self.leg.get('intent') == tuple(key) and
+                _distance(selected, self.leg['target']) <= 1.e-4):
+            occupied = self.leg['occupied']
+        if (_distance(position, occupied) > 32. or
+                _distance(position, occupied) <= WAYPOINT_ARRIVAL_RADIUS):
+            return None
         # Only the independent pathfinder's bounded retry starts a new attempt.
         # A corpse pose/global revision never renews a consumed local leg.
-        gate = (tuple(key), tuple(goal), nav_state.get('replan_generation', 0))
-        retained = self.leg is not None and self.leg['key'] == gate
-        if _distance(selected, goal) > 1.5 and not (retained and
-                _distance(selected, self.leg['target']) <= 1.e-4):
-            return None  # A checked A* bend is not an occupied endpoint.
+        gate = (tuple(key), occupied, nav_state.get('replan_generation', 0))
         bodies = self._bodies(state, context)
         radius = math.hypot(state['half_length'], state['half_width'])
-        if not self._occupied(goal, bodies, radius, state):
+        if not self._occupied(occupied, bodies, radius, state):
             if self.leg is not None and self.leg['key'] == gate:
                 self.leg = None
             return None
-        self.receipt = dict(status='occupied_endpoint', goal=tuple(goal), at=now)
+        blocked_living = any(raw.get('alive', True) and
+            self._occupied(occupied, [(raw, point, other)], radius, state)
+            for raw, point, other in bodies)
+        intermediate = _distance(occupied, goal) > WAYPOINT_ARRIVAL_RADIUS
+        # A completed/refused side leg cannot hand the same living hull centre
+        # back to the driver. The revocable planning layer owns the next path;
+        # a pending or impossible connector remains an honest physical hold.
+        refused = tuple(position) if intermediate or blocked_living else None
+        self.receipt = dict(status='occupied_endpoint', goal=occupied,
+                            strategic_goal=tuple(goal), intermediate=intermediate, at=now)
         if gate in self.finished:
             self.receipt['status'] = self.finished[gate]
-            return None
+            return refused
         if self.leg is not None and self.leg['key'] == gate:
             leg = self.leg
             remaining = _distance(position, leg['target'])
             if remaining <= 1.5:
                 self._finish(gate, 'bypass_completed', now)
-                return None
+                return refused
             if remaining < leg['best'] - .2:
                 leg['best'], leg['progress_at'] = remaining, now
             if now - leg['progress_at'] >= 8.:
                 self._finish(gate, 'bypass_stalled', now)
-                return None
+                return refused
             if self._admit(state, leg['target'], clear, bodies):
                 self.receipt.update(status='bypass_retained', target=leg['target'])
                 return leg['target']
             self._finish(gate, 'bypass_refused', now)
-            return None
-        dx, dz = goal[0] - position[0], goal[2] - position[2]
+            return refused
+        dx, dz = occupied[0] - position[0], occupied[2] - position[2]
         length = max(.01, math.hypot(dx, dz))
         forward = (dx / length, dz / length)
         for reach in (8., 12.):
             for ox, oz in ((forward[1], -forward[0]), (-forward[1], forward[0]),
                            forward, (-forward[0], -forward[1])):
-                target = self._point(goal[0] + ox * reach, goal[2] + oz * reach, goal[1])
+                target = self._point(occupied[0] + ox * reach, occupied[2] + oz * reach, occupied[1])
                 if target is None or not self._admit(state, target, clear, bodies):
                     continue
-                self.leg = dict(key=gate, target=target, origin=tuple(position),
+                self.leg = dict(key=gate, intent=tuple(key), occupied=occupied,
+                                target=target, origin=tuple(position),
                                 progress_at=now, best=_distance(position, target))
                 self.receipt.update(status='bypass_issued', target=target)
                 return target
         self.receipt['status'] = 'no_checked_bypass'
-        return None
+        return refused
 
     def _lane_target(self, state, context, goal, selected, key, clear):
         position = state['position']
@@ -313,6 +358,7 @@ class LocalRoutes(object):
             return selected  # Never broaden a scoped ford proof into a lane.
         narrow = getattr(self.navigator, 'narrow_passage_target', None)
         target = selected
+        bypass = None
         if callable(narrow):
             target = narrow(identity, position, goal, selected, now, state['yaw'],
                             state['half_length'], state['half_width'])
@@ -325,11 +371,16 @@ class LocalRoutes(object):
             elif allow_lane and self.receipt['status'] == 'unchanged':
                 target = self._lane_target(state, context, goal, selected, key, clear)
         if tuple(target) != tuple(selected):
+            if _distance(position, target) <= WAYPOINT_ARRIVAL_RADIUS:
+                return target  # A refusal is not a new zero-length local leg.
             remember = getattr(self.navigator, 'remember_runtime_target', None)
             if callable(remember) and not remember(identity, position, goal, target, now):
                 self.receipt = dict(status='private_refusal', target=tuple(target))
-                return selected
+                # Do not restore the very occupied corner whose bypass was
+                # refused. Its original path cursor remains unconsumed.
+                return tuple(position) if bypass is not None else selected
         return target
 
     def snapshot(self):
-        return dict(self.receipt, static_hulls=dict(self.static_receipt))
+        return dict(self.receipt, static_hulls=dict(self.static_receipt),
+                    stationary_hulls=dict(self.stationary_receipt))

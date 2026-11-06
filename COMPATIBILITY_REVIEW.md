@@ -1,4 +1,91 @@
-# November 6 repeated cover circuits in the foreground player
+# November 6 stop-and-fire, occupied corners and repeated route transfers
+
+`wot-error-report-20261106-133716-d75e941bdded` identifies both installed and
+bundled payloads as `colorfulmeans-42091871223-1`, the package built from
+`95fe7da3`. The user's rejection of that package is supported by the new
+session. Its predecessor's repeated-cover test established a bounded reverse
+execution direction but retained the unwanted repeated movement. That test
+is a lower-level motion regression; it does not establish stop-and-fire
+acceptance. The per-target penetration/HE correction from `d69988df` remains
+unchanged.
+
+The session again uses the stationary-target scene on Mittengard. Timestamps
+below are the report's local timestamps. They identify separate defects:
+
+| Observed behavior | Report evidence and cause | Independent player correction |
+| --- | --- | --- |
+| A shootable enemy still causes forward/reverse travel | At 13:22:53.357, the selected enemy is 189.256 m away, clear and aligned, while throttle is -0.65. At 13:23:06.014 it is 194.574 m away with the same proof while throttle is +1. The medium's 135 m preferred distance never established an ordinary firing hold, and cover/flank could override a hold anyway. | A current usable aiming proof admits the player's explicit stop-and-fire policy independently of preferred approach range. Ordinary cover, flank, traffic recovery, automatic route reassignment and automatic end-of-route capture yield to that owner. Full-traverse turrets do not add an unnecessary hull pivot while already able to fire. |
+| A short aiming gap restarts driving | At 13:23:00.648, the same live selected enemy remains visible, but a `native_source_unverified` point result returns no target before `checking` becomes true. Most later gaps are bounded multi-frame scans. | The same native target object retains its previously established four-second stationary lease across both unknown first frames and pending scans. Unknown or cached solutions do not renew the lease. Confirmed lane loss, target loss/replacement, empty ammunition and expiry release it; a failed firing-position search approaches that same direct-fire contact instead of returning to an unrelated route. SPG deployment/sortie ownership remains separate. |
+| Repeated approach to stationary T110E4 | The opening local target repeatedly equals the living ally's centre near (-50, 0.30, -98). A completed head-on retreat hands the same target back to ordinary driving. This begins before the first cover movement at 13:22:52.322. | The selected A* corner receives the same occupied-point check as a strategic endpoint. Nearby observed stationary living hulls enter a revocable player-private planning layer. Current support, terrain, vehicle sweep and boundary checks must prove a bypass; failed or completed bypasses cannot restore the occupied centre. Departed, moving or no-longer-observed hulls release their temporary layer. |
+| A distant clear goal still causes a complete alignment stop | At 13:19:52.876, the target is 40.7 m away, yaw error is -0.458220459 rad, speed is 4.01241274 m/s, and the forward probe is clear with no recorded traffic rejection. Player's global 0.30 rad gate stops it; the released Bot drives the same clear scene. | Ordinary forward driving independently consumes the current Bot's near-corner, installed-turn-radius, slope and rear-heading pedal gates. A near alignment retains its admitted target until the 0.12 rad exit threshold; a distant moderate correction keeps forward progress. Installed `rotSpd` and actual hull length reach the player driver. Fixed-gear cover execution and final collision vetoes retain their contracts. |
+| Repeated stops just short of a path corner | 151 decisions occupy the 1.5--2 m band with `terminal=false`, `holding=false` and driver mode `hold`; 14 stable episodes total about 144.083 s. At 13:25:57.288 the remaining distance is 1.972971 m. | The ordinary driver uses the pathfinder's same 1.5 m corner-consumption radius. Explicit terminal arrival/braking contracts retain their own radius. No larger corner-skipping tolerance is introduced. |
+| Mid-route reversal under unchanged observations | All 14 recorded route changes are automatic local-pressure decisions; the session has no corresponding explicit mission. The player deducts its own 0.65 support from the currently occupied front, producing 0.60 versus 1.25 and reversing that comparison after arrival. | A transfer must strictly reduce the maximum deficit after accounting for both departure and arrival. Actor identity distinguishes native entity IDs from network player IDs and counts a friendly hull once. The 12 s observation interval and 30 s lease are unchanged; the correction changes the decision, not only its delay. |
+
+## Priority and migration contracts checked in this correction
+
+The explicit player stop-and-fire requirement is stronger than the current
+Bot's role-dependent preferred-range/cover policy. The live Bot chain is
+`server_bot_ai._order_for` through worker orders and `BotRuntime`, rather than
+only the basic `ai.planner.order_for` helper. Relevant behavior contracts are
+implemented in foreground-owned state:
+
+- Stationary target ownership survives pending lane refresh without granting
+  permission to fire from a stale proof. Final current-barrel and projectile
+  admission remain responsible for every shot.
+- Ordinary single-shot reloads remain stopped. Real empty-magazine/no-HE
+  retreat, the existing critical-health retreat, explicit movement/capture
+  commands and artillery deployment retain their applicable priorities.
+- A chosen direct-fire contact remains the combat objective after confirmed
+  lane loss. A failed local side-position search does not restore the
+  strategic route as an accidental fallback.
+- Automatic route-terminal capture waits for a real combat hold to release;
+  a bare no-target arrival still enters capture normally.
+- Occupied intermediate corners use observed actor geometry and independent
+  path/search state. This adds neither a Bot delegate nor a fake stationary
+  wall to the shared terrain model. Unchanged stationary observations retain
+  in-flight searches instead of restarting them each frame.
+- Front transfers apply the released Bot allocator's two-sided improvement
+  principle locally, without taking Bot slots or using hidden team orders.
+  Equal-pressure relocation cannot manufacture a new deficit on departure.
+  Changed stronger pressure can still justify a new assignment.
+
+The migration audit continues to distinguish behavioral parity from absence
+of Bot imports. The ordinary player driver still has its own smaller local
+steering/recovery implementation. Its distance/traverse pedal gates now
+consume the same observed geometry and installed parameters; the Bot driver's
+complete side-commit and recovery-pocket lifecycle are not certified as
+identical by this change. A navigation-acknowledged cross-route transfer
+lifecycle also remains a separate parity boundary: pressure reassessment
+does not claim that selecting a route proves arrival or reserves support
+there. These gaps are recorded rather than hidden behind passing isolation
+tests or an unsupported claim of complete migration.
+
+## Regression and package acceptance
+
+The new stationary-engagement suite executes the real foreground update,
+combat policy, navigation, driver and final sender boundaries. Its initial
+17 cases pass with the correction and produce 27 failed assertions, with no
+test errors, against the pinned `95fe7da3` runtime sources. It covers the
+reported 185--195 m geometry, committed shots, ordinary reloads, both forms
+of scan gap, stale returned solutions, lease expiry, target replacement,
+ordinary cover/flank suppression, explicit/emergency priorities, route
+terminal/flag-circle handoff and the SPG exception. Separate tests consume
+actual pathfinder corners and reproduce both directions of the unchanged
+front-pressure oscillation. Occupied-corner checks cover live actor layers,
+blocked bypasses and path/search lifecycle, rather than assuming that a
+missing native exception means movement succeeded.
+
+Previous reverse-gear/physical-steering corrections remain applicable to
+genuine withdrawal. Blindly reverting `95fe7da3` would leave the ordinary
+range policy, occupied-corner omission, arrival-radius mismatch and front
+self-feedback in place. The superseded acceptance claim and its ordinary
+automatic-pivot/route-fallback expectations have been corrected instead.
+Exact-head CI and extracted package identity are recorded with the PR
+handoff. Python tests and CI package checks establish implementation and
+packaging evidence; the resulting build still requires a new Chinese HD
+#1513 gameplay session to establish native movement behavior.
+
+# Historical November 6 cover-direction correction: incomplete behavioral acceptance
 
 `wot-error-report-20261106-024847-cfdc71d37406` identifies the installed
 and bundled build as `colorfulmeans-pr119-d69988df-local-qa`. This revision

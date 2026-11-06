@@ -1595,13 +1595,15 @@ class PlayerTerrainGrid(object):
 	def safe_local_target(self, current, goal, now, avoid_points=None,
 			side_preference=1.0, edge_penalties=None,
 			minimum_offset=0.0, diagnostic=None, excluded_target_cells=None,
-			excluded_target_points=()):
+			excluded_target_points=(), candidate_clear=None):
 		"""Choose one short, fully probed detour when the global search fails.
 
 		This is deliberately not a direct-to-goal fallback. Every candidate must
 		have supported ground, a safe grade, no deep water, no static collision and
 		no remembered failed edge. Returning ``None`` means the only safe action is
 		to stop and retry the global planner later.
+		An owner predicate can reject exact live-hull segments before ranking;
+		coarse edge masks cannot represent a crossing within one grid cell.
 		"""
 		if diagnostic is not None:
 			diagnostic.clear()
@@ -1621,6 +1623,14 @@ class PlayerTerrainGrid(object):
 			if blocked and diagnostic is not None:
 				diagnostic['proved_point_rejected'] = diagnostic.get('proved_point_rejected', 0) + 1
 			return blocked
+		def private_refused(point):
+			if candidate_clear is None or candidate_clear(point):
+				return False
+			if diagnostic is not None:
+				diagnostic['private_edge'] += 1
+				diagnostic['candidates'].append(dict(point=point,
+					rejected='player_private_segment'))
+			return True
 		dx = float(goal[0]) - float(current[0])
 		dz = float(goal[2]) - float(current[2])
 		if abs(dx) + abs(dz) < 0.1:
@@ -1639,7 +1649,7 @@ class PlayerTerrainGrid(object):
 					y = self._baked_cell_height(key)
 					if y is not None:
 						point = self.point_for(key, y)
-						if refused(point):
+						if refused(point) or private_refused(point):
 							continue
 						if _distance_2d(current, point) > WAYPOINT_ARRIVAL_RADIUS:
 							candidates.append((_distance_2d(current, point), point))
@@ -1697,8 +1707,12 @@ class PlayerTerrainGrid(object):
 					# Prove a short actual-pose step without publishing graph terrain.
 					if (self.prebaked and native_candidates < 3 and
 							callable(self.obstacle_probe)):
-						native_candidates += 1
 						candidate = (x, float(current[1]), z)
+						# A cheap owner refusal made no native query. Keep the
+						# bounded probe budget for the next admissible fan point.
+						if private_refused(candidate):
+							continue
+						native_candidates += 1
 						egress_evidence = dict(start=tuple(current), end=candidate, egress_reason='not_probed')
 						if diagnostic is not None:
 							diagnostic.setdefault('native_egress_attempts', []).append(egress_evidence)
@@ -1719,6 +1733,8 @@ class PlayerTerrainGrid(object):
 							rejected='missing_ground', theta=offset))
 					continue
 				candidate = (x, y, z)
+				if private_refused(candidate):
+					continue
 				# Preserve the predicate order and query count while retaining
 				# the first rejection. These are receipts, never extra probes.
 				reason = None
@@ -2067,6 +2083,9 @@ class PlayerPathfinder(object):
 		self.closed = False
 		self.boundary_bodies = {}
 		self.boundary_edge_cache = {}
+		self.stationary_layers = {}
+		self.path_stationary_revisions = {}
+		self.search_stationary_revisions = {}
 		self.paths = {}
 		self.path_times = {}
 		self.path_hull_revisions = {}
@@ -2114,6 +2133,8 @@ class PlayerPathfinder(object):
 			self._native_navigation = None
 			self._boundary_actor = None
 			for cache in (self.boundary_bodies, self.boundary_edge_cache,
+					self.stationary_layers, self.path_stationary_revisions,
+					self.search_stationary_revisions,
 					self.searches, self.search_times, self.paths, self.path_times,
 					self.path_hull_revisions, self.path_native_refusals,
 					self.player_states, self.player_failed_edges, self.player_macro_edges,
@@ -2137,6 +2158,7 @@ class PlayerPathfinder(object):
 		for key in keys:
 			job = self.searches.pop(key, None)
 			self.search_times.pop(key, None)
+			self.search_stationary_revisions.pop(key, None)
 			if job is not None:
 				jobs.append(job)
 		if self._native_navigation is not None:
@@ -2215,6 +2237,7 @@ class PlayerPathfinder(object):
 		self.paths.clear()
 		self.path_times.clear()
 		self.path_hull_revisions.clear()
+		self.path_stationary_revisions.clear()
 		self.path_native_refusals.clear()
 
 
@@ -2473,7 +2496,9 @@ class PlayerPathfinder(object):
 			self._active_planning_edge_penalties(player_id, now),
 			0.0, diagnostic=state.setdefault('local_fallback', {}),
 			excluded_target_cells=exclusions,
-			excluded_target_points=self._active_local_target_refusals(player_id, now))
+			excluded_target_points=self._active_local_target_refusals(player_id, now),
+			candidate_clear=lambda point: not self._player_edges_penalized(
+				player_id, current, point, now))
 		selection=state.setdefault('local_selection',{})
 		selection.update(at=float(now),current=tuple(current),origin=tuple(origin),goal=tuple(goal),
 			candidate=fallback,candidate_cell=self.grid.cell_for(fallback) if fallback is not None else None,
@@ -2513,14 +2538,13 @@ class PlayerPathfinder(object):
 		connector = dict(reason='not_required', start=tuple(current), end=fallback)
 		selection['connector'] = connector
 		previous_refusal=getattr(self.grid,'_last_native_refusal',None)
-		if fallback is not None and origin != tuple(current):
-			if self._player_edges_penalized(player_id, current, fallback, now):
-				connector_clear = False
-				connector['reason'] = 'player_private_or_retired_edge'
-			else:
-				proof = {}
-				connector_clear = bool(self.grid.dry_segment_clear(current, fallback, now, proof))
-				connector.update(reason=proof.get('egress_reason'), proof=proof)
+		if fallback is not None and self._player_edges_penalized(player_id, current, fallback, now):
+			connector_clear = False
+			connector['reason'] = 'player_private_or_retired_edge'
+		elif fallback is not None and origin != tuple(current):
+			proof = {}
+			connector_clear = bool(self.grid.dry_segment_clear(current, fallback, now, proof))
+			connector.update(reason=proof.get('egress_reason'), proof=proof)
 			if connector_clear and self.grid.prebaked:
 				# Centre-to-centre baked edge receipts cannot prove the diagonal
 				# from an off-centre hull still inside the arrival disk.
@@ -2547,6 +2571,8 @@ class PlayerPathfinder(object):
 			state.pop('local_fallback_target', None)
 			state.pop('local_fallback_intent', None)
 			state.pop('local_fallback_start', None)
+			if not deferred:
+				self._record_local_retry_refusal(state, current, goal, now)
 			# Retire the unreachable anchor but keep the actual hull's wall,
 			# water and deferred-proof hold for this decision.
 			return tuple(current)
@@ -2961,7 +2987,9 @@ class PlayerPathfinder(object):
 			1.0 if (player_id % 2) else -1.0,
 			self._active_planning_edge_penalties(player_id, now),
 			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
-			excluded_target_points=self._active_local_target_refusals(player_id, now))
+			excluded_target_points=self._active_local_target_refusals(player_id, now),
+			candidate_clear=lambda point: not self._player_edges_penalized(
+				player_id, current, point, now))
 		state['target'] = tuple(goal)
 		state['position'] = tuple(current)
 		state['progress_at'] = float(now)
@@ -2980,7 +3008,9 @@ class PlayerPathfinder(object):
 			1.0 if (int(player_id) % 2) else -1.0,
 			self._active_planning_edge_penalties(player_id, now),
 			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
-			excluded_target_points=self._active_local_target_refusals(player_id, now))
+			excluded_target_points=self._active_local_target_refusals(player_id, now),
+			candidate_clear=lambda point: not self._player_edges_penalized(
+				player_id, current, point, now))
 		key = self.grid._edge_cells_for_segment(current, target)
 		if key is None and escape is None:
 			return False
@@ -3323,7 +3353,9 @@ class PlayerPathfinder(object):
 			1.0 if (int(player_id) + attempt) % 2 else -1.0,
 			self._active_planning_edge_penalties(player_id, now),
 			FIRST_CANDIDATE_OFFSET, diagnostic=state.setdefault('local_fallback', {}),
-			excluded_target_points=self._active_local_target_refusals(player_id, now))
+			excluded_target_points=self._active_local_target_refusals(player_id, now),
+			candidate_clear=lambda point: not self._player_edges_penalized(
+				player_id, current, point, now))
 		if target is not None:
 			state['ingress_escape'] = {'target': tuple(target), 'until': float(now) + 8.0}
 			return tuple(target)
@@ -3430,9 +3462,110 @@ class PlayerPathfinder(object):
 		self.boundary_bodies[int(player_id)]=dict(key=key,shape=shape,cell=cell,
 			position=tuple(position),yaw=float(yaw),edges=edges,scope=(shape,cell if inward else None))
 
+	@staticmethod
+	def _stationary_crossing(start, end, entry, shape, allow_exit=False):
+		body, hull = entry
+		if not _segment_crosses_hull(start, end, hull):
+			return False
+		dx, dz = end[0]-start[0], end[2]-start[2]
+		length2 = dx*dx + dz*dz
+		fraction = max(0., min(1., ((body['position'][0]-start[0])*dx +
+			(body['position'][2]-start[2])*dz) / max(.01, length2)))
+		height = start[1] + (end[1]-start[1])*fraction
+		if not tank_collision.vertical_overlap(height, shape,
+				body['position'][1], body['collision_shape'], slop=0.,
+				pitch_b=body.get('pitch', 0.), roll_b=body.get('roll', 0.)):
+			return False
+		# The advisory inset may already contain the realised starting centre.
+		# An outward exit still needs the caller's full physical hull sweep.
+		if (allow_exit and _segment_crosses_hull(start, start, hull) and
+				not _segment_crosses_hull(end, end, hull) and
+				(start[0]-hull[1])*dx + (start[2]-hull[2])*dz > 0.):
+			return False
+		return True
+
+	def set_stationary_hulls(self, player_id, bodies, shape, clearance=0.):
+		"""Replace this player's observed living obstacles, separate from wrecks.
+
+		Only the caller's current stationary observations enter this layer. No
+		world failure, corpse publication, or timed blacklist is fabricated.
+		Identical occupied edges retain their revision and in-flight search.
+		"""
+		player_id, shape = int(player_id), tuple(shape)
+		padding = max(0., float(clearance))
+		key = (shape, round(padding, 3), tuple(sorted(
+			(int(body['id']), tuple(round(float(value), 3) for value in body['position']),
+			 round(float(body['yaw']), 3), tuple(body['collision_shape']),
+			 round(float(body.get('pitch', 0.)), 3), round(float(body.get('roll', 0.)), 3))
+			for body in bodies)))
+		previous = self.stationary_layers.get(player_id)
+		entries = []
+		for body in bodies:
+			point, other = body['position'], body['collision_shape']
+			yaw = float(body['yaw'])
+			hull = (int(body['id']), point[0], point[2], math.sin(yaw), math.cos(yaw),
+				max(.05, other[1]-STATIC_HULL_PLANNING_INSET)+padding,
+				max(.05, other[0]-STATIC_HULL_PLANNING_INSET)+padding)
+			entries.append((dict(body), hull))
+		if previous is not None and previous['key'] == key:
+			previous['entries'] = entries
+			return dict(count=len(entries), changed=False, revision=previous['revision'])
+		edges, grid = {}, self.grid
+		for entry in entries:
+			body, hull = entry
+			radius = math.hypot(hull[5], hull[6])
+			first = grid.cell_for((hull[1]-radius-grid.cell_size, 0., hull[2]-radius-grid.cell_size))
+			last = grid.cell_for((hull[1]+radius+grid.cell_size, 0., hull[2]+radius+grid.cell_size))
+			for z in range(first[1], last[1]+1):
+				for x in range(first[0], last[0]+1):
+					cell = (x, z)
+					y = grid._baked_cell_height(cell) if grid.prebaked else body['position'][1]
+					if y is None:
+						continue
+					start = grid.point_for(cell, y)
+					for dx, dz, unused in grid._NEIGHBOURS:
+						peer = (x+dx, z+dz)
+						end_y = grid._baked_cell_height(peer) if grid.prebaked else y
+						if end_y is None:
+							continue
+						end = grid.point_for(peer, end_y)
+						if self._stationary_crossing(start, end, entry, shape):
+							edges[tuple(sorted((cell, peer)))] = STATIC_HULL_EDGE_PENALTY
+		changed = edges != (previous['edges'] if previous is not None else {})
+		revision = (previous['revision'] if previous is not None else 0) + int(changed)
+		self.stationary_layers[player_id] = dict(key=key, shape=shape, entries=entries,
+			edges=edges, revision=revision)
+		return dict(count=len(entries), changed=changed, revision=revision)
+
+	def _stationary_segment_penalized(self, player_id, start, end):
+		layer = self.stationary_layers.get(player_id)
+		return bool(layer and any(self._stationary_crossing(
+			start, end, entry, layer['shape'], allow_exit=True) for entry in layer['entries']))
+
+	def _stationary_edge_penalties(self, player_id):
+		layer = self.stationary_layers.get(player_id)
+		if not layer or not layer['edges']:
+			return {}
+		edges = dict(layer['edges'])
+		body = self.boundary_bodies.get(player_id)
+		if body is not None:
+			# A coarse cell can overlap a peer while the real hull is beside it.
+			# Permit only clear outward first edges, never entry through the peer.
+			position, cell = body['position'], body['cell']
+			for dx, dz, unused in self.grid._NEIGHBOURS:
+				peer = (cell[0]+dx, cell[1]+dz)
+				y = self.grid._baked_cell_height(peer) if self.grid.prebaked else position[1]
+				if y is None:
+					continue
+				end = self.grid.point_for(peer, y)
+				if not self._stationary_segment_penalized(player_id, position, end):
+					edges.pop(tuple(sorted((cell, peer))), None)
+		return edges
+
 	def _active_planning_edge_penalties(self, player_id, now):
 		result = dict(self._active_player_edge_penalties(player_id, now) or {})
 		result.update(self._active_macro_edge_penalties(player_id, now) or {})
+		result.update(self._stationary_edge_penalties(player_id))
 		body=self.boundary_bodies.get(player_id)
 		if body is not None:
 			if not result:return body['edges'] or None
@@ -3443,6 +3576,8 @@ class PlayerPathfinder(object):
 		"""True when this player's own escalation covers any edge of the segment."""
 		body=self.boundary_bodies.get(int(player_id))
 		if body is not None and not arena_boundary.segment_clear(self.grid.bounds,start,end,*body['shape']):
+			return True
+		if self._stationary_segment_penalized(int(player_id), start, end):
 			return True
 		retired = self.player_states.get(int(player_id), {}).get('local_target_retired')
 		if (retired is not None and float(now) < retired[1] and
@@ -3533,6 +3668,7 @@ class PlayerPathfinder(object):
 				self.paths.pop(key, None)
 				self.path_times.pop(key, None)
 				self.path_hull_revisions.pop(key, None)
+				self.path_stationary_revisions.pop(key, None)
 				self.path_native_refusals.pop(key, None)
 		# In-flight searches may have already admitted edges through that wall.
 		for search in self.searches.values():
@@ -3565,6 +3701,7 @@ class PlayerPathfinder(object):
 			self.paths.pop(key, None)
 			self.path_times.pop(key, None)
 			self.path_hull_revisions.pop(key, None)
+			self.path_stationary_revisions.pop(key, None)
 			self.path_native_refusals.pop(key, None)
 
 	def _retire_pending_prefixes(self, search):
@@ -3583,8 +3720,22 @@ class PlayerPathfinder(object):
 		self.path_native_refusals[key] = dict(search.progress.get("native_refusal") or {},
 			start=search.progress.get("start"), goal=search.progress.get("goal"),
 			steps=search.steps, result="path" if path else "no_path")
+		owner, revision = self.search_stationary_revisions.pop(key, (None, 0))
+		layer = self.stationary_layers.get(owner, {})
 		self.searches.pop(key, None)
 		self.search_times.pop(key, None)
+		occupied = bool(path and any(self._stationary_segment_penalized(owner, first, second)
+			for first, second in zip(path, path[1:])))
+		if revision != layer.get('revision', 0) and (not path or occupied):
+			# A job owns frozen inputs. Newly observed living hulls can veto an
+			# old route; a departed hull can release an old no-path result.
+			combat_count('player_nav_search_stale_stationary')
+			return False
+		if occupied:
+			# Sub-cell endpoints can overlap a hull without crossing a raster
+			# edge. Retain an honest no-path result for the normal bounded retry.
+			path = ()
+			self.path_native_refusals[key].update(result='no_path', reason='observed_stationary_hull')
 		if (path and search.hull_revision != self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path)):
 			# A wreck may appear while a pure worker owns the old map inputs.
@@ -3597,6 +3748,7 @@ class PlayerPathfinder(object):
 		# A resumable search may have traversed a cell before a wreck appeared.
 		# Stamp the revision it started with so that path still gets retired.
 		self.path_hull_revisions[key] = search.hull_revision
+		self.path_stationary_revisions[key] = layer.get('revision', 0)
 		if path:
 			combat_count('nav_search_completed')
 			self.search_completed += 1
@@ -3725,6 +3877,7 @@ class PlayerPathfinder(object):
 				self.paths.pop(key, None)
 				self.path_times.pop(key, None)
 				self.path_hull_revisions.pop(key, None)
+				self.path_stationary_revisions.pop(key, None)
 				self.path_native_refusals.pop(key, None)
 		self.player_direct_progress.pop(player_id, None)
 		self.fallback_modes.pop(player_id, None)
@@ -3896,6 +4049,7 @@ class PlayerPathfinder(object):
 		owner = self._path_owner(path_key)
 		if owner is None and self._boundary_actor in self.boundary_bodies:
 			owner=self._boundary_actor
+		stationary_revision = self.stationary_layers.get(owner, {}).get('revision', 0)
 		if native_capability is not None and native_capability[0] != ('ignore_destructibles', 1):
 			raise ValueError('unsupported navigation collision policy')
 		if owner is not None:
@@ -3914,9 +4068,12 @@ class PlayerPathfinder(object):
 			path = self.paths[key]
 			hard_edge_penalties=dict(self._active_player_edge_penalties(owner,now) or {})
 			hard_edge_penalties.update(self._active_macro_edge_penalties(owner,now) or {})
+			hard_edge_penalties.update(self._stationary_edge_penalties(owner))
 			body=self.boundary_bodies.get(owner)
 			boundary_bad=bool(body and any(not arena_boundary.segment_clear(
 				self.grid.bounds,a,b,*body['shape']) for a,b in zip(path or (), (path or ())[1:])))
+			stationary_bad = any(self._stationary_segment_penalized(owner, a, b)
+				for a, b in zip(path or (), (path or ())[1:]))
 			# A probe can fail while distant chunks are still streaming. Successful
 			# paths are permanent for the battle; failed ones get another chance.
 			#
@@ -3930,7 +4087,7 @@ class PlayerPathfinder(object):
 				self.grid.static_hull_revision and
 				self.grid.path_crosses_static_hull(path))
 			partial = bool(path and _distance_2d(path[-1], goal) > WAYPOINT_ARRIVAL_RADIUS)
-			if (path and not boundary_bad and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
+			if (path and not boundary_bad and not stationary_bad and not (partial and float(now) - self.path_times.get(key, now) >= 8.0) and not retired_by_hull and
 					not self.grid.path_has_penalty(path, now) and
 					not self.grid.path_has_edge_penalty(
 						path, hard_edge_penalties)):
@@ -3938,20 +4095,24 @@ class PlayerPathfinder(object):
 					self.path_times[key] = float(now)
 				combat_count('nav_path_cached')
 				self.path_hull_revisions[key] = self.grid.static_hull_revision
+				self.path_stationary_revisions[key] = stationary_revision
 				return key, path
 			if path:
 				combat_count('nav_path_penalty_invalidated')
 				del self.paths[key]
 				self.path_times.pop(key, None)
 				self.path_hull_revisions.pop(key, None)
+				self.path_stationary_revisions.pop(key, None)
 			else:
-				if float(now) - self.path_times.get(key, 0.0) < 8.0:
+				if (self.path_stationary_revisions.get(key, 0) == stationary_revision and
+						float(now) - self.path_times.get(key, 0.0) < 8.0):
 					combat_count('nav_failed_path_cooldown')
 					return key, path
 				combat_count('nav_failed_path_retry')
 				del self.paths[key]
 				self.path_times.pop(key, None)
 				self.path_hull_revisions.pop(key, None)
+				self.path_stationary_revisions.pop(key, None)
 				self.grid.clear_negative_cache()
 		search = self.searches.get(key)
 		if search is None:
@@ -3974,11 +4135,10 @@ class PlayerPathfinder(object):
 				combat_count('nav_path_direct')
 				self.path_hull_revisions[key] = (
 					self.grid.static_hull_revision)
+				self.path_stationary_revisions[key] = stationary_revision
 				return key, path
-			# Moving tanks do not belong in a cached static terrain path. Including all
-			# 28 peers made every expansion scan transient positions, permanently baked
-			# traffic into shared paths, and multiplied probe cost. LocalDriver handles
-			# moving OBBs every frame; A* only owns static terrain and remembered edges.
+			# Moving tanks stay with traffic. Observed stationary living hulls use
+			# this player's revocable edge snapshot, never shared terrain edits.
 			begin_plan = (self._native_navigation.submit
 			              if self._native_navigation is not None else
 			              self.grid.begin_plan)
@@ -3993,6 +4153,7 @@ class PlayerPathfinder(object):
 				                else None))
 			self.searches[key] = search
 			self.search_times[key] = float(now)
+			self.search_stationary_revisions[key] = (owner, stationary_revision)
 			combat_count('nav_search_created')
 		else:
 			combat_count('nav_search_retained')
@@ -4131,8 +4292,8 @@ class PlayerPathfinder(object):
 			horizon = max(
 				self.grid.cell_size * 2.0, float(lookahead_distance))
 		prefer_clearance = self._prefers_baked_clearance(path_key)
-		edge_penalties = self._active_planning_edge_penalties(
-			player_id if player_id is not None else self._path_owner(path_key), now)
+		owner = player_id if player_id is not None else self._path_owner(path_key)
+		edge_penalties = self._active_planning_edge_penalties(owner, now)
 		for candidate in range(index + 1, limit):
 			corner = path[index]
 			if (self.grid.obstacle_probe is not None and
@@ -4154,7 +4315,8 @@ class PlayerPathfinder(object):
 			if not self.grid.live_shortcut_preserves_climb_approach(current,path,index,candidate):
 				self._record_corner_check(player_id,current,path,index,candidate,now,False,'climb_setup_required')
 				break
-			if self.grid.path_has_edge_penalty((current,path[candidate]),edge_penalties):
+			if (owner is not None and self._player_edges_penalized(owner, current, path[candidate], now) or
+					self.grid.path_has_edge_penalty((current,path[candidate]),edge_penalties)):
 				self._record_corner_check(player_id,current,path,index,candidate,now,False,'private_edge_penalty')
 				break
 			corridor = {}

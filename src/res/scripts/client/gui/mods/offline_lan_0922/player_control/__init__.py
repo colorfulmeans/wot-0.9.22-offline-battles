@@ -1831,7 +1831,12 @@ class PlayerControl(object):
                 self.no_aim_since = now
             aim_idle = (self.direct_engagement is None or
                         self.direct_engagement.target is None or now - self.no_aim_since >= 1.5)
+            retained_aim = bool(self.engagement_hold is not None and engagement is not None and
+                now < self.engagement_hold[1] and
+                records.get(engagement.target) is self.engagement_hold[0] and
+                not (getattr(engagement, 'retreat', False) or self.ammo_state['empty']))
             if ('fire' in self.features and self.weapon is not None and aim_idle and not settling_aim and
+                    not retained_aim and
                     not getattr(owner, '_local_fire_intent', None) and
                     not getattr(owner, '_local_player_burst', None)):
                 self.weapon.forward(position,yaw,max(.5,(shape[2]+shape[3])*.5))
@@ -1861,6 +1866,8 @@ class PlayerControl(object):
                          roll=getattr(owner, '_local_roll', 0.),
                          decision_horizon=decision_horizon,
                          burst_active=bool(getattr(owner, '_local_player_burst', None)))
+            physics = getattr(owner, '_local_physics', None)
+            state['turn_speed_limit'] = physics.get('rotSpd') if isinstance(physics, dict) else None
             from .traffic_laws import traffic_stopping_distance
             def stopping_distance(turn=False):
                 params = getattr(owner, '_local_physics', None)
@@ -1898,7 +1905,9 @@ class PlayerControl(object):
                     self.direct_engagement.target != self.blocked_fire_target):
                 blocked_target = None
             final_blocked = blocked_target is not None
-            seeking = bool(getattr(engagement, 'seek', False))
+            # A nominal HE fallback retains its penetration-search clock, but
+            # a newly proved usable shot still owns stop-and-fire movement.
+            seeking = bool(getattr(engagement, 'seek', False) and not fire_clear)
             gun = owner._gun_state
             direct_reload = (engagement is not None and gun.clip_size > 1 and
                              gun.clip <= 0 and gun.reload_time > 0.)
@@ -1917,21 +1926,34 @@ class PlayerControl(object):
                 facing_key = None
             pivot_hold = (self.confirmed_facing.owns_hold(facing_key) or
                           getattr(engagement, 'pivot_search', None) is not None)
+            established = self.engagement_hold
             locked_wait = (getattr(engagement, 'locked_wait', False) and not final_blocked
                 and not self.ammo_state['empty'] and self.last_order.get('holding')
+                and established is not None and now < established[1]
+                and records.get(getattr(engagement, 'target', None)) is established[0]
                 and self.last_order.get('combat_mode') in ('engage', 'support_hold', 'base_capture'))
             protected_hold = pivot_hold or locked_wait
-            established = self.engagement_hold
+            # A point rescan can return no solution for one update before
+            # checking becomes true (for example native_source_unverified).
+            # Keep the same live selected enemy's bounded stationary lease;
+            # unknown evidence neither renews it nor proves a lost lane.
             retain_hold = bool(established is not None and engagement is not None and
                 records.get(engagement.target) is established[0] and
                 (target is None or target is established[0]) and now < established[1] and
-                settling_aim and not final_blocked and not self.ammo_state['empty'])
+                not (final_blocked or direct_reload or
+                     getattr(engagement, 'retreat', False) or self.ammo_state['empty']))
+            shot_lane_proven = bool(target is not None and tactical_clear and
+                solution.get('reachable') and not (final_blocked or seeking) and
+                (engagement is not None or solution.get('clear')) and
+                not getattr(engagement, 'checking', False))
             context = dict(empty_ammo=self.ammo_state['empty'],
                 target=target, contacts=contacts, allies=roster, neighbours=peers,
                 base=base, enemy_base=enemy_base,
                 allies_complete=roster_complete, turret_hulls=turret_hulls,
                 burst_active=state['burst_active'],
-                fire_clear=tactical_clear and not (final_blocked or seeking),
+                fire_clear=tactical_clear and not (final_blocked or seeking or
+                    getattr(engagement, 'checking', False)),
+                shot_lane_proven=shot_lane_proven,
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
                 pivot_hold=protected_hold,
@@ -1974,10 +1996,14 @@ class PlayerControl(object):
                     tactical_clear and not (final_blocked or seeking) and target is not None and math.hypot(
                     target.position[0]-home[0],target.position[2]-home[1])<100. and
                     self.aim_receipt['distance']<=150.)
+            critical_health = (state['max_health'] > 0 and
+                               state['health'] <= state['max_health'] * .25)
             position_goal = None
+            approach_target = None
             withdrawal = None
             manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
+                self.navigation.context['stationary_fire_hold'] = bool(hold)
                 if (self.direct_engagement is not None and movement.get('allow_withdrawal') and
                         (self.direct_engagement.retreat or direct_reload)):
                     reason = 'magazine_reload' if direct_reload else 'no_he'
@@ -1986,7 +2012,8 @@ class PlayerControl(object):
                     if not decision_current():
                         return
                 elif ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_withdrawal') and not automatic_defence and not retain_hold and
+                        movement.get('allow_withdrawal') and not automatic_defence and
+                        (not (hold or retain_hold) or critical_health) and
                         (target is not None or self.navigation.cover_move is not None or
                          self.navigation.reload_route is not None)):
                     withdrawal = self.navigation.withdrawal(
@@ -2002,25 +2029,30 @@ class PlayerControl(object):
                 if self.direct_engagement is not None and not (self.direct_engagement.retreat or direct_reload):
                     self.navigation.ammo_retreat = None
                 if ('fire' in self.features and not self.ammo_state['empty'] and
-                        movement.get('allow_firing_position') and (not tactical_clear or final_blocked or seeking)
-                        and (final_blocked or candidates) and not automatic_defence and not retain_hold
+                        movement.get('allow_firing_position') and not context['fire_clear']
+                        and (final_blocked or candidates) and not automatic_defence and not hold
                         and withdrawal is None):
                     def firing_lane_from(candidate, start):
                         end = point if final_blocked and target is not None else self.target_point(candidate)
                         return (self.lane_from(candidate, start, end) and
                                 (not final_blocked or self.direct_engagement is not None or
                                  self.dynamic_path_clear(candidate, (start, end))))
+                    firing_target = blocked_target if final_blocked else records.get(
+                        getattr(self.direct_engagement, 'target', None), candidates[0])
                     position_goal = self.navigation.firing_position(
-                        state, blocked_target if final_blocked else records.get(
-                            getattr(self.direct_engagement, 'target', None), candidates[0]), clear,
+                        state, firing_target, clear,
                         firing_lane_from, owner._mutable_shot_ray()[0])
                     if not decision_current():
                         return
+                    if self.navigation.tag != 'SPG':
+                        # Artillery's firing-position refusal preserves its
+                        # deployment/sortie owner; it is not a direct approach.
+                        approach_target = firing_target
                 if position_goal is None:
                     self.navigation.firing_move = None
                 manoeuvre = self.combat_tactics.movement(state, context, entity.typeDescriptor,
                     allowed=bool(movement.get('allow_firing_position') and not automatic_defence and
-                        not retain_hold and withdrawal is None and position_goal is None),
+                        not hold and withdrawal is None and position_goal is None),
                     height=self.navigation._height, clear=clear)
                 if not decision_current():
                     return
@@ -2032,6 +2064,11 @@ class PlayerControl(object):
                 hold = False
                 order = self.navigation.drive_combat_goal(state, clear, manoeuvre['goal'],
                     mode=manoeuvre['phase'], key=('player_flank', manoeuvre['target']))
+            elif position_goal is None and approach_target is not None:
+                # A confirmed lost lane (or an expired pending proof) changes
+                # the approach to this enemy, not ownership back to the route.
+                hold = False
+                order = self.navigation.drive_to_contact(state, clear, approach_target)
             elif position_goal is None:
                 if retain_hold and isinstance(self.navigation, PlayerNavigation):
                     self.navigation.context['retain_engagement_hold'] = True
@@ -2042,11 +2079,16 @@ class PlayerControl(object):
             if not decision_current():
                 return
             reverse_only = bool(order.get('reverse_only'))
-            if protected_hold and order.get('holding') and order.get('combat_mode') in (
+            if (hold or protected_hold) and order.get('holding') and order.get('combat_mode') in (
                     'engage', 'support_hold', 'base_capture'):
                 order['traffic_hold_protected'] = True
-                if engagement.pivot_search is not None:
+                if getattr(engagement, 'pivot_search', None) is not None:
                     order['pivot_point_search'] = True
+                if order.get('combat_mode') in ('engage', 'support_hold'):
+                    order['stationary_fire'] = dict(target=target.id if target is not None else
+                        getattr(engagement, 'target', None), proven=shot_lane_proven,
+                        retained=retain_hold, lease_until=now + 4. if shot_lane_proven else
+                        established[1] if established is not None else None)
             pushing = not reverse_only and self.wreck_push.apply(order,state,traffic,
                 lambda heading, reach:self.direction_clear(position,heading,entity.typeDescriptor,shape,reach),
                 pose_clear=lambda end_yaw:self.rotation_clear(entity,position,yaw,end_yaw))
@@ -2126,7 +2168,11 @@ class PlayerControl(object):
                 mission_order.get('status') == 'running')
             if full_turret and parked_capture:
                 order['capture_pivot_circle'] = (mission_order['goal'], mission_order['radius'])
+            stationary_fire = bool(hold and order.get('holding') and
+                order.get('combat_mode') in ('engage', 'support_hold') and
+                (shot_lane_proven or retain_hold))
             if (full_turret and facing_allowed and order.get('holding') and
+                    not stationary_fire and
                     not (pushing or reverse_only or order['throttle'] or order['turn']) and
                     context['supported'] and not context['overturned'] and
                     (parked_capture or order.get('combat_mode') in ('engage', 'support_hold'))):
@@ -2170,7 +2216,7 @@ class PlayerControl(object):
             self.aim_receipt['settling'] = True
         if engagement is not None and order.get('holding') and order.get('combat_mode') in (
                 'engage', 'support_hold'):
-            if target is not None and fire_clear:
+            if target is not None and shot_lane_proven:
                 self.engagement_hold = (target, now + 4.)
             elif not retain_hold:
                 self.engagement_hold = None

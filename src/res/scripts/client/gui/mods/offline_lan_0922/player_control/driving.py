@@ -1,6 +1,7 @@
 """Visible human's independent pivot/travel controller; no Bot driver state."""
 from __future__ import division
 import math
+from .pathfinding import WAYPOINT_ARRIVAL_RADIUS
 
 
 def angle(value):
@@ -22,12 +23,14 @@ class Driver(object):
         self.clearance_checks = None
         self.recovery_heading = None
         self.recovery_origin = None
+        self.alignment_target = None
         self.replan = False
         self.receipt = {}
 
     def drive(self, position, yaw, speed, target, now, clear, hold=False,
               stopping_distance=None, decision_horizon=.1, terminal=False,
-              arrival_radius=2., travel_direction=1., motion_key=None):
+              arrival_radius=2., travel_direction=1., motion_key=None,
+              half_length=3.5, turn_speed_limit=None):
         direction = -1. if travel_direction < 0. else 1.
         if self.motion_key != motion_key or self.travel_direction != direction:
             # A short manoeuvre owns its gear and progress. A route's old
@@ -35,6 +38,25 @@ class Driver(object):
             self._reset_motion()
             self.motion_key, self.travel_direction = motion_key, direction
         fixed_direction = motion_key is not None
+        radius = max(0., float(arrival_radius)) if terminal else WAYPOINT_ARRIVAL_RADIUS
+        requested_target = tuple(target)
+        try:
+            traverse = float(turn_speed_limit)
+            if math.isnan(traverse) or math.isinf(traverse) or traverse <= 0.:
+                traverse = None
+        except (TypeError, ValueError, OverflowError):
+            traverse = None
+        alignment = self.alignment_target
+        if alignment is not None:
+            if (hold or fixed_direction or direction < 0. or speed < -.05 or traverse is None or
+                    math.hypot(target[0]-position[0], target[2]-position[2]) <= radius or
+                    math.hypot(alignment[0]-position[0], alignment[2]-position[2]) <= radius or
+                    math.hypot(alignment[0]-target[0], alignment[2]-target[2]) > 2.):
+                self.alignment_target = None
+            else:
+                # The admitted near corner owns both heading and brake until
+                # aligned. Rebased nearby tips cannot keep moving that target.
+                target = alignment
         dx, dz = target[0]-position[0], target[2]-position[2]
         distance = math.hypot(dx, dz)
         travel_heading = math.atan2(dx, dz) if distance > .1 else yaw
@@ -42,7 +64,9 @@ class Driver(object):
         delta = angle(heading-yaw)
         self.replan = False
         mode, throttle, turn, brake = 'travel', 0., 0., False
-        radius = max(0., float(arrival_radius)) if terminal else 2.
+        # A nonterminal corner is consumed by the pathfinder at this same
+        # radius. Stopping farther away leaves an unconsumed, unreachable leg.
+        alignment_gates = []
         stopping = None
         if stopping_distance is not None:
             value = stopping_distance() if callable(stopping_distance) else stopping_distance
@@ -60,6 +84,7 @@ class Driver(object):
             self.reverse_until = 0.
             self.forward_until = 0.
             self.forward_origin = None
+            self.alignment_target = None
         elif (direction < 0. or fixed_direction) and speed * direction < -.05:
             mode, brake = 'direction_brake', True
         elif now < self.forward_until:
@@ -105,10 +130,37 @@ class Driver(object):
                 # Do not demand cruise space beyond this short leg; the
                 # stopping envelope above still brakes before that endpoint.
                 reach = min(distance, reach)
-            # Ordinary routes always face an objective before driving forward.
-            # An explicit reverse manoeuvre instead aligns the rear; the
-            # heading receipt remains a physical hull heading for turn guards.
-            if abs(delta) > .30:
+            if fixed_direction or direction < 0.:
+                # Short cover legs retain their checked gear/alignment rule.
+                # This is separate from ordinary forward route steering.
+                align = abs(delta) > .30
+                if align:
+                    alignment_gates.append('fixed_gear_alignment')
+            else:
+                # Independent implementation of the current Bot's pedal
+                # gates: a modest angle to a distant clear goal still drives.
+                # Only near turning circles, corners, slopes and rear goals
+                # require a stationary alignment before forward travel.
+                if self.recovery_heading is not None:
+                    self.alignment_target = None
+                elif traverse is not None and speed >= -.05:
+                    turning_radius = max(1., abs(speed)) / traverse
+                    if distance <= max(8., 2. * turning_radius) and abs(delta) > .30:
+                        self.alignment_target = tuple(target)
+                    if self.alignment_target is not None:
+                        if abs(delta) > .12:
+                            alignment_gates.append('retained_near_point_alignment')
+                        else:
+                            self.alignment_target = None
+                if distance <= max(8., float(half_length) * 2.) and abs(delta) > .45:
+                    alignment_gates.append('near_corner_alignment')
+                grade = (target[1] - position[1]) / max(.1, distance)
+                if abs(grade) > math.tan(math.radians(22.5)) and abs(delta) > math.pi / 4.:
+                    alignment_gates.append('slope_entry_alignment')
+                if abs(delta) > math.pi / 2.:
+                    alignment_gates.append('rear_heading_alignment')
+                align = bool(alignment_gates)
+            if align:
                 mode = 'align'
                 if abs(speed) > (.05 if direction < 0. else 1.5):
                     brake = True
@@ -122,7 +174,8 @@ class Driver(object):
                                         else .65 if direction < 0. else 1.)
                 # Native steering reverses its yaw sign with reverse intent;
                 # stationary alignment above still uses the physical yaw sign.
-                turn = max(-.6, min(.6, delta * direction))
+                turn = (max(-.6, min(.6, delta * direction)) if fixed_direction or direction < 0.
+                        else max(-1., min(1., delta / .58)))
             else:
                 mode, brake = 'blocked', True
                 if direction > 0. and not fixed_direction:
@@ -153,7 +206,7 @@ class Driver(object):
                 if (direction > 0. and not fixed_direction and
                         mode in ('blocked', 'travel', 'align', 'detour_align')):
                     rear = clear(yaw+math.pi, 4.)
-                    front = not rear and mode in ('align', 'detour_align') and clear(yaw, 4.)
+                    front = not rear and mode in ('align', 'detour_align', 'blocked') and clear(yaw, 4.)
                     self.clearance_checks = dict(at=now, origin=tuple(position),
                         yaw=yaw, rear=rear, front=front, stalled_mode=mode)
                     if rear:
@@ -168,6 +221,9 @@ class Driver(object):
                             yaw=yaw, delta=delta, reverse_until=self.reverse_until,
                             forward_until=self.forward_until,
                             clearance_checks=self.clearance_checks,
+                            requested_target=requested_target,
+                            alignment_target=self.alignment_target,
+                            alignment_gates=alignment_gates, turn_speed_limit=traverse,
                             terminal=bool(terminal), arrival_radius=radius,
                             stopping_envelope=stopping,
                             decision_horizon=max(0., float(decision_horizon)))
