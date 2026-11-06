@@ -10,11 +10,12 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src/res/scripts/client'))
-from gui.mods.offline_lan_0922 import gun_mechanics, loadout
+from gui.mods.offline_lan_0922 import equipment_mechanics, gun_mechanics, loadout
 from gui.mods.offline_lan_0922.player_control import full_runtime
 from gui.mods.offline_lan_0922.player_control.copied.ai.planner import build_vehicle_profile
 from test_port_0922_bot_runtime import (_combat_descriptor, _flat_open_graph,
                                        _plain_attribute_factors, _effective_params_snapshot)
+from test_port_0922_equipment_mechanics import _defaults
 from player_native_fixtures import Matrix
 
 
@@ -123,6 +124,32 @@ class FullRuntimeTests(unittest.TestCase):
         self.assertIsInstance(self.runtime.planner,full_runtime.BotPlanner)
         self.assertIsNotNone(self.runtime.engine.adapter.driver)
         self.assertIsNotNone(self.runtime.engine.navigator)
+
+    def test_real_player_consumable_slot_order_does_not_use_bot_contract(self):
+        # A real #1513 player can mount medkit, repairkit, extinguisher in
+        # slots 4/5/6; this is not the fixed Bot consumable contract order.
+        native_items = _defaults()
+        mounted = (native_items[1], native_items[2], native_items[0])
+        states = [equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(item)) for item in mounted]
+        self.battle._equipment_states = states
+        snapshots = [item.trusted_snapshot(0.) for item in states]
+        self.battle._records['player:1']['state']['equipment_states'] = snapshots
+        original_snapshot = copy.deepcopy(snapshots)
+        with mock.patch.object(equipment_mechanics, 'bot_consumable_contracts',
+                               wraps=equipment_mechanics.bot_consumable_contracts) as bot_only:
+            self.assertTrue(self.runtime.start(('drive', 'fire', 'consumables')))
+            bot_only.assert_not_called()
+        self.assertTrue(self.runtime.active)
+        self.assertEqual(original_snapshot,
+                         self.battle._records['player:1']['state']['equipment_states'])
+        views = self.runtime.engine._equipment_states[self.runtime.actor_id]
+        self.assertEqual(tuple(item.original for item in views), tuple(states))
+        self.assertEqual(tuple(item.contract['name'] for item in views),
+                         ('largeMedkit', 'largeRepairkit', 'autoExtinguishers'))
+        self.battle._last_frame_time = .1
+        self.runtime.update(.1, .1)
+        self.assertTrue(self.runtime.active)
 
     def test_complete_live_loop_emits_native_drive_without_duplicating_physics(self):
         self.assertTrue(self.runtime.start(('drive',)))

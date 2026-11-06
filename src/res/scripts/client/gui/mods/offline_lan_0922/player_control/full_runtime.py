@@ -1035,6 +1035,13 @@ class FullPlayerRuntime(object):
             raise RuntimeError('local_vehicle_record_unavailable')
         self._local_record_key = next(key for key, row in battle._records.items() if row is local)
         own_raw = dict(local.get('state') or {})
+        # The copied Bot bootstrap accepts only the Bot's fixed consumable
+        # order.  The human's authoritative slots can be in any order and
+        # belong to the native player equipment ledger, not this synthetic
+        # Bot bootstrap.  _observe() projects those live native states into
+        # the private planner through _sync_equipments() during attach.
+        # Never change or reorder the actual player/server snapshots.
+        own_raw.pop('equipment_states', None)
         position, yaw = battle.local_pose()
         own_raw.update(id=self.actor_id, team=int(local.get('team', own_raw.get('team', 0))),
                        vehicle=local.get('vehicle') or own_raw.get('vehicle') or
