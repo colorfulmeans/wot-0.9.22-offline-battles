@@ -447,7 +447,7 @@ class _NativeAimInput(object):
         # ordinary float32 tolerance would deadlock that unchanged proof.
         # Ordinary tanks use the observed #1513 native-angle precision.
         type_tags = getattr(getattr(descriptor, 'type', None), 'tags', ()) or ()
-        tolerance = 1.e-8 if 'SPG' in type_tags else NATIVE_ANGLE_TOLERANCE
+        tolerance = 1.e-7 if 'SPG' in type_tags else NATIVE_ANGLE_TOLERANCE
         stabilised = getattr(battle, '_local_stabilised_pose', battle._local_body_pose)
         body = battle._runtime.math.Matrix(stabilised())
         rotator = battle._avatar.gunRotator

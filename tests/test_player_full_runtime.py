@@ -697,6 +697,31 @@ class NativeAimLoopBoundaryTests(unittest.TestCase):
                          scene.runtime.state['fire_seq'])
         self.assertGreater(scene.runtime.state['fire_seq'], 0)
 
+    def test_real_artillery_float32_native_angles_preserve_exact_arc_proof(self):
+        """Native float32 SPG input must satisfy the copied 1e-7 arc gate."""
+        from test_player_fire_admission_complete import ArtilleryFireScene, f
+        scene = ArtilleryFireScene()
+        scene.setUp()
+        self.addCleanup(scene.doCleanups)
+        scene.configure_artillery()
+        original_angles = scene.observed_source_angles
+
+        def native_float(value):
+            return struct.unpack('f', struct.pack('f', float(value)))[0]
+
+        scene.observed_source_angles = lambda *args: tuple(
+            native_float(angle) for angle in original_angles(*args))
+        scene.battle._runtime.get_shot_angles = scene.observed_source_angles
+        scene.battle._vector = lambda value: f._Vector(
+            tuple(native_float(component) for component in value))
+        for unused in range(100):
+            scene.artillery_tick()
+            if scene.launches():
+                break
+        self.assertTrue(scene.launches(), scene.artillery_trace[-1])
+        self.assertLess(scene.battle._avatar.gunRotator.gunPitch, -.9)
+        self.assertEqual([19, 10], scene.battle._gun_state.ammo)
+
     def test_only_a_committed_native_shot_advances_copied_aim_receipt(self):
         scene = self.scene()
         state = scene.runtime.state
