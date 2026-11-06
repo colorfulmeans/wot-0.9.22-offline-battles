@@ -53,6 +53,7 @@ class PlayerControl(object):
         self.aim_detail_sequence = 0
         self.aim_detail_signature = None
         self.next_round_request = None
+        self.next_clip_request = None
         self.owner, self.features, self.notify = owner, set(features) & set(('drive', 'fire', 'consumables')), notify
         self.active = self.key_down = False
         self.navigation = self.weapon = self.ammo_policy = None
@@ -64,6 +65,8 @@ class PlayerControl(object):
         self.target_selection = TargetSelection()
         self.combat_tactics = CombatTactics()
         self.confirmed_facing = ConfirmedFacing()
+        from .hull_alignment import HullAlignment
+        self.hull_alignment = HullAlignment()
         self.fire_admission = FireAdmission(self)
         self.strategy = None
         self.next_strategy = 0.
@@ -337,6 +340,7 @@ class PlayerControl(object):
         self.target_selection.reset()
         self.combat_tactics.reset()
         self.confirmed_facing.reset()
+        self.hull_alignment.reset()
         self.fire_admission.reset()
         self.blocked_fire_target = None
         self.engagement_hold = None
@@ -463,6 +467,7 @@ class PlayerControl(object):
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
         self.confirmed_facing.reset()
+        self.hull_alignment.reset()
         self.engagement_hold = self.combat_movement_target = self.front_priority = None
         callbacks = list(self.release_pending)
         self.release_pending = []
@@ -503,6 +508,9 @@ class PlayerControl(object):
                           (burst.get('player_control') or {}).get('command') is not None)
         if burst is not None and not keep_burst:
             callbacks.append(('burst_release', lambda:self.release_burst(burst)))
+        if (self.next_clip_request is not None and
+                not any(stage == 'clip_ammo_release' for stage, unused in callbacks)):
+            callbacks.append(('clip_ammo_release', self.release_clip_plan))
         if not keep_burst:
             self.owned_burst = None
         siege_observer, self.siege_observer = self.siege_observer, None
@@ -1003,6 +1011,7 @@ class PlayerControl(object):
         context = burst.get('player_control')
         if context is None:
             return
+        self.fire_admission.burst_retired(burst)
         if context.get('policy') is not None:
             context['policy'].close_group(burst.get('group_seq'), burst.get('committed', 0))
         if context.get('command') is not None:
@@ -1336,11 +1345,16 @@ class PlayerControl(object):
         if (owner._local_fire_intent is not None or
                 (self.direct_engagement is not None and getattr(owner, '_local_player_burst', None))):
             return
+        if self.direct_engagement is not None and gun.clip_size > 1 and gun.clip > 0:
+            # A partial cassette remains loaded until its search/withdrawal
+            # owner explicitly requests RELOAD_PARTIAL_CLIP.
+            return False
         if (selected != gun.shot_index and
                 (self.direct_engagement is not None or selected != gun.pending_index)):
             settings = owner._runtime.constants.VEHICLE_SETTING
-            # Direct fire can have no legal shot with the current magazine.
-            # Request the native immediate reload instead of waiting to empty it.
+            # Single-round selection and the existing artillery policy keep
+            # their native setting behavior. Live direct-fire cassettes are
+            # protected above and have their own next-cassette transaction.
             code = (settings.CURRENT_SHELLS if self.direct_engagement is not None or
                     gun.clip_size <= 1 or gun.clip <= 0 else settings.NEXT_SHELLS)
             if self.direct_engagement is not None:
@@ -1358,7 +1372,7 @@ class PlayerControl(object):
     def _queue_next_shell(self, gun, selected):
         from ..gun_mechanics import _field
         owner = self.owner
-        if (gun.clip <= 0 or gun.ammo[selected] <= 0 or
+        if ((gun.clip <= 0 and gun.clip_size <= 1) or gun.ammo[selected] <= 0 or
                 getattr(owner, '_local_fire_intent', None) or
                 getattr(owner, '_local_player_burst', None)):
             return False
@@ -1369,10 +1383,76 @@ class PlayerControl(object):
         compact = _field(_field(gun.shots[selected], 'shell'), 'compactDescr')
         return owner.change_vehicle_setting(settings.NEXT_SHELLS, compact)
 
+    def release_clip_plan(self):
+        """Retain a failed cleanup only while its original pending plan exists."""
+        request = self.next_clip_request
+        try:
+            self.queue_next_automatic_clip(None)
+        except Exception:
+            # The cancellation publishes its temporary ownership before a
+            # native call. A failed call must not orphan the still-pending
+            # plan, nor reclaim a newer manual selection or replacement gun.
+            if (request is not None and not self.active and self.next_clip_request is None and
+                    self.owner._gun_state is request[0] and request[0].pending_index == request[1]):
+                self.next_clip_request = request
+            raise
+        if self.next_clip_request is not None:
+            raise RuntimeError('automatic_clip_release_pending')
+
     def queue_next_automatic_clip(self, selected):
-        gun = self.owner._gun_state
-        if gun.clip_size > 1:
-            self._queue_next_shell(gun, selected)
+        """Replace only this controller's pending cassette, never its load."""
+        owner, gun = self.owner, self.owner._gun_state
+        if gun is None or gun.clip_size <= 1:
+            self.next_clip_request = None
+            return False
+        queued = getattr(gun, 'pending_index', None)
+        owned = queued is not None and self.next_clip_request == (gun, queued)
+        if not owned:
+            self.next_clip_request = None
+            if queued is not None:
+                return False
+        cancelling = selected is None
+        if cancelling:
+            if not owned:
+                return False
+            selected = gun.shot_index
+        elif not self.active or self.direct_engagement is None:
+            return False
+        if (isinstance(selected, bool) or not isinstance(selected, int) or
+                not 0 <= selected < len(gun.ammo) or gun.ammo[selected] <= 0 or
+                getattr(owner, '_local_fire_intent', None) or
+                getattr(owner, '_local_player_burst', None)):
+            return False
+        if selected == (queued if queued is not None else gun.shot_index):
+            return True
+        generation = self.control_generation
+        previous = self.next_clip_request
+        request = (gun, selected) if selected != gun.shot_index else None
+        self.next_clip_request = request
+        accepted = self._queue_next_shell(gun, selected)
+        if owner._gun_state is not gun or self.control_generation != generation:
+            if self.next_clip_request is request:
+                self.next_clip_request = None
+            # A native setting can finish its write after Stop re-entered.
+            # Release only that still-current, otherwise unclaimed request.
+            if (not self.active and owner._gun_state is gun and
+                    self.next_clip_request is None and gun.pending_index == selected):
+                self.next_clip_request = (gun, selected)
+                if not any(stage == 'clip_ammo_release' for stage, unused in self.release_pending):
+                    self._run_releases([('clip_ammo_release', self.release_clip_plan)], owner._clock())
+            return False
+        if not accepted:
+            if self.next_clip_request is request:
+                self.next_clip_request = previous if gun.pending_index == queued else None
+            return False
+        expected = None if selected == gun.shot_index else selected
+        if gun.pending_index != expected:
+            self.next_clip_request = None
+            return False
+        self.next_clip_request = (gun, selected) if expected is not None else None
+        self.record('ammo_next_clip', shell=selected, loaded=gun.shot_index,
+                    cancelled=cancelling)
+        return True
 
     def queue_next_automatic_round(self, selected):
         gun = self.owner._gun_state
@@ -1397,15 +1477,24 @@ class PlayerControl(object):
     def reload_automatic_clip(self, selected):
         owner, gun = self.owner, self.owner._gun_state
         generation = self.control_generation
-        if gun.ammo[selected] <= 0:
+        if (gun is None or gun.clip_size <= 1 or gun.clip <= 0 or
+                not self.active or not getattr(self.direct_engagement, 'retreat', False) or
+                isinstance(selected, bool) or not isinstance(selected, int) or
+                not 0 <= selected < len(gun.ammo) or gun.ammo[selected] <= 0 or
+                getattr(owner, '_local_player_burst', None) or
+                getattr(owner, '_local_fire_intent', None)):
             return False
-        self.queue_next_automatic_clip(selected)
+        if not self.queue_next_automatic_clip(selected):
+            return False
         if (not self.active or self.control_generation != generation or owner._gun_state is not gun or
                 gun.clip <= 0 or getattr(owner, '_local_player_burst', None) or
                 getattr(owner, '_local_fire_intent', None)):
             return False
         settings = owner._runtime.constants.VEHICLE_SETTING
-        return owner.change_vehicle_setting(settings.RELOAD_PARTIAL_CLIP, 0)
+        accepted = owner.change_vehicle_setting(settings.RELOAD_PARTIAL_CLIP, 0)
+        if owner._gun_state is gun and gun.pending_index is None:
+            self.next_clip_request = None
+        return bool(accepted)
 
     def consumables(self, entity):
         # Player-owned activation decisions, actual mounted kits/cooldowns.
@@ -1670,10 +1759,11 @@ class PlayerControl(object):
         decision_aiming, decision_policy = self.aiming, self.ammo_policy
         decision_server, decision_client = owner._server, owner.client
         decision_gun = owner._gun_state
+        decision_descriptor = entity.typeDescriptor
         decision_features = set(self.features)
         decision_mission = self.mission_command
 
-        def decision_current():
+        def decision_current(check_gun=True):
             # Every native query/source setter can synchronously dispatch a
             # Stop, a new command, a siege descriptor or another round. Native
             # observations may finish, but the retired decision cannot publish
@@ -1686,7 +1776,7 @@ class PlayerControl(object):
             return bool(self.active and not self.closed and self.control_generation == decision_generation and
                 self.owner is owner and self.identity() == decision_identity and actual is entity and
                 owner._sender is sender and owner.client is decision_client and owner._server is decision_server and
-                owner._gun_state is decision_gun and self.features == decision_features and
+                (not check_gun or owner._gun_state is decision_gun) and self.features == decision_features and
                 self.mission_command == decision_mission and
                 self.navigation is decision_navigation and self.weapon is decision_weapon and
                 self.aiming is decision_aiming and self.ammo_policy is decision_policy)
@@ -1787,13 +1877,17 @@ class PlayerControl(object):
         self.aim_receipt = None
         aim_command = 'unchanged'
         from ..gun_mechanics import _field
+        hull_candidate = bool(not artillery and engagement is not None and
+            target is not None and solution and tactical_clear and
+            solution.get('needs_hull') and
+            _field(_field(entity.typeDescriptor, 'gun'), 'turretYawLimits') is not None)
         if target is not None:
             self.no_aim_since = None
             from .weapon import barrel_aligned
             self.target_engine = target.id
             point = solution['point']
             if (not getattr(engagement, 'locked_wait', False) and
-                    (engagement is None or fire_clear or solution.get('laying'))):
+                    (engagement is None or fire_clear or solution.get('laying') or hull_candidate)):
                 self.weapon.aim_solution(target.id, solution, now)
                 aim_command = 'track'
                 if not decision_current():
@@ -1854,6 +1948,7 @@ class PlayerControl(object):
                                 'previous_not_visible_alive' if previous_target not in records else
                                 'no_clear_firing_lane'),
                         position=position, yaw=yaw, aim=self.aim_receipt)
+        ammo_search_attempt = False
         if 'drive' in self.features and self.navigation is not None:
             from .traffic import Traffic, body
             from .navigation import PlayerNavigation
@@ -1958,7 +2053,7 @@ class PlayerControl(object):
                 shot_lane_proven=shot_lane_proven,
                 aligned=bool(self.aim_receipt and self.aim_receipt.get('aligned')
                     and solution and solution.get('reachable')),
-                pivot_hold=protected_hold,
+                pivot_hold=protected_hold or hull_candidate,
                 gun_ready=self.ammo_state['can_fire'], fire_seq=self.automatic_commits,
                 fire_failure=self.last_fire_failure, aim_progress=aim_progress,
                 battle_finished=False, supported=not getattr(owner, '_local_airborne', False)
@@ -1968,13 +2063,18 @@ class PlayerControl(object):
             movement = self.navigation.movement_policy(state)
             if not decision_current():
                 return
+            hull_hold = bool(hull_candidate and not movement.get('force_move') and
+                movement.get('allow_firing_position') and not direct_reload and
+                not getattr(engagement, 'retreat', False) and not final_blocked and
+                self.aim_receipt['distance'] <= movement.get('fire_range', 150.))
+            protected_hold = protected_hold or hull_hold
             hold = bool(not self.ammo_state['empty'] and not movement.get('force_move') and
                 target is not None and tactical_clear and not (final_blocked or seeking) and
                 (artillery or movement.get('combat_hold',
                     self.aim_receipt['distance'] <= movement.get('engage_range', 150.))))
             retain_hold = bool((retain_hold or protected_hold) and not movement.get('force_move') and
                                movement.get('allow_firing_position', True))
-            hold = hold or retain_hold
+            hold = hold or retain_hold or hull_hold
             if not protected_hold and now >= self.next_strategy and movement.get('allow_strategy'):
                 self.next_strategy=now+1.
                 previous_mode = self.strategy.mode
@@ -2026,7 +2126,8 @@ class PlayerControl(object):
                 self.navigation.context['stationary_fire_hold'] = bool(hold)
                 if (self.direct_engagement is not None and movement.get('allow_withdrawal') and
                         (self.direct_engagement.retreat or direct_reload)):
-                    reason = 'magazine_reload' if direct_reload else 'no_he'
+                    reason = ('magazine_reload' if direct_reload or
+                        getattr(self.direct_engagement, 'reload_requested', None) is not None else 'no_he')
                     withdrawal = self.navigation.ammo_withdrawal(
                         state, clear, contacts, owner._tactical_ray_clear, reason)
                     if not decision_current():
@@ -2059,6 +2160,10 @@ class PlayerControl(object):
                                  self.dynamic_path_clear(candidate, (start, end))))
                     firing_target = blocked_target if final_blocked else records.get(
                         getattr(self.direct_engagement, 'target', None), candidates[0])
+                    # A requested search may be refused by its real support
+                    # and collision checks. That is a bounded failed attempt,
+                    # not an obligation to wait until movement becomes possible.
+                    ammo_search_attempt = bool(getattr(engagement, 'seek', False))
                     position_goal = self.navigation.firing_position(
                         state, firing_target, clear,
                         firing_lane_from, owner._mutable_shot_ray()[0])
@@ -2090,7 +2195,7 @@ class PlayerControl(object):
                 hold = False
                 order = self.navigation.drive_to_contact(state, clear, approach_target)
             elif position_goal is None:
-                if retain_hold and isinstance(self.navigation, PlayerNavigation):
+                if (retain_hold or hull_hold) and isinstance(self.navigation, PlayerNavigation):
                     self.navigation.context['retain_engagement_hold'] = True
                 order = self.navigation.decide(state, clear, hold=hold)
             else:
@@ -2127,7 +2232,7 @@ class PlayerControl(object):
                      order['artillery'].get('phase') != 'holding'))
             full_turret = (engagement is not None and not artillery and
                 _field(_field(entity.typeDescriptor, 'gun'), 'turretYawLimits') is None)
-            if not full_turret and hold and facing_allowed and target is not None:
+            if artillery and not full_turret and hold and facing_allowed and target is not None:
                 from .driving import angle
                 dx = target.position[0] - position[0]
                 dz = target.position[2] - position[2]
@@ -2206,7 +2311,7 @@ class PlayerControl(object):
             parked_capture = (order.get('combat_mode') == 'base_capture' and
                 order.get('holding') and arrival.get('inside') and
                 mission_order.get('status') == 'running')
-            if full_turret and parked_capture:
+            if not artillery and parked_capture:
                 order['capture_pivot_circle'] = (mission_order['goal'], mission_order['radius'])
             stationary_fire = bool(hold and order.get('holding') and
                 order.get('combat_mode') in ('engage', 'support_hold') and
@@ -2229,6 +2334,69 @@ class PlayerControl(object):
                     self.confirmed_facing.reset()
             else:
                 self.confirmed_facing.reset()
+            limited_key = ((target.id, getattr(engagement, 'sample', None), gun.shot_index)
+                           if target is not None and engagement is not None else None)
+            limited_identity = (id(target), id(gun), id(entity.typeDescriptor))
+            limited_active = bool(not artillery and not full_turret and limited_key is not None and
+                solution and tactical_clear and facing_allowed and order.get('holding') and
+                (hull_candidate or self.hull_alignment.matches(limited_key, limited_identity)) and
+                not (pushing or reverse_only or order['throttle'] or order['turn'] or
+                     direct_reload or getattr(engagement, 'retreat', False) or
+                     getattr(owner, '_local_fire_intent', None) or
+                     getattr(owner, '_local_player_burst', None)) and
+                context['supported'] and not context['overturned'] and
+                (parked_capture or order.get('combat_mode') in ('engage', 'support_hold')))
+            if limited_active:
+                from .weapon import hull_traverse_error
+                target_descriptor = target.typeDescriptor
+                def release_retired_laying():
+                    # A gun replacement invalidates this decision without
+                    # transferring movement to a new controller. Release its
+                    # previous turn only while that exact input owner and
+                    # hull attempt still exist; Stop/new commands keep theirs.
+                    if (decision_current(check_gun=False) and
+                            self.hull_alignment.matches(limited_key, limited_identity)):
+                        self.hull_alignment.reset()
+                        order.update(throttle=0., turn=0., brake=True, holding=True)
+                        order.pop('combat_facing', None)
+                        self.last_order = order
+                        sender.forward = sender.turn = 0.
+                        sender.handbrake = True
+                        sender.send_current()
+                def limited_current():
+                    return bool(decision_current() and entity.typeDescriptor is decision_descriptor and
+                        target.typeDescriptor is target_descriptor and
+                        self.fire_admission._target(dict(target=target.id)) is target)
+                error = (hull_traverse_error(owner, decision_descriptor, point, 0., solution)
+                         if limited_current() else None)
+                if not decision_current():
+                    release_retired_laying()
+                    return
+                if error is not None:
+                    stalled = self.hull_alignment.apply(order, state, limited_key, limited_identity,
+                        error, hull_candidate, getattr(engagement, 'locked_wait', False),
+                        lambda turn: traffic.can_turn(turn) and self.rotation_clear(
+                            entity, position, yaw, yaw+turn*.15))
+                    if not decision_current():
+                        release_retired_laying()
+                        return
+                    if not limited_current():
+                        order.update(throttle=0., turn=0., brake=True, holding=True)
+                        order.pop('combat_facing', None)
+                        self.hull_alignment.reset()
+                        fire_ready = False
+                    elif stalled:
+                        self.aiming.defer_ordered_point(target, gun.shot_index, solution, now)
+                        engagement.interrupt_pivot(gun.shot_index, engagement.sample, 'unavailable')
+                        self.hull_alignment.reset()
+                    if hull_candidate or order['turn']:
+                        fire_ready = False
+                else:
+                    self.hull_alignment.reset()
+                    order.update(throttle=0., turn=0., brake=True, holding=True)
+                    fire_ready = False
+            else:
+                self.hull_alignment.reset()
             if reverse_only and (order['throttle'] > 0. or order['turn']):
                 order.update(throttle=0., turn=0., brake=True)
             if (not order.get('holding') and (order['throttle'] or order['turn']) and
@@ -2244,14 +2412,39 @@ class PlayerControl(object):
             self.last_order = order
             sender.forward, sender.turn = order['throttle'], order['turn']
             sender.handbrake = order['brake']
-            sender.send_current()
+            movement_submitted = sender.send_current()
             if not decision_current():
                 return
+            observe_search = getattr(engagement, 'observe_search', None)
+            if callable(observe_search):
+                searching = bool(movement_submitted and ammo_search_attempt and withdrawal is None and
+                    not (pushing or reverse_only or movement.get('force_move')))
+                observe_search(now, position, yaw, searching)
+                if searching:
+                    order['ammunition_search'] = dict(target=engagement.target,
+                        elapsed=engagement.search_elapsed, position_goal=position_goal,
+                        movement=order.get('combat_mode'), attempted=True)
+            requested_clip = getattr(engagement, 'reload_requested', None)
+            if (movement_submitted and requested_clip is not None and withdrawal is not None and
+                    order.get('reverse_only') and order.get('combat_mode') in
+                    ('ammo_retreat', 'ammo_retreat_hold')):
+                if self.reload_automatic_clip(requested_clip):
+                    if not decision_current():
+                        return
+                    engagement.clip_reload_started(owner._gun_state)
+                    fire_ready = False
+                    order['magazine_reload_started'] = dict(shell=owner._gun_state.shot_index,
+                        after_withdrawal=True)
+                if not decision_current():
+                    return
             self.update_siege(entity, order, tactical_clear, now)
             if not decision_current():
                 return
         else:
             order = {}
+            observe_search = getattr(engagement, 'observe_search', None)
+            if callable(observe_search):
+                observe_search(now, position, yaw, False)
         if settling_aim and self.aim_receipt is not None:
             self.aim_receipt['settling'] = True
         if engagement is not None and order.get('holding') and order.get('combat_mode') in (

@@ -37,6 +37,14 @@ class DirectEngagement(object):
         self.switch_from = None
         self.last_full_at = None
         self.laying_error = None
+        self.search_elapsed = 0.
+        self.search_observation = None
+        self.reload_requested = None
+        self._reload_plan = None
+        self._reload_candidate = None
+        self._magazine_state = None
+        self._magazine_fallback = None
+        self.native_deferred = False
 
     def shells(self, policy, gun):
         main = next((row for row in policy.shells if row['index'] == policy.main), None)
@@ -69,13 +77,103 @@ class DirectEngagement(object):
         self.next_round = None
         self.next_shell = None
         self.switch_from = None
+        self.reload_requested = self._reload_plan = self._magazine_fallback = None
+        self._reload_candidate = None
+        self.search_observation = None
+        self.native_deferred = False
+
+    def observe_search(self, now, position, yaw, active):
+        """Credit only the final owner's actual firing-position attempts.
+
+        ``active`` includes a checked path refusal, so a tank with no safe
+        manoeuvre still has a bounded search. Merely waiting for native scan
+        evidence, driving a route or having movement disabled is not a search
+        attempt. The caller supplies this after the final movement guards.
+        After a completed armor failure, an actual attempt can overlap sliced
+        native checks; pending checks still cannot authorize a clip reload.
+        """
+        active = bool(active and self._magazine_state is not None and self.seek
+            and self.search_since is not None and self.failed_penetration_shells is not None
+            and not (self.locked_wait or self.retreat))
+        previous = self.search_observation
+        if active:
+            if previous is not None and now >= previous[0]:
+                self.search_elapsed = min(SEARCH_SECONDS, self.search_elapsed + now - previous[0])
+            self.search_observation = (now, tuple(position), yaw)
+        else:
+            self.search_observation = None
+
+    def _clear_search(self):
+        self.search_since = self.search_observation = None
+        self.search_elapsed = 0.
+        self.failed_penetration_shells = None
+        self.reload_requested = None
+        self._reload_candidate = None
+        self.exhausted.clear()
+        self.retreat = self.seek = False
+
+    def _observe_magazine(self, gun):
+        if gun.clip_size <= 1:
+            self._magazine_state = None
+            return
+        previous = self._magazine_state
+        if previous is not None and (previous[0] is not gun or previous[1] != gun.shot_index
+                                     or gun.clip > previous[2]):
+            plan = self._reload_plan if previous[0] is gun else None
+            target = self.target
+            self._clear_search()
+            self.adopt(target)
+            if (plan is not None and plan[:2] == (target, gun.shot_index)
+                    and gun.clip > 0 and plan[3]):
+                # The original HE fallback selected a point before reloading.
+                # Its physical source and nominal armor are rechecked by _lay;
+                # no pre-reload native firing proof is carried into this clip.
+                self.sample, self.fallback = plan[2], True
+                self.stage = (gun.shot_index, None)
+        self._magazine_state = (gun, gun.shot_index, gun.clip)
+
+    def clip_reload_started(self, gun):
+        """Consume the same-gun reload accepted by the withdrawal owner."""
+        if (self._magazine_state is None or self._magazine_state[0] is not gun
+                or gun.clip > 0 or gun.reload_time <= 0.):
+            return False
+        plan = self._reload_plan
+        self._clear_search()
+        self.adopt(self.target)
+        self._reload_plan = plan
+        self._magazine_state = (gun, gun.shot_index, gun.clip)
+        self.retreat = True
+        return True
+
+    def _request_clip_reload(self, control, target, index, sample, fallback, now, pose):
+        self.retreat, self.seek = True, False
+        self._reload_candidate = (target.id, id(target), index, sample, fallback)
+        # A full comparison can span native slices and vehicle poses. As for
+        # the single-shot switch, recheck the chosen alternate before allowing
+        # any command to discard currently loaded rounds. Keep the candidate
+        # across a budget deferral so the final comparison can get a slot.
+        verdict, unused = control.aiming.compare_direct(target, index, sample, now,
+            lambda a, b: control.lane_from(target, a, b),
+            None if fallback else PENETRATION_FACTOR_65, nominal=fallback)
+        self.motion = pose
+        if verdict == 'pending':
+            self.checking = self.native_deferred = True
+            return
+        self._reload_candidate = None
+        if verdict != 'ready':
+            self._reload_plan = self._magazine_fallback = None
+            self.failed_penetration_shells = None
+            self.retreat, self.seek = False, True
+            control.queue_next_automatic_clip(None)
+            return
+        self.reload_requested = index
+        self._reload_plan = (target.id, index, sample, fallback)
+        control.queue_next_automatic_clip(index)
 
     def shot_admitted(self, target):
         if self.target == target and not self.fallback:
-            self.search_since = None
-            self.failed_penetration_shells = None
-            self.exhausted.clear()
-            self.retreat = self.seek = False
+            self._clear_search()
+            self._reload_plan = self._magazine_fallback = None
 
     def _motion_changes(self, aiming, target):
         try:
@@ -96,14 +194,19 @@ class DirectEngagement(object):
         indices = tuple(row['index'] for row in rows)
         count = aiming.direct_samples(target)
         gun = control.owner._gun_state
-        protect_current = gun.clip_size <= 1 and mode == 'full' and gun.shot_index in indices
+        protect_current = mode in ('full', 'next') and gun.shot_index in indices
         current = gun.shot_index if protect_current else None
-        identity = (target.id, indices, mode, count, current)
+        identity = (target.id, indices, mode, count, current, id(target))
         if self.scan is None or self.scan['identity'] != identity:
             rejected = self.pivot_search if mode == 'full' and self.pivot_search is not None else {}
-            self.scan = dict(identity=identity, pending=[(index, point)
-                for point in range(count) for index in indices if (index, point) not in rejected],
-                hits=[], armor='armor' in rejected.values(), unknown='unknown' in rejected.values(),
+            pending = [(index, point) for point in range(count) for index in indices
+                       if (index, point) not in rejected]
+            if gun.clip_size > 1 and protect_current:
+                # A deferred alternate cannot consume the budget needed to
+                # discover that the current magazine is usable again.
+                pending.sort(key=lambda item: item[0] != current)
+            self.scan = dict(identity=identity, pending=pending,
+                hits=[], hull=[], armor='armor' in rejected.values(), unknown='unknown' in rejected.values(),
                 current_unknown=any(index == current and verdict == 'unknown'
                     for (index, unused_point), verdict in rejected.items()))
         scan = self.scan
@@ -116,17 +219,41 @@ class DirectEngagement(object):
                 None if mode == 'splash' else PENETRATION_FACTOR_65,
                 nominal=mode == 'splash')
             if verdict == 'pending':
+                self.native_deferred = True
                 return 'pending', None
             scan['pending'].pop(0)
             if verdict == 'ready':
                 score = solution['nominal_armor'] if mode == 'splash' else indices.index(index)
                 scan['hits'].append((score, point, indices.index(index), index))
+                if gun.clip_size > 1 and protect_current and index == current:
+                    self.scan = None
+                    return 'ready', (index, point)
+            elif verdict == 'needs_hull':
+                # This is a geometric candidate, not an armor comparison or
+                # a verified firing source. Keep it for the player's hull
+                # owner only after all ready candidates have had their turn.
+                scan['hull'].append((index != gun.shot_index, point, indices.index(index), index))
+                scan['unknown'] = True
             elif verdict == 'armor':
                 scan['armor'] = True
             elif verdict == 'unknown':
                 scan['unknown'] = True
                 if index == current:
                     scan['current_unknown'] = True
+        if gun.clip_size > 1 and protect_current:
+            mounted = [hit for hit in scan['hits'] if hit[3] == current]
+            if mounted:
+                self.scan = None
+                unused_score, point, unused_rank, index = min(mounted)
+                return 'ready', (index, point)
+            if not any(index == current for index, unused_point in scan['pending']):
+                hull = [hit for hit in scan['hull'] if hit[3] == current]
+                if hull:
+                    self.scan = None
+                    return 'needs_hull', (current, min(hull)[1])
+                if scan['current_unknown']:
+                    self.scan = None
+                    return 'unavailable', None
         if scan['pending']:
             return 'pending', None
         self.scan = None
@@ -146,6 +273,9 @@ class DirectEngagement(object):
                     self.next_round = None
             unused_score, point, unused_rank, index = best
             return 'ready', (index, point)
+        if scan['hull']:
+            unused_loaded, point, unused_rank, index = min(scan['hull'])
+            return 'needs_hull', (index, point)
         return ('armor' if scan['armor'] and not scan['unknown'] else 'unavailable'), None
 
     def interrupt_pivot(self, index, sample, verdict):
@@ -161,10 +291,11 @@ class DirectEngagement(object):
 
     def _compare_next_shell(self, control, target, index, sample, now):
         gun, aiming = control.owner._gun_state, control.aiming
-        if ((gun.clip_size > 1 and gun.clip != 1) or
-                getattr(control.owner, '_local_player_burst', None) or
+        if (getattr(control.owner, '_local_player_burst', None) or
                 getattr(control.owner, '_local_fire_intent', None)):
             return
+        if gun.clip_size > 1:
+            return self._compare_next_clip(control, target, index, sample, now)
         rows = self.shells(control.ammo_policy, gun)
         indices = tuple(row['index'] for row in rows)
         planned = self.next_round if (self.next_round is not None and
@@ -193,18 +324,66 @@ class DirectEngagement(object):
         # Only a recent proof for a higher-priority shell may queue a change.
         selected = next((other for other in indices[:indices.index(index)]
             if scan['ready'].get(other) is not None and now - scan['ready'][other] <= .35), index)
-        if gun.clip_size <= 1:
-            self.next_shell = selected if selected != index else None
-        elif len(scan['ready']) == len(alternatives):
-            control.queue_next_automatic_clip(selected)
+        self.next_shell = selected if selected != index else None
+        return False
+
+    def _compare_next_clip(self, control, target, index, sample, now):
+        gun, aiming = control.owner._gun_state, control.aiming
+        indices = tuple(row['index'] for row in self.shells(control.ammo_policy, gun))
+        if index not in indices:
+            control.queue_next_automatic_clip(None)
+            return False
+        preferred = tuple(other for other in (indices if self.fallback else
+                          indices[:indices.index(index)]) if other != index)
+        count = aiming.direct_samples(target)
+        points = (sample,) + tuple(point for point in range(count) if point != sample)
+        candidates = tuple((other, point) for point in points for other in preferred)
+        key = (target.id, id(target), index, sample, candidates)
+        scan = self.next_shell_scan
+        if scan is None or scan['key'] != key:
+            scan = self.next_shell_scan = dict(key=key, cursor=0, ready={}, selected=None, refresh=False)
+        if not candidates:
+            control.queue_next_automatic_clip(None)
+            return False
+        selected = scan['selected']
+        if selected is not None and scan['refresh']:
+            candidate = selected
+            scan['refresh'] = False
         else:
-            return True
+            candidate = candidates[scan['cursor']]
+            scan['cursor'] = (scan['cursor'] + 1) % len(candidates)
+            scan['refresh'] = selected is not None
+        other, point = candidate
+        verdict, unused = aiming.compare_direct(target, other, point, now,
+            lambda a, b: control.lane_from(target, a, b), PENETRATION_FACTOR_65,
+            current_barrel=point == sample)
+        if verdict == 'ready':
+            scan['ready'][candidate] = now
+        else:
+            scan['ready'].pop(candidate, None)
+        ready = [candidate for candidate, completed in scan['ready'].items()
+                 if now - completed <= .35]
+        selected = min(ready, key=lambda item: (preferred.index(item[0]), item[1])) if ready else None
+        if selected != scan['selected']:
+            scan['refresh'] = selected is not None
+        scan['selected'] = selected
+        # This never loads a round. A current-shell physical proof gets the
+        # first budget slot, then one next-clip comparison either refreshes
+        # the plan or visits another shell/point. Pending work cannot block
+        # firing, even on a final trigger that consumes several clip rounds.
+        control.queue_next_automatic_clip(selected[0] if selected is not None else None)
         return False
 
     def _lay(self, control, target, index, sample, now, fallback, facing=None, compare_next=True):
         gun, aiming = control.owner._gun_state, control.aiming
         self.stage = (index, None if fallback else PENETRATION_FACTOR_65)
         if gun.shot_index != index:
+            if gun.clip_size > 1 and gun.clip > 0:
+                # A candidate for another shell is a next-clip plan only.
+                # Even HE cannot discard a live magazine through CURRENT.
+                self.sample = self.last_solution = self.switch_from = None
+                self.checking = True
+                return None, None, False
             if gun.clip_size <= 1 and self.switch_from != gun.shot_index:
                 # A completed shot or a manual selection can replace the
                 # mounted shell while the old aiming stage is still present.
@@ -228,9 +407,17 @@ class DirectEngagement(object):
         verdict, solution = aiming.compare_direct(target, index, sample, now,
             lambda a, b: control.lane_from(target, a, b), self.stage[1],
             physical=True, nominal=fallback, verify_point=turning)
+        if verdict == 'pending':
+            self.native_deferred = True
         if verdict == 'pending' and self.last_solution is not None:
             self.checking = self.locked_wait = True
             return target, self.last_solution, False
+        if verdict == 'needs_hull':
+            self.last_solution = solution
+            self.laying_until = self.laying_error = None
+            self.failed_penetration_shells = None
+            self.seek = self.retreat = False
+            return target, solution, False
         if turning and verdict != 'ready' and not (solution and solution.get('point_viable')):
             # A missing or failed current point proof releases the tracks to
             # stationary point search. Unknown evidence does not reject armor.
@@ -263,10 +450,13 @@ class DirectEngagement(object):
                 # proof can still reject the shot, so keep the search clock.
                 self.failed_penetration_shells = None
                 self.retreat = self.seek = False
+                self.reload_requested = self._reload_plan = self._magazine_fallback = None
             waiting_for_clip = compare_next and self._compare_next_shell(control, target, index, sample, now)
             return target, solution, not waiting_for_clip
         self.checking = verdict == 'pending'
         if verdict != 'pending':
+            if gun.clip_size > 1:
+                control.queue_next_automatic_clip(None)
             if facing or self.pivot_search is not None:
                 self.interrupt_pivot(index, sample, verdict)
             else:
@@ -282,19 +472,29 @@ class DirectEngagement(object):
     def update(self, control, candidates, now):
         owner, aiming = control.owner, control.aiming
         gun, policy = owner._gun_state, control.ammo_policy
+        self._observe_magazine(gun)
         rows = self.shells(policy, gun)
         self.checking = False
         self.locked_wait = False
         self.confirmed = None
         self.next_shell = None
+        self.reload_requested = None
+        self.native_deferred = False
         self.seek = self.search_since is not None and not self.retreat
         held = bool(getattr(owner, '_local_fire_intent', None) or
                     getattr(owner, '_local_player_burst', None) or
                     getattr(control, 'owned_burst', None))
         by_id = dict((target.id, target) for target in candidates)
-        facing = getattr(control, 'last_order', {}).get('confirmed_facing', {})
+        last_order = getattr(control, 'last_order', {})
+        facing = last_order.get('confirmed_facing', {})
+        facing_states = ('turning', 'settling', 'recheck')
+        limited = last_order.get('combat_facing', {})
+        if (limited.get('limited_traverse') and
+                limited.get('key') == (self.target, self.sample, gun.shot_index)):
+            facing = limited
+            facing_states = ('braking', 'turning', 'checking', 'aligned')
         phase = facing.get('state')
-        facing_phase = phase if (phase in ('turning', 'settling', 'recheck') and
+        facing_phase = phase if (phase in facing_states and
             facing.get('key') == (self.target, self.sample, gun.shot_index)) else None
         if held:
             target = by_id.get(self.target)
@@ -303,9 +503,13 @@ class DirectEngagement(object):
                                  facing=facing_phase)
             return None, None, False
         if not rows or not candidates:
+            if gun.clip_size > 1 and gun.clip > 0:
+                control.queue_next_automatic_clip(None)
             self.adopt(None)
             return None, None, False
         if self.target not in by_id:
+            if gun.clip_size > 1 and gun.clip > 0:
+                control.queue_next_automatic_clip(None)
             self.adopt(candidates[0].id)
         target = by_id[self.target]
         target_moved, own_moved, pose = self._motion_changes(aiming, target)
@@ -320,9 +524,19 @@ class DirectEngagement(object):
         loaded = next((row for row in rows if row['index'] == gun.shot_index), None)
         keep_clip = magazine and gun.clip > 0 and loaded is not None
         if magazine and gun.clip <= 0 and gun.reload_time > 0.:
+            self.search_observation = None
             return None, None, False
         eligible = [loaded] if keep_clip else rows
         he = [row for row in eligible if row['kind'] == HE]
+        if self._reload_candidate is not None:
+            candidate = self._reload_candidate
+            if (keep_clip and candidate[:2] == (target.id, id(target)) and
+                    not (target_moved or own_moved)):
+                self._request_clip_reload(control, target, candidate[2], candidate[3], candidate[4], now, pose)
+                return None, None, False
+            self._reload_candidate = self._reload_plan = self._magazine_fallback = None
+            self.failed_penetration_shells = self.scan = None
+            self.retreat, self.seek = False, self.search_since is not None
         if self.stage is not None and not any(row['index'] == self.stage[0] for row in eligible):
             self.sample = self.last_solution = None
             self.fallback = False
@@ -330,9 +544,11 @@ class DirectEngagement(object):
             if self.stage[0] != gun.shot_index and self.last_solution is None:
                 return self._lay(control, target, self.stage[0], self.sample, now, self.fallback)
             if self.stage[0] == gun.shot_index:
+                fallback_due = self.fallback and (not magazine or self.last_full_at is None or
+                                                  now - self.last_full_at >= OWN_RESCAN_SECONDS)
                 rescan = (not pivoting and self.last_solution is not None and
-                    (not magazine or gun.clip != 1) and self.laying_until is None and
-                    (self.fallback or target_moved or own_due or
+                    self.laying_until is None and
+                    (fallback_due or target_moved or own_due or
                      self.scan is not None and self.scan['identity'][2] == 'full'))
                 result = self._lay(control, target, self.stage[0], self.sample, now, self.fallback,
                                    facing=facing_phase if pivoting else None, compare_next=not rescan)
@@ -340,8 +556,11 @@ class DirectEngagement(object):
                     if self.scan is None or self.scan['identity'][2] != 'full':
                         self.motion = pose
                         self.last_full_at = now
-                        self.next_shell_scan = None
+                        if not self.fallback or target_moved or own_due:
+                            self.next_shell_scan = None
                     unused_verdict, pick = self._scan(control, target, eligible, now, 'full')
+                    if magazine and self.fallback and unused_verdict != 'pending':
+                        self.last_full_at = now
                     if self.fallback and pick is not None:
                         index, self.sample = pick
                         self.stage = (index, PENETRATION_FACTOR_65)
@@ -352,15 +571,19 @@ class DirectEngagement(object):
                             self.switch_from = gun.shot_index
                         return result[0], result[1], False
                 return result
-        expired = self.search_since is not None and now - self.search_since >= SEARCH_SECONDS
+        expired = (self.search_elapsed >= SEARCH_SECONDS if magazine else
+                   self.search_since is not None and now - self.search_since >= SEARCH_SECONDS)
         eligible_shells = tuple(row['index'] for row in eligible)
+        available_shells = tuple(row['index'] for row in rows)
         if self.pivot_search is not None and self.sample is None:
             mode = 'full'
-        elif self.scan is not None and self.scan['identity'][2] == 'next' and not self.retreat:
+        elif self.scan is not None and self.scan['identity'][2] == 'next':
             mode = 'next'
+        elif keep_clip and expired and self._magazine_fallback == available_shells:
+            mode = 'splash'
         elif (expired and self.failed_penetration_shells == eligible_shells and
-              self.sample is None and self.scan is None and not self.retreat):
-            mode = 'next' if keep_clip and not he else 'splash' if he else 'full'
+              self.sample is None and self.scan is None and (keep_clip or not self.retreat)):
+            mode = 'next' if keep_clip else 'splash' if he else 'full'
         elif self.scan is not None and self.scan['identity'][2] == 'splash':
             mode = 'splash'
         elif self.scan is not None and self.scan['identity'][2] == 'full':
@@ -374,7 +597,10 @@ class DirectEngagement(object):
         if mode == 'full' and (self.scan is None or self.scan['identity'][2] != 'full'):
             self.motion = pose
             self.last_full_at = now
-        compare = he if mode == 'splash' else rows if mode == 'next' else eligible
+        if mode == 'splash':
+            compare = [row for row in rows if row['kind'] == HE] if keep_clip else he
+        else:
+            compare = rows if mode == 'next' else eligible
         verdict, pick = self._scan(control, target, compare, now, mode)
         if verdict == 'pending':
             self.checking = True
@@ -384,18 +610,41 @@ class DirectEngagement(object):
         if mode == 'full':
             self.failed_penetration_shells = eligible_shells if verdict == 'armor' else None
         if mode == 'next':
-            next_index = (pick[0] if pick is not None else
-                          next((row['index'] for row in rows if row['kind'] == HE), gun.shot_index))
-            if pick is not None and next_index == gun.shot_index:
+            if pick is not None and pick[0] == gun.shot_index:
                 self.sample = pick[1]
                 self.fallback = False
-                return self._lay(control, target, next_index, self.sample, now, False)
-            if control.reload_automatic_clip(next_index):
-                self.search_since = None
-                self.exhausted.clear()
-            elif not he and not any(row['kind'] == HE for row in rows):
-                self.retreat = True
+                return self._lay(control, target, pick[0], self.sample, now, False)
+            if verdict == 'ready' and pick is not None:
+                self._request_clip_reload(control, target, pick[0], pick[1], False, now, pose)
+            elif verdict == 'armor':
+                has_he = any(row['kind'] == HE for row in rows)
+                self._magazine_fallback = available_shells if has_he else None
+                self.retreat = not has_he
+                self.seek = not self.retreat
+            else:
+                # Unknown or a hull-only alternate is not permission to
+                # unload the current clip, even after a previous timeout.
+                self._magazine_fallback = None
+                self.failed_penetration_shells = None
+                self._reload_plan = None
+                self.retreat, self.seek = False, True
+                control.queue_next_automatic_clip(None)
             return None, None, False
+        if mode == 'splash' and keep_clip:
+            if verdict == 'ready' and pick is not None and pick[0] != gun.shot_index:
+                self._request_clip_reload(control, target, pick[0], pick[1], True, now, pose)
+                return None, None, False
+            if verdict != 'ready':
+                self._magazine_fallback = None
+                self.failed_penetration_shells = None
+                self._reload_plan = None
+                control.queue_next_automatic_clip(None)
+            elif pick is not None:
+                # A loaded HE clip can use the unchanged nominal fallback;
+                # reloading the same shell would only discard its ready clip.
+                self.retreat = self.seek = False
+            if verdict == 'armor' and not he:
+                self.retreat = True
         if pick is not None:
             index, self.sample = pick
             self.stage = (index, None if mode == 'splash' else PENETRATION_FACTOR_65)

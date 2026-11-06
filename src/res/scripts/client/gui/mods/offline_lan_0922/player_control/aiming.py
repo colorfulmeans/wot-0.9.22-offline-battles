@@ -52,7 +52,13 @@ def mechanical_reach(descriptor, direction, body_ypr, hydraulic=None):
         direction, *body_ypr)
     gun = _field(descriptor, 'gun')
     limits = _field(gun, 'turretYawLimits')
-    yaw_ok = limits is None or float(limits[0]) <= yaw <= float(limits[1])
+    # The inverse body transform can leave round-off even at a fixed gun's
+    # exact heading. Use the native source solver's precision, not a wider
+    # tactical alignment threshold. Artillery retains its existing contract.
+    tolerance = (0. if 'SPG' in (_field(_field(descriptor, 'type'), 'tags', ()) or ())
+                 else NATIVE_ANGLE_TOLERANCE)
+    yaw_ok = (limits is None or
+              float(limits[0]) - tolerance <= yaw <= float(limits[1]) + tolerance)
     try:
         minimum, maximum = gun_pitch_limits.calc_pitch_limits(
             yaw, _field(gun, 'pitchLimits'))
@@ -908,6 +914,13 @@ class Aiming(object):
                 if detail is not None:
                     detail['reason'] = result.get('reason') or (
                         'geometry_unavailable' if not result['geometry_clear'] else 'traverse_unreachable')
+                if (result['geometry_clear'] and result.get('needs_hull') and 'SPG' not in
+                        (_field(_field(own['descriptor'], 'type'), 'tags', ()) or ())):
+                    # A checked path outside the installed horizontal arc
+                    # is a hull-laying candidate, not an unusable target or
+                    # a firing proof. Source inversion and penetration still
+                    # wait for the current mounted gun to reach this point.
+                    return 'needs_hull', result
                 return 'unavailable', result
             if not result['source_verified']:
                 if detail is not None:

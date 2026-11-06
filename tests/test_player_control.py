@@ -151,8 +151,13 @@ class PlayerRegressionTests(unittest.TestCase):
         transitions=[call for call in c.record.call_args_list if call.args[0]=='aim_transition']
         self.assertEqual(1,len(transitions))
 
-    def test_combat_hold_turns_hull_only_when_clear_and_slow(self):
+    def test_legacy_artillery_hold_turns_hull_only_when_clear_and_slow(self):
         c, target = self.aim_controller()
+        # Successful non-SPG start installs DirectEngagement. Only artillery
+        # uses this legacy direct=None hull-facing consumer in production.
+        own = c.owner._server_entity(c.owner._server.vehicle_id)
+        own.typeDescriptor.type = types.SimpleNamespace(tags=('SPG',))
+        c.navigation.tag = 'SPG'
         c.firing_lane = lambda unused: True
         c.navigation.decide.side_effect = lambda *a, **kw: dict(throttle=0., turn=0., brake=True)
         with mock.patch('gui.mods.offline_lan_0922.player_control.traffic.Traffic.can_turn',

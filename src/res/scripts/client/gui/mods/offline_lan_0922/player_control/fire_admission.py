@@ -23,6 +23,10 @@ COMPLETED_PROOF_TTL = .2
 FULL_PROOF_INTERVAL = .5
 GEOMETRY_RESTART_LIMIT = 2
 MAX_COLLISION_ROSTER = 30
+# Match the direct player's existing bounded gun-laying tolerance. A released
+# burst may survive a short obstruction, but cannot own the gun indefinitely.
+BURST_PATH_WAIT_SECONDS = 5.
+_BURST_PATH_REFUSALS = ('auto_world_blocked', 'auto_friendly_lane', 'auto_friendly_splash')
 
 
 def _point(value):
@@ -70,12 +74,19 @@ class FireAdmission(object):
 
     def reset(self):
         self.pending = self.front_contact = None
+        self._tail_attempt = self._tail_wait = self._tail_timeout = None
         self.lane = FiringLane()
         self.receipt = dict(status='idle', reason='idle', world_chords=0)
         self._next_probe = float('-inf')
         self._next_full_probe = float('-inf')
 
     def _result(self, status, reason, token=None, **fields):
+        if status == 'pending':
+            self._record_tail_refusal(reason)
+        elif status in ('rejected', 'committed'):
+            self._tail_attempt = self._tail_wait = None
+            if reason != 'auto_burst_path_timeout':
+                self._tail_timeout = None
         result = dict(status=status, reason=reason, token=token)
         result.update(fields)
         if getattr(self.control, 'direct_engagement', None) is not None:
@@ -87,6 +98,104 @@ class FireAdmission(object):
         self.receipt = dict((key, value) for key, value in result.items()
                             if key not in ('token', 'target'))
         return result
+
+    def _tail_current(self, attempt, retired=False):
+        if attempt is None:
+            return False
+        control, owner = self.control, self.control.owner
+        burst, context = attempt['burst'], attempt['context']
+        actual = getattr(owner, '_local_player_burst', None)
+        entity = attempt['entity']
+        server = getattr(owner, '_server', None)
+        if (server is None or server is not context.get('server') or
+                owner._server_entity(server.vehicle_id) is not entity):
+            return False
+        tags = getattr(getattr(entity.typeDescriptor, 'type', None), 'tags', ())
+        return bool(context is burst.get('player_control') and context.get('automatic') and
+            'SPG' not in tags and control.direct_engagement is attempt['direct'] and
+            attempt['direct'] is not None and control.weapon is context.get('weapon') and
+            getattr(owner, '_player_control', None) is control and
+            control.fire_admission is self and control.active and not control.closed and
+            'fire' in control.features and context.get('generation') == control.control_generation and
+            context.get('identity') == control.identity() and
+            burst.get('generation') == owner._generation and
+            burst.get('committed') == attempt['committed'] and attempt['committed'] > 0 and
+            context.get('entity') is entity and context.get('gun') is owner._gun_state and
+            context.get('shell_signature') == control._trigger_shell_signature(owner._gun_state) and
+            context.get('server') is owner._server and context.get('client') is owner.client and
+            control.owned_burst is burst and (actual is None if retired else actual is burst))
+
+    def _bind_tail_attempt(self, context, entity, burst):
+        attempt = None
+        if isinstance(burst, dict):
+            attempt = dict(burst=burst, context=context, entity=entity,
+                direct=self.control.direct_engagement, committed=burst.get('committed', 0))
+        self._tail_attempt = attempt if self._tail_current(attempt) else None
+        wait = self._tail_wait
+        if (self._tail_attempt is None or wait is not None and
+                (not self._tail_current(wait['attempt']) or
+                 wait['attempt']['burst'] is not burst or
+                 wait['attempt']['context'] is not context or
+                 wait['attempt']['committed'] != attempt['committed'])):
+            self._tail_wait = self._tail_timeout = None
+
+    def _record_tail_refusal(self, reason):
+        attempt = self._tail_attempt
+        if not self._tail_current(attempt):
+            self._tail_wait = None
+            return
+        # Proof slices, target motion and revalidated poses do not renew an
+        # already refused physical round. An unknown first proof has no such
+        # conclusive refusal and keeps its existing planner lifecycle.
+        if self._tail_wait is not None or reason not in _BURST_PATH_REFUSALS:
+            return
+        target = self._target(attempt['context'])
+        solution = getattr(self.control.weapon, 'solution', None)
+        if target is not None and isinstance(solution, dict) and self._tail_current(attempt):
+            self._tail_wait = dict(attempt=attempt, target=target, solution=dict(solution),
+                shell=self.control.owner._gun_state.shot_index,
+                started=float(self.control.owner._clock()), reason=reason)
+
+    def _expired_tail(self, now):
+        wait = self._tail_wait
+        if (wait is None or not self._tail_current(wait['attempt']) or
+                now - wait['started'] < BURST_PATH_WAIT_SECONDS):
+            return None
+        self._tail_timeout = wait
+        self.pending = None
+        return self._result('rejected', 'auto_burst_path_timeout',
+            burst_wait_seconds=max(0., now-wait['started']),
+            burst_wait_budget=BURST_PATH_WAIT_SECONDS, burst_wait_reason=wait['reason'])
+
+    def burst_retired(self, burst):
+        """Consume only this timeout's cancellation receipt, after native debit."""
+        timeout = self._tail_timeout
+        if self._tail_attempt is not None and self._tail_attempt['burst'] is burst:
+            self._tail_attempt = None
+        if self._tail_wait is not None and self._tail_wait['attempt']['burst'] is burst:
+            self._tail_wait = None
+        if timeout is None or timeout['attempt']['burst'] is not burst:
+            return False
+        self._tail_timeout = None
+        attempt = timeout['attempt']
+        if not self._tail_current(attempt, retired=True):
+            return False
+        control, target, solution = self.control, timeout['target'], timeout['solution']
+        direct, index = control.direct_engagement, timeout['shell']
+        if (self._target(attempt['context']) is not target or
+                not self._tail_current(attempt, retired=True) or
+                control.owner._gun_state.shot_index != index or
+                direct.target != target.id or direct.sample != solution.get('sample') or
+                direct.stage is None or direct.stage[0] != index):
+            return False
+        # This was a path refusal, not an armor failure. Defer that exact
+        # point using the player's existing short deferral and scan anew.
+        control.aiming.defer_ordered_point(target, index, solution, control.owner._clock())
+        direct.sample = direct.last_solution = direct.scan = direct.next_shell_scan = None
+        direct.laying_until = direct.laying_error = direct.confirmed = None
+        direct.checking, direct.locked_wait = True, False
+        control.queue_next_automatic_clip(None)
+        return True
 
     def _target(self, context):
         """Use this client's currently visible native entity, never Bot memory."""
@@ -140,7 +249,7 @@ class FireAdmission(object):
     def terminal_reason(reason):
         return reason in ('auto_target_lost', 'auto_aim_owner_changed',
                          'auto_mission_failed', 'auto_mission_cancelled',
-                         'auto_shell_changed')
+                         'auto_shell_changed', 'auto_burst_path_timeout')
 
     def _identity(self, context, entity, gun, target, burst):
         identity = context.get('identity') or {}
@@ -457,6 +566,7 @@ class FireAdmission(object):
     def prepare(self, context, entity, gun, raw_ray, dispersion, source_shot,
                 now, burst=None, range_origin=None):
         """Return ready/pending/rejected without sending or debiting ammunition."""
+        self._bind_tail_attempt(context, entity, burst)
         if not context.get('automatic'):
             return self._result('rejected', 'auto_not_owned')
         now = float(now)
@@ -466,6 +576,9 @@ class FireAdmission(object):
             if target is None or self.terminal_reason(reason):
                 self.pending = None
                 return self._result('rejected', reason or 'auto_target_lost')
+            expired = self._expired_tail(now)
+            if expired is not None:
+                return expired
             if reason is not None:
                 return self._result('pending', reason, world_chords=0)
             key = self._identity(context, entity, gun, target, burst)

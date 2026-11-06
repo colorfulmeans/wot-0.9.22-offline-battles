@@ -288,11 +288,30 @@ class DirectEngagementTests(unittest.TestCase):
         self.gun.clip_size, self.gun.clip = 3, 2
         self.verdicts[(21, 2, 0)] = 'ready'
         self.state.update(self.control, [self.first], 0.)
+        self.state.observe_search(0., (0., 0., 0.), 0., True)
         self.control.reload_automatic_clip.assert_not_called()
+        # The timer now belongs to real admitted search attempts. Wall-clock
+        # scanning alone must not discard a live clip, and only the final
+        # withdrawal consumer may apply the requested native reload.
+        for second in range(1, 9):
+            self.state.update(self.control, [self.first], float(second))
+            self.state.observe_search(float(second), (0., 0., 0.), 0., True)
+            self.assertIsNone(self.state.reload_requested)
+            self.assertEqual((0, 2, 0.), (self.gun.shot_index, self.gun.clip, self.gun.reload_time))
         for now in (8.1, 8.2, 8.3):
             self.state.update(self.control, [self.first], now)
-        self.control.reload_automatic_clip.assert_called_once_with(2)
+        self.control.reload_automatic_clip.assert_not_called()
+        self.assertTrue(self.state.retreat)
+        self.assertEqual(2, self.state.reload_requested)
+        self.assertEqual((0, 2, 0.), (self.gun.shot_index, self.gun.clip, self.gun.reload_time))
         self.assertEqual([], self.calls)
+        self.verdicts[(21, 0, 1)] = 'ready'
+        target, solution, clear = self.state.update(self.control, [self.first], 8.4)
+        self.assertIs(self.first, target)
+        self.assertTrue(clear)
+        self.assertFalse(self.state.retreat)
+        self.assertIsNone(self.state.reload_requested)
+        self.control.reload_automatic_clip.assert_not_called()
 
 
     def test_own_hull_rescan_cools_down_but_target_turret_can_trigger_it(self):

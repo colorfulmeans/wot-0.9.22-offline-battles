@@ -1,4 +1,178 @@
-# November 6 opening-spin regression and local bypass rollback
+# November 6 limited-traverse, magazine and automatic-burst follow-up
+
+The report `wot-error-report-20261106-183205-e97f70580e0d` identifies both
+the installed client and bundled launcher payload as
+`colorfulmeans-42184370955-1`, built from `99e1b8d8`. This is the baseline
+for this follow-up. Native observations below come from that package, not
+from the corrected source or its controlled tests. The three rounds use
+the stationary equipment-test scene on Mittengard.
+
+## What this report proves
+
+| Player vehicle | Committed native shots | Relevant observation |
+| --- | ---: | --- |
+| `china:Ch21_T34` | 83 | The unchanged horizontal pose and hull yaw from 17:34:57.887 to 17:37:12.671 contain 68 actual shot commits. This supports stationary single-shot firing through reloads in that interval. |
+| `china:Ch09_M5` | 73 | The unchanged horizontal pose and hull yaw from 17:45:27.939 to 17:46:46.946 contain 33 commits. The vehicle eventually consumes all 73 rounds and enters empty-ammunition capture. |
+| `china:Ch39_WZ120_1G_FT` | 0 | Ammunition remains at 35 after the initial reload. Both automatic trigger requests are rejected with `auto_front_vehicle`; neither is a committed shot. The user's no-fire observation is confirmed. |
+
+The T-34 above is the Chinese vehicle actually played, rather than a USSR
+T-34 appearing elsewhere in the garage data. Its report also contains
+rejected world-obstructed requests; the successful parked interval does not
+establish universal aiming or movement correctness.
+
+For the WZ, 2,046 of 2,092 aiming decisions return no selected target.
+There are 3,587 `yaw_limit` and 304 `pitch_limit` candidate refusals. From
+18:19:54.120 through 18:21:33.341, 935 aiming rows retain exactly the same
+horizontal position and hull yaw for 99.222 seconds, despite fifteen
+visible contacts. The final control receipt is a settled automatic base
+capture with zero throttle/turn, brake enabled and no combat-facing owner.
+Earlier control rows contain nonzero turns; the evidence does not support
+an inability of that vehicle's tracks to turn.
+
+These rounds expose only single-round loaded states. They do not provide
+native magazine, machinegun or limited-turret acceptance evidence. The
+additional weapon categories below are audited by actual descriptor fields
+and production consumers with explicit native-boundary test seams. No
+unavailable exact-client vehicle catalog or mounted WZ traverse measurement
+is invented.
+
+## Player hull laying before firing admission
+
+The old direct comparison correctly found a mechanically unreachable
+horizontal angle, but converted its completed geometric result to
+`unavailable`. DirectEngagement then discarded that target. The later
+limited-traverse branch required an already returned target and combat
+hold, so it could not perform the turn needed to make the target reachable.
+A settled automatic capture made this circular prerequisite especially
+visible: it held the tracks while the aiming scan kept discarding enemies.
+
+The player now retains a completed, unobstructed, yaw-only candidate as
+`needs_hull`. This is evidence for body alignment, not permission to fire.
+It leaves `reachable`, `source_verified` and `clear` false, and does not
+invent a penetration result. Pitch-only refusals, blocked geometry and
+unfinished native probes cannot acquire this owner. Mounted
+`gun.turretYawLimits`, including asymmetric and zero-width arcs, determine
+the behavior; turret class names do not substitute for the installed arc.
+
+The independent foreground hull owner brakes translation, checks traffic
+and the existing full native rotation sweep, and retains the selected
+sample while measured body yaw approaches the installed arc. Settled
+automatic capture may turn in place under its existing capture-circle
+constraints. An explicit moving mission, withdrawal, an active physical
+trigger, an unsupported/overturned hull or a lost/replaced target cannot
+inherit that turn. Native queries recheck the controller and target
+identity before the final sender publishes movement. A gun replacement
+also retires an already-sent old turn when the same controller still owns
+that input; Stop or a successor command keeps its own input ownership.
+
+Once the hull enters the arc, native source inversion, the actual barrel,
+current collision geometry and armor admission must all succeed again.
+The previous point proof is never promoted into a new pose's shot proof.
+The existing 1e-5-radian native angular tolerance is applied to non-SPG
+horizontal limits to avoid rejecting roundoff such as 2.78e-17 at a fixed
+zero-width arc. This does not widen the arc by the former 0.02-radian
+movement completion threshold, and the SPG limit checks remain unchanged.
+
+The owner has a finite lease, a 2.4-second no-new-best-angle exit and a
+five-second pending-proof exit. Its lease accounts for the existing
+proportional turn command's final convergence using the mounted turn-rate
+limit; an angle/rate-only deadline incorrectly interrupted a slow fixed
+gun despite continuous measured improvement. A refused or expired pivot
+defers its point and returns to normal selection without labelling the
+point's armor a failure. The initial-blocked-scan route protection from
+`99e1b8d8` remains in force.
+
+## Loaded magazine, trigger and next-magazine ownership
+
+The player reads `GunState.clip_size` as physical rounds per magazine and
+`burst_count` as physical rounds per trigger. A normal autoloader and a
+machinegun therefore share magazine ownership, while each trigger still
+requires a fresh usable point. Physical subshots keep their original
+trigger and ammunition transaction.
+
+| Condition | Player decision |
+| --- | --- |
+| The loaded magazine has a point meeting the existing 65% penetration threshold | Use that magazine, including a loaded HE magazine. A ready current trigger receives comparison budget before speculative next-magazine work. |
+| A different ammunition type has a better eligible next-magazine priority | Update `NEXT_SHELLS` while the current magazine remains loaded. Plans can be changed or cancelled throughout the magazine; a deferred comparison never delays an already proved current trigger. |
+| A full current-ammunition scan conclusively has no eligible point | Attempt the player's checked local firing-position search. No direct `CURRENT_SHELLS` selection can unload the live magazine. |
+| The authorized search reaches its existing eight-second budget | Recheck current and alternative ammunition. If the current magazine becomes usable again, retain it. Otherwise request withdrawal and a new magazine. |
+| The final movement sender has accepted the withdrawal owner | Only then may the player perform `NEXT_SHELLS` followed by `RELOAD_PARTIAL_CLIP`. Rejected queueing, Stop, gun replacement, an active burst or a manual pending selection prevents this transaction. |
+| No ammunition meets the penetration threshold, but the existing HE nominal fallback is usable | An already-loaded HE magazine uses that fallback. Another loaded type first completes the same bounded search/withdrawal handoff before loading HE. The existing HE impact/damage calculations are unchanged. |
+
+The search clock consumes actual final-owner firing-position attempts,
+including checked blocked-path refusals. Requiring successful translation
+would deadlock a vehicle with no safe search move. Conversely, wall-clock
+time spent merely scanning, travelling an explicit route or running with
+automatic driving disabled does not authorize an early unload. After a
+completed current-armor failure, real search attempts may continue while a
+new native proof is pending; such a pending proof cannot issue a reload
+permit. A completed unknown result revokes the armor-failure qualification.
+Multi-slice scans and their final alternative recheck retain bounded work
+without starving either search timing or the next complete proof.
+
+The loaded type remains unchanged through every physical subshot. A queued
+plan is promoted only at the real magazine boundary, including a last
+trigger that consumes several remaining rounds. User-owned pending choices
+are preserved. An automatic plan left by a reentrant Stop must be cancelled
+or retained as an exact-gun cleanup obligation in the existing release
+retry mechanism; a refused cancellation cannot silently leave an unowned
+future ammunition change behind.
+
+## Bounded recovery from a blocked automatic burst tail
+
+A separate controlled reproduction found a player-only liveness gap not
+observed in the three native report rounds. After a successful first bullet,
+a frozen-scatter tail could hit a world object or friendly hull away from
+the clear central aiming line. The old full consumer retained that same
+burst for 601 decisions and 66.11 seconds, with two tails still pending,
+only one committed shot and no new trigger available. Removing the blocker
+allowed the two remaining bullets to finish immediately. A dead target and
+an ordinarily unlaid barrel already had terminal paths; neither explains
+this specific infinite `automatic_wait`.
+
+The foreground admission owner now bounds an already-confirmed blocked
+physical tail using the existing five-second laying tolerance. Temporary
+proof work cannot renew that deadline. A short-lived obstruction may clear
+and complete the burst normally. Persistent refusal terminates only the
+uncommitted tails through the existing native cancellation contract,
+retains already committed shots/debits, and defers that exact point before
+the next normal trigger search. Pure unknown work, SPG fire and another
+session/controller's burst do not acquire this new timeout. Shared native
+shooting, projectile physics and Bot burst behavior are unchanged.
+
+## Verification and delivery boundary
+
+The new regressions cover complete player consumers, not only selected
+helper returns. Limited-traverse tests advance measured body yaw through
+the final sender, hold fire while native source/barrel/armor evidence is
+missing, and then commit actual projectiles through the production firing
+chain. Magazine movement tests use the real navigation, final sender and
+GunState to establish search, withdrawal and partial-reload ordering,
+including blocked paths, explicit movement, disabled driving, unknown
+armor, manual ammunition and Stop inside the withdrawal callback. Burst
+tests exercise actual physical commits and cancellation rather than
+mocking a successful trigger.
+
+The previously captured opening-spin, blocked-scan and stationary-engagement
+regressions retain their movement/collision assertions. The old synthetic
+`direct=None` combat-facing test is explicitly identified as the unchanged
+SPG branch: production non-SPG startup always constructs DirectEngagement.
+Its original low-speed and collision-veto assertions remain in place.
+
+The frozen local run passes all 41 isolated player files and 991 tests.
+Including the existing gun, physical burst and SPG acceptance/reference
+checks, the same run passes 46 files and 1,051 tests, with no failures,
+errors or skips. These totals overlap and must not be added together.
+
+Runtime changes in this follow-up are confined to `player_control/`.
+Bot policies, shared vehicle/shot physics and `player_control/artillery.py`
+are identical to `99e1b8d8`. Descriptor-class tests are not a claim that every
+vehicle in the exact Windows resource catalog has been played. Frozen-source
+test totals, exact pushed-head CI and the verified launcher build identity
+are recorded in the PR handoff. A new native gameplay report is still needed
+to accept the corrected package's behavior in the user's client.
+
+# Historical November 6 opening-spin regression and local bypass rollback
 
 The follow-up report `wot-error-report-20261106-144204-f5b16d3a3c3a`
 ran `colorfulmeans-42173215936-1`, from `ae1a466b`, in the Chinese HD

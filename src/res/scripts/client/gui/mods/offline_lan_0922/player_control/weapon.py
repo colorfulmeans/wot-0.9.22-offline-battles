@@ -66,6 +66,7 @@ def artillery_path(start, point, shot, direction=None, prefer_high=False):
 def hull_traverse_error(owner, descriptor, point, world_error, solution=None):
     """Return the extra hull rotation needed by the mounted gun."""
     from ..gun_mechanics import _field
+    from .aiming import NATIVE_ANGLE_TOLERANCE
     from .driving import angle
     limits = _field(_field(descriptor, 'gun'), 'turretYawLimits')
     if limits is None:
@@ -87,7 +88,9 @@ def hull_traverse_error(owner, descriptor, point, world_error, solution=None):
     relative = angle(relative)
     # Lay the gun slightly inside its stop so that a small position
     # change does not toggle between the gun and hull every frame.
-    if minimum <= relative <= maximum:
+    tolerance = (0. if 'SPG' in (_field(_field(descriptor, 'type'), 'tags', ()) or ())
+                 else NATIVE_ANGLE_TOLERANCE)
+    if minimum - tolerance <= relative <= maximum + tolerance:
         return 0.
     margin = min(.08, (maximum - minimum) * .5)
     return relative - (minimum + margin if relative < minimum else maximum - margin)
