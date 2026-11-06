@@ -10354,8 +10354,8 @@
     {
       "adaptations": [],
       "bounded_shared_symbols": {},
-      "copied_lines": 712,
-      "copied_sha256": "73ad2e98143bf0df62d28eb8f842124dcdd8147a859366d03d68c81513ff0dd4",
+      "copied_lines": 715,
+      "copied_sha256": "0857c9d6b84e9da1adf7d20c9c20f7f4113f289209ef4ba1f0c25302d51a2c2d",
       "declarations": [
         {
           "end_line": 47,
@@ -10808,69 +10808,69 @@
           "name": "NativeAmmo.publish"
         },
         {
-          "end_line": 712,
+          "end_line": 715,
           "kind": "ClassDef",
           "line": 649,
           "name": "NativeBurst"
         },
         {
-          "end_line": 656,
+          "end_line": 659,
           "kind": "FunctionDef",
           "line": 654,
           "name": "NativeBurst.__init__"
         },
         {
-          "end_line": 663,
+          "end_line": 666,
           "kind": "FunctionDef",
-          "line": 658,
+          "line": 661,
           "name": "NativeBurst._sync"
         },
         {
-          "end_line": 675,
+          "end_line": 678,
           "kind": "FunctionDef",
-          "line": 665,
+          "line": 668,
           "name": "NativeBurst.start"
-        },
-        {
-          "end_line": 684,
-          "kind": "FunctionDef",
-          "line": 677,
-          "name": "NativeBurst.advance"
         },
         {
           "end_line": 687,
           "kind": "FunctionDef",
-          "line": 686,
-          "name": "NativeBurst.accepts"
+          "line": 680,
+          "name": "NativeBurst.advance"
         },
         {
-          "end_line": 692,
+          "end_line": 690,
           "kind": "FunctionDef",
           "line": 689,
-          "name": "NativeBurst.commit"
+          "name": "NativeBurst.accepts"
         },
         {
           "end_line": 695,
           "kind": "FunctionDef",
-          "line": 694,
-          "name": "NativeBurst.abort"
+          "line": 692,
+          "name": "NativeBurst.commit"
         },
         {
-          "end_line": 701,
+          "end_line": 698,
           "kind": "FunctionDef",
           "line": 697,
-          "name": "NativeBurst.terminate"
+          "name": "NativeBurst.abort"
         },
         {
           "end_line": 704,
           "kind": "FunctionDef",
-          "line": 703,
+          "line": 700,
+          "name": "NativeBurst.terminate"
+        },
+        {
+          "end_line": 707,
+          "kind": "FunctionDef",
+          "line": 706,
           "name": "NativeBurst.publish"
         },
         {
-          "end_line": 712,
+          "end_line": 715,
           "kind": "FunctionDef",
-          "line": 706,
+          "line": 709,
           "name": "NativeBurst.restore"
         }
       ],
@@ -10920,8 +10920,8 @@
       ],
       "module": "native_weapons",
       "source": "src/res/scripts/client/gui/mods/offline_lan_0922/native_weapons.py",
-      "source_lines": 712,
-      "source_sha256": "7b713b694c7c58cba8a9d716075f49bbe8c1cb4c2a34cb3b87adac521779757b",
+      "source_lines": 715,
+      "source_sha256": "e5bb3cad2e5b560fc6cc768ce5184c3bb9e86eba5272135a721779159e8adfd7",
       "target": "src/res/scripts/client/gui/mods/offline_lan_0922/player_control/copied/native_weapons.py"
     },
     {

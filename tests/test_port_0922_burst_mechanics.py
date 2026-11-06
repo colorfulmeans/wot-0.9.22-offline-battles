@@ -12,9 +12,25 @@ sys.path.insert(0, str(CLIENT))
 
 from gui.mods.offline_lan_0922 import burst_mechanics
 from gui.mods.offline_lan_0922 import gun_mechanics
+from gui.mods.offline_lan_0922 import native_weapons
 
 
 class TriggerMechanicsTests(unittest.TestCase):
+
+    def test_native_facade_is_a_clock_subtype_for_python_two_method_binding(self):
+        # In Python 2, calling TriggerClock.accepts/publish with an unrelated
+        # NativeBurst raises TypeError even if its fields look identical.
+        self.assertTrue(issubclass(native_weapons.NativeBurst,
+                                   burst_mechanics.TriggerClock))
+        clock = native_weapons.NativeBurst(object())
+        clock._sync((True, 41, 3, 1, 0.1, 0.0, 0))
+        due = dict(shot_seq=42, burst_group_seq=41, burst_index=1,
+                   burst_count=3, shell_index=0, final=False)
+        self.assertTrue(clock.accepts(due))
+        wire = {}
+        clock.publish(wire)
+        self.assertEqual(1, wire['burst_next_index'])
+        self.assertEqual(41, wire['burst_group_seq'])
 
     @staticmethod
     def _gun(count=3, interval=0.1):

@@ -646,14 +646,17 @@ class NativeAmmo(object):
                      ammo_reload_pending=bool(self.reload_pending))
 
 
-class NativeBurst(object):
+class NativeBurst(TriggerClock):
     """Detached observation facade for the native physical trigger frontier."""
 
     WIRE_FIELDS = TriggerClock.WIRE_FIELDS
 
     def __init__(self, actor):
+        # Python 2 checks the receiver type of an unbound class method.
+        # Reuse the clock's read-only frontier checks through a real subtype;
+        # all writes still go exclusively through the native actor commands.
+        TriggerClock.__init__(self)
         self._actor = actor
-        self.terminal_reason = None
 
     def _sync(self, row):
         for name, value in zip(BURST_FIELDS, row):
