@@ -972,7 +972,7 @@ class PlayerNavigation(object):
         order = self.drive_combat_goal(state, clear, point, 'advance_contact',
                                       ('player_contact', target_value(target, 'id')))
         order['combat_contact'] = dict(target=target_value(target, 'id'),
-                                      point=point, reason='firing_lane_unproved')
+                                      point=point, reason='established_firing_lane_lost')
         return order
 
     def drive_combat_goal(self, state, clear, goal, mode='flank', key=None):
@@ -1038,7 +1038,8 @@ class PlayerNavigation(object):
             stopping_distance=state.get('stopping_distance'),
             decision_horizon=state.get('decision_horizon', .1), terminal=terminal,
             arrival_radius=arrival_radius, travel_direction=travel_direction, motion_key=motion_key,
-            half_length=state['half_length'], turn_speed_limit=state.get('turn_speed_limit'))
+            half_length=state['half_length'], turn_speed_limit=state.get('turn_speed_limit'),
+            request_key=key)
         if self.driver.replan and distance(position, target) >= 2.:
             # Preserve the path cursor and progress history across local
             # recovery. Retire a cached corridor only on obstruction evidence.

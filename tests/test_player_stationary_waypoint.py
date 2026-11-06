@@ -5,6 +5,7 @@ T34/T110E4 poses and chassis shapes come from report 133716, round 1 on
 these tests exercise the real player pathfinder, modifier and driver, not
 Windows motion timing or the map's complete native BSP.
 """
+import json
 import math
 from pathlib import Path
 import sys
@@ -30,6 +31,48 @@ PEER_SHAPE = (1.8655439615249634, 3.1621220111846924,
 CORNER = (-50., .303, -98.)
 GOAL = (-34., .25, -130.)
 REQUEST = ('route', 1, 'captured_t110e4', 0)
+
+
+def captured_pit_neighbours():
+    """Report 144204, worker contact_chain at 14:41:08.530, line 5929.
+
+    These stationary shapes/poses are shared with the opening controller
+    replay. Engine IDs are joined to the visible TRACK SURFACE records by
+    their unique observed positions; no private server targets are supplied.
+    """
+    rows = (
+        (2130706441, (-46., .2500002384185791, -110.),
+         (1.8386110067367554, 3.669321060180664, .011706000193953514, 1.7258760333061218), .0010183393134704946, 0.),
+        (2130706443, (-18., .2539999485015869, -110.),
+         (1.7990260124206543, 3.313530921936035, -.000009999999747378752, 1.938812017440796), .0015089617554458871, .00019100356491389038),
+        (2130706445, (-62., .2500002384185791, -110.),
+         (1.723338007926941, 3.40755295753479, -.000009999999747378752, 1.9145479798316956), 0., 0.),
+        (2130706447, (-6., .2500002384185791, -110.),
+         (1.7882659435272217, 3.3853719234466553, .0002519999979995191, 2.691987991333008), 0., 0.),
+        (2130706449, (-74., .2500002384185791, -110.),
+         (1.6142549514770508, 3.6577529907226562, .004255000036209822, 1.8282999992370605), 0., 0.),
+        (2130706451, (14., .25, -110.),
+         (1.2527639865875244, 2.506582021713257, 0., 1.3582489788532257), 0., 0.),
+        (2130706453, (-74., .25000011920928955, -98.),
+         (1.5048600435256958, 3.124521017074585, .0007050000131130219, 1.6989060044288635), .00000005722923076817417, 0.),
+        (2130706455, (26., .25, -114.),
+         (1.2395429611206055, 2.0993480682373047, -.0014260000316426158, 1.6680829524993896), 0., 0.),
+        (2130706457, (-30., .2500002384185791, -98.),
+         (1.6618980169296265, 3.407438039779663, 0., 1.7179380059242249), -.0006746860172715002, 0.),
+        (2130706459, (-50., .3028402328491211, -98.),
+         (1.8655439615249634, 3.1621220111846924, .0007440000190399587, 2.010150969028473), .010938742826754376, -.0677588451072916),
+        (2130706461, (-18., .2500002384185791, -98.),
+         (1.9185899496078491, 3.890415906906128, .0022869999520480633, 1.8815849423408508), 0., 0.),
+        (2130706463, (-62., .31700026988983154, -98.),
+         (1.8655439615249634, 3.122407913208008, -.0007440000190399587, 1.6375709772109985), .0014898058115962584, .008979309915734876),
+        (2130706465, (-6., .2500002384185791, -98.),
+         (2.037031888961792, 3.966768980026245, .0023270000237971544, 1.8543199300765991), 0., -.0007827484367733493),
+        (2130706467, (-90., .2500002384185791, -110.),
+         (1.2397199869155884, 3.243720054626465, .022065000608563423, 2.859639048576355), .00021118843817677078, 0.),
+    )
+    return [dict(id=identity, position=point, yaw=.029842, collision_shape=shape,
+                 pitch=pitch, roll=roll, alive=True, team=1, speed=0., velocity=(0., 0., 0.))
+            for identity, point, shape, pitch, roll in rows]
 
 
 def pose(now=0., position=(-52.053, .25, -80.333), yaw=2.987):
@@ -61,6 +104,202 @@ class StationaryWaypointTests(unittest.TestCase):
         support = PlayerHeightSupport(nav.grid, lambda *args: .25, None)
         self.addCleanup(support.close)
         return nav, support, LocalRoutes(nav, support, 1)
+
+    def pit_scene(self):
+        baked = json.loads((ROOT / 'navgraphs/100_thepit.json').read_text())
+        nav = PlayerPathfinder(lambda *args: .25, lambda *args: False, baked_graph=baked)
+        self.addCleanup(nav.close)
+        support = PlayerHeightSupport(nav.grid, lambda *args: .25, None)
+        self.addCleanup(support.close)
+        return nav, support, LocalRoutes(nav, support, 1)
+
+    def completed_fallback_scene(self, neighbours=None):
+        # The position/consumed tip come from the copied-physics opening
+        # fixture after the alignment-point fix, not a new Windows capture.
+        # Its map and fourteen observed hulls still come from report 144204.
+        scene = self.pit_scene()
+        nav, support, local = scene
+        current = pose(154.92099990844727,
+            (-62.13645962633774, .25, -104.55434915857333), 4.675003214097741)
+        completed = (-59.84345992952434, .302, -103.73001037900198)
+        goal = (-78.8077, .25, -98.9527)
+        request = ('route', 1, 'class_mt_rim_west', 1)
+        unused, traffic = self.observe(scene, current,
+            captured_pit_neighbours() if neighbours is None else neighbours)
+        nav._boundary_actor = 1
+        state = dict(request_key=nav._cache_key(request, goal),
+            request_path_key=request, planned_goal=goal, replan_generation=0,
+            last_target=current['position'], last_position=current['position'],
+            progress_time=current['now'], pending_since=current['now'])
+        state['local_completed_target'] = (completed, nav._local_fallback_intent(goal, state))
+        nav.player_states[1] = state
+        return scene, current, completed, goal, request, state, traffic
+
+    def test_exhausted_completed_fan_uses_the_checked_actual_hull_exit(self):
+        for consumer in ('failed_path', 'pending_path'):
+            with self.subTest(consumer=consumer):
+                scene, current, completed, goal, request, state, traffic = self.completed_fallback_scene()
+                nav = scene[0]
+                start, now = current['position'], current['now']
+                frontier = dict(request=state['request_key'], at=now-20.,
+                    visited={nav.grid.cell_for(start)}, best={}, replans=0,
+                    reason='retained_route_progress')
+                state['path_frontier'] = frontier
+                with mock.patch.object(nav.grid, 'safe_local_target',
+                                       wraps=nav.grid.safe_local_target) as choose:
+                    selected = (nav._fallback_target(1, start, goal, now, None, state, True)
+                        if consumer == 'failed_path' else nav._pending_target(
+                            1, start, goal, now, state, immediate_safe_local=True))
+                    reach = math.hypot(selected[0]-start[0], selected[2]-start[2])
+                    self.assertGreater(reach, 1.5, state['local_selection'])
+                    self.assertEqual([completed, start], [call.args[0] for call in choose.call_args_list])
+                    self.assertFalse(nav.player_segment_penalized(1, start, selected, now))
+                    self.assertTrue(nav.grid.dry_segment_clear(start, selected, now))
+                    self.assertTrue(traffic.clear(math.atan2(selected[0]-start[0], selected[2]-start[2]), reach))
+                    self.assertNotIn('local_completed_target', state)
+                    admitted_at = state['local_target_progress_at']
+                    moved = (start[0]+.02*(selected[0]-start[0])/reach,
+                             start[1], start[2]+.02*(selected[2]-start[2])/reach)
+                    self.assertEqual(selected, nav._safe_fallback_target(
+                        1, moved, goal, now+.1, None, state))
+                    self.assertEqual(2, choose.call_count)
+                    self.assertEqual(admitted_at, state['local_target_progress_at'])
+                self.assertIs(frontier, state['path_frontier'])
+                self.assertEqual(now-20., frontier['at'])
+
+    def test_available_completed_fan_and_active_leg_keep_their_original_owner(self):
+        scene, current, completed, goal, request, state, unused = self.completed_fallback_scene([])
+        nav, start, now = scene[0], current['position'], current['now']
+        with mock.patch.object(nav.grid, 'safe_local_target',
+                               wraps=nav.grid.safe_local_target) as choose:
+            selected = nav._fallback_target(1, start, goal, now, None, state, True)
+            self.assertNotEqual(start, selected)
+            self.assertEqual([completed], [call.args[0] for call in choose.call_args_list])
+            self.assertEqual(completed, state['local_completed_target'][0])
+            admitted_at = state['local_target_progress_at']
+            self.assertEqual(selected, nav._safe_fallback_target(1, start, goal, now+.1, None, state))
+            self.assertEqual(1, choose.call_count)
+            self.assertEqual(admitted_at, state['local_target_progress_at'])
+
+    def test_conclusive_empty_fans_feed_the_existing_bounded_replan(self):
+        scene, current, completed, goal, request, state, unused = self.completed_fallback_scene()
+        nav, start, now = scene[0], current['position'], current['now']
+        # An explicit native wall veto covers both the old fan and the new
+        # actual-pose fan. It must keep holding while the existing retry
+        # interval advances, without fabricating failed terrain edges.
+        nav.grid.review_native_corridor(start, (start[0]-4., start[1], start[2]))
+        nav.grid.obstacle_probe = lambda *unused: True
+        with mock.patch.object(nav.grid, 'safe_local_target',
+                               wraps=nav.grid.safe_local_target) as choose:
+            for offset in (0., .1, 1., 11.9):
+                self.assertEqual(start, nav._pending_target(
+                    1, start, goal, now+offset, state, immediate_safe_local=True))
+                self.assertFalse(nav.grid._proof_deferred)
+                self.assertEqual(0, state['replan_generation'])
+            self.assertEqual([completed, start, start, start, start],
+                             [call.args[0] for call in choose.call_args_list])
+        self.assertNotIn('local_completed_target', state)
+        self.assertEqual(now, state['local_retry_progress']['at'])
+        self.assertEqual(2, state['local_retry_progress']['failures'])
+        nav.next_target(1, start, goal, request, now+12.1)
+        self.assertEqual(1, state['replan_generation'])
+        nav.next_target(1, start, goal, request, now+12.2)
+        self.assertEqual(1, state['replan_generation'])
+        self.assertEqual({}, nav.player_failed_edges)
+        self.assertEqual({}, nav.grid._failed_edges)
+
+    def test_unproved_empty_fan_preserves_the_completed_anchor_and_retry_budget(self):
+        for reason in ('deferred', 'revision_changed', 'unknown_ground'):
+            with self.subTest(reason=reason):
+                scene, current, completed, goal, request, state, unused = self.completed_fallback_scene()
+                nav, start, now = scene[0], current['position'], current['now']
+                nav.grid.review_native_corridor(start, (start[0]-4., start[1], start[2]))
+                def collision(*unused):
+                    if reason == 'revision_changed':
+                        nav.grid._native_proof_revision += 1
+                        return False
+                    return 'deferred'
+                nav.grid.obstacle_probe = collision
+                if reason == 'unknown_ground':
+                    nav.grid.ground_probe = lambda *unused: None
+                with mock.patch.object(nav.grid, 'safe_local_target',
+                                       wraps=nav.grid.safe_local_target) as choose:
+                    for offset in (0., 13.):
+                        self.assertEqual(start, nav._pending_target(
+                            1, start, goal, now+offset, state, immediate_safe_local=True))
+                        self.assertTrue(nav.grid._proof_deferred)
+                    self.assertEqual([completed, completed],
+                                     [call.args[0] for call in choose.call_args_list])
+                self.assertEqual(completed, state['local_completed_target'][0])
+                self.assertNotIn('local_retry_progress', state)
+                self.assertEqual(0, state['replan_generation'])
+
+    def test_report_144204_clear_kv2_corner_is_not_a_circle_only_detour(self):
+        scene = self.pit_scene()
+        nav, support, local = scene
+        selected, goal = (-26., .25, -102.), (14., .28999999165534973, 118.)
+        current = pose(62.53900146484375,
+            (-31.016707908194757, .2500060074375176, -109.88047219137214), 1.1877044136966244)
+        context, traffic = self.observe(scene, current, captured_pit_neighbours())
+        self.assertTrue(local._occupied(selected, local._bodies(current, context),
+                                       math.hypot(*PLAYER_SHAPE[:2]), current))
+        self.assertFalse(nav.player_segment_penalized(1, current['position'], selected, current['now']))
+        self.assertTrue(nav.grid.dry_segment_clear(current['position'], selected, current['now']))
+        dx, dz = selected[0]-current['position'][0], selected[2]-current['position'][2]
+        self.assertTrue(traffic.clear(math.atan2(dx, dz), math.hypot(dx, dz)))
+        self.assertEqual(selected, local.adjust(current, context, goal, selected,
+            ('player_contact', 2130706452), traffic.clear, allow_lane=False))
+        self.assertIsNone(local.leg)
+
+    def test_finished_circle_only_midpoint_cannot_hold_the_proved_forward_corner(self):
+        selected, goal = (-26., .25, -102.), (14., .28999999165534973, 118.)
+        request = ('player_contact', 2130706452)
+        for reason in ('bypass_completed', 'bypass_stalled', 'bypass_refused'):
+            with self.subTest(reason=reason):
+                scene = self.pit_scene()
+                nav, support, local = scene
+                current = pose(62.53900146484375,
+                    (-31.016707908194757, .2500060074375176, -109.88047219137214), 1.1877044136966244)
+                context, traffic = self.observe(scene, current, captured_pit_neighbours())
+                nav.player_states[1] = dict(index=1, replan_generation=0)
+                # These are the terminal states reported while this exact
+                # corner kept passing the real pathfinder's admission.
+                local._record_finished((request, selected, 0), reason)
+                for now in (62.53900146484375, 74.54, 116.54):
+                    current['now'] = now
+                    self.assertEqual(selected, local.adjust(current, context, goal, selected,
+                        request, traffic.clear, allow_lane=False))
+                    self.assertEqual(1, nav.player_states[1]['index'])
+
+    def test_completed_or_stalled_endpoint_yields_the_clear_destination_to_its_owner(self):
+        goal = (-26., .25, -102.)
+        request = ('local', 1, 'endpoint')
+        for outcome in ('completed', 'stalled'):
+            with self.subTest(outcome=outcome):
+                scene = self.pit_scene()
+                nav, support, local = scene
+                current = pose(44.555999755859375,
+                    (-35.523880391239345, .26113834925287244, -114.11042671568345), .645)
+                context, traffic = self.observe(scene, current, captured_pit_neighbours())
+                first = local.adjust(current, context, goal, goal, request, traffic.clear, allow_lane=False)
+                self.assertEqual('bypass_issued', local.receipt['status'])
+                self.assertNotEqual(goal, first)
+                if outcome == 'completed':
+                    current.update(now=46.356998443603516,
+                        position=(-31.948739345495195, .2501904450826252, -109.37562836903275))
+                else:
+                    current['now'] += 9.
+                context, traffic = self.observe(scene, current, captured_pit_neighbours())
+                self.assertFalse(nav.player_segment_penalized(1, current['position'], goal, current['now']))
+                dx, dz = goal[0]-current['position'][0], goal[2]-current['position'][2]
+                self.assertTrue(traffic.clear(math.atan2(dx, dz), math.hypot(dx, dz)))
+                self.assertEqual(goal, local.adjust(current, context, goal, goal,
+                    request, traffic.clear, allow_lane=False))
+                self.assertEqual('bypass_'+outcome, local.receipt['status'])
+                current['now'] += 60.
+                self.assertEqual(goal, local.adjust(current, context, goal, goal,
+                    request, traffic.clear, allow_lane=False))
+                self.assertIsNone(local.leg)
 
     def observe(self, scene, current, neighbours):
         nav, support, local = scene
@@ -112,43 +351,50 @@ class StationaryWaypointTests(unittest.TestCase):
         nav.player_states[1] = state
         return scene, current, end, goal, state
 
-    def test_actual_intermediate_t110e4_corner_gets_checked_local_bypass(self):
-        scene, current = self.scene(), pose()
+    def test_true_t110e4_centre_is_not_issued_by_the_real_planner(self):
+        scene, current = self.pit_scene(), pose()
         nav, support, local = scene
         context, traffic = self.observe(scene, current, [t110e4()])
-        nav.player_states[1] = dict(index=1)
-        selected = local.adjust(current, context, GOAL, CORNER, REQUEST, traffic.clear)
-        self.assertNotEqual(CORNER, selected)
-        self.assertNotEqual(current['position'], selected)
-        self.assertEqual('bypass_issued', local.receipt['status'])
-        self.assertTrue(local.receipt['intermediate'])
-        self.assertEqual(1, nav.player_states[1]['index'])
-        heading = math.atan2(selected[0]-current['position'][0], selected[2]-current['position'][2])
-        reach = math.hypot(selected[0]-current['position'][0], selected[2]-current['position'][2])
-        self.assertTrue(traffic.clear(heading, reach))
-        self.assertTrue(nav.grid.dry_segment_clear(current['position'], selected, 0.))
+        request = ('local', 1, 'occupied_destination')
+        # Removing the circle-only intermediate modifier does not remove the
+        # exact planner refusal, including when the requested endpoint itself
+        # is the stationary tank's centre.
+        for tick in range(20):
+            current['now'] = tick * .1
+            target = nav.next_target(1, current['position'], CORNER, request, current['now'])
+            selected = local.adjust(current, context, CORNER, target, request,
+                                    traffic.clear, allow_lane=False)
+            self.assertGreater(math.hypot(selected[0]-CORNER[0], selected[2]-CORNER[2]), 1.5)
+            self.assertFalse(nav.player_segment_penalized(1, current['position'], selected, current['now']))
+            self.assertFalse(nav.target_is_terminal(1))
 
-    def test_completed_side_leg_and_repeated_retreat_do_not_reissue_peer_centre(self):
-        scene, current = self.scene(), pose()
+    def test_real_planner_rejects_the_occupied_corner_after_each_captured_retreat(self):
+        scene = self.scene()
         nav, support, local = scene
-        context, traffic = self.observe(scene, current, [t110e4()])
-        nav.player_states[1] = dict(index=1)
-        bypass = local.adjust(current, context, GOAL, CORNER, REQUEST, traffic.clear)
-        current = pose(1., bypass)
-        context, traffic = self.observe(scene, current, [t110e4()])
-        self.assertEqual(bypass, local.adjust(
-            current, context, GOAL, bypass, REQUEST, traffic.clear))
-        self.assertEqual('bypass_completed', local.receipt['status'])
         # These are the repeatedly completed head-on retreats in the report.
+        # Feed the stale corner through the actual planner, not straight into
+        # a modifier while treating its indefinite self-position hold as a fix.
         for now, point in ((13., (-52.258, .25, -82.193)),
                            (27., (-52.222, .25, -82.233)),
                            (52., (-52.295, .25, -78.859))):
             current = pose(now, point)
             context, traffic = self.observe(scene, current, [t110e4()])
-            selected = local.adjust(current, context, GOAL, CORNER, REQUEST, traffic.clear)
-            self.assertEqual(point, selected)
-            self.assertEqual(1, nav.player_states[1]['index'])
-            self.assertEqual('bypass_completed', local.receipt['status'])
+            key = self.path_key(nav)
+            nav.paths[key], nav.path_times[key] = (point, CORNER, GOAL), now
+            nav.path_hull_revisions[key] = nav.grid.static_hull_revision
+            moving = False
+            for tick in range(20):
+                current['now'] = now + tick*.1
+                target = nav.next_target(1, point, GOAL, REQUEST, current['now'])
+                selected = local.adjust(current, context, GOAL, target, REQUEST, traffic.clear)
+                self.assertGreater(math.hypot(selected[0]-CORNER[0], selected[2]-CORNER[2]), 1.5)
+                self.assertFalse(nav.player_segment_penalized(1, point, selected, current['now']))
+                dx, dz = selected[0]-point[0], selected[2]-point[2]
+                if math.hypot(dx, dz) > 1.5:
+                    self.assertTrue(traffic.clear(math.atan2(dx, dz), math.hypot(dx, dz)))
+                    moving = True
+                    break
+            self.assertTrue(moving, (point, nav.player_states[1]))
 
     def test_real_pathfinder_replaces_captured_cached_corner_and_reaches_forward_route(self):
         scene, current = self.scene(), pose()
@@ -163,8 +409,12 @@ class StationaryWaypointTests(unittest.TestCase):
             last_position=current['position'], progress_time=0., last_target=CORNER,
             replan_generation=0)
         driver, advanced = Driver(), 0
+        previous = current['position']
         for tick in range(160):
             current['now'] = tick * .1
+            current['speed'] = math.hypot(current['position'][0]-previous[0],
+                                          current['position'][2]-previous[2]) / .1
+            previous = current['position']
             context, traffic = self.observe(scene, current, [t110e4()])
             target = nav.next_target(1, current['position'], GOAL, REQUEST, current['now'])
             target = local.adjust(current, context, GOAL, target, REQUEST, traffic.clear)
@@ -175,8 +425,10 @@ class StationaryWaypointTests(unittest.TestCase):
                 heading = math.atan2(dx, dz)
                 self.assertTrue(traffic.clear(heading, remaining), (tick, target))
                 self.assertTrue(nav.grid.dry_segment_clear(current['position'], target, current['now']))
+                # Heading is an instantaneous geometry seam; observed speed is
+                # derived from the preceding realised step, not native dynamics.
                 current['yaw'] = heading
-                command = driver.drive(current['position'], heading, 0., target,
+                command = driver.drive(current['position'], heading, current['speed'], target,
                                        current['now'], traffic.clear)
                 self.assertGreater(command['throttle'], 0.)
                 step = min(1., remaining)
@@ -266,7 +518,7 @@ class StationaryWaypointTests(unittest.TestCase):
         self.assertEqual(1, local.static_receipt['count'])
         self.assertTrue(nav.grid.path_crosses_static_hull((current['position'], CORNER)))
 
-    def test_wall_unknown_height_or_new_live_sweep_refusal_cannot_skip_corner(self):
+    def test_endpoint_bypass_requires_wall_height_and_live_clearance_before_handoff(self):
         for refusal in ('wall', 'height', 'live_sweep'):
             with self.subTest(refusal=refusal):
                 scene, current = self.scene(), pose()
@@ -277,16 +529,18 @@ class StationaryWaypointTests(unittest.TestCase):
                                (support, 'height') if refusal == 'height' else (traffic, 'clear'))
                 with mock.patch.object(owner, name, return_value=None if refusal == 'height' else False), \
                      mock.patch.object(nav, 'remember_runtime_target', wraps=nav.remember_runtime_target) as remember:
-                    target = local.adjust(current, context, GOAL, CORNER, REQUEST, traffic.clear)
-                self.assertEqual(current['position'], target)
+                    target = local.adjust(current, context, CORNER, CORNER, REQUEST, traffic.clear)
+                # No unproved bypass is published. Returning the unchanged
+                # proposal yields to the path/driver owners; the real planner
+                # test above rejects an actually occupied destination.
+                self.assertEqual(CORNER, target)
                 self.assertEqual('no_checked_bypass', local.receipt['status'])
                 self.assertEqual(1, nav.player_states[1]['index'])
                 remember.assert_not_called()
                 self.assertIsNone(local.leg)
-                # Missing proof is retried from the same route, without
-                # inventing a permanent wall or consuming its corner.
+                # Missing proof is retried without inventing a permanent wall.
                 current['now'] = 1.
-                target = local.adjust(current, context, GOAL, CORNER, REQUEST, traffic.clear)
+                target = local.adjust(current, context, CORNER, CORNER, REQUEST, traffic.clear)
                 self.assertNotEqual(current['position'], target)
                 self.assertNotEqual(CORNER, target)
 

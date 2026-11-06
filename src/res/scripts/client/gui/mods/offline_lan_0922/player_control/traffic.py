@@ -92,6 +92,10 @@ def body(identity, position, yaw, shape, pitch=0., roll=0.):
                 yaw=yaw, pitch=pitch, roll=roll, shape=tuple(shape))
 
 
+def steering_reach(speed):
+    return max(1., min(8., abs(speed) * .65 + 1.))
+
+
 class Traffic(object):
     def __init__(self, current, neighbours):
         self.current = current
@@ -146,7 +150,7 @@ class Traffic(object):
         moving = dict(self.current)
         yaw = moving['yaw']
         sign = 1. if throttle > 0. else -1.
-        reach = (max(1., min(8., abs(speed) * .65 + 1.)) if reach is None
+        reach = (steering_reach(speed) if reach is None
                  else max(0., float(reach)))
         peers = [peer for peer in self.neighbours if peer['id'] not in ignore_ids]
         step = sign * reach / 4.
@@ -164,6 +168,54 @@ class Traffic(object):
             moving['z'] += dz
             yaw = new_yaw
         return True
+
+    def corner_straight_proof(self, order, speed, turn_speed, direction_clear):
+        """Prove a straight arrival after this command's full arc was refused.
+
+        A near waypoint can be reached without the requested turn. Retain the
+        original complete sweep horizon; the arrival disc only proves useful
+        progress, never a shorter collision check. The caller owns the final
+        command and must already have rejected its ordinary can_steer sweep.
+        """
+        driving = order.get('driving') or {}
+        target = order.get('local_target')
+        if (order.get('recovery_mode') != 'travel' or
+                driving.get('mode') != 'travel' or
+                driving.get('terminal') is not False or
+                driving.get('direction') != 1. or
+                driving.get('recovery_heading') is not None or
+                not order.get('travel_intent') or order.get('holding') or protected_hold(order) or
+                order.get('cover_motion') or order.get('brake') or
+                order.get('throttle', 0.) <= 0. or not order.get('turn') or
+                target is None or turn_speed != 0. or speed < 0. or
+                math.isnan(speed) or math.isinf(speed)):
+            return None
+        # Native traverse clamps settled rotation to exactly zero. A new
+        # zero-turn command alone does not erase the old angular velocity or
+        # its track-centred hull motion, so absent/rotating state must wait.
+        from .pathfinding import WAYPOINT_ARRIVAL_RADIUS
+        radius = WAYPOINT_ARRIVAL_RADIUS
+        moving = self.current
+        yaw = moving['yaw']
+        dx, dz = target[0] - moving['x'], target[2] - moving['z']
+        forward_x, forward_z = math.sin(yaw), math.cos(yaw)
+        along = dx * forward_x + dz * forward_z
+        lateral = abs(dx * forward_z - dz * forward_x)
+        if math.hypot(dx, dz) <= radius or along <= 0. or lateral >= radius:
+            return None
+        reach = steering_reach(speed)
+        entry = along - math.sqrt(radius * radius - lateral * lateral)
+        if entry < 0. or entry > reach:
+            return None
+        fraction, unused_hits = self.sweep(yaw, reach)
+        if fraction < .999 or not direction_clear(yaw, reach):
+            return None
+        closest = min(reach, along)
+        return dict(kind='corner_straight', origin=(moving['x'], moving['y'], moving['z']),
+            goal=tuple(target), heading=yaw, reach=reach, arrival_radius=radius,
+            entry_distance=entry, lateral_distance=lateral,
+            closest_distance=math.hypot(dx-forward_x*closest, dz-forward_z*closest),
+            fraction=fraction, turn_speed=turn_speed)
 
 
 class PlayerTraffic(object):

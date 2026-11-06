@@ -45,6 +45,7 @@ class PlayerControl(object):
         self.drive_contact_receipt = None
         self.blocked_fire_target = None
         self.engagement_hold = None
+        self.combat_movement_target = None
         self.front_priority = None
         self.blocked_fire_sample = None
         self.no_aim_since = None
@@ -339,6 +340,7 @@ class PlayerControl(object):
         self.fire_admission.reset()
         self.blocked_fire_target = None
         self.engagement_hold = None
+        self.combat_movement_target = None
         self.front_priority = None
         self.blocked_fire_sample = None
         self.no_aim_since = None
@@ -461,7 +463,7 @@ class PlayerControl(object):
         self.target_engine = self.aim_receipt = self.aim_progress_sample = None
         self.last_order = {}
         self.confirmed_facing.reset()
-        self.engagement_hold = self.front_priority = None
+        self.engagement_hold = self.combat_movement_target = self.front_priority = None
         callbacks = list(self.release_pending)
         self.release_pending = []
         if not preserve_explicit:
@@ -2003,6 +2005,24 @@ class PlayerControl(object):
             withdrawal = None
             manoeuvre = None
             if isinstance(self.navigation, PlayerNavigation):
+                # A scan candidate is not a combat movement assignment. The
+                # released Bot admits a local firing lane first, then retains
+                # that same visible contact when the lane is lost. Keep this
+                # player's native-object ownership independently of the short
+                # stationary lease; changing scan targets cannot inherit it.
+                selected_contact = facing_target if engagement is not None else target
+                movement_contact = self.combat_movement_target
+                if established is not None and selected_contact is established[0]:
+                    movement_contact = established[0]
+                if shot_lane_proven:
+                    movement_contact = target
+                if (artillery or 'fire' not in self.features or self.ammo_state['empty'] or
+                        movement_contact is None or selected_contact is not movement_contact or
+                        records.get(movement_contact.id) is not movement_contact or
+                        math.hypot(movement_contact.position[0] - position[0],
+                            movement_contact.position[2] - position[2]) > self.navigation.combat.fire_range):
+                    movement_contact = None
+                self.combat_movement_target = movement_contact
                 self.navigation.context['stationary_fire_hold'] = bool(hold)
                 if (self.direct_engagement is not None and movement.get('allow_withdrawal') and
                         (self.direct_engagement.retreat or direct_reload)):
@@ -2044,7 +2064,7 @@ class PlayerControl(object):
                         firing_lane_from, owner._mutable_shot_ray()[0])
                     if not decision_current():
                         return
-                    if self.navigation.tag != 'SPG':
+                    if self.navigation.tag != 'SPG' and firing_target is movement_contact:
                         # Artillery's firing-position refusal preserves its
                         # deployment/sortie owner; it is not a direct approach.
                         approach_target = firing_target
@@ -2152,15 +2172,35 @@ class PlayerControl(object):
                             state['id'], order, position, yaw, now, dt)
                         if not decision_current():
                             return
+                    driver = self.navigation.driver
+                    # A changed/finished detour can request a new path while
+                    # still offering a valid steering action. Only measured
+                    # nonprogress, without an owned driver recovery, admits
+                    # another traffic escape; native failure remains evidence.
+                    driver_recovery = now < driver.reverse_until or now < driver.forward_until
                     self.player_traffic.apply(order, state, traffic, int(owner.client.team),
                         clear, lambda:stopping_distance(order['turn']), 1. / 30.,
-                        not reverse_only and (self.navigation.driver.replan or failure is not None),
+                        not reverse_only and (failure is not None or
+                            driver.nonprogress_triggered and not driver_recovery),
                         failure if not reverse_only else None, contact=contact if not reverse_only else None)
                     if not decision_current():
                         return
+                    if order.get('recovery_mode') == 'short_escape_complete':
+                        # The actual checked translation has finished. Its
+                        # earlier driver gear must not resume after this brake.
+                        driver.complete_translation_escape(position, yaw, now)
                 if (order['throttle'] and order['turn'] and
                         not traffic.can_steer(order['throttle'], order['turn'], state['speed'])):
-                    order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
+                    straight = traffic.corner_straight_proof(order, state['speed'],
+                        getattr(owner, '_local_turn_speed', None),
+                        lambda heading, reach:self.direction_clear(
+                            position, heading, entity.typeDescriptor, shape, reach))
+                    if not decision_current():
+                        return
+                    if straight is not None:
+                        order.update(turn=0., steering_clearance=straight)
+                    else:
+                        order.update(throttle=0., turn=0., brake=True, recovery_mode='traffic_yield')
             else:
                 self.drive_failure = None
             parked_capture = (order.get('combat_mode') == 'base_capture' and

@@ -156,6 +156,14 @@ class SortieNavigationTests(unittest.TestCase):
         self.assertEqual('skip', order['sortie_recovery']['phase'])
         self.assertEqual(3, nav.index)
         self.assertEqual(0., order['throttle'])
+        # The new node owns a fresh driver request, not the previous node's
+        # recovery clock or clearance receipt. Both entry and the next
+        # bounded recovery must still respect the blocked native corridor.
+        self.assertIsNone(order['driving']['clearance_checks'])
+        for now in (21., 22., 23.1):
+            order = self.update(nav, now)
+            self.assertEqual(3, nav.index)
+            self.assertEqual(0., order['throttle'])
         self.assertFalse(order['driving']['clearance_checks']['front'])
         self.assertFalse(order['driving']['clearance_checks']['rear'])
 

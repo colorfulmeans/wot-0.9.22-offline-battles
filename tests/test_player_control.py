@@ -404,37 +404,42 @@ class PlayerRegressionTests(unittest.TestCase):
         self.assertEqual(0,p.failures)
 
     def test_objective_behind_tank_pivots_and_never_reverses(self):
-        d=Driver();yaw=0.;position=[0.,0.,0.]
+        d=Driver();yaw=0.;position=[0.,0.,0.];speed=0.
+        # In this simplified .1s step seam, the next speed observation must
+        # match the preceding signed displacement, including a stopped pivot.
         for i in range(200):
-            order=d.drive(position,yaw,0.,(0,0,-40),i*.1,lambda *a:True)
+            order=d.drive(position,yaw,speed,(0,0,-40),i*.1,lambda *a:True)
             self.assertGreaterEqual(order['throttle'],0.)
             yaw=angle(yaw+order['turn']*.08)
             position[0]+=math.sin(yaw)*order['throttle']*.6
             position[2]+=math.cos(yaw)*order['throttle']*.6
+            speed=order['throttle']*.6/.1
         self.assertLess(position[2],-25)
 
     def test_short_proved_detour_is_not_rejected_by_long_cruise_horizon(self):
-        d=Driver();position=[0.,0.,0.];yaw=0.
+        d=Driver();position=[0.,0.,0.];yaw=0.;speed=0.
         # The real traffic trace found a clear five-metre fan beside a friend
         # but the eight-metre forward sweep still touched the next hull.
         def clear(heading,reach):
             return reach<=5. or abs(angle(heading))>.4
         for i in range(100):
-            command=d.drive(position,yaw,0.,(0,0,100),i*.1,clear)
+            command=d.drive(position,yaw,speed,(0,0,100),i*.1,clear)
             yaw=angle(yaw+command['turn']*.08)
             position[0]+=math.sin(yaw)*command['throttle']*.5
             position[2]+=math.cos(yaw)*command['throttle']*.5
+            speed=command['throttle']*.5/.1  # Observe this simplified step's travel.
         self.assertGreater(math.hypot(position[0],position[2]),3.)
 
     def test_captured_near_tip_does_not_alternate_forward_reverse(self):
-        d=Driver();position=[-9.2,.258,33.65];yaw=0.
+        d=Driver();position=[-9.2,.258,33.65];yaw=0.;speed=0.
         target=(-14,.258,30.)
         for i in range(100):
-            order=d.drive(position,yaw,0.,target,i*.1,lambda *a:True)
+            order=d.drive(position,yaw,speed,target,i*.1,lambda *a:True)
             self.assertGreaterEqual(order['throttle'],0.)
             yaw=angle(yaw+order['turn']*.08)
             position[0]+=math.sin(yaw)*order['throttle']*.3
             position[2]+=math.cos(yaw)*order['throttle']*.3
+            speed=order['throttle']*.3/.1  # Observe this simplified step's travel.
         self.assertLess(math.hypot(position[0]-target[0],position[2]-target[2]),2.1)
 
     def test_blocked_all_directions_cannot_reverse_into_mountain(self):

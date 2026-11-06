@@ -4,6 +4,7 @@ These exercise real admission, mission validation, cleanup, and launcher readbac
 engine stubs model only the unavailable native boundary.
 """
 import json
+import math
 import os
 from pathlib import Path
 import sys
@@ -543,12 +544,17 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.combat_tactics.movement = mock.Mock(return_value=None)
         control.navigation.decide = mock.Mock(return_value=dict(
             throttle=1., turn=0., brake=False, recovery_mode='travel', combat_mode='route'))
-        control.blocked_fire_target = target.id
         control.trigger = mock.Mock(return_value=False)
         control.fire_admission.receipt = dict(status='pending', reason='auto_friendly_lane')
 
         with mock.patch('gui.mods.offline_lan_0922.player_control.weapon.barrel_aligned',
                         return_value=True):
+            # Admit this native target through the previous usable lane. A
+            # blocked id by itself is not a new movement assignment.
+            control.update(.1, .8)
+            self.assertIs(target, control.combat_movement_target)
+            control.navigation.decide.reset_mock()
+            control.blocked_fire_target = target.id
             control.update(.1, 1.)
         self.assertFalse(control.navigation.context['fire_clear'])
         control.navigation.decide.assert_not_called()
@@ -590,7 +596,7 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.weapon.forward.assert_called_once()
 
 
-    def test_pending_direct_scan_preserves_turret_and_approaches_the_selected_contact(self):
+    def test_pending_direct_scan_preserves_turret_and_existing_route(self):
         from test_player_control import PlayerRegressionTests
         from test_player_navigation_migration import controller as navigation_controller
         from types import SimpleNamespace
@@ -604,10 +610,126 @@ class PlayerControlIntegrationReviewTests(unittest.TestCase):
         control.update(.1, 1.)
         control.update(.1, 3.)
         control.weapon.forward.assert_not_called()
-        control.navigation.decide.assert_not_called()
-        self.assertEqual('advance_contact', control.last_order['combat_mode'])
-        self.assertEqual(target.id, control.last_order['combat_contact']['target'])
-        self.assertTrue(control.last_order['travel_intent'])
+        self.assertEqual(2, control.navigation.decide.call_count)
+        self.assertEqual('route', control.last_order['combat_mode'])
+        self.assertEqual((1., .4, False), (
+            control.owner._sender.forward, control.owner._sender.turn,
+            control.owner._sender.handbrake))
+
+    def movement_controller(self, bearing=0.):
+        from test_player_control import PlayerRegressionTests
+        from test_player_navigation_migration import controller as navigation_controller
+        control, unused = PlayerRegressionTests().aim_controller()
+        control.features = {'drive'}
+        control.navigation = navigation_controller('mediumTank')
+        self.addCleanup(control.navigation.close)
+        route = dict(id='recovery_handoff', waypoints=[(0., 0.),
+            (40.*math.sin(bearing), 40.*math.cos(bearing))])
+        control.navigation.routes = control.navigation.selection = [route]
+        control.navigation.route, control.navigation.index = route, 1
+        control._contacts = lambda unused: ([], [], {})
+        control.publish_status = mock.Mock()
+        control.probe_receipt = {}  # Native direction callbacks below supply the seam.
+        observation = dict(now=0., position=(0., 0., 0.))
+        control.owner._clock = lambda: observation['now']
+        control.owner.local_pose = lambda: (observation['position'], 0.)
+        control.owner._local_speed = 0.
+        return control, observation
+
+    def test_checked_detour_replan_does_not_start_an_unrequested_reverse(self):
+        from gui.mods.offline_lan_0922.player_control.driving import angle
+        control, observation = self.movement_controller()
+        def native_clear(position, heading, descriptor, shape, reach=None):
+            selected = .55 if observation['now'] < .5 else -.55
+            return (abs(angle(heading-selected)) < .01 or
+                    abs(angle(heading-math.pi)) < .01)
+        control.direction_clear = native_clear
+        control.update(.1, 0.)
+        self.assertEqual('detour_align', control.last_order['recovery_mode'])
+        observation['now'] = .5
+        control.update(.1, .5)
+        driver = control.navigation.driver
+        self.assertTrue(driver.replan)
+        self.assertAlmostEqual(-.55, driver.receipt['recovery_heading'])
+        self.assertLess(driver.receipt['progress']['age'], 3.)
+        self.assertEqual('detour_align', control.last_order['recovery_mode'])
+        self.assertEqual(0., control.owner._sender.forward)
+        self.assertLess(control.owner._sender.turn, 0.)
+        self.assertIsNone(control.player_traffic.escape)
+
+    def test_driver_recovery_is_not_duplicated_by_traffic_escape(self):
+        control, observation = self.movement_controller(2.)
+        control.direction_clear = lambda *unused: True
+        control.update(.1, 0.)
+        observation['now'] = 3.1
+        control.update(.1, 3.1)
+        self.assertEqual('reverse_clearance', control.navigation.driver.receipt['mode'])
+        self.assertEqual('reverse_clearance', control.last_order['recovery_mode'])
+        self.assertLess(control.owner._sender.forward, 0.)
+        self.assertIsNone(control.player_traffic.escape)
+
+    def test_completed_native_feedback_escape_retires_the_old_driver_reverse(self):
+        control, observation = self.movement_controller(2.)
+        control.direction_clear = lambda *unused: True
+        control.update(.1, 0.)
+        # Real native failure feedback may still admit a separately checked
+        # shorter escape while the driver's four-metre recovery is active.
+        control.drive_failure = dict(position=observation['position'], attempted_heading=0.)
+        observation['now'] = 3.1
+        control.update(.1, 3.1)
+        self.assertEqual('short_reverse_escape', control.last_order['recovery_mode'])
+        driver = control.navigation.driver
+        points = driver.progress['points']
+        best = [point['best'] for point in points]
+        observation.update(now=3.4, position=(0., 0., -2.1))
+        control.update(.1, 3.4)
+        self.assertEqual('short_escape_complete', control.last_order['recovery_mode'])
+        self.assertEqual((0., True), (control.owner._sender.forward, control.owner._sender.handbrake))
+        self.assertEqual(0., driver.reverse_until)
+        self.assertIs(points, driver.progress['points'])
+        self.assertEqual(best, [point['best'] for point in points])
+        observation['now'] = 3.5
+        control.update(.1, 3.5)
+        self.assertNotIn(control.last_order['recovery_mode'], ('reverse_clearance', 'short_reverse_escape'))
+        self.assertIsNone(control.player_traffic.escape)
+
+    def test_final_sender_can_consume_a_checked_corner_straight_after_rotation_settles(self):
+        from test_player_stationary_waypoint import PLAYER_SHAPE, captured_pit_neighbours
+        position = (-63.55030459826099, .25, -117.46075994169222)
+        target = (-64.09645830609244, .279, -116.00317478873046)
+        yaw = -.6080466905610693
+        for omega in (0., .377165001):
+            with self.subTest(turn_speed=omega):
+                control, observation = self.movement_controller()
+                owner, nav = control.owner, control.navigation
+                observation['position'] = position
+                owner.local_pose = lambda: (position, yaw)
+                owner._local_turn_speed = omega
+                owner._collision_shape = lambda unused: PLAYER_SHAPE
+                control._contacts = lambda unused: ([], captured_pit_neighbours(), {})
+                # Replay the observed local planner result; the complete
+                # opening test independently produces its own live path tips.
+                route = dict(id='near_corner_handoff', waypoints=[
+                    (position[0], position[2]), (-78.8077, -98.9527)])
+                nav.routes = nav.selection = [route]
+                nav.route, nav.index = route, 1
+                nav.navigator.next_target = mock.Mock(return_value=target)
+                control.direction_clear = lambda *unused: True  # Native world seam.
+                control.update(.1, 0.)
+                order = control.last_order
+                self.assertEqual('travel', order['driving']['mode'])
+                if omega:
+                    self.assertEqual('traffic_yield', order['recovery_mode'])
+                    self.assertEqual((0., 0., True), (owner._sender.forward,
+                        owner._sender.turn, owner._sender.handbrake))
+                else:
+                    self.assertGreater(owner._sender.forward, 0.)
+                    self.assertEqual((0., False), (owner._sender.turn, owner._sender.handbrake))
+                    proof = order['steering_clearance']
+                    self.assertEqual('corner_straight', proof['kind'])
+                    self.assertEqual(1., proof['reach'])
+                    self.assertEqual(1.5, proof['arrival_radius'])
+                    self.assertLess(proof['entry_distance'], .06)
 
 
     def test_established_engagement_stays_parked_through_scan_gap_then_expires(self):

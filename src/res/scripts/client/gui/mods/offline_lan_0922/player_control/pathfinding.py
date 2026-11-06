@@ -2490,6 +2490,7 @@ class PlayerPathfinder(object):
 			avoid_points, state, eroded_reentry=False, consumed_once=False):
 		exclusions = (state.get('temporary_visited_cells', ())
 		              if eroded_reentry and state.get('temporary_stalled') else ())
+		revision = self.grid._native_proof_revision
 		fallback = self.grid.safe_local_target(
 			origin, goal, now, avoid_points,
 			1.0 if (int(player_id) % 2) else -1.0,
@@ -2582,6 +2583,30 @@ class PlayerPathfinder(object):
 				selection.update(outcome='retired_target',retired_until=retired[1],selected=None)
 				return None
 			self._remember_local_fallback(fallback, goal, state, current, now)
+		else:
+			deferred = (revision != self.grid._native_proof_revision or
+				getattr(self.grid, '_proof_deferred', False))
+			selection['candidate_deferred'] = bool(deferred)
+			completed = state.get('local_completed_target')
+			if (not deferred and completed is not None and
+					completed[1] == self._local_fallback_intent(goal, state) and
+					tuple(completed[0]) == tuple(origin) and tuple(origin) != tuple(current)):
+				# Arrival can leave the hull beside a consumed waypoint whose
+				# fixed fan has no legal continuation. Retire only that exhausted
+				# anchor and prove one fresh fan from the actual hull. Removing
+				# it before retrying bounds this handoff; an active leg retains
+				# its original target, progress frontier and refusal history.
+				retired = dict(origin=tuple(origin), at=float(now), reason='no_candidate')
+				state.pop('local_completed_target', None)
+				result = self._new_local_fallback(player_id, current, tuple(current),
+					goal, now, avoid_points, state, eroded_reentry, consumed_once)
+				state['local_selection']['retired_completed_anchor'] = retired
+				return result
+			if not deferred:
+				# Conclusive empty fans consume the existing bounded retry.
+				# Pending native work must neither invent an obstacle nor keep
+				# renewing the realised-progress clock on every held decision.
+				self._record_local_retry_refusal(state, current, goal, now)
 		selection.update(outcome='selected' if fallback is not None else 'no_candidate',selected=fallback)
 		return fallback
 

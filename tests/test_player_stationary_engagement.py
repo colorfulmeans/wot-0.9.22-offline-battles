@@ -250,7 +250,60 @@ class StationaryEngagementTests(unittest.TestCase):
         scenario.step(1., 'checking')
         self.assertIsNone(scenario.control.engagement_hold)
         self.assert_moving(scenario)
-        self.assertEqual('advance_contact', scenario.control.last_order['combat_mode'])
+        self.assertEqual('route', scenario.control.last_order['combat_mode'])
+
+    def test_unproved_opening_scan_switches_cannot_replace_the_route(self):
+        scenario = StationaryScenario()
+        alternate = types.SimpleNamespace(id=scenario.target.id + 1,
+            position=(14., 0., 228.), typeDescriptor=scenario.target.typeDescriptor)
+        scenario.records[alternate.id] = alternate
+        route = scenario.control.navigation.route
+        # The 14:42 report never establishes a usable lane. Its aiming scan
+        # alternates two blocked enemies every three seconds for 80 seconds.
+        # Scanning those enemies must not create a movement assignment.
+        for second in range(1, 81):
+            scenario.aim.target = (scenario.target.id if second // 3 % 2
+                                   else alternate.id)
+            scenario.step(float(second), 'checking' if second % 2 else 'unknown')
+            self.assertEqual('route', scenario.control.last_order['combat_mode'], second)
+            self.assertIs(route, scenario.control.navigation.route)
+            self.assertEqual(('main', 1), (
+                scenario.control.last_order['route_id'],
+                scenario.control.last_order['route_index']))
+            self.assert_moving(scenario)
+
+    def test_proven_contact_tracking_outlives_only_the_stationary_lease(self):
+        scenario = StationaryScenario()
+        scenario.step(1.)
+        for now in (5.2, 9., 20., 40.):
+            scenario.step(now, 'checking')
+            self.assertIsNone(scenario.control.engagement_hold)
+            self.assertEqual('advance_contact', scenario.control.last_order['combat_mode'])
+            self.assertEqual(scenario.target.id,
+                             scenario.control.last_order['combat_contact']['target'])
+            self.assert_moving(scenario)
+
+    def test_lost_lane_movement_cannot_transfer_to_an_unproved_native_target(self):
+        for change in ('replacement', 'different_lock', 'out_of_range', 'lost'):
+            with self.subTest(change=change):
+                scenario = StationaryScenario()
+                scenario.step(1.)
+                scenario.step(5.2, 'checking')
+                self.assertEqual('advance_contact', scenario.control.last_order['combat_mode'])
+                if change in ('replacement', 'different_lock'):
+                    identity = scenario.target.id + int(change == 'different_lock')
+                    replacement = types.SimpleNamespace(id=identity,
+                        position=(14., 0., 228.),
+                        typeDescriptor=scenario.target.typeDescriptor)
+                    scenario.records[identity] = replacement
+                    scenario.aim.target = identity
+                elif change == 'out_of_range':
+                    scenario.target.position = (0., 0., 600.)
+                else:
+                    scenario.records.clear()
+                scenario.step(6., 'checking')
+                self.assertEqual('route', scenario.control.last_order['combat_mode'])
+                self.assert_moving(scenario)
 
     def test_cached_geometry_without_current_source_proof_cannot_establish_hold(self):
         scenario = StationaryScenario()

@@ -209,71 +209,63 @@ class LocalRoutes(object):
 
     def _occupied_target(self, state, context, goal, selected, key, clear):
         position, now = state['position'], state['now']
-        nav_state = getattr(self.navigator, 'player_states', {}).get(int(state['id']), {})
-        # The released Bot modifier checks the actual selected point after
-        # A*, including intermediate corners. The strategic endpoint alone
-        # misses a parked hull occupying an otherwise valid path vertex.
-        occupied = tuple(selected)
-        if (self.leg is not None and self.leg.get('intent') == tuple(key) and
-                _distance(selected, self.leg['target']) <= 1.e-4):
-            occupied = self.leg['occupied']
-        if (_distance(position, occupied) > 32. or
-                _distance(position, occupied) <= WAYPOINT_ARRIVAL_RADIUS):
+        if (_distance(position, goal) > 32. or
+                _distance(position, goal) <= WAYPOINT_ARRIVAL_RADIUS):
             return None
+        nav_state = getattr(self.navigator, 'player_states', {}).get(int(state['id']), {})
         # Only the independent pathfinder's bounded retry starts a new attempt.
         # A corpse pose/global revision never renews a consumed local leg.
-        gate = (tuple(key), occupied, nav_state.get('replan_generation', 0))
+        gate = (tuple(key), tuple(goal), nav_state.get('replan_generation', 0))
+        retained = self.leg is not None and self.leg['key'] == gate
+        if _distance(selected, goal) > WAYPOINT_ARRIVAL_RADIUS and not (retained and
+                _distance(selected, self.leg['target']) <= 1.e-4):
+            # Enclosing circles reserve space at a destination; they do not
+            # prove an intermediate A* corner is physically occupied. Exact
+            # private hull admission and the motion sweep own those segments.
+            return None
         bodies = self._bodies(state, context)
         radius = math.hypot(state['half_length'], state['half_width'])
-        if not self._occupied(occupied, bodies, radius, state):
+        if not self._occupied(goal, bodies, radius, state):
             if self.leg is not None and self.leg['key'] == gate:
                 self.leg = None
             return None
-        blocked_living = any(raw.get('alive', True) and
-            self._occupied(occupied, [(raw, point, other)], radius, state)
-            for raw, point, other in bodies)
-        intermediate = _distance(occupied, goal) > WAYPOINT_ARRIVAL_RADIUS
-        # A completed/refused side leg cannot hand the same living hull centre
-        # back to the driver. The revocable planning layer owns the next path;
-        # a pending or impossible connector remains an honest physical hold.
-        refused = tuple(position) if intermediate or blocked_living else None
-        self.receipt = dict(status='occupied_endpoint', goal=occupied,
-                            strategic_goal=tuple(goal), intermediate=intermediate, at=now)
+        self.receipt = dict(status='occupied_endpoint', goal=tuple(goal), at=now)
         if gate in self.finished:
             self.receipt['status'] = self.finished[gate]
-            return refused
+            # Completing this modifier yields to the original checked path.
+            # A circle-only reservation is not a permanent physical hold.
+            return None
         if self.leg is not None and self.leg['key'] == gate:
             leg = self.leg
             remaining = _distance(position, leg['target'])
             if remaining <= 1.5:
                 self._finish(gate, 'bypass_completed', now)
-                return refused
+                return None
             if remaining < leg['best'] - .2:
                 leg['best'], leg['progress_at'] = remaining, now
             if now - leg['progress_at'] >= 8.:
                 self._finish(gate, 'bypass_stalled', now)
-                return refused
+                return None
             if self._admit(state, leg['target'], clear, bodies):
                 self.receipt.update(status='bypass_retained', target=leg['target'])
                 return leg['target']
             self._finish(gate, 'bypass_refused', now)
-            return refused
-        dx, dz = occupied[0] - position[0], occupied[2] - position[2]
+            return None
+        dx, dz = goal[0] - position[0], goal[2] - position[2]
         length = max(.01, math.hypot(dx, dz))
         forward = (dx / length, dz / length)
         for reach in (8., 12.):
             for ox, oz in ((forward[1], -forward[0]), (-forward[1], forward[0]),
                            forward, (-forward[0], -forward[1])):
-                target = self._point(occupied[0] + ox * reach, occupied[2] + oz * reach, occupied[1])
+                target = self._point(goal[0] + ox * reach, goal[2] + oz * reach, goal[1])
                 if target is None or not self._admit(state, target, clear, bodies):
                     continue
-                self.leg = dict(key=gate, intent=tuple(key), occupied=occupied,
-                                target=target, origin=tuple(position),
+                self.leg = dict(key=gate, target=target, origin=tuple(position),
                                 progress_at=now, best=_distance(position, target))
                 self.receipt.update(status='bypass_issued', target=target)
                 return target
         self.receipt['status'] = 'no_checked_bypass'
-        return refused
+        return None
 
     def _lane_target(self, state, context, goal, selected, key, clear):
         position = state['position']

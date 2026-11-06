@@ -1,4 +1,181 @@
-# November 6 stop-and-fire, occupied corners and repeated route transfers
+# November 6 opening-spin regression and local bypass rollback
+
+The follow-up report `wot-error-report-20261106-144204-f5b16d3a3c3a`
+ran `colorfulmeans-42173215936-1`, from `ae1a466b`, in the Chinese HD
+#1513 client. Both bundled and installed identities match. The user's
+opening-spin-then-stop observation is confirmed by the native session;
+the previous green Python and packaging results did not establish this
+movement behavior.
+
+## What the new session establishes
+
+The foreground controller stays active for the entire captured interval.
+All 765 aiming decisions have no usable returned target or firing proof;
+1,472 recorded comparisons return world-blocked or unavailable. Two
+unproved scan candidates alternate through 28 lock episodes (27 changes,
+about three seconds apart). There is no prior stationary firing position
+whose loss would justify an established-contact approach.
+
+Nevertheless, after only about 1.7 seconds of route movement, the new
+`advance_contact` branch replaces the route. The recorded opening travels
+about 31.006 m but ends only 2.986 m from the start, with about 723.076 degrees
+of accumulated absolute hull rotation. From 14:41:09.105 through
+14:42:04.254, 524 aiming samples retain exactly the same horizontal pose and
+yaw. Control decisions issue zero throttle and turn with the brake enabled.
+Their `holding` flag is false: this is not tactical stationary firing.
+
+Three independent contracts explain the failure:
+
+| Boundary | Captured evidence | Correction |
+| --- | --- | --- |
+| Initial scan versus established combat movement | `advance_contact` is selected for 77 of 79 control decisions despite no usable lane ever being established. Changing a scan candidate changes the path request. | A foreground-owned native target may retain contact-approach movement only after its own current usable firing proof. The separate four-second stationary lease can expire without erasing that established target, but a new, replaced, hidden/lost or out-of-range scan candidate cannot inherit movement ownership. When no checked firing position is available, an initial blocked scan keeps the existing route. |
+| Selected corner versus broad parking proximity | The final raw corner is (-26, 0.25, -102), beside the KV-2 at (-30, 0.25, -98). The two enclosing circles overlap, but the private exact hull/segment check, baked segment proof and full vehicle sweep allow the actual connector. | Roll back the `ae1a466b` extension that applied the endpoint's enclosing-circle bypass to intermediate corners. Preserve exact temporary hull obstacles in the player's pathfinder and the final physical movement checks. Completed/refused endpoint bypasses return to their path owner instead of manufacturing a permanent target at the current position. |
+| Retained detour versus current movement intent | At 14:40:43.900 the current target's bearing is +0.2582 rad, but driving still follows a previous -1.93082 rad detour. Later fans are selected around the old detour again. | Give ordinary request ownership its own identity, separate from fixed cover gear. Retained detours use the released Bot's bounded lifetime, angular validity and current clearance conditions. A new fan is centred on the current objective; completed travel and tactical holds retire the old heading. |
+
+The hard stop can be reproduced without fabricating a blocked native probe:
+starting from the captured 14:40:51 pose, the original modifier chooses the
+same bypass (-30.94531538097, -108.28839055584). After that leg completes,
+it repeatedly returns the current position for the otherwise clear corner,
+including after 12, 24, 54 and 120 seconds. This is a regression in the
+new modifier/hold behavior, not a reason to lengthen a retry timeout.
+
+## Further failures exposed by the complete movement consumer
+
+The opening regression additionally runs the real foreground controller,
+navigation, pathfinder, local modifiers, driver, traffic arbitration and final
+sender together. It uses the actual Mittengard graph, fourteen observed
+stationary allied hulls and the captured blocked target-switch sequence.
+Production copied-physics and full-hull collision helpers advance the pose;
+ground/BSP and aiming remain explicit test seams. This is a controlled
+closed-loop test, not a claim to reproduce BigWorld suspension or Windows
+frame timing.
+
+Checking only the original three defects was insufficient. The same unchanged
+scenario exposed additional state and command-boundary defects:
+
+- A retained alignment point could remain selected after its whole connector
+  became blocked by the observed T110E5, even though the planner's replacement
+  point less than two metres away was clear. The full old connector must still
+  be proved before it can retain heading ownership; target proximity alone
+  does not establish that proof.
+- With one fixed local target, stationary track pivots displaced the hull
+  centre by more than one metre while increasing its target distance from
+  4.126 to 10.617 metres. The driver's arbitrary-displacement reset credited
+  that motion, overwrote its best alignment with a worse angle, and then
+  credited the next swing back again. Its progress age never exceeded 1.32
+  seconds, so the existing three-second checked recovery never ran. Progress
+  needs a fixed-point distance/frontier and new best alignment; moving the
+  target or repeating an already earned turn is not travel.
+- A consumed fallback anchor at (-59.84346, -103.73001) survived after the
+  actual hull moved to (-62.13646, -104.55435). All eighteen candidates from
+  that old origin were rejected. The no-candidate branch neither retired the
+  consumed anchor nor recorded a bounded retry refusal, so every update
+  selected the same self-target. Using the actual hull with the same complete
+  selector finds (-65.09397, -103.56061), a 3.12-metre segment admitted by the
+  private hull check, baked dry proof and full physical sweep. A consumed
+  origin's conclusive failure cannot prove that the actual hull has no exit.
+- Path replanning and physical nonprogress had shared the same traffic-escape
+  admission flag. A valid replacement detour could therefore be interrupted
+  after only 1.10 seconds by an unnecessary short reverse. A real driver
+  recovery could also acquire a second traffic recovery, and its old gear
+  could resume after traffic had already completed and braked. Only the
+  driver's explicit current nonprogress event, without an owned recovery,
+  admits this extra escape; actual native failure stays a separate input.
+  A distance-completed short escape hands control back once, retiring old
+  driver gear/alignment state while retaining fixed-point best distances.
+- At a later local point, the hull remained 1.55655 metres away, only 5.65 cm
+  outside the unchanged 1.5-metre consumption circle. The combined turning
+  probe was blocked beyond that circle, so the final adapter cancelled
+  forward motion as well. Straight motion over the same full probe distance
+  was clear and entered the original circle. This requires a proved straight
+  continuation at the final command boundary, not a larger arrival radius
+  or a shorter collision probe.
+- The blocked-forward fan omitted the live goal direction itself. At
+  (-66.12424, -114.04324), yaw -0.72819 rad, the actual goal bearing
+  -0.19101 rad admitted both five/eight-metre full hull sweeps and the entire
+  intervening pivot. All four offset branches were blocked, so the old
+  selector incorrectly returned `blocked` without testing this clear centre.
+  The current goal must be tried before the existing offset fan; a zero
+  heading error cannot manufacture a negative turn.
+
+The native report independently confirms the track-pivot premise: between
+14:40:54.501 and 14:40:55.565 both control samples report zero speed while the
+centre moves 0.989208 m and yaw changes 47.899 degrees; the next interval adds
+0.986605 m and 47.765 degrees, again at zero speed. The exact repeated-credit
+chain above is observed in the controlled consumer, rather than asserted to
+have been directly logged by that native build.
+
+The fallback correction retires only a matching consumed anchor whose fan
+conclusively has no candidate, then retries the existing selector once from
+the actual hull. Active legs and their progress history retain ownership.
+If the actual-pose selector also fails conclusively, the existing bounded
+local-refusal retry advances; no new timeout or fabricated terrain edge is
+introduced. A changed native proof revision or deferred/unknown probe keeps
+the old anchor and does not consume a refusal. The private planning obstacle
+is an inflated observed OBB checked against a centreline; it is not a
+substitute for the full oriented player-hull sweep at the movement boundary.
+
+The independent driver now measures cumulative distance against fixed local
+points and keeps a fixed admitted alignment direction. Changing or revisiting
+a connector does not renew the progress clock; translation cannot overwrite
+the historical best angle with a worse one. Real arrival at the previous
+corner or departure from a vehicle-sized local area admits the next bend's
+alignment. Its existing one-metre, 0.20-radian and three-second thresholds and
+checked four-metre recovery corridor are unchanged. Positive cases include
+slow forward travel, continuous slow alignment, the next turn after a reached
+corner, and a slow turn toward an admitted detour. Four existing simplified
+motion fixtures now report speed consistent with their own preceding
+displacement; their scene, step size, steering integration and assertions
+are unchanged. The complete opening test uses its separate copied-physics
+and collision loop.
+
+Intermediate versions are retained as failing evidence. Merely waiting longer
+was not accepted as a fix: one intermediate version eventually reached the
+first route point after 102.41 seconds with 2,151.35 degrees of accumulated
+absolute yaw, while another stopped on its own position. These are repeated
+turns in both directions, not a measurement of that many same-direction
+circles. The route-point, sender and collision assertions remain unchanged.
+
+## Source and acceptance scope
+
+The current server Bot allocator admits a direct-fire assignment only with
+a local firing lane (`BotPlanner._assign_targets`), then retains that same
+visible established contact when the lane is temporarily lost. The previous
+Player change copied the latter behavior without its admission prerequisite.
+The correction owns its target locally; it neither calls the Bot allocator
+nor borrows its target assignment. The aiming-point and ammunition search
+algorithms are unchanged.
+
+The actual Bot occupied-point modifier is scoped to parked or initial
+artillery bodies during travel. The Player extension had instead applied
+its conservative endpoint circles to every observed stationary living body
+and every intermediate corner. The exact player-private planning layer
+continues to keep genuinely occupied corners, including the opening T110E4
+centre, out of direct, cached, asynchronous and fallback paths. Rolling back
+the circle-based modifier is not permission to pass through those hulls.
+
+Regressions must prove both rejection and forward progress. In particular,
+asserting that a fabricated occupied waypoint produces indefinite zero
+throttle is not an adequate navigation acceptance test. The new report's
+actual geometry, completed bypass lifecycle, initial unproved-target
+switches and retained-detour handoffs are checked before the corrected
+source is frozen. The frozen local player suite passes all 36 isolated
+files and 915 tests, with no failures, errors or skips. This includes the
+unchanged opening route/collision assertions and the stop-and-fire
+contracts. The final unchanged opening fixture consumes its first real
+route point after 64.35 seconds, with 46.68 metres net displacement and
+103.91 metres travelled. Its 1,072.76 degrees of accumulated absolute yaw
+include turns in both directions; the unwrapped range is 176.89 degrees.
+All 586 decisions retain the route instead of assigning an unproved
+contact. There are three early rotation clips and no translation clip;
+maximum overlap remains within the existing 0.01-metre physical slop.
+These figures establish bounded progress in this crowded fixture, not
+native driving efficiency or collision-free Windows gameplay.
+Exact pushed-head CI and package identity belong in the PR
+handoff. Controlled motion/geometry seams do not replace a fresh native
+Windows gameplay session.
+
+# Historical November 6 stop-and-fire correction: opening regressions found
 
 `wot-error-report-20261106-133716-d75e941bdded` identifies both installed and
 bundled payloads as `colorfulmeans-42091871223-1`, the package built from
