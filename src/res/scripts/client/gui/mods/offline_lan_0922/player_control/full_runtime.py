@@ -61,6 +61,31 @@ def _plain_order(order):
     return dict((name, order[name]) for name in names if name in order)
 
 
+def _player_bootstrap_actor(record, actor_id, descriptor, position, yaw, entity):
+    """Create a new private Bot actor, never restore a human wire snapshot.
+
+    The live player row is not a Bot authority manifest. In particular the
+    server's public player row contains next_shell_index without the Bot's
+    ammunition inventory/reload checkpoint, and its equipment slots are not
+    the Bot's fixed three-slot contract. Those and all other native systems
+    are observed after the copied decision loop is constructed. Only the
+    required identity, spawn and native hull facts enter this bootstrap.
+    """
+    human = record.get('state') or {}
+    vehicle = (record.get('vehicle') or human.get('vehicle') or
+               getattr(getattr(descriptor, 'type', None), 'name', None))
+    if not vehicle:
+        raise RuntimeError('native_vehicle_name_unavailable')
+    return dict(id=actor_id, team=int(record.get('team', human.get('team', 0))),
+        slot=int(human.get('slot', record.get('slot', 0))),
+        name=human.get('name', record.get('name', 'Player')),
+        vehicle=vehicle, x=position[0], y=position[1], z=position[2],
+        yaw=yaw, health=int(getattr(entity, 'health', human.get('health', 0))),
+        max_health=int(getattr(descriptor, 'maxHealth',
+                               human.get('max_health', 1))),
+        alive=bool(entity.isAlive()))
+
+
 class _GunObservation(object):
     """Read through the real gun, never advance its reload/burst twice."""
     def __init__(self, runtime):
@@ -1034,22 +1059,9 @@ class FullPlayerRuntime(object):
         if local is None:
             raise RuntimeError('local_vehicle_record_unavailable')
         self._local_record_key = next(key for key, row in battle._records.items() if row is local)
-        own_raw = dict(local.get('state') or {})
-        # The copied Bot bootstrap accepts only the Bot's fixed consumable
-        # order.  The human's authoritative slots can be in any order and
-        # belong to the native player equipment ledger, not this synthetic
-        # Bot bootstrap.  _observe() projects those live native states into
-        # the private planner through _sync_equipments() during attach.
-        # Never change or reorder the actual player/server snapshots.
-        own_raw.pop('equipment_states', None)
         position, yaw = battle.local_pose()
-        own_raw.update(id=self.actor_id, team=int(local.get('team', own_raw.get('team', 0))),
-                       vehicle=local.get('vehicle') or own_raw.get('vehicle') or
-                       getattr(getattr(descriptor, 'type', None), 'name', None),
-                       x=position[0], y=position[1], z=position[2], yaw=yaw,
-                       name=own_raw.get('name', 'Player'), slot=int(own_raw.get('slot', 0)))
-        if not own_raw['vehicle']:
-            raise RuntimeError('native_vehicle_name_unavailable')
+        own_raw = _player_bootstrap_actor(
+            local, self.actor_id, descriptor, position, yaw, self.entity)
         # This is a new private planner instance, not a restored Bot authority.
         message.pop('bot_manifest', None)
         message.pop('bot_orders', None)
@@ -1445,6 +1457,10 @@ class FullPlayerRuntime(object):
             views.append(view)
         self.engine._equipment_states[self.actor_id] = tuple(views)
         self.engine._refresh_equipment_passives(self.actor_id)
+        # The bootstrap temporarily published a Bot equipment ledger. Replace
+        # its private wire view on this very first native observation as well,
+        # not only after the first copied decision-loop tick.
+        self.engine._publish_equipment_state(self.state)
 
     def _equipment_signature(self):
         raw = getattr(self.owner, '_equipment_states', None)

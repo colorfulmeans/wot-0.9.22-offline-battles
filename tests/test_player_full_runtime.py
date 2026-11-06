@@ -151,6 +151,98 @@ class FullRuntimeTests(unittest.TestCase):
         self.runtime.update(.1, .1)
         self.assertTrue(self.runtime.active)
 
+    def test_real_player_public_wire_is_not_a_bot_restore_checkpoint(self):
+        # server/lan_battle_server.py::_public_player sends a human's
+        # next_shell_index without the Bot-only ammunition inventory and
+        # reload_pending pair. The complete public row also includes live
+        # input, equipment and checkpoint fields that are not a Bot manifest.
+        row = self.battle._records['player:1']['state']
+        row.update(name='Human', vehicle='ussr:R11_MS-1', slot=0,
+            world_pose=True, x=12., y=3., z=24., yaw=.8, pitch=.01,
+            roll=-.01, aim_yaw=.4, gun_pitch=.03, speed=5.,
+            input_seq=5, input_processed_seq=4, siege_state=0,
+            siege_time_left_ms=0, fire_seq=11, shell_index=0,
+            next_shell_index=0, shell_change_pending=False,
+            max_health=1000, stun_end_server_time_ms=0,
+            gun_checkpoint_seq=5, gun_checkpoint=dict(reload_time=0.,
+                reload_duration=1., clip=3, clip_size=3, dispersion=.03))
+        native_items = _defaults()
+        mounted = (native_items[1], native_items[2], native_items[0])
+        states = [equipment_mechanics.EquipmentState(
+            equipment_mechanics.project_equipment(item)) for item in mounted]
+        self.battle._equipment_states = states
+        row['equipment_states'] = [item.trusted_snapshot(0.) for item in states]
+        row['equipment_revision'] = 1
+        row['equipment_intent_seq'] = 0
+        row['equipment_intent_result'] = dict(intent_seq=0,
+            accepted=False, reason='')
+        original = copy.deepcopy(row)
+        original_restore = full_runtime.copied_runtime._BotAmmoState.restore
+        restored_rows = []
+        def inspect_bootstrap(state, raw):
+            restored_rows.append(dict(raw))
+            self.assertFalse(set(raw) & set((
+                'ammo_remaining', 'next_shell_index', 'ammo_reload_pending',
+                'equipment_states', 'gun_checkpoint', 'gun_checkpoint_seq',
+                'shell_change_pending', 'input_seq')))
+            return original_restore(state, raw)
+        with mock.patch.object(full_runtime.copied_runtime._BotAmmoState,
+                               'restore', inspect_bootstrap):
+            self.assertTrue(self.runtime.start(('drive', 'fire', 'consumables')))
+        self.assertTrue(self.runtime.active)
+        self.assertEqual(len(restored_rows), 1)
+        self.assertEqual(set(restored_rows[0]), set((
+            'id', 'team', 'slot', 'name', 'vehicle', 'x', 'y', 'z', 'yaw',
+            'health', 'max_health', 'alive')))
+        self.assertEqual(original, row)
+        self.assertIsInstance(self.runtime.engine._ammo_states[self.runtime.actor_id],
+                              full_runtime._AmmoObservation)
+        self.assertEqual(self.runtime.state['ammo_remaining'],
+                         list(self.battle._gun_state.ammo))
+        self.assertEqual(tuple(item.original for item in
+                         self.runtime.engine._equipment_states[self.runtime.actor_id]),
+                         tuple(states))
+        self.assertEqual(tuple(item['equipment']['name'] for item in
+                         self.runtime.state['equipment_states']),
+                         ('largeMedkit', 'largeRepairkit', 'autoExtinguishers'))
+        self.battle._last_frame_time = .1
+        self.runtime.update(.1, .1)
+        self.assertTrue(self.runtime.active)
+
+    def test_bootstrap_ignores_every_partial_native_ammunition_checkpoint(self):
+        # Human snapshots and native observation have independent lifecycles.
+        # None of the following subsets may be interpreted as a persisted Bot
+        # inventory, even when they contain valid Bot-shaped values by chance.
+        pieces = dict(ammo_remaining=[5], shell_index=0,
+            next_shell_index=0, ammo_reload_pending=False)
+        for fields in (('next_shell_index',), ('ammo_remaining',),
+                       ('ammo_reload_pending',),
+                       ('ammo_remaining', 'next_shell_index'),
+                       ('ammo_remaining', 'ammo_reload_pending'),
+                       ('next_shell_index', 'ammo_reload_pending'),
+                       tuple(pieces)):
+            with self.subTest(fields=fields):
+                battle = full_scene()
+                native = battle._records['player:1']['state']
+                native.update((name, pieces[name]) for name in fields)
+                original = copy.deepcopy(native)
+                runtime = full_runtime.FullPlayerRuntime(battle)
+                original_restore = full_runtime.copied_runtime._BotAmmoState.restore
+                def inspect_bootstrap(state, raw):
+                    self.assertFalse(set(raw) & set((
+                        'ammo_remaining', 'next_shell_index',
+                        'ammo_reload_pending')))
+                    return original_restore(state, raw)
+                with mock.patch.object(full_runtime.copied_runtime._BotAmmoState,
+                                       'restore', inspect_bootstrap):
+                    self.assertTrue(runtime.start(('drive', 'fire')))
+                self.assertEqual(native, original)
+                self.assertIsInstance(runtime.engine._ammo_states[runtime.actor_id],
+                                      full_runtime._AmmoObservation)
+                self.assertEqual(runtime.state['ammo_remaining'],
+                                 list(battle._gun_state.ammo))
+                runtime.stop('test')
+
     def test_complete_live_loop_emits_native_drive_without_duplicating_physics(self):
         self.assertTrue(self.runtime.start(('drive',)))
         body_before=copy.copy(self.battle._local_matrix.__dict__)
